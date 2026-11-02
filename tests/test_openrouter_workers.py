@@ -33,9 +33,7 @@ class WorkerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
-        self.source = self.root / 'source'
-        self.source.mkdir()
-        enroll(self.source, self.root / 'private')
+        self.source = enroll(self).repository_root
         (self.root / 'auth').mkdir(mode=0o700)
         executable = self.root / 'worker'
         executable.write_text('#!/bin/sh\nexit 0\n')

@@ -16,7 +16,7 @@ class DiagnosticCleanupConsumerTests(unittest.TestCase):
 
     def fixture(self):
         fixture = evidence_tests.CanonicalEvidenceTests(methodName='runTest')
-        fixture.setUp(d4_recovery=True)
+        fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         return fixture
 
@@ -123,11 +123,14 @@ class DiagnosticCleanupConsumerTests(unittest.TestCase):
         self.assert_protected(source.api, context, output, closed)
         self.assertTrue(source.api._retire_closed_task(context, second_owner)['retired'])
 
-    def test_linked_preparation_after_unrelated_ordinary_expiry_keeps_required_content(self):
+    def test_linked_preparation_after_component_expiry_keeps_required_content(self):
         fixture, context, _, _, output, closed = self.ordinary()
         source = fixture.fixture
         self.clock[0] = closed['lifecycle']['safe_closed_at'] + self.retention_age
-        result = source.api._cleanup_diagnostics(context)
+        # Isolate prior unlink state; this is not public canonical cleanup eligibility.
+        with patch.object(source.api, '_diagnostic_consumers',
+                return_value=dict(complete=True, required=[], blockers=[])):
+            result = source.api._cleanup_diagnostics(context)
         self.assertIn(output, result['expired'], result)
         self.assertFalse((context.directory / 'evidence' / output['name']).exists())
         with source.api._context_database(context) as db:

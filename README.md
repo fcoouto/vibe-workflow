@@ -4,7 +4,7 @@
 
 [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit), packaged for your coding agent.
 
-**Early development.** Codex has opt-in task controls, read-only diagnostics and shared schema-2 worker/check/review ownership. Recorded [D2](docs/d2-validation.md) and [D5](docs/d5-validation.md) qualification covers bounded CLI/bundled app-server behavior, a controlled Interrupt case, Desktop startup orientation and the earlier D5 lifecycle at their stated versions and pins. It does not qualify the new schema-2 native lifecycle. General guard/continuation turn correlation, other desktop behavior and Claude lifecycle remain unqualified. See the [client contracts](clients/index.md) for local procedures.
+**Early development.** Codex has opt-in task controls, read-only diagnostics and shared canonical worker/check/review ownership. Recorded [D2](docs/d2-validation.md) and [D5](docs/d5-validation.md) qualification covers bounded CLI/bundled app-server behavior, a controlled Interrupt case, Desktop startup orientation and the earlier D5 lifecycle at their stated versions and pins. It does not qualify the composed canonical native lifecycle. General guard/continuation turn correlation, other desktop behavior and Claude lifecycle remain unqualified. See the [client contracts](clients/index.md) for local procedures.
 
 For task controls, read [task runtime](clients/runtime.md); for accepted checks, review and completion, load [evidence](clients/evidence.md); for native delegated work only, load [native delegation](clients/delegation.md). Local readiness covers current task evidence and grants no merge authority. D7's [bounded fixture inspector](clients/repository-gate.md) is implemented but always exits 1; production evidence sources, publishing and repository enforcement remain unqualified.
 
@@ -15,6 +15,11 @@ The separate [OpenRouter worker pilot](skills/openrouter-workers/SKILL.md) runs 
 Explicitly invoke [LLM Council](skills/llm-council/SKILL.md) with `$llm-council <question>` for three independent answers, one anonymous critique round and fresh native chair synthesis. Choose Frontier or Balanced; Free is temporarily unavailable, with no automatic paid substitution. Runtime task-aware selection chooses a group-appropriate native member and two external models at supported maximum reasoning, preserving coordinator settings. Text questions use direct tool-free requests; repository questions use qualified read-only snapshot inspection. Every technically usable answer and critique reaches the chair unchanged; models evaluate claims, assumptions and dissent. Council needs saved consent and reviewed transmission scope, and defaults to 20 minutes including preparation and waits. [Validation](docs/council-validation.md) separates package/synthetic checks from observed client execution. Historical runs remain readable and cancellable with operational settlement; live availability, comparative quality and savings require separate evidence.
 
 Use [Manage OpenRouter Integration](skills/manage-openrouter/SKILL.md) for saved setup, status and enable/disable controls. It starts disabled and currently supports an already enrolled Codex POSIX checkout with accepted private runtime state. Managed executors enforce the selected routes and configured paths. Disable blocks new admissions; launched work can finish and receive native verification. Saved enablement does not verify a connection, client execution or model fitness, and disabling does not revoke direct account access.
+
+Use [Workstreams](skills/workstreams/SKILL.md) for suitable coordinated contexts,
+saved mode controls, resource admission, recovery and managed titles. New supported
+Codex runtime scopes start enabled; existing preferences remain. Managed titles
+require explicit adoption. See the [main-runtime boundary](docs/workstreams-main-port.md).
 
 ## Prepare your Workspace
 

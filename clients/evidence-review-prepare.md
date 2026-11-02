@@ -1,0 +1,10 @@
+# Prepare a native review
+
+Apply the [common evidence contract](evidence.md) before this procedure.
+Use the [current native review bindings](evidence-review-bindings.md) when relying on native results.
+
+`evidence review prepare` is the sole native review admission entrypoint. It requires an accepted D6 plan with a read-only `review` job; `coverage` (nonempty subset of `general`, `security`, `behavior`), covered criterion IDs and exact plain reviewer `assignment` (1–65,536 characters); plus explicit `dispatch_id`, `job_id`, `selection`, `control_observation`, `discovery_expectation`, `guidance` and `resource_units`. Optional `retry_of`/`diagnostic` retain bounded retry semantics. Use `prepare_review` in [runtime/evidence.py](../runtime/evidence.py) and the [native preparation procedure](delegation.md#prepare-and-launch-once). Nothing selects these inputs automatically.
+
+Preparation atomically creates one shared attempt/ownership UUID, consumes one D5 review round and native admission, and returns the exact `review_<attempt_id>` marker, prompt, `requested_model`/`requested_effort` and once-only launch permit. Follow delegation's single-launch procedure; worker preparation cannot admit a reviewer. Fixes, retries and a new plan cannot reset original round or admission limits. D5 `assignment_digest` remains SHA-256 of the exact plain assignment; `ledger_assignment_digest` separately identifies the D6 immutable ownership/selection artifact. Version-1 review reports/receipts retain the D5 meaning. Version-2 lifecycle observation binds the D6 digest; never substitute one for the other. Legacy v1 `requested_*` receipt fields describe spawn-observed settings, not modern requested settings.
+
+For a grouped Workstreams reviewer, the immutable request may also include `workstream_context_id:"WS42.03"`. Its exact creation marker comes from the [dispatch protocol](workstreams-protocol.md#immutable-native-names); ordinary reviews retain `review_<attempt_id>`. This grouping is independent of current mode so existing output can finish review after disable.

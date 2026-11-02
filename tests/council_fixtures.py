@@ -16,8 +16,8 @@ class CouncilCase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='council ')
         self.addCleanup(temporary.cleanup)
         self.temporary = Path(temporary.name).resolve()
-        self.repo = self.temporary / 'repo'
-        self.scope = enroll(self.repo, self.temporary / 'state')
+        self.scope = enroll(self)
+        self.repo = self.scope.repository_root
         guard = patch.object(changes, 'LOCK_ROOT', self.temporary / 'locks')
         guard.start()
         self.addCleanup(guard.stop)

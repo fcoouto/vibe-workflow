@@ -1,6 +1,7 @@
 """Private, bounded SQLite task controls and atomic deterministic hook decisions."""
 
 from contextlib import ExitStack, closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import hashlib
 import json
@@ -14,7 +15,7 @@ from types import MappingProxyType
 
 from runtime.engine import HookResult, evaluate, guarded_mutation
 from runtime.startup import (StartupError, AcceptedScope, RuntimeSettings, PROJECT_FILE, json_object, _canonical_plain, _canonical_freeze,
-    _canonical_path, _canonical_binding, _canonical_ref, _canonical_hash)
+    _canonical_path, _canonical_binding, _canonical_ref, _canonical_hash, _budgeted_source_read)
 
 
 SCHEMA_VERSION = 2
@@ -22,7 +23,209 @@ APPLICATION_ID = 0x56494245
 PACKAGE = Path(__file__).resolve().parents[1]
 LIMITATIONS = ["Supported Codex apply_patch and Claude Code Edit/Write/NotebookEdit guards only; shell and external edits remain possible",
                "Hooks alone do not establish client execution, filesystem locality or current completion evidence"]
-STATES = {"planned", "active", "awaiting_user", "blocked", "verifying", "ready", "cancelled"}
+_CAPTURE_SQL_SCOPE = ContextVar('capture_sql_scope', default=None)
+
+
+def _capture_selection(operation):
+    if operation == 'schema':
+        bound=2*len(CANONICAL_TABLE_SQL)+len(CANONICAL_INDEX_SQL)+1
+        return ("select type,name,sql from sqlite_master limit ?", (bound+1,), bound,
+            "select count(*),coalesce(sum(coalesce(length(cast(type as blob)),0)+coalesce(length(cast(name as blob)),0)+coalesce(length(cast(sql as blob)),0)),0),"
+            "coalesce(sum(typeof(type)!='text' or typeof(name)!='text' or (typeof(sql)!='text' and not(type='index' and typeof(sql)='null'))),0) "
+            "from (select type,name,sql from sqlite_master limit ?)")
+    if operation == 'database_list':
+        return ("select seq,name,file from pragma_database_list order by seq limit 2", (), 1,
+            "select count(*),coalesce(sum(coalesce(length(cast(seq as text)),0)+coalesce(length(cast(name as blob)),0)+coalesce(length(cast(file as blob)),0)),0),"
+            "coalesce(sum(typeof(seq)!='integer' or typeof(name)!='text' or typeof(file)!='text'),0) "
+            "from (select seq,name,file from pragma_database_list order by seq limit 2)")
+    raise StateError('Unsupported capture measurement selection')
+
+
+def _capture_measure(db,operation):
+    sql,parameters,bound,measure=_capture_selection(operation)
+    row=db.execute(measure,parameters).fetchone()
+    if (type(row) is not tuple or len(row)!=3 or any(type(v) is not int or v<0 for v in row)
+            or row[0]>bound or row[2]):
+        raise StateError('Capture measurement overflow or invalid scalar')
+    count,material,_=row
+    # Includes selected strings plus schema split/join scratch; accounted material, not RSS.
+    return sql,parameters,4*material+64*count,64*material+1024*count
+
+
+def _capture_registered(resources,db,*,prepaid=False):
+    resources._check_native_connection(db)
+    if prepaid:resources.check_integrity()
+    else:resources.check()
+    record=resources._connections.get(id(db))
+    if (type(db) is not sqlite3.Connection or type(record) is not tuple or len(record)!=2
+            or record[0] is not db or record[1].owner is not resources or record[1].amount!=1024
+            or resources._leases.get(id(record[1])) is not record[1]):
+        raise StateError('Capture lacks its actual registered connection')
+
+
+@contextmanager
+def _capture_precharge(db,operation):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:
+        yield None
+        return
+    resources,escrow=scope
+    if operation not in {'schema','database_list','application_id','user_version','journal_mode',
+            'trusted_schema','synchronous','begin'}:
+        raise StateError('Unknown fixed capture operation')
+    _capture_registered(resources,db,prepaid=escrow is not None)
+    if escrow is not None:
+        record=resources._exit_scopes.get(id(escrow))
+        if (type(escrow) is not dict or len(escrow)!=3 or any(type(k) is not str or k not in ('lease','caps','remaining') for k in escrow)
+                or type(record) is not tuple or len(record)!=4):
+            raise StateError('Invalid finite prepaid validation record')
+        caps=escrow['caps'];remaining=escrow['remaining'];allowed=('database_list','schema','application_id','user_version','journal_mode')
+        if (type(caps) is not dict or len(caps)!=2 or any(type(k) is not str or k not in ('database_list','schema') for k in caps)
+                or type(record[2]) is not tuple or len(record[2])!=2
+                or any(type(t) is not tuple or len(t)!=2 or any(type(v) is not int or not 0<=v<=bound for v,bound in zip(t,(resources.work.limit,resources.live.limit))) for t in (caps['database_list'],caps['schema'],record[2][0],record[2][1]))
+                or any(type(s) is not set or len(s)>5 or any(type(v) is not str or v not in allowed for v in s) for s in (remaining,record[3]))):
+            raise StateError('Invalid finite prepaid validation caps')
+        if (record[0] is not escrow or record[1] is not escrow['lease']
+                or type(record[1]) is not type(resources._connections[id(db)][1]) or record[1].owner is not resources
+                or record[1].amount!=4096+2048*5+caps['database_list'][1]+caps['schema'][1]
+                or resources._leases.get(id(record[1])) is not record[1]
+                or (caps['database_list'],caps['schema'])!=record[2] or remaining!=record[3]
+                or operation not in escrow['remaining']):
+            raise StateError('Prepaid validation operation repeated or unavailable')
+        escrow['remaining'].remove(operation)
+        record[3].remove(operation)
+        if operation in ('schema','database_list'):
+            sql,parameters,work,live=_capture_measure(db,operation)
+            allowed=escrow['caps'][operation]
+            if work>allowed[0] or live>allowed[1]:
+                raise StateError('Exit validation material changed beyond prepaid bound')
+            yield sql,parameters,work,live
+        else:yield None
+        return
+    control=resources.reserve(requested=512,live=2048)
+    payload=None
+    try:
+        if operation in ('schema','database_list'):
+            sql,parameters,work,live=_capture_measure(db,operation)
+            payload=resources.reserve(requested=work,live=live)
+            yield sql,parameters,work,live
+        else:yield None
+    except BaseException as error:
+        resources.retain_failure(control,error)
+        if payload is not None:resources.retain_failure(payload,error)
+        raise
+    else:
+        if payload is not None:payload.discard()
+        control.discard()
+
+
+def _capture_exit_reservation(db,resources):
+    planning=resources.reserve(live=4096)
+    try:
+        caps={}
+        for operation in ('database_list','schema'):
+            with _capture_precharge(db,operation) as selection:
+                caps[operation]=selection[2:]
+        operations={'database_list','schema','application_id','user_version','journal_mode'}
+        lease=resources.reserve(requested=512*len(operations)+sum(v[0] for v in caps.values()),
+            live=4096+2048*len(operations)+sum(v[1] for v in caps.values()))
+        result=dict(lease=lease,caps=caps,remaining=operations)
+        resources._exit_scopes[id(result)]=(result,lease,(caps['database_list'],caps['schema']),set(operations))
+    except BaseException as error:
+        resources.retain_failure(planning,error)
+        raise
+    else:
+        planning.discard()
+        return result
+
+
+def _capture_scalar(db,operation):
+    if operation not in {'application_id','user_version','journal_mode'}:
+        raise StateError('Unsupported capture scalar')
+    with _capture_precharge(db,operation):
+        return db.execute('pragma '+operation).fetchone()[0]
+
+
+def _capture_json(raw,loader,*,comparison_budget=None):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:
+        if comparison_budget is not None:
+            from runtime import resource_accounting as accounting
+            accounting.require(isinstance(comparison_budget,accounting.CaptureBudget))
+            material=accounting._json_comparison_bound(raw)
+            comparison_budget.take(bytes=material)
+        return loader(raw)
+    return scope[0].current_acquisition().decode(raw,loader,comparison_budget=comparison_budget)
+
+
+def _resource_origin(error):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    return scope is not None and getattr(error,'_vcw_resource_origin',None) is scope[0]
+
+
+def _capture_point_selection(operation):
+    if operation=='metadata':
+        return ("select name,digest,owner_key,class,created_at,closed_at,status,bytes,data from evidence_metadata where name=?",
+            "select count(*),coalesce(sum(coalesce(length(cast(name as blob)),0)+coalesce(length(cast(digest as blob)),0)+"
+            "coalesce(length(cast(owner_key as blob)),0)+coalesce(length(cast(class as blob)),0)+coalesce(length(cast(created_at as blob)),0)+"
+            "coalesce(length(cast(closed_at as blob)),0)+coalesce(length(cast(status as blob)),0)+coalesce(length(cast(bytes as blob)),0)+"
+            "coalesce(length(cast(data as blob)),0)),0) from evidence_metadata where name=?")
+    if operation=='retired':
+        return ("select data,assignment_id from retired_identities where kind=? and identity_digest=?",
+            "select count(*),coalesce(sum(coalesce(length(cast(data as blob)),0)+coalesce(length(cast(assignment_id as blob)),0)),0) "
+            "from retired_identities where kind=? and identity_digest=?")
+    if operation=='retired_assignment':
+        return ("select identity_digest,data,assignment_id from retired_identities where kind='assignment' and assignment_id=?",
+            "select count(*),coalesce(sum(coalesce(length(cast(identity_digest as blob)),0)+coalesce(length(cast(data as blob)),0)+"
+            "coalesce(length(cast(assignment_id as blob)),0)),0) from retired_identities where kind='assignment' and assignment_id=?")
+    if operation=='task':
+        return ("select data from tasks where scope_id=? and client=? and session_id=? and task_id=?",
+            "select count(*),coalesce(sum(length(cast(data as blob))),0),coalesce(sum(typeof(data) not in ('text','blob')),0) "
+            "from tasks where scope_id=? and client=? and session_id=? and task_id=?")
+    if operation=='binding':
+        return ("select task_id from bindings where scope_id=? and client=? and session_id=?",
+            "select count(*),coalesce(sum(length(cast(task_id as blob))),0),coalesce(sum(typeof(task_id)!='text'),0) "
+            "from bindings where scope_id=? and client=? and session_id=?")
+    if operation=='checkout':
+        return ("select * from checkouts where scope_id=?",
+            "select count(*),coalesce(sum(length(cast(scope_id as blob))+length(cast(project_id as blob))+"
+            "length(cast(repository_root as blob))+length(cast(git_common_dir as blob))+coalesce(length(cast(generation as blob)),0)+"
+            "length(cast(physical_identity as blob))),0),coalesce(sum(typeof(scope_id)!='text' or typeof(project_id)!='text' "
+            "or typeof(repository_root)!='text' or typeof(git_common_dir)!='text' "
+            "or typeof(physical_identity) not in ('text','blob')),0) from checkouts where scope_id=?")
+    if operation=='task_database':
+        return ("pragma database_list",
+            "select count(*),coalesce(sum(length(cast(seq as text))+length(cast(name as blob))+length(cast(file as blob))),0),"
+            "coalesce(sum(typeof(seq)!='integer' or typeof(name)!='text' or typeof(file)!='text'),0) "
+            "from (select seq,name,file from pragma_database_list limit 1)")
+    raise StateError('Unsupported fixed captured point read')
+
+
+@contextmanager
+def _capture_point(db,operation,parameters):
+    sql,measurement=_capture_point_selection(operation);scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:
+        yield db.execute(sql,parameters).fetchone()
+        return
+    resources,escrow=scope
+    if escrow is not None:raise StateError('Point read cannot borrow exit-validation allowance')
+    _capture_registered(resources,db);owner=resources.current_acquisition()
+    control=owner.reserve(requested=512,live=2048);payload=None;row=None;measured=None
+    try:
+        measured=db.execute(measurement,parameters).fetchone()
+        if (type(measured) is not tuple or len(measured) not in (2,3)
+                or any(type(v) is not int or v<0 for v in measured) or measured[0]>1
+                or len(measured)==3 and measured[2]):
+            raise StateError('Captured point measurement overflow')
+        material=4*measured[1]+128*measured[0]
+        payload=owner.reserve(requested=material,live=4*material+512*measured[0])
+        row=db.execute(sql,parameters).fetchone()
+        yield row
+    except BaseException as error:owner.fail(error);raise
+    else:
+        row=measured=None;owner.release(payload);owner.release(control)
+from runtime.task_statuses import STATES
+_HISTORICAL_STATES = {"planned", "active", "awaiting_user", "blocked", "verifying", "ready", "cancelled"}
 TABLE_SQL = {
     "checkouts": """CREATE TABLE checkouts(scope_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
         repository_root TEXT NOT NULL, git_common_dir TEXT NOT NULL, generation INTEGER NOT NULL)""",
@@ -60,14 +263,14 @@ class StateError(StartupError):
 
 
 def _runtime_sources():
-    return sorted([*(PACKAGE / "runtime").glob("*.py"), *(PACKAGE / "runtime/adapters").glob("*.py"), PACKAGE / "scripts/workflow.py"])
+    return sorted([*(PACKAGE / "runtime").glob("*.py"), *(PACKAGE / "runtime/adapters").glob("*.py"), PACKAGE / "scripts/workflow.py", PACKAGE / "scripts/workstreams_family.py", PACKAGE / "scripts/workstreams_recovery.py", PACKAGE / "scripts/onboard_coordinator.py"])
 
 
-def runtime_fingerprint():
+def runtime_fingerprint(*, budget=None):
     """Pin installed runtime sources, dispatcher and adapter contents, by relative path."""
     digest = hashlib.sha256()
     for path in _runtime_sources():
-        digest.update(str(path.relative_to(PACKAGE)).encode() + b"\0" + path.read_bytes() + b"\0")
+        digest.update(str(path.relative_to(PACKAGE)).encode() + b"\0" + _budgeted_source_read(path, budget) + b"\0")
     return digest.hexdigest()
 
 
@@ -217,83 +420,100 @@ def _retired_identity(kind, identity):
 
 def _retired_record(kind, digest, raw, assignment_id):
     try:
-        value = json_object(raw)
-        _fields(value, ("version", "identity", "pins_digest", "request_digest", "created_at", "retired_at", "outcome", "evidence_expired",
-                        *(["assignment_id"] if kind == "assignment" else [])))
-        if (type(value["version"]) is not int or value["version"] != 1
-                or _retired_identity(kind, value["identity"]) != digest
-                or value["outcome"] not in ("completed", "failed", "cancelled", "unknown", "ready", "verifying") or kind=="assignment" and value["outcome"] in {"ready","verifying"}
-                or type(value["evidence_expired"]) is not bool
-                or value["evidence_expired"] and value["outcome"] != "unknown"):
-            raise StateError("Retired identity marker is corrupt")
-        if kind == "assignment":
-            if (not isinstance(assignment_id, str) or not re.fullmatch(r"[0-9a-f]{32}", assignment_id)
-                    or value["assignment_id"] != assignment_id):
-                raise StateError("Retired native assignment identity differs from its scalar")
-        elif assignment_id is not None:
-            raise StateError("Only assignment markers may have a native assignment ID")
-        for field in ("pins_digest", "request_digest"):
-            if value[field] is not None:
-                _canonical_hash(value[field])
-        if (kind in ("task", "assignment") and value["pins_digest"] is None
-                or kind in ("assignment", "receipt") and value["request_digest"] is None):
-            raise StateError("Retired identity is missing replay digests")
-        _integer(value["created_at"], "original marker creation time")
-        _integer(value["retired_at"], "marker retirement time", value["created_at"])
-        return value
-    except (StartupError, ValueError, TypeError, KeyError, RecursionError):
+        scope=_CAPTURE_SQL_SCOPE.get()
+        if scope is None:
+            value=json_object(raw)
+            return _validate_retired_record(kind,digest,value,assignment_id)
+        return scope[0].current_acquisition().decode(raw,json_object,
+            validate=lambda value:_validate_retired_record(kind,digest,value,assignment_id))
+    except (StartupError, ValueError, TypeError, KeyError, RecursionError) as error:
+        if _resource_origin(error):raise
         raise StateError("Retired identity marker is corrupt or incompatible") from None
+
+
+def _validate_retired_record(kind,digest,value,assignment_id):
+    _fields(value, ("version", "identity", "pins_digest", "request_digest", "created_at", "retired_at", "outcome", "evidence_expired",
+                    *(["assignment_id"] if kind == "assignment" else [])))
+    if (type(value["version"]) is not int or value["version"] != 1
+            or _retired_identity(kind, value["identity"]) != digest
+            or value["outcome"] not in ("completed", "failed", "cancelled", "unknown", "DONE", "REVIEW", "CANCELLED") or kind=="assignment" and value["outcome"] in {"DONE","REVIEW","CANCELLED"}
+            or type(value["evidence_expired"]) is not bool
+            or value["evidence_expired"] and value["outcome"] != "unknown"):
+        raise StateError("Retired identity marker is corrupt")
+    if kind == "assignment":
+        if (not isinstance(assignment_id, str) or not re.fullmatch(r"[0-9a-f]{32}", assignment_id)
+                or value["assignment_id"] != assignment_id):
+            raise StateError("Retired native assignment identity differs from its scalar")
+    elif assignment_id is not None:
+        raise StateError("Only assignment markers may have a native assignment ID")
+    for field in ("pins_digest", "request_digest"):
+        if value[field] is not None:
+            _canonical_hash(value[field])
+    if (kind in ("task", "assignment") and value["pins_digest"] is None
+            or kind in ("assignment", "receipt") and value["request_digest"] is None):
+        raise StateError("Retired identity is missing replay digests")
+    _integer(value["created_at"], "original marker creation time")
+    _integer(value["retired_at"], "marker retirement time", value["created_at"])
+    return value
 
 
 def _retired(db, kind, identity):
     """Point replay lookup for exact owner-written retirement markers."""
-    version = db.execute("pragma user_version").fetchone()[0]
+    version = _capture_scalar(db,'user_version')
     if version in (1, 2):
         return None
     if version != 3:
         raise StateError("Unsupported marker authority")
+    scope=_CAPTURE_SQL_SCOPE.get();identity_lease=None
+    if scope is not None:
+        owner=scope[0].current_acquisition()
+        identity_lease=_capture_identity_precharge(owner,identity)
     digest = _retired_identity(kind, identity)
-    row = db.execute("select data,assignment_id from retired_identities where kind=? and identity_digest=?", (kind, digest)).fetchone()
-    if row is None:
-        return None
-    value = _retired_record(kind, digest, *row)
-    if value["identity"] != identity:
-        raise StateError("Retired identity differs from its lookup key")
+    with _capture_point(db,'retired',(kind,digest)) as row:
+        if row is None:value=None
+        else:
+            value = _retired_record(kind, digest, *row)
+            if value["identity"] != identity:
+                raise StateError("Retired identity differs from its lookup key")
+        row=None
+    digest=None
+    if identity_lease is not None:owner.release(identity_lease)
     return value
 
 
 def _retired_assignment(db, assignment_id):
     """Resolve the original native ID through its scalar index, never lifetime scans."""
-    version = db.execute("pragma user_version").fetchone()[0]
+    version = _capture_scalar(db,'user_version')
     if version in (1, 2):
         return None
     if version != 3 or not isinstance(assignment_id, str) or not re.fullmatch(r"[0-9a-f]{32}", assignment_id):
         raise StateError("Unsupported retired native assignment lookup")
-    row = db.execute("select identity_digest,data,assignment_id from retired_identities "
-                     "where kind='assignment' and assignment_id=?", (assignment_id,)).fetchone()
-    return _retired_record("assignment", *row) if row else None
+    with _capture_point(db,'retired_assignment',(assignment_id,)) as row:
+        value=_retired_record("assignment",*row) if row else None
+        row=None
+    return value
 
 
 def _metadata(db, name):
     """Read stored shape/accounting columns; no file or dependency trust is implied."""
-    if db.execute("pragma user_version").fetchone()[0] != 3:
+    if _capture_scalar(db,'user_version') != 3:
         return None
     _text(name, "metadata name", 4096)
-    row = db.execute("select name,digest,owner_key,class,created_at,closed_at,status,bytes,data "
-                     "from evidence_metadata where name=?", (name,)).fetchone()
-    if row is None:
-        return None
-    try:
-        return _metadata_record(row)
-    except (StartupError, ValueError, TypeError, KeyError, RecursionError):
-        raise StateError("Evidence metadata is corrupt or incompatible; content remains protected") from None
+    with _capture_point(db,'metadata',(name,)) as row:
+        if row is None:return None
+        try:value=_metadata_record(row)
+        except (StartupError, ValueError, TypeError, KeyError, RecursionError) as error:
+            if _resource_origin(error):raise
+            raise StateError("Evidence metadata is corrupt or incompatible; content remains protected") from None
+        row=None
+    return value
 
 
-def _metadata_record(row):
+def _metadata_record(row,*,comparison_budget=None):
     name = row[0]
-    value = json_object(row[8])
+    value = _capture_json(row[8],json_object,comparison_budget=comparison_budget)
     _fields(value, ("version", "owner", "created_at", "class", "bytes", "status", "closed_at",
-                    "dependencies", "targets", "export", "managed"), ("screening",))
+                    "dependencies", "targets", "export", "managed"), ("screening", "screening_result"))
     if type(value["version"]) is not int or value["version"] not in (1, 2):
         raise StateError("Unsupported evidence metadata")
     owner = value["owner"]
@@ -364,6 +584,29 @@ def _metadata_record(row):
                 or not value["targets"] or value["dependencies"] or value["export"] is not None
                 or value["created_at"] != owner["created_at"]):
             raise StateError("Screening accounting requires its live temporary owner anchor")
+    if "screening_result" in value:
+        pointer = _screening_result(value["screening_result"])
+        if ("screening" not in value or value["screening"]["revision"] != 2
+                or value["screening"]["last_receipt"]["ticket"] != pointer["ticket"]):
+            raise StateError("Screening result requires its exact terminal receipt")
+    return value
+
+
+def _screening_result(value):
+    _fields(value, ("version", "ticket", "plan_directory", "directory_binding", "plan_id", "projection_digest"))
+    if type(value["version"]) is not int or value["version"] != 1:
+        raise StateError("Unsupported screening result")
+    _screening_ticket(value["ticket"])
+    path = _canonical_path(value["plan_directory"])
+    binding = value["directory_binding"]
+    _fields(binding, ("directory", "parents"))
+    _canonical_binding(binding["directory"])
+    _metadata_parents(path, binding["parents"])
+    if set(binding["parents"]) != {str(p) for p in path.parents}:
+        raise StateError("Incomplete screening plan parent bindings")
+    if not isinstance(value["plan_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", value["plan_id"]):
+        raise StateError("Invalid screening plan identity")
+    _canonical_hash(value["projection_digest"])
     return value
 
 
@@ -422,6 +665,17 @@ def _task_reference(value):
 
 def _lifecycle_identity(db, kind, reference):
     """Read bounded original identity/age from one exact existing schema-3 authority."""
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is not None and kind == 'task':
+        return _captured_lifecycle_identity(db,reference,scope)
+    if scope is not None and kind == 'assignment':
+        if scope[1] is not None:raise StateError('Lifecycle cannot borrow exit-validation allowance')
+        _capture_registered(scope[0],db)
+        captured_owner=scope[0].current_acquisition()
+        chars,units,integer=_lifecycle_reference_size(captured_owner,reference)
+        tree=4*(chars+1)+384*(units+1)+4*integer
+        path=768+196*(chars+1)
+        captured_owner.reserve(requested=20*tree+2*path,live=12*tree+2*path+4096)
     from runtime import delegation, evidence
     if db is None or not db.in_transaction:
         raise StateError("Lifecycle identity requires its existing authority transaction")
@@ -465,8 +719,7 @@ def _lifecycle_identity(db, kind, reference):
 
     marker_owner = _retired(db, "assignment", reference["owner"])
     marker_id = _retired_assignment(db, reference["id"])
-    row = db.execute("select id,scope_id,client,session_id,task_id,dispatch_id,data from assignments where id=?",
-                     (reference["id"],)).fetchone()
+    row = _lifecycle_assignment_row(db,reference["id"])
     if row is None:
         if marker_owner is None or marker_id is None or marker_owner != marker_id:
             raise StateError("Lifecycle assignment identity or original age is unavailable")
@@ -479,6 +732,12 @@ def _lifecycle_identity(db, kind, reference):
     if marker_owner is not None or marker_id is not None:
         raise StateError("Live assignment conflicts with its retired identity marker")
     record = delegation._record(None, row, db=db, context=context)
+    if scope is not None:
+        chars,units,integer=_lifecycle_reference_size(captured_owner,record)
+        tree=4*(chars+1)+384*(units+1)+4*integer
+        serialized=12*(chars+1)+4*(units+1)+4*integer+32
+        # Fresh credit for original binding checks, pins hashing and both compact containers.
+        captured_owner.reserve(requested=8*tree+6*serialized,live=8*tree+6*serialized)
     if (record["id"] != reference["id"] or record["owner"] != reference["owner"] or
             record["data"]["assignment"] != reference["assignment"]):
         raise StateError("Live assignment differs from its exact identity reference")
@@ -497,21 +756,252 @@ def _lifecycle_identity(db, kind, reference):
         created_at=lifecycle["created_at"]))
 
 
+def _lifecycle_assignment_row(db,identity):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is not None:
+        resources,escrow=scope
+        if escrow is not None:raise StateError('Assignment point read cannot borrow exit-validation allowance')
+        _capture_registered(resources,db)
+        owner=resources.current_acquisition()
+        owner.reserve(requested=512,live=2048)
+        try:
+            measured=db.execute(
+                'select count(*),coalesce(sum(coalesce(length(cast(id as blob)),0)+'
+                'coalesce(length(cast(scope_id as blob)),0)+coalesce(length(cast(client as blob)),0)+'
+                'coalesce(length(cast(session_id as blob)),0)+coalesce(length(cast(task_id as blob)),0)+'
+                'coalesce(length(cast(dispatch_id as blob)),0)+coalesce(length(cast(data as blob)),0)),0),'
+                "coalesce(sum(typeof(id)!='text' or typeof(scope_id)!='text' or typeof(client)!='text' or "
+                "typeof(session_id)!='text' or typeof(task_id)!='text' or typeof(dispatch_id)!='text' or "
+                "typeof(data)!='text'),0) from "
+                '(select id,scope_id,client,session_id,task_id,dispatch_id,data from assignments where id=? limit 2)',
+                (identity,)).fetchone()
+            if (type(measured) is not tuple or len(measured)!=3
+                    or any(type(value) is not int or value<0 for value in measured)
+                    or measured[0]>1 or measured[2]):
+                raise StateError('Captured assignment point measurement overflow or invalid scalar')
+            material=4*measured[1]+128*measured[0]
+            owner.reserve(requested=material,live=4*material+512*measured[0])
+        except BaseException as error:owner.fail(error);raise
+    return db.execute("select id,scope_id,client,session_id,task_id,dispatch_id,data from assignments where id=?",
+        (identity,)).fetchone()
+
+
+def _lifecycle_reference_size(owner,value,depth=0):
+    # Charge the visit/frame before recursion, integer arithmetic or iterator allocation.
+    visit=owner.reserve(requested=512,live=1024)
+    if depth>owner.resources.depth_limit:
+        _capture_unsupported('Resource lifecycle reference depth exhausted')
+    kind=type(value);chars=integer=0;units=1
+    if kind is str:chars=len(value)
+    elif kind is int:
+        bits=value.bit_length()
+        integer=bits+2  # Covers native limbs and signed decimal width without coercion.
+    elif value is None or kind in (bool,float):pass
+    elif kind not in (dict,MappingProxyType,list,tuple):
+        _capture_unsupported('Resource lifecycle reference requires native values')
+    scalar=owner.reserve(requested=4*(chars+1)+4*integer,live=4*(chars+1)+4*integer)
+    if kind in (dict,MappingProxyType):
+        for key,item in value.items():
+            for child in (key,item):
+                c,u,i=_lifecycle_reference_size(owner,child,depth+1)
+                chars+=c;units+=u;integer+=i
+                if units>owner.resources.unit_limit:
+                    _capture_unsupported('Resource lifecycle reference units exhausted')
+    elif kind in (list,tuple):
+        for child in value:
+            c,u,i=_lifecycle_reference_size(owner,child,depth+1)
+            chars+=c;units+=u;integer+=i
+            if units>owner.resources.unit_limit:
+                _capture_unsupported('Resource lifecycle reference units exhausted')
+    result=(chars,units,integer)
+    child=key=item=value=None
+    owner.release(scalar);owner.release(visit)
+    return result
+
+
+def _captured_lifecycle_identity(db,reference,scope):
+    owner=scope[0].current_acquisition()
+    control=owner.reserve(requested=512,live=2048)
+    if scope[1] is not None:raise StateError('Lifecycle cannot borrow exit-validation allowance')
+    _capture_registered(scope[0],db)
+    if not db.in_transaction:
+        raise StateError('Lifecycle identity requires its existing authority transaction')
+    chars,units,integer=_lifecycle_reference_size(owner,reference)
+    tree=4*(chars+1)+384*(units+1)+4*integer
+    path=768+196*(chars+1)
+    reference_lease=owner.reserve(requested=20*tree+2*path,live=12*tree+2*path+4096)
+    decodes=[];scratch=[]
+    result=_captured_lifecycle_task_result(db,reference,owner,decodes,scratch)
+    # The helper frame (task, marker, lifecycle and temporary compact aliases) is gone.
+    for decoded in decodes:owner._release_owned(decoded)
+    decodes.clear();decoded=None
+    for lease in scratch:owner.release(lease)
+    scratch.clear();lease=None
+    owner.release(reference_lease);owner.release(control)
+    return result
+
+
+def _lifecycle_retired_owned(db,identity,owner):
+    version=_capture_scalar(db,'user_version')
+    if version in (1,2):return None
+    if version!=3:raise StateError('Unsupported marker authority')
+    identity_lease=_capture_identity_precharge(owner,identity)
+    digest=_retired_identity('task',identity)
+    with _capture_point(db,'retired',('task',digest)) as row:
+        decoded=None
+        if row is not None:
+            try:
+                decoded=owner._decode_owned(row[0],json_object,
+                    lambda value:_validate_retired_record('task',digest,value,row[1]))
+            except (StartupError,ValueError,TypeError,KeyError,RecursionError) as error:
+                if _resource_origin(error):raise
+                raise StateError('Retired identity marker is corrupt or incompatible') from None
+            if decoded.value['identity']!=identity:
+                raise StateError('Retired identity differs from its lookup key')
+        row=None
+    digest=None
+    owner.release(identity_lease)
+    return decoded
+
+
+def _lifecycle_task_owned(db,identity,owner):
+    scope_id,client,session,task_id=(identity[k] for k in ('scope_id','client','session_id','task_id'))
+    inputs=_capture_task_inputs(db,owner,scope_id,client,session,task_id)
+    if _capture_scalar(db,'user_version')!=3:
+        _capture_unsupported('Resource task capture requires canonical schema 3')
+    with _capture_point(db,'task',(scope_id,client,session,task_id)) as row:
+        if row is None:
+            if _task_retired(db,scope_id,client,session,task_id):
+                raise StateError('Retired task evidence is unavailable or expired')
+            raise StateError('Runtime task binding is corrupt')
+        version=_capture_scalar(db,'user_version')
+        if version!=3:_capture_unsupported('Resource task capture requires canonical schema 3')
+        decoded=owner._decode_owned(row[0],lambda raw:json_object(raw,limit=4*1024*1024),
+            lambda value:_validate_task(db,scope_id,client,session,task_id,version,value))
+        row=None
+    owner.release(inputs)
+    return decoded
+
+
+def _captured_lifecycle_task_result(db,reference,owner,decodes,scratch):
+    from runtime import evidence
+    _task_reference(reference)
+    identity={key:reference[key] for key in ('scope_id','client','session_id','task_id')}
+    context=evidence._existing_authority_context(reference['authority'],db=db)
+    authority=_canonical_plain(context.authority_set[0])
+    if reference['authority']!=authority:
+        raise StateError('Lifecycle identity authority is not canonical')
+    _schema(db,version=CANONICAL_SCHEMA_VERSION)
+    marker_decode=_lifecycle_retired_owned(db,identity,owner)
+    if marker_decode is not None:
+        owner._require_owned(marker_decode)
+        decodes.append(marker_decode)
+    marker=marker_decode.value if marker_decode is not None else None
+    presence=owner.reserve(requested=512,live=2048)
+    row=db.execute('select 1 from tasks where scope_id=? and client=? and session_id=? and task_id=?',
+        tuple(identity[key] for key in ('scope_id','client','session_id','task_id'))).fetchone()
+    present=row is not None
+    row=None
+    owner.release(presence)
+    if not present:
+        if marker is None:raise StateError('Lifecycle task identity or original age is unavailable')
+        tail=owner.reserve(requested=4*marker_decode.tree+3*marker_decode.serialized,
+            live=4*marker_decode.tree+3*marker_decode.serialized)
+        scratch.append(tail)
+        return _lifecycle_compact_owned(owner,'expired' if marker['evidence_expired'] else 'retired',
+            identity,marker['pins_digest'],marker['request_digest'],marker['created_at'],scratch)
+    if marker is not None:raise StateError('Live task conflicts with its retired identity marker')
+    task_decode=_lifecycle_task_owned(db,identity,owner)
+    owner._require_owned(task_decode)
+    decodes.append(task_decode)
+    task=task_decode.value
+    # Covers lifecycle revalidation, pins serialization/hash, and both compact containers.
+    tail=owner.reserve(requested=4*task_decode.tree+3*task_decode.serialized,
+        live=4*task_decode.tree+3*task_decode.serialized)
+    scratch.append(tail)
+    lifecycle=_task_lifecycle(task)
+    if task['pins']['schema_version']!=CANONICAL_SCHEMA_VERSION or lifecycle is None:
+        raise StateError('Lifecycle task lacks canonical pins or an original creation time')
+    return _lifecycle_compact_owned(owner,'live',identity,_digest(task['pins']),None,lifecycle['created_at'],scratch)
+
+
+def _lifecycle_compact_owned(owner,status,identity,pins_digest,request_digest,created_at,scratch):
+    chars=integer=0;units=1
+    for key,value in zip(('status','identity','pins_digest','request_digest','created_at'),
+            (status,identity,pins_digest,request_digest,created_at)):
+        for item in (key,value):
+            c,u,i=_lifecycle_reference_size(owner,item)
+            chars+=c;units+=u;integer+=i
+    tree=4*(chars+1)+384*(units+1)+4*integer
+    building=owner.reserve(requested=2*tree+1024,live=2*tree+1024)
+    scratch.append(building)
+    destination=owner.reserve(requested=tree+1024,live=tree+1024)
+    return _canonical_freeze(dict(status=status,identity=identity,pins_digest=pins_digest,
+        request_digest=request_digest,created_at=created_at))
+
+
 def inspect_dependencies(db, task_ref):
     """Observe bounded existing rows; this is not closure or deletion permission."""
     from runtime import evidence
+    capture=_CAPTURE_SQL_SCOPE.get();resource_owner=None
+    projection_chars=projection_units=projection_integer=0
+    turn_material=receipt_material=0
+    if capture is not None:
+        resources,escrow=capture
+        if escrow is not None:raise StateError('Dependency inventory cannot borrow exit-validation allowance')
+        _capture_registered(resources,db);resource_owner=resources.current_acquisition()
+        if not db.in_transaction:raise StateError('Dependency inventory requires its existing transaction')
+        ref_chars,ref_units,ref_integer=_lifecycle_reference_size(resource_owner,task_ref)
+        reference_tree=4*(ref_chars+1)+384*(ref_units+1)+4*ref_integer
+        resource_owner.reserve(requested=4*reference_tree+1024,live=4*reference_tree+1024)
+    def project(value):
+        nonlocal projection_chars,projection_units,projection_integer
+        if resource_owner is not None:
+            chars,units,integer=_lifecycle_reference_size(resource_owner,value)
+            tree=4*(chars+1)+384*(units+1)+4*integer
+            resource_owner.reserve(requested=4*tree,live=4*tree)
+            projection_chars+=chars;projection_units+=units;projection_integer+=integer
+        return value
     _task_reference(task_ref)
     context=evidence._existing_authority_context(task_ref['authority'],db=db)
     selected_identity=_lifecycle_identity(db,'task',task_ref)
     authority=_canonical_plain(context.authority_set[0])
     def bounded(sql):
+        nonlocal projection_chars,projection_units,projection_integer,turn_material,receipt_material
+        if resource_owner is not None:
+            _capture_registered(resources,db)
+            if resources.current_acquisition() is not resource_owner:
+                raise StateError('Dependency inventory acquisition changed')
+            resource_owner.reserve(requested=512+4*len(sql),live=2048+8*len(sql))
+            try:
+                columns=sql[7:sql.index(' from ')].split(',')
+                material='+'.join('coalesce(length(cast('+column+' as blob)),0)' for column in columns)
+                measured=db.execute('select count(*),coalesce(sum('+material+'),0) from ('+sql+' limit 4097)').fetchone()
+                if (type(measured) is not tuple or len(measured)!=2
+                        or any(type(value) is not int or value<0 for value in measured) or measured[0]>4097):
+                    raise StateError('Dependency inventory measurement overflow or invalid scalar')
+                count,raw_bytes=measured
+                if count>4096:raise StateError('Lifecycle current history exceeds its observation bound')
+                if ' from turns ' in sql:turn_material=raw_bytes
+                elif ' from receipts ' in sql:receipt_material=raw_bytes
+                cells=count*len(columns)
+                raw=4*raw_bytes+128*cells
+                resource_owner.reserve(requested=raw,live=4*raw+512*cells)
+                # Separate credit for native row-derived references, lists, sets and blockers.
+                chars=raw_bytes+count*ref_chars
+                units=cells+count+1+count*ref_units
+                integer=64*cells+count*ref_integer
+                tree=4*(chars+1)+384*(units+1)+4*integer
+                resource_owner.reserve(requested=4*tree,live=4*tree)
+                projection_chars+=chars;projection_units+=units;projection_integer+=integer
+            except BaseException as error:resource_owner.fail(error);raise
         rows=db.execute(sql+' limit 4097').fetchall()
         if len(rows)>4096:raise StateError('Lifecycle current history exceeds its observation bound')
         return rows
     tasks=[];requirements=[];blockers=[]
     for scope_id,client,session,task_id in bounded('select scope_id,client,session_id,task_id from tasks order by scope_id,client,session_id,task_id'):
         reference=dict(authority=authority,scope_id=scope_id,client=client,session_id=session,task_id=task_id)
-        task=_task(db,scope_id,client,session,task_id)
+        task=project(_task(db,scope_id,client,session,task_id))
         tasks.append(dict(reference=reference,task=task))
         if reference!=task_ref:requirements.append(dict(owner=reference,kind='task',reference=reference,need='raw'))
     selected=next((row['task'] for row in tasks if row['reference']==task_ref),None)
@@ -529,16 +1019,26 @@ def inspect_dependencies(db, task_ref):
     for row in turns:
         if tuple(row[:3])==owner and tuple(row[:3])+(row[4],) not in known_tasks:
             blockers.append('Turn task ownership is ambiguous')
+    if resource_owner is not None and receipts and turns:
+        comparisons=len(receipts)*len(turns)
+        # Two four-cell slices and native cell comparisons for every possible pair.
+        resource_owner.reserve(requested=512*comparisons+8*(len(receipts)*turn_material+len(turns)*receipt_material),
+            live=2048+8*(turn_material+receipt_material))
     for row in receipts:
         if tuple(row[:3])==owner and row[7]:blockers.append('Conflicted receipt ownership remains protected')
         if tuple(row[:3])==owner and not any(tuple(t[:4])==tuple(row[:4]) and t[4] is not None for t in turns):
             blockers.append('Receipt task ownership is ambiguous')
     metadata=[]
     for row in bounded('select name,digest,owner_key,class,created_at,closed_at,status,bytes,data from evidence_metadata order by name'):
-        metadata.append(dict(reference=dict(name=row[0],digest=row[1]),metadata=_metadata_record(row)))
+        metadata.append(dict(reference=dict(name=row[0],digest=row[1]),metadata=project(_metadata_record(row))))
     checkouts=bounded('select scope_id,project_id,repository_root,git_common_dir,generation,physical_identity from checkouts order by scope_id')
     if not any(row[0]==task_ref['scope_id'] for row in checkouts):raise StateError('Lifecycle checkout is unavailable')
     bindings=bounded('select scope_id,client,session_id,task_id from bindings order by scope_id,client,session_id')
+    if resource_owner is not None:
+        tree=4*(projection_chars+ref_chars+1)+384*(projection_units+ref_units+1)+4*(projection_integer+ref_integer)
+        serialized=12*(projection_chars+ref_chars+1)+4*(projection_units+ref_units+1)+4*(projection_integer+ref_integer)+32
+        # Fresh whole-result freeze/plain copies, JSON encoding, hashing and output material.
+        resource_owner.reserve(requested=6*tree+8*serialized+1024,live=4*tree+4*serialized+1024)
     result=dict(task=selected,tasks=tasks,assignments=assignments,turns=turns,receipts=receipts,metadata=metadata,
         checkouts=checkouts,bindings=bindings,requirements=requirements,blockers=sorted(set(blockers)))
     result=_canonical_plain(_canonical_freeze(result))
@@ -605,7 +1105,7 @@ def _check_ready_stop_local_inputs(context,db,task,inputs):
     evidence._candidate_projection(candidate,task)
     if linked is None or task['lifecycle']['safe_closed_at'] is None:evidence._check_ready_inputs(stop['inputs'],directory_identity=True)
     verification=evidence._read(None,stop['verification'],context=context,db=db) if stop['verification'] is not None else None
-    if task['state']=='ready' and (verification is None or verification['candidate_digest']!=proof['candidate_digest']):raise StateError('Retained ready verification changed')
+    if task['state']=='DONE' and (verification is None or verification['candidate_digest']!=proof['candidate_digest']):raise StateError('Retained ready verification changed')
     return proof
 
 
@@ -620,25 +1120,30 @@ def _ready_stop_local(context,db,task):
     return dict(proof=proof,bindings=inputs['bindings'],candidate=inputs['candidate'],linked=job)
 
 
-def _ready_stop(context,db,task,*,observe=False):
+def _ready_stop(context,db,task,*,observe=False,read_context=None,read_roster=None):
     from runtime import evidence
+    member=(dict(authority=evidence._canonical_plain(context.authority_set[0]),scope_id=evidence._task_scope_id(task),
+        **{k:task[k] for k in ('client','session_id','task_id')}) if read_context is not None or read_roster is not None else None)
     stop=task.get('writer_stop');_writer_stop_shape(stop)
+    if read_roster is not None:
+        linked=evidence._read(None,stop['linked'],context=context,db=db) if stop.get('linked') else None
+        read_roster=evidence._matching_linked_read_roster(read_roster,linked)
     if stop.get('linked') and task['lifecycle']['safe_closed_at'] is not None:
         linked=evidence._read(None,stop['linked'],context=context,db=db)
         if evidence._linked_component_closed(evidence._linked_basis_root(linked),writer=(context,db)):
-            retained=evidence._linked_retained_component(evidence._linked_basis_root(linked),linked['authorities'],writer=(context,db))
+            retained=evidence._linked_retained_component(evidence._linked_basis_root(linked),evidence._linked_read_authorities(read_context,linked,member=member,writer=(context,db),read_roster=read_roster),writer=(context,db))
             if retained.get('discovered_authorities'):raise StateError('Retained linked stop requires complete source guards')
             own=next(m for m in retained['members'] if m['reference']['authority']==evidence._canonical_plain(context.authority_set[0]) and
                 m['reference']['scope_id']==evidence._task_scope_id(task) and all(m['reference'][key]==task[key] for key in ('client','session_id','task_id')))
             if own['task']!=task or own['preparation']['content']['stopped']['writer_stop']!=stop:raise StateError('Historical linked stop owner changed')
-            return own['preparation']['content']['stopped']['proof']
+            return evidence._finish_linked_read_context(own['preparation']['content']['stopped']['proof'],read_context,read_roster=read_roster)
     inputs=_ready_stop_local_inputs(context,db,task)
     linked=inputs['linked']
     if linked is not None:
-        if evidence._linked_stopped_basis(evidence._linked_basis_root(linked),linked['authorities'],writer=(context,db))!=linked:raise StateError('Linked complete-stop basis changed')
+        if evidence._linked_stopped_basis(evidence._linked_basis_root(linked),evidence._linked_read_authorities(read_context,linked,member=member,writer=(context,db),read_roster=read_roster),writer=(context,db))!=linked:raise StateError('Linked complete-stop basis changed')
     proof=_check_ready_stop_local_inputs(context,db,task,inputs)
-    if observe and linked is None:evidence._ready_stop_candidate(context,task,inputs['candidate'])
-    return proof
+    if observe and linked is None:evidence._ready_stop_candidate(context,task,inputs['candidate'],read_context=read_context,read_roster=read_roster)
+    return evidence._finish_linked_read_context(proof,read_context,read_roster=read_roster)
 
 
 def _retain_ready_stop(scope,request,*,linked_basis=None):
@@ -662,12 +1167,12 @@ def _retain_ready_stop(scope,request,*,linked_basis=None):
                 if linked_basis is not None:
                     retained=evidence._read(None,task['writer_stop']['linked'],context=context,db=db)
                     if evidence._linked_basis_root(retained)!=pointer:raise StateError('Ready stop replay common basis changed')
-                _ready_stop(context,db,task,observe=True)
+                _ready_stop(context,db,task,observe=True,read_context=evidence._bind_linked_read_context(pointer,authorities,writer=(context,db),basis=evidence._read(None,task['writer_stop']['linked'],context=context,db=db)) if pointer is not None and task['writer_stop'].get('linked') else None)
                 if task['writer_stop']['request_digest']!=request_digest or task['writer_stop']['proof_digest']!=request['stop_proof']['sha256']:
                     raise StateError('Ready stop replay payload changed')
                 return dict(ok=True,task=task,replayed=True)
             _assert_open(task)
-            if task['state'] not in ({'ready','verifying','cancelled'} if pointer is not None else {'ready','cancelled'}) or 'evidence' not in task:
+            if task['state'] not in ({'DONE','REVIEW','CANCELLED'} if pointer is not None else {'DONE','CANCELLED'}) or 'evidence' not in task:
                 raise StateError('Independent ready stop requires actual ordinary ready verification')
             snapshot=_ready_stop_bindings(context,db,task)
             verification_ref=evidence._stop_verification(context,db,task,allow_absent=linked_basis is not None)
@@ -695,14 +1200,15 @@ def _retain_ready_stop(scope,request,*,linked_basis=None):
             if linked is not None:
                 dependencies=[dict(kind='artifact',reference=dict(authority=pointer['authority'],artifact=pointer['reference']))]
                 dependencies += [dict(kind='task',reference=row['task']) for row in linked['members']]
-                retained_owner=evidence._LinkedOwner(owner,tuple(_canonical_freeze(d) for d in dependencies))
-                stop['linked']=evidence._artifact(scope,linked,owner=retained_owner,db=db)
+                with evidence._bound_stop_registration(scope,request,context,db,owner,linked,dependencies,
+                        proof,candidate,verification_ref,authorities) as retained_owner:
+                    stop['linked']=evidence._artifact(scope,linked,owner=retained_owner,db=db)
             task=dict(task,writer_stop=stop);_writer_stop_shape(stop)
             raw=json.dumps(task,separators=(',',':'))
             if len(raw.encode())>4*1024*1024:raise StateError('Ready stop exceeds the original task record bound')
             db.execute('update tasks set data=? where scope_id=? and client=? and session_id=? and task_id=?',
                 (raw,_scope_id(scope),task['client'],task['session_id'],task['task_id']))
-            _ready_stop(context,db,task)
+            _ready_stop(context,db,task,read_context=evidence._bind_linked_read_context(pointer,authorities,writer=(context,db),basis=evidence._read(None,task['writer_stop']['linked'],context=context,db=db)) if pointer is not None and task['writer_stop'].get('linked') else None)
             evidence._check_ready_inputs(files)
             if linked is not None and evidence._linked_stop_basis(pointer,authorities)!=linked:raise StateError('Linked stop source changed during registration')
             return dict(ok=True,task=task,replayed=False)
@@ -715,7 +1221,7 @@ def _close_lifecycle(db, task_ref, observations, compact):
     facts=evidence._check_closure_observation(context,db,task_ref,observations,new_compact=compact)
     task=_task(db,task_ref['scope_id'],task_ref['client'],task_ref['session_id'],task_ref['task_id'])
     _assert_open(task)
-    if task['revision']!=facts['task']['revision'] or task['state']!=facts['task']['state'] or (task['state'] not in {'cancelled','ready'} and not ('linked' in facts and task['state']=='verifying')):
+    if task['revision']!=facts['task']['revision'] or task['state']!=facts['task']['state'] or (task['state'] not in {'CANCELLED','DONE'} and not ('linked' in facts and task['state']=='REVIEW')):
         raise StateError('Closure original stopped owner changed')
     closed_at=_owner_time()
     original_age=max([task['lifecycle']['created_at']]+[item['created_at'] for item in facts['certificate'].get('assignments',[])]+
@@ -836,25 +1342,52 @@ def _checkout_row(db, scope, *, initialize=False):
         else:
             db.execute("insert into checkouts values(?,?,?,?,0)", expected)
         row = db.execute("select * from checkouts where scope_id=?", (scope_id,)).fetchone()
+        from runtime.workstreams import initialize_default
+        initialize_default(scope, db)
     return row
 
 
 def _task_projection(db, scope_id, task):
-    version = db.execute("pragma user_version").fetchone()[0]
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is not None:scope[0].current_acquisition()._require_validation(task)
+    version = _capture_scalar(db,'user_version')
     _validate_pins(task.get("pins"), version=version)
     if version != 3:
         if "accepted_identity" in task:
             raise StateError("Legacy task cannot acquire canonical identity")
         return
     identity = _accepted_identity(task.get("accepted_identity"))
-    row = db.execute("select * from checkouts where scope_id=?", (scope_id,)).fetchone()
-    database_path = Path(db.execute("pragma database_list").fetchone()[2])
+    if scope is None:
+        row=db.execute("select * from checkouts where scope_id=?",(scope_id,)).fetchone()
+        database_path=Path(db.execute("pragma database_list").fetchone()[2])
+        _validate_task_projection(identity,row,database_path,scope_id,task)
+        return
+    owner=scope[0].current_acquisition()
+    with _capture_point(db,'checkout',(scope_id,)) as row:
+        with _capture_point(db,'task_database',()) as database:
+            length=len(database[2])
+            path=owner.reserve(requested=768+196*(length+1),live=768+196*(length+1))
+            database_path=Path(database[2])
+            _validate_task_projection(identity,row,database_path,scope_id,task)
+            database_path=database=None
+            owner.release(path)
+        row=None
+
+
+def _checkout_matches(raw,identity):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:return json_object(raw)==_physical_identity(identity)
+    return scope[0].current_acquisition()._decode_check(raw,json_object,
+        lambda value:value==_physical_identity(identity))
+
+
+def _validate_task_projection(identity,row,database_path,scope_id,task):
     if (identity["configuration"]["runtime"]["state_dir"] != str(database_path.parent)
             or identity["client"] != task["client"] or _digest(identity) != task["pins"]["accepted_scope_digest"]
             or any(identity["configuration"][k] != task["pins"][k] for k in ("policy_digest", "runtime_digest"))
             or _digest([3, identity["project_id"], identity["repository_id"], identity["checkout_id"]]) != scope_id
             or row is None or row[:4] != (scope_id, identity["project_id"], identity["repository_root"], identity["git_common_dir"])
-            or json_object(row[5]) != _physical_identity(identity)):
+            or not _checkout_matches(row[5],identity)):
         raise StateError("Task snapshot, pins and physical checkout differ")
 
 
@@ -918,14 +1451,20 @@ def _sidecars(path):
 
 
 def _schema(db, *, version=SCHEMA_VERSION):
+    with _capture_precharge(db,'schema') as selection:
+        return _schema_selected(db,version=version,selection=selection)
+
+
+def _schema_selected(db, *, version, selection):
     # Version 1 is accepted only by D4's private read-only transition inspector.
     tables = TABLES - {"assignments"} if version == 1 else set(CANONICAL_TABLE_SQL) if version == 3 else TABLES
-    objects = db.execute("select type,name,sql from sqlite_master").fetchall()
+    objects = (db.execute("select type,name,sql from sqlite_master").fetchall() if selection is None
+        else db.execute(selection[0],selection[1]).fetchall())
     if (version not in (1, SCHEMA_VERSION, CANONICAL_SCHEMA_VERSION) or
-            db.execute("pragma application_id").fetchone()[0] != APPLICATION_ID or
-            db.execute("pragma user_version").fetchone()[0] != version or
+            _capture_scalar(db,'application_id') != APPLICATION_ID or
+            _capture_scalar(db,'user_version') != version or
             {name for kind, name, _ in objects if kind == "table"} != tables or
-            db.execute("pragma journal_mode").fetchone()[0] != "delete"):
+            _capture_scalar(db,'journal_mode') != "delete"):
         raise StateError("Runtime database is unowned or has an incompatible schema")
     for kind, name, sql in objects:
         if kind == "table":
@@ -993,8 +1532,13 @@ def _prepare_directory(directory):
     _private(directory, True)
 
 
-def _initialize(path, *, version=SCHEMA_VERSION, expected_directory=None):
-    _prepare_directory(path.parent)
+def _initialize(path, *, version=SCHEMA_VERSION, expected_directory=None, initialize_metadata=None):
+    if version != CANONICAL_SCHEMA_VERSION:
+        raise StateError('Legacy authority creation is unavailable; retain the original pinned package and use approved D4 birth')
+    if initialize_metadata is None:
+        _prepare_directory(path.parent)
+    else:
+        _private(path.parent, True)
     if version == 3:
         parent_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -1018,6 +1562,9 @@ def _initialize(path, *, version=SCHEMA_VERSION, expected_directory=None):
                 database_binding=dict(device=info.st_dev, inode=info.st_ino))
             creation = _AuthorityCreation(_canonical_freeze(authority), _owner_time(), descriptor, _CREATION_ISSUER)
             _check_creation(path, creation)
+            if initialize_metadata is not None:
+                from runtime.changes import _checkpoint
+                _checkpoint('birth-unreceipted')
         else:
             os.close(descriptor)
             descriptor = None
@@ -1032,6 +1579,14 @@ def _initialize(path, *, version=SCHEMA_VERSION, expected_directory=None):
             db.execute('pragma user_version=' + str(version))
             if creation is not None:
                 _check_creation(path, creation, db)
+            if initialize_metadata is not None:
+                initialize_metadata(db, creation)
+                _check_creation(path, creation, db)
+        if creation is not None:
+            os.fsync(creation.descriptor)
+            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try: os.fsync(directory)
+            finally: os.close(directory)
         return creation
     except BaseException:
         if descriptor is not None:
@@ -1060,7 +1615,7 @@ def _source_baseline(scope, db, *, context=None):
         return None
     reference = dict(name=name, digest=metadata['managed']['sha256'])
     content = evidence._read(None if selected else scope, reference, context=selected, db=db)
-    _fields(content, ('version', 'kind', 'source_contract', 'authority', 'project_id', 'created_at', 'runtime_digest'))
+    _fields(content, ('version', 'kind', 'source_contract', 'authority', 'project_id', 'created_at', 'runtime_digest'), ('birth_expectation',))
     if (type(content['version']) is not int or content['version'] != 1 or content['kind'] != 'authority-source-baseline'
             or type(content['source_contract']) is not int or content['source_contract'] not in (1, 2)
             or content['authority'] != authority or metadata['class'] != 'compact'
@@ -1068,6 +1623,16 @@ def _source_baseline(scope, db, *, context=None):
             or metadata['created_at'] != content['created_at'] or metadata['closed_at'] is not None
             or metadata['targets'] or metadata['export'] is not None):
         raise StateError('Authority source baseline provenance is invalid')
+    if 'birth_expectation' in content:
+        expectation = content['birth_expectation']
+        _fields(expectation, ('version', 'identity', 'intent_digest'))
+        _fields(expectation['identity'], ('plan_dir', 'transaction_id', 'manifest_digest'))
+        if expectation['version'] != 1 or type(expectation['version']) is not int or content['source_contract'] != 2:
+            raise StateError('Unsupported original birth expectation')
+        _canonical_path(expectation['identity']['plan_dir'])
+        _text(expectation['identity']['transaction_id'], 'birth transaction')
+        _canonical_hash(expectation['identity']['manifest_digest'])
+        _canonical_hash(expectation['intent_digest'])
     _canonical_hash(content['runtime_digest'])
     _integer(content['created_at'], 'original authority creation time')
     for dependency in metadata['dependencies']:
@@ -1082,13 +1647,29 @@ def _source_baseline(scope, db, *, context=None):
     return _canonical_freeze(dict(reference=reference, content=content, dependencies=metadata['dependencies']))
 
 
+def _check_current_authority(scope, db):
+    baseline = _source_baseline(scope, db)
+    if (baseline is None or baseline['content']['runtime_digest'] != _pins(scope)['runtime_digest']
+            or baseline['content']['project_id'] != scope.project_id):
+        raise StateError('Canonical authority belongs to another or unproven runtime generation; retain its original pinned reader')
+    from runtime import onboarding
+    observed = onboarding._authority_observation(scope.project_root, dict(paths=0, bytes=0), canonical_only=True)
+    if observed['error'] or observed['target'] != _canonical_plain(scope.authority_target):
+        raise StateError('Canonical project authority changed; reacquire the accepted scope')
+
+
 @contextmanager
-def _database(scope, write=False, initialize=False):
+def _database(scope, write=False, initialize=False, *, guard_existing=False, historical=False):
     db = creation = None
     with ExitStack() as guards:
         try:
-            path = _path(scope)
             version = _scope_version(scope)
+            if historical:
+                if version != 2 or write or initialize or guard_existing:
+                    raise StateError('Historical inspection is read-only and cannot create or mutate authority')
+            elif version != 3:
+                raise StateError('Legacy runtime requires its original pinned package; fresh approved D4 enrollment is required for current authority')
+            path = _path(scope)
             if initialize and version == 3:
                 if not write:
                     raise StateError('Fresh schema3 bootstrap requires its write transaction')
@@ -1100,6 +1681,15 @@ def _database(scope, write=False, initialize=False):
                 info = path.parent.lstat()
                 if dict(device=info.st_dev, inode=info.st_ino) != directory_binding:
                     raise StateError('Authority directory changed before bootstrap guard')
+            elif guard_existing and version == 3:
+                if not write:
+                    raise StateError('Existing canonical task guard requires its write transaction')
+                _private(path.parent, True)
+                authority = _authority_identity(path)
+                from runtime.changes import _authority_guards
+                guards.enter_context(_authority_guards([path.parent]))
+                if _authority_identity(path) != authority:
+                    raise StateError('Existing authority physical identity changed before task guard')
             if not os.path.lexists(path):
                 if initialize:
                     try:
@@ -1110,6 +1700,8 @@ def _database(scope, write=False, initialize=False):
                     except FileExistsError:
                         pass
                 else:
+                    if version == 3:
+                        raise StateError('Canonical authority database is missing; the owned D4 operation is required')
                     yield None
                     return
             _sidecars(path)
@@ -1120,14 +1712,19 @@ def _database(scope, write=False, initialize=False):
                 _check_creation(path, creation, db)
             db.execute('pragma busy_timeout=100')
             db.execute('pragma trusted_schema=off')
+            if historical:db.execute('pragma query_only=on')
             _schema(db, version=version)
             db.execute('begin immediate' if write else 'begin')
             if creation is not None:
                 from runtime.evidence import _register_source_baseline
                 _register_source_baseline(scope, db, creation)
                 _check_creation(path, creation, db)
+            elif version == 3:
+                _check_current_authority(scope, db)
             yield db
             if write:
+                if version == 3 and creation is None:
+                    _check_current_authority(scope, db)
                 _sidecars(path)
                 if creation is not None:
                     _check_creation(path, creation, db)
@@ -1145,7 +1742,99 @@ def _database(scope, write=False, initialize=False):
                 os.close(creation.descriptor)
 
 
-def _task(db, scope_id, client, session, task_id=None):
+def _capture_unsupported(message):
+    error=StateError(message);error._vcw_resource_origin=_CAPTURE_SQL_SCOPE.get()[0]
+    raise error
+
+
+def _capture_task_inputs(db,owner,scope_id,client,session,task_id):
+    owner.resources._check_native_connection(db)
+    bookkeeping=owner.reserve(requested=512,live=512)
+    values=(scope_id,client,session,task_id)
+    if any(value is not None and type(value) is not str for value in values):
+        _capture_unsupported('Resource task capture requires native identifiers')
+    if (type(scope_id) is not str or len(scope_id)!=64 or type(client) is not str or len(client)>11
+            or type(session) is not str or len(session)>1024 or task_id is not None and len(task_id)>128):
+        _capture_unsupported('Resource task identifier exceeds supported bounds')
+    size=sum(len(value) for value in values if value is not None)
+    lease=owner.reserve(requested=8*size+1024,live=8*size+1024)
+    if (not re.fullmatch(r'[0-9a-f]{64}',scope_id) or client not in ('codex','claude-code')
+            or not session.strip() or not session.isprintable()
+            or task_id is not None and (not task_id.strip() or not task_id.isprintable())):
+        _capture_unsupported('Resource task capture has invalid identifiers')
+    values=None
+    owner.release(bookkeeping)
+    return lease
+
+
+def _capture_identity_precharge(owner,identity):
+    control=owner.reserve(requested=512,live=512)
+    if type(identity) is not dict or len(identity)>6 or any(type(k) is not str or type(v) is not str for k,v in identity.items()):
+        _capture_unsupported('Resource retired lookup requires native identity')
+    chars=sum(len(k)+len(v) for k,v in identity.items());units=2*len(identity)+1
+    tree=4*(chars+1)+384*(units+1);serialized=12*(chars+1)+4*(units+1)+32
+    lease=owner.reserve(requested=4*tree+3*serialized,live=4*tree+3*serialized)
+    owner.release(control)
+    return lease
+
+
+def _task_retired(db,scope_id,client,session,task_id):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:return _retired(db,'task',dict(scope_id=scope_id,client=client,session_id=session,task_id=task_id))
+    owner=scope[0].current_acquisition()
+    size=len(scope_id)+len(client)+len(session)+len(task_id)
+    lease=owner.reserve(requested=4*size+4096,live=4*size+4096)
+    identity=dict(scope_id=scope_id,client=client,session_id=session,task_id=task_id)
+    value=_retired(db,'task',identity)
+    identity=None
+    if value is not None:return value
+    owner.release(lease)
+    return None
+
+
+def _task(db, scope_id, client, session, task_id=None, *, historical=False):
+    scope=_CAPTURE_SQL_SCOPE.get()
+    if scope is None:return _task_unaccounted(db,scope_id,client,session,task_id,historical=historical)
+    if historical:_capture_unsupported("Historical task inspection requires its original unaccounted reader")
+    owner=scope[0].current_acquisition()
+    inputs=_capture_task_inputs(db,owner,scope_id,client,session,task_id)
+    task=_captured_task_lookup(db,scope_id,client,session,task_id)
+    owner.release(inputs)
+    return task
+
+
+def _captured_task_lookup(db,scope_id,client,session,task_id):
+    owner=_CAPTURE_SQL_SCOPE.get()[0].current_acquisition()
+    if _capture_scalar(db,'user_version')!=3:
+        _capture_unsupported('Resource task capture requires canonical schema 3')
+    if task_id is None:
+        with _capture_point(db,'binding',(scope_id,client,session)) as binding:
+            if binding is None:return None
+            task_id=binding[0]
+            inputs=_capture_task_inputs(db,owner,scope_id,client,session,task_id)
+            task=_captured_task_row(db,scope_id,client,session,task_id)
+            binding=task_id=None
+            owner.release(inputs)
+            return task
+    return _captured_task_row(db,scope_id,client,session,task_id)
+
+
+def _captured_task_row(db,scope_id,client,session,task_id):
+    with _capture_point(db,'task',(scope_id,client,session,task_id)) as row:
+        if row is None:
+            if _task_retired(db,scope_id,client,session,task_id):
+                raise StateError("Retired task evidence is unavailable or expired")
+            raise StateError("Runtime task binding is corrupt")
+        version=_capture_scalar(db,'user_version')
+        if version!=3:_capture_unsupported('Resource task capture requires canonical schema 3')
+        task=_CAPTURE_SQL_SCOPE.get()[0].current_acquisition().decode(row[0],
+            lambda raw:json_object(raw,limit=4*1024*1024),
+            validate=lambda value:_validate_task(db,scope_id,client,session,task_id,version,value))
+        row=None
+    return task
+
+
+def _task_unaccounted(db, scope_id, client, session, task_id=None, *, historical=False):
     if task_id is None:
         binding = db.execute("select task_id from bindings where scope_id=? and client=? and session_id=?",
                              (scope_id, client, session)).fetchone()
@@ -1160,8 +1849,12 @@ def _task(db, scope_id, client, session, task_id=None):
         raise StateError("Runtime task binding is corrupt")
     version = db.execute("pragma user_version").fetchone()[0]
     task = json_object(row[0], limit=4 * 1024 * 1024) if version == 3 else json.loads(row[0])
+    return _validate_task(db,scope_id,client,session,task_id,version,task,historical=historical)
+
+
+def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=False):
     _fields(task, ("client", "session_id", "task_id", "scope_ref", "mode", "decision_ref", "state", "revision",
-                   "pins", "reason", "reference", "conditions", "turn_id", "turn_uncertain", *(["accepted_identity"] if version == 3 else [])), ("resolution_ref", "evidence", "retirement", "delegation", *(["lifecycle","writer_stop"] if version == 3 else [])))
+                   "pins", "reason", "reference", "conditions", "turn_id", "turn_uncertain", *(["accepted_identity"] if version == 3 else [])), ("resolution_ref", "evidence", "retirement", "delegation", "milestones", *(["lifecycle","writer_stop"] if version == 3 else [])))
     stored_claude = (version == 3 and task.get("client") == "claude-code" and
                      isinstance(task.get("accepted_identity"), dict) and
                      task["accepted_identity"].get("client") == "claude-code")
@@ -1170,8 +1863,12 @@ def _task(db, scope_id, client, session, task_id=None):
     for field in ("decision_ref", "reason", "reference", "resolution_ref"):
         if field in task:
             _text(task[field], "stored " + field)
+    legacy = (historical and version in (1, 2) and task['state'] in _HISTORICAL_STATES
+        and isinstance(task['pins'], dict) and task['pins'].get('runtime_digest') != runtime_fingerprint())
+    if task['state'] in _HISTORICAL_STATES and not legacy:
+        raise StateError('Historical task vocabulary requires its original pinned package; current authority requires approved D4 birth')
     if (task["task_id"] != task_id or task["client"] != client or task["session_id"] != session or
-            task["state"] not in STATES or task["mode"] not in {"editable", "read-only"} or
+            (task["state"] not in STATES and not legacy) or task["mode"] not in {"editable", "read-only"} or
             type(task["turn_uncertain"]) is not bool or not isinstance(task["conditions"], list) or
             len(task["conditions"]) > 64):
         raise StateError("Runtime task record is corrupt")
@@ -1182,7 +1879,7 @@ def _task(db, scope_id, client, session, task_id=None):
         raise StateError("Claude Code task records do not support evidence, delegation or retirement")
     if version == 3:
         _task_lifecycle(task)
-        if _retired(db, "task", dict(scope_id=scope_id, client=client, session_id=session, task_id=task_id)):
+        if _task_retired(db,scope_id,client,session,task_id):
             raise StateError("Live task conflicts with a retired identity marker")
     seen = set()
     for condition in task["conditions"]:
@@ -1209,6 +1906,7 @@ def _task(db, scope_id, client, session, task_id=None):
     if "delegation" in task:
         from runtime.delegation import validate_delegation
         validate_delegation(task["delegation"])
+    if "milestones" in task:_milestones(task["milestones"])
     if "writer_stop" in task:_writer_stop_shape(task["writer_stop"])
     if "retirement" in task:
         retirement = task["retirement"]
@@ -1216,12 +1914,23 @@ def _task(db, scope_id, client, session, task_id=None):
         for field in ("proof_digest", "observation_ref", "coordinator_ref"):
             _text(retirement[field], "stored retirement " + field)
         _integer(retirement["previous_revision"], "stored retirement revision", 1)
-        if task["state"] != "cancelled" or retirement["previous_revision"] >= task["revision"]:
+        if task["state"] not in ({"cancelled"} if legacy else {"CANCELLED"}) or retirement["previous_revision"] >= task["revision"]:
             raise StateError("Retired task must remain terminal with original history")
     return task
 
 
 def _save(db, scope_id, task):
+    if _capture_scalar(db, 'user_version') != CANONICAL_SCHEMA_VERSION:
+        raise StateError('Legacy task mutation requires its original pinned package; current authority requires approved D4 birth')
+    if task.get('state') not in STATES or task.get('pins',{}).get('runtime_digest') != runtime_fingerprint():
+        raise StateError('Historical task mutation requires its original pinned package; current authority requires approved D4 birth')
+    previous = db.execute('select data from tasks where scope_id=? and client=? and session_id=? and task_id=?',
+        (scope_id,task['client'],task['session_id'],task['task_id'])).fetchone()
+    if previous is not None:
+        original = json_object(previous[0], limit=4 * 1024 * 1024)
+        if original.get('state') not in STATES or original.get('pins') != task['pins']:
+            raise StateError('Historical task vocabulary and pins cannot be rewritten')
+    if 'milestones' in task:_milestones(task['milestones'])
     _task_projection(db, scope_id, task)
     if task["pins"]["schema_version"] == 3:
         previous = db.execute("select data from tasks where scope_id=? and client=? and session_id=? and task_id=?",
@@ -1254,9 +1963,9 @@ def _save(db, scope_id, task):
 
 
 def _compatible(scope, task):
-    if task is not None and (task["pins"] != _pins(scope) or isinstance(scope, AcceptedScope)
+    if task is not None and (task["state"] not in STATES or task["pins"] != _pins(scope) or isinstance(scope, AcceptedScope)
                             and task["accepted_identity"] != _canonical_plain(scope.accepted_identity)):
-        raise StateError("Task policy, runtime or schema pins differ; explicit migration is required")
+        raise StateError("Task policy, runtime or schema pins differ; retain the original pinned package and arrange fresh approved D4 enrollment")
 
 
 def _status(db, scope, client, session):
@@ -1280,7 +1989,7 @@ def task_status(scope, client, session_id):
         revalidate_ready(scope, client, session_id)
     with _database(scope) as db:
         status = _status(db, scope, client, session_id)
-        if client == "claude-code" and status["task"] is not None and status["task"]["state"] == "ready":
+        if client == "claude-code" and status["task"] is not None and status["task"]["state"] == "DONE":
             raise StateError("Claude Code task readiness is unverified by the available evidence adapter")
         if status['task'] is not None and status['task'].get('lifecycle',{}).get('safe_closed_at') is not None:
             from runtime.evidence import _closed_status
@@ -1293,6 +2002,11 @@ def inspect_state(scope):
     report = dict(configured=scope.runtime is not None, present=False, compatible=False,
                   schema_version=3 if isinstance(scope, AcceptedScope) else SCHEMA_VERSION, policy_digest=scope.policy_digest,
                   runtime_digest=runtime_fingerprint(), tasks=[])
+    if isinstance(scope, AcceptedScope):
+        try: _scope_version(scope)
+        except StateError as error:
+            report["error"] = str(error)
+            return report
     if scope.runtime is None:
         report["compatible"] = True
         return report
@@ -1335,11 +2049,30 @@ def start_task(scope, request):
     if isinstance(scope, AcceptedScope) and request["client"] != scope.client:
         raise StateError("Task client differs from accepted scope")
     pins = _pins(scope)
-    with _database(scope, write=True, initialize=True) as db:
+    if isinstance(scope, AcceptedScope) and not _path(scope).exists():
+        raise StateError('Canonical authority birth requires the owned D4 operation')
+    with _database(scope, write=True, initialize=not isinstance(scope, AcceptedScope),
+                   guard_existing=isinstance(scope, AcceptedScope)) as db:
+        if db is None:
+            raise StateError('Canonical authority is unavailable')
+        if isinstance(scope, AcceptedScope) and _source_baseline(scope, db) is None:
+            raise StateError('Canonical authority original baseline is unavailable')
+        placeholders=','.join('?' for _ in STATES)
+        incompatible=db.execute("select 1 from tasks where json_type(data,'$.state') is not 'text' or "
+            "json_extract(data,'$.state') not in ("+placeholders+") or json_type(data,'$.pins.runtime_digest') is not 'text' or "
+            "json_extract(data,'$.pins.runtime_digest') != ? or json_type(data,'$.pins.schema_version') is not 'integer' or "
+            "json_extract(data,'$.pins.schema_version') != ? or json_type(data,'$.pins.policy_digest') is not 'text' or "
+            "(scope_id=? and json_extract(data,'$.pins.policy_digest') != ?) limit 1",
+            (*sorted(STATES),pins['runtime_digest'],_scope_version(scope),_scope_id(scope),pins['policy_digest'])).fetchone()
+        if incompatible:
+            raise StateError('Retained task authority is incompatible; preserve its original pinned package and arrange any fresh approved enrollment through D4')
         scope_id = _scope_id(scope)
         if _retired(db, "task", dict(scope_id=scope_id, **{k:request[k] for k in ("client", "session_id", "task_id")})):
             raise StateError("Retired task identity cannot start again; evidence is unavailable or expired")
         _checkout_row(db, scope, initialize=True)
+        if isinstance(scope, AcceptedScope) and not db.execute('select 1 from tasks where scope_id=? limit 1', (scope_id,)).fetchone():
+            from runtime.workstreams import initialize_default
+            initialize_default(scope, db)
         current = _task(db, scope_id, request["client"], request["session_id"])
         if current and current["task_id"] == request["task_id"]:
             _assert_open(current)
@@ -1365,7 +2098,7 @@ def start_task(scope, request):
         elif replacement is not None:
             raise StateError("No bound task matches the requested replacement")
         task = {field: request[field] for field in ("client", "session_id", "task_id", "scope_ref", "mode", "decision_ref")}
-        task.update(state="planned", revision=1, pins=pins, reason="Task started", reference=request["decision_ref"],
+        task.update(state="TRIAGE", revision=1, pins=pins, reason="Task started", reference=request["decision_ref"],
                     conditions=[], turn_id=None, turn_uncertain=True)
         if isinstance(scope, AcceptedScope):
             task["accepted_identity"] = _accepted_identity(scope.accepted_identity)
@@ -1392,7 +2125,7 @@ def _condition(value, task, previous):
         _text(continuation["turn_id"], "continuation turn_id")
         if type(continuation["budget"]) is not int or continuation["budget"] not in (0, 1):
             raise StateError("Continuation budget must be zero or one")
-        if (value["kind"] != "runnable" or task["state"] not in {"active", "verifying"} or
+        if (value["kind"] != "runnable" or task["state"] not in {"WORKING", "REVIEW"} or
                 task["turn_id"] != continuation["turn_id"] or task["turn_uncertain"]):
             raise StateError("Continuation requires a runnable condition and observed current task turn")
         if old and (old["turn_id"] != continuation["turn_id"] or continuation["budget"] > old["budget"]):
@@ -1406,7 +2139,7 @@ def _condition(value, task, previous):
 
 def update_task(scope, request):
     _fields(request, ("client", "session_id", "task_id", "scope_ref", "expected_revision", "state", "reason", "reference"),
-            ("conditions", "resolutions", "resolution_ref"))
+            ("conditions", "resolutions", "resolution_ref", "milestones"))
     _identity(request, allow_claude=request.get("client") == "claude-code")
     _require_claude_scope(scope, request["client"])
     _integer(request["expected_revision"], "expected_revision", 1)
@@ -1414,8 +2147,8 @@ def update_task(scope, request):
         _text(request[field], field)
     if "resolution_ref" in request:
         _text(request["resolution_ref"], "resolution_ref")
-    if not isinstance(request["state"], str) or request["state"] not in STATES - {"ready"}:
-        raise StateError("Only completion evidence verification can declare ready")
+    if not isinstance(request["state"], str) or request["state"] not in STATES - {"DONE"}:
+        raise StateError("Only completion evidence verification can declare DONE")
     for field in ("conditions", "resolutions"):
         if field in request and (not isinstance(request[field], list) or len(request[field]) > 64):
             raise StateError("Task conditions and resolutions must be bounded lists")
@@ -1430,13 +2163,14 @@ def update_task(scope, request):
         if task["revision"] != request["expected_revision"]:
             raise StateError("Task revision conflict")
         old_state, state = task["state"], request["state"]
-        allowed = (old_state == state or state in {"awaiting_user", "blocked", "cancelled"} or
-                   (old_state, state) in {("planned", "active"), ("active", "verifying"), ("verifying", "active"), ("ready", "active"), ("ready", "verifying")} or
-                   (old_state in {"blocked", "awaiting_user"} and state in {"planned", "active", "verifying"} and
-                    "resolution_ref" in request))
-        if old_state == "cancelled" or not allowed:
+        allowed = (old_state == state or state in {'WAITING','BLOCKED','PAUSED','CANCELLED'} or
+            (old_state,state) in {('TRIAGE','READY'),('TRIAGE','WORKING'),('TRIAGE','REVIEW'),('READY','WORKING'),
+                ('READY','REVIEW'),('WORKING','REVIEW'),('REVIEW','WORKING'),('DONE','WORKING'),('DONE','REVIEW')} or
+            (old_state in {'WAITING','BLOCKED','PAUSED'} and state in {'TRIAGE','READY','WORKING','REVIEW'} and 'resolution_ref' in request))
+        if old_state == 'CANCELLED' or not allowed:
             raise StateError("Task state transition is not allowed")
         task.update(state=state, reason=request["reason"], reference=request["reference"])
+        if 'milestones' in request:task['milestones']=_milestones(request['milestones'])
         if "resolution_ref" in request:
             task["resolution_ref"] = request["resolution_ref"]
         conditions = {condition["id"]: condition for condition in task["conditions"]}
@@ -1459,7 +2193,7 @@ def update_task(scope, request):
             seen.add(resolution["id"])
             conditions[resolution["id"]].update(status="resolved", resolution_ref=resolution["reference"])
         task["conditions"] = list(conditions.values())
-        if state in {"blocked", "awaiting_user", "cancelled"}:
+        if state in {'BLOCKED','WAITING','PAUSED','CANCELLED'}:
             for condition in task["conditions"]:
                 if "continuation" in condition:
                     condition["continuation"]["revoked"] = True
@@ -1470,9 +2204,10 @@ def update_task(scope, request):
 
 def process_event(scope, event):
     """Evaluate and apply in one short transaction; hooks never initialize state."""
-    if scope.runtime is None:
-        return HookResult(event.kind)
     try:
+        if isinstance(scope, AcceptedScope): _scope_version(scope)
+        if scope.runtime is None:
+            return HookResult(event.kind)
         _require_claude_scope(scope, event.client)
         if isinstance(scope, AcceptedScope) and event.client != scope.client:
             raise StateError("Event client differs from accepted scope")
@@ -1572,8 +2307,9 @@ def retire_task(scope, request):
         if (proof['identity'] != identity or proof['expected_revision'] != task['revision'] or proof['expected_pins'] != task['pins'] or
                 proof['observed_turn_id'] != task['turn_id'] or proof['attempt_ids'] != attempts):
             raise StateError('Stopped-writer proof does not match exact historical task and attempts')
+        _compatible(scope, task)
         retained_proof = _artifact(scope, proof, owner=_artifact_owner(scope, task), db=db)
-        task.update(state='cancelled', reason=request['reason'], reference=request['reference'],
+        task.update(state='CANCELLED', reason=request['reason'], reference=request['reference'],
                     retirement=dict(proof_digest=request['stop_proof']['sha256'], proof=retained_proof, observation_ref=proof['observation_ref'],
                                     coordinator_ref=proof['coordinator_ref'], previous_revision=task['revision']))
         for condition in task['conditions']:
@@ -1582,3 +2318,17 @@ def retire_task(scope, request):
         task['revision'] += 1
         _save(db, scope_id, task)
     return dict(ok=True, task=task, limitations=['Cancellation only; host-proof authority is coordinator-verified, not authenticated by local JSON'])
+
+
+def _milestones(values):
+    if not isinstance(values,list) or len(values)>64:
+        raise StateError('Task milestones must be a bounded list')
+    seen=set()
+    for value in values:
+        _fields(value,('id','weight','accepted','reference'))
+        _text(value['id'],'milestone id',128);_text(value['reference'],'milestone acceptance reference',1024)
+        if (value['id'] in seen or type(value['weight']) is not int or not 1<=value['weight']<=1000000
+                or type(value['accepted']) is not bool):
+            raise StateError('Invalid task milestone identity, weight or acceptance')
+        seen.add(value['id'])
+    return values

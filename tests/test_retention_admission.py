@@ -2,19 +2,16 @@
 import unittest
 from unittest.mock import patch
 
-from tests.test_evidence import EvidenceTests
-from tests.test_state import canonical_scope
+from tests import test_evidence
 from runtime import state
 
 
 class RetentionAdmissionTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = EvidenceTests(methodName='runTest')
+        self.fixture = test_evidence.EvidenceTests(methodName='runTest')
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
-        self.fixture.scope = canonical_scope(self.fixture.scope)
         self.scope = self.fixture.scope
-        state.start_task(self.scope, self.fixture.identity | dict(mode='editable', decision_ref='user:accepted'))
         self.fixture.plan()
         self.api = self.fixture.api
 

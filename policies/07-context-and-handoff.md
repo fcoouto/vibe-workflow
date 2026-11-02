@@ -29,3 +29,5 @@ Apply with the [shared contract rules](00-index.md).
 Use the existing plan or task record for unfinished multi-session work. Include the objective, authorized scope, verified state, checks/results, pending work, blockers, owned resources and next action. Distinguish stopped, running and unknown workers/processes; claim background work only when an active process or execution can be verified.
 
 On resume, inspect the actual checkout, files, checks and processes before trusting the handoff. Reconcile discrepancies and use [Agent Delegation](03-agent-delegation.md) before taking over uncertain worker resources. Preserve pauses and limits; continue only the authorized remainder. Keep temporary progress out of permanent memory. Durable lessons belong once in the responsible record, supported by evidence and a condition for rechecking them.
+
+For managed Workstreams, retain the original implementer through relevant review fixes and load the [continuation protocol](../clients/workstreams-protocol.md). Reconcile writers and review readers before resuming; preserve identity, original scope, pins and remaining budgets.

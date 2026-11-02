@@ -31,8 +31,7 @@ class ProposalTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name).resolve()
-        self.repo = root / 'repo'
-        enroll(self.repo, root / 'private')
+        self.repo = enroll(self).repository_root
         self.settings = configure(self.repo, routes=('proposals',))
         self.store = Path(self.settings['proposal_store'])
 

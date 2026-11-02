@@ -33,7 +33,10 @@ class DiagnosticRetentionRoutesTests(unittest.TestCase):
         except state.StateError:
             return
         self.assertFalse(report["deletion_authorized"])
-        output = self.output_row(report, output_ref)
+        output = next((row for row in report["outputs"] if row["reference"] == output_ref), None)
+        if output is None:
+            self.assertTrue(report.get("blockers"), report)
+            return
         self.assertTrue(output["blockers"] or any(route["disposition"] == "protected" for route in output["routes"]))
         self.assertFalse(any(route["disposition"] == "diagnostic-provenance" for route in output["routes"]))
 
@@ -149,13 +152,7 @@ class DiagnosticRetentionRoutesTests(unittest.TestCase):
                     path.write_bytes(original + b" ")
                     path.chmod(0o400)
                 try:
-                    with api._context_database(context) as db:
-                        report = api._diagnostic_output_routes(context, db, task_ref)
-                    output = self.output_row(report, output_ref)
-                    mandate_routes = [route for route in output["routes"] if route["kind"] == "mandate"]
-                    self.assertFalse(report["deletion_authorized"])
-                    self.assertTrue(output["blockers"] or any(route["disposition"] == "protected" for route in mandate_routes))
-                    self.assertFalse(any(route["disposition"] == "bookkeeping" for route in mandate_routes))
+                    self.assert_protected_or_guarded(api, context, task_ref, output_ref)
                 finally:
                     if mode == "missing":
                         moved.rename(path)

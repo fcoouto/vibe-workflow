@@ -35,8 +35,9 @@ def signature(info):
 
 def resolve(cwd):
     require(cwd is not None and os.name == 'posix', 'openrouter_scope_required')
-    scope = startup.resolve_project(SimpleNamespace(client='codex', cwd=Path(cwd)), PACKAGE)
-    require(type(scope) is startup.ProjectScope and scope.runtime is not None,
+    scope = startup._entry_scope(startup.acquire_project_entry(
+        SimpleNamespace(client='codex', cwd=Path(cwd)), PACKAGE))
+    require(type(scope) is startup.AcceptedScope and scope.runtime is not None,
             'existing_enrolled_runtime_required')
     return scope
 

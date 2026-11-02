@@ -7,16 +7,14 @@ import json
 import os
 from pathlib import Path
 import selectors
-import shutil
 import subprocess
 import sys
 import time
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from runtime import startup, state
-from tests import test_runtime
+from tests.openrouter_fixtures import enroll, cli_driver
 from tests.test_langfuse import protocol_server, PUBLIC_KEY, SECRET_KEY
 
 
@@ -26,15 +24,9 @@ SCRIPT = PACKAGE / 'scripts/observability.py'
 
 class ObservabilityActivationTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = test_runtime.RuntimeTests(methodName='runTest')
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.fixture.enroll(runtime=self.fixture.runtime())
-        self.scope = startup.resolve_project(
-            SimpleNamespace(client='codex', cwd=self.fixture.repo), PACKAGE)
-        state.start_task(self.scope, dict(client='codex', session_id='session-1',
-            task_id='activation-fixture', scope_ref='user:fixture', mode='read-only',
-            decision_ref='user:fixture'))
+        self.scope = enroll(self)
+        self.fixture = self._optional_fixtures[-1]
+        self.driver = cli_driver(self, self.scope, SCRIPT)
 
     def snapshot_state(self):
         directory = self.scope.runtime.state_dir
@@ -46,7 +38,7 @@ class ObservabilityActivationTests(unittest.TestCase):
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(('LANGFUSE_', 'GIT_'))}
         environment.update(overrides)
-        return subprocess.run([sys.executable, '-I', '-B', str(SCRIPT), action,
+        return subprocess.run([sys.executable, '-I', '-B', str(self.driver), action,
             '--cwd', str(self.fixture.repo)], input=raw if raw is not None else json.dumps(request or {}).encode(),
             capture_output=True, cwd=self.fixture.repo, env=environment, timeout=25)
 
@@ -168,7 +160,7 @@ class ObservabilityActivationTests(unittest.TestCase):
         self.successful('configure', dict(expected_revision=0, destination='https://cloud.langfuse.com',
             langfuse_project_id='lf-project', credential_source='os-store'))
         environment = {key: value for key, value in os.environ.items() if not key.startswith(('LANGFUSE_', 'GIT_'))}
-        result = subprocess.run([sys.executable, '-I', '-B', str(SCRIPT), 'forget-credentials',
+        result = subprocess.run([sys.executable, '-I', '-B', str(self.driver), 'forget-credentials',
             '--cwd', str(self.fixture.repo), '--expected-revision', '0'],
             input=b'', capture_output=True, env=environment, timeout=10)
         self.assertEqual(result.returncode, 1)
@@ -178,8 +170,6 @@ class ObservabilityActivationTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == 'darwin', 'This CLI fixture selects the macOS backend')
     def test_real_terminal_store_enable_probe_disable_forget_with_fake_native_store(self):
         package = self.fixture.base / 'isolated-package'
-        for name in ('runtime', 'scripts', 'policies', 'clients'):
-            shutil.copytree(PACKAGE / name, package / name, ignore=shutil.ignore_patterns('__pycache__'))
         keyring = package / 'keyring'
         (keyring / 'backends').mkdir(parents=True)
         (keyring / '__init__.py').write_text('def get_keyring():\n    raise AssertionError("default backend")\n')
@@ -207,7 +197,9 @@ class Keyring:
         metadata = package / 'keyring-25.7.0.dist-info'
         metadata.mkdir()
         (metadata / 'METADATA').write_text('Metadata-Version: 2.1\nName: keyring\nVersion: 25.7.0\n')
-        script = package / 'scripts/observability.py'
+        script = cli_driver(self, self.scope, SCRIPT)
+        script.write_text(script.read_text().replace('runpy.run_path(',
+            f'sys.path.insert(0, {str(package)!r})\nrunpy.run_path('))
         store = self.fixture.base / 'synthetic-credentials.json'
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(('LANGFUSE_', 'GIT_'))

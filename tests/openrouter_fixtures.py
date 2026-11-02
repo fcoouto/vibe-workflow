@@ -1,31 +1,51 @@
 """Disposable accepted scopes for managed OpenRouter tests; no live account state."""
-import json
-import os
 from pathlib import Path
-import subprocess
-from types import SimpleNamespace
+from unittest.mock import patch
 
-from runtime import startup, state
+from runtime import changes, startup
 
 PACKAGE = Path(__file__).resolve().parents[1]
 
 
-def enroll(repo, private):
-    repo.mkdir(exist_ok=True)
-    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
-    subprocess.run(['git', 'init', '-q', '--template=', str(repo)], env=env, check=True, capture_output=True)
-    root, common = startup.checkout(repo)
-    record = dict(schema_version=1, project_id='openrouter-fixture', repository_root=str(root),
-                  git_common_dir=str(common), clients=['codex'], policy_digest=startup.policy_digest(PACKAGE),
-                  runtime=dict(schema_version=2, state_dir=str(private)))
-    path = repo / startup.PROJECT_FILE
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(record))
-    scope = startup.resolve_project(SimpleNamespace(client='codex', cwd=repo), PACKAGE)
-    state.start_task(scope, dict(client='codex', session_id='fixture-session', task_id='fixture-task',
-        scope_ref='test:scope', mode='read-only', decision_ref='test:scope'))
+def enroll(testcase):
+    """Genuine D4 birth with an explicit software-only owner observation."""
+    from tests.fixture_canonical_birth import fresh_canonical
+    fixture, acquisition, observation = fresh_canonical(testcase)
+    scope = startup._entry_scope(acquisition)
+    if not hasattr(testcase, '_optional_observations'):
+        testcase._optional_observations = {}
+        testcase._optional_fixtures = []
+        actual = startup.acquire_project_entry
+
+        def acquire(event, package, **kwargs):
+            owner = testcase._optional_observations.get(str(event.cwd))
+            if owner is not None and 'qualifier' not in kwargs:
+                kwargs['qualifier'] = lambda record, facts: owner
+            return actual(event, package, **kwargs)
+
+        qualification = patch.object(startup, 'acquire_project_entry', side_effect=acquire)
+        qualification.start()
+        testcase.addCleanup(qualification.stop)
+    testcase._optional_observations[str(scope.repository_root)] = observation
+    testcase._optional_fixtures.append(fixture)
     return scope
+
+
+def cli_driver(testcase, scope, script):
+    """Run the real CLI with test-only owner injection, never a production flag."""
+    path = scope.runtime.state_dir.parent / (script.stem + '-fixture-driver.py')
+    observation = testcase._optional_observations[str(scope.repository_root)]
+    path.write_text("import sys, runpy\n"
+        + f"sys.path.insert(0, {str(PACKAGE)!r})\n"
+        + "from runtime import changes, startup\n"
+        + f"changes.LOCK_ROOT = __import__('pathlib').Path({str(changes.LOCK_ROOT)!r})\n"
+        + f"observation = {observation!r}\n"
+        + "actual = startup.acquire_project_entry\n"
+        + "def acquire(event, package, **kwargs):\n"
+        + "    return actual(event, package, qualifier=lambda record, facts: observation, **kwargs)\n"
+        + "startup.acquire_project_entry = acquire\n"
+        + f"runpy.run_path({str(script)!r}, run_name='__main__')\n")
+    return path
 
 
 def configure(repo, *, executable=None, auth=None, routes=('proposals', 'workers')):

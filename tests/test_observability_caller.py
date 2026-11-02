@@ -8,12 +8,12 @@ import json
 from pathlib import Path
 import runpy
 import sys
-from types import SimpleNamespace
+import subprocess
 import unittest
 from unittest.mock import patch
 
 from runtime import observability, startup, state
-from tests import test_runtime
+from tests.openrouter_fixtures import enroll, cli_driver
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/workflow.py'
@@ -21,12 +21,9 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/workflow.py'
 
 class ObservabilityCallerTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = test_runtime.RuntimeTests(methodName='runTest')
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.fixture.enroll(runtime=self.fixture.runtime())
-        self.scope = startup.resolve_project(
-            SimpleNamespace(client='codex', cwd=self.fixture.repo), SCRIPT.parent.parent)
+        self.scope = enroll(self)
+        self.fixture = self._optional_fixtures[-1]
+        self.driver = cli_driver(self, self.scope, SCRIPT)
         state.start_task(self.scope, dict(client='codex', session_id='session-1', task_id='caller-task',
             scope_ref='user:fixture', mode='read-only', decision_ref='user:fixture'))
         self.report = state.task_status(self.scope, 'codex', 'session-1')
@@ -39,7 +36,6 @@ class ObservabilityCallerTests(unittest.TestCase):
             args.append('--prepare-observability')
         output = io.StringIO()
         with patch.object(sys, 'path', list(sys.path)), patch.object(sys, 'argv', args), redirect_stdout(output), \
-                patch.object(startup, 'resolve_project', return_value=self.scope), \
                 patch.object(state, 'task_status', return_value=self.report, side_effect=source_error) as source:
             namespace = runpy.run_path(str(SCRIPT))
             code = namespace['control_main']()
@@ -140,9 +136,14 @@ class ObservabilityCallerTests(unittest.TestCase):
         state_dir = self.scope.runtime.state_dir
         before = {p.relative_to(state_dir): p.read_bytes() for p in state_dir.rglob('*') if p.is_file()}
         flags = ('--client', 'codex', '--session', 'session-1')
-        code, normal = self.fixture.task_cli('status', None, *flags)
+        def status(*options):
+            result = subprocess.run([sys.executable, '-I', '-B', str(self.driver), 'task', 'status',
+                '--cwd', str(self.fixture.repo), *options], input=b'', capture_output=True, timeout=20)
+            self.assertEqual(result.stderr, b'')
+            return result.returncode, json.loads(result.stdout)
+        code, normal = status(*flags)
         self.assertEqual(code, 0)
-        code, prepared = self.fixture.task_cli('status', None, *flags, '--prepare-observability')
+        code, prepared = status(*flags, '--prepare-observability')
         self.assertEqual(code, 0, prepared)
         extra = prepared.pop('observability_preparation')
         self.assertEqual(prepared, normal)

@@ -1,0 +1,5 @@
+# Retire a task
+
+Apply the [common evidence contract](evidence.md) before this procedure.
+
+`task retire` uses the common identity plus `expected_pins` (`schema_version`, `policy_digest`, `runtime_digest`), reason, reference, and `stop_proof` absolute private path/SHA-256. The proof file (JSON, at most 128 KiB) has `version:1`, `kind:"stopped-writer-reconciliation"`, exact `identity`, `expected_revision`, `expected_pins`, `observed_turn_id`, `stopped:true`, `descendants_stopped:true`, ordered `attempt_ids`, `observation_ref`, and `coordinator_ref`. Retirement only cancels and preserves history; it cannot clear unresolved shared assignments. Reconcile each exact assignment first, including retained history and other relevant sessions/scopes. If authority or writer state cannot be verified, the task remains blocked. An interrupted `reserved`, `running`, or `uncertain` attempt blocks readiness and plan changes; do not treat a retry as clearing that record. Resolve uncertainty through exact observed reconciliation before retirement; the retirement proof does not replace assignment or check reconciliation.

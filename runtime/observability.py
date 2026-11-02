@@ -2,9 +2,11 @@
 
 import re
 
+from runtime.task_statuses import STATES
+
 
 # Do not import core validators: importing state also loads mutation-capable owners.
-_STATES = {'planned', 'active', 'awaiting_user', 'blocked', 'verifying', 'ready', 'cancelled'}
+_STATES = STATES | {'planned', 'active', 'awaiting_user', 'blocked', 'verifying', 'ready', 'cancelled'}
 _GAPS = ('source_authenticity_unverified', 'source_freshness_unverified',
          'export_eligibility_unverified', 'current_readiness_unverified')
 

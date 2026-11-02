@@ -1,10 +1,10 @@
 # Native delegation
 
-Read this contract only when preparing, observing or recovering native delegated work. Apply [Agent Delegation](../policies/03-agent-delegation.md) for execution choice, authorization, worker selection, briefs, ownership, review and retry decisions. Use [task runtime](runtime.md#opt-in) for the approved shared state authority. Use [evidence](evidence.md) for native review admission, review quality, accepted checks and completion. Direct checks and coordinator resource claims do not need native guidance. Startup alone needs none of this procedure.
+Read this contract only when preparing, observing or recovering native delegated work. Apply [Agent Delegation](../policies/03-agent-delegation.md) for execution choice, authorization, worker selection, briefs, ownership, review and retry decisions. Use [task runtime](runtime.md#runtime-authority) for the approved shared state authority. Use [evidence](evidence.md) for native review admission, review quality, accepted checks and completion. Direct checks and coordinator resource claims do not need native guidance. Startup alone needs none of this procedure.
 
 ## Observe the route and select settings
 
-The package provides Codex CLI/Desktop native observation; schema-2 native lifecycle qualification remains pending. Qualify the actual surface/version and required controls before relying on them. Approval alone cannot make an unsupported route executable.
+The package provides Codex CLI/Desktop native observation. Qualify the actual surface and required controls before relying on them. Recorded version numbers are provenance, not support gates. Package validation does not establish observed native execution. Approval alone cannot make an unsupported route executable.
 
 Use `discover_native_workers` in the [Codex adapter](../runtime/adapters/codex.py) to inspect current surface, native version and catalog with the coordinator's actual exposed dispatch controls. Select suitable worker settings under policy, retaining the control observation and expected capability digest. Explicit model/effort selection requires supported controls and `fork_turns="none"`; otherwise supply supported inheritance and its evidence only when suitable. Missing controls are limitations, not permission to change coordinator or global settings.
 
@@ -20,24 +20,34 @@ When policy's refresh triggers apply, call `claim_guidance` before fetching and 
 
 Run the installed package's `scripts/workflow.py` with the enrolled checkout as `--cwd`. The following controls read bounded JSON on stdin, except assignment status:
 
-| Control after `workflow.py` | Local request definition |
+| Control after `workflow.py` | Load only this request reference |
 | --- | --- |
-| `delegation guidance status\|claim\|record --cwd /checkout` | `guidance_status`, `claim_guidance`, `record_guidance` |
-| `delegation plan --cwd /checkout` | `plan_delegation` and `PLAN_FIELDS` |
-| `delegation prepare --cwd /checkout` | `prepare_assignment`, `_prepare_native` and `_brief` |
-| `delegation observe --cwd /checkout` | `observe_assignment` |
-| `delegation reconcile --cwd /checkout` | `reconcile_assignment` and `_validate_operation_proof` |
-| `delegation status --cwd /checkout --client codex --session SESSION` | `delegation_status`; no stdin |
+| `delegation guidance status\|claim\|record --cwd /checkout` | [Guidance cache controls](#use-the-relevant-guidance) |
+| `delegation plan --cwd /checkout` | [Plan](delegation-requests.md#plan) |
+| `delegation prepare --cwd /checkout` | [Prepare worker](delegation-requests.md#prepare-worker) |
+| `delegation observe --cwd /checkout` | [Observe](delegation-requests.md#observe) |
+| `delegation reconcile --cwd /checkout` | [Reconcile](delegation-requests.md#reconcile) |
+| `delegation status --cwd /checkout --client codex --session SESSION` | [Status](delegation-requests.md#status); no stdin |
 
-These exact schemas are in [runtime/delegation.py](../runtime/delegation.py). Guidance requests use surface/applicability, not task identity, and are limited to 64 KiB. Other mutations use the current task identity and `expected_revision` within the 128 KiB input limit. After a conflict, read status and prepare current bindings; retain the original semantic request for replay. The runtime does not choose jobs, budgets, settings or authorization.
+Use the [common envelope](delegation-requests.md#common-envelope) and current response
+revision for mutations. The action references include validator-checked examples;
+implementation reads are for diagnosis, explicit implementation work, or the narrow
+uncovered-schema lookups below. For trusted stop-proof construction, read only
+`_validate_operation_proof` in [the validator](../runtime/delegation.py); for cache refresh
+publication, read only `_common`, `_trigger` and `_guidance` there. These lookups
+remain required until complete public references replace those specific schemas;
+do not load the whole implementation for ordinary plan/prepare/observe requests. The runtime
+does not choose jobs, budgets, settings or authorization.
 
-Accept the D5 evidence plan, then an immutable D6 plan with exact jobs, claims, dependencies, finite admission limits and verified capacity. Apply policy's isolation and ownership rules under the [shared authority](runtime.md#opt-in). Claims include relevant path aliases, Git and mutable resources; directory claims conservatively serialize path ownership. Admission requires completed, reconciled dependencies and available capacity/budget, including unresolved retained assignments.
+Accept the D5 evidence plan, then an immutable D6 plan with exact jobs, claims, dependencies, finite admission limits and verified capacity. Apply policy's isolation and ownership rules under the [shared authority](runtime.md#runtime-authority). Claims include relevant path aliases, Git and mutable resources; directory claims conservatively serialize path ownership. Admission requires completed, reconciled dependencies and available capacity/budget, including unresolved retained assignments.
 
 New worker plans and admissions require filesystem write claims (`path`, `build`, `database`) to stay within the task checkout. Declared and resolved paths, including named brief files, cannot cross an external or nested repository/submodule boundary. External reads and separately declared service/port coordination retain their existing rules. Directory descendants and unknown aliases are not exhaustively inspected; this is an admission check, not filesystem isolation. Existing plans and assignments remain readable for replay and recovery; a rejected new admission does not release their ownership or reset budgets.
 
 For a worker, supply a stable dispatch ID, exact planned worker job, selection/control/discovery/guidance evidence, resource units and bounded brief. `_brief` binds files, resources and dependencies to that job and checks to accepted D5 definitions. Include applicable instructions, acceptance, self-review and stop conditions. Native review preparation instead uses the single [D5 review path](evidence.md#request-fields); worker preparation cannot admit a reviewer.
 
-Only a newly committed response with `launch_admitted:true` permits one coordinator spawn, using its exact task name and prompt, with the accepted supported worker settings. Returned `requested_model`/`requested_effort` are null for inheritance; preserve the recorded inheritance rather than inventing overrides. Replay returns the same assignment without another permit. This is protocol admission, not native spawn idempotency. A lost response requires inspection of the same admission and native identity; never blindly respawn. Reservations coordinate participating owners without enforcing native tools, paths or external writers. Deadlines/resource units bound admission, not measured execution or usage.
+For ordinary delegation, only a newly committed response with `launch_admitted:true` permits one coordinator spawn, using its exact task name and prompt, with the accepted supported worker settings. Returned `requested_model`/`requested_effort` are null for inheritance; preserve the recorded inheritance rather than inventing overrides. Replay returns the same assignment without another permit. This is protocol admission, not native spawn idempotency. A lost response requires inspection of the same admission and native identity; never blindly respawn. Reservations coordinate participating owners without enforcing native tools, paths or external writers. Deadlines/resource units bound admission, not measured execution or usage.
+
+Managed Workstreams preparation returns no launch permission. Use its [dispatch protocol](workstreams-protocol.md) to consume the one-use permission before native sending; disable/re-enable invalidates stale preparation.
 
 ## Observe and reconcile independently
 

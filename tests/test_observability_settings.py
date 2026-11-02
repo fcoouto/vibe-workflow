@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from runtime import startup, state
-from tests import test_runtime
+from tests.openrouter_fixtures import enroll
 from tests.test_langfuse import protocol_server
 
 
@@ -22,13 +22,8 @@ class ObservabilitySettingsTests(unittest.TestCase):
     def setUp(self):
         from runtime import observability_settings
         self.settings = observability_settings
-        self.fixture = test_runtime.RuntimeTests(methodName="runTest")
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.fixture.enroll(runtime=self.fixture.runtime())
-        self.scope = startup.resolve_project(SimpleNamespace(client="codex", cwd=self.fixture.repo), PACKAGE)
-        state.start_task(self.scope, dict(client="codex", session_id="session-1", task_id="settings-fixture",
-            scope_ref="user:fixture", mode="read-only", decision_ref="user:fixture"))
+        self.scope = enroll(self)
+        self.fixture = self._optional_fixtures[-1]
         self.directory = self.scope.runtime.state_dir / "observability"
         self.path = self.directory / (state._scope_id(self.scope) + ".json")
 
@@ -53,9 +48,55 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertEqual(set(json.loads(raw)), {"version", "revision", "binding", "destination",
             "langfuse_project_id", "desired_opt_in", "connection_verified_at"})
 
+    def test_saved_active_flags_without_owner_qualification_cannot_access_settings(self):
+        from tests.fixture_canonical_birth import _ACTUAL_ACQUIRE
+        self.settings.configure(self.scope, CONFIGURE)
+        before = self.path.read_bytes(), self.core_digest()
+        with patch.object(startup, 'acquire_project_entry', _ACTUAL_ACQUIRE):
+            with self.assertRaises(self.settings.SettingsError):
+                self.settings.status(self.scope)
+        self.assertEqual((self.path.read_bytes(), self.core_digest()), before)
+
+    def test_sibling_activation_change_preserves_selected_checkout_consent(self):
+        self._canonical_peer = True
+        scope = enroll(self)
+        self.settings.configure(scope, CONFIGURE)
+        with patch("runtime.langfuse.verify_project", return_value=None):
+            self.settings.enable(scope, dict(expected_revision=1))
+        path = scope.runtime.state_dir / "observability" / (state._scope_id(scope) + ".json")
+        before = path.read_bytes()
+        record = json.loads(scope.authority_path.read_bytes())
+        sibling = next(repository for repository in record['repositories']
+                       if repository['repository_id'] != scope.repository_id)
+        sibling['checkouts'][0]['clients'][0]['activation'].update(status='configured',
+            qualification='pending', accepted_scope_digest=None, transaction_id=None,
+            evidence=[], qualification_binding=None)
+        record['revision'] += 1
+        scope.authority_path.write_text(json.dumps(record))
+        current = startup._entry_scope(startup.acquire_project_entry(
+            SimpleNamespace(client='codex', cwd=scope.repository_root), PACKAGE))
+        self.assertEqual(current.accepted_scope_digest, scope.accepted_scope_digest)
+        self.assertTrue(self.settings.status(current)['desired_opt_in'])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(self.settings.disable(current, dict(expected_revision=2))['desired_opt_in'])
+
+    def test_selected_membership_change_rejects_saved_consent_without_writes(self):
+        self.settings.configure(self.scope, CONFIGURE)
+        before = self.path.read_bytes(), self.core_digest()
+        record = json.loads(self.scope.authority_path.read_bytes())
+        selected = next(repository for repository in record['repositories']
+                        if repository['repository_id'] == self.scope.repository_id)
+        selected['membership'] = 'removed'
+        record['revision'] += 1
+        self.scope.authority_path.write_text(json.dumps(record))
+        for operation in (lambda: self.settings.status(self.scope),
+                          lambda: self.settings.enable(self.scope, dict(expected_revision=1))):
+            with self.assertRaises(self.settings.SettingsError):
+                operation()
+        self.assertEqual((self.path.read_bytes(), self.core_digest()), before)
+
     def test_uninitialized_authority_is_never_bootstrapped(self):
-        uninitialized = replace(self.scope, runtime=startup.RuntimeSettings(2, self.fixture.base / "missing-state"))
-        self.fixture.enroll(runtime=self.fixture.runtime(uninitialized.runtime.state_dir))
+        uninitialized = replace(self.scope, runtime=startup.RuntimeSettings(3, self.fixture.base / "missing-state"))
         for operation, request in ((self.settings.configure, CONFIGURE), (self.settings.status, None)):
             with self.subTest(operation=operation.__name__), self.assertRaises(self.settings.SettingsError):
                 operation(uninitialized, request) if request else operation(uninitialized)

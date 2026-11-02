@@ -1,6 +1,6 @@
 """Bounded, private D3 review plans. No enrollment, retrieval, or project execution."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
@@ -12,7 +12,7 @@ import stat
 import subprocess
 import uuid
 
-from runtime.startup import PROJECT_FILE, StartupError, checkout, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
+from runtime.startup import PROJECT_FILE, StartupError, checkout, _checkout_identity, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
 from runtime.state import runtime_fingerprint
 
 
@@ -26,7 +26,8 @@ HEX = re.compile(r"[0-9a-f]{64}\Z")
 CHECKOUT_INPUTS = ("repository_root", "git_common_dir", "head", "index_digest", "dirty_inventory", "paths")
 LIMITS = ["Helpers do not authenticate source ownership, trust, catalog semantics, or agent evidence.",
           "Structural checks do not qualify client execution, enrollment, approval, or merge readiness.",
-          "No project commands run; missing baseline and client observations remain agent-recorded gaps."]
+          "No project commands run; missing baseline and client observations remain agent-recorded gaps.",
+          "Metadata-only inventory records do not verify file contents; dependent evidence and edits still require bounded content."]
 
 def _require(condition, message):
     if not condition:
@@ -124,7 +125,7 @@ def _git(root, *args, limit=None, deadline=None):
     return read_git(root, *args, limit=MAX_FILE if limit is None else min(MAX_FILE, limit), deadline=deadline)
 
 
-def _plan_path(value):
+def _plan_path(value, *, create=True):
     _require(os.name == "posix", "Onboarding requires a qualified POSIX filesystem")
     path = Path(value)
     _require(path.is_absolute() and str(path.resolve()) == str(path),
@@ -140,6 +141,7 @@ def _plan_path(value):
     code, _ = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir")
     _require(code != 0, "Plan directory must be outside repositories")
     if not path.exists():
+        _require(create, "An existing private reviewed plan is required")
         _require(path.parent.is_dir(), "Plan directory parent must exist")
         path.mkdir(mode=0o700)
     _private(path.stat(), directory=True)
@@ -181,7 +183,7 @@ def _open_path(path, flags):
     finally:
         os.close(parent)
 
-def _read_file(path, limit, private=False, *, expected_binding=None):
+def _read_file(path, limit, private=False, *, expected_binding=None, resources=None, held=None):
     descriptor = _open_path(path, os.O_RDONLY)
     with os.fdopen(descriptor, "rb") as stream:
         metadata = os.fstat(stream.fileno())
@@ -192,13 +194,22 @@ def _read_file(path, limit, private=False, *, expected_binding=None):
                      and metadata.st_nlink == 1, "Observed input physical identity changed")
         _require(stat.S_ISREG(metadata.st_mode), "Expected a regular onboarding input file")
         _require(metadata.st_size <= limit, "Onboarding file size limit exceeded")
-        raw = stream.read(limit + 1)
-        _require(len(raw) <= limit, "Onboarding file size limit exceeded")
-        after = os.fstat(stream.fileno())
-        _require(all(getattr(metadata, field) == getattr(after, field) for field in
-                     ("st_dev", "st_ino", "st_size", "st_mode", "st_nlink", "st_mtime_ns", "st_ctime_ns")),
-                 "Onboarding input changed while reading")
-        return raw
+        if resources is not None:
+            admission = resources.reserve()
+            try: owner = resources.current_acquisition()
+            finally: admission.discard()
+            owner.reserve(requested=limit + 1, live=limit + 1).__enter__()
+        raw = None
+        try:
+            raw = stream.read(limit + 1)
+            _require(len(raw) <= limit, "Onboarding file size limit exceeded")
+            after = os.fstat(stream.fileno())
+            _require(all(getattr(metadata, field) == getattr(after, field) for field in
+                         ("st_dev", "st_ino", "st_size", "st_mode", "st_nlink", "st_mtime_ns", "st_ctime_ns")),
+                     "Onboarding input changed while reading")
+            if resources is not None: resources.check()
+            return raw
+        finally: raw = None
 
 def _load(path):
     if not os.path.lexists(path / "plan.json"):
@@ -215,13 +226,18 @@ def _load(path):
     _object(plan, ("schema_version", "plan_id", "revision", "created_at", "identity", "package_pins",
         "sources", "requirements", "inventory", "decisions", "coverage", "actions", "evidence",
         "semantic_assessment", "invalidations", "decision_history", "recovery_requirement", "status",
-        "blockers", "verified_at", "review_digest", "current_input_digest", "evidence_limits"))
+        "blockers", "verified_at", "review_digest", "current_input_digest", "evidence_limits"), ("screening",))
     _require(plan.get("schema_version") == 1 and type(plan.get("revision")) is int
              and plan["revision"] >= 1, "Unsupported onboarding plan")
+    if "screening" in plan:
+        _screening_projection(plan["screening"])
+    _inventory_enabled(plan["identity"])
     return plan
 
-def _save(plan, path, directory):
+def _save(plan, path, directory, *, budget=None):
+    _check_observation_deadline(budget or {})
     raw = json.dumps(plan, sort_keys=True, indent=2, ensure_ascii=True).encode() + b"\n"
+    _check_observation_deadline(budget or {})
     _require(len(raw) <= MAX_PLAN, "Onboarding artifact size limit exceeded; plan remains unchanged")
     if os.path.lexists(path / "plan.json"):
         _private((path / "plan.json").lstat())
@@ -233,8 +249,10 @@ def _save(plan, path, directory):
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        _check_observation_deadline(budget or {})
         os.replace(name, "plan.json", src_dir_fd=directory, dst_dir_fd=directory)
         os.fsync(directory)
+        _check_observation_deadline(budget or {})
     finally:
         if os.path.lexists(path / name):
             os.unlink(name, dir_fd=directory)
@@ -324,24 +342,33 @@ def _sources(record):
             observed[item["path"]] = {"status": "unavailable"}
     return observed
 
-def _fingerprint(root, relative, limit=MAX_FILE):
+def _secret_file(path):
+    return path.name == ".env" or path.name.startswith(".env.") or path.suffix in {".pem", ".key", ".p12", ".pfx"}
+
+def _fingerprint(root, relative, limit=MAX_FILE, *, resources=None):
     path = root / relative
+    held = ExitStack() if resources is not None else None; raw = None
     try:
         _no_links(path)
         st = path.lstat()
         if not stat.S_ISREG(st.st_mode):
             return {"status": "special"}
-        if path.name == ".env" or path.name.startswith(".env.") or path.suffix in {
-                ".pem", ".key", ".p12", ".pfx"}:
+        if _secret_file(path):
             return {"status": "excluded", "reason": "potential secret file"}
         if st.st_size > limit:
             return {"status": "oversized"}
-        raw = _read_file(path, limit)
+        raw = _read_file(path, limit, resources=resources, held=held)
+        if resources is not None:
+            resources.current_acquisition().reserve(requested=len(raw) + 64, live=1024)
         return {"status": "read", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
     except FileNotFoundError:
         return {"status": "absent"}
-    except (OSError, StartupError):
+    except (OSError, StartupError) as error:
+        if resources is not None and getattr(error, "_vcw_resource_origin", None) is resources: raise
         return {"status": "unreadable_or_link"}
+    finally:
+        raw = None
+        if held is not None: held.close()
 
 def _file_targets(actions):
     _require(isinstance(actions, list) and len(actions) <= MAX_PATHS, "Invalid proposed actions")
@@ -352,24 +379,106 @@ def _file_targets(actions):
             targets.append(_relative(action.get("target")))
     return targets
 
+def _inventory_enabled(snapshot):
+    version = snapshot.get("inventory_version")
+    _require("inventory_version" not in snapshot or type(version) is int and version == 1, "Unsupported file inventory version")
+    _require(isinstance(snapshot["fingerprints"], dict), "Invalid saved file observations")
+    for name, value in snapshot["fingerprints"].items():
+        _require(isinstance(value, dict) and "status" in value, "Invalid saved file observation")
+        if value["status"] != "metadata":
+            continue
+        _require(version == 1 and not name.startswith("instruction:"), "Metadata cannot replace instruction/content evidence")
+        _object(value, ("status", "reason", "metadata"))
+        _require(value["reason"] in ("oversized", "excluded", "special", "unreadable_or_link"),
+                 "Invalid metadata-only inventory reason")
+        metadata = value["metadata"]
+        _object(metadata, ("device", "inode", "mode", "links", "size", "mtime_ns", "ctime_ns"))
+        _require(all(type(v) is int for v in metadata.values())
+                 and all(metadata[k] >= 0 for k in ("device", "inode", "mode", "links", "size")),
+                 "Invalid file inventory metadata")
+    return version == 1
+
+def _inventory_fingerprint(root, relative, limit):
+    # Observe the leaf without opening it or following links, including secret/special files.
+    path = root / relative
+    try:
+        descriptor = _open_path(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            info = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+        finally:
+            os.close(descriptor)
+        if _secret_file(path):
+            reason = "excluded"
+        elif not stat.S_ISREG(info.st_mode):
+            reason = "unreadable_or_link" if stat.S_ISLNK(info.st_mode) else "special"
+        elif info.st_size > MAX_FILE:
+            reason = "oversized"
+        else:
+            # Shared-budget exhaustion must not change evidence strength between inspect and apply.
+            return _fingerprint(root, relative, limit)
+        return {"status": "metadata", "reason": reason, "metadata": {
+            "device": info.st_dev, "inode": info.st_ino, "mode": info.st_mode, "links": info.st_nlink,
+            "size": info.st_size, "mtime_ns": info.st_mtime_ns, "ctime_ns": info.st_ctime_ns}}
+    except FileNotFoundError:
+        return {"status": "absent"}
+    except (OSError, StartupError):
+        return {"status": "unreadable_or_link"}
+
 def _snapshot_targets(plan):
     names = {name for name in plan["identity"]["fingerprints"] if not name.startswith("instruction:")}
     return sorted(names | set(_file_targets(plan["actions"])))
 
-def _snapshot(root, targets=(), *, budget=None):
-    identity = checkout(root)
+def _snapshot(root, targets=(), *, budget=None, inventory=False):
+    def check(*, reading=False):
+        if budget is not None:
+            _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
+                     "Project aggregate path limit exceeded; inventory remains incomplete")
+            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+                     "Project aggregate byte limit exceeded; inventory remains incomplete")
+            if reading:
+                _require(budget["bytes"] < MAX_TOTAL,
+                         "Project aggregate byte limit exceeded; inventory remains incomplete")
+            _check_observation_deadline(budget)
+
+    def git(*args):
+        if budget is None:
+            return _git(root, *args)
+        check(reading=True)
+        try:
+            code, raw = _git(root, *args, limit=MAX_TOTAL - budget["bytes"], deadline=budget.get("deadline"))
+        except (StartupError, OSError, subprocess.SubprocessError):
+            # Unknown partial output must not leave a reusable allowance.
+            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+            raise
+        budget["bytes"] += len(raw)
+        check()
+        return code, raw
+
+    if budget is None:
+        identity = checkout(root)
+    else:
+        check(reading=True)
+        _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
+        try:
+            identity = checkout(root, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
+                                deadline=budget.get("deadline"), budget=budget)
+        except (StartupError, OSError, subprocess.SubprocessError):
+            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+            raise
+        check()
     _require(identity is not None and identity[0] == root, "Selected checkout identity changed")
-    code, raw = _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+    code, raw = git("ls-files", "--cached", "--others", "--exclude-standard", "-z")
     _require(code == 0, "Cannot enumerate checkout files")
     names = sorted(set(os.fsdecode(name) for name in raw.split(b"\x00") if name))
     observed_names = sorted(set(names) | {_relative(name) for name in targets})
     _require(len(observed_names) <= MAX_PATHS, "Checkout path limit exceeded; inventory remains incomplete")
     fingerprints = {}
     total = 0
+    observer = _inventory_fingerprint if inventory else _fingerprint
     for name in observed_names:
         _relative(name)
-        fingerprints[name] = (_inspection_fingerprint(root, name, budget)
-                              if budget is not None else _fingerprint(root, name))
+        fingerprints[name] = (_inspection_fingerprint(root, name, budget, inventory=inventory)
+                              if budget is not None else observer(root, name, MAX_FILE))
         total += fingerprints[name].get("bytes", 0)
         _require(total <= MAX_TOTAL, "Checkout byte limit exceeded; inventory remains incomplete")
     instructions = []
@@ -391,16 +500,20 @@ def _snapshot(root, targets=(), *, budget=None):
             if fingerprints[key]["status"] != "absent":
                 instructions.append({"path": str(location), "scope": str(directory),
                                      "editable": location.is_relative_to(root)})
-    code, index = _git(root, "ls-files", "--stage", "-z")
+    code, index = git("ls-files", "--stage", "-z")
     _require(code == 0, "Cannot read staged checkout identity")
-    code, status = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    code, status = git("status", "--porcelain=v1", "-z", "--untracked-files=all")
     _require(code == 0, "Cannot read checkout changes")
-    code, head = _git(root, "rev-parse", "--verify", "HEAD")
-    return {"repository_root": str(root), "git_common_dir": str(identity[1]),
+    code, head = git("rev-parse", "--verify", "HEAD")
+    result = {"repository_root": str(root), "git_common_dir": str(identity[1]),
             "head": head.decode("ascii").strip() if code == 0 else None,
             "index_digest": hashlib.sha256(index).hexdigest(),
             "dirty_inventory": [os.fsdecode(v) for v in status.split(b"\x00") if v],
             "paths": names, "fingerprints": fingerprints, "instructions": instructions}
+    check()
+    if inventory:
+        result["inventory_version"] = 1
+    return result
 
 def _package_pins():
     return {"policy_digest": policy_digest(PACKAGE), "runtime_digest": runtime_fingerprint()}
@@ -437,7 +550,7 @@ def _source_blockers(plan, observed):
 
 def _current(plan):
     root = Path(plan["identity"]["repository_root"])
-    snapshot = _snapshot(root, _snapshot_targets(plan))
+    snapshot = _snapshot(root, _snapshot_targets(plan), inventory=_inventory_enabled(plan["identity"]))
     sources = _sources(plan["sources"]["declared"])
     package = _package_pins()
     changes = []
@@ -484,6 +597,9 @@ def _invalidate(plan, changes):
         plan["invalidations"].append(entry)
 
 def _review_digest(plan):
+    if "screening" in plan:
+        ordinary = {key: value for key, value in plan.items() if key != "screening"}
+        return _digest(dict(plan=_review_digest(ordinary), screening=plan["screening"]))
     if plan["schema_version"] == 2:
         return _digest({key: plan[key] for key in ("identity", "project_scope", "assessments",
             "package_pins", "sources", "requirements", "current_observations")})
@@ -491,7 +607,7 @@ def _review_digest(plan):
         "identity", "package_pins", "sources", "inventory", "decisions", "coverage", "actions", "evidence",
         "semantic_assessment")})
 
-def _finish(plan, sources, changes, blockers, draft=False, current=None):
+def _finish(plan, sources, changes, blockers, draft=False, current=None, screening_authentication=None):
     blockers = _source_blockers(plan, sources) + blockers
     decisions = ([d | {"id": key} for key, d in _project_decisions(plan).items()]
                  if plan["schema_version"] == 2 else plan["decisions"])
@@ -513,16 +629,23 @@ def _finish(plan, sources, changes, blockers, draft=False, current=None):
         blockers = blockers[:MAX_PATHS - 1] + [_block("limits", "Aggregate blocker limit reached; assessment remains incomplete",
             "Resolve listed gaps, then reinspect for remaining bounded observations")]
     current = current or {"identity": plan["identity"], "sources": sources, "package_pins": plan["package_pins"]}
+    if "screening" in plan and plan["screening"]["freshness"]["status"] != "unavailable":
+        freshness = _screening_freshness(plan["screening"]["payload"], _digest(current))
+        if freshness["status"] == "stale" or plan["screening"]["freshness"]["status"] != "stale":
+            plan["screening"]["freshness"] = freshness
     plan.update(status=status, blockers=blockers, verified_at=_now(), review_digest=_review_digest(plan),
                 current_input_digest=_digest(current))
     limits = list(LIMITS)
     if plan["sources"]["declared"]["toolkit"]["acquisition"] == "offline":
         limits.append("Offline source freshness is unverified; declared commit/hash is not current upstream proof.")
     plan["evidence_limits"] = limits
-    return {"plan_id": plan["plan_id"], "revision": plan["revision"], "status": status,
+    report = {"plan_id": plan["plan_id"], "revision": plan["revision"], "status": status,
             "blockers": blockers, "next_decision": pending[0] if pending else None,
             "evidence_limits": limits, "review_digest": plan["review_digest"], "current_input_digest": plan["current_input_digest"],
             "exit_code": 0 if status == "ready_for_review" else 2}
+    if "screening" in plan:
+        report["screening"] = _screening_report(plan, screening_authentication)["screening"]
+    return report
 
 def inspect_project(cwd, plan_dir, source_record):
     """Pin one explicitly selected checkout and declared retained source bundle."""
@@ -536,7 +659,7 @@ def inspect_project(cwd, plan_dir, source_record):
         _source_record(source_record, path)
         plan = _load(path)
         if plan is None:
-            snapshot = _snapshot(root)
+            snapshot = _snapshot(root, inventory=True)
             sources = _sources(source_record)
             plan = {"schema_version": 1, "plan_id": uuid.uuid4().hex, "revision": 1,
                     "created_at": _now(), "identity": snapshot | {"clients": source_record["clients"]},
@@ -557,15 +680,17 @@ def inspect_project(cwd, plan_dir, source_record):
             blockers = _validate_proposal(plan) if plan["semantic_assessment"] else []
             report = _finish(plan, sources, changes, blockers, draft=not bool(plan["semantic_assessment"]), current=current)
         _save(plan, path, directory)
-        return report
+    return _screen_onboarding_plan(plan_dir, plan["revision"], inspection=plan)
 
-def _inspection_fingerprint(root, relative, budget):
+def _inspection_fingerprint(root, relative, budget, *, resources=None, inventory=False):
+    _require(not inventory or resources is None, "Capture resource owners require strict content observations")
     _check_observation_deadline(budget)
     _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
     budget["paths"] += 1
     remaining = MAX_TOTAL - budget["bytes"]
     _require(remaining >= 0, "Project aggregate byte limit exceeded; inventory remains incomplete")
-    result = _fingerprint(root, relative, min(MAX_FILE, remaining))
+    result = (_inventory_fingerprint(root, relative, min(MAX_FILE, remaining)) if inventory else
+              _fingerprint(root, relative, min(MAX_FILE, remaining), resources=resources))
     _require(not (result["status"] == "oversized" and remaining < MAX_FILE),
              "Project aggregate byte limit exceeded; inventory remains incomplete")
     budget["bytes"] += result.get("bytes", 0)
@@ -625,14 +750,13 @@ def _checkout_observation(value, budget):
         _check_observation_deadline(budget)
         _require(str(root.resolve(strict=True)) == str(root), "Member boundary contains a link or noncanonical root")
         observed["binding"]["root"] = _filesystem_binding(root)
-        identity = checkout(root, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), deadline=budget.get("deadline"))
+        identity = _checkout_identity(root, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
         _require(identity is not None and identity[0] == root, "Member must select an existing checkout root")
         common = identity[1]
-        budget["bytes"] += len(os.fsencode(str(root))) + len(os.fsencode(str(common))) + 2
         observed["git_common_dir"] = str(common)
         observed["binding"]["git_common_dir"] = _filesystem_binding(common)
-        code, raw = git(root, "rev-parse", "--absolute-git-dir")
-        _require(code == 0 and len(raw.splitlines()) == 1, "Cannot resolve selected worktree Git directory")
+        raw = identity[2]
+        _require(len(raw.splitlines()) == 1, "Cannot resolve selected worktree Git directory")
         git_dir = Path(os.fsdecode(raw.rstrip(b"\n")))
         _require(git_dir.is_absolute() and git_dir.resolve(strict=True) == git_dir,
                  "Noncanonical worktree Git directory")
@@ -659,13 +783,10 @@ def _checkout_observation(value, budget):
                 _require(not any(f == b"bare" or f.startswith(b"prunable") for f in fields)
                          and sum(f.startswith(b"HEAD ") for f in fields) == 1,
                          "Unsupported primary or selected worktree metadata")
-        primary_identity = checkout(primary, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), deadline=budget.get("deadline"))
-        if primary_identity:
-            budget["bytes"] += sum(len(os.fsencode(str(p))) + 1 for p in primary_identity)
+        primary_identity = _checkout_identity(primary, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
         _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
-        code, raw = git(primary, "rev-parse", "--absolute-git-dir")
-        _require(primary_identity == (primary, common) and code == 0
-                 and os.fsdecode(raw.rstrip(b"\n")) == str(common), "Primary worktree identity is ambiguous")
+        _require(primary_identity is not None and primary_identity[:2] == (primary, common)
+                 and os.fsdecode(primary_identity[2].rstrip(b"\n")) == str(common), "Primary worktree identity is ambiguous")
         observed["binding"]["primary_root"] = _filesystem_binding(primary)
         observed["primary_root"] = str(primary)
         _check_observation_deadline(budget)
@@ -675,11 +796,14 @@ def _checkout_observation(value, budget):
             error = StartupError("Project aggregate byte limit exceeded; inventory remains incomplete")
         return observed, "Checkout/worktree observation incomplete: " + str(error)
 
-def _authority_observation(root, budget, *, canonical_only=False):
+def _authority_observation(root, budget, *, canonical_only=False, resources=None):
+    held = ExitStack() if resources is not None else None; raw = None
+    if resources is not None:
+        from runtime.resource_accounting import Exhausted
     location = root / PROJECT_FILE
     observed = {"path": str(location), "fingerprint": {}, "binding": None, "record": None, "error": None, "target": None}
     try:
-        observed["fingerprint"] = _inspection_fingerprint(root, str(PROJECT_FILE), budget)
+        observed["fingerprint"] = _inspection_fingerprint(root, str(PROJECT_FILE), budget, resources=resources)
         observed["target"] = _physical_target(root, location, observed["fingerprint"], budget)
         if observed["fingerprint"]["status"] == "absent":
             return observed
@@ -687,16 +811,46 @@ def _authority_observation(root, budget, *, canonical_only=False):
         info = location.stat()
         _require(info.st_nlink == 1, "Authority record has physical aliases")
         observed["binding"] = {"device": info.st_dev, "inode": info.st_ino}
-        raw = _read_file(location, min(MAX_FILE, 128 * 1024, max(0, MAX_TOTAL - budget["bytes"])), expected_binding=observed["binding"])
+        raw = _read_file(location, min(MAX_FILE, 128 * 1024, max(0, MAX_TOTAL - budget["bytes"])), expected_binding=observed["binding"], resources=resources, held=held)
         budget["bytes"] += len(raw)
         _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
+        if resources is not None:
+            owner = resources.current_acquisition()
+            owner.reserve(requested=len(raw) + 64, live=512)
         _require(hashlib.sha256(raw).hexdigest() == observed["fingerprint"]["sha256"], "Authority changed while reading")
-        record = read_request(raw)
-        _bounded(record)
+        if resources is None:
+            record = read_request(raw)
+            _bounded(record)
+        else:
+            decoded = owner._decode_owned(raw, read_request, _bounded)
+            owner._require_owned(decoded)
+            record = decoded.value
         _require(_physical_target(root, location, observed["fingerprint"], budget) == observed["target"],
                  "Authority physical identity changed while reading")
         if record.get("schema_version") == 2:
             observed["record"] = record
+            if resources is not None:
+                owner._require_owned(decoded)
+                tree, serialized = decoded.tree, decoded.serialized
+                path = 768 + 196 * (len(decoded.raw) + 1)
+                owner.reserve(requested=2 * tree + serialized + len(decoded.raw), live=2048)
+                pair_work = 0
+                membership = record.get("membership")
+                if type(membership) is dict:
+                    for boundary in ("include", "exclude"):
+                        rows = membership.get(boundary)
+                        if type(rows) is list:
+                            count = len(rows); chars = components = longest = 0; strings = True
+                            for text in rows:
+                                if type(text) is str:
+                                    parts = text.count("/") + 1
+                                    chars += len(text); components += parts; longest = max(longest, parts)
+                                else: strings = False
+                            if strings:
+                                pair_work += 64 * count * count + 32 * count * (longest + 1) * (2 * chars + 2 * components + count)
+                # Fresh pairwise ancestor/string work; sequential live scratch stays linear.
+                owner.reserve(requested=8 * tree + 16 * serialized + 4 * path + pair_work,
+                    live=8 * tree + 6 * serialized + 4 * path)
             decode_project_record(record)
             _check_observation_deadline(budget)
             return observed
@@ -714,8 +868,12 @@ def _authority_observation(root, budget, *, canonical_only=False):
             _object(record["runtime"], ("schema_version", "state_dir"))
         runtime_settings(record, PACKAGE, Path(record["git_common_dir"]))
         observed["record"] = record
-    except (StartupError, OSError, ValueError, TypeError, subprocess.SubprocessError):
+    except (StartupError, OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        if resources is not None and (isinstance(error, Exhausted) or getattr(error, "_vcw_resource_origin", None) is resources): raise
         observed["error"] = "Existing authority is malformed, unsupported, changed, aliased or unreadable"
+    finally:
+        raw = None
+        if held is not None: held.close()
     return observed
 
 def _project_observations(scope, sources, assessments=None):
@@ -769,10 +927,12 @@ def _project_observations(scope, sources, assessments=None):
         try:
             assessment = by_root.get(repository["root"], {})
             targets = _observed_targets(assessment)
-            repository["snapshot"] = _snapshot(Path(repository["root"]), targets, budget=budget)
+            prior = assessment.get("identity", {}).get("snapshot")
+            repository["snapshot"] = _snapshot(Path(repository["root"]), targets, budget=budget,
+                inventory=_inventory_enabled(prior) if prior is not None else True)
             if assessment.get("actions") or assessment.get("identity", {}).get("targets"):
                 repository["targets"] = _target_observations(assessment, repository["snapshot"]["fingerprints"], budget=budget)
-            if any(value["status"] not in ("read", "absent") for value in repository["snapshot"]["fingerprints"].values()):
+            if any(value["status"] not in ("read", "absent", "metadata") for value in repository["snapshot"]["fingerprints"].values()):
                 gap(repository["root"], "Repository inventory contains unreadable, excluded or over-limit files")
         except (StartupError, OSError, ValueError, subprocess.SubprocessError) as error:
             gap(repository["root"], "Repository inventory incomplete: " + str(error))
@@ -817,7 +977,15 @@ def _observed_targets(assessment):
     return list(dict.fromkeys([*(name for name in prior if not name.startswith("cwd:/")),
                               *_file_targets(assessment.get("actions", []))]))
 
-def _project_file_boundary(root, name, repositories):
+def _project_file_boundary(root, name, repositories, *, budget=None):
+    def check():
+        if budget is not None:
+            _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
+                     "Project aggregate path limit exceeded; inventory remains incomplete")
+            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+                     "Project aggregate byte limit exceeded; inventory remains incomplete")
+            _check_observation_deadline(budget)
+    check()
     target = root / name
     _no_links(target)
     protected = [Path(r[k]) for r in repositories for k in ("root", "primary_root", "git_dir", "git_common_dir") if r[k]]
@@ -828,14 +996,27 @@ def _project_file_boundary(root, name, repositories):
             break
         _require(not os.path.lexists(parent / ".git"), "Project file enters an unbound software tree")
     existing = next(parent for parent in (target.parent, *target.parent.parents) if parent.is_dir())
-    code, _ = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir")
+    if budget is None:
+        code, _ = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir")
+    else:
+        check()
+        _require(budget["bytes"] < MAX_TOTAL, "Project aggregate byte limit exceeded; inventory remains incomplete")
+        try:
+            code, raw = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir",
+                             limit=MAX_TOTAL - budget["bytes"], deadline=budget.get("deadline"))
+        except (StartupError, OSError, subprocess.SubprocessError):
+            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+            raise
+        budget["bytes"] += len(raw)
+        check()
     _require(code != 0, "Project file enters an unbound Git tree or metadata")
+    check()
 
 def _project_files(root, names, repositories, budget, gap):
     fingerprints = {}
     for name in names:
         try:
-            _project_file_boundary(root, name, repositories)
+            _project_file_boundary(root, name, repositories, budget=budget)
             fingerprints[name] = _inspection_fingerprint(root, name, budget)
             _require(fingerprints[name]["status"] in ("read", "absent"), "Project file cannot be inspected safely")
         except (StartupError, OSError, subprocess.SubprocessError) as error:
@@ -873,6 +1054,13 @@ def _physical_target(root, location, fingerprint, budget, *, directory=False):
     return {"path": str(location), "binding": physical, "parents": parents, "fingerprint": fingerprint}
 
 def _target_observations(assessment, fingerprints, repositories=(), *, budget):
+    def check():
+        _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
+                 "Project aggregate path limit exceeded; inventory remains incomplete")
+        _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+                 "Project aggregate byte limit exceeded; inventory remains incomplete")
+        _check_observation_deadline(budget)
+    check()
     owner = assessment["owner"]
     root = Path(owner["root"])
     targets = {}
@@ -880,6 +1068,7 @@ def _target_observations(assessment, fingerprints, repositories=(), *, budget):
     cwds = [action.get("cwd") for action in assessment["actions"] if action.get("kind") == "command"]
     cwds += [name[4:] for name in assessment["identity"].get("targets", {}) if name.startswith("cwd:/")]
     for name in [*names, *("cwd:" + _text(cwd) for cwd in dict.fromkeys(cwds))]:
+        check()
         directory = name.startswith("cwd:/")
         location = Path(name[4:]) if directory else root / name
         _require(location.is_absolute() and location.is_relative_to(root)
@@ -888,14 +1077,25 @@ def _target_observations(assessment, fingerprints, repositories=(), *, budget):
         _no_links(location)
         if owner["kind"] == "project":
             if location != root:
-                _project_file_boundary(root, str(location.relative_to(root)), repositories)
+                _project_file_boundary(root, str(location.relative_to(root)), repositories, budget=budget)
         else:
             parent = location if directory else location.parent
             existing = next(p for p in (parent, *parent.parents) if p.is_dir())
-            _require(checkout(existing) == (root, Path(owner["git_common_dir"])),
+            check()
+            _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
+            _require(budget["bytes"] < MAX_TOTAL, "Project aggregate byte limit exceeded; inventory remains incomplete")
+            try:
+                identity = checkout(existing, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
+                                    deadline=budget.get("deadline"), budget=budget)
+            except (StartupError, OSError, subprocess.SubprocessError):
+                budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+                raise
+            check()
+            _require(identity == (root, Path(owner["git_common_dir"])),
                      "Action target/cwd enters another checkout or Git tree")
         targets[name] = _physical_target(root, location, None if directory else
             fingerprints.get(name, {"status": "blocked"}), budget, directory=directory)
+    check()
     return targets
 
 def _new_assessment(owner, identity):
@@ -927,16 +1127,19 @@ def _project_plan_shape(plan):
         if "reason" in value:
             _text(value["reason"])
 
-    def fingerprints(value):
+    def fingerprints(value, inventory=False):
         _require(isinstance(value, dict) and len(value) <= MAX_PATHS, "Invalid saved file observations")
         for name, item in value.items():
             _text(name)
-            fingerprint(item)
+            if not isinstance(item, dict) or item.get("status") != "metadata" or not inventory:
+                fingerprint(item)
 
     _object(plan, ("schema_version", "plan_id", "revision", "created_at", "project_scope", "identity",
         "assessments", "current_observations", "package_pins", "sources", "requirements", "invalidations",
         "decision_history", "recovery_requirement", "status", "blockers", "verified_at", "review_digest",
-        "current_input_digest", "evidence_limits"))
+        "current_input_digest", "evidence_limits"), ("screening",))
+    if "screening" in plan:
+        _screening_projection(plan["screening"])
     _require(type(plan["schema_version"]) is int and plan["schema_version"] == 2
              and type(plan["revision"]) is int and plan["revision"] >= 1, "Unsupported Project inspection")
     for key in ("plan_id", "created_at", "verified_at", "recovery_requirement"):
@@ -1107,7 +1310,7 @@ def _project_plan_shape(plan):
                          "Invalid Repository observation binding")
                 if value["snapshot"] is not None:
                     snapshot = value["snapshot"]
-                    _object(snapshot, (*CHECKOUT_INPUTS, "fingerprints", "instructions", "clients"))
+                    _object(snapshot, (*CHECKOUT_INPUTS, "fingerprints", "instructions", "clients"), ("inventory_version",))
                     _require(snapshot["repository_root"] == owner["root"]
                              and snapshot["git_common_dir"] == owner["git_common_dir"]
                              and snapshot["clients"] == declared["clients"], "Invalid selected checkout snapshot")
@@ -1120,7 +1323,7 @@ def _project_plan_shape(plan):
                              and len(snapshot["dirty_inventory"]) <= 2 * MAX_PATHS, "Invalid saved checkout changes")
                     for item in snapshot["dirty_inventory"]:
                         _text(item)
-                    fingerprints(snapshot["fingerprints"])
+                    fingerprints(snapshot["fingerprints"], inventory=_inventory_enabled(snapshot))
                     for instruction in rows(snapshot["instructions"]):
                         _object(instruction, ("path", "scope", "editable"))
                         _require(Path(_text(instruction["path"])).is_absolute()
@@ -1298,7 +1501,7 @@ def _inspect_project_scope(cwd, plan_dir, request):
         report = _finish_project(plan, current, blockers)
         _project_plan_shape(plan)
         _save(plan, path, directory)
-        return report
+    return _screen_onboarding_plan(plan_dir, plan["revision"], inspection=plan)
 
 
 def _rows(value, fields):
@@ -1336,7 +1539,12 @@ def _validate_proposal(plan, *, shared=False, references=None):
     inventory = plan["inventory"]
     names = ("product", "critical_flows", "stack", "documents", "quality_commands", "services",
              "client_capabilities", "merge_feasibility", "instructions", "integrations")
-    _object(inventory, () if shared else names, names if shared else ())
+    _object(inventory, () if shared else names, (*names, "uninspected_files") if shared else ("uninspected_files",))
+    uninspected = inventory.get("uninspected_files", {})
+    _require(isinstance(uninspected, dict) and len(uninspected) <= MAX_PATHS, "Invalid uninspected file assessment")
+    for name, reason in uninspected.items():
+        _relative(name)
+        _text(reason)
     documents = inventory.get("documents", {})
     _require(isinstance(documents, dict) and (shared or len(documents) == 9),
              "Map all nine canonical document destinations from the pinned manifest")
@@ -1346,7 +1554,7 @@ def _validate_proposal(plan, *, shared=False, references=None):
         if document["path"] is not None:
             _relative(document["path"])
     fact_records = []
-    for key in inventory.keys() - {"documents"}:
+    for key in inventory.keys() - {"documents", "uninspected_files"}:
         _object(inventory[key], ("facts", "assumptions"))
         _require(isinstance(inventory[key]["facts"], list), "Inventory facts must be a list")
         _strings(inventory[key]["assumptions"])
@@ -1358,6 +1566,8 @@ def _validate_proposal(plan, *, shared=False, references=None):
     evidence_ids = _rows(plan["evidence"], ("id", "kind", "summary", "scope", "inputs", "reference")
                          + (("input_digest",) if references is not None else ()))
     fingerprints = plan["identity"]["fingerprints"]
+    _require(set(uninspected) <= {name for name, value in fingerprints.items() if value["status"] == "metadata"},
+             "Uninspected file assessments must name current metadata-only observations")
     input_keys = set(fingerprints) | (set() if shared else {"checkout:" + key for key in CHECKOUT_INPUTS}) | {"package"} | {
         "source:" + name for name in plan["sources"]["observed"]}
     if references is not None:
@@ -1513,20 +1723,44 @@ def _validate_proposal(plan, *, shared=False, references=None):
         if not native["method"] or not native["smoke_cases"]:
             blockers.append(_block("native_evaluation", "Native harness method/initial smoke cases missing",
                                    "Plan required native evaluation; keep optional paid labs separate"))
+    required = set(_file_targets(plan["actions"]))
+    required.update(name for row in plan["evidence"] for name in row["inputs"])
+    required.update(name for row in plan["decisions"] for name in row["invalidate_on"])
+    required.update(document["path"] for document in documents.values() if document["path"] is not None)
+    inventory_enabled = _inventory_enabled(plan["identity"])
     for key, value in fingerprints.items():
+        if value["status"] == "metadata" and inventory_enabled and key not in required:
+            if key not in uninspected:
+                blockers.append(_block(key, "Uninspected content needs an applicability assessment",
+                    "Record why this untouched file is unnecessary for adoption, or leave dependent coverage pending"))
+            continue
         if value["status"] not in ("read", "absent"):
             blockers.append(_block(key, "File inventory has an explicit assessment gap: " + value["status"],
                                    "Resolve safely or record a scoped independent assessment prerequisite"))
     return blockers
 
-def record_plan(plan_dir, request):
+def _record_plan(plan_dir, request, *, screening_check=None):
     """Replace one agent-authored proposal using an expected revision; never execute it."""
     _bounded(request)
     with _locked(plan_dir) as (path, directory):
         plan = _load(path)
         _require(plan is not None, "Inspect the selected checkout before recording a plan")
+        screening_authentication = None
+        if screening_check is not None:
+            from runtime import screening
+            _require((plan['plan_id'], plan['revision'], screening._selection(plan)) == screening_check[:3],
+                     'Onboarding plan changed during screening authentication')
+            screening_authentication = screening_check[3]
+        payload = _authenticated_screening_payload(plan, screening_authentication)
+        if payload is not None:
+            plan['screening'] = dict(version=1, payload=payload,
+                freshness=_screening_freshness(payload, plan['current_input_digest']))
+        else:
+            screening_authentication = None
+            if 'screening' in plan:
+                plan['screening']['freshness'] = dict(status='unavailable', reason='Source pointer authentication failed; allowance is not reset')
         if plan["schema_version"] == 2:
-            return _record_project_plan(plan, request, path, directory)
+            return _record_project_plan(plan, request, path, directory, screening_authentication=screening_authentication)
         _object(request, ("expected_revision", "inventory", "decisions", "coverage", "actions", "evidence", "semantic_assessment"), ("reconcile",))
         _require(type(request["expected_revision"]) is int, "Expected an integer plan revision")
         _require(request["expected_revision"] == plan["revision"], "Onboarding revision conflict; inspect the current plan")
@@ -1567,7 +1801,8 @@ def record_plan(plan_dir, request):
                 _remember_decision(plan, old)
         # New file destinations add raw fingerprints and instruction scopes even when Git ignores them.
         targets = _file_targets(plan["actions"])
-        expanded = _snapshot(Path(plan["identity"]["repository_root"]), targets)
+        expanded = _snapshot(Path(plan["identity"]["repository_root"]), targets,
+                             inventory=_inventory_enabled(plan["identity"]))
         fingerprints = plan["identity"]["fingerprints"]
         fingerprints.update({key: value for key, value in expanded["fingerprints"].items()
                              if (key.startswith("instruction:") or key in targets) and key not in fingerprints})
@@ -1579,7 +1814,8 @@ def record_plan(plan_dir, request):
         changes = sorted(set(changes) | set(new_changes))
         _invalidate(plan, changes)
         plan["revision"] += 1
-        report = _finish(plan, sources, changes, blockers, current=current)
+        report = _finish(plan, sources, changes, blockers, current=current,
+                         screening_authentication=screening_authentication)
         _save(plan, path, directory)
         return report
 
@@ -1669,7 +1905,7 @@ def _validate_project_proposal(plan):
             count += len(assessment[key])
         for key, section in assessment["inventory"].items():
             _require(isinstance(section, dict), "Invalid scoped inventory section")
-            if key == "documents":
+            if key in ("documents", "uninspected_files"):
                 count += len(section)
             else:
                 _object(section, ("facts", "assumptions"))
@@ -1783,7 +2019,7 @@ def _expand_project_inputs(plan, current):
         old["fingerprints"].update({key: value for key, value in new["fingerprints"].items()
                                     if key not in old["fingerprints"]})
 
-def _finish_project(plan, current, blockers):
+def _finish_project(plan, current, blockers, screening_authentication=None):
     if current["package_pins"] == plan["package_pins"]:
         _require(plan["requirements"] == _requirements(plan["sources"]["declared"]),
                  "Current package requirements must retain the complete catalog and policy metadata")
@@ -1792,11 +2028,12 @@ def _finish_project(plan, current, blockers):
     blockers += _validate_project_proposal(plan)
     plan["current_observations"] = current["observations"]
     report = _finish(plan, current["sources"], changes, blockers, current=current,
-                     draft=any(not a["semantic_assessment"] for a in _assessments(plan["assessments"])))
-    plan["evidence_limits"].append("Private IDs and authority references do not authenticate adoption; schema 2 cannot apply.")
+                     draft=any(not a["semantic_assessment"] for a in _assessments(plan["assessments"])),
+                     screening_authentication=screening_authentication)
+    plan["evidence_limits"].append("Private IDs and authority references do not authenticate adoption; schema 2 apply requires the verified coordinator route.")
     return report
 
-def _record_project_plan(plan, request, path, directory):
+def _record_project_plan(plan, request, path, directory, screening_authentication=None):
     _object(request, ("expected_revision", "assessments"), ("reconcile",))
     _require(type(request["expected_revision"]) is int and request["expected_revision"] == plan["revision"],
              "Onboarding revision conflict; inspect the current plan")
@@ -1850,7 +2087,455 @@ def _record_project_plan(plan, request, path, directory):
     final, final_blockers = _project_current(plan)
     _require(expanded == final, "Project inputs changed during proposal validation; inspect again")
     plan["revision"] += 1
-    report = _finish_project(plan, final, blockers + observation_blockers + final_blockers)
+    report = _finish_project(plan, final, blockers + observation_blockers + final_blockers,
+                             screening_authentication=screening_authentication)
     _project_plan_shape(plan)
     _save(plan, path, directory)
     return report
+
+
+def _screening_directory_binding(path):
+    from runtime import review_storage as storage
+    return dict(directory=_filesystem_binding(path), parents=storage._parents(path))
+
+
+@contextmanager
+def _existing_screening_plan(value, *, budget):
+    """Existing-only no-follow opener; a lost source never creates directories or locks."""
+    import fcntl
+    _check_observation_deadline(budget)
+    path = Path(value)
+    _require(path.is_absolute() and path.resolve(strict=True) == path, 'Screening plan path changed')
+    _no_links(path)
+    directory = _open_path(path, os.O_RDONLY | os.O_DIRECTORY)
+    lock = None
+    try:
+        _private(os.fstat(directory), directory=True)
+        lock = os.open('.lock', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        _private(os.fstat(lock))
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise StartupError('Onboarding plan busy; screening remains unavailable') from None
+        _check_observation_deadline(budget)
+        yield path, directory
+        _check_observation_deadline(budget)
+    finally:
+        if lock is not None:
+            os.close(lock)
+        os.close(directory)
+
+
+def _screening_projection(value):
+    from runtime import state
+    _object(value, ('version', 'payload', 'freshness'))
+    _require(type(value['version']) is int and value['version'] == 1, 'Unsupported screening projection')
+    payload = value['payload']
+    _object(payload, ('version', 'accounting', 'ticket', 'repositories', 'inputs', 'coverage', 'timing'))
+    _require(type(payload['version']) is int and payload['version'] == 1, 'Unsupported screening payload')
+    accounting = payload['accounting']
+    _object(accounting, ('authority', 'owner', 'reference', 'created_at'))
+    _object(accounting['owner'], ('kind', 'id', 'created_at'))
+    _require(accounting['owner']['kind'] == 'temporary'
+        and re.fullmatch(r'[0-9a-f]{32}', accounting['owner']['id'])
+        and accounting['owner']['created_at'] == accounting['created_at'], 'Invalid screening owner')
+    state._integer(accounting['created_at'], 'original screening owner creation time')
+    state._artifact_reference(accounting['reference'])
+    authority = accounting['authority']
+    _object(authority, ('directory', 'database', 'directory_binding', 'database_binding'))
+    for key in ('directory', 'database'):
+        state._canonical_path(authority[key])
+        state._canonical_binding(authority[key + '_binding'])
+    state._screening_ticket(payload['ticket'])
+    _require(isinstance(payload['repositories'], list) and 0 < len(payload['repositories']) <= MAX_PATHS,
+             'Invalid screening Repository scope')
+    from runtime import review_storage as storage
+    roots = []
+    for target in payload['repositories']:
+        storage._target_shape(target)
+        _require(target['git'] is not None, 'Screening Repository needs its physical Git identity')
+        roots.append(target['path'])
+    _require(roots == sorted(set(roots)), 'Screening Repository scope must be unique and sorted')
+    _object(payload['inputs'], ('digest', 'files', 'checkouts'))
+    _hash(payload['inputs']['digest'])
+    _require(isinstance(payload['inputs']['files'], list) and len(payload['inputs']['files']) <= MAX_PATHS,
+             'Invalid screening input fingerprints')
+    names = set()
+    for item in payload['inputs']['files']:
+        _object(item, ('repository_root', 'path', 'sha256', 'bytes', 'binding'))
+        _require(item['repository_root'] in roots, 'Screening input escapes its Repository')
+        _relative(item['path'])
+        key = (item['repository_root'], item['path'])
+        _require(key not in names, 'Duplicate screening input fingerprint')
+        names.add(key)
+        _hash(item['sha256'])
+        state._integer(item['bytes'], 'screening input bytes')
+        _require(item['bytes'] <= MAX_FILE, 'Screening input exceeds its read bound')
+        state._canonical_binding(item['binding'])
+    _require(isinstance(payload['inputs']['checkouts'], list)
+        and len(payload['inputs']['checkouts']) <= len(roots), 'Invalid screening checkout inputs')
+    seen = set()
+    for item in payload['inputs']['checkouts']:
+        _object(item, ('repository_root', 'head', 'index_digest', 'dirty_digest', 'paths_digest'))
+        _require(item['repository_root'] in roots and item['repository_root'] not in seen,
+                 'Invalid screening checkout scope')
+        seen.add(item['repository_root'])
+        if item['head'] is not None:
+            _require(isinstance(item['head'], str) and re.fullmatch(r'[0-9a-f]{40,64}', item['head']),
+                     'Invalid screening checkout HEAD')
+        for key in ('index_digest', 'dirty_digest', 'paths_digest'):
+            _hash(item[key])
+    coverage = payload['coverage']
+    _object(coverage, ('groups', 'gaps', 'partial'))
+    _strings(coverage['gaps'])
+    _require(type(coverage['partial']) is bool and isinstance(coverage['groups'], list)
+        and len(coverage['groups']) <= MAX_PATHS, 'Invalid screening coverage')
+    for group in coverage['groups']:
+        _object(group, ('repository_root', 'ancestor', 'counted_files', 'oversized_count', 'inspected_files',
+            'exclusions', 'unknown_coverage', 'representatives', 'impact', 'effort', 'risk', 'confidence', 'next_step'))
+        _require(group['repository_root'] in roots, 'Screening group escapes its Repository')
+        if group['ancestor'] != '.':
+            _relative(group['ancestor'])
+        for key in ('counted_files', 'oversized_count', 'inspected_files'):
+            state._integer(group[key], 'screening ' + key)
+        _require(group['oversized_count'] <= group['counted_files']
+            and group['inspected_files'] <= group['oversized_count'], 'Inconsistent screening counts')
+        for key in ('exclusions', 'unknown_coverage'):
+            _require(isinstance(group[key], dict) and len(group[key]) <= 16, 'Invalid screening gaps')
+            for reason, count in group[key].items():
+                _text(reason)
+                state._integer(count, 'screening gap count', 1)
+        _require(isinstance(group['representatives'], list) and len(group['representatives']) <= 3,
+                 'Invalid screening representatives')
+        for item in group['representatives']:
+            _object(item, ('path', 'lines', 'bytes', 'reference_limit', 'basis', 'sample_definitions'))
+            _relative(item['path'])
+            for key in ('lines', 'bytes', 'reference_limit', 'sample_definitions'):
+                state._integer(item[key], 'screening representative ' + key)
+            _text(item['basis'])
+        for key in ('impact', 'effort', 'risk', 'confidence', 'next_step'):
+            _text(group[key])
+    timing = payload['timing']
+    _object(timing, ('limit_ms', 'elapsed_ms', 'qualification'))
+    _require(type(timing['limit_ms']) is int and timing['limit_ms'] == 300000, 'Invalid screening deadline')
+    state._integer(timing['elapsed_ms'], 'observed screening elapsed time')
+    _text(timing['qualification'])
+    _object(value['freshness'], ('status', 'reason'))
+    _require(value['freshness']['status'] in ('current', 'stale', 'unavailable'), 'Invalid screening freshness')
+    _text(value['freshness']['reason'])
+    _bounded(value)
+    return value
+
+
+def _read_onboarding_screening_source(pointer, *, locked=None, budget=None):
+    from runtime import state
+    state._screening_result(pointer)
+    budget = budget or {}
+    path = Path(pointer['plan_directory'])
+
+    def read():
+        _check_observation_deadline(budget)
+        _require(_screening_directory_binding(path) == pointer['directory_binding'], 'Screening source physical binding changed')
+        plan = _load(path)
+        _require(plan is not None and plan['plan_id'] == pointer['plan_id'] and 'screening' in plan,
+                 'Screening source plan is unavailable')
+        payload = plan['screening']['payload']
+        _require(_digest(payload) == pointer['projection_digest'] and payload['ticket'] == pointer['ticket'],
+                 'Screening source payload changed')
+        _require(_screening_directory_binding(path) == pointer['directory_binding'], 'Screening source binding changed while reading')
+        _check_observation_deadline(budget)
+        return deepcopy(payload)
+
+    if locked is not None:
+        _require(str(path) in locked, 'Screening source lacks its existing plan lock')
+        return read()
+    with _existing_screening_plan(path, budget=budget):
+        return read()
+
+
+def _screening_freshness(payload, current_digest):
+    current = payload['inputs']['digest'] == current_digest
+    return dict(status='current' if current else 'stale', reason=(
+        'Matches the observed input digest' if current else 'Inputs changed since the bounded attempt; coverage has not expanded'))
+
+
+def _collect_onboarding_screening(run):
+    """Local physical-line inventory with a bounded shallow sample, never a project runner."""
+    from runtime import screening
+    from runtime.startup import _canonical_plain
+    import time
+    execution = screening._execution(run)
+    _require('produced' not in execution and 'ticket' in execution, 'Screening collector is one-shot')
+    repositories = sorted((target for target in _canonical_plain(execution['targets']) if target['git'] is not None),
+                          key=lambda item: item['path'])
+    budget = dict(execution['observation_budget'], deadline=run.deadline_monotonic - 0.5)
+    groups, gaps, fingerprints, checkouts = {}, [], [], []
+    source_suffixes = {'.py', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'}
+    excluded = {'.git', 'node_modules', 'vendor', 'vendors', 'dist', 'build', 'coverage', '__pycache__',
+                '.venv', 'venv', 'generated', '.next', '.tox'}
+    try:
+        for repository in repositories:
+            _check_observation_deadline(budget)
+            root = Path(repository['path'])
+            _require(_filesystem_binding(root) == repository['binding'], 'Screening Repository binding changed')
+            checkout_inputs, names = _screening_checkout_inputs(root, budget)
+            plan = execution['last_plan']
+            snapshots = ([plan['identity']] if plan['schema_version'] == 1 else
+                [item['identity']['snapshot'] for item in plan['current_observations']['repositories']])
+            prior = next((item for item in snapshots if item is not None and item['repository_root'] == str(root)), None)
+            if prior is not None:
+                _require(checkout_inputs == dict(repository_root=str(root), head=prior['head'],
+                    index_digest=prior['index_digest'], dirty_digest=_digest(prior['dirty_inventory']),
+                    paths_digest=_digest(prior['paths'])), 'Screening inputs changed after required Inspect')
+            checkouts.append(checkout_inputs)
+            for name in names:
+                _check_observation_deadline(budget)
+                _relative(name)
+                budget['paths'] += 1
+                _require(budget['paths'] <= MAX_PATHS, 'Screening aggregate path limit reached')
+                relative = PurePosixPath(name)
+                ancestor = str(PurePosixPath(*relative.parts[:min(2, len(relative.parts) - 1)]))
+                group = groups.setdefault((str(root), ancestor), dict(repository_root=str(root), ancestor=ancestor,
+                    counted_files=0, oversized_count=0, inspected_files=0, exclusions={}, unknown_coverage={},
+                    representatives=[], impact='unknown', effort='unknown', risk='unknown', confidence='unknown',
+                    next_step='Request a separate detailed assessment before choosing refactoring boundaries'))
+                def gap(category, reason):
+                    group[category][reason] = group[category].get(reason, 0) + 1
+                if any(part in excluded for part in relative.parts) or '.min.' in name or relative.name.endswith(('.generated.py', '.generated.ts')):
+                    gap('exclusions', 'generated/vendor/dependency paths')
+                    continue
+                if relative.name == '.env' or relative.name.startswith('.env.') or relative.suffix.lower() in {
+                        '.pem', '.key', '.p12', '.pfx'}:
+                    gap('exclusions', 'potential secret file')
+                    continue
+                if relative.suffix.lower() not in source_suffixes:
+                    gap('exclusions', 'outside supported source-file types')
+                    continue
+                try:
+                    _require(budget['bytes'] < MAX_TOTAL, 'Screening aggregate byte limit reached')
+                    info = (root / name).lstat()
+                    binding = dict(device=info.st_dev, inode=info.st_ino)
+                    # Reserve two rereads for publication checks within the same byte/path allowance.
+                    _require(3 * (budget['bytes'] + info.st_size) <= MAX_TOTAL,
+                             'Screening aggregate read allowance reached')
+                    data = _read_file(root / name, min(MAX_FILE, MAX_TOTAL - budget['bytes']), expected_binding=binding)
+                    after = (root / name).lstat()
+                    _require((after.st_dev, after.st_ino) == (info.st_dev, info.st_ino), 'Screening input path changed')
+                    budget['bytes'] += len(data)
+                    _check_observation_deadline(budget)
+                    if b'\0' in data:
+                        gap('exclusions', 'binary source file')
+                        continue
+                    text = data.decode('utf-8')
+                    lines = len(text.splitlines())
+                except UnicodeError:
+                    gap('exclusions', 'non-UTF-8 source file')
+                    continue
+                except (StartupError, OSError):
+                    gap('unknown_coverage', 'unsafe/unreadable/over-limit input')
+                    continue
+                fingerprints.append(dict(repository_root=str(root), path=name, sha256=hashlib.sha256(data).hexdigest(),
+                                         bytes=len(data), binding=binding))
+                group['counted_files'] += 1
+                limit = 1000 if relative.suffix.lower() == '.py' else 350
+                if lines <= limit:
+                    continue
+                group['oversized_count'] += 1
+                # Count every safe candidate; sample only a bounded prefix and retain no source text.
+                sample = text[:8192].splitlines()[:80]
+                definitions = sum(bool(re.match(r'\s*(?:async\s+)?(?:def|class|function)\s|\s*(?:export\s+)?(?:const|let)\s', line))
+                                  for line in sample)
+                group['inspected_files'] += 1
+                if definitions > 1:
+                    group.update(impact='Multiple definitions in a bounded prefix; responsibility mix remains unverified', confidence='low')
+                if len(group['representatives']) < 3:
+                    group['representatives'].append(dict(path=name, lines=lines, bytes=len(data), reference_limit=limit,
+                        basis='Policy reference only; local physical lines include blanks and comments, not an enforced project gate',
+                        sample_definitions=definitions))
+    except (StartupError, OSError):
+        gaps.append('Collection stopped at its shared deadline or an aggregate safety limit; remaining coverage is unknown')
+    partial = bool(gaps) or any(group['unknown_coverage'] for group in groups.values())
+    payload = dict(version=1, accounting=_canonical_plain(execution['accounting']), ticket=_canonical_plain(execution['ticket']),
+        repositories=repositories, inputs=dict(_canonical_plain(execution['inputs']), files=fingerprints, checkouts=checkouts),
+        coverage=dict(groups=list(groups.values()), gaps=gaps, partial=partial),
+        timing=dict(limit_ms=300000, elapsed_ms=max(0, int((time.monotonic() - run.entered_monotonic) * 1000)),
+                    qualification='Helper elapsed through collection; persistence/reporting and native reasoning are not hard timing qualified'))
+    _check_observation_deadline(dict(deadline=run.deadline_monotonic))
+    _screening_projection(dict(version=1, payload=payload, freshness=dict(status='current', reason='Bounded producer result')))
+    _check_observation_deadline(dict(deadline=run.deadline_monotonic))
+    execution['observation_budget'].update(paths=budget['paths'], bytes=budget['bytes'])
+    execution.update(produced=payload, produced_digest=_digest(payload), verification_budget=execution['observation_budget'])
+    return payload
+
+
+def _screening_checkout_inputs(root, budget):
+    """Only fixed read-only Git observations; no authored command is executed."""
+    _check_observation_deadline(budget)
+    values = []
+    for args in (('ls-files', '--cached', '--others', '--exclude-standard', '-z'),
+                 ('ls-files', '--stage', '-z'), ('status', '--porcelain=v1', '-z', '--untracked-files=all')):
+        code, raw = _git(root, *args, limit=max(0, MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
+        budget['bytes'] += len(raw)
+        _require(budget['bytes'] <= MAX_TOTAL and code == 0, 'Screening checkout inputs unavailable or over limit')
+        values.append(raw)
+    code, head = _git(root, 'rev-parse', '--verify', 'HEAD', limit=max(0, MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
+    budget['bytes'] += len(head)
+    _require(budget['bytes'] <= MAX_TOTAL, 'Screening aggregate Git read limit reached')
+    _check_observation_deadline(budget)
+    names = sorted(set(os.fsdecode(name) for name in values[0].split(b'\0') if name))
+    _require(len(names) <= MAX_PATHS, 'Screening checkout inventory limit reached')
+    return dict(repository_root=str(root), head=head.decode('ascii').strip() if code == 0 else None,
+        index_digest=hashlib.sha256(values[1]).hexdigest(),
+        dirty_digest=_digest([os.fsdecode(value) for value in values[2].split(b'\0') if value]),
+        paths_digest=_digest(names)), names
+
+
+def _screening_inputs_match(payload, budget):
+    """Recheck only captured inputs; this never extends coverage or resumes collection."""
+    try:
+        for item in payload['inputs']['checkouts']:
+            current, _ = _screening_checkout_inputs(Path(item['repository_root']), budget)
+            _require(current == item, 'Screening checkout inventory changed')
+        for item in payload['inputs']['files']:
+            _check_observation_deadline(budget)
+            budget['paths'] += 1
+            _require(budget['paths'] <= MAX_PATHS and budget['bytes'] + item['bytes'] <= MAX_TOTAL,
+                     'Screening verification allowance reached')
+            path = Path(item['repository_root']) / item['path']
+            data = _read_file(path, min(MAX_FILE, item['bytes']), expected_binding=item['binding'])
+            budget['bytes'] += len(data)
+            info = path.lstat()
+            _require(dict(device=info.st_dev, inode=info.st_ino) == item['binding']
+                and len(data) == item['bytes'] and hashlib.sha256(data).hexdigest() == item['sha256'],
+                'Screening input fingerprint changed')
+        _check_observation_deadline(budget)
+        return True
+    except (OSError, StartupError):
+        return False
+
+
+def _finalize_onboarding_screening(run, payload):
+    from runtime import screening
+    return screening._publish_onboarding_screening(run, payload)
+
+
+def _compact_screening_coverage(coverage):
+    """Roll up presentation only; every observed candidate remains in the immutable payload."""
+    if len(coverage['groups']) <= 12:
+        return deepcopy(coverage), None
+    repositories = {}
+    totals = dict(counted_files=0, oversized_count=0, inspected_files=0)
+    exclusions, unknowns = {}, {}
+    for group in coverage['groups']:
+        root = group['repository_root']
+        if root not in repositories:
+            repositories[root] = dict(group, ancestor='.', counted_files=0, oversized_count=0, inspected_files=0,
+                exclusions={}, unknown_coverage={}, representatives=[], impact='unknown', confidence='unknown')
+        combined = repositories[root]
+        for key in totals:
+            combined[key] += group[key]
+            totals[key] += group[key]
+        for key in ('exclusions', 'unknown_coverage'):
+            for reason, count in group[key].items():
+                combined[key][reason] = combined[key].get(reason, 0) + count
+                aggregate = exclusions if key == 'exclusions' else unknowns
+                aggregate[reason] = aggregate.get(reason, 0) + count
+        combined['representatives'].extend(deepcopy(group['representatives'][:3 - len(combined['representatives'])]))
+    groups = list(repositories.values())
+    return dict(groups=groups[:12], gaps=deepcopy(coverage['gaps']), partial=coverage['partial']), dict(
+        folder_groups=len(coverage['groups']), repository_groups=len(groups), omitted_repository_groups=max(0, len(groups) - 12),
+        totals=totals, exclusions=exclusions, unknown_coverage=unknowns,
+        detail='All folder groups and coverage gaps remain in the private plan')
+
+
+def _authenticated_screening_payload(plan, authentication):
+    """Saved shape or generic accounting success never authenticates report coverage."""
+    from runtime import state
+    from runtime.startup import _canonical_plain
+    try:
+        if (authentication is None or not state._frozen_snapshot(authentication)
+                or authentication.get('status') not in ('published', 'reuse')):
+            return None
+        verified = _canonical_plain(authentication)
+        payload = verified['payload']
+        _require(plan['plan_id'] == verified['plan_id']
+            and _screening_directory_binding(Path(verified['plan_directory'])) == verified['directory_binding']
+            and _digest(payload) == verified['projection_digest']
+            and _digest(plan['screening']['payload']) == verified['projection_digest'],
+            'Saved screening differs from authenticated report evidence')
+        return payload
+    except (OSError, StartupError, KeyError, TypeError, ValueError, RuntimeError):
+        return None
+
+
+def _screening_report(plan, authentication=None):
+    report = {key: deepcopy(plan[key]) for key in ('plan_id', 'revision', 'status', 'blockers', 'evidence_limits',
+                                                  'review_digest', 'current_input_digest')}
+    decisions = list(_project_decisions(plan).values()) if plan['schema_version'] == 2 else plan['decisions']
+    report.update(next_decision=next((item for item in decisions if item['disposition'] in ('pending', 'proposed')), None),
+                  exit_code=0 if plan['status'] == 'ready_for_review' else 2)
+    payload = _authenticated_screening_payload(plan, authentication)
+    if payload is not None:
+        freshness = _screening_freshness(payload, plan['current_input_digest'])
+        coverage, reporting = _compact_screening_coverage(payload['coverage'])
+        report['screening'] = dict(status=('stale' if freshness['status'] == 'stale' else
+            'partial' if payload['coverage']['partial'] else 'complete'),
+            coverage=coverage, timing=deepcopy(payload['timing']), freshness=freshness)
+        if reporting is not None:
+            report['screening']['reporting'] = reporting
+    else:
+        report['screening'] = dict(status='unavailable', reason='Authenticated screening coverage is unavailable; allowance is not reset')
+    return report
+
+
+def _screen_onboarding_plan(plan_dir, expected_revision, *, inspection):
+    from runtime import screening, review_storage as storage
+    # Entry clock precedes every screening-specific path, Git, history or plan observation.
+    with screening._onboarding_screening_run() as run:
+        run.execution['last_plan'] = inspection
+        result = dict(ok=False, status='unavailable')
+        try:
+            result = screening._begin_onboarding_screening(run, plan_dir, expected_revision)
+            if result.get('status') == 'admitted':
+                payload = _collect_onboarding_screening(run)
+                result = _finalize_onboarding_screening(run, payload)
+        except (*storage._ERRORS, RuntimeError):
+            result = dict(ok=False, status='unavailable')
+        # Reporting shares the original deadline; expiry uses the last already-observed plan.
+        plan = run.execution['last_plan']
+        try:
+            _check_observation_deadline(dict(deadline=run.deadline_monotonic))
+            latest = _load(Path(plan_dir))
+            _require(latest is not None, 'Onboarding plan is unavailable')
+            plan = latest
+            _check_observation_deadline(dict(deadline=run.deadline_monotonic))
+            authentication = (run.execution.get('report_authentication')
+                if result.get('ok') and result.get('status') in ('published', 'reuse') else None)
+            if authentication is not None and _digest(plan) != authentication['plan_digest']:
+                authentication = None
+            report = _screening_report(plan, authentication)
+            _check_observation_deadline(dict(deadline=run.deadline_monotonic))
+            return report
+        except (*storage._ERRORS, RuntimeError):
+            return _screening_report(plan)
+
+
+def record_plan(plan_dir, request):
+    from runtime import screening, review_storage as storage
+    _bounded(request)
+    _require('screening' not in request, 'Screening evidence is producer-owned')
+    # Validate before taking the proposal lock; never acquire machine guard under a plan lock.
+    plan = _load(Path(plan_dir))
+    check = None
+    if plan is not None:
+        authentication = None
+        if 'screening' in plan:
+            with screening._onboarding_screening_run() as run:
+                try:
+                    result = screening._begin_onboarding_screening(run, plan_dir, plan['revision'], admit=False)
+                    if result.get('ok') and result.get('status') == 'reuse':
+                        authentication = run.execution.get('report_authentication')
+                except (*storage._ERRORS, RuntimeError):
+                    pass
+        check = (plan['plan_id'], plan['revision'], screening._selection(plan), authentication)
+    return _record_plan(plan_dir, request, screening_check=check)

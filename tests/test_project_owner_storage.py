@@ -397,7 +397,7 @@ class ProjectOwnerStorageTests(unittest.TestCase):
         from tests.test_evidence import CanonicalEvidenceTests
 
         enrolled = CanonicalEvidenceTests(methodName="runTest")
-        enrolled.setUp(d4_recovery=True)
+        enrolled.setUp()
         self.addCleanup(enrolled.doCleanups)
         root = enrolled.fixture.root
         enrolled_repo = enrolled.fixture.repo

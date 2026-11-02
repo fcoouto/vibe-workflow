@@ -1,4 +1,5 @@
 """Runtime boundaries use disposable enrollments; no hooks, models or user state."""
+from tests.fixture_canonical_birth import fixture_artifact
 
 import json
 import hashlib
@@ -55,10 +56,31 @@ class RuntimeTests(unittest.TestCase):
     def runtime(self, state_dir=None):
         return {"schema_version": 2, "state_dir": str(state_dir or self.base / "state")}
 
+    def canonical(self):
+        from tests.fixture_canonical_birth import fresh_canonical, save_test_acquisition
+        fixture, acquired, observation = fresh_canonical(self)
+        self.base, self.repo = fixture.base, fixture.repo
+        self.scope = startup._entry_scope(acquired)
+        self.payload['cwd'] = str(self.repo)
+        self.test_acquisition = save_test_acquisition(self.base / 'test-acquisition.json', fixture, observation)
+
+    def workflow_command(self):
+        script = str(PACKAGE / 'scripts/workflow.py')
+        if not hasattr(self, 'test_acquisition'):
+            return [sys.executable, '-I', '-B', script]
+        # Actual child CLI execution; only its trusted-owner observation is synthetic.
+        bootstrap = ('import sys,runpy,json; from pathlib import Path; sys.path.insert(0,' + repr(str(PACKAGE)) + '); '
+            'from runtime import startup,changes; '
+            'observation=json.loads(Path(' + repr(str(self.test_acquisition)) + ').read_bytes())["observation"]; '
+            'original=startup.acquire_project_entry; '
+            'startup.acquire_project_entry=lambda *args,**kwargs:original(*args,**(kwargs|dict(qualifier=lambda record,facts:observation))); '
+            'changes.LOCK_ROOT=Path(' + repr(str(self.base / 'authority-guards')) + '); '
+            'sys.argv=[' + repr(script) + ']+sys.argv[1:]; runpy.run_path(' + repr(script) + ',run_name="__main__")')
+        return [sys.executable, '-I', '-B', '-c', bootstrap]
+
     def invoke(self, event="PreToolUse", payload=None, raw=None, client="codex"):
         payload = self.payload if payload is None else payload
-        result = subprocess.run([sys.executable, "-I", "-B", str(PACKAGE / "scripts/workflow.py"),
-                                 client, event], cwd=self.repo,
+        result = subprocess.run(self.workflow_command() + [client, event], cwd=self.repo,
                                 input=raw if raw is not None else json.dumps(payload).encode(),
                                 capture_output=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr.decode())
@@ -99,7 +121,7 @@ class RuntimeTests(unittest.TestCase):
         hook = output["hookSpecificOutput"]
         self.assertEqual(hook["hookEventName"], "PreToolUse")
         self.assertEqual(hook["permissionDecision"], "deny")
-        self.assertIn("state", hook["permissionDecisionReason"])
+        self.assertIn("original_pinned_package", hook["permissionDecisionReason"])
         self.assertNotIn("updatedInput", hook)
         self.assertFalse((self.base / "state").exists())
         self.assertNotIn("PRIVATE_PATCH", str(output))
@@ -118,23 +140,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.base / "state").exists())
 
     def task_cli(self, action, request=None, *options):
-        result = subprocess.run([sys.executable, "-I", "-B", str(PACKAGE / "scripts/workflow.py"),
-                                 "task", action, "--cwd", str(self.repo), *options],
+        result = subprocess.run(self.workflow_command() + ["task", action, "--cwd", str(self.repo), *options],
                                 input=json.dumps(request).encode() if request is not None else b"",
                                 capture_output=True, timeout=5)
         self.assertEqual(result.stderr, b"")
         return result.returncode, json.loads(result.stdout)
 
     def test_task_cli_start_update_status_and_validation(self):
-        self.enroll(runtime=self.runtime())
+        self.canonical()
         request = dict(client="codex", session_id="session-1", task_id="cli-task", scope_ref="user:task",
                        mode="editable", decision_ref="user:request")
         code, output = self.task_cli("start", request)
         self.assertEqual(code, 0, output)
-        self.assertEqual(output["task"]["state"], "planned")
+        self.assertEqual(output["task"]["state"], 'TRIAGE')
         self.assertTrue(output["ok"])
         update = {key: request[key] for key in ("client", "session_id", "task_id", "scope_ref")} | dict(
-            expected_revision=1, state="active", reason="Implement request", reference="user:request")
+            expected_revision=1, state='WORKING', reason="Implement request", reference="user:request")
         code, output = self.task_cli("update", update)
         self.assertEqual(code, 0, output)
         self.assertEqual(output["task"]["revision"], 2)
@@ -142,7 +163,7 @@ class RuntimeTests(unittest.TestCase):
         code, output = self.task_cli("status", None, "--client", "codex", "--session", "session-1")
         self.assertEqual(code, 0, output)
         self.assertEqual(output["task"]["task_id"], "cli-task")
-        for invalid in (update, {**update, "state": "ready"}, {**update, "unexpected": True}):
+        for invalid in (update, {**update, "state": 'DONE'}, {**update, "unexpected": True}):
             code, output = self.task_cli("update", invalid)
             self.assertEqual(code, 1, output)
             self.assertFalse(output["ok"])
@@ -169,18 +190,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(codex_guard["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_evidence_cli_trivial_completion_and_separate_merge_evidence(self):
+        self.canonical()
         (self.repo / 'note.txt').write_text('fixture')
         self.git(self.repo, 'add', '.')
         self.git(self.repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
-        self.enroll(runtime=self.runtime())
         identity = dict(client='codex', session_id='session-1', task_id='evidence-cli', scope_ref='user:task')
         self.assertEqual(self.task_cli('start', identity | dict(mode='editable', decision_ref='user:accepted'))[0], 0)
         def evidence(parts, request=None, *flags):
-            bootstrap = ('import sys,runpy; from pathlib import Path; sys.path.insert(0,' + repr(str(PACKAGE)) + '); '
-                'from runtime import changes; changes.LOCK_ROOT=Path(' + repr(str(self.base / 'authority-guards')) + '); '
-                'sys.argv=[' + repr(str(PACKAGE / 'scripts/workflow.py')) + ']+sys.argv[1:]; '
-                'runpy.run_path(' + repr(str(PACKAGE / 'scripts/workflow.py')) + ',run_name="__main__")')
-            result = subprocess.run([sys.executable, '-I', '-B', '-c', bootstrap,
+            result = subprocess.run(self.workflow_command() + [
                 'evidence', *parts, '--cwd', str(self.repo), *flags], input=json.dumps(request).encode() if request else b'',
                 capture_output=True, timeout=10)
             self.assertEqual(result.stderr, b'')
@@ -219,10 +236,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result['attempt']['status'], 'passed')
         code, result = evidence(['verify'], identity | dict(expected_revision=result['task']['revision'], purpose='completion'))
         self.assertTrue(result['verified'], result)
-        self.assertEqual(result['task']['state'], 'ready')
+        self.assertEqual(result['task']['state'], 'DONE')
         code, status = evidence(['status'], None, '--client', 'codex', '--session', 'session-1')
         self.assertEqual(code, 0, status)
-        self.assertEqual(status['task']['state'], 'ready')
+        self.assertEqual(status['task']['state'], 'DONE')
         code, result = evidence(['verify'], identity | dict(expected_revision=status['task']['revision'], purpose='merge-evidence'))
         self.assertEqual(code, 0, result)
         self.assertFalse(result['verified'])
@@ -272,6 +289,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(report["execution"]["status"], "unverified")
         self.assertNotIn("Traceback", result.stdout.decode())
         self.assertFalse((self.base / "state").exists())
+
+    def test_doctor_acquisition_error_keeps_independent_report(self):
+        pointer=self.enroll(runtime=self.runtime())
+        pointer.write_text('invalid enrollment')
+        result=subprocess.run([sys.executable,'-I','-B',str(PACKAGE/'scripts/workflow.py'),
+            'doctor','--cwd',str(self.repo),'--client','codex','--executable','/unavailable-native'],
+            capture_output=True,timeout=5)
+        self.assertEqual(result.returncode,1)
+        self.assertEqual(result.stderr,b'')
+        report=json.loads(result.stdout)
+        self.assertEqual(report['package']['status'],'passed')
+        self.assertEqual(report['enrollment']['status'],'unavailable')
+        self.assertEqual(report['native']['status'],'unavailable')
+        self.assertEqual(report['execution']['status'],'unverified')
+        self.assertFalse((self.base/'state').exists())
 
     def test_task_cli_missing_state_module_returns_sanitized_json_failure(self):
         installed = self.incomplete_package()
@@ -387,7 +419,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn("permissionDecision", str(output))
 
     def test_runtime_startup_never_emits_an_oversized_context(self):
-        self.enroll(runtime=self.runtime())
+        self.canonical()
         payload = {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(self.repo),
                    "session_id": "word " * 160}
         output = self.invoke("SessionStart", payload)
@@ -395,15 +427,16 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn("applies to this enrolled checkout", str(output))
 
     def test_runtime_startup_adds_only_bounded_local_pointer_and_native_identity(self):
-        self.enroll(runtime=self.runtime())
+        self.canonical()
+        original = {str(p): p.read_bytes() for p in self.scope.runtime.state_dir.rglob("*") if p.is_file()}
         payload = {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(self.repo),
                    "session_id": "session-1"}
         output = self.invoke("SessionStart", payload)
         context = output["hookSpecificOutput"]["additionalContext"]
-        self.assertIn(str(self.base / "state/runtime.sqlite3"), context)
+        self.assertIn(str(self.scope.runtime.state_dir / "runtime.sqlite3"), context)
         self.assertIn("session-1", context)
         self.assertLessEqual(len(context.split()), 150)
-        self.assertFalse((self.base / "state").exists())
+        self.assertEqual(original, {str(p): p.read_bytes() for p in self.scope.runtime.state_dir.rglob("*") if p.is_file()})
 
     def test_runtime_input_is_bounded_and_errors_are_event_specific(self):
         for kind in ("PreToolUse", "PostToolUse", "Stop", "Interrupt"):
@@ -621,6 +654,7 @@ class OnboardingDispatcherTests(unittest.TestCase):
         before={str(p.relative_to(old_dir)):p.read_bytes() for p in old_dir.rglob('*') if p.is_file()}
         target=fixture.repo/startup.PROJECT_FILE
         original_rules=(fixture.repo/'AGENTS.md').read_bytes()
+        original_rules_mode=(fixture.repo/'AGENTS.md').stat().st_mode & 0o777
         def invoke(family,parts,payload,*,crash=False):
             bootstrap=f"""
 import sys,runpy
@@ -654,43 +688,57 @@ runpy.run_path(sys.argv[0],run_name='__main__')
         self.assertFalse(target.exists())
         self.assertEqual((fixture.directory/'enrollment.backup').read_bytes(),original)
         self.assertFalse((fixture.base/'fresh-state').exists())
+        self.assertEqual((fixture.repo/'AGENTS.md').read_bytes(),original_rules)
+        self.assertEqual((fixture.repo/'AGENTS.md').stat().st_mode & 0o777,original_rules_mode)
         self.assertEqual({str(p.relative_to(old_dir)):p.read_bytes() for p in old_dir.rglob('*') if p.is_file()},before)
-        for _ in range(3):
-            request=fixture.observe(request)
-            code,result=onboard('resume',request)
-            if code==0:
-                break
-            self.assertEqual(code,2,result)
-        self.assertEqual(code,0,result)
-        installed=json.loads(target.read_bytes())
-        self.assertEqual(installed['schema_version'],1)
-        self.assertEqual(installed['runtime']['schema_version'],2)
-        self.assertEqual(installed['runtime']['state_dir'],str(fixture.base/'fresh-state'))
-        self.assertFalse((fixture.base/'fresh-state').exists())
-        self.assertEqual(onboard('resume',fixture.observe(request))[0],0)
-        code,status=invoke('delegation',['status','--cwd',str(fixture.repo),'--client','codex','--session','old-session'],{})
-        self.assertEqual(code,0,status);self.assertEqual(status['assignments'],[]);self.assertIsNone(status['plan'])
-        identity=dict(client='codex',session_id='fresh-session',task_id='fresh-task',scope_ref='user:fresh')
-        code,started=invoke('task',['start','--cwd',str(fixture.repo)],identity|dict(mode='editable',decision_ref='user:accepted'))
-        self.assertEqual(code,0,started);self.assertEqual(started['task']['pins']['schema_version'],2)
-        enrollment_bytes=target.read_bytes()
-        code,result=onboard('resume',fixture.observe(request))
+        request=fixture.observe(request)
+        code,result=onboard('resume',request)
         self.assertEqual(code,2,result)
-        self.assertEqual(target.read_bytes(),enrollment_bytes)
+        self.assertEqual(result['blocked'],[{'id':'transaction','reason':
+            'Collect adoption qualification/reviews and bind observations to current inputs before final enrollment'}],result)
+        self.assertEqual(result['completed'],['write-rules'])
+        self.assertEqual((fixture.repo/'AGENTS.md').read_bytes(),b'product rules\nnew process\n')
+        self.assertEqual((fixture.repo/'AGENTS.md').stat().st_mode & 0o777,0o644)
+        self.assertFalse(target.exists())
+        self.assertFalse((fixture.base/'fresh-state').exists())
         self.assertEqual((fixture.directory/'enrollment.backup').read_bytes(),original)
         self.assertEqual({str(p.relative_to(old_dir)):p.read_bytes() for p in old_dir.rglob('*') if p.is_file()},before)
-        code,stopped=invoke('task',['update','--cwd',str(fixture.repo)],identity|dict(expected_revision=started['task']['revision'],
-            state='cancelled',reason='User cancelled unused fresh task',reference='user:cancel'))
-        self.assertEqual(code,0,stopped)
+        request=fixture.observe(request)
+        code,result=onboard('resume',request)
+        self.assertEqual(code,2,result)
+        self.assertEqual(result['blocked'],[{'id':'transaction','reason':
+            'Enrollment runtime state/pins are incompatible; reconcile them before activation'}],result)
+        self.assertEqual(result['completed'],['write-rules'])
+        self.assertEqual((fixture.repo/'AGENTS.md').read_bytes(),b'product rules\nnew process\n')
+        self.assertEqual((fixture.repo/'AGENTS.md').stat().st_mode & 0o777,0o644)
+        self.assertFalse(target.exists())
+        self.assertFalse((fixture.base/'fresh-state').exists())
+        self.assertEqual((fixture.directory/'enrollment.backup').read_bytes(),original)
+        self.assertEqual({str(p.relative_to(old_dir)):p.read_bytes() for p in old_dir.rglob('*') if p.is_file()},before)
+        code,repeat=onboard('resume',fixture.observe(request))
+        self.assertEqual(code,2,repeat)
+        self.assertEqual(repeat['blocked'],result['blocked'],repeat)
+        self.assertEqual(repeat['completed'],['write-rules'])
+        code,status=invoke('delegation',['status','--cwd',str(fixture.repo),'--client','codex','--session','old-session'],{})
+        self.assertEqual(code,1,status)
+        self.assertEqual(status['error'],'Enrollment record is missing')
+        identity=dict(client='codex',session_id='fresh-session',task_id='fresh-task',scope_ref='user:fresh')
+        code,started=invoke('task',['start','--cwd',str(fixture.repo)],identity|dict(mode='editable',decision_ref='user:accepted'))
+        self.assertEqual(code,1,started)
+        self.assertEqual(started['error'],'Enrollment record is missing')
+        self.assertFalse((fixture.base/'fresh-state').exists())
         code,result=onboard('rollback',fixture.observe(request))
         self.assertEqual(code,2,result)
+        self.assertTrue(any('incompatible' in item['reason'].lower() for item in result['blocked']),result)
         self.assertFalse(target.exists())
         self.assertEqual((fixture.directory/'enrollment.backup').read_bytes(),original)
         self.assertEqual((fixture.repo/'AGENTS.md').read_bytes(),original_rules)
+        self.assertEqual((fixture.repo/'AGENTS.md').stat().st_mode & 0o777,original_rules_mode)
         self.assertEqual({str(p.relative_to(old_dir)):p.read_bytes() for p in old_dir.rglob('*') if p.is_file()},before)
         self.assertEqual(old_task['pins']['schema_version'],1)
         with self.assertRaises(startup.StartupError):
             startup.runtime_settings(record,PACKAGE,Path(record['git_common_dir']))
+        # Current task/delegation success is covered by genuinely born canonical dispatcher fixtures.
 
     def test_inspect_and_plan_work_without_enrollment_and_never_activate_runtime(self):
         from tests.test_onboarding import OnboardingTests
@@ -731,11 +779,19 @@ class DelegationDispatcherTests(unittest.TestCase):
         self.fixture = RuntimeTests(methodName="runTest")
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.canonical()
         self.base, self.repo = self.fixture.base, self.fixture.repo
         self.nested = self.repo / "nested"
         self.nested.mkdir()
         self.cache = dict(client_surface="codex-cli", applicability=dict(
             client_version="0.163.0", capability_fingerprint="a" * 64))
+
+    def canonical(self, *, linked=False):
+        self.fixture._canonical_linked=linked
+        self.fixture.canonical()
+        self.base,self.repo=self.fixture.base,self.fixture.repo
+        self.nested=self.repo/'nested';self.nested.mkdir(exist_ok=True)
+        return self.fixture.scope
 
     def cli(self, parts, request=None, *, raw=None, flags=(), family='delegation', native=None, cwd=None, env_updates=None):
         package = PACKAGE
@@ -745,7 +801,11 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, {str(package)!r})
-from runtime import changes
+from runtime import changes, startup
+import json
+observation=json.loads(Path({str((getattr(self.fixture,'test_acquisition',None) or self.fixture.fixture.test_acquisition))!r}).read_bytes())['observation']
+original_acquire=startup.acquire_project_entry
+startup.acquire_project_entry=lambda *args,**kwargs:original_acquire(*args,**(kwargs|dict(qualifier=lambda record,facts:observation)))
 from runtime.adapters import codex
 changes.LOCK_ROOT = Path({str(self.base / 'authority-guards')!r})
 native = {native or {}!r}
@@ -777,15 +837,16 @@ with ExitStack() as mocks:
         for surface in ("codex-cli", "codex-desktop"):
             for action in ("status", "claim", "record"):
                 with self.subTest(surface=surface, action=action):
-                    state_dir = self.base / (surface + "-" + action)
-                    self.fixture.enroll(runtime=self.fixture.runtime(state_dir))
+                    scope=self.canonical()
+                    state_dir=scope.runtime.state_dir
+                    before={str(p):p.read_bytes() for p in state_dir.rglob('*') if p.is_file()}
                     request = self.cache | dict(client_surface=surface)
                     field, expected = "freshness", "unavailable"
                     if action == "claim":
                         request |= dict(trigger=dict(kind="routine", id="fixture"))
                         field, expected = "claimed", True
                     elif action == "record":
-                        scope = startup.resolve_project(SimpleNamespace(client="codex", cwd=self.nested), PACKAGE)
+                        scope = self.fixture.scope
                         claim = delegation.claim_guidance(scope, request | dict(trigger=dict(kind="routine", id="fixture")))
                         guidance = dict(schema_version=1, client_surface=surface, checked_at="2026-01-01T00:00:00Z",
                             applicability=request["applicability"], sources=[dict(id="official",
@@ -797,9 +858,9 @@ with ExitStack() as mocks:
                             coordinator_ref="fixture:verified", guidance=guidance)
                         expected = "verified"
                     code, report = self.cli(["guidance", action], request)
-                    self.assertFalse((state_dir / "runtime.sqlite3").exists())
+                    self.assertTrue((state_dir / "runtime.sqlite3").is_file())
                     if action == "status":
-                        self.assertFalse(state_dir.exists())
+                        self.assertEqual(before,{str(p):p.read_bytes() for p in state_dir.rglob("*") if p.is_file()})
                     self.assertEqual(code, 0, report)
                     self.assertEqual(report.get(field), expected, report)
                     if action == "record":
@@ -809,7 +870,7 @@ with ExitStack() as mocks:
 
     def test_delegation_status_reads_cwd_scope_without_initializing_state(self):
         # Catch hook fallback, process-cwd routing, or status creating task state.
-        self.fixture.enroll(runtime=self.fixture.runtime())
+        self.canonical()
         code, report = self.cli(["status"], flags=("--client", "codex", "--session", "session-1"))
         self.assertFalse((self.base / "state").exists())
         self.assertEqual(code, 0, report)
@@ -827,7 +888,7 @@ with ExitStack() as mocks:
 
     def test_guidance_rejects_ambiguous_oversized_and_unknown_surface_requests(self):
         # Catch swallowed input, loose JSON parsing, or unknown-surface cache creation.
-        self.fixture.enroll(runtime=self.fixture.runtime())
+        self.canonical()
         cases = [
             ("non-object", "status", b"null", ()),
             ("duplicate-nested", "status", b'{"applicability":{"x":1,"x":2}}', ()),
@@ -841,18 +902,20 @@ with ExitStack() as mocks:
             ("unknown-flag", "status", json.dumps(self.cache).encode(), ("--PRIVATE_MARKER",)),
             ("missing-record-fields", "record", json.dumps(self.cache).encode(), ()),
         ]
+        before={str(p):p.read_bytes() for p in self.fixture.scope.runtime.state_dir.rglob('*') if p.is_file()}
         for label, action, raw, flags in cases:
             with self.subTest(case=label):
                 code, report = self.cli(["guidance", action], raw=raw, flags=flags)
                 self.assertFalse((self.base / "state").exists())
                 self.assertEqual(code, 1, report)
                 self.assertFalse(report["ok"])
+                self.assertEqual(before,{str(p):p.read_bytes() for p in self.fixture.scope.runtime.state_dir.rglob("*") if p.is_file()})
                 if label == "guidance-cap":
                     self.assertIn("bounded", report["error"].lower())
 
 
     def test_coordinator_reservation_and_reconciliation_are_model_free_cli_pairs(self):
-        self.fixture.enroll(runtime=self.fixture.runtime())
+        self.canonical()
         identity = dict(client='codex', session_id='session-1', task_id='cli-coordinator', scope_ref='user:task')
         self.assertEqual(self.fixture.task_cli('start', identity | dict(mode='editable', decision_ref='user:accepted'))[0], 0)
         request = identity | dict(expected_revision=1, dispatch_id='coordinator-cli',
@@ -867,14 +930,14 @@ with ExitStack() as mocks:
         self.assertEqual(code, 0, replay)
         self.assertTrue(replay['replayed'])
         self.assertEqual(replay['attempt_id'], admitted['attempt_id'])
-        scope = startup.resolve_project(SimpleNamespace(client='codex', cwd=self.nested), PACKAGE)
+        scope = self.fixture.scope
         from runtime import evidence
         with state._database(scope) as db:
             record = next(r for r in delegation._ledger(scope, db) if r['id'] == admitted['attempt_id'])
             task = state._task(db, state._scope_id(scope), 'codex', 'session-1')
         bindings = dict(operation_id='coordinator-cli', operation_digest=record['body']['operation']['digest'],
             claims_digest=evidence._digest(record['data']['claims']))
-        observed = evidence._artifact(scope, bindings | dict(observation='Fixture independent inspection; operation and descendants stopped'))
+        observed = fixture_artifact(scope,identity, bindings | dict(observation='Fixture independent inspection; operation and descendants stopped'))
         proof = dict(version=2, kind='coordinator-operation-reconciliation', identity=identity, expected_pins=task['pins'],
             expected_revision=task['revision'], scope_id=state._scope_id(scope), attempt_id=record['id'], dispatch_id='coordinator-cli',
             assignment_digest=record['data']['assignment']['digest'], decision_ref=task['decision_ref'], operation_evidence=observed,
@@ -899,19 +962,20 @@ with ExitStack() as mocks:
         self.assertEqual(record['data']['resource_units'], 0)
 
     def test_scope_resolution_and_rejected_controls_never_initialize_unrelated_state(self):
-        self.fixture.enroll(runtime=self.fixture.runtime())
+        self.canonical()
         status = ['--client', 'codex', '--session', 'session-1']
         nested_repo = self.nested / 'inner'
         nested_repo.mkdir(); self.fixture.git(nested_repo, 'init', '-q')
         code, report = self.cli(['status'], flags=status, cwd=nested_repo)
         self.assertEqual(code, 1, report)
         self.assertFalse((self.base/'state').exists())
-        self.fixture.enroll(root=nested_repo, runtime=self.fixture.runtime(self.base/'inner-state'))
-        code, report = self.cli(['status'], flags=status, cwd=nested_repo,
-            env_updates=dict(GIT_DIR=str(self.repo/'.git'), GIT_WORK_TREE=str(self.repo)))
-        self.assertEqual(code, 0, report)
-        self.assertFalse((self.base/'state').exists())
-        self.assertFalse((self.base/'inner-state').exists())
+        outer=self.repo
+        self.canonical()
+        code, report = self.cli(['status'], flags=status, cwd=self.nested,
+            env_updates=dict(GIT_DIR=str(outer/'.git'), GIT_WORK_TREE=str(outer)))
+        self.assertEqual(code,0,report)
+        self.assertIsNone(report['plan'])
+        nested_repo=self.nested/'inner';nested_repo.mkdir();self.fixture.git(nested_repo,'init','-q')
         self.fixture.enroll(root=nested_repo)
         code, report = self.cli(['status'], flags=status, cwd=nested_repo)
         self.assertEqual(code, 1, report)
@@ -932,23 +996,18 @@ with ExitStack() as mocks:
             self.assertFalse(json.loads(result.stdout)['ok'])
 
     def test_linked_checkout_cwd_wins_over_inherited_git_selectors(self):
-        (self.repo/'note.txt').write_text('fixture')
-        self.fixture.git(self.repo,'add','.')
-        self.fixture.git(self.repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','fixture')
-        linked = self.base/'linked'
-        self.fixture.git(self.repo,'worktree','add','-q','--detach',str(linked),'HEAD')
-        nested = linked/'nested';nested.mkdir()
-        self.fixture.enroll(runtime=self.fixture.runtime())
-        self.fixture.enroll(root=linked,runtime=self.fixture.runtime(self.base/'linked-state'))
+        self.canonical(linked=True)
+        scope=self.fixture.scope
+        self.assertNotEqual(scope.repository_root,scope.primary_root)
         identity=dict(client='codex',session_id='linked-session',task_id='linked-task',scope_ref='user:linked')
-        env=dict(GIT_DIR=str(self.repo/'.git'),GIT_WORK_TREE=str(self.repo))
-        code, started=self.cli(['start'],identity|dict(mode='editable',decision_ref='user:accepted'),family='task',cwd=nested,env_updates=env)
+        env=dict(GIT_DIR=str(scope.git_common_dir),GIT_WORK_TREE=str(scope.primary_root))
+        code,started=self.cli(['start'],identity|dict(mode='editable',decision_ref='user:accepted'),family='task',cwd=self.nested,env_updates=env)
         self.assertEqual(code,0,started)
-        code, status=self.cli(['status'],flags=('--client','codex','--session','linked-session'),cwd=nested,env_updates=env)
+        code,status=self.cli(['status'],flags=('--client','codex','--session','linked-session'),cwd=self.nested,env_updates=env)
         self.assertEqual(code,0,status)
         self.assertEqual(status['revision'],1)
-        self.assertTrue((self.base/'linked-state/runtime.sqlite3').exists())
-        self.assertFalse((self.base/'state').exists())
+        self.assertEqual(started['task']['pins']['accepted_scope_digest'],scope.accepted_scope_digest)
+        self.assertTrue((scope.runtime.state_dir/'runtime.sqlite3').is_file())
 
 
 class DelegationLifecycleDispatcherTests(unittest.TestCase):
@@ -959,11 +1018,6 @@ class DelegationLifecycleDispatcherTests(unittest.TestCase):
         self.fixture=Stage4NativeReviewTests(methodName='runTest');self.fixture.setUp();self.addCleanup(self.fixture.doCleanups)
         self.base,self.repo=self.fixture.root,self.fixture.repo
         self.nested=self.repo/'nested';self.nested.mkdir()
-        scope=self.fixture.scope
-        path=self.repo/startup.PROJECT_FILE;path.parent.mkdir(exist_ok=True)
-        path.write_text(json.dumps(dict(schema_version=1,project_id=scope.project_id,clients=['codex'],
-            repository_root=str(scope.repository_root),git_common_dir=str(scope.git_common_dir),policy_digest=scope.policy_digest,
-            runtime=dict(schema_version=2,state_dir=str(scope.runtime.state_dir)))))
 
     def test_worker_and_linked_review_dispatch_once_through_all_native_cli_leaves(self):
         f=self.fixture
@@ -1020,7 +1074,9 @@ class DelegationLifecycleDispatcherTests(unittest.TestCase):
         with state._database(f.scope,write=True) as db:
             task=state._task(db,state._scope_id(f.scope),'codex','parent')
             task['pins']['runtime_digest']='0'*64
-            state._save(db,state._scope_id(f.scope),task)
+            # Seed a retained incompatible record without using the current mutation authority.
+            db.execute('update tasks set data=? where scope_id=? and client=? and session_id=? and task_id=?',
+                (json.dumps(task,separators=(',',':')),state._scope_id(f.scope),'codex','parent',task['task_id']))
         directory=f.scope.runtime.state_dir
         before={str(p.relative_to(directory)):p.read_bytes() for p in directory.rglob('*') if p.is_file()}
         request=f.identity|dict(expected_revision=task['revision'],dispatch_id='incompatible',claims=[f.path_claim()],

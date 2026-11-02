@@ -1,4 +1,8 @@
-"""Genuine D4 lifecycle fixtures for ordinary diagnostic age cleanup."""
+"""Cleanup component safety with explicit prevalidated consumer input.
+
+Authority birth, closure, permissions and filesystem transactions remain real.
+The component precondition is not evidence that public canonical cleanup is eligible.
+"""
 
 import os
 from pathlib import Path
@@ -9,10 +13,10 @@ from runtime import state
 from tests import test_evidence as evidence_tests
 
 
-class DiagnosticCleanupTests(unittest.TestCase):
+class DiagnosticCleanupComponentTests(unittest.TestCase):
     retention_age = 7 * 24 * 60 * 60
 
-    def fixture(self):
+    def fixture(self, *, consumer_proof=True):
         clock = [1_800_000_000]
         clock_patch = patch.object(state, "_owner_time", side_effect=lambda: clock[0])
         clock_patch.start()
@@ -21,7 +25,7 @@ class DiagnosticCleanupTests(unittest.TestCase):
         class D4AssignedCancelledFixture(evidence_tests.D4RecoveryFixture,
                                          evidence_tests.AssignedCancelledClosureTests):
             def setUp(self):
-                evidence_tests.CanonicalEvidenceTests.setUp(self, d4_recovery=True)
+                evidence_tests.CanonicalEvidenceTests.setUp(self)
 
             def stopped(self):
                 original_root = self.fixture.root
@@ -36,6 +40,9 @@ class DiagnosticCleanupTests(unittest.TestCase):
         fixture = D4AssignedCancelledFixture(methodName="runTest")
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        if consumer_proof:
+            self.enterContext(patch.object(fixture.fixture.api, "_diagnostic_consumers",
+                return_value=dict(complete=True, required=[], blockers=[])))
         return fixture, clock
 
     def closed_output(self, fixture):
@@ -53,6 +60,22 @@ class DiagnosticCleanupTests(unittest.TestCase):
     def file_bytes(self, context, *references):
         paths = {ref["name"]: context.directory / "evidence" / ref["name"] for ref in references}
         return paths, {name: path.read_bytes() for name, path in paths.items()}
+
+    def test_current_birth_history_without_complete_consumer_acquisition_remains_protected(self):
+        fixture, clock = self.fixture(consumer_proof=False)
+        _, context, _, _, _, output, _, closed = self.closed_output(fixture)
+        api = fixture.fixture.api
+        path = context.directory / "evidence" / output["name"]
+        original = path.read_bytes()
+        clock[0] = closed["lifecycle"]["safe_closed_at"] + self.retention_age
+        result = api._cleanup_diagnostics(context)
+        self.assertEqual(result["expired"], [])
+        self.assertEqual(result["pending"], [])
+        self.assertIn(dict(reference=output, reason="Diagnostic consumer content is unavailable"),
+                      result["protected"])
+        self.assertEqual(path.read_bytes(), original)
+        with api._context_database(context) as db:
+            self.assertEqual(state._metadata(db, output["name"])["status"], "live")
 
     def test_age_boundary_deletes_only_diagnostic_and_preserves_compact_receipts(self):
         fixture, clock = self.fixture()

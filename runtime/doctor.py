@@ -17,7 +17,13 @@ PACKAGE = Path(__file__).resolve().parents[1]
 RPC_TIMEOUT = 5
 TOTAL_TIMEOUT = 15
 MAX_OUTPUT = 512 * 1024
-KNOWN_VERSIONS = {"0.163.0", "0.164.0-alpha.11.1"}
+# Historical observations only; support is determined by the live protocol contract.
+NATIVE_COMPATIBILITY = {
+    ("0.163.0", "0.163.0", "codex-cli", "exec", "codex_exec"),
+    ("0.164.0-alpha.11.1", "0.164.0-alpha.11.1", "codex-desktop", "vscode", "Codex Desktop"),
+    ("0.165.0", "0.165.0-alpha.1.2", "codex-desktop", "vscode", "Codex Desktop"),
+}
+KNOWN_VERSIONS = {pair[0] for pair in NATIVE_COMPATIBILITY}
 HASH = re.compile(r"sha256:[0-9a-f]{64}(?:/sha256:[0-9a-f]{64})?\Z")
 SOURCES = {"system", "user", "project", "mdm", "sessionFlags", "plugin", "cloudRequirements",
            "cloudManagedConfig", "legacyManagedConfigFile", "legacyManagedConfigMdm", "unknown"}
@@ -129,15 +135,21 @@ def version(executable, deadline):
         child.close()
 
 
+def validate_initialize(response):
+    for field in ("codexHome", "platformFamily", "platformOs", "userAgent"):
+        value = response.get(field)
+        if (not isinstance(value, str) or not value.strip() or len(value) > 4096
+                or any(not char.isprintable() for char in value)):
+            raise ObservationError("malformed_response")
+
+
 def discover(executable, cwd, deadline):
     child = NativeProcess([str(executable), "app-server", "--listen", "stdio://"], deadline)
     try:
         initialized = child.request(1, "initialize", {
             "clientInfo": {"name": "vibe-workflow-doctor", "version": "1"},
             "capabilities": {"experimentalApi": True}})
-        if any(not isinstance(initialized.get(field), str) for field in
-               ("codexHome", "platformFamily", "platformOs", "userAgent")):
-            raise ObservationError("malformed_response")
+        validate_initialize(initialized)
         child.send({"method": "initialized"})
         return child.request(2, "hooks/list", {"cwds": [str(cwd)]})
     finally:
@@ -213,7 +225,7 @@ def inspect_hooks(response, scope, definitions):
             "error_count": len(errors), "warning_count": len(warnings), "unexpected_count": unexpected}
 
 
-def inspect_runtime(scope, executable):
+def inspect_runtime(scope, executable, *, acquisition=None, enrollment_unavailable=False):
     """Return JSON-safe independent observations; exit_code is 0, failure 1, incomplete 2."""
     deadline = time.monotonic() + TOTAL_TIMEOUT - 0.25
     report = {
@@ -235,6 +247,21 @@ def inspect_runtime(scope, executable):
                              "version": manifest["version"], "policy_digest": installed_policy}
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         failed = True
+    state_api = None
+    try:
+        from runtime.state import inspect_state, runtime_fingerprint
+        state_api = inspect_state
+        report["package"]["runtime_digest"] = runtime_fingerprint()
+    except ImportError:
+        report["state"] = {"status": "unavailable"}
+        incomplete = True
+    if enrollment_unavailable:
+        report["enrollment"] = {"status": "unavailable"}
+    if acquisition is not None:
+        resolution = acquisition.resolution
+        scope = resolution.scope if resolution.status == "active" else None
+        if scope is None and resolution.status != "outside":
+            report["enrollment"] = {"status": resolution.status, "reason": resolution.reason}
     if scope is None:
         failed = True
         report["hooks"] = {"status": "requires_enrollment"}
@@ -246,14 +273,13 @@ def inspect_runtime(scope, executable):
             report["enrollment"]["status"] = "policy_mismatch"
             failed = True
         try:
-            from runtime.state import inspect_state, runtime_fingerprint
-            state = inspect_state(scope)
-            runtime_digest = runtime_fingerprint()
-            report["package"]["runtime_digest"] = runtime_digest
-            status = ("not_configured" if not state["configured"] else "missing" if not state["present"]
-                      else "incompatible" if not state["compatible"] else "passed")
+            if state_api is None:
+                raise ImportError
+            state = state_api(scope)
+            status = ("not_configured" if not state["configured"] else "incompatible" if state['schema_version'] != 3
+                      else "missing" if not state["present"] else "incompatible" if not state["compatible"] else "passed")
             report["state"] = {"status": status, **{key: state[key] for key in
-                ("configured", "present", "compatible", "schema_version", "policy_digest", "runtime_digest", "tasks")
+                ("configured", "present", "compatible", "schema_version", "policy_digest", "runtime_digest", "tasks", "error")
                 if key in state}}
             failed |= status != "passed"
         except ImportError:
@@ -264,10 +290,11 @@ def inspect_runtime(scope, executable):
             failed = True
     try:
         observed = version(executable, deadline)
-        report["native"] = {"status": "passed" if observed in KNOWN_VERSIONS else "unknown_version", "version": observed}
-        incomplete |= observed not in KNOWN_VERSIONS
+        report["native"] = {"status": "observed", "version": observed,
+                            "version_evidence": "recorded" if observed in KNOWN_VERSIONS else "unrecorded"}
         if scope is not None:
             response = discover(executable, scope.repository_root, deadline)
+            report["native"]["status"] = "passed"
             if definitions is not None:
                 report["hooks"] = inspect_hooks(response, scope, definitions)
                 failed |= report["hooks"]["status"] == "failed"

@@ -7,18 +7,19 @@ import unittest
 from unittest.mock import patch
 
 from runtime import evidence, state
-from tests import test_changes
+from tests import test_d4_owned_transitions
 
 
 class D4FinalBoundaryTests(unittest.TestCase):
     def test_post_registration_permission_and_overlay_changes_rollback(self):
         for boundary in ('membership', 'baseline-edge'):
             with self.subTest(boundary=boundary):
-                fixture = test_changes.ScopedChangesTests(methodName='runTest')
-                fixture.setUp()
-                self.addCleanup(fixture.doCleanups)
-                changes = fixture.changes
-                request, source_path, _, context, _ = fixture.d4_reachable_taskless_guidance()
+                scenario = test_d4_owned_transitions.D4OwnedTransitionTests(methodName='runTest')
+                self.addCleanup(scenario.doCleanups)
+                scenario.setUp()
+                fixture, changes = scenario.fixture, scenario.changes
+                request, source_path, _, context, _ = scenario.guidance_request()
+                original_record = source_path.read_bytes()
                 with evidence._context_database(context) as db:
                     before_baseline = evidence._canonical_plain(state._source_baseline(None, db, context=context))
                 before_effects = {action['id']: changes._fingerprint(Path(action['owner']['root']), action['effects'][0]['path'])
@@ -75,7 +76,7 @@ class D4FinalBoundaryTests(unittest.TestCase):
                 self.assertEqual(len(issued), 1)
                 self.assertEqual(changed, [boundary])
                 self.assertEqual(result['exit_code'], 2, result)
-                reason = 'Taskless D4 source has no exact current or owned-transition bookkeeping permission' if boundary == 'membership' else 'Recovery baseline differs from its exact owned overlay'
+                reason = 'Current D4 Project authority changed outside its owned transition' if boundary == 'membership' else 'Recovery baseline differs from its exact owned overlay'
                 self.assertTrue(any(reason in row['reason'] for row in result['blocked']), result)
                 with evidence._context_database(context) as db:
                     self.assertEqual(evidence._canonical_plain(state._source_baseline(None, db, context=context)), before_baseline)
@@ -83,7 +84,7 @@ class D4FinalBoundaryTests(unittest.TestCase):
                 for action in request['manifest']['actions']:
                     self.assertEqual(changes._fingerprint(Path(action['owner']['root']), action['effects'][0]['path']), before_effects[action['id']])
                 project_file = Path(request['manifest']['enrollment']['record']['project_root']) / changes.PROJECT_FILE
-                self.assertFalse(project_file.exists())
+                if boundary != 'membership': self.assertEqual(project_file.read_bytes(), original_record)
                 canonical_marker = Path(changes.LOCK_ROOT) / ('canonical-' + hashlib.sha256(
                     ('destination:' + str(project_file)).encode()).hexdigest() + '.lock')
                 markers = [*changes._authority_locations([context.directory]), canonical_marker]

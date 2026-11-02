@@ -17,17 +17,7 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
     def umbrella(self, before_publish=None):
         fixture = test_enrolled_accounting_integration.EnrolledUmbrellaAccountingTests(methodName="runTest")
         self.addCleanup(fixture.doCleanups)
-        if before_publish is None:
-            fixture.setUp()
-        else:
-            real_run = test_evidence._run_d4_fixture
-
-            def publish(d4, request, operation):
-                before_publish(fixture, request["manifest"]["enrollment"]["record"])
-                return real_run(d4, request, operation)
-
-            with patch.object(test_evidence, "_run_d4_fixture", side_effect=publish):
-                fixture.setUp()
+        fixture.setUp(before_publish=before_publish)
         return fixture
 
     @staticmethod
@@ -61,7 +51,8 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         self.assertEqual(result.get("status"), "protected", result)
 
     def assert_history(self, result, prior):
-        self.assert_protected(result)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result.get("status"), "resolved", result)
         history = result.get("temporary_history", {})
         self.assertIs(history.get("complete"), True, result)
         expected = [dict(owner=item["owner"], reference=item["reference"], created_at=item["created_at"])
@@ -74,7 +65,8 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         result = self.resolve(self.scope(fixture.record))
         self.assert_baseline(result, fixture.record, fixture.baseline)
         self.assertEqual(result.get("temporary_history"),
-            dict(complete=False, reason="machine_configuration_absent"))
+            dict(complete=True, reason="authenticated_no_related_history", owners=[],
+                 handoff=result["temporary_history"]["handoff"]))
         checkouts = result.get("checkouts", [])
         self.assertEqual([entry["root"] for entry in checkouts], [str(member) for member in fixture.members])
         for member, checkout in zip(fixture.members, checkouts):
@@ -82,16 +74,15 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
             self.assertEqual(checkout["git_dir"], str(member / ".git"))
             self.assertEqual(checkout["git_common_dir"], str(member / ".git"))
         self.assertNotEqual(checkouts[0]["binding"], checkouts[1]["binding"])
-        self.assertFalse(fixture.locator.exists())
+        self.assertTrue(fixture.locator.exists())
         self.assertEqual(fixture.snapshot(), before)
 
-    def test_real_enrolled_standalone_preserves_existing_success_fields_and_unknown_history(self):
+    def test_real_enrolled_standalone_preserves_success_fields_and_original_history(self):
         fixture = test_evidence.CanonicalEvidenceTests(methodName="runTest")
         self.addCleanup(fixture.doCleanups)
-        fixture.setUp(d4_recovery=True)
+        fixture.setUp()
         root = fixture.fixture.root
-        locator = root / "machine" / "machine.json"
-        locator.parent.mkdir(mode=0o700)
+        locator = review_storage._machine_config_path()
         record = json.loads((fixture.fixture.repo / PROJECT_FILE).read_text())
         context = evidence._evidence_context(fixture.scope)
         with evidence._context_database(context) as db:
@@ -103,7 +94,9 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         self.assert_baseline(result, record, baseline)
         for key in ("owner", "reference", "created_at", "authority", "age_basis", "checkout", "temporary_history"):
             self.assertEqual(result.get(key), ordinary.get(key), key)
-        self.assertEqual(result.get("temporary_history"), dict(complete=False, reason="machine_configuration_absent"))
+        self.assertEqual(result.get("temporary_history"), dict(complete=True, reason="authenticated_retained_history", owners=result["temporary_history"]["owners"],
+                 handoff=result["temporary_history"]["handoff"]))
+        self.assertTrue(result["temporary_history"]["owners"])
         self.assertEqual(test_review_storage.ReviewStorageTests.tree_snapshot(root), before)
 
     def test_enrolled_member_subset_retains_project_baseline_and_separate_selected_facts(self):
@@ -114,7 +107,7 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
                 result = self.resolve(self.scope(fixture.record, members))
                 self.assert_baseline(result, fixture.record, fixture.baseline)
                 self.assertEqual([entry["root"] for entry in result.get("checkouts", [])], members)
-                self.assertIs(result.get("temporary_history", {}).get("complete"), False)
+                self.assertIs(result.get("temporary_history", {}).get("complete"), True)
                 self.assertEqual(fixture.snapshot(), before)
 
     def test_enrolled_request_authenticates_root_kind_literal_membership_and_authority_preimage(self):
@@ -146,11 +139,11 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assert_protected(self.resolve(changed))
                 self.assertEqual(fixture.snapshot(), before)
-        self.assertFalse(fixture.locator.exists())
+        self.assertTrue(fixture.locator.exists())
 
     def test_enrolled_scope_with_one_authenticated_empty_machine_history_remains_read_only(self):
         fixture = self.umbrella()
-        prepared = review_storage.prepare_storage(fixture.private / "temporary-state")
+        prepared = review_storage.prepare_storage(fixture.private / "private")
         self.assertTrue(prepared.get("ok"), prepared)
         before = fixture.snapshot()
         result = self.resolve(self.scope(fixture.record))
@@ -160,11 +153,11 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         self.assertEqual(result["temporary_history"].get("owners", []), [])
         self.assertEqual(fixture.snapshot(), before)
 
-    def test_subset_cannot_hide_sibling_standalone_history_or_drop_original_references_and_ages(self):
+    def test_subset_retains_sibling_standalone_history_and_original_references_and_ages(self):
         prior = []
 
         def before_publish(fixture, record):
-            prepared = review_storage.prepare_storage(fixture.private / "temporary-state")
+            prepared = review_storage.prepare_storage(fixture.private / "private")
             self.assertTrue(prepared.get("ok"), prepared)
             for repository in record["repositories"]:
                 owner = review_storage.resolve_owner(repository["primary_root"])
@@ -183,7 +176,7 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         prior = []
 
         def before_publish(fixture, record):
-            self.assertTrue(review_storage.prepare_storage(fixture.private / "temporary-state").get("ok"))
+            self.assertTrue(review_storage.prepare_storage(fixture.private / "private").get("ok"))
             result = review_storage.resolve_owner(record["repositories"][1]["primary_root"])
             self.assertTrue(result.get("ok"), result)
             prior.append(result)
@@ -193,11 +186,11 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         self.assert_history(self.resolve(self.scope(fixture.record, [str(fixture.members[0])])), prior)
         self.assertEqual(fixture.snapshot(), before)
 
-    def test_prior_temporary_umbrella_history_protects_enrolled_subset_and_ordinary_lookup(self):
+    def test_prior_temporary_umbrella_history_survives_enrolled_subset_and_ordinary_lookup(self):
         prior = []
 
         def before_publish(fixture, record):
-            self.assertTrue(review_storage.prepare_storage(fixture.private / "temporary-state").get("ok"))
+            self.assertTrue(review_storage.prepare_storage(fixture.private / "private").get("ok"))
             scope = copy.deepcopy(fixture.d4.plan()["project_scope"])
             self.assertEqual(scope["authority"]["sha256"], "absent")
             result = self.resolve(scope)
@@ -207,7 +200,7 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         fixture = self.umbrella(before_publish)
         before = fixture.snapshot()
         self.assert_history(self.resolve(self.scope(fixture.record, [str(fixture.members[1])])), prior)
-        self.assert_protected(review_storage.resolve_owner(fixture.members[1]))
+        self.assert_history(review_storage.resolve_owner(fixture.members[1]), prior)
         self.assertEqual(fixture.snapshot(), before)
 
     def test_unrelated_valid_temporary_umbrella_does_not_corrupt_enrolled_or_ordinary_lookup(self):
@@ -215,7 +208,8 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         unrelated = test_onboarding.OnboardingTests(methodName="runTest")
         self.addCleanup(unrelated.doCleanups)
         unrelated.setUp()
-        self.assertTrue(review_storage.prepare_storage(fixture.private / "temporary-state").get("ok"))
+        self.enterContext(patch.object(review_storage, "_machine_config_path", return_value=fixture.locator))
+        self.assertTrue(review_storage.prepare_storage(fixture.private / "private").get("ok"))
         temporary_scope = unrelated.project_record(root=unrelated.base, members=[unrelated.repo], kind="umbrella")["project_scope"]
         temporary = self.resolve(temporary_scope)
         self.assertTrue(temporary.get("ok"), temporary)
@@ -238,9 +232,10 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
         external = test_onboarding.OnboardingTests(methodName="runTest")
         self.addCleanup(external.doCleanups)
         external.setUp()
+        self.enterContext(patch.object(review_storage, "_machine_config_path", return_value=fixture.locator))
         extra_member = Path(fixture.record["project_root"]) / "third-member"
         external.repo.rename(extra_member)
-        self.assertTrue(review_storage.prepare_storage(fixture.private / "temporary-state").get("ok"))
+        self.assertTrue(review_storage.prepare_storage(fixture.private / "private").get("ok"))
         scope = self.scope(fixture.record)
         scope["member_checkouts"].append(str(extra_member))
         before = fixture.snapshot()
@@ -257,7 +252,7 @@ class ProjectOwnerEnrolledTests(unittest.TestCase):
 
     def test_bounded_out_machine_history_reports_unknown_without_claiming_absence(self):
         def before_publish(fixture, record):
-            self.assertTrue(review_storage.prepare_storage(fixture.private / "temporary-state").get("ok"))
+            self.assertTrue(review_storage.prepare_storage(fixture.private / "private").get("ok"))
             result = review_storage.resolve_owner(record["repositories"][1]["primary_root"])
             self.assertTrue(result.get("ok"), result)
 

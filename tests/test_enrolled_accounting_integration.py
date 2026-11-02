@@ -3,69 +3,38 @@
 import copy
 import json
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
-from runtime import evidence, onboarding, review_storage, state
-from runtime.startup import (AcceptedScope, PROJECT_FILE, RuntimeSettings,
-                             _canonical_freeze, _canonical_plain,
-                             canonical_scope_projection, decode_project_record)
-from tests import test_changes, test_evidence, test_review_storage
+from runtime import evidence, review_storage, state
+from runtime.startup import PROJECT_FILE, _canonical_plain, decode_project_record
+from tests import test_review_storage
 
 
 class EnrolledUmbrellaAccountingTests(unittest.TestCase):
-    def setUp(self):
-        self.d4 = test_changes.ScopedChangesTests(methodName="runTest")
-        self.d4.setUp()
-        self.addCleanup(self.d4.doCleanups)
-        private = tempfile.TemporaryDirectory(prefix="vibe-umbrella-accounting-")
-        self.addCleanup(private.cleanup)
-        self.private = Path(private.name).resolve()
-        self.storage = self.private / "project-state"
-        self.locator = self.private / "machine" / "machine.json"
-        self.locator.parent.mkdir(mode=0o700)
-        locator = patch.object(review_storage, "_machine_config_path", return_value=self.locator)
-        locator.start()
-        self.addCleanup(locator.stop)
+    def setUp(self, before_publish=None):
+        from tests.fixture_canonical_birth import CanonicalBirthFixture
+        from runtime import changes
 
-        request = self.d4.scoped_request(umbrella=True)
+        birth = CanonicalBirthFixture(methodName="runTest")
+        self.addCleanup(birth.doCleanups)
+        prepared = birth.prepare(umbrella=True, history=False)
+        self.d4, request, decision, self.storage = prepared
+        self.private = self.storage.parent
+        self.locator = review_storage._machine_config_path()
         record = request["manifest"]["enrollment"]["record"]
-        self.assertEqual(record["kind"], "umbrella")
-        self.assertEqual(len(record["repositories"]), 2)
-        for repository in record["repositories"]:
-            self.assertEqual(repository["membership"], "joined")
-            repository["checkouts"][0]["clients"][0]["configuration"]["runtime"] = dict(
-                schema_version=3, state_dir=str(self.storage))
-        request["approval"]["manifest_digest"] = onboarding._digest(request["manifest"])
         self.authority = Path(record["project_root"]) / PROJECT_FILE
-        self.assertFalse(self.authority.exists())
-        self.assertFalse(self.storage.exists())
-        published = test_evidence._run_d4_fixture(self.d4, request, "apply")
-        self.assertEqual(published["exit_code"], 0, published)
-        self.assertEqual(published["activation_status"], "configured")
-        self.assertFalse(published["qualified"])
+        if before_publish is not None:
+            before_publish(self, record)
+        # Birth witnesses the actual machine history selected by this accounting case.
+        with review_storage._capture_birth_history(record) as (history, reobserve):
+            reobserve()
+            intent = changes._birth_intent(self.d4.plan(), request["manifest"], history,
+                plan_dir=self.d4.directory)
+        decision["creation"] = dict(version=1, intent=intent, resume=None)
+        birth.assert_applied_configured(prepared, birth.invoke(prepared))
         self.record = json.loads(self.authority.read_text())
-        self.assertEqual(self.record, record)
-        self.assertFalse(self.storage.exists())
-
-        repository = self.record["repositories"][0]
-        checkout = repository["checkouts"][0]
-        identity = canonical_scope_projection(decode_project_record(self.record),
-            repository_id=repository["repository_id"], checkout_id=checkout["checkout_id"], client="codex")
-        # D4RecoveryFixture seam: published configured scope, without native activation.
-        self.scope = AcceptedScope(self.record["project_id"], repository["repository_id"], checkout["checkout_id"],
-            Path(self.record["project_root"]), self.authority,
-            _canonical_freeze(self.d4.changes._scoped_target(Path(self.record["project_root"]), str(PROJECT_FILE))),
-            self.record["revision"], Path(checkout["root"]), Path(repository["primary_root"]),
-            Path(checkout["git_dir"]), Path(repository["git_common_dir"]),
-            _canonical_freeze(repository["binding"] | checkout["binding"]), "codex",
-            identity["configuration"]["policy_digest"], identity["configuration"]["runtime_digest"],
-            RuntimeSettings(3, self.storage), identity, onboarding._digest(_canonical_plain(identity)),
-            _canonical_freeze(dict(kind="trusted-coordinator", **request["approval"]["evidence"][0])))
-        state.start_task(self.scope, dict(client="codex", session_id="umbrella", task_id="baseline",
-            scope_ref="fixture:published-umbrella", mode="read-only", decision_ref="fixture:internal-scope"))
-        context = evidence._evidence_context(self.scope)
+        context = birth.context(self.d4)
         with evidence._context_database(context) as db:
             self.baseline = _canonical_plain(state._source_baseline(None, db, context=context))
             metadata = state._metadata(db, self.baseline["reference"]["name"])
@@ -90,13 +59,14 @@ class EnrolledUmbrellaAccountingTests(unittest.TestCase):
             self.assertEqual(result.get("authority"), self.baseline["content"]["authority"])
             self.assertEqual(result.get("created_at"), self.baseline["content"]["created_at"])
             self.assertEqual(result.get("age_basis"), "authority_provenance")
-            self.assertEqual(result.get("temporary_history"), dict(complete=False, reason="machine_configuration_absent"))
+            self.assertEqual(result.get("temporary_history"), dict(complete=True, reason="authenticated_no_related_history",
+                owners=[], handoff=result["temporary_history"]["handoff"]))
             self.assertEqual(result["checkout"]["root"], str(member))
             self.assertEqual(result["checkout"]["primary_root"], str(member))
             self.assertEqual(result["checkout"]["git_common_dir"], str(member / ".git"))
         self.assertNotEqual(results[0]["checkout"], results[1]["checkout"])
         self.assertNotEqual(results[0]["checkout"]["binding"], results[1]["checkout"]["binding"])
-        self.assertFalse(self.locator.exists())
+        self.assertTrue(self.locator.exists())
         self.assertEqual(self.snapshot(), before)
 
     def test_competing_configured_member_or_client_store_protects_without_allocation(self):
@@ -120,7 +90,7 @@ class EnrolledUmbrellaAccountingTests(unittest.TestCase):
                     self.assertFalse(result.get("ok"), result)
                     self.assertEqual(result.get("status"), "protected", result)
                 self.assertFalse(competing.exists())
-                self.assertFalse(self.locator.exists())
+                self.assertTrue(self.locator.exists())
                 self.assertEqual(self.snapshot(), before)
 
 

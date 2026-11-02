@@ -144,17 +144,21 @@ class CompactWorkerTests(unittest.TestCase):
             self.assertEqual(list(Path(folder).iterdir()), [])
 
 class CompactCliTests(unittest.TestCase):
-    def test_native_flag_uses_selected_scope_without_state_creation(self):
+    def test_native_flag_uses_selected_scope_without_state_mutation(self):
         from tests.test_runtime import DelegationDispatcherTests
         fixture = DelegationDispatcherTests(methodName='runTest')
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
-        fixture.fixture.enroll(runtime=fixture.fixture.runtime())
+        directory = fixture.fixture.scope.runtime.state_dir
+        before = {path.relative_to(directory): path.read_bytes()
+                  for path in directory.rglob('*') if path.is_file()}
         code, report = fixture.cli(['status'], flags=('--client', 'codex', '--session', 'session-1', '--compact'))
         self.assertEqual(code, 0, report)
         self.assertEqual(report['view'], 'compact')
-        self.assertTrue(report['blockers'])
-        self.assertFalse((fixture.base / 'state').exists())
+        self.assertTrue(report['observation_only'])
+        self.assertEqual(report['blockers'], [])
+        self.assertEqual({path.relative_to(directory): path.read_bytes()
+                          for path in directory.rglob('*') if path.is_file()}, before)
 
     def test_worker_flag_returns_summary_without_publishing(self):
         with tempfile.TemporaryDirectory() as folder:

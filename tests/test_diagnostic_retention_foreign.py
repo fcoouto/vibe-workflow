@@ -8,6 +8,22 @@ from tests import test_evidence, test_foreign_admission
 
 
 class DiagnosticRetentionForeignTests(unittest.TestCase):
+    def test_retired_reverse_discovery_preserves_prospective_target_guard(self):
+        fixture = test_evidence.CanonicalEvidenceTests(methodName='runTest')
+        self.addCleanup(fixture.doCleanups)
+        fixture.setUp()
+        task, context, owner, attempt = test_evidence.AssignedCancelledClosureTests.stopped(fixture)
+        test_evidence.AssignedCancelledClosureTests.close(fixture, task, context, owner)
+        api = fixture.fixture.api
+        output = api._read(fixture.scope, attempt['execution'])['output']
+        api._retire_closed_task(context, owner)
+        source = dict(authority=owner['authority'], reference=output)
+        with api._context_database(context) as db, api._protect_content_target(source):
+            metadata = state._metadata(db, output['name'])
+            self.assertIn(owner['authority'], api._reverse_source_authorities(context, db, metadata))
+            with self.assertRaisesRegex(state.StateError, 'protected prospective target'):
+                api._managed_content(context, output, metadata)
+
     def test_incomplete_foreign_intent_keeps_actual_diagnostic_output_protected(self):
         foreign = test_foreign_admission.ForeignAdmissionTests(methodName='runTest')
         foreign.setUp()

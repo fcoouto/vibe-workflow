@@ -30,7 +30,8 @@ class NativeReviewTests(unittest.TestCase):
                            candidate_digest="b" * 64, coverage=["general"], findings=[], limitations=[])
         self.text = json.dumps(self.report)
         self.responses = {
-            "parent": dict(thread=dict(id="parent", cwd=str(self.root), cliVersion="0.163.0")),
+            "parent": dict(thread=dict(id="parent", cwd=str(self.root), cliVersion="0.163.0",
+                                       source="exec", originator="codex_exec")),
             "spawn": dict(data=[dict(turnId="parent-turn", item=dict(
                 id="spawn", type="subAgentActivity", kind="started", agentThreadId="child",
                 agentPath="/root/review_attempt", model="gpt-6-luna", reasoningEffort="medium"))]),
@@ -63,7 +64,7 @@ for line in sys.stdin:
     params = request["params"]
     if mode == "slow":
         time.sleep(30)
-    if method == "initialize": result = {{}}
+    if method == "initialize": result = responses.get("initialize", {{"codexHome": "/private/native", "platformFamily": "unix", "platformOs": "macos", "userAgent": "fixture"}})
     elif method == "thread/read": result = responses[params["threadId"]]
     elif method == "thread/items/read": result = responses["spawn"]
     elif method == "model/list": result = responses.get("catalog_second", responses["catalog"]) if params.get("cursor") else responses["catalog"]
@@ -71,7 +72,12 @@ for line in sys.stdin:
         turn_reads += 1
         result = responses.get("turns_second", responses["turns"]) if turn_reads > 1 else responses["turns"]
     elif method == "thread/items/list":
-        result = responses.get("items_second", responses["items"]) if params.get("cursor") else responses["items"]
+        if "history" in responses:
+            start = int(params.get("cursor", "0"))
+            stop = start + params["limit"]
+            result = {{"data": responses["history"][start:stop], "nextCursor": str(stop) if stop < len(responses["history"]) else None}}
+        else:
+            result = responses.get("items_second", responses["items"]) if params.get("cursor") else responses["items"]
     else: raise RuntimeError("Unexpected RPC")
     if mode == "oversized": result = {{"data": "x" * (600 * 1024)}}
     print(json.dumps({{"id": request["id"], "result": result}}), flush=True)
@@ -116,7 +122,7 @@ for line in sys.stdin:
         self.assertEqual(set(methods), {"initialize", "initialized", "thread/read", "thread/items/read",
                                        "thread/turns/list", "thread/items/list"})
 
-    def test_thread_versions_must_match_selected_executable(self):
+    def test_thread_creation_versions_do_not_replace_current_reader_provenance(self):
         for version, other in (("0.163.0", "0.164.0-alpha.11.1"),
                                ("0.164.0-alpha.11.1", "0.163.0")):
             for identity in ("parent", "child"):
@@ -124,8 +130,12 @@ for line in sys.stdin:
                 for matched in ("parent", "child"):
                     responses[matched]["thread"]["cliVersion"] = version
                 responses[identity]["thread"]["cliVersion"] = other
-                with self.subTest(version=version, identity=identity), self.assertRaises(StartupError):
-                    self.collect(responses, version=version)
+                with self.subTest(version=version, identity=identity):
+                    receipt = self.collect(responses, version=version)["receipt"]
+                    self.assertIn("current_observer_version", receipt)
+                    self.assertEqual(receipt["current_observer_version"], version)
+                    self.assertEqual(receipt["parent_creation_version"], responses["parent"]["thread"]["cliVersion"])
+                    self.assertEqual(receipt["worker_creation_version"], responses["child"]["thread"]["cliVersion"])
 
     def test_invalid_native_chains_fail_closed(self):
         cases = []
@@ -156,14 +166,12 @@ for line in sys.stdin:
             with self.subTest(label=label), self.assertRaises(StartupError):
                 self.collect(responses)
 
-    def test_malformed_envelopes_and_unknown_versions_are_not_provenance(self):
+    def test_malformed_envelopes_are_not_provenance(self):
         for text in ("not JSON", '{"version":1,"version":1}', "{}", self.text.replace('"findings": []', '"findings": true')):
             responses = copy.deepcopy(self.responses)
             responses["items"]["data"][0]["item"]["text"] = text
             with self.subTest(text=text), self.assertRaises(StartupError):
                 self.collect(responses)
-        with self.assertRaises(StartupError):
-            self.collect(version="9.999.0")
 
     def test_candidate_rechecked_after_fetch_and_errors_are_sanitized(self):
         module = types.ModuleType("runtime.evidence")
@@ -184,6 +192,35 @@ for line in sys.stdin:
             self.collect(responses)
         with patch.object(doctor, "RPC_TIMEOUT", 0.05), self.assertRaisesRegex(StartupError, "Native review observation unavailable"):
             self.collect(mode="slow")
+
+    def test_large_tool_history_does_not_overflow_a_report_collection_frame(self):
+        responses = copy.deepcopy(self.responses)
+        responses['history'] = [dict(turnId='child-turn', item=dict(id='tool-' + str(i),
+            type='commandExecution', aggregatedOutput='x' * 1536)) for i in range(120)]
+        responses['history'].extend(responses['items']['data'])
+        try:
+            observed = self.collect(responses)
+        except StartupError:
+            self.fail('Bounded collection must retrieve the small report through large tool history')
+        self.assertEqual(observed['report'], self.report)
+
+    def test_large_individual_tool_items_preserve_transport_bounds(self):
+        responses = copy.deepcopy(self.responses)
+        responses['history'] = [dict(turnId='child-turn', item=dict(id='tool-' + str(i),
+            type='commandExecution', aggregatedOutput='x' * (20 * 1024))) for i in range(16)]
+        responses['history'].extend(responses['items']['data'])
+        self.assertEqual(self.collect(responses)['report'], self.report)
+
+    def test_paginated_report_collection_keeps_uniqueness_and_total_item_bound(self):
+        for count, duplicate in ((120, True), (400, False)):
+            responses = copy.deepcopy(self.responses)
+            responses['history'] = [dict(turnId='child-turn', item=dict(id='tool-' + str(i),
+                type='commandExecution', aggregatedOutput='ok')) for i in range(count)]
+            responses['history'].extend(responses['items']['data'])
+            if duplicate:
+                responses['history'].insert(0, copy.deepcopy(responses['items']['data'][0]))
+            with self.subTest(count=count, duplicate=duplicate), self.assertRaises(StartupError):
+                self.collect(responses)
 
     def test_invalid_identifiers_do_not_launch_native_process(self):
         with self.prepared(), patch.object(codex, "NativeProcess") as process:
@@ -306,6 +343,70 @@ for line in sys.stdin:
         with self.assertRaises(StartupError):
             self.observe_worker(responses, binding)
 
+    def test_workstream_creation_names_preserve_family_role_and_exact_native_lineage(self):
+        cases = [(self.worker_fixture, self.observe_worker, "WS42.01", "worker_ws42_01_build_attempt"),
+                 (self.review_assignment_fixture, self.observe_review_assignment,
+                  "WS42.03", "review_ws42_03_review_attempt")]
+        for fixture, observe, context, marker in cases:
+            responses, binding = fixture()
+            binding.update(workstream_context_id=context, task_name=marker)
+            responses["spawn"]["data"][0]["item"]["agentPath"] = "/root/" + marker
+            responses["child"]["thread"]["source"]["subAgent"]["thread_spawn"]["agent_path"] = "/root/" + marker
+            with self.subTest(marker=marker):
+                try:
+                    receipt = observe(responses, binding)["receipt"]
+                except StartupError:
+                    self.fail("Exact prepared Workstreams creation marker was rejected")
+                self.assertEqual(receipt["task_name"], marker)
+                self.assertEqual(receipt["agent_path"], "/root/" + marker)
+                self.assertEqual(receipt["worker_id"], "child")
+                self.assertNotIn("workstream_context_id", receipt)
+        responses = copy.deepcopy(self.responses)
+        marker = "review_ws42_03_review_attempt"
+        responses["spawn"]["data"][0]["item"]["agentPath"] = "/root/" + marker
+        responses["child"]["thread"]["source"]["subAgent"]["thread_spawn"]["agent_path"] = "/root/" + marker
+        binding = dict(self.binding, workstream_context_id="WS42.03", task_name=marker)
+        try:
+            receipt = self.collect(responses, binding=binding)["receipt"]
+        except StartupError:
+            self.fail("Exact prepared Workstreams D5 review marker was rejected")
+        self.assertEqual(receipt["task_name"], marker)
+
+    def test_workstream_creation_names_reject_other_attempt_family_role_or_unbound_context(self):
+        for change in ("attempt", "family", "role", "context", "missing context", "legacy marker", "origin path"):
+            responses, binding = self.worker_fixture()
+            marker = "worker_ws42_01_build_attempt"
+            binding.update(workstream_context_id="WS42.01", task_name=marker)
+            if change == "attempt": marker = "worker_ws42_01_build_other"
+            elif change == "family": marker = "worker_ws99_01_build_attempt"
+            elif change == "role": marker = "worker_ws42_01_review_attempt"
+            elif change == "context": binding["workstream_context_id"] = "WS42.02"
+            elif change == "missing context": binding.pop("workstream_context_id")
+            elif change == "legacy marker": marker = "worker_attempt"
+            binding["task_name"] = marker
+            responses["spawn"]["data"][0]["item"]["agentPath"] = "/root/" + marker
+            responses["child"]["thread"]["source"]["subAgent"]["thread_spawn"]["agent_path"] = "/root/" + marker
+            if change == "origin path":
+                responses["child"]["thread"]["source"]["subAgent"]["thread_spawn"]["agent_path"] = "/root/worker_ws99_01_build_attempt"
+            with self.subTest(change=change), self.assertRaises(StartupError):
+                self.observe_worker(responses, binding)
+
+    def test_native_task_names_normalize_without_truncating_or_losing_attempt_identity(self):
+        self.assertTrue(callable(getattr(codex, "native_task_name", None)), "Shared native marker derivation is unavailable")
+        self.assertEqual(codex.native_task_name("attempt", "worker"), "worker_attempt")
+        self.assertEqual(codex.native_task_name("attempt", "review"), "review_attempt")
+        self.assertEqual(codex.native_task_name("attempt", "worker", "WSAb42.01"), "worker_wsab42_01_build_attempt")
+        self.assertEqual(codex.native_task_name("a" * 32, "review", "WS42.03"), "review_ws42_03_review_" + "a" * 32)
+        for context in ("C12", "WS42.0", "WS42.00", "WS42.01.BUILD", "WS42/01", "WS42.01\n", "WS.01", "WS" + "a" * 17 + ".01", "WS42." + "1" * 17, 42, {}):
+            with self.subTest(context=context), self.assertRaises(StartupError):
+                codex.native_task_name("attempt", "worker", context)
+        for attempt, role, context in (("a" * 64, "worker", "WS42.01"),
+                                       ("other/path", "worker", "WS42.01"),
+                                       ("UPPER", "worker", "WS42.01"),
+                                       ("attempt", "coord", "WS42.01")):
+            with self.subTest(attempt=attempt, role=role), self.assertRaises(StartupError):
+                codex.native_task_name(attempt, role, context)
+
     def test_worker_observation_separates_settings_and_never_proves_stopped_writers(self):
         self.assertTrue(callable(getattr(codex, "observe_native_worker", None)), "Worker observation is unavailable")
         observed = self.observe_worker()
@@ -347,6 +448,71 @@ for line in sys.stdin:
         self.assertIsNone(observed["receipt"]["worker_turn_id"])
         self.assertIsNone(observed["result"])
 
+    def test_assignment_failure_preserves_only_recognized_codes_and_explicit_retry_intent(self):
+        cases = [
+            ("serverOverloaded", True, "serverOverloaded"),
+            ("rateLimitExceeded", False, "rateLimitExceeded"),
+            ("usageLimitExceeded", None, "usageLimitExceeded"),
+            ("internalServerError", False, "internalServerError"),
+            ({"httpConnectionFailed": {"httpStatusCode": 503}}, None, "httpConnectionFailed"),
+            ({"responseStreamConnectionFailed": {}}, None, "responseStreamConnectionFailed"),
+            ({"responseStreamDisconnected": {}}, None, "responseStreamDisconnected"),
+            ({"responseTooManyFailedAttempts": {}}, False, "responseTooManyFailedAttempts"),
+            ({"activeTurnNotSteerable": {"turnKind": "review"}}, None, "activeTurnNotSteerable"),
+        ]
+        for info, retry, expected in cases:
+            responses, binding = self.worker_fixture()
+            turn = responses["turns"]["data"][0]
+            turn.update(status="failed", error=dict(codexErrorInfo=info,
+                message="secret-token", additionalDetails="secret-details"))
+            if retry is not None:
+                turn["willRetry"] = retry
+            with self.subTest(info=info, retry=retry):
+                observed = self.observe_worker(responses, binding)
+                self.assertIn("failure_code", observed["receipt"])
+                self.assertEqual(observed["receipt"]["failure_code"], expected)
+                self.assertIs(observed["receipt"]["will_retry"], retry)
+                self.assertNotIn("secret", json.dumps(observed))
+                self.assertNotIn("httpStatusCode", json.dumps(observed))
+                self.assertIsNone(observed["result"])
+
+    def test_assignment_unknown_failure_and_retry_intent_are_never_inferred(self):
+        cases = [None, {}, "serverOverloaded", {"message": "rateLimitExceeded"},
+                 {"codexErrorInfo": "unknown-secret"}, {"codexErrorInfo": "x" * 4097},
+                 {"codexErrorInfo": ["serverOverloaded"]},
+                 {"codexErrorInfo": {"serverOverloaded": {}}},
+                 {"codexErrorInfo": {"httpConnectionFailed": "secret"}},
+                 {"codexErrorInfo": {"httpConnectionFailed": {}, "other": {}}}]
+        for error in cases:
+            responses, binding = self.review_assignment_fixture()
+            responses["turns"]["data"][0].update(status="failed", error=error, willRetry="false")
+            with self.subTest(error=error):
+                receipt = self.observe_review_assignment(responses, binding)["receipt"]
+                self.assertIn("failure_code", receipt)
+                self.assertIsNone(receipt["failure_code"])
+                self.assertIsNone(receipt["will_retry"])
+        for status in (None, "inProgress", "interrupted", "failed", "completed"):
+            responses, binding = self.worker_fixture()
+            if status is None:
+                responses["turns"]["data"] = []
+            else:
+                responses["turns"]["data"][0]["status"] = status
+            with self.subTest(status=status):
+                receipt = self.observe_worker(responses, binding)["receipt"]
+                self.assertIn("failure_code", receipt)
+                self.assertIsNone(receipt["failure_code"])
+                self.assertIsNone(receipt["will_retry"])
+
+    def test_assignment_rechecks_normalized_failure_and_host_retry_intent(self):
+        for changed in ({"error": {"codexErrorInfo": "rateLimitExceeded"}}, {"willRetry": False}):
+            responses, binding = self.worker_fixture()
+            responses["turns"]["data"][0].update(status="failed",
+                error={"codexErrorInfo": "serverOverloaded"}, willRetry=True)
+            responses["turns_second"] = copy.deepcopy(responses["turns"])
+            responses["turns_second"]["data"][0].update(changed)
+            with self.subTest(changed=changed), self.assertRaises(StartupError):
+                self.observe_worker(responses, binding)
+
     def test_worker_observation_accepts_observed_desktop_surface_tuple(self):
         responses, binding = self.worker_fixture()
         binding.update(client_surface="codex-desktop", native_version="0.164.0-alpha.11.1")
@@ -371,7 +537,7 @@ for line in sys.stdin:
         responses, binding = self.worker_fixture()
         cases = []
         for field, value in (("task_name", "worker_other"), ("attempt_id", "other"),
-                             ("native_version", "other"), ("client_surface", "codex-desktop"),
+                             ("native_version", None), ("client_surface", "codex-desktop"),
                              ("assignment_digest", "bad"), ("candidate_digest", "bad")):
             other = dict(binding, **{field: value})
             cases.append((responses, other, None))
@@ -431,11 +597,29 @@ for line in sys.stdin:
         methods = {json.loads(line)["method"] for line in self.log.read_text().splitlines()}
         self.assertEqual(methods, {"initialize", "initialized", "thread/read", "model/list"})
 
+    def test_reader_update_keeps_capability_digest_but_catalog_or_controls_changes_do_not(self):
+        responses, controls = self.control_fixture()
+        original = self.discover_workers(responses, controls)
+        updated_controls = dict(controls)
+        updated = self.discover_workers(responses, updated_controls, version="9.999.0")
+        self.assertEqual(original["native_version"], "0.163.0")
+        self.assertEqual(updated["native_version"], "9.999.0")
+        self.assertEqual(updated["capability_digest"], original["capability_digest"])
+        changed = copy.deepcopy(responses)
+        changed["catalog"]["data"][0]["supportedReasoningEfforts"].append(dict(reasoningEffort="xhigh"))
+        self.assertNotEqual(self.discover_workers(changed, updated_controls, version="9.999.0")["capability_digest"],
+                            updated["capability_digest"])
+        changed_controls = copy.deepcopy(updated_controls)
+        changed_controls["dispatch_controls"]["explicit_effort"] = False
+        self.assertNotEqual(self.discover_workers(responses, changed_controls, version="9.999.0")["capability_digest"],
+                            updated["capability_digest"])
+        self.assertEqual(controls["native_version"], "0.163.0")
+
     def test_discovery_rejects_unqualified_surface_and_malformed_or_unbounded_catalog(self):
-        for label in ("desktop", "version", "originator", "control type", "duplicate", "effort", "page loop"):
+        for label in ("desktop", "version metadata", "originator", "control type", "duplicate", "effort", "page loop"):
             responses, controls = self.control_fixture()
             if label == "desktop": controls["client_surface"] = "codex-desktop"
-            elif label == "version": controls["native_version"] = "other"
+            elif label == "version metadata": controls["native_version"] = None
             elif label == "originator": responses["parent"]["thread"]["originator"] = "Codex Desktop"
             elif label == "control type": controls["dispatch_controls"]["spawn"] = "true"
             elif label == "duplicate": responses["catalog"]["data"] *= 2
@@ -448,7 +632,7 @@ for line in sys.stdin:
         responses["catalog"] = dict(data=[], nextCursor="next-page")
         self.assertEqual(len(self.discover_workers(responses, controls)["catalog"]), 1)
 
-    def test_desktop_catalog_requires_matching_observer_and_exact_surface_binding(self):
+    def test_desktop_catalog_preserves_surface_binding_across_reader_updates(self):
         responses, controls = self.control_fixture()
         controls.update(client_surface="codex-desktop", native_version="0.164.0-alpha.11.1")
         responses["parent"]["thread"].update(cliVersion="0.164.0-alpha.11.1", source="vscode", originator="Codex Desktop")
@@ -468,15 +652,113 @@ for line in sys.stdin:
                 self.discover_workers(responses, controls, version="0.164.0-alpha.11.1")
         responses["parent"]["thread"]["source"] = "vscode"
         for version in ("0.163.0", "9.999.0"):
-            with self.subTest(version=version), self.assertRaises(StartupError):
-                self.discover_workers(responses, controls, version=version)
+            with self.subTest(version=version):
+                updated = self.discover_workers(responses, controls, version=version)
+                self.assertEqual(updated["native_version"], version)
+                self.assertEqual(updated["capability_digest"], observed["capability_digest"])
         controls["client_surface"] = "codex-cli"
         with self.assertRaises(StartupError):
             self.discover_workers(responses, controls, version="0.164.0-alpha.11.1")
         controls.update(client_surface="codex-desktop", native_version="0.163.0")
         responses["parent"]["thread"]["cliVersion"] = "0.163.0"
+        self.assertEqual(self.discover_workers(responses, controls, version="0.163.0")["client_surface"], "codex-desktop")
+
+    def test_work_desktop_originator_preserves_live_surface_and_identity_checks(self):
+        responses, controls = self.current_desktop_fixture(self.control_fixture)
+        responses['parent']['thread']['originator']='codex_work_desktop'
+        observed=self.discover_workers(responses,controls,version='0.165.0')
+        self.assertEqual(observed['originator'],'codex_work_desktop')
+        for source in ('exec','unknown',None):
+            changed=copy.deepcopy(responses)
+            changed['parent']['thread']['source']=source
+            with self.assertRaises(StartupError):
+                self.discover_workers(changed,controls,version='0.165.0')
+
+    def current_desktop_fixture(self, fixture):
+        responses, binding = fixture()
+        binding.update(client_surface="codex-desktop", native_version="0.165.0")
+        for identity in ("parent", "child"):
+            responses[identity]["thread"]["cliVersion"] = "0.165.0-alpha.1.2"
+        responses["parent"]["thread"].update(source="vscode", originator="Codex Desktop")
+        return responses, binding
+
+    def test_current_desktop_discovery_distinguishes_observer_from_creation_version(self):
+        responses, controls = self.current_desktop_fixture(self.control_fixture)
+        try:
+            observed = self.discover_workers(responses, controls, version="0.165.0")
+        except StartupError:
+            self.fail("Proven observer/creation version pair was rejected")
+        self.assertEqual(observed["native_version"], "0.165.0")
+        self.assertEqual(observed["client_surface"], "codex-desktop")
+        self.assertEqual(observed["originator"], "Codex Desktop")
+        for field, value in (("cliVersion", None), ("cliVersion", ""),
+                             ("cliVersion", {}), ("source", "exec"),
+                             ("originator", "codex_exec"), ("originator", "Codex desktop"),
+                             ("cwd", "/other")):
+            changed = copy.deepcopy(responses)
+            changed["parent"]["thread"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(StartupError):
+                self.discover_workers(changed, controls, version="0.165.0")
+        for reader in ("0.163.0", "0.164.0-alpha.11.1", "0.165.0-alpha.1.2", "9.999.0"):
+            changed = dict(controls, native_version=reader)
+            with self.subTest(reader=reader):
+                self.assertEqual(self.discover_workers(responses, changed, version=reader)["native_version"], reader)
+        controls["client_surface"] = "codex-cli"
         with self.assertRaises(StartupError):
-            self.discover_workers(responses, controls, version="0.163.0")
+            self.discover_workers(responses, controls, version="0.165.0")
+
+    def test_current_desktop_native_chain_requires_exact_identity_with_independent_creation_versions(self):
+        responses, binding = self.current_desktop_fixture(self.worker_fixture)
+        try:
+            receipt = self.observe_worker(responses, binding, version="0.165.0")["receipt"]
+        except StartupError:
+            self.fail("Proven native chain observer/creation version pair was rejected")
+        self.assertEqual(receipt["native_version"], "0.165.0")
+        self.assertEqual(receipt["worker_id"], "child")
+        self.assertEqual(receipt["turn_status"], "completed")
+        for creation in ("0.165.0", "0.163.0", "9.999.0-alpha.42"):
+            changed = copy.deepcopy(responses)
+            changed["child"]["thread"]["cliVersion"] = creation
+            with self.subTest(creation=creation):
+                receipt = self.observe_worker(changed, binding, version="0.165.0")["receipt"]
+                self.assertEqual(receipt["worker_creation_version"], creation)
+        for field, value in (("cliVersion", None), ("cliVersion", ""),
+                             ("cliVersion", "line\nbreak"), ("cwd", "/other"),
+                             ("parentThreadId", "other")):
+            changed = copy.deepcopy(responses)
+            changed["child"]["thread"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(StartupError):
+                self.observe_worker(changed, binding, version="0.165.0")
+        changed = copy.deepcopy(responses)
+        changed["spawn"]["data"][0]["item"]["agentPath"] = "/root/worker_other"
+        with self.assertRaises(StartupError):
+            self.observe_worker(changed, binding, version="0.165.0")
+        changed = copy.deepcopy(responses)
+        changed["turns_second"] = dict(data=[dict(id="other", status="completed", error=None)])
+        with self.assertRaises(StartupError):
+            self.observe_worker(changed, binding, version="0.165.0")
+
+    def test_current_desktop_d5_review_uses_proven_creation_pair_and_exact_surface(self):
+        responses, _ = self.current_desktop_fixture(lambda: (copy.deepcopy(self.responses), {}))
+        try:
+            observed = self.collect(responses, version="0.165.0")
+        except StartupError:
+            self.fail("Proven D5 observer/creation version pair was rejected")
+        self.assertEqual(observed["report"], self.report)
+        self.assertEqual(observed["receipt"]["native_version"], "0.165.0")
+        for field, value in (("source", "exec"), ("originator", "codex_exec"), ("cliVersion", None)):
+            changed = copy.deepcopy(responses)
+            changed["parent"]["thread"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(StartupError):
+                self.collect(changed, version="0.165.0")
+
+    def test_d5_review_rejects_consistent_surface_switch_from_admitted_binding(self):
+        responses, _ = self.current_desktop_fixture(lambda: (copy.deepcopy(self.responses), {}))
+        binding = dict(self.binding, native_version="0.165.0", client_surface="codex-desktop")
+        self.assertEqual(self.collect(responses, binding=binding, version="9.999.0")["report"], self.report)
+        responses["parent"]["thread"].update(source="exec", originator="codex_exec")
+        with self.assertRaises(StartupError):
+            self.collect(responses, binding=binding, version="9.999.0")
 
     def test_cli_surface_requires_exact_observed_standalone_exec_tuple(self):
         responses, controls = self.control_fixture()
@@ -501,8 +783,36 @@ for line in sys.stdin:
         for version in ("0.164.0-alpha.11.1", "9.999.0"):
             controls["native_version"] = version
             responses["parent"]["thread"]["cliVersion"] = version
-            with self.subTest(version=version), self.assertRaises(StartupError):
-                self.discover_workers(responses, controls, version=version)
+            with self.subTest(version=version):
+                self.assertEqual(self.discover_workers(responses, controls, version=version)["native_version"], version)
+
+    def test_updated_reader_keeps_admitted_worker_and_review_versions_without_rebinding(self):
+        responses, binding = self.current_desktop_fixture(self.worker_fixture)
+        responses["child"]["thread"]["cliVersion"] = "0.166.0-alpha.1"
+        try:
+            receipt = self.observe_worker(responses, binding, version="9.999.0")["receipt"]
+        except StartupError:
+            self.fail("Reader update rejected the unchanged admitted assignment")
+        self.assertEqual(receipt["native_version"], "0.165.0")
+        self.assertEqual(receipt["current_observer_version"], "9.999.0")
+        self.assertEqual(receipt["parent_creation_version"], "0.165.0-alpha.1.2")
+        self.assertEqual(receipt["worker_creation_version"], "0.166.0-alpha.1")
+        self.assertEqual(receipt["assignment_digest"], binding["assignment_digest"])
+        self.assertEqual(receipt["worker_id"], "child")
+        responses, _ = self.current_desktop_fixture(lambda: (copy.deepcopy(self.responses), {}))
+        binding = dict(self.binding, native_version="0.165.0")
+        receipt = self.collect(responses, binding=binding, version="9.999.0")["receipt"]
+        self.assertEqual(receipt["native_version"], "0.165.0")
+        self.assertEqual(receipt["current_observer_version"], "9.999.0")
+
+    def test_live_initialization_contract_rejects_missing_malformed_or_changed_shapes(self):
+        for initialized in ({}, {"codexHome": "/private/native"},
+                dict(codexHome=True, platformFamily="unix", platformOs="macos", userAgent="fixture"),
+                dict(codexHome="/private/native", platformFamily="unix", platformOs="macos", userAgent="")):
+            responses, binding = self.worker_fixture()
+            responses["initialize"] = initialized
+            with self.subTest(initialized=initialized), self.assertRaises(StartupError):
+                self.observe_worker(responses, binding)
 
     def test_provider_metadata_preserves_unknown_and_differing_native_values(self):
         discovered = self.discover_workers()
@@ -531,18 +841,14 @@ for line in sys.stdin:
         self.assertIsNone(receipt["worker_model_provider"])
 
     def test_canonical_linked_native_observation_binds_original_projection_and_selected_cwd(self):
-        from dataclasses import replace
         from runtime import state
         from runtime.startup import _canonical_plain
-        from tests.test_state import canonical_scope
         from tests.test_evidence import EvidenceTests
         f = EvidenceTests(methodName='runTest')
+        f._canonical_linked = True
         f.setUp(); self.addCleanup(f.doCleanups)
-        linked = f.root / 'linked'
-        f.git('worktree', 'add', '--detach', str(linked))
-        private = Path(subprocess.check_output(['git', '-C', str(linked),
-            'rev-parse', '--absolute-git-dir']).decode().strip())
-        self.scope = canonical_scope(replace(f.scope, repository_root=linked), primary_root=f.repo, git_dir=private)
+        self.scope = f.scope
+        linked = f.repo
         responses, binding = self.worker_fixture()
         for name in ('parent', 'child'): responses[name]['thread']['cwd'] = str(linked)
         binding.update(pins=state._pins(self.scope), accepted_identity=_canonical_plain(self.scope.accepted_identity),
@@ -553,7 +859,7 @@ for line in sys.stdin:
         changed = copy.deepcopy(binding)
         changed['accepted_identity']['checkout_id'] = 'other-checkout'
         with self.assertRaises(StartupError): self.observe_worker(responses, changed)
-        responses['child']['thread']['cwd'] = str(f.repo)
+        responses['child']['thread']['cwd'] = str(f.scope.primary_root)
         with self.assertRaises(StartupError): self.observe_worker(responses, binding)
 
 

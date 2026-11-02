@@ -14,7 +14,7 @@ Keep policy adoption, action applicability and action satisfaction distinct. Mis
 | --- | --- |
 | [Project Scope](01-project-scope.md) | During onboarding or updates; at task startup or resume; after changes to repository/client scope, instructions, permissions or accepted policy. |
 | [Task Planning](02-task-planning.md) | Before implementation; when resuming work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
-| [Agent Delegation](03-agent-delegation.md) | Before starting a task or dispatching a worker; after material scope changes, failed attempts or capacity changes. |
+| [Agent Delegation](03-agent-delegation.md) | Before starting a task or dispatching a worker; after material scope changes, failed attempts, stalled repair/validation progress or capacity changes. |
 | [Security Review](04-security-review.md) | After implementing a deliverable, before completion or merge; after changes affecting review coverage or evidence. |
 | [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting completion or merge; after changes affecting evidence. |
 | [Code Review](06-code-review.md) | Before every merge; before completing nontrivial or review-required work; when requested; after changes affecting review evidence. |

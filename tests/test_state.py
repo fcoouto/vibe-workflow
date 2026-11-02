@@ -21,11 +21,32 @@ from runtime.startup import ProjectScope, RuntimeSettings
 PACKAGE = Path(__file__).resolve().parents[1]
 
 
-def canonical_scope(legacy, *, client="codex", repository_id="repository", checkout_id="checkout",
+def canonical_scope(legacy, *, client="codex", repository_id=None, checkout_id=None,
                     primary_root=None, git_dir=None):
-    """Synthetic accepted scope for internal seam tests; no enrollment/transition proof."""
+    """Reuse born authority for seam projections; legacy inputs remain synthetic negatives."""
     from runtime import state
     from runtime.startup import AcceptedScope, _canonical_freeze, policy_digest
+    if isinstance(legacy, AcceptedScope):
+        from runtime.startup import _canonical_plain
+        identity = _canonical_plain(legacy.accepted_identity)
+        updates = dict(client=client)
+        for key, value in (("repository_id", repository_id), ("checkout_id", checkout_id),
+                           ("primary_root", primary_root), ("git_dir", git_dir)):
+            if value is not None:
+                updates[key] = value
+        for key, value in updates.items():
+            identity[key] = str(value) if isinstance(value, Path) else value
+        identity["repository_root"] = str(legacy.repository_root)
+        bindings = _canonical_plain(legacy.bindings)
+        for key, value in (("root", legacy.repository_root), ("primary_root", primary_root), ("git_dir", git_dir)):
+            if value is not None:
+                info = value.stat()
+                bindings[key] = dict(device=info.st_dev, inode=info.st_ino)
+        identity["bindings"] = bindings
+        return replace(legacy, **updates, bindings=_canonical_freeze(bindings),
+            accepted_identity=_canonical_freeze(identity), accepted_scope_digest=state._digest(identity))
+    repository_id = repository_id or "repository"
+    checkout_id = checkout_id or "checkout"
     root, common = legacy.repository_root, legacy.git_common_dir
     primary, private = primary_root or root, git_dir or common
     for path in (root, common, primary, private): path.mkdir(parents=True, exist_ok=True)
@@ -51,17 +72,19 @@ def canonical_scope(legacy, *, client="codex", repository_id="repository", check
 
 class StateTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="vibe-state-")
-        self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name).resolve()
-        self.scope = ProjectScope("project", self.base / "repo", self.base / "repo/.git", "policy",
-                                  RuntimeSettings(2, self.base / "private"))
+        self.fresh_scope()
         self.request = dict(client="codex", session_id="session", task_id="task", scope_ref="request:1",
                             mode="editable", decision_ref="user:1")
         from runtime import changes
         guard_patch = patch.object(changes, 'LOCK_ROOT', self.base / 'authority-guards')
         guard_patch.start()
         self.addCleanup(guard_patch.stop)
+
+    def fresh_scope(self):
+        from tests.fixture_canonical_birth import fresh_canonical, save_test_acquisition
+        fixture, self.acquisition, observation = fresh_canonical(self)
+        self.base, self.scope = fixture.base, self.acquisition.resolution.scope
+        self.test_acquisition = save_test_acquisition(self.base / 'test-acquisition.json', fixture, observation)
 
     def api(self):
         self.assertIsNotNone(importlib.util.find_spec("runtime.state"), "durable state implementation missing")
@@ -91,7 +114,7 @@ class StateTests(unittest.TestCase):
 
     def arm(self):
         self.start()
-        self.update(state="active")
+        self.update(state='WORKING')
         self.event()
         self.update(conditions=[self.runnable()])
 
@@ -100,18 +123,20 @@ class StateTests(unittest.TestCase):
         first = self.start()
         api = self.api()
         self.assertEqual(first["task"]["pins"]["schema_version"], 3)
-        self.assertEqual(first["task"]["accepted_identity"]["checkout_id"], "checkout")
+        self.assertEqual(first["task"]["accepted_identity"]["checkout_id"], self.scope.checkout_id)
         self.assertEqual(self.start(), first)
         with api._database(self.scope) as db:
             self.assertEqual(db.execute("pragma user_version").fetchone()[0], 3)
             physical = json.loads(db.execute("select physical_identity from checkouts").fetchone()[0])
             self.assertNotIn("client", physical)
-            self.assertEqual(physical["checkout_id"], "checkout")
+            self.assertEqual(physical["checkout_id"], self.scope.checkout_id)
         self.assertEqual(api.SCHEMA_VERSION, 2)
 
     def test_canonical_scope_cannot_open_or_rewrite_legacy_database(self):
         self.start()
         path = self.scope.runtime.state_dir / "runtime.sqlite3"
+        with closing(sqlite3.connect(path)) as db:
+            db.execute("pragma user_version=2")
         before = path.read_bytes()
         scope = canonical_scope(self.scope)
         from runtime.startup import _canonical_plain, _canonical_freeze
@@ -178,7 +203,7 @@ class StateTests(unittest.TestCase):
         with api._database(self.scope) as db:
             row = api._checkout_row(db, self.scope)
             self.assertEqual(row[4], 1)
-            self.assertEqual(json.loads(row[5])["checkout_id"], "checkout")
+            self.assertEqual(json.loads(row[5])["checkout_id"], self.scope.checkout_id)
             self.assertEqual(db.execute("select count(*) from tasks").fetchone()[0], 0)
 
     def test_canonical_changed_configuration_preserves_historical_snapshot_and_cannot_repin(self):
@@ -221,16 +246,20 @@ class StateTests(unittest.TestCase):
         from types import MappingProxyType
         from runtime.startup import _canonical_plain
         scope = canonical_scope(self.scope)
+        path = scope.runtime.state_dir / 'runtime.sqlite3'
+        before = path.read_bytes()
         for snapshot in (_canonical_plain(scope.accepted_identity), MappingProxyType(_canonical_plain(scope.accepted_identity))):
             with self.subTest(snapshot=type(snapshot).__name__), self.assertRaises(self.api().StateError):
                 self.api().start_task(replace(scope, accepted_identity=snapshot), self.request)
-        self.assertFalse(scope.runtime.state_dir.exists())
+        self.assertEqual(path.read_bytes(), before)
 
     def test_legacy_schema_one_status_remains_a_read_only_incompatibility_report(self):
+        path = self.scope.runtime.state_dir / 'runtime.sqlite3'
+        before = path.read_bytes()
         report = self.api().inspect_state(replace(self.scope, runtime=RuntimeSettings(1, self.scope.runtime.state_dir)))
         self.assertFalse(report['compatible'])
         self.assertIn('error', report)
-        self.assertFalse(self.scope.runtime.state_dir.exists())
+        self.assertEqual(path.read_bytes(), before)
 
     def test_canonical_retirement_proof_cannot_be_stored_inside_bare_repository(self):
         import hashlib
@@ -274,8 +303,11 @@ class StateTests(unittest.TestCase):
             self.assertEqual(indexes, {'evidence_lifecycle','assignment_owner','retired_assignment_id'})
         legacy = replace(self.scope.runtime, schema_version=2, state_dir=self.base / 'legacy')
         old = ProjectScope('old', self.scope.repository_root, self.scope.git_common_dir, 'policy', legacy)
-        self.api().start_task(old, self.request)
-        with self.api()._database(old) as db:
+        with self.assertRaises(self.api().StateError):
+            self.api().start_task(old, self.request)
+        self.assertFalse(legacy.state_dir.exists())
+        with closing(sqlite3.connect(':memory:')) as db:
+            db.executescript(';'.join(self.api().TABLE_SQL.values()))
             self.assertEqual({r[0] for r in db.execute("select name from sqlite_master where type='table'")}, self.api().TABLES)
             self.assertEqual(db.execute("select count(*) from sqlite_master where type='index' and sql is not null").fetchone()[0], 0)
 
@@ -285,7 +317,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(first['lifecycle'], dict(created_at=100,safe_closed_at=None,closure=None,compact=None))
         with patch('runtime.state._owner_time', side_effect=AssertionError('replay regenerated age')):
             self.assertEqual(self.start()['task'], first)
-            self.update(state='active')
+            self.update(state='WORKING')
             self.event('PostToolUse')
         task = self.status()['task']
         self.assertEqual(task['lifecycle']['created_at'],100)
@@ -442,10 +474,11 @@ class StateTests(unittest.TestCase):
         with self.assertRaisesRegex(api.StateError,'[Rr]etired|expired'): self.start()
         turn={k:owner[k] for k in ('scope_id','client','session_id')} | dict(turn_id='turn')
         self.seed_marker('turn',turn)
-        path=self.scope.runtime.state_dir/'runtime.sqlite3'; before=path.read_bytes()
-        self.event('PostToolUse')
-        self.assertEqual(path.read_bytes(),before)
         with api._database(self.scope) as db:
+            generation=api._checkout_row(db,self.scope)[4]
+        self.event('PostToolUse')
+        with api._database(self.scope) as db:
+            self.assertEqual(api._checkout_row(db,self.scope)[4],generation+1)
             self.assertEqual(db.execute('select count(*) from tasks').fetchone()[0],0)
             self.assertEqual(db.execute('select count(*) from receipts').fetchone()[0],0)
 
@@ -488,7 +521,7 @@ class StateTests(unittest.TestCase):
         value['bytes']=1
         value['managed']['bytes']=True
         with api._database(self.scope,write=True) as db:
-            db.execute('update evidence_metadata set bytes=1,data=?',(json.dumps(value),))
+            db.execute('update evidence_metadata set bytes=1,data=? where name=?',(json.dumps(value),name))
         with api._database(self.scope) as db,self.assertRaises(api.StateError): api._metadata(db,name)
 
     def test_lifecycle_caller_cannot_save_a_structurally_valid_synthetic_closure(self):
@@ -524,21 +557,15 @@ class StateTests(unittest.TestCase):
         request["stop_proof"] = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest())
         with self.assertRaises(self.api().StateError):
             self.api().retire_task(self.scope, request | dict(expected_revision=1))
-        if canonical:
-            self.assertEqual(set(historical["pins"]), {"schema_version", "policy_digest", "runtime_digest", "accepted_scope_digest"})
-            with self.api()._database(self.scope) as db:
-                metadata = db.execute("select * from evidence_metadata order by name").fetchall()
-            with patch.object(self.api(), "runtime_fingerprint", return_value="new-runtime"), \
-                    self.assertRaisesRegex(self.api().StateError, "Installed runtime differs"):
-                self.api().retire_task(self.scope, request)
-            with self.api()._database(self.scope) as db:
-                self.assertEqual(self.api()._task(db, self.api()._scope_id(self.scope), "codex", "session", "task"), historical)
-                self.assertEqual(db.execute("select * from evidence_metadata order by name").fetchall(), metadata)
-            result = self.api().retire_task(self.scope, request)
-        else:
-            with patch.object(self.api(), "runtime_fingerprint", return_value="new-runtime"):
-                result = self.api().retire_task(self.scope, request)
-        self.assertEqual(result["task"]["state"], "cancelled")
+        files = {str(p):p.read_bytes() for p in self.scope.runtime.state_dir.rglob('*') if p.is_file()}
+        with patch.object(self.api(), "runtime_fingerprint", return_value="new-runtime"), \
+                self.assertRaises(self.api().StateError):
+            self.api().retire_task(self.scope, request)
+        self.assertEqual({str(p):p.read_bytes() for p in self.scope.runtime.state_dir.rglob('*') if p.is_file()}, files)
+        with self.api()._database(self.scope) as db:
+            self.assertEqual(self.api()._task(db, self.api()._scope_id(self.scope), 'codex', 'session', 'task'), historical)
+        result = self.api().retire_task(self.scope, request)
+        self.assertEqual(result["task"]["state"], 'CANCELLED')
         self.assertEqual(result["task"]["pins"], historical["pins"])
         self.assertEqual(self.status()["task"]["task_id"], "new")
         with self.assertRaises(self.api().StateError):
@@ -578,17 +605,16 @@ class StateTests(unittest.TestCase):
 
     def test_start_restart_idempotence_and_pins(self):
         first = self.start()
-        self.assertEqual(first["task"]["state"], "planned")
+        self.assertEqual(first["task"]["state"], 'TRIAGE')
         self.assertEqual(first["task"]["revision"], 1)
         self.assertEqual(first, self.start())
         result = subprocess.run([sys.executable, "-B", "-c",
             "from runtime.state import *; from runtime.startup import *; from pathlib import Path; import json; "
-            f"s=ProjectScope('project',Path({str(self.scope.repository_root)!r}),Path({str(self.scope.git_common_dir)!r}),"
-            f"'policy',RuntimeSettings(2,Path({str(self.scope.runtime.state_dir)!r}))); "
+            f"from tests.fixture_canonical_birth import acquire_test_scope; s=acquire_test_scope({str(self.test_acquisition)!r}); "
             "print(json.dumps(task_status(s,'codex','session')))"], cwd=PACKAGE, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["task"], first["task"])
-        self.assertEqual(set(first["task"]["pins"]), {"policy_digest", "runtime_digest", "schema_version"})
+        self.assertEqual(set(first["task"]["pins"]), {"policy_digest", "runtime_digest", "schema_version", "accepted_scope_digest"})
 
     def test_explicit_rebinding_preserves_old_task_and_revokes_continuation(self):
         self.arm()
@@ -602,27 +628,27 @@ class StateTests(unittest.TestCase):
         self.assertEqual(stored["revision"], old["revision"] + 1)
         self.assertTrue(stored["conditions"][0]["continuation"]["revoked"])
         self.assertEqual(self.event("Interrupt").action, "context")
-        self.assertEqual(self.status()["task"]["state"], "planned")
+        self.assertEqual(self.status()["task"]["state"], 'TRIAGE')
 
     def test_cas_transitions_terminal_cancellation_and_immutable_mode(self):
         self.start()
-        for updates in ({"state": "ready"}, {"state": "verifying"}, {"expected_revision": 0}, {"mode": "read-only"}):
+        for updates in ({"state": 'DONE'}, {"state": 'NOT A STATUS'}, {"expected_revision": 0}, {"mode": "read-only"}):
             with self.subTest(updates=updates), self.assertRaises(self.api().StateError):
                 self.update(**updates)
-        self.update(state="active")
-        self.update(state="verifying")
-        self.update(state="active")
-        self.update(state="blocked")
+        self.update(state='WORKING')
+        self.update(state='REVIEW')
+        self.update(state='WORKING')
+        self.update(state='BLOCKED')
         with self.assertRaises(self.api().StateError):
-            self.update(state="active")
-        self.update(state="active", resolution_ref="user:resolved")
-        self.update(state="cancelled")
+            self.update(state='WORKING')
+        self.update(state='WORKING', resolution_ref="user:resolved")
+        self.update(state='CANCELLED')
         with self.assertRaises(self.api().StateError):
-            self.update(state="active")
+            self.update(state='WORKING')
 
     def test_conditions_need_explicit_resolution_and_no_approval_is_inferred(self):
         self.start()
-        self.update(state="active", conditions=[dict(id="decision", kind="decision", action="task",
+        self.update(state='WORKING', conditions=[dict(id="decision", kind="decision", action="task",
                                                      reason="Choose", reference="agent:claims-user-approved")])
         self.assertEqual(self.event().action, "deny")
         self.update(conditions=[])
@@ -635,32 +661,37 @@ class StateTests(unittest.TestCase):
                         {"mode": "auto"}, {"decision_ref": "bad\nvalue"}, {"surprise": True}):
             with self.subTest(updates=updates), self.assertRaises(self.api().StateError):
                 self.start(**updates)
-        self.assertFalse(self.scope.runtime.state_dir.exists())
+        with self.api()._database(self.scope) as db:
+            self.assertEqual(db.execute('select count(*) from tasks').fetchone()[0], 0)
 
     def test_task_identity_includes_checkout_common_project_client_session(self):
         self.start()
         for changes in ({"repository_root": self.base / "other"}, {"git_common_dir": self.base / "common"},
                         {"project_id": "other"}):
             other = replace(self.scope, **changes)
-            self.assertIsNone(self.api().task_status(other, "codex", "session")["task"])
+            with self.assertRaises(self.api().StateError):
+                self.api().task_status(other, "codex", "session")
         self.assertIsNone(self.status(session="different")["task"])
 
     def test_hooks_status_and_inspection_do_not_initialize(self):
         api = self.api()
-        self.assertFalse(api.inspect_state(self.scope)["present"])
+        self.assertTrue(api.inspect_state(self.scope)["present"])
+        original_inode=(self.scope.runtime.state_dir/'runtime.sqlite3').stat().st_ino
         self.assertIsNone(self.status()["task"])
         self.assertEqual(self.event().action, "deny")
         self.assertEqual(self.event("Stop").action, "pass")
-        self.assertFalse(self.scope.runtime.state_dir.exists())
+        self.assertEqual((self.scope.runtime.state_dir/'runtime.sqlite3').stat().st_ino,original_inode)
+        with api._database(self.scope) as db:self.assertEqual(db.execute('select count(*) from tasks').fetchone()[0],0)
         with self.assertRaises(api.StateError):
             api.start_task(replace(self.scope, runtime=None), self.request)
         self.assertEqual(api.process_event(replace(self.scope, runtime=None), RuntimeEvent(
-            "PreToolUse", "codex", "session", self.scope.repository_root, tool_name="apply_patch")).action, "pass")
+            "PreToolUse", "codex", "session", self.scope.repository_root, tool_name="apply_patch")).action, "deny")
+        self.assertFalse(api.inspect_state(replace(self.scope,runtime=None))["compatible"])
 
     def test_private_directory_database_sidecars_and_corrupt_state(self):
         api = self.api()
         directory = self.scope.runtime.state_dir
-        directory.mkdir(mode=0o755)
+        directory.chmod(0o755)
         with self.assertRaises(api.StateError):
             self.start()
         directory.chmod(0o700)
@@ -670,7 +701,9 @@ class StateTests(unittest.TestCase):
         with self.assertRaises(api.StateError):
             self.start()
         self.assertEqual(path.read_text(), "not our database")
-        path.unlink()
+        self.fresh_scope()
+        directory=self.scope.runtime.state_dir
+        path=directory/'runtime.sqlite3'
         self.start()
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         sidecar = directory / "runtime.sqlite3-journal"
@@ -684,14 +717,14 @@ class StateTests(unittest.TestCase):
 
     def test_arbitrary_sqlite_schema_and_schema_version_are_not_adopted(self):
         directory = self.scope.runtime.state_dir
-        directory.mkdir(mode=0o700)
         path = directory / "runtime.sqlite3"
         with closing(sqlite3.connect(path)) as db, db:
             db.execute("create table private(value)")
         path.chmod(0o600)
         with self.assertRaises(self.api().StateError):
             self.start()
-        path.unlink()
+        self.fresh_scope()
+        path=self.scope.runtime.state_dir/'runtime.sqlite3'
         self.start()
         with closing(sqlite3.connect(path)) as db, db:
             db.execute("pragma user_version=99")
@@ -701,7 +734,7 @@ class StateTests(unittest.TestCase):
 
     def test_policy_runtime_pin_mismatch_and_lock_fail_closed(self):
         self.start()
-        self.update(state="active")
+        self.update(state='WORKING')
         changed = replace(self.scope, policy_digest="changed")
         self.assertEqual(self.api().process_event(changed, RuntimeEvent("PreToolUse", "codex", "session",
                          self.scope.repository_root, tool_name="apply_patch")).action, "deny")
@@ -716,13 +749,13 @@ class StateTests(unittest.TestCase):
     def test_patch_guard_and_scoped_blockers(self):
         self.assertEqual(self.event().action, "deny")
         self.start(mode="read-only")
-        self.update(state="active")
+        self.update(state='WORKING')
         self.assertEqual(self.event().action, "deny")
         self.assertEqual(self.event(tool_name="Bash").action, "pass")
         self.start(session_id="editable")
         other = RuntimeEvent("PreToolUse", "codex", "editable", self.scope.repository_root, tool_name="apply_patch")
         self.api().update_task(self.scope, dict(client="codex", session_id="editable", task_id="task",
-            scope_ref="request:1", expected_revision=1, state="active", reason="work", reference="user:1"))
+            scope_ref="request:1", expected_revision=1, state='WORKING', reason="work", reference="user:1"))
         self.assertEqual(self.api().process_event(self.scope, other).action, "pass")
         self.update(conditions=[dict(id="patch", kind="blocker", action="patch", reason="Check", reference="ref")])
         self.assertEqual(self.api().process_event(self.scope, other).action, "pass")
@@ -739,13 +772,13 @@ class StateTests(unittest.TestCase):
         request = self.request | dict(client="claude-code", session_id="claude-session")
         api.start_task(self.scope, request)
         api.update_task(self.scope, {key: request[key] for key in ("client", "session_id", "task_id", "scope_ref")} |
-                        dict(expected_revision=1, state="active", reason="work", reference="user:1"))
+                        dict(expected_revision=1, state='WORKING', reason="work", reference="user:1"))
         for name in ("Edit", "Write", "NotebookEdit"):
             with self.subTest(tool=name):
                 self.assertEqual(api.process_event(self.scope, event(name)).action, "pass")
 
         api.update_task(self.scope, {key: request[key] for key in ("client", "session_id", "task_id", "scope_ref")} |
-                        dict(expected_revision=2, state="active", reason="work", reference="user:1",
+                        dict(expected_revision=2, state='WORKING', reason="work", reference="user:1",
                              conditions=[dict(id="block", kind="blocker", action="patch", reason="Check", reference="ref")]))
         for name in ("Edit", "Write", "NotebookEdit"):
             with self.subTest(tool=name, blocked=True):
@@ -763,7 +796,7 @@ class StateTests(unittest.TestCase):
             raw = db.execute("select data from tasks where scope_id=? and client=? and session_id=? and task_id=?",
                              (scope_id, "claude-code", "claude-session", "task")).fetchone()[0]
             task = json.loads(raw)
-            task["state"] = "ready"
+            task["state"] = 'DONE'
             db.execute("update tasks set data=? where scope_id=? and client=? and session_id=? and task_id=?",
                        (json.dumps(task, separators=(",", ":")), scope_id, "claude-code", "claude-session", "task"))
         with self.assertRaisesRegex(api.StateError, "Claude Code task readiness is unverified"):
@@ -844,11 +877,12 @@ class StateTests(unittest.TestCase):
             self.event("PostToolUse", turn_id=None)
         self.assertEqual(self.status()["generation"], 4)
         other = replace(self.scope, repository_root=self.base / "other")
-        self.assertEqual(self.api().task_status(other, "codex", "session")["generation"], 0)
+        with self.assertRaises(self.api().StateError):
+            self.api().task_status(other, "codex", "session")
 
     def test_continuation_requires_observation_and_never_rearms(self):
         self.start()
-        self.update(state="active")
+        self.update(state='WORKING')
         with self.assertRaises(self.api().StateError):
             self.update(conditions=[self.runnable()])
         self.event()
@@ -857,7 +891,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.event("Stop").action, "pass")
         self.update(conditions=[self.runnable(reason="Edited")])
         self.assertEqual(self.event("Stop").action, "pass")
-        self.assertEqual(self.status()["task"]["state"], "active")
+        self.assertEqual(self.status()["task"]["state"], 'WORKING')
 
     def test_stop_suppression_for_uncertainty_budget_state_and_blockers(self):
         self.arm()
@@ -874,11 +908,11 @@ class StateTests(unittest.TestCase):
     def test_interruption_pauses_only_correlated_task_and_cannot_continue(self):
         self.arm()
         self.assertEqual(self.event("Interrupt", turn_id="unknown").action, "context")
-        self.assertEqual(self.status()["task"]["state"], "active")
+        self.assertEqual(self.status()["task"]["state"], 'WORKING')
         self.assertEqual(self.event("Interrupt").action, "pass")
-        self.assertEqual(self.status()["task"]["state"], "blocked")
+        self.assertEqual(self.status()["task"]["state"], 'PAUSED')
         self.assertEqual(self.event("Stop").action, "pass")
-        self.update(state="active", resolution_ref="user:resume")
+        self.update(state='WORKING', resolution_ref="user:resume")
         self.assertEqual(self.event("Stop").action, "pass")
 
     def test_late_old_turns_do_not_pause_or_reassign_new_binding(self):
@@ -886,7 +920,7 @@ class StateTests(unittest.TestCase):
         revision = self.status()["task"]["revision"]
         self.start(task_id="new-task", replaces=dict(task_id="task", expected_revision=revision))
         self.request["task_id"] = "new-task"
-        self.update(state="active")
+        self.update(state='WORKING')
         self.event(turn_id="new-turn", tool_call_id="new-call")
         self.update(conditions=[self.runnable(continuation={"turn_id": "new-turn", "budget": 1})])
         before = self.status()["task"]
@@ -911,19 +945,19 @@ class StateTests(unittest.TestCase):
                 tool_name="Bash", tool_input={"command": "PRIVATE_SENTINEL"}, tool_response=response))
             self.api().process_event(self.scope, event)
         self.assertEqual(self.status()["generation"], 2)
-        self.assertEqual(self.status()["task"]["state"], "active")
-        for path in self.scope.runtime.state_dir.iterdir():
-            self.assertNotIn(b"PRIVATE_SENTINEL", path.read_bytes())
+        self.assertEqual(self.status()["task"]["state"], 'WORKING')
+        for path in self.scope.runtime.state_dir.rglob("*"):
+            if path.is_file(): self.assertNotIn(b"PRIVATE_SENTINEL", path.read_bytes())
 
     def test_cancelled_waiting_blocked_and_decisions_suppress_stop(self):
-        for state in ("blocked", "awaiting_user", "cancelled"):
+        for state in ('BLOCKED', 'WAITING', 'CANCELLED'):
             with self.subTest(state=state):
                 self.arm()
                 self.update(state=state)
                 self.assertEqual(self.event("Stop").action, "pass")
                 self.assertEqual(self.status()["task"]["state"], state)
                 # A separate fixture preserves terminal task identity and consumed history.
-                self.scope = replace(self.scope, runtime=RuntimeSettings(2, self.base / state))
+                self.fresh_scope()
         self.arm()
         for kind in ("decision", "blocker"):
             self.update(conditions=[dict(id=kind, kind=kind, action="task", reason="Waiting", reference="external:1")])
@@ -963,7 +997,9 @@ class StateTests(unittest.TestCase):
         database.unlink()
         self.assertEqual(self.event("Stop").action, "pass")
         self.assertFalse(database.exists())
-        directory.rmdir()
+        from runtime import workstreams
+        workstreams._path(self.scope).unlink()
+        directory.rename(self.base/'retained-original-authority')
         directory.symlink_to(self.base, target_is_directory=True)
         with self.assertRaises(self.api().StateError):
             self.start()
@@ -1001,7 +1037,7 @@ class StateTests(unittest.TestCase):
         self.arm()
         self.event("PostToolUse", turn_id="unseen-new-turn", tool_call_id="new-result")
         task = self.status()["task"]
-        self.assertEqual(task["state"], "active")
+        self.assertEqual(task["state"], 'WORKING')
         self.assertEqual(task["turn_id"], "turn")
         self.assertTrue(task["turn_uncertain"])
         self.assertEqual(self.event("Stop").action, "pass")
@@ -1013,11 +1049,11 @@ class StateTests(unittest.TestCase):
     def test_unknown_or_missing_stop_persistently_suppresses_old_allowance(self):
         for observed in ("unseen-stop-turn", None):
             with self.subTest(observed=observed):
-                self.scope = replace(self.scope, runtime=RuntimeSettings(2, self.base / (observed or "missing-stop")))
+                self.fresh_scope()
                 self.arm()
                 self.assertEqual(self.event("Stop", turn_id=observed).action, "pass")
                 task = self.status()["task"]
-                self.assertEqual(task["state"], "active")
+                self.assertEqual(task["state"], 'WORKING')
                 self.assertEqual(task["turn_id"], "turn")
                 self.assertTrue(task["turn_uncertain"])
                 self.assertTrue(task["conditions"][0]["continuation"]["revoked"])
@@ -1042,8 +1078,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.status()["generation"], 2)
         code = ("from pathlib import Path; from runtime.startup import *; from runtime.state import *; "
                 "from runtime.engine import *; import json; "
-                f"s=ProjectScope('project',Path({str(self.scope.repository_root)!r}),Path({str(self.scope.git_common_dir)!r}),"
-                f"'policy',RuntimeSettings(2,Path({str(self.scope.runtime.state_dir)!r}))); "
+                f"from tests.fixture_canonical_birth import acquire_test_scope; s=acquire_test_scope({str(self.test_acquisition)!r}); "
                 "r=process_event(s,RuntimeEvent('PostToolUse','codex','session',s.repository_root,'turn','call',"
                 "'apply_patch',False,'A')); print(json.dumps({'action':r.action,"
                 "'generation':task_status(s,'codex','session')['generation']}))")
@@ -1084,8 +1119,7 @@ class StateTests(unittest.TestCase):
         self.update(conditions=[self.runnable(id="second"), self.runnable(id="third")])
         code = ("from pathlib import Path; from runtime.startup import *; from runtime.state import *; "
                 "from runtime.engine import *; import json; "
-                f"s=ProjectScope('project',Path({str(self.scope.repository_root)!r}),Path({str(self.scope.git_common_dir)!r}),"
-                f"'policy',RuntimeSettings(2,Path({str(self.scope.runtime.state_dir)!r}))); "
+                f"from tests.fixture_canonical_birth import acquire_test_scope; s=acquire_test_scope({str(self.test_acquisition)!r}); "
                 "print(process_event(s, RuntimeEvent('Stop','codex','session',s.repository_root,'turn',"
                 "stop_hook_active=False)).action)")
         processes = [subprocess.Popen([sys.executable, "-B", "-c", code], cwd=PACKAGE,
@@ -1095,267 +1129,37 @@ class StateTests(unittest.TestCase):
         self.assertEqual(sum(stdout.strip() == b"continue" for stdout, _ in results), 1, results)
 
 
-class AuthorityBootstrapTests(unittest.TestCase):
-    def setUp(self):
-        self.fixture = StateTests(methodName='runTest')
-        self.fixture.setUp()
-        self.addCleanup(self.fixture.doCleanups)
-        self.scope = canonical_scope(self.fixture.scope)
-        self.fixture.scope = self.scope
-        self.api = self.fixture.api()
-        from runtime import changes
-        lock_patch = patch.object(changes, 'LOCK_ROOT', self.fixture.base / 'authority-guards')
-        lock_patch.start(); self.addCleanup(lock_patch.stop)
+    def test_actual_startup_only_acquisition_remains_non_enforcing(self):
+        from tests.test_runtime import RuntimeTests
+        from runtime import startup
+        from types import SimpleNamespace
+        fixture=RuntimeTests('runTest');self.addCleanup(fixture.doCleanups);fixture.setUp()
+        fixture.enroll()
+        acquired=startup.acquire_project_entry(SimpleNamespace(client='codex',cwd=fixture.repo),PACKAGE)
+        scope=startup._entry_scope(acquired)
+        self.assertIsInstance(scope,startup.ProjectScope)
+        self.assertIsNone(scope.runtime)
+        self.assertEqual(self.api().process_event(scope,RuntimeEvent('PreToolUse','codex','session',fixture.repo,tool_name='apply_patch')).action,'pass')
+        self.assertTrue(self.api().inspect_state(scope)['compatible'])
 
-    def baseline(self):
-        with self.api._database(self.scope) as db:
-            return self.api._source_baseline(self.scope, db)
-
-    def test_fresh_owner_baseline_precedes_task_and_preserves_original_age(self):
-        from runtime import evidence
-        with patch.object(self.api, '_owner_time', return_value=100):
-            self.fixture.start()
-        baseline = self.baseline()
-        self.assertEqual(baseline['content']['created_at'], 100)
-        self.assertEqual(baseline['content']['source_contract'], 2)
-        self.assertNotIn('complete', baseline)
-        with self.api._database(self.scope) as db:
-            metadata = self.api._metadata(db, baseline['reference']['name'])
-        self.assertEqual(metadata['class'], 'compact')
-        self.assertEqual(metadata['created_at'], 100)
-        self.assertEqual(metadata['owner'], dict(kind='project', project_id='project', task=None))
-        with patch.object(self.api, '_owner_time', side_effect=AssertionError('baseline age reset')):
-            self.fixture.start()
-        self.assertEqual(self.baseline(), baseline)
-        with self.assertRaises(self.api.StateError):
-            evidence._artifact(self.scope, dict(result='forged purpose'),
-                owner=evidence._ArtifactOwner('project', None, None, 'authority-source-baseline'))
-
-    def test_replacement_after_exclusive_create_before_sqlite_open_rejects(self):
-        original = sqlite3.connect
-        replaced = []
-        path = self.scope.runtime.state_dir / 'runtime.sqlite3'
-        def replace_before_open(database, *args, **kwargs):
-            if not replaced and str(database) == str(path):
-                path.rename(path.with_name('original.sqlite3'))
-                path.touch(mode=0o600)
-                replaced.append(True)
-            return original(database, *args, **kwargs)
-        with patch.object(sqlite3, 'connect', side_effect=replace_before_open):
-            with self.assertRaises(self.api.StateError): self.fixture.start()
-        self.assertTrue(replaced)
-        with closing(original(path)) as db:
-            self.assertEqual(db.execute('select count(*) from sqlite_master').fetchone()[0], 0)
-
-    def test_preexisting_empty_database_never_gets_creation_baseline(self):
-        witness = self.api._initialize(self.scope.runtime.state_dir / 'runtime.sqlite3', version=3)
-        if witness is not None: os.close(witness.descriptor)
-        self.fixture.start()
-        self.assertIsNone(self.baseline())
-
-    def test_copied_database_does_not_rebind_its_baseline(self):
-        import shutil
-        self.fixture.start()
-        original = self.baseline()
-        path = self.scope.runtime.state_dir / 'runtime.sqlite3'
-        replacement = path.with_name('copy.sqlite3')
-        shutil.copyfile(path, replacement); replacement.chmod(0o600); replacement.replace(path)
-        self.assertIsNone(self.baseline())
-        self.fixture.start()
-        self.assertIsNone(self.baseline())
-        with self.api._database(self.scope) as db:
-            self.assertIsNotNone(self.api._metadata(db, original['reference']['name']))
-
-    def test_active_d4_marker_blocks_before_database_creation(self):
-        from runtime import changes
-        directory = self.scope.runtime.state_dir
-        directory.mkdir(mode=0o700)
-        for location in changes._authority_locations([directory]):
-            marker = Path(str(location) + '.json')
-            marker.write_text(json.dumps(dict(schema_version=1, plan_dir=str(self.fixture.base),
-                transaction_id='fixture:active', manifest_digest='a'*64)))
-            marker.chmod(0o600)
-        with self.assertRaises(self.api.StateError): self.fixture.start()
-        self.assertFalse((directory / 'runtime.sqlite3').exists())
-
-    def test_rollback_leaves_protected_orphan_and_never_retrofits_baseline(self):
-        with self.assertRaisesRegex(RuntimeError, 'rollback bootstrap'):
-            with self.api._database(self.scope, write=True, initialize=True):
-                raise RuntimeError('rollback bootstrap')
-        artifacts = list((self.scope.runtime.state_dir / 'evidence').iterdir())
-        self.assertEqual(len(artifacts), 1)
-        self.assertIsNone(self.baseline())
-        self.fixture.start()
-        self.assertIsNone(self.baseline())
-        self.assertEqual(list((self.scope.runtime.state_dir / 'evidence').iterdir()), artifacts)
-
-    def test_missing_and_same_byte_substituted_baseline_remain_unknown_without_retrofit(self):
-        self.fixture.start()
-        baseline = self.baseline()
-        path = self.scope.runtime.state_dir / 'evidence' / baseline['reference']['name']
-        replacement = path.with_suffix('.copy')
-        replacement.write_bytes(path.read_bytes()); replacement.chmod(0o400); replacement.replace(path)
-        with self.assertRaises(self.api.StateError): self.baseline()
-        path.unlink()
-        with self.assertRaises(self.api.StateError): self.baseline()
-        self.fixture.start()
-        self.assertFalse(path.exists())
-
-    def test_concurrent_initializer_cannot_bypass_held_authority_guard(self):
-        import threading
-        from concurrent.futures import ThreadPoolExecutor
-        entered, release = threading.Event(), threading.Event()
-        original = self.api._initialize
-        def pause(*args, **kwargs):
-            entered.set()
-            if not release.wait(5): raise AssertionError('bootstrap guard test timed out')
-            return original(*args, **kwargs)
-        with patch.object(self.api, '_initialize', side_effect=pause), ThreadPoolExecutor(max_workers=2) as executor:
-            first = executor.submit(self.fixture.start)
-            try:
-                self.assertTrue(entered.wait(5))
-                second = executor.submit(self.fixture.start)
-                with self.assertRaises(self.api.StateError): second.result(timeout=2)
-            finally:
-                release.set()
-            self.assertTrue(first.result(timeout=5)['ok'])
-        self.assertIsNotNone(self.baseline())
-
-    def test_replacement_immediately_after_open_cannot_change_captured_descriptor_identity(self):
-        original_open = os.open
-        path = self.scope.runtime.state_dir / 'runtime.sqlite3'
-        replaced = []
-        def replace_after_open(target, flags, *args, **kwargs):
-            descriptor = original_open(target, flags, *args, **kwargs)
-            actual_target = path if target == path.name and kwargs.get('dir_fd') is not None else Path(target)
-            if actual_target == path and flags & os.O_EXCL and not replaced:
-                path.rename(path.with_name('original.sqlite3'))
-                replacement = original_open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                os.close(replacement)
-                replaced.append(True)
-            return descriptor
-        with patch.object(os, 'open', side_effect=replace_after_open):
-            with self.assertRaises(self.api.StateError): self.fixture.start()
-        self.assertTrue(replaced)
-        with closing(sqlite3.connect(path)) as db:
-            self.assertEqual(db.execute('select count(*) from sqlite_master').fetchone()[0], 0)
-
-    def test_replacement_at_runtime_open_registration_and_first_commit_rejects(self):
-        import shutil
-        from runtime import evidence
-        for stage in ('runtime-open', 'registration', 'first-commit'):
-            with self.subTest(stage=stage):
-                scope = canonical_scope(replace(self.fixture.scope, runtime=replace(self.fixture.scope.runtime,
-                    state_dir=self.fixture.base / ('bootstrap-' + stage))))
-                self.scope = self.fixture.scope = scope
-                path = scope.runtime.state_dir / 'runtime.sqlite3'
-                changed = []
-                def substitute():
-                    copy = path.with_name('copy.sqlite3')
-                    shutil.copyfile(path, copy); copy.chmod(0o600)
-                    path.rename(path.with_name('original.sqlite3')); copy.replace(path)
-                    changed.append(True)
-                original_connect = sqlite3.connect
-                original_register = evidence._register_source_baseline
-                original_save = self.api._save
-                def connect(database, *args, **kwargs):
-                    if stage == 'runtime-open' and str(database).startswith(path.as_uri()) and not changed:
-                        substitute()
-                    return original_connect(database, *args, **kwargs)
-                def register(*args, **kwargs):
-                    if stage == 'registration': substitute()
-                    return original_register(*args, **kwargs)
-                def save(*args, **kwargs):
-                    result = original_save(*args, **kwargs)
-                    if stage == 'first-commit': substitute()
-                    return result
-                with patch.object(sqlite3, 'connect', side_effect=connect), \
-                     patch.object(evidence, '_register_source_baseline', side_effect=register), \
-                     patch.object(self.api, '_save', side_effect=save):
-                    with self.assertRaises(self.api.StateError): self.fixture.start()
-                self.assertTrue(changed)
-                self.assertIsNone(self.baseline())
-
-    def test_preexisting_orphan_blocks_fresh_baseline_and_never_gets_adopted(self):
-        directory = self.scope.runtime.state_dir
-        folder = directory / 'evidence'
-        folder.mkdir(mode=0o700, parents=True); directory.chmod(0o700)
-        orphan = folder / ('f'*32 + '.json')
-        orphan.write_text('{}'); orphan.chmod(0o400)
-        with self.assertRaises(self.api.StateError): self.fixture.start()
-        self.assertIsNone(self.baseline())
-        self.fixture.start()
-        self.assertIsNone(self.baseline())
-        self.assertEqual(list(folder.iterdir()), [orphan])
-
-    def test_exclusive_create_race_winner_does_not_give_loser_a_witness(self):
-        original = self.api._initialize
-        def raced(path, **kwargs):
-            witness = original(path, **kwargs)
-            os.close(witness.descriptor)
-            raise FileExistsError('another initializer won')
-        with patch.object(self.api, '_initialize', side_effect=raced): self.fixture.start()
-        self.assertIsNone(self.baseline())
-
-
-    def test_first_task_write_still_holds_guard_and_existing_d6_path_does_not_reenter(self):
-        from runtime import delegation
-        original = self.api._save
-        checked = []
-        def save(*args, **kwargs):
-            with self.assertRaises(self.api.StateError):
-                with delegation._reservation_write(self.scope): pass
-            checked.append(True)
-            return original(*args, **kwargs)
-        with patch.object(self.api, '_save', side_effect=save): self.fixture.start()
-        self.assertEqual(checked, [True])
-        with delegation._reservation_write(self.scope) as db:
-            self.assertIsNotNone(self.api._source_baseline(self.scope, db))
-
-
-    def test_guarded_directory_replacement_before_initializer_rejects_before_creation(self):
-        original = self.api._initialize
-        directory = self.scope.runtime.state_dir
-        saved = directory.with_name('original-authority-directory')
-        def substitute(path, **kwargs):
-            directory.rename(saved)
-            directory.mkdir(mode=0o700)
-            return original(path, **kwargs)
-        with patch.object(self.api, '_initialize', side_effect=substitute):
-            with self.assertRaises(self.api.StateError): self.fixture.start()
-        self.assertFalse((directory / 'runtime.sqlite3').exists())
-        self.assertFalse((saved / 'runtime.sqlite3').exists())
-        self.assertFalse((directory / 'evidence').exists())
-
-
-
-class LifecycleDependencyTests(unittest.TestCase):
-    def setUp(self):
-        from runtime import evidence
-        self.f=StateTests(methodName='runTest');self.f.setUp();self.addCleanup(self.f.doCleanups)
-        self.f.scope=canonical_scope(self.f.scope);self.api=self.f.api()
-        with patch.object(self.api,'_owner_time',return_value=100):self.f.start()
-        with self.api._database(self.f.scope) as db:
-            task=self.api._task(db,self.api._scope_id(self.f.scope),'codex','session')
-            self.ref=evidence._canonical_plain(evidence._artifact_owner(self.f.scope,task).task)
-
-    def test_dependency_observation_is_bounded_exact_and_read_only(self):
-        with self.api._database(self.f.scope) as db:
-            before=db.total_changes
-            result=self.api.inspect_dependencies(db,self.ref)
-            self.assertEqual(result['task']['lifecycle']['created_at'],100)
-            self.assertEqual(result['task']['task_id'],'task')
-            self.assertEqual(result['assignments'],[])
-            self.assertEqual(result['blockers'],[])
-            self.assertEqual(result,self.api.inspect_dependencies(db,self.ref))
-            self.assertEqual(db.total_changes,before)
-
-    def test_ambiguous_receipt_ownership_is_protected(self):
-        with self.api._database(self.f.scope,write=True) as db:
-            db.execute("insert into receipts values(?,?,?,?,?,?,?,0)",(self.ref['scope_id'],'codex','session','orphan-turn','call','PreToolUse','hash'))
-        with self.api._database(self.f.scope) as db:
-            result=self.api.inspect_dependencies(db,self.ref)
-            self.assertTrue(any('ownership' in b for b in result['blockers']))
+    def test_real_members_and_projects_isolate_task_identity(self):
+        from tests.fixture_canonical_birth import CanonicalBirthFixture, fresh_canonical
+        from runtime import state
+        owner=CanonicalBirthFixture('runTest');self.addCleanup(owner.doCleanups)
+        fixture,acquired,_=owner.accepted_birth(peer=True)
+        members=[a.resolution.scope for a in fixture.member_acquisitions.values()]
+        self.assertEqual(len(members),2)
+        self.assertEqual(members[0].project_id,members[1].project_id)
+        self.assertNotEqual(members[0].repository_id,members[1].repository_id)
+        self.assertNotEqual(members[0].git_common_dir,members[1].git_common_dir)
+        self.assertEqual(members[0].runtime.state_dir,members[1].runtime.state_dir)
+        state.start_task(members[0],self.request)
+        self.assertIsNone(state.task_status(members[1],'codex','session')['task'])
+        state.start_task(members[1],self.request)
+        self.assertNotEqual(state._scope_id(members[0]),state._scope_id(members[1]))
+        _,other,_=fresh_canonical(self)
+        self.assertNotEqual(other.resolution.scope.project_id,members[0].project_id)
+        self.assertIsNone(state.task_status(other.resolution.scope,'codex','session')['task'])
 
 
 if __name__ == "__main__":

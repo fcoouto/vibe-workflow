@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from runtime import changes, startup, state
-from tests.openrouter_fixtures import PACKAGE, enroll
+from tests.openrouter_fixtures import PACKAGE, enroll, cli_driver
 
 
 class SettingsTests(unittest.TestCase):
@@ -20,8 +20,8 @@ class SettingsTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='openrouter management ')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
-        self.repo = self.root / 'repo'
-        self.scope = enroll(self.repo, self.root / 'state')
+        self.scope = enroll(self)
+        self.repo = self.scope.repository_root
         self.locks = self.root / 'locks'
         guard = patch.object(changes, 'LOCK_ROOT', self.locks)
         guard.start()
@@ -36,8 +36,8 @@ class SettingsTests(unittest.TestCase):
         self.path = self.scope.runtime.state_dir / 'openrouter' / (state._scope_id(self.scope) + '.json')
 
     def snapshot(self):
-        return {str(path.relative_to(self.root)): (path.stat().st_mode,
-            path.read_bytes() if path.is_file() else None) for path in self.root.rglob('*')}
+        return {str(path): (path.stat().st_mode, path.read_bytes() if path.is_file() else None)
+            for root in (self.root, self.repo, self.scope.runtime.state_dir) for path in root.rglob('*')}
 
     def configured(self):
         return self.settings.configure(self.repo, self.request)
@@ -55,6 +55,38 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(report['control_scope'], 'checkout')
         self.assertEqual(report['connection'], 'not_checked')
         self.assertFalse(self.locks.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_saved_active_flags_without_owner_qualification_cannot_enable_settings(self):
+        from tests.fixture_canonical_birth import _ACTUAL_ACQUIRE
+        self.enabled()
+        before = self.snapshot()
+        with patch.object(startup, 'acquire_project_entry', _ACTUAL_ACQUIRE):
+            with self.assertRaises(self.settings.SettingsError):
+                self.settings.status(self.repo)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_runtime_is_left_untouched(self):
+        repo = self.root / 'legacy'
+        repo.mkdir()
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+        subprocess.run(['git', 'init', '-q', '--template=', str(repo)],
+                       env=environment, check=True, capture_output=True)
+        root, common = startup.checkout(repo)
+        directory = self.root / 'legacy-state'
+        directory.mkdir(mode=0o700)
+        (directory / 'runtime.sqlite3').write_bytes(b'original pinned runtime only')
+        record = dict(schema_version=1, project_id='legacy-fixture', repository_root=str(root),
+            git_common_dir=str(common), clients=['codex'], policy_digest=startup.policy_digest(PACKAGE),
+            runtime=dict(schema_version=2, state_dir=str(directory)))
+        path = repo / startup.PROJECT_FILE
+        path.parent.mkdir()
+        path.write_text(json.dumps(record))
+        before = self.snapshot()
+        for operation in (lambda: self.settings.status(repo), lambda: self.settings.configure(repo, self.request)):
+            with self.assertRaises(self.settings.SettingsError):
+                operation()
         self.assertEqual(self.snapshot(), before)
 
     def test_configure_is_private_off_and_does_not_mutate_native_state(self):
@@ -189,12 +221,8 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaises(self.settings.SettingsError): self.settings.status(self.repo)
         self.assertEqual(self.path.read_bytes(), old)
 
-    def test_benign_enrollment_and_database_updates_preserve_consent(self):
+    def test_database_task_updates_preserve_consent(self):
         self.enabled()
-        enrollment = self.repo / startup.PROJECT_FILE
-        record = json.loads(enrollment.read_text())
-        record['source_revision'] = 'benign-update'
-        enrollment.write_text(json.dumps(record))
         state.start_task(self.scope, dict(client='codex', session_id='other-session', task_id='other-task',
             scope_ref='test:scope', mode='read-only', decision_ref='test:scope'))
         self.assertTrue(self.settings.status(self.repo)['enabled'])
@@ -202,8 +230,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_copied_settings_do_not_enable_another_enrolled_checkout(self):
         self.enabled()
-        other = self.root / 'other'
-        other_scope = enroll(other, self.root / 'other-state')
+        other_scope = enroll(self)
+        other = other_scope.repository_root
         folder = other_scope.runtime.state_dir / 'openrouter'
         folder.mkdir(mode=0o700)
         copied = folder / (state._scope_id(other_scope) + '.json')
@@ -260,7 +288,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(report['routes'], ['proposals'])
 
     def test_isolated_cli_persists_controls_without_project_imports(self):
-        script = PACKAGE / 'scripts/openrouter.py'
+        script = cli_driver(self, self.scope, PACKAGE / 'scripts/openrouter.py')
         self.assertTrue(script.exists(), 'management CLI must exist')
         configured = self.configured()
         result = subprocess.run([sys.executable, '-I', '-B', str(script), 'enable', '--cwd', str(self.repo)],

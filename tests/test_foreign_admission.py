@@ -1,6 +1,4 @@
 """Stage A source-owned foreign-content admission tests."""
-import json
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -15,22 +13,9 @@ class ForeignAdmissionTests(unittest.TestCase):
         self.addCleanup(self.fixture.doCleanups)
 
     def third_source(self):
-        from tests.test_state import canonical_scope
-        from tests.test_startup import CanonicalAcquisitionTests
-
         source = test_evidence.EvidenceTests(methodName='runTest')
         source.setUp()
         self.addCleanup(source.doCleanups)
-        source.scope = canonical_scope(source.scope)
-        state.start_task(source.scope, source.identity | dict(mode='editable', decision_ref='user:accepted'))
-        record, path = CanonicalAcquisitionTests.record(SimpleNamespace(
-            repo=source.repo, base=source.root, assertIsNone=self.assertIsNone))
-        identity = source.api._canonical_plain(source.scope.accepted_identity)
-        record['project_id'] = identity['project_id']
-        record['repositories'][0]['repository_id'] = identity['repository_id']
-        record['repositories'][0]['checkouts'][0]['checkout_id'] = identity['checkout_id']
-        record['repositories'][0]['checkouts'][0]['clients'][0]['configuration'].update(identity['configuration'])
-        path.write_text(json.dumps(record))
         return source
 
     def source_for(self, fixture):
@@ -112,7 +97,7 @@ class ForeignAdmissionTests(unittest.TestCase):
         self.assertEqual(receipts[0]['content']['observed_at'], receipts[1]['content']['observed_at'])
         self.assertEqual(len(source.api._source_intents(context, reference['reference'])), 1)
         self.assertTrue(result['ok'] and result['verified'])
-        self.assertEqual(result['task']['state'], 'ready')
+        self.assertEqual(result['task']['state'], 'DONE')
         self.assertEqual(len(calls), 1)
 
     def test_source_commit_failure_and_lost_permission_keep_retry_unpublished(self):
@@ -157,7 +142,8 @@ class ForeignAdmissionTests(unittest.TestCase):
 
         def commit_then_remove_record(plan, selected):
             receipt = original(plan, selected)
-            source.scope.authority_path.unlink()
+            if selected == reference:
+                source.scope.authority_path.unlink()
             return receipt
 
         with patch.object(fixture.api, '_commit_foreign_intent', side_effect=commit_then_remove_record):

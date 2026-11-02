@@ -476,17 +476,13 @@ class EnrolledReviewStorageTests(unittest.TestCase):
     def setUp(self):
         from tests.test_evidence import CanonicalEvidenceTests
         self.fixture = CanonicalEvidenceTests(methodName="runTest")
-        self.fixture.setUp(d4_recovery=True)
+        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.base = self.fixture.fixture.root
         self.api = importlib.import_module("runtime.review_storage")
-        self.locator = self.base / "machine" / "machine.json"
-        self.locator.parent.mkdir(mode=0o700, parents=True)
-        self.locator_patch = patch.object(self.api, "_machine_config_path", return_value=self.locator)
-        self.locator_patch.start()
-        self.addCleanup(self.locator_patch.stop)
+        self.locator = self.api._machine_config_path()
 
-    def assert_project_accounting(self, result, *, history_complete=False, history_reason="machine_configuration_absent"):
+    def assert_project_accounting(self, result, *, history_complete=True, history_reason="authenticated_retained_history"):
         self.assertTrue(result.get("ok"), result)
         self.assertEqual(result.get("status"), "resolved", result)
         self.assertEqual(result.get("owner"), dict(kind="project", project_id=self.fixture.scope.project_id, task=None), result)
@@ -500,40 +496,25 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         self.assertIs(history.get("complete"), history_complete, result)
         self.assertEqual(history.get("reason"), history_reason, result)
 
-    def test_enrolled_accounting_without_machine_configuration_is_read_only(self):
+    def test_enrolled_accounting_without_original_machine_configuration_is_protected(self):
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
-        home = self.base / "cli-home"
+        repo = self.fixture.fixture.repo
+        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        missing = self.base / "missing-machine" / "machine.json"
+        before = (ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes())
+        with patch.object(self.api, "_machine_config_path", return_value=missing):
+            owner = self.api.resolve_owner(str(repo))
+        self.assertFalse(owner["ok"], owner)
+        self.assertEqual(owner["status"], "protected")
+        self.assertFalse(missing.exists())
+        home = self.base / "no-machine-cli-home"
         home.mkdir(mode=0o700)
-        environment = os.environ.copy()
-        environment["HOME"] = str(home)
-        subset_path = self.fixture.fixture.repo / "subset"
-        subset_path.mkdir()
-        selected_file = subset_path / "file.txt"
-        selected_file.write_text("fixture subset\n")
-        before = (ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes(),
-            ReviewStorageTests.tree_snapshot(self.locator.parent))
-        self.assertFalse(self.locator.exists())
-
-        owner = self.api.resolve_owner(str(self.fixture.fixture.repo))
-        subset = self.api.resolve_owner(str(subset_path))
-        file_owner = self.api.resolve_owner(str(selected_file))
         command = subprocess.run([sys.executable, "-B", str(PACKAGE / "scripts" / "workflow.py"),
-            "storage", "owner", "--cwd", str(self.fixture.fixture.repo)], cwd=PACKAGE, env=environment,
-            capture_output=True, text=True, timeout=10)
-
-        self.assert_project_accounting(owner)
-        self.assert_project_accounting(subset)
-        self.assert_project_accounting(file_owner)
-        self.assertEqual((owner["owner"], owner["reference"], owner["created_at"]),
-            (subset["owner"], subset["reference"], subset["created_at"]))
-        self.assertEqual((owner["owner"], owner["reference"], owner["created_at"]),
-            (file_owner["owner"], file_owner["reference"], file_owner["created_at"]))
-        self.assertEqual(command.returncode, 0, (command.stderr, command.stdout))
-        self.assertEqual(command.stderr, "")
-        self.assertEqual(json.loads(command.stdout), owner)
-        self.assertEqual((ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes(),
-            ReviewStorageTests.tree_snapshot(self.locator.parent)), before)
+            "storage", "owner", "--cwd", str(repo)], cwd=PACKAGE,
+            env=os.environ | {"HOME": str(home)}, capture_output=True, text=True, timeout=10)
+        self.assertEqual(command.returncode, 1, command.stderr)
+        self.assertEqual(json.loads(command.stdout)["status"], "protected")
+        self.assertEqual((ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes()), before)
 
     def test_linked_checkout_uses_same_project_accounting_and_its_own_observation(self):
         repo = self.fixture.fixture.repo
@@ -652,8 +633,8 @@ class EnrolledReviewStorageTests(unittest.TestCase):
                     ReviewStorageTests.tree_snapshot(self.locator.parent), project_record.read_bytes(),
                     ReviewStorageTests.tree_snapshot(repo)), before_lookup)
 
-    def test_authenticated_machine_history_reports_complete_without_related_owner(self):
-        temporary_storage = self.base / "temporary-private"
+    def test_original_machine_history_reports_complete_with_retained_owner(self):
+        temporary_storage = self.locator.parent.parent / "private"
         self.assertTrue(self.api.prepare_storage(temporary_storage).get("ok"))
         before = (ReviewStorageTests.tree_snapshot(temporary_storage),
             ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
@@ -662,7 +643,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         owner = self.api.resolve_owner(str(self.fixture.fixture.repo))
 
         self.assert_project_accounting(owner, history_complete=True,
-            history_reason="authenticated_no_related_history")
+            history_reason="authenticated_retained_history")
         self.assertEqual((ReviewStorageTests.tree_snapshot(temporary_storage),
             ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
             (self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json").read_bytes()), before)
@@ -746,48 +727,33 @@ class EnrolledReviewStorageTests(unittest.TestCase):
             project_record.read_bytes(), ReviewStorageTests.tree_snapshot(self.locator.parent)), after_delete)
         self.assertEqual(project_record.read_bytes(), project_before)
 
-    def test_existing_temporary_history_before_d4_enrollment_protects(self):
-        from tests.test_evidence import CanonicalEvidenceTests, D4RecoveryFixture
-        from runtime import review_storage
+    def test_existing_temporary_history_before_d4_enrollment_is_retained(self):
+        from tests.test_enrolled_accounting_integration import EnrolledUmbrellaAccountingTests
 
-        enrolled = CanonicalEvidenceTests(methodName="runTest")
-        locator = self.base / "pre-enrollment-machine" / "machine.json"
-        temporary_storage = self.base / "pre-enrollment-temporary-private"
-
-        def enroll_after_temporary_owner(fixture_self, *, shared=False):
-            repo = fixture_self.fixture.repo
-            locator.parent.mkdir(mode=0o700, parents=True)
-            with patch.object(review_storage, "_machine_config_path", return_value=locator):
-                prepared = review_storage.prepare_storage(temporary_storage)
-                self.assertTrue(prepared.get("ok"), prepared)
-                prior = review_storage.resolve_owner(str(repo))
-            self.assertTrue(prior.get("ok"), prior)
-            self.assertEqual(prior.get("owner", {}).get("kind"), "temporary", prior)
-            fixture_self.prior_temporary_owner = prior
-            return D4RecoveryFixture.enroll_recovery(fixture_self, shared=shared)
-
-        with patch.object(CanonicalEvidenceTests, "enroll_recovery", enroll_after_temporary_owner):
-            enrolled.setUp(d4_recovery=True)
+        enrolled = EnrolledUmbrellaAccountingTests(methodName="runTest")
         self.addCleanup(enrolled.doCleanups)
-        project_record = enrolled.fixture.repo / ".vibe-coding-workflow" / "project.json"
-        self.assertEqual(enrolled.prior_temporary_owner["owner"]["kind"], "temporary")
-        self.assertEqual(json.loads(project_record.read_text())["project_id"], enrolled.scope.project_id)
-        before = (ReviewStorageTests.tree_snapshot(temporary_storage),
-            ReviewStorageTests.tree_snapshot(enrolled.scope.runtime.state_dir), project_record.read_bytes())
-        with patch.object(review_storage, "_machine_config_path", return_value=locator):
-            result = review_storage.resolve_owner(str(enrolled.fixture.repo))
+        prior = []
 
-        self.assertFalse(result.get("ok"), result)
-        self.assertEqual(result.get("status"), "protected", result)
-        self.assertEqual((ReviewStorageTests.tree_snapshot(temporary_storage),
-            ReviewStorageTests.tree_snapshot(enrolled.scope.runtime.state_dir), project_record.read_bytes()), before)
+        def retain_before_birth(fixture, record):
+            owner = self.api.resolve_owner(record["repositories"][0]["primary_root"])
+            self.assertTrue(owner["ok"], owner)
+            self.assertEqual(owner["owner"]["kind"], "temporary")
+            prior.append({key: owner[key] for key in ("owner", "reference", "created_at")})
+
+        enrolled.setUp(before_publish=retain_before_birth)
+        before = enrolled.snapshot()
+        result = self.api.resolve_owner(enrolled.members[0])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["temporary_history"]["reason"], "authenticated_retained_history")
+        self.assertEqual(result["temporary_history"]["owners"], prior)
+        self.assertEqual(enrolled.snapshot(), before)
 
     def test_wrong_project_baseline_from_another_genuine_project_is_protected(self):
         from tests.test_evidence import CanonicalEvidenceTests
         from runtime import evidence, state
 
         other = CanonicalEvidenceTests(methodName="runTest")
-        other.setUp(d4_recovery=True)
+        other.setUp()
         self.addCleanup(other.doCleanups)
         self.assertNotEqual(other.scope.project_id, self.fixture.scope.project_id)
         other_context = evidence._evidence_context(other.scope)
@@ -844,10 +810,10 @@ class EnrolledReviewStorageTests(unittest.TestCase):
             post_mutation_snapshot[0])
 
     def test_genuinely_enrolled_repository_keeps_project_authority(self):
-        result = self.api.prepare_storage(self.base / "temporary-private")
+        temporary_storage = self.locator.parent.parent / "private"
+        result = self.api.prepare_storage(temporary_storage)
         self.assertTrue(result.get("ok"), result)
         self.fixture.fixture.checked()
-        temporary_storage = self.base / "temporary-private"
         project_storage = self.fixture.scope.runtime.state_dir
         project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
         self.assertTrue(project_storage.is_dir(), project_storage)
@@ -859,7 +825,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         before_project_record = project_record.read_bytes()
         owner = self.api.resolve_owner(str(self.fixture.fixture.repo))
         self.assert_project_accounting(owner, history_complete=True,
-            history_reason="authenticated_no_related_history")
+            history_reason="authenticated_retained_history")
         self.assertEqual(ReviewStorageTests.tree_snapshot(temporary_storage), before_temporary_storage)
         self.assertEqual(ReviewStorageTests.tree_snapshot(project_storage), before_project_storage)
         self.assertEqual(project_record.read_bytes(), before_project_record)

@@ -1,21 +1,26 @@
 """Focused visibility/rollback regressions around the real linked D4 fixture."""
 
 from contextlib import contextmanager
-import importlib
 import sqlite3
 import unittest
 from unittest.mock import patch
 import uuid
 
 
-_METHOD = "test_linked_no_verifier_native_history_survives_d4_retirement_and_guidance"
+_METHOD = "closure_fixture"
 
 
 def _scenario(test_case):
-    module = importlib.import_module("tests.test_evidence")
-    scenario = module.LinkedVerificationTests(methodName=_METHOD)
-    scenario.setUp()
-    test_case.addCleanup(scenario.doCleanups)
+    from tests.test_canonical_linked_closure import CanonicalLinkedClosureTests
+    from tests.test_evidence import D4RecoveryFixture
+
+    owner = CanonicalLinkedClosureTests(methodName="runTest")
+    test_case.addCleanup(owner.doCleanups)
+    owner.setUp()
+    scenario = owner.linked
+    scenario.closure_fixture = owner.closure_fixture
+    scenario.recovery_fixtures = [(owner.operation.fixture, owner.operation.request)]
+    scenario.recovery_head = D4RecoveryFixture.recovery_head.__get__(scenario)
     return scenario
 
 
@@ -265,8 +270,7 @@ class LinkedWriterVisibilityTests(unittest.TestCase):
         def add_file_after_artifact(scope, value, *, context=None, owner=None, db=None):
             reference = artifact(scope, value, context=context, owner=owner, db=db)
             if not captured.get("injected") and isinstance(value, dict) and value.get("kind") == "d4-recovery-source" \
-                    and value.get("version") == 2 \
-                    and value == scenario.api._canonical_plain(captured["observation"].content):
+                    and getattr(owner, "source", None) is captured["observation"]:
                 path = context.directory / "evidence" / ("unmanaged-" + uuid.uuid4().hex + ".json")
                 body = b'{"kind":"appeared during registration"}'
                 path.write_bytes(body);captured["injected"] = True
@@ -281,8 +285,8 @@ class LinkedWriterVisibilityTests(unittest.TestCase):
                 pass
 
         self.assertIn("result", captured, "release must return a failed result to the original assertion")
+        self.assertTrue(captured.get("injected"), "inject only after the actual owned release projection is registered")
         self.assertFalse(captured["result"]["complete"], captured["result"])
-        self.assertTrue(captured.get("injected"), "inject only after the actual v2 release artifact is registered")
         self.assertIn("Unaccounted", " ".join(captured["result"]["blockers"]))
         self.assertFalse(any(row["authority"] == captured["orphan_context"].authority_set[0]
                              for row in captured["result"]["replacements"]))

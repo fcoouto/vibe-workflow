@@ -22,6 +22,11 @@ class OnboardingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
+        from runtime import review_storage
+        machine_config = patch.object(review_storage, "_machine_config_path",
+            return_value=self.base / "machine" / "machine.json")
+        machine_config.start()
+        self.addCleanup(machine_config.stop)
         self.repo = self.base / "target"
         self.repo.mkdir()
         self.git("init", "-q")
