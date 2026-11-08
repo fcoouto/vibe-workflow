@@ -87,7 +87,7 @@ Disabling Smart Routing:
 3. Release only claims for which non-dispatch is established. Running and uncertain attempts retain their claims and accounting.
 4. Let already-started workers finish within their assigned budgets. Subsequent spawns use the OFF behavior. Explicit interruption remains a separate action.
 
-Re-enabling does not revive stale decisions. Rollout `shadow`/`canary`/`enforced` states describe qualification, not extra user selection modes. Shadow evaluation does not grant dispatch authority.
+Re-enabling does not revive stale decisions. Rollout `canary`/`enforced` states describe qualification, not extra user selection modes. There is no shadow or simulation mode: a route is active or it is not, and unready routes are reported as blocked or unsupported rather than computed without enforcement.
 
 Coordinator consumption is included in root-task accounting where observable and in shared-account headroom reconciliation. The coordinator does not need a worker route lease, and the router does not rewrite its session settings.
 
@@ -460,10 +460,10 @@ One logical ledger authority owns financial decisions across worktrees. The Open
 ### 10.4 Breaking cutover
 
 1. Select the reconciled source baseline and map every current admission/selection writer.
-2. Run shadow decisions alongside the current selectors: compute profile, ranking and allocation against an isolated ledger copy, with no dispatch authority and no live-ledger writes. Then canary enforced routing on one explicitly chosen project. Proceed only when the cutover criteria, recorded before shadow starts, pass (section 13); otherwise the current selectors remain.
+2. Replay recorded arrivals against isolated ledgers as ordinary tests, then canary enforced routing on one explicitly chosen project within recorded bounds: a project allowlist, a spend cap per funding pool, a maximum duration, the concurrency caps, an abort condition and the Smart Routing OFF kill switch. Proceed only when the cutover criteria, recorded before the canary starts, pass (section 13); otherwise the current selectors remain.
 3. Stop legacy new admissions, finish or authoritatively reconcile outstanding work, and retain historical costs/minimal unresolved ownership evidence.
 4. Install the built-in routing service and new schema with Smart Routing ON by default, honoring an explicit new Smart Routing OFF choice and the existing Workstreams preference. Configure readiness separately. API Usage remains excluded until explicit enablement/key setup; do not translate legacy Manual/Smart Balance state into new API spending authority implicitly.
-5. Remove superseded runtime selectors, aliases, schemas, wrappers, shadow hooks and obsolete tests when the new path qualifies. No compatibility layer or simultaneous old/new writer is retained.
+5. Remove superseded runtime selectors, aliases, schemas, wrappers and obsolete tests when the new path qualifies. No compatibility layer or simultaneous old/new writer is retained.
 
 Unresolved old executions block affected cutover until their ownership can be established. No-backward-compatibility does not mean deleting charges or making uncertain capacity available again. The user can later delete the standalone planning checkout without affecting the feature.
 
@@ -497,7 +497,7 @@ Earlier local probes reported OpenCode 2.2.6, Codex 0.167.0 and Claude Code 2.1.
 
 Produce sanitized feasibility notes, a capability matrix and reproducible fixtures in vibe-workflow. Earlier scratch probe output is not a fixture until prompts, credentials and account identifiers are removed. Live event streams require resynchronization after a gap; do not assume an event subscription replays missed records.
 
-P0 exit is evidence for each enabled route or an explicit unsupported result. Advisory/shadow operation is not a substitute for mandatory-routing proof. In particular, an after-the-fact interrupt does not close the dispatch or funding gate.
+P0 exit is evidence for each enabled route or an explicit unsupported result. Advisory operation is not a substitute for mandatory-routing proof. In particular, an after-the-fact interrupt does not close the dispatch or funding gate.
 
 ## 13. Validation and acceptance cases
 
@@ -532,7 +532,7 @@ Required cases:
 25. Smart Routing OFF admits the first feasible `worker_choices` entry for the role, or leaves the assignment pending with `worker_choice_unavailable`.
 26. Profiling or ranking endpoints that retain, train on or forbid confidential data are never used without the user's per-endpoint opt-in. Strategy-table rows naming unavailable models or unsupported efforts are dropped at compilation.
 
-Evaluate in two parts. Deterministic allocator replay runs identical chronological arrivals, concurrent demand, balances and resets over isolated ledgers as ordinary tests, checking funding violations, stranded quota/credits and recovery errors. Quality evaluation re-executes a pre-registered, budgeted sample of historical tasks with fixed acceptance checks; it is required for shadow disagreements flagged by the cutover criteria and for promoting a model ranker over the deterministic one. Measure routing overhead, acceptance and total delivery cost per policy. Cutover follows shadow and bounded canary (section 10.4). Rolling back automatic selection keeps ledger ownership and limits intact.
+Evaluate in two parts. Deterministic allocator replay runs identical chronological arrivals, concurrent demand, balances and resets over isolated ledgers as ordinary tests, checking funding violations, stranded quota/credits and recovery errors. Quality evaluation re-executes a pre-registered, budgeted sample of historical tasks with fixed acceptance checks; it is required for disagreements flagged by the cutover criteria and for promoting a model ranker over the deterministic one. Measure routing overhead, acceptance and total delivery cost per policy. Cutover follows replay and a bounded canary (section 10.4). Rolling back automatic selection keeps ledger ownership and limits intact.
 
 Run `python3 -B scripts/validate.py` for package checks and, once implementation exists, focused router/adapter tests and representative instruction-loading walkthroughs. Report document/package validation, synthetic tests and observed client/provider execution separately.
 
@@ -597,9 +597,9 @@ Self-reviewed on 2026-11-08 using installed Superpowers `writing-plans` 7.0.2: s
 | Default-on could cause inference during setup/status or imply approval of optional features. | Section 3 and F01/F02/F08/F10/F15/F17 separate local controls from actual inference and feature activation. |
 | Existing phase handoff lacked concrete feature regression ownership and executable checkpoints. | The accompanying implementation handoff adds a writing-plans header, review focus, file/interface boundaries and phase-owned checks. |
 
-### v1.5 amendments (2026-11-08)
+### v1.5 amendments (2026-11-08; A14 added later the same day)
 
-Amendments A1–A13 from the [v1.7 implementation plan](../plans/2026-11-08-smart-routing.md), accepted by the user, with A12 applied identically to every provider:
+Amendments A1–A14 from the [v1.7 implementation plan](../plans/2026-11-08-smart-routing.md), accepted by the user, with A12 applied identically to every provider:
 
 | ID | Amendment | Sections |
 |---|---|---|
@@ -613,9 +613,10 @@ Amendments A1–A13 from the [v1.7 implementation plan](../plans/2026-11-08-smar
 | A8 | Class deficits derived from admission records. | 7.2 |
 | A9 | Stateless within-class selection by highest pressure. | 7.3, 13 cases 7–8 |
 | A10 | Default global and per-provider-account concurrency caps. | 7.4, 13 case 24 |
-| A11 | Shadow and canary before cutover; two-part evaluation. | 10.4, 13 |
+| A11 | Replay and canary before cutover; two-part evaluation. | 10.4, 13 |
 | A12 | Billing classification per route; Claude and OpenAI offer the same subscription and API route kinds under one model. | 1, 6.1, 12, 13 case 23 |
 | A13 | OFF-mode `worker_choices` settings shape. | 3, 13 case 25 |
+| A14 | No shadow or simulation mode: a route is active or it is not; the canary is bounded. | 3, 10.4, 12, 13 |
 
 This is an author revision, not an independent review.
 
