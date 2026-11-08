@@ -16,7 +16,8 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 9.83M, 82%.
+# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.53M, 87.8%
+# since S3.5's binding allowance (it was 9.83M, 82%).
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900
@@ -26,8 +27,10 @@ MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
 # Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
-# A larger admission is refused with `record_too_large` and writes nothing.
-MAX_ADMISSION_BYTES = 4096
+# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow
+# binding (S3.5, runtime/routing_gates.py), bounded by MAX_BINDING_BYTES on top of the S3.4 record allowance.
+MAX_BINDING_BYTES = 2560
+MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES
 MAX_HOLD_BYTES = 2048
 # Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
 # worst-case capacity test counts every hold at both bounds.

@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing fresh gates at dispatch (S3.5) — 8 November 2026
+
+Task S3.5 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) binds each admission to its canonical workflow job and re-validates that binding inside `dispatch`. It adds read-only accessors to the workflow modules, makes no OpenCode or model call and changes no client file.
+
+| Contract | Source |
+| --- | --- |
+| [S3.5 contract](superpowers/plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3), `runtime/routing_gates.py`, `runtime/routing.py`, `scripts/routing.py`, and read-only `delegation.routing_view`/`routing_etag`/`routing_job`, `state.ChangeWatch`, `workstreams.setting_marker` | Bounded binding (no prompts or source) in the admission record; `job: null` without a workflow job; fixed gate set wired in code, never from a request; reasons `binding_missing`, `credential_changed`, `binding_stale`, `dependency_reopened`, `ownership_changed`, `resource_authority_lost`, `workflow_changed`, `gate_error`; refusals leave the hold admitted and the ledger unchanged; view read before the write transaction, only a cheap etag (file identity, `PRAGMA data_version` on a separate read-only connection, Workstreams setting digest) inside it, three rounds then `workflow_changed`; no raw descriptor on the database, so no lock is dropped; serialized binding size checked at `prepare` (`binding_too_large`); `workflow_bound`, `unbound_open_holds`, `--project` pin on the checkout the reader resolves, at `prepare` and `dispatch` (`project_mismatch`, `project_pinned`); `delegation.routing_job` canonical semantic job; cache hits confer no authority | Spec §4.1–4.2 (shared preparation, recheck at dispatch even on a cache hit), §8 (atomic authorization, common spawn path) and RF3; Appendix A F03, F11, F12; plan Task S3.5, the coordinator's 8 November 2026 brief and both independent reviews of PR #141 (round 1: lock drop on descriptor close, caller-chosen `job: null`, unbound semantic digest, serialized binding size; round 2: pin the resolved checkout, the cross-store window); `validate_dependencies`, `_resources_available` and the `resource_admission` preference reused; SQLite `PRAGMA data_version` (changes on another connection's commit, not on a rollback) and the unix VFS keeping descriptors open while the process holds locks, both verified by `ChangeWatchTests`; `tests/test_routing_gates.py` |
+
 ## Smart Routing dispatch authority (S3.4) — 8 November 2026
 
 Task S3.4 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds single-use dispatch authority to the routing command and ledger. It makes no OpenCode call and changes no client file; the shim side of the handshake lands with S3.3.

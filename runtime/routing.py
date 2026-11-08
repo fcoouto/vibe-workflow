@@ -17,7 +17,7 @@ import math
 import secrets
 
 
-from runtime import routing_allocator as allocator, routing_settings
+from runtime import routing_allocator as allocator, routing_gates, routing_settings
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
 CONTRACT_VERSION = 1
@@ -544,7 +544,7 @@ def _choice_matches(entry, item):
     return all(spec.get(field) == entry[field] for field in ROUTE_IDENTITY) and item['cls'] == entry['funding']
 
 
-def _decide(data, assignment, ranking, settings, observations):
+def _decide(data, assignment, ranking, settings, observations, workflow=None):
     now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
     accounts, held = Ledger.open_accounts(data), Ledger.held(data)
     if len(accounts) >= _caps(data, settings)[0]:
@@ -607,6 +607,7 @@ def _decide(data, assignment, ranking, settings, observations):
                   snapshot_id=observations.get('snapshot_id'),
                   reason_codes=list(dict.fromkeys(reasons)),
                   ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
+    record['binding'] = routing_gates.binding(copy.deepcopy(workflow), credential_marker(data, record))
     return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])
 
 
@@ -731,7 +732,7 @@ def _shape_error(assignment, ranking, settings, observations):
     return None
 
 
-def admit(assignment, ranking, settings, observations, *, ledger):
+def admit(assignment, ranking, settings, observations, *, ledger, workflow=None):
     """Choose a funding class and route, reserve the padded claim and record the decision atomically.
 
     ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
@@ -770,16 +771,22 @@ def admit(assignment, ranking, settings, observations, *, ledger):
     input returns ``pending`` with ``invalid_assignment``, ``invalid_ranking``, ``invalid_settings`` or
     ``invalid_observation``. Any other failure inside the decision becomes ``pending`` with
     ``admission_error``: ``admit`` never raises on its inputs.
+
+    ``workflow`` is the job part of the S3.5 binding (``routing_gates.job_binding``) or None for an assignment
+    with no workflow job; the record stores it with the credential marker as ``binding`` (``invalid_binding``
+    when malformed). ``dispatch`` re-validates it.
     """
     try:
         reason = _shape_error(assignment, ranking, settings, observations)
+        if reason is None and not routing_gates.binding_fits(workflow):
+            reason = 'invalid_binding'
     except Exception:  # noqa: BLE001 - e.g. RecursionError on a pathological structure
         reason = 'invalid_observation'
     if reason is not None:
         return _pending(reason)
     try:
         outcome = ledger.admit(assignment['attempt_id'],
-                               lambda data: _decide(data, assignment, ranking, settings, observations))
+                               lambda data: _decide(data, assignment, ranking, settings, observations, workflow))
     except BudgetError as error:
         return _pending(str(error))
     except Exception:  # noqa: BLE001 - the transaction rolled back; nothing was reserved or recorded
@@ -845,6 +852,24 @@ def _funding_block(data, hold, record, settings, now):
         unavailable = ('organization_unconfigured', 'organization_disabled', 'manual_recovery_required')
         return 'organization_unavailable' if str(error) in unavailable else 'funding_unverified'
     return None
+
+
+def credential_marker(data, record):
+    """Digest of the trusted credential binding a dollar-funded admission relies on, or None for other routes.
+
+    The trusted record is the existing secure key binding in the ledger (`routing` entries written by Usage
+    Routing's `configure`: opaque `credential_ref`, scope, revision, enabled/disabled), matched by the admission's
+    `credential_ref`; no secret is read. Revoking, disabling, rebinding or reconfiguring it changes the marker,
+    and so does adding or removing an entry for the reference."""
+    if record.get('billing_class') not in FUNDED:
+        return None
+    ref = record.get('credential_ref')
+    entries = sorted(json.dumps([scope, config.get('revision'), config.get('binding'), config.get('enabled'),
+                                 config.get('disabled')], sort_keys=True, separators=(',', ':'))
+                     for scope, config in (data.get('routing') or {}).items()
+                     if isinstance(config, dict) and isinstance(config.get('binding'), dict)
+                     and config['binding'].get('credential_ref') == ref)
+    return routing_gates.digest([ref, entries])
 
 
 def check_request(data, attempt_id, facts, settings, now, *, authority=None, strict=False, dispatching=False):
@@ -1005,18 +1030,84 @@ def check(data, facts, settings, now, *, attempt_id=None, session_id=None, autho
                          strict=session_id is not None or authority is not None)
 
 
-def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
+def _fresh_inputs(ledger, attempt_id, workflow):
+    """Read the admission's binding and, for a bound job, the workflow view. Runs BEFORE the write transaction.
+
+    Returns what the in-transaction gate compares against: the record's nonce and binding as read here, plus the
+    view or a fixed error. A hold that is not admitted needs no view: the transaction answers it."""
+    data = ledger.snapshot()
+    hold, record = data['holds'].get(attempt_id), Ledger.admission(data, attempt_id)
+    if hold is None or record is None or hold['closed'] or hold['state'] != 'admitted':
+        return dict(skip=True)
+    fresh = dict(nonce=record.get('nonce'), binding=copy.deepcopy(record.get('binding')))
+    job = (fresh['binding'] or {}).get('job') if isinstance(fresh['binding'], dict) else None
+    if job is not None:
+        try:
+            view = workflow.view(copy.deepcopy(job['locator']))
+            fresh['view'] = copy.deepcopy(view) if routing_gates.valid_view(view) else None
+            fresh['error'] = None if fresh['view'] is not None else 'gate_error'
+        except routing_gates.WorkflowChanged:
+            fresh['view'], fresh['error'] = None, 'workflow_changed'  # retried like an etag mismatch
+        except routing_gates.ProjectMismatch:
+            fresh['view'], fresh['error'] = None, 'project_mismatch'
+        except Exception:  # noqa: BLE001 - an unreadable workflow fails closed; the hold stays admitted
+            fresh['view'], fresh['error'] = None, 'gate_error'
+        if fresh['error'] is None:
+            del fresh['error']
+    return fresh
+
+
+def _fresh_gate(data, attempt_id, fresh, workflow):
+    """S3.5's fixed gate set, run inside the write transaction after the ``check`` gates. Reads only.
+
+    The record must still be the one read before the transaction (else ``workflow_changed``: retry). Then the
+    binding (``binding_missing`` for admissions recorded before S3.5), the trusted credential binding
+    (``credential_changed``), and for a bound job the workflow etag (``workflow_changed`` when the state moved
+    since the view) and the view's verdict. Any exception is ``gate_error``."""
+    try:
+        record = Ledger.admission(data, attempt_id)
+        if fresh.get('skip') or record is None or record.get('nonce') != fresh['nonce'] or \
+                record.get('binding') != fresh['binding']:
+            return 'workflow_changed'
+        stored = record.get('binding')
+        if stored is None:
+            return 'binding_missing'
+        if not routing_gates.valid_binding(stored):
+            return 'gate_error'
+        if credential_marker(data, record) != stored['credential']:
+            return 'credential_changed'
+        job = stored['job']
+        if job is None:
+            return None  # no workflow job: the funding, settings and route gates above are the whole set
+        if 'error' in fresh:
+            return fresh['error']
+        current = workflow.etag(copy.deepcopy(job['locator']))
+        if current is None or current != fresh['view']['etag']:
+            return 'workflow_changed'
+        return routing_gates.verdict(job, fresh['view'])
+    except Exception:  # noqa: BLE001 - fail closed with a fixed reason
+        return 'gate_error'
+
+
+def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=None):
     """Issue the single-use authority for an admitted attempt, or return the existing decision.
 
     ``settings`` (resolved settings with ``revision``) and ``now`` may be callables; they are read INSIDE the
     write transaction, so a settings change that holds the same lock (the command's ``set``) is ordered wholly
     before or after the dispatch. The transaction re-runs every ``check`` gate on the unsent admission (settings
     revision, age, dollar funding, route identity, envelope), refuses ids another remembered attempt owns, then
-    runs each ``gates`` entry ``gate(data, record) -> reason | None`` (S3.5's fresh gates) on a deep copy, so a
-    gate cannot change the ledger. It then moves the hold to ``dispatched`` with the token's hash and the
-    derived ids. A refusal writes nothing and the hold stays ``admitted``. The token is generated before the
-    transaction and returned only in this ``dispatched`` result; repeated or racing callers get
-    ``already_dispatched`` without one. No host or network call happens here or inside the transaction."""
+    runs S3.5's fixed fresh gates on the stored binding (``_fresh_gate``; ``workflow`` is the trusted reader,
+    never request input) and finally each ``gates`` entry ``gate(data, record) -> reason | None`` (a test seam)
+    on a deep copy, so a gate cannot change the ledger. It then moves the hold to ``dispatched`` with the
+    token's hash and the derived ids. A refusal writes nothing and the hold stays ``admitted``.
+
+    Snapshot rule (S3.5): the workflow view is read before the transaction; inside it only the reader's cheap
+    etag is compared. A changed etag aborts that round without writing and the whole round is retried, at
+    most ``routing_gates.ROUNDS`` times, then refused with ``workflow_changed``. The token is generated before
+    the transaction and returned only in this ``dispatched`` result; repeated or racing callers get
+    ``already_dispatched`` without one. No host or network call happens here or inside the transaction.
+    Not excluded: a workflow commit between the in-transaction etag read and the ledger commit (the two stores
+    commit separately)."""
     if not _text(attempt_id):
         return _blocked('invalid_request')
     token = secrets.token_urlsafe(AUTHORITY_BYTES)
@@ -1028,7 +1119,7 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
             raise BudgetError('unknown_attempt')
         return found
 
-    def gate(data, moment):
+    def gate(data, moment, fresh):
         current = settings() if callable(settings) else settings
         found = check_request(data, attempt_id, facts, current, moment, dispatching=True)
         if found['state'] != 'allow':
@@ -1038,6 +1129,9 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
         admitted.update(route=record['route'], pool=record['pool'])
+        reason = _fresh_gate(data, attempt_id, fresh, workflow)
+        if reason is not None:
+            return reason
         if gates:
             copied = copy.deepcopy(data)
             for extra in gates:
@@ -1045,10 +1139,16 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
                 if reason is not None:
                     return reason if _text(reason) else 'gate_invalid'
         return None
-    try:
-        outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), derived, gate, now)
-    except BudgetError as error:
-        return _blocked(str(error))
+    for round_ in range(routing_gates.ROUNDS):
+        try:
+            fresh = _fresh_inputs(ledger, attempt_id, workflow)
+            outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), derived,
+                                           lambda data, moment: gate(data, moment, fresh), now)
+        except BudgetError as error:
+            if str(error) == 'workflow_changed' and round_ + 1 < routing_gates.ROUNDS:
+                continue
+            return _blocked(str(error))
+        break
     ids = outcome['ids']
     if not outcome['issued']:
         return dict(state='already_dispatched', attempt_id=attempt_id, hold_state=outcome['state'], **ids,
@@ -1114,6 +1214,10 @@ def ledger_summary(data):
     # Holds admitted before `authority_required` keep the old rules; the canary needs this count at zero.
     unstamped = sum(1 for attempt in Ledger.open_holds(data)
                     if not (Ledger.admission(data, attempt) or {}).get('authority_required'))
+    # Open holds with no workflow job (S3.5): fine for explicit delegation, never for a planned job.
+    unbound = sum(1 for attempt in Ledger.open_holds(data)
+                  if not ((Ledger.admission(data, attempt) or {}).get('binding') or {}).get('job'))
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
+                unbound_open_holds=unbound,
                 caps=dict(total=total, per_account=per_account), organizations=organizations)

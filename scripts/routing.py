@@ -2,8 +2,11 @@
 """The single local Smart Routing command every client calls (spec 10.3, A1). No network, model or secret access.
 
 Usage:
-  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs]   one request on stdin
-  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs] one request per line
+  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH] [--project PATH] [--test-inputs]
+  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--project PATH] [--test-inputs]
+
+`<op>` reads one request on stdin; `--serve` reads one request per line. `--project` pins the checkout a
+`prepare` workflow locator may name (S3.5).
 
 The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
 the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
@@ -17,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import routing, routing_settings, usage_budget  # noqa: E402
+from runtime import routing, routing_gates, routing_settings, usage_budget  # noqa: E402
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -35,7 +38,7 @@ TEST_FLAG = '--test-inputs'
 READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
-FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
+FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints', 'workflow'}),
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
               dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}))
@@ -47,7 +50,7 @@ ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'b
 PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_band', 'review_policy', 'uncertainty')
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
-                 'admission_error')
+                 'invalid_binding', 'admission_error')
 
 
 class Blocked(Exception):
@@ -128,14 +131,22 @@ def _resolved(path):
 
 
 class Service:
-    """Handles requests against one settings file, one strategy table and one ledger (reused while serving)."""
-    def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False):
+    """Handles requests against one settings file, one strategy table and one ledger (reused while serving).
+
+    `workflow` is the trusted reader of canonical workflow state for S3.5's gates (default: the delegation state
+    reader). Only code constructs it; no request, configuration or test switch can replace it."""
+    def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False,
+                 workflow=None, project=None):
+        self.project = None if project is None else Path(project).resolve()
+        self.workflow = workflow if workflow is not None else routing_gates.D6Workflow(project=self.project)
         self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
         self._open = None
 
     def close(self):
+        if callable(getattr(self.workflow, 'close', None)):
+            self.workflow.close()
         if self._open is not None:
             self._open.close()
             self._open = None
@@ -288,15 +299,50 @@ class Service:
             ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                            profile_digest=profile['semantic_digest'])
         observations = self._observations(body['observations'])
+        bound = self._workflow_binding(body, profile)
+        if bound is not None and bound[0] != 'bound':
+            return dict(state=bound[0], reason=bound[1], reasons=[bound[1]]) if bound[0] == 'pending' \
+                else dict(state='blocked', reason=bound[1])
         result = routing.admit(dict(assignment, role=role, complexity_band=profile['complexity_band']), ranking,
-                               settings, observations, ledger=self._ledger(True, write=True))
+                               settings, observations, ledger=self._ledger(True, write=True),
+                               workflow=None if bound is None else bound[1])
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'])
+        stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
+                    workflow_bound=stored.get('job') is not None,
                     ranking=dict(strategy_ids=ranking['strategy_ids'], reason_codes=ranking['reason_codes'],
                                  table_version=ranking.get('table_version')),
                     profile={key: profile[key] for key in PROFILE_FIELDS})
+
+    def _workflow_binding(self, body, profile):
+        """S3.5: read the canonical job the request names (before any ledger write) and bind to it.
+
+        No `workflow` locator means ordinary explicit delegation with no workflow job: None (`job: null`).
+        Otherwise ('bound', job binding), or (state, reason) when the job cannot be bound now."""
+        if 'workflow' not in body:
+            return None
+        locator = body['workflow']
+        require(routing_gates.valid_locator(locator), 'invalid_request')
+        if self.project is not None:  # early refusal; the reader checks the checkout it actually resolves
+            cwd = Path(locator['cwd']).resolve()
+            require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
+        try:
+            view = self.workflow.view(dict(locator))
+        except routing_gates.WorkflowChanged:
+            raise Blocked('workflow_changed') from None
+        except routing_gates.ProjectMismatch:
+            raise Blocked('project_mismatch') from None
+        except Exception:  # noqa: BLE001 - an unreadable workflow never admits
+            raise Blocked('workflow_unavailable') from None
+        require(routing_gates.valid_view(view), 'workflow_unavailable')
+        problem = routing_gates.readiness(view, profile['semantic_digest'])
+        if problem is not None:
+            return problem
+        job = routing_gates.job_binding(locator, view)
+        require(routing_gates.binding_fits(job), 'binding_too_large')
+        return 'bound', job
 
     def _now(self, body):
         """The command's clock; only the `--test-inputs` flag lets a request supply `now`."""
@@ -325,7 +371,7 @@ class Service:
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
         # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
-        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body))
+        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body), workflow=self.workflow)
 
     def _record(self, body):
         event = body['event']
@@ -359,7 +405,8 @@ class Service:
         # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
         effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs)
+                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs,
+                    project_pinned=self.project is not None)
 
     def _set(self, body):
         if 'organization' in body:
@@ -465,7 +512,7 @@ def _arguments(argv):
             serving = True
         elif item == TEST_FLAG and not test_inputs:
             test_inputs = True
-        elif item in ('--settings', '--ledger', '--table') and item not in paths and items \
+        elif item in ('--settings', '--ledger', '--table', '--project') and item not in paths and items \
                 and not items[0].startswith('-'):
             paths[item] = items.pop(0)
         elif not item.startswith('-') and op is None:
@@ -501,7 +548,8 @@ def main(argv=None, stdin=None, stdout=None):
             return USAGE
         op, serving, test_inputs, paths = parsed
         service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger(),
-                          paths.get('--table'), test_inputs=test_inputs, serving=serving)
+                          paths.get('--table'), test_inputs=test_inputs, serving=serving,
+                          project=paths.get('--project'))
         try:
             if serving:
                 return serve(service, stdin, stdout)

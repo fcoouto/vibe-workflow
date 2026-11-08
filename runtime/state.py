@@ -1488,6 +1488,42 @@ def _sidecars(path):
                 raise StateError("Unsupported runtime journal mode")
 
 
+class ChangeWatch:
+    """Cheap read-only change marker for one SQLite database file (Smart Routing S3.5 dispatch gates).
+
+    Holds ONE read-only SQLite connection and asks `PRAGMA data_version`, which changes whenever another
+    connection, in any process, commits to the file and never on a rollback; the file's (device, inode) from
+    `os.lstat` makes a replaced file a change too. Markers compare only within one watch. It never opens a raw
+    descriptor on the database: on POSIX, closing any descriptor of a file drops every lock this process holds
+    on it, and only SQLite's own close defers that while its other connections still hold locks. A busy database
+    (another connection holds PENDING or EXCLUSIVE) returns None after at most `BUSY_SECONDS`. Never writes."""
+    BUSY_SECONDS = 0.1
+
+    def __init__(self, path):
+        self.path = Path(path)
+        _sidecars(self.path)
+        self._db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=self.BUSY_SECONDS,
+                                   isolation_level=None)
+        try:
+            self._db.execute("pragma query_only=on")
+        except BaseException:
+            self._db.close()
+            raise
+
+    def marker(self):
+        try:
+            info = os.lstat(self.path)
+            version = self._db.execute("pragma data_version").fetchone()[0]
+        except sqlite3.OperationalError as error:
+            if "locked" in str(error) or "busy" in str(error):
+                return None
+            raise StateError("Runtime state is unavailable, corrupt, locked or incompatible") from None
+        return "%d:%d:%d" % (info.st_dev, info.st_ino, version)
+
+    def close(self):
+        self._db.close()
+
+
 def _schema(db, *, version=SCHEMA_VERSION):
     with _capture_precharge(db,'schema') as selection:
         return _schema_selected(db,version=version,selection=selection)
