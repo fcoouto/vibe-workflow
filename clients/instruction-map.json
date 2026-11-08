@@ -295,7 +295,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "8cb9edf1f61e192026afc055db243f0623d8008da5a3a04a3a58511a945f3be9",
+      "sha256": "7792fbea944493bcf9c516e24dda16bbb51c26e333f773eda067a8be6aee458a",
       "ranges": [
         [
           1,
@@ -307,7 +307,7 @@
         ],
         [
           282,
-          309
+          311
         ]
       ]
     },
