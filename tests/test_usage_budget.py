@@ -648,16 +648,16 @@ class ParallelLedgerTests(unittest.TestCase):
         self.assertEqual((migrated['version'], migrated['holds'], migrated['admissions']), (3, {}, []))
         self.assertEqual(migrated['runs']['open']['calls']['count']['maximum'], 5 * M)
         self.assertEqual(self.ledger.credit_headroom('org'), 23 * M)  # 30 - 2% protected - 5 held
-        self.ledger.admit('new', self.decide('new', {'pool/w': 5}))  # A write persists the migration.
+        self.ledger.admit('new', self.decide('new', {'win:pool/w': 5}))  # A write persists the migration.
         with closing(sqlite3.connect(self.path)) as db:
             self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 3)
 
     def test_admit_writes_hold_and_record_together_and_duplicates_return_the_record(self):
-        first = self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        first = self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
         before = self.ledger.snapshot()
-        self.assertEqual(before['holds']['a']['vector'], {'p/w': 7})
-        self.assertEqual(self.ledger.held(before), {'p/w': 7})
-        again = self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        self.assertEqual(before['holds']['a']['windows'], {'win:p/w': 7})
+        self.assertEqual(self.ledger.held(before), {'win:p/w': 7})
+        again = self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
         self.assertEqual(again, dict(first, duplicate=True))
         self.assertEqual(self.ledger.snapshot(), before)
 
@@ -671,7 +671,7 @@ class ParallelLedgerTests(unittest.TestCase):
 
     def test_closing_an_attempt_releases_its_hold_and_its_concurrency_place(self):
         self.ledger.set_caps(total=1, per_account=1)
-        self.ledger.admit('a', self.decide('a', {'p/w': 7}, 'org'))
+        self.ledger.admit('a', self.decide('a', {'win:p/w': 7}, 'org'))
         self.org()
         with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
             self.begin('run', M)  # a hold counts against the same caps as a run
@@ -691,7 +691,7 @@ class ParallelLedgerTests(unittest.TestCase):
 
     # S2.6 review follow-up: hold states, reuse and hold-to-run conversion
     def test_only_established_outcomes_release_a_hold(self):
-        self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
         for bad in ('timeout', None, 'released', 3):
             with self.subTest(bad=bad), self.assertRaisesRegex(budget.BudgetError, 'invalid_outcome'):
                 self.ledger.close_attempt('a', bad)
@@ -700,7 +700,7 @@ class ParallelLedgerTests(unittest.TestCase):
             self.ledger.close_attempt('a', 'not_dispatched')  # a dispatched attempt did run
         self.ledger.close_attempt('a', 'uncertain')
         self.assertEqual(self.ledger.snapshot()['holds']['a']['state'], 'uncertain')
-        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {'p/w': 7})
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {'win:p/w': 7})
         self.ledger.close_attempt('a', 'complete')
         self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
         with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
@@ -726,18 +726,60 @@ class ParallelLedgerTests(unittest.TestCase):
     def test_hold_converts_to_a_run_claim_counted_once(self):
         self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
         self.ledger.set_caps(total=1, per_account=1)
-        self.ledger.admit('a', self.decide('a', {'org/credit': 6 * M, 'sub/5h': 12}, 'org'))
-        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['org'])
-        run = self.ledger.convert_hold('a', ['org/credit'], 'org', 'a', 'packet', 5 * M, 1, 101, native('a'),
-                                       next_request_bound=0)
-        self.assertEqual(run['calls']['count']['maximum'], 6 * M)
+        self.ledger.admit('a', lambda data: dict(record=self.record('a'), vector={'org:org': 6 * M, 'win:sub/5h': 12},
+                                                 account='acct', now=101, revision=1))
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)  # the hold is part of R before conversion
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct'])
+        run = self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'), next_request_bound=0)
+        self.assertEqual((run['calls']['count']['maximum'], run['account']), (6 * M, 'acct'))
         state = self.ledger.snapshot()
-        self.assertEqual(budget.Ledger.open_accounts(state), ['org'])  # one place: the run, not run plus hold
-        self.assertEqual(self.ledger.held(state), {'sub/5h': 12})  # the funded key moved to the run
+        self.assertEqual(budget.Ledger.open_accounts(state), ['acct'])  # one place: the attempt, not run plus hold
+        self.assertEqual(self.ledger.held(state), {'win:sub/5h': 12})  # the dollar amount moved to the run
         self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
-        self.assertEqual(state['holds']['a']['state'], 'admitted')
-        with self.assertRaisesRegex(budget.BudgetError, 'hold_state_forbidden|convert_forbidden'):
-            self.ledger.convert_hold('a', ['org/credit'], 'org', 'a', 'packet', 5 * M, 1, 101, native('a'))
+        self.assertEqual((state['holds']['a']['state'], state['holds']['a']['amount']), ('admitted', 0))
+        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+            self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'))
 
+    def test_dollar_holds_pass_the_same_gates_as_begin(self):
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+        decide = lambda vector, revision=1, now=101: (lambda data: dict(  # noqa: E731
+            record=self.record('a'), vector=vector, account='acct', now=now, revision=revision))
+        for vector, revision, now, reason in (({'org:org': 31 * M}, 1, 101, 'insufficient_headroom'),
+                                              ({'org:ghost': M}, 1, 101, 'organization_unconfigured'),
+                                              ({'org:org': M}, 2, 101, 'policy_revision_changed'),
+                                              ({'org:org': M}, 1, 5000, 'balance_stale_or_missing'),
+                                              ({'org:org': M, 'org:other': M}, 1, 101, 'invalid_admission'),
+                                              ({'pool/w': 1}, 1, 101, 'invalid_admission'),
+                                              ({'win:p/w': 10**30}, 1, 101, 'invalid_integer')):
+            with self.subTest(vector=vector, reason=reason), self.assertRaisesRegex(budget.BudgetError, reason):
+                self.ledger.admit('a', decide(vector, revision, now))
+        self.assertEqual(self.ledger.snapshot()['holds'], {})
+        self.ledger.admit('a', decide({'org:org': 30 * M}))
+        self.assertEqual(self.ledger.headroom('org'), 0)
+        with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
+            self.begin('run', 1)  # S1 begin sees the hold (holds are part of R)
+
+    def test_written_ledgers_with_the_old_hold_shape_are_repaired(self):
+        def old(data):
+            data['holds'] = {'x': dict(account='acct', task='t', vector={'p/w': 7}, closed=False, state='admitted')}
+            data.pop('seen_attempts')
+        self.raw(old)
+        state = self.ledger.snapshot()
+        self.assertEqual(state['seen_attempts'], [])
+        self.assertEqual(state['holds']['x']['windows'], {'win:p/w': 7})
+        self.assertEqual((state['holds']['x']['organization'], state['holds']['x']['amount']), (None, 0))
+
+    def test_pruning_never_drops_open_or_uncertain_holds(self):
+        with self.ledger.transaction() as data:
+            for i in range(budget.MAX_HOLDS - 1):
+                data['holds']['c%d' % i] = dict(account='a', task='t', organization=None, amount=0, cycle=None,
+                                                windows={}, closed=True, state='released')
+            data['holds']['u'] = dict(account='a', task='t', organization=None, amount=0, cycle=None,
+                                      windows={'win:p/w': 1}, closed=False, state='uncertain')
+        self.ledger.admit('n', self.decide('n', {}))
+        holds = self.ledger.snapshot()['holds']
+        self.assertIn('u', holds)
+        self.assertIn('n', holds)
+        self.assertLess(len(holds), budget.MAX_HOLDS)
 
 if __name__ == '__main__': unittest.main()

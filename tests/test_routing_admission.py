@@ -21,9 +21,11 @@ def sub_pool(used=100, extra=None, **window):
     return dict(windows=windows + (extra or []))
 
 
-def api_pool(limit=30 * M, expires=NOW + 86400, remaining=None, kind='api_grant', grant=True):
+def api_pool(limit=30 * M, expires=NOW + 86400, remaining=None, kind='api_grant', grant=True, organization=None):
+    """A dollar pool always names its funding organization; a gateway has its own (see `fund`)."""
+    organization = organization or ('gw-org' if kind == 'gateway' else 'api-org')
     pool = dict(billing_class=kind, windows=[dict(id='credit', limit=limit, used=0, length=None, reset_at=None,
-                                                  fresh=True)])
+                                                  fresh=True, organization=organization, organization_revision=1)])
     if grant:
         pool['grant'] = dict(remaining=remaining or limit, expected_spend=0, expires_at=expires)
     return pool
@@ -64,6 +66,17 @@ def observations(routes, pools, **extra):
     return dict(now=NOW, routes=routes, pools=pools, **extra)
 
 
+FUND_POLICY = dict(cycle='c', start=0, end=2_000_000, expiry=2_000_000, stop_at=1_900_000, ceiling='none',
+                   amount=None, grant_amount=0, pilot_limit=None, task_limit=None, allowance_bp=10000)
+
+
+def fund(ledger):
+    """The default funding organizations are large, so the collector's pool limit stays the binding minimum."""
+    for organization in ('api-org', 'gw-org'):
+        ledger.configure(organization, FUND_POLICY, 0)
+        ledger.observe(organization, 1000 * M, NOW, issued=1000 * M)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -71,6 +84,7 @@ class Base(unittest.TestCase):
         self.identity = budget.initialize(self.path)
         self.ledger = budget.Ledger(self.path, self.identity)
         self.ledger.set_caps(40, 40)
+        fund(self.ledger)
 
     def tearDown(self):
         self.ledger.close()
@@ -149,6 +163,7 @@ class EligibilityTests(Base):
                 identity = budget.initialize(path)
                 with budget.Ledger(path, identity) as ledger:
                     ledger.set_caps(40, 40)
+                    fund(ledger)
                     routes = [sub_route('sub', provider), api_route('api', provider)]
                     pools = dict(sub=sub_pool(used=740), api=api_pool())
                     run = []
@@ -297,7 +312,8 @@ class ReservationTests(Base):
         pools = dict(api=api_pool(grant=False))
         for task, cost, expected in (('t5', 5 * M, 6 * M), ('t10', 10 * M, 12 * M), ('t8', 8 * M, 9_600_000)):
             result = self.admit(task, ['s-api'], routes(cost), pools)
-            self.assertEqual((result['status'], result['reserved']['api/credit']), ('admitted', expected))
+            # Dollar claims are keyed by the funding organization, not by the collector's pool/window.
+            self.assertEqual((result['status'], result['reserved']['org:api-org']), ('admitted', expected))
         fourth = self.admit('t3', ['s-api'], routes(3 * M), pools)
         self.assertEqual((fourth['status'], fourth['reason_code']), ('pending', 'no_feasible_route'))
         self.ledger.close_attempt('t5', 'not_dispatched')
@@ -350,7 +366,7 @@ class ReservationTests(Base):
         pools = dict(sub=sub_pool(used=0, extra=[dict(id='wk', limit=20, used=0, length=604800, reset_at=None, rolling=True, fresh=True)]))
         routes = [sub_route('sub', demand={'5h': 10, 'wk': 10})]
         first = self.admit('a', ['s-sub'], routes, pools)
-        self.assertEqual(first['reserved'], {'sub/5h': 12, 'sub/wk': 12})
+        self.assertEqual(first['reserved'], {'win:sub/5h': 12, 'win:sub/wk': 12})
         second = self.admit('b', ['s-sub'], routes, pools)
         self.assertEqual(second['status'], 'pending')  # the weekly window cannot hold a second 12
         self.assertEqual(list(self.ledger.snapshot()['holds']), ['a'])
