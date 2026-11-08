@@ -340,6 +340,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 - [ ] Write failing tests:
   - API Usage OFF excludes direct API routes and their expiry pressure.
+  - No organization defined or enabled: `admit` still works for subscription and `worker_choices` routes, funded routes are excluded with `no_funded_organization`, and nothing raises. Routing never creates or enables an organization or key; the Personal workspace is enabled only by the user, and an enabled organization with no ready key is unavailable with a reason (spec §6.4).
   - A stored-but-unenabled key excludes them; a wrong-scope or revoked binding blocks the route.
   - OpenRouter uses only its own funding gate.
   - A `purchased_usage` route is never counted as subscription headroom (RF6).
