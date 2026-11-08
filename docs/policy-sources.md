@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing dispatch authority (S3.4) — 8 November 2026
+
+Task S3.4 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds single-use dispatch authority to the routing command and ledger. It makes no OpenCode call and changes no client file; the shim side of the handshake lands with S3.3.
+
+| Local contract | Requirements carried locally | Basis |
+| --- | --- | --- |
+| [S3.1 command contract](superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command) (dispatch, derived ids, handshake, unmanaged sessions, lost acknowledgments), `runtime/routing.py`, `runtime/usage_budget.py` and `scripts/routing.py` | One write transaction re-checks the admission and issues one random token stored only as a hash; repeated callers get the decision, never a token; refusals consume nothing; no host call inside the transaction; deterministic domain-separated `ses_`/`msg_` ids with collision refusal; strict token checks for sessions and tokens, S3.1 rules for attempt-only checks without one; `unmanaged` for sessions no remembered attempt derives; `uncertain` keeps exposure; release after dispatch only with a `message_absent` proof read strictly after the uncertain mark; retry only by re-sending the same ids; `check` stays read-only; tokens never in the ledger, `status` or logs | Spec §7.4 and §8 (atomic authorization, dispatch identity, lost acknowledgments, bounded uncertainty); plan Task S3.4 and the coordinator's 8 November 2026 brief; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08) P0.7 rows and `p0-7-dispatch-recovery.json`; S3.3 shim attach contract on branch `smart-routing-s33`; `tests/test_routing_dispatch.py` |
+
 ## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
 
 Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.
