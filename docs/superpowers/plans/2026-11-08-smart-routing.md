@@ -8,11 +8,11 @@
 
 **Tech Stack:** Python 3.11+ standard library and SQLite (the repo's runtime contract), `unittest`, one OpenCode V2 plugin shim whose loader and test runner P0.1 pins.
 
-**Spec:** [Smart Routing — Vibe Router integration design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) v1.5, which includes amendments A1–A13.
+**Spec:** [Smart Routing — Vibe Router integration design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) v1.5, which includes amendments A1–A14.
 
 - **Version:** 1.7 draft
 - **Date:** 2026-11-08
-- **Status:** Restructured for incremental delivery; spec amended to v1.5; runtime implementation gated per slice by P0.
+- **Status:** Restructured for incremental delivery; spec amended to v1.5; runtime implementation gated per slice by P0. Amended 2026-11-08 at the user's direction: no shadow or simulation mode (A14).
 - **Supersedes:** v1.6 (`docs/Smart Router - Impl Plan.md`).
 - **Target:** Vibe Router inside vibe-workflow, with OpenCode V2 as the first enforced worker-routing host.
 
@@ -25,7 +25,7 @@ The canonical design owns product behavior and merge decisions. This plan record
 | Ledger, allocator and ranker stay in Python; OpenCode gets a thin shim (A1). | The repo's runtime contract is Python + SQLite under `runtime/adapters/`, and Codex/Claude Code coordinators need the same ledger without OpenCode running. |
 | Deterministic compiled-evidence ranking is the v1 default; model ranking is an optional later promotion (A2–A5). | Removes per-assignment inference, free-endpoint churn and data-handling exposure from the hot path; the deterministic policy was already the evaluation baseline. |
 | Allocation inputs account for time to reset and stranded credit; within-class allocation becomes stateless (A6–A9). | Utilization without pace misjudges short versus long windows; expiry pressure should reflect credit that would otherwise expire unused; fewer persisted counters. |
-| Four slices with per-slice P0 gates; shadow runs before cutover (A11). | v1.6 deleted old selectors before shadow qualification, leaving nothing to roll back to. |
+| Four slices with per-slice P0 gates; allocator replay and a bounded enforced canary before cutover (A11); no shadow or simulation mode (A14). | v1.6 deleted old selectors before any qualification, leaving nothing to roll back to. A route is active or it is not; nothing computes decisions without enforcing them. |
 | New billing/terms gate P0.0, applied identically to Claude and OpenAI subscription and API routes; former P0.9 and P0.10 move to the phases that build them (A12). | Whether a subscription route counts as included usage depends on its harness, which is a billing question before it is a telemetry question; router fitness and the shared preparation path cannot be proven before they exist. |
 | Default concurrency caps; OFF-mode worker-choice shape defined (A10, A13). | Unlimited fan-out after removing the slot meets provider limits; v1.6 left "configured choices" undefined. |
 | Formulas, constraints and amendments are defined in the spec and referenced here. | One definition per rule prevents plan/spec drift. |
@@ -65,7 +65,7 @@ Every constraint in v1.6 "Global Constraints" remains in force through the spec 
 
 ## 3. Amendments (in spec v1.5)
 
-Amendments A1–A13 are defined in the spec; the IDs below are used throughout this plan. The spec's Appendix B lists each one's sections.
+Amendments A1–A14 are defined in the spec; the IDs below are used throughout this plan. The spec's Appendix B lists each one's sections.
 
 | ID | Summary | Spec sections |
 |---|---|---|
@@ -79,7 +79,8 @@ Amendments A1–A13 are defined in the spec; the IDs below are used throughout t
 | A8 | Class deficits derived from admission records; one unit per assignment per `(role, complexity_band)` bucket. | §7.2 |
 | A9 | Within class, admit the highest-pressure feasible strategy; no deficit state. Changes case 7. | §7.3, §13 cases 7–8 |
 | A10 | Concurrency caps: onboarding limit, else 4 total and 2 per provider account. | §7.4 |
-| A11 | Shadow and canary before cutover; allocator replay plus budgeted quality re-execution. | §10.4, §13 |
+| A11 | Allocator replay and a bounded enforced canary before cutover; budgeted quality re-execution. | §10.4, §13 |
+| A14 | No shadow or simulation mode: a route is active or it is not. API Usage and live funding are explicit enabled/disabled states with their P0 gates, not a third mode. | §3, §10.4 |
 | A12 | Billing class per route. **Claude and OpenAI use the same model:** each offers subscription routes (subscription login through a harness the vendor bills as included usage, such as Codex or Claude Code, directly or via OpenCode) and API Usage routes (secure key, `api_grant`, plus `api_prepaid` only under `no-limit`). Extra or purchased usage is excluded for both. | §1, §6.1, §12 |
 | A13 | OFF-mode `worker_choices`: ordered per-role list; first feasible entry admitted. | §3 |
 
@@ -87,10 +88,10 @@ Amendments A1–A13 are defined in the spec; the IDs below are used throughout t
 
 | Slice | Delivers | Independently useful because |
 |---|---|---|
-| **S1 — Parallel ledger** | Per-task padded claims, allowance policy, concurrency caps, slot removal in the existing Python ledger. | Removes serial API execution and the 20% floor. On `main`, `runtime/usage_routing.py` still returns `simulation_only=True`, so S1 lands first in simulation and goes live only with P0.3/P0.4. |
-| **S2 — Unified deterministic routing (shadow)** | Settings, profiles, compiled evidence, deterministic ranker, allocator, shadow decisions, allocator replay. | One decision engine is measurable against current selectors without changing dispatch. |
+| **S1 — Parallel ledger** | Per-task padded claims, allowance policy, concurrency caps, slot removal in the existing Python ledger. | Removes serial API execution and the 20% floor. S1 contains no simulation mode: `simulation_only` is removed from `runtime/usage_routing.py`. API Usage stays OFF until explicitly enabled with a secure key, and live API funding needs P0.3/P0.4 before it is enabled. |
+| **S2 — Unified deterministic routing** | Settings, profiles, compiled evidence, deterministic ranker, allocator, cutover criteria, allocator replay. | One decision engine is measurable offline by replaying recorded arrivals against isolated ledgers. |
 | **S3 — OpenCode V2 managed launches** | JSON command, OpenCode adapter and shim, dispatch authority, enforcement, lineage and settlement. | Enforced routing on the first host; Codex/Claude Code use the same command. |
-| **C — Cutover** | Feature contracts F01–F17, caller replacement, retirement of old selectors and slot paths, default ON. | Runs only after S2 shadow and S3 canary criteria pass. |
+| **C — Cutover** | Feature contracts F01–F17, caller replacement, retirement of old selectors and slot paths, default ON. | Runs only after S2 replay and S3 canary criteria pass. |
 | **S4 — Optional model ranking** | Routing benchmark, quality evaluation, model-ranker promotion. | Ships only if it beats the deterministic ranker. |
 
 Proposed placement (new files appear with their slice only):
@@ -102,7 +103,6 @@ runtime/routing_settings.py          # S2: Smart Routing, caps, worker_choices, 
 runtime/routing.py                   # S2: contracts, ensure_profile, prepare_assignment
 runtime/routing_evidence.py          # S2: evidence compiler and strategy table
 runtime/routing_allocator.py         # S2: pure allocation functions
-runtime/routing_shadow.py            # S2: shadow decisions; retired after C
 scripts/routing.py                   # S3: the single JSON command for all clients
 runtime/adapters/opencode.py         # S3: probe, event normalization
 runtime/adapters/opencode_plugin.ts  # S3: policy-free pre-transmission shim
@@ -125,7 +125,7 @@ Gate meanings are in spec §12 and v1.6 §4; P0.0 is new. A missing proof is `un
 | P0.7 Dispatch recovery | No duplicate dispatch from duplicate IDs, racing callers or lost acknowledgments. | — | — | ✓ |
 | P0.8 Lineage/accounting | Coordinator, control, worker, review, repair, auxiliary and retry usage attributed or marked unknown; gaps resynchronized. | — | — | ✓ |
 
-"live" means the slice can merge in simulation without the gate but needs it before live funding. Former P0.9 (role fitness) is the S4 entry gate; former P0.10 (Workstreams binding on the target host) is the S3 exit. Unsupported routes stay out of enforced automatic dispatch; after-the-fact interruption is recovery, not enforcement.
+"live" means the slice can merge without the gate, but live funding stays disabled until the gate passes. Former P0.9 (role fitness) is the S4 entry gate; former P0.10 (Workstreams binding on the target host) is the S3 exit. Unsupported routes stay out of enforced automatic dispatch; after-the-fact interruption is recovery, not enforcement.
 
 ## 5. Review focus
 
@@ -166,7 +166,7 @@ The feature-by-feature matrix is [design Appendix A](../specs/2026-11-08-usage-r
 | F01–F02 | Prepare my Workspace; Onboard my Project | S2 (settings), C.2a |
 | F03, F11 | Workstreams; planning/native delegation/continuation | S2.2, S3, C.2b |
 | F04 | Manage API Usage | S1, C.2c |
-| F05–F07 | Manage OpenRouter; proposals; workers | S2.7 (shadow), C.2c |
+| F05–F07 | Manage OpenRouter; proposals; workers | C.2c |
 | F08 | LLM Council (checkout feature) | C.2d |
 | F09 | Review my Project (checkout feature) | C.2d |
 | F10 | Manage Observability | S3.6, C.2e |
@@ -348,13 +348,12 @@ Read the owning spec section and amendment before each task. Do not invent provi
   - A model-ranker timeout falls back to the deterministic ranking (RF8).
 - [ ] Run, implement, re-run; expected PASS.
 
-### Task S2.7: Shadow decisions (A11)
+### Task S2.7: Cutover criteria (A11)
 
-**Files:** create `runtime/routing_shadow.py`, `tests/test_routing_shadow.py`; add shadow calls at the current decision points in `runtime/delegation.py`, `runtime/external_delegation.py` (`select`) and `scripts/openrouter_proposals.py` (`triage`); create `docs/smart-routing-validation.md`.
+**Files:** create `docs/smart-routing-validation.md`.
 
-- [ ] Write the cutover criteria in `docs/smart-routing-validation.md` before shadow starts: minimum shadow sample, the disagreement rate that triggers quality re-execution, zero funding violations in allocator replay, and latency budgets for warm and cold preparation.
-- [ ] Write failing tests: a shadow decision never writes the live ledger, never grants dispatch authority, makes zero model calls on a complete profile, and stores only bounded, sanitized fields (14-day retention).
-- [ ] Run, implement, re-run; expected PASS. Current selectors keep dispatching unchanged.
+- [ ] Write the cutover criteria before any canary starts: minimum canary sample, the disagreement rate against the deterministic baseline (measured by S2.8 replay) that triggers quality re-execution, zero funding violations in allocator replay, and latency budgets for warm and cold preparation.
+- [ ] There is no shadow or simulation mode and no decision-only hook at the current selectors. Current selectors keep dispatching until C.3 replaces them.
 
 ### Task S2.8: Allocator replay
 
@@ -420,7 +419,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 ### Task C.1: Confirm the cutover criteria
 
-- [ ] Confirm that S2.7 shadow, S2.8 replay and S3.7 canary meet the pre-registered criteria; re-execute flagged disagreement samples within the recorded budget. If the criteria fail, stop and report; current selectors remain.
+- [ ] Confirm that S2.8 replay and S3.7 canary meet the S2.7 pre-registered criteria; re-execute flagged disagreement samples within the recorded budget. If the criteria fail, stop and report; current selectors remain.
 
 ### Task C.2: Feature contracts, one group per task
 
@@ -435,7 +434,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 ### Task C.3: Replace callers and retire selectors
 
-**Files:** modify `runtime/delegation.py`, `runtime/external_delegation.py`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py`, `policies/03-agent-delegation.md`, `docs/policy-sources.md`, `clients/instruction-map.json` and affected skill entry points; delete `runtime/routing_shadow.py`.
+**Files:** modify `runtime/delegation.py`, `runtime/external_delegation.py`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py`, `policies/03-agent-delegation.md`, `docs/policy-sources.md`, `clients/instruction-map.json` and affected skill entry points.
 
 - [ ] Route every native, external, API and OpenRouter selection through `prepare_assignment` (`scripts/routing.py prepare`). Keep endpoint, scope, permission, acceptance and explicit user controls as constraints.
 - [ ] Stop legacy admissions, settle or reconcile outstanding legacy attempts, and keep historical costs and unresolved ownership.
