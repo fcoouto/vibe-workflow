@@ -8,9 +8,14 @@ never guessed. Model, effort and harness names appear only as data.
 Input shapes (all plain JSON):
   guidance:   [{id, sha256, checked_at, rows:[{role, task_family, complexity_band, risk_band,
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
-  catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # as native/OpenRouter discovery reports
-  benchmarks: [{id, model, harness?, task_family, sha256, checked_at}]
-  terms:      [{model, zero_retention, no_training, forbids_confidential, user_opt_in}]
+  catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # native catalog shape (runtime/delegation.py)
+  benchmarks: [{id, model, harness, task_family, sha256, checked_at}]      # harness and task_family are required to match
+  terms:      [{model, endpoint, zero_retention, no_training, forbids_confidential, user_opt_in}]  # per endpoint (RF7)
+
+Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
+A catalog entry without ``harnesses`` accepts any harness. A strategy's ``endpoint`` defaults to its harness.
+OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
+An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
 """
 import hashlib
 import json
@@ -20,7 +25,7 @@ import time
 from runtime import routing
 
 SCHEMA = 1
-BLOCKED = dict(blocked=True, reason='no_strategy')
+NO_RECOMMENDATION = dict(no_recommendation=True, reason='no_recommendation')
 # Rows for these roles select models that see task text outside the worker, so data terms apply.
 CONTROL_ROLES = ('profiler', 'ranker')
 MAX_ROWS = 4096
@@ -92,7 +97,7 @@ def _terms(items):
     result = {}
     for item in _list(items, 'terms'):
         _require(isinstance(item, dict), 'Invalid terms entry')
-        result[_text(item.get('model'), 'terms model', 128)] = item
+        result[(_text(item.get('model'), 'terms model', 128), _text(item.get('endpoint'), 'terms endpoint', 128))] = item
     return result
 
 
@@ -102,9 +107,9 @@ def _control_allowed(terms):
     return (terms.get('zero_retention') is True and terms.get('no_training') is True) or terms.get('user_opt_in') is True
 
 
-def _qualified(strategy, family, refs):
-    """A strategy qualifies only through cited evidence: a guidance entry, or a benchmark for the same model,
-    harness and task family."""
+def _qualified(strategy, family, refs, entry):
+    """A strategy qualifies only through cited evidence: its own guidance entry, or a benchmark for the same
+    model, harness and task family (records lacking harness or task family match nothing)."""
     cited = strategy['evidence_refs']
     if not cited:
         return False
@@ -112,9 +117,11 @@ def _qualified(strategy, family, refs):
         if ref not in refs:
             return False
         benchmark = refs[ref]
-        if benchmark is not None and (benchmark.get('model') != strategy['model'] or
-                                      benchmark.get('task_family') not in (None, family) or
-                                      benchmark.get('harness') not in (None, strategy['harness'])):
+        if benchmark is None:
+            if ref != entry:
+                return False
+        elif (benchmark.get('model') != strategy['model'] or benchmark.get('task_family') != family or
+              benchmark.get('harness') != strategy['harness']):
             return False
     return True
 
@@ -133,12 +140,18 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
             _require(row.get('complexity_band') in routing.COMPLEXITY_BANDS and
                      row.get('risk_band') in routing.RISK_BANDS, 'Invalid row band')
             family = _text(row.get('task_family'), 'row task family', 64)
-            target = rows.setdefault(routing.row_key(role, family, row['complexity_band'], row['risk_band']), [])
+            try:
+                name = routing.row_key(role, family, row['complexity_band'], row['risk_band'])
+            except ValueError:
+                dropped.append(dict(reason='invalid_row', model=None, effort=None, row=None))
+                continue
+            target = rows.setdefault(name, [])
             for item in _list(row.get('strategies'), 'row strategies'):
                 _require(isinstance(item, dict), 'Invalid strategy')
                 _require(item.get('effort') is None or isinstance(item.get('effort'), str), 'Invalid strategy effort')
                 strategy = dict(model=_text(item.get('model'), 'strategy model', 128), effort=item.get('effort'),
                                 harness=_text(item.get('harness'), 'strategy harness', 64),
+                                endpoint=item.get('endpoint') or item.get('harness'),
                                 evidence_refs=list(item.get('evidence_refs') or []))
                 _require(all(isinstance(ref, str) for ref in strategy['evidence_refs']), 'Invalid evidence reference')
                 reason = None
@@ -150,15 +163,16 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
                     reason = 'effort_unsupported'
                 elif model['harnesses'] is not None and strategy['harness'] not in model['harnesses']:
                     reason = 'harness_unsupported'
-                elif not _qualified(strategy, family, refs):
+                elif not _qualified(strategy, family, refs, entry.get('id')):
                     reason = 'evidence_missing'
-                elif role in CONTROL_ROLES and not _control_allowed(policy.get(strategy['model'])):
+                elif role in CONTROL_ROLES and not _control_allowed(policy.get((strategy['model'], strategy['endpoint']))):
                     reason = 'control_plane_terms'
                 if reason:
                     dropped.append(dict(reason=reason, model=strategy['model'], effort=strategy['effort'],
                                         row=routing.row_key(role, family, row['complexity_band'], row['risk_band'])))
                     continue
-                strategy['strategy_id'] = _digest([strategy['model'], strategy['effort'], strategy['harness']])[:16]
+                strategy['strategy_id'] = _digest([strategy['model'], strategy['effort'], strategy['harness']] + (
+                    [strategy['endpoint']] if strategy['endpoint'] != strategy['harness'] else []))[:16]
                 if model['context_limit'] is not None:
                     strategy['context_limit'] = model['context_limit']
                 if all(existing['strategy_id'] != strategy['strategy_id'] for existing in target):
@@ -173,18 +187,28 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
 def refresh_table(previous, load, *, now=None):
     """Maintenance refresh: ``load()`` returns the four compile inputs.
 
-    Any failure keeps the last verified table with its original ``compiled_at``
-    and marks ``refresh_failed``; with no previous table the failure is an error.
+    Any failure, or a successful compile that drops every row of a non-empty previous table (for
+    example an empty catalog), keeps the last verified table with its original ``compiled_at`` and
+    marks ``refresh_failed``; with no previous table the failure is an error.
     """
     try:
-        return compile_table(*load(), now=now)
-    except (OSError, ValueError, TypeError, KeyError) as error:
-        if previous is None:
-            raise ValueError('No verified strategy table to retain') from error
-        return dict(previous, refresh_failed=True)
+        fresh = compile_table(*load(), now=now)
+        failure = None
+        if previous and previous.get('rows') and not fresh['rows']:
+            failure = ValueError('Refresh produced no qualified rows')
+    except Exception as error:  # Any loader or compiler fault must leave the last verified table in place.
+        fresh, failure = None, error
+    if failure is None:
+        return fresh
+    if previous is None:
+        raise ValueError('No verified strategy table to retain') from failure
+    return dict(previous, refresh_failed=True)
 
 
 def lookup(table, profile):
-    """Strategies for a profile (exact row, then stricter or conservative fallback), or ``BLOCKED``."""
+    """Strategies for a profile (exact row, then stricter or conservative fallback), or ``NO_RECOMMENDATION``.
+
+    ``NO_RECOMMENDATION`` is not a refusal: the caller falls through to the deterministic path or the
+    user's explicit worker choices."""
     strategies, _ = routing.resolve_row(table, profile)
-    return strategies if strategies else dict(BLOCKED)
+    return strategies if strategies else dict(NO_RECOMMENDATION)

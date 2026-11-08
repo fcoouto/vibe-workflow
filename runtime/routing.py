@@ -1,5 +1,8 @@
 """Smart Routing task profiles and deterministic ranking.
 
+An empty ranking (``no_recommendation``) is never a refusal: callers fall through to the
+deterministic admission path or the user's explicit worker choices. Only admission can block.
+
 Pure functions: no network, subprocess or model call happens here except through
 the caller-supplied, optional ``jev`` enrichment callable. Nothing in this module
 grants spending, launch or review authority.
@@ -24,6 +27,9 @@ SUPPLIED_FIELDS = ('task_family', 'complexity_band', 'risk_band', 'context_token
 SUPPLIED_REFERENCES = ('scope_ref', 'contract_version', 'semantic_digest')
 _ORDERS = dict(complexity_band=COMPLEXITY_BANDS, risk_band=RISK_BANDS, review_policy=REVIEW_POLICIES)
 MAX_TOKENS = 10**9
+# Same bounds as the worker brief and claim limits in runtime/delegation.py.
+MAX_TEXT = 8192
+MAX_CLAIMS = 64
 
 
 class ProfileUnavailable(ValueError):
@@ -31,7 +37,7 @@ class ProfileUnavailable(ValueError):
 
 
 def _name(value):
-    return isinstance(value, str) and 0 < len(value) <= 64 and value.isprintable()
+    return isinstance(value, str) and 0 < len(value) <= 64 and value.isprintable() and '|' not in value
 
 
 def _valid(field, value):
@@ -64,13 +70,27 @@ def validate_supplied_profile(value):
 
 
 def _digest(value):
-    data = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    try:
+        data = json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    except (TypeError, ValueError, RecursionError):
+        raise ProfileUnavailable('profile_unavailable: unhashable job content') from None
     return hashlib.sha256(data).hexdigest()
 
 
 def _claims(job):
-    claims = job.get('claims') or []
-    return sorted((str(c.get('kind')), str(c.get('key')), str(c.get('mode'))) for c in claims if isinstance(c, dict))
+    claims = job.get('claims')
+    if claims is None:
+        return []
+    if not isinstance(claims, list) or len(claims) > MAX_CLAIMS or not all(isinstance(c, dict) for c in claims):
+        raise ProfileUnavailable('profile_unavailable: invalid scope claims')
+    return sorted((str(c.get('kind')), str(c.get('key')), str(c.get('mode'))) for c in claims)
+
+
+def _bounded_text(job):
+    for field in ('objective', 'context'):
+        value = job.get(field)
+        if value is not None and not (isinstance(value, str) and len(value) <= MAX_TEXT):
+            raise ProfileUnavailable('profile_unavailable: invalid ' + field)
 
 
 def _floors(job):
@@ -100,6 +120,7 @@ def _tools(job):
 
 def semantic_digest(job):
     """Digest of objective, role, scope/context, tools, requirement floors and contract version only."""
+    _bounded_text(job)
     return _digest(dict(version=CONTRACT_VERSION, objective=job.get('objective'), role=job.get('role'),
                         scope_ref=job.get('scope_ref'), claims=_claims(job), context=job.get('context'),
                         tools=_tools(job), floors=_floors(job)))
@@ -119,6 +140,8 @@ def _estimate_tokens(job):
 
 def _usable_supplied(job, digest, reasons):
     supplied = job.get('profile')
+    if supplied is not None and not isinstance(supplied, dict):
+        reasons.append('profile_invalid')
     if not isinstance(supplied, dict):
         return {}
     if set(supplied) - set(SUPPLIED_FIELDS) - set(SUPPLIED_REFERENCES):
@@ -152,7 +175,7 @@ def ensure_profile(job, *, jev=None):
     deterministic floors; ``jev`` (optional) is asked once for unresolved
     semantic fields. No supplied or enriched value can lower a requirement floor.
     """
-    if not isinstance(job, dict) or job.get('role') not in ROLES:
+    if not isinstance(job, dict) or not isinstance(job.get('role'), str) or job.get('role') not in ROLES:
         raise ProfileUnavailable('profile_unavailable: unknown role')
     if not isinstance(job.get('scope_ref'), str) or not job['scope_ref']:
         raise ProfileUnavailable('profile_unavailable: no scope')
@@ -208,10 +231,12 @@ CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'al
 def resolve_row(table, profile):
     """Pick the table row for a profile: exact, then the nearest stricter band, then the strongest row.
 
-    Returns ``(strategies, reason)``; an empty list means no qualified row at or above the profile's bands
-    exists for the role. Bands only rise: a weaker row is never used, even as the conservative fallback.
+    Returns ``(strategies, reason)``. An empty list (``no_recommendation``, never a refusal) means no
+    qualified row at or above the profile's bands exists for the role. Bands only rise: a weaker row is never used, even as the conservative fallback.
     """
-    rows = table.get('rows') or {}
+    rows = table.get('rows') if isinstance(table, dict) else None
+    if not isinstance(rows, dict) or not rows:
+        return [], 'no_recommendation'
     role, family = profile['role'], profile['task_family']
     c, r = COMPLEXITY_BANDS.index(profile['complexity_band']), RISK_BANDS.index(profile['risk_band'])
     exact = rows.get(row_key(role, family, profile['complexity_band'], profile['risk_band']))
@@ -233,7 +258,7 @@ def resolve_row(table, profile):
         return min(stricter, key=lambda item: item[:4])[4], 'ranking_stricter_band'
     if strongest:
         return max(strongest, key=lambda item: (item[0], [-ord(ch) for ch in item[1]]))[2], 'ranking_conservative'
-    return [], 'no_strategy'
+    return [], 'no_recommendation'
 
 
 def _narrow(strategies, constraints):
@@ -251,7 +276,10 @@ def rank(profile, table, constraints):
 
     Pure lookup: no network, subprocess or model call, no funding or launch
     authority. Constraints can only remove candidates; they never add one or
-    trigger a wider search.
+    trigger a wider search. Empty ``strategy_ids`` carry ``no_recommendation``: it is a missing
+    suggestion, not a block, and callers continue on the deterministic path or explicit choices.
+    ``review_policy`` and ``scope_ref`` are echoed so callers can form the cache key
+    (profile digest, table version, review policy, route scope).
     """
     constraints = constraints or {}
     if not isinstance(constraints, dict) or set(constraints) - set(CONSTRAINT_FIELDS):
@@ -273,5 +301,11 @@ def rank(profile, table, constraints):
         narrowed = _narrow(strategies, constraints)
         reasons.append('constraints_applied' if narrowed else 'constraints_exclude_all')
         strategies = narrowed
+    if not strategies and 'no_recommendation' not in reasons:
+        reasons.append('no_recommendation')
+    if not isinstance(table, dict) or not table.get('rows'):
+        reasons.append('table_empty')
     return dict(strategy_ids=[item['strategy_id'] for item in strategies], reason_codes=reasons,
-                table_version=table.get('version'), profile_digest=profile.get('semantic_digest'))
+                table_version=table.get('version') if isinstance(table, dict) else None,
+                profile_digest=profile.get('semantic_digest'), review_policy=profile.get('review_policy'),
+                scope_ref=profile.get('scope_ref'))

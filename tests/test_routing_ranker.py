@@ -61,7 +61,7 @@ class RankTests(unittest.TestCase):
         weak = table({('worker', 'implementation', 'low', 'low'): [strategy('w1', 'm-a')]})
         result = routing.rank(profile(complexity_band='critical', risk_band='critical'), weak, {})
         self.assertEqual(result['strategy_ids'], [])
-        self.assertIn('no_strategy', result['reason_codes'])
+        self.assertIn('no_recommendation', result['reason_codes'])
         one_band = routing.rank(profile(complexity_band='low', risk_band='critical'), weak, {})
         self.assertEqual(one_band['strategy_ids'], [])
 
@@ -70,10 +70,10 @@ class RankTests(unittest.TestCase):
         self.assertEqual(routing.rank(profile(), broken, {})['strategy_ids'], ['s1', 's2'])
         self.assertEqual(routing.rank(profile(complexity_band='critical', risk_band='critical'), broken, {})['strategy_ids'], ['s4'])
 
-    def test_role_without_rows_is_blocked(self):
+    def test_role_without_rows_gives_no_recommendation(self):
         result = routing.rank(profile(role='review'), TABLE, {})
         self.assertEqual(result['strategy_ids'], [])
-        self.assertIn('no_strategy', result['reason_codes'])
+        self.assertIn('no_recommendation', result['reason_codes'])
 
     def test_constraints_only_narrow(self):
         result = routing.rank(profile(), TABLE, dict(allowed_models=['m-b', 'm-zzz']))
@@ -126,9 +126,24 @@ class RankTests(unittest.TestCase):
             self.assertEqual(routing.rank(profile(), TABLE, {})['strategy_ids'], ['s1', 's2'])
             routing.rank(profile(role='review'), TABLE, dict(allowed_models=['x']))
 
+    def test_result_exposes_the_cache_key_inputs(self):
+        result = routing.rank(profile(review_policy='strict', scope_ref='scope-a'), TABLE, {})
+        self.assertEqual((result['review_policy'], result['scope_ref']), ('strict', 'scope-a'))
+
+    def test_empty_recommendation_is_never_a_refusal(self):
+        for bad in (dict(schema=1, version='v0', rows={}), dict(version='v0'), None, {}, 'junk'):
+            result = routing.rank(profile(), bad, {})
+            self.assertEqual(result['strategy_ids'], [])
+            self.assertIn('no_recommendation', result['reason_codes'])
+            self.assertNotIn('blocked', result)
+            self.assertNotIn('blocked', str(result).lower())
+        stale = dict(TABLE, refresh_failed=True)
+        self.assertEqual(routing.rank(profile(), stale, {})['strategy_ids'], ['s1', 's2'])
+
     def test_result_carries_no_spending_authority(self):
         result = routing.rank(profile(), TABLE, {})
-        self.assertEqual(set(result), {'strategy_ids', 'reason_codes', 'table_version', 'profile_digest'})
+        self.assertEqual(set(result), {'strategy_ids', 'reason_codes', 'table_version', 'profile_digest', 'review_policy',
+                                       'scope_ref'})
 
 
 if __name__ == '__main__':

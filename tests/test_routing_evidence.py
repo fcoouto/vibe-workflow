@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import unittest
+import unittest.mock
 
 from runtime import routing, routing_evidence as evidence
 
@@ -85,11 +86,43 @@ class CompileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evidence.compile_table(guidance, catalog, benchmarks, terms)
 
-    def test_blocked_result_is_not_shared_state(self):
+    def test_empty_recommendation_is_not_shared_state(self):
         table = evidence.compile_table(*inputs())
         result = evidence.lookup(table, dict(role='review', task_family='x', complexity_band='low', risk_band='low'))
         result['reason'] = 'tampered'
-        self.assertEqual(evidence.BLOCKED['reason'], 'no_strategy')
+        self.assertEqual(evidence.NO_RECOMMENDATION['reason'], 'no_recommendation')
+
+    def test_pipe_in_a_key_part_drops_only_that_row(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        guidance[0]['rows'][0]['task_family'] = 'imple|mentation'
+        table = evidence.compile_table(guidance, catalog, benchmarks, terms)
+        self.assertIn('invalid_row', {item['reason'] for item in table['dropped']})
+        self.assertIn(key('worker', 'implementation', 'high', 'high'), table['rows'])
+
+    def test_guidance_citation_must_come_from_the_entry_holding_the_row(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        other = dict(id='guide-2', sha256='3' * 64, checked_at='2026-11-01T00:00:00Z', rows=[])
+        guidance[0]['rows'][0]['strategies'][0]['evidence_refs'] = ['guide-2']
+        table = evidence.compile_table(guidance + [other], catalog, benchmarks, terms)
+        models = [(i['model'], i['effort']) for i in table['rows'][key('worker', 'implementation', 'medium', 'medium')]]
+        self.assertEqual(models, [('alpha-small', 'low')])
+
+    def test_benchmark_must_state_harness_and_task_family(self):
+        for missing in ('harness', 'task_family'):
+            guidance, catalog, benchmarks, terms = inputs()
+            del benchmarks[0][missing]
+            guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
+            table = evidence.compile_table(guidance, catalog, benchmarks, terms)
+            self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'], missing)
+
+    def test_terms_are_keyed_by_model_and_endpoint(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        terms[0]['endpoint'] = 'elsewhere'
+        table = evidence.compile_table(guidance, catalog, benchmarks, terms)
+        self.assertNotIn(key('profiler', 'general', 'low', 'low'), table['rows'])
+        del terms[0]['endpoint']
+        with self.assertRaises(ValueError):
+            evidence.compile_table(guidance, catalog, benchmarks, terms)
 
     def test_removed_catalog_model_disappears_on_recompile(self):
         guidance, catalog, benchmarks, terms = inputs()
@@ -166,6 +199,26 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(fresh['compiled_at'], '2026-11-08T00:00:00Z')
         self.assertFalse(fresh.get('refresh_failed'))
 
+    def test_successful_but_empty_compile_keeps_the_previous_table(self):
+        table = evidence.compile_table(*inputs(), now='2026-11-01T00:00:00Z')
+        guidance, catalog, benchmarks, terms = inputs()
+        kept = evidence.refresh_table(table, lambda: (guidance, [], benchmarks, []), now='2026-11-08T00:00:00Z')
+        self.assertTrue(kept['rows'])
+        self.assertTrue(kept['refresh_failed'])
+        self.assertEqual(kept['compiled_at'], '2026-11-01T00:00:00Z')
+        every_row_dropped = [dict(guidance[0], rows=[])]
+        kept = evidence.refresh_table(table, lambda: (every_row_dropped, catalog, benchmarks, terms))
+        self.assertEqual(kept['version'], table['version'])
+
+    def test_any_exception_from_load_or_compile_keeps_the_previous_table(self):
+        table = evidence.compile_table(*inputs(), now='2026-11-01T00:00:00Z')
+        def boom():
+            raise RuntimeError('loader bug')
+        self.assertTrue(evidence.refresh_table(table, boom)['refresh_failed'])
+        with unittest.mock.patch.object(evidence, 'compile_table', side_effect=ZeroDivisionError):
+            self.assertTrue(evidence.refresh_table(table, lambda: inputs())['refresh_failed'])
+        self.assertTrue(evidence.refresh_table(table, lambda: 5)['refresh_failed'])
+
     def test_first_failed_refresh_without_previous_is_an_error(self):
         def broken():
             raise OSError('offline')
@@ -174,13 +227,15 @@ class RefreshTests(unittest.TestCase):
 
 
 class LookupTests(unittest.TestCase):
-    def test_lookup_returns_exact_row_or_blocked(self):
+    def test_lookup_returns_strategies_or_an_empty_recommendation(self):
         table = evidence.compile_table(*inputs())
         profile = dict(role='worker', task_family='implementation', complexity_band='medium', risk_band='medium')
         found = evidence.lookup(table, profile)
         self.assertEqual([item['model'] for item in found], ['alpha-large', 'alpha-small'])
         blocked = evidence.lookup(table, dict(profile, role='review'))
-        self.assertEqual(blocked, evidence.BLOCKED)
+        self.assertEqual(blocked, evidence.NO_RECOMMENDATION)
+        self.assertNotIn('blocked', blocked)
+        self.assertEqual(evidence.lookup(None, profile), evidence.NO_RECOMMENDATION)
 
 
 class NoHardCodedModelTests(unittest.TestCase):

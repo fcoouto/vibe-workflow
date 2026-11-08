@@ -189,6 +189,30 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(both['tools'], ['edit', 'shell'])
         self.assertEqual(both['provenance']['tools'], 'metadata')
 
+    def test_hostile_job_input_raises_profile_unavailable(self):
+        for hostile in (dict(context={1, 2}), dict(claims=5), dict(claims=[5]), dict(objective='x' * 8193),
+                        dict(context='x' * (50 * 1024 * 1024)), dict(objective=b'bytes'),
+                        dict(claims=[dict(kind='path', key='/r/a', mode='read')] * 65)):
+            with self.assertRaises(routing.ProfileUnavailable, msg=str(list(hostile))):
+                routing.ensure_profile(job(**hostile))
+        with self.assertRaises(routing.ProfileUnavailable):
+            routing.semantic_digest(job(context={1}))
+        with self.assertRaises(routing.ProfileUnavailable):
+            routing.ensure_profile('not a job')
+
+    def test_pipe_in_a_key_component_is_rejected(self):
+        profile = routing.ensure_profile(job(profile=complete_profile(task_family='a|b')))
+        self.assertEqual(profile['provenance']['task_family'], 'floor')
+        self.assertNotIn('|', profile['task_family'])
+        self.assertEqual(routing.row_key(profile['role'], profile['task_family'], 'low', 'low').count('|'), 3)
+
+    def test_non_dict_profile_is_reported_invalid(self):
+        for bad in ('text', 5, ['x']):
+            profile = routing.ensure_profile(job(profile=bad))
+            self.assertIn('profile_invalid', profile['reasons'])
+            self.assertEqual(profile['provenance']['risk_band'], 'floor')
+        self.assertNotIn('profile_invalid', routing.ensure_profile(job(profile=None))['reasons'])
+
     def test_input_is_not_mutated(self):
         value = job()
         before = copy.deepcopy(value)
