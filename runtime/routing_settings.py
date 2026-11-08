@@ -56,7 +56,11 @@ def _worker_choices(value):
     require(type(value) is dict and set(value) <= set(ROLES), 'invalid_worker_choices')
     for role, entries in value.items():
         require(type(entries) is list and len(entries) <= MAX_CHOICES, 'invalid_worker_choices')
-    return {role: [_choice(entry) for entry in entries] for role, entries in value.items()}
+    result = {role: [_choice(entry) for entry in entries] for role, entries in value.items()}
+    for entries in result.values():
+        require(len({json.dumps(entry, sort_keys=True) for entry in entries}) == len(entries),
+                'duplicate_worker_choice')
+    return result
 
 
 def _bool(value):
@@ -156,7 +160,8 @@ def update(path, change, expected_revision):
     require(type(change) is dict and change and type(expected_revision) is int, 'invalid_change')
     path = Path(path).absolute()
     path = path.parent.resolve() / path.name
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for folder in reversed([p for p in (path.parent, *path.parent.parents) if not p.exists()]):
+        folder.mkdir(mode=0o700)  # every directory this call creates is private, not just the leaf
     private(path.parent, True)
     lock = os.open(path.parent / '.settings.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:

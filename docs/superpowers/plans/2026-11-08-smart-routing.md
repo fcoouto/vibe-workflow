@@ -321,7 +321,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 **Files:** create `runtime/routing_allocator.py`, `tests/test_routing_allocator.py`.
 
-**Interface:** `projected_utilization(windows, reserve_new, now, min_elapsed_fraction) -> (float | None, reasons)`; `expiry_pressure(remaining, expected_spend, hours_to_expiry, T_hours) -> float`; `api_share(u, e, L=0.65, H=0.85) -> float`; `choose_class(shares, admissions, bucket, epoch, feasible) -> str`; `choose_route(candidates, now, minimum_horizon) -> str`.
+**Interface:** `projected_utilization(windows, reserve_new, now, min_elapsed_fraction) -> (float | None, reasons)`; `expiry_pressure(remaining, expected_spend, hours_to_expiry, T_hours) -> float`; `api_share(u, e, L=0.65, H=0.85) -> float`; `choose_class(shares, admissions, bucket, epoch, feasible) -> str | None`; `choose_route(candidates, now, minimum_horizon) -> str | None`. Both return `None` when nothing is eligible or fundable; `api_share` raises `ValueError` for unknown utilization; bad numbers raise `ValueError` with a fixed reason.
 
 - [ ] Write failing tests:
   - `api_share(0.40, 0) == 0`; `api_share(0.75, 0) ≈ 0.5`; `api_share(0.80, 0) ≈ 0.75`; `api_share(0.90, 0) == 1`; `api_share(0.40, 2/3) ≈ 2/3`; `api_share(0.75, 2/3) ≈ 0.833`.

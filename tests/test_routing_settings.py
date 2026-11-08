@@ -76,6 +76,16 @@ class RoutingSettingsTests(unittest.TestCase):
         routing_settings.update(self.path, dict(worker_choices=choices), 0)
         self.assertEqual(routing_settings.read(self.path)['worker_choices'], choices)
 
+    def test_duplicate_worker_choices_rejected(self):
+        with self.assertRaises(routing_settings.SettingsError):
+            routing_settings.update(self.path, dict(worker_choices=dict(reviewer=[CHOICE, dict(CHOICE)])), 0)
+
+    def test_intermediate_directories_are_private(self):
+        deep = Path(self.tmp.name).resolve() / 'a' / 'b' / 'settings.json'
+        routing_settings.update(deep, dict(smart_routing=False), 0)
+        for folder in (deep.parent, deep.parent.parent):
+            self.assertEqual(os.stat(folder).st_mode & 0o777, 0o700)
+
     def test_stale_revision_refused(self):
         routing_settings.update(self.path, dict(smart_routing=False), 0)
         with self.assertRaises(routing_settings.SettingsError) as caught:

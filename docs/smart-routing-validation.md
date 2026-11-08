@@ -18,6 +18,8 @@ Replay feeds recorded arrivals, in order, through the pure allocation functions 
 | Class and route decisions reproduced from admission records alone | 100% |
 | Duplicate or rejected arrivals that leave an admission record | 0 |
 
+The 200-assignment minimum applies to the cutover replay over recorded historical assignments. The three committed fixtures in `tests/fixtures/smart-routing/arrivals/` are small synthetic regression fixtures (about 50 arrivals in total); they check the replay harness and do not meet this minimum.
+
 Any single failure stops the cutover until the cause is fixed and the full replay passes again.
 
 ## Disagreement and quality re-execution

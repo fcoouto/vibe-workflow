@@ -254,6 +254,45 @@ class ReplayTests(unittest.TestCase):
                     self.assertEqual(allocator.choose_route(record['candidates'], record['at'], MINIMUM_HORIZON),
                                      record['route'])
 
+    def hand_scenario(self, used, expiry=2_592_000, jobs=4):
+        base = load('mixed_load')
+        events = []
+        for i in range(jobs):
+            events += [dict(t=100000 + 100 * i, kind='arrive', id='h-%d' % i, role='implementer',
+                            complexity='medium', api_cost=2_000_000, sub_cost=0.005),
+                       dict(t=100000 + 100 * i + 30, kind='complete', id='h-%d' % i, api_actual=1_000_000,
+                            sub_actual=0.004)]
+        policy = dict(base['policy'], expiry=expiry, end=expiry, stop_at=expiry - 1000)
+        pools = dict(only=dict(account='acct', windows=[
+            dict(id='weekly', length=604800, reset_at=700000, used=used)]))
+        return dict(base, policy=policy, pools=pools, events=events)
+
+    def run_scenario(self, scenario):
+        with tempfile.TemporaryDirectory() as folder:
+            run = Replay(scenario, folder)
+            try:
+                run.run()
+                return run.records
+            finally:
+                run.close()
+
+    def test_hand_computed_decisions(self):
+        # Independent expectations worked out on paper, not by calling the allocator.
+        # Healthy subscription (about 10% used, far from reset), grant expiry 30 days away: share 0, all subscription.
+        low = self.run_scenario(self.hand_scenario(used=0.10))
+        self.assertEqual([r['class'] for r in low], ['subscription'] * 4)
+        self.assertTrue(all(r['shares']['api'] == 0 for r in low))
+        # Saturated subscription (99% used): projected utilization is above H, so the API share is 1.
+        full = self.run_scenario(self.hand_scenario(used=0.99))
+        self.assertEqual([r['class'] for r in full], ['api'] * 4)
+        self.assertTrue(all(r['shares']['api'] == 1 for r in full))
+        # Healthy subscription but the grant expires in 2 hours of a 72-hour horizon: E = 1 - 2/72 = 35/36,
+        # so the first assignment goes to the API; the deficit rule then spreads later ones by those shares.
+        soon = self.run_scenario(self.hand_scenario(used=0.10, expiry=107200, jobs=1))
+        self.assertEqual(soon[0]['class'], 'api')
+        self.assertAlmostEqual(soon[0]['shares']['api'], 35 / 36, places=6)
+        self.assertEqual(soon[0]['route'], 'api:org')
+
     def test_rejections_and_pending_leave_no_admission_record(self):
         log, records, _ = replay('mixed_load')
         admitted = [item['id'] for item in log if item['outcome'] == 'admitted']
