@@ -268,7 +268,9 @@ class Events(unittest.TestCase):
                                            "cache_write": 20406})
         self.assertEqual((ended["cost"], ended["finish"], ended["raw_finish"]), (0, "stop", "end_turn"))
         self.assertEqual(ended["rate_limit"]["windows"]["five_hour"],
-                         {"utilization": 0.14, "unit": "fraction", "resets_at": 1794178200, "status": "allowed"})
+                         {"utilization_fraction": 0.14, "resets_at_s": 1794178200, "status": "allowed"})
+        self.assertEqual(ended["rate_limit"]["resets_at_s"], 1794178200)
+        self.assertEqual(ended["created_ms"], 1794169976719)
         self.assertEqual(ended["durable_seq"], 9)
 
     def test_volatile_usage_has_no_durable_seq(self):
@@ -306,7 +308,24 @@ class Messages(unittest.TestCase):
         self.assertEqual(result["route_identity"]["catalog_family"], "claude-haiku")
         self.assertEqual(result["tokens"]["cache_read"], 25945)
         windows = result["rate_limit"]["windows"]
-        self.assertEqual((windows["five_hour"]["utilization"], windows["seven_day"]["utilization"]), (0.17, 0.04))
+        self.assertEqual((windows["five_hour"]["utilization_fraction"], windows["seven_day"]["utilization_fraction"]),
+                         (0.17, 0.04))
+        self.assertEqual((result["created_ms"], result["completed_ms"]), (1794170364822, 1794170366331))
+        self.assertNotIn("created", result)
+
+    def test_percent_looking_utilization_is_unknown_not_a_fraction(self):
+        msg = copy.deepcopy(next(m for m in LINEAGE["aux_session_C"]["messages"] if m["type"] == "assistant"))
+        windows = msg["native"]["rateLimit"]["unifiedWindows"]
+        windows["five_hour"]["utilization"] = 45
+        windows["seven_day"]["utilization"] = 1.0001
+        result = opencode.normalize_message(msg)["rate_limit"]["windows"]
+        self.assertEqual((result["five_hour"]["utilization_fraction"], result["seven_day"]["utilization_fraction"]),
+                         (None, None))
+        self.assertEqual(result["five_hour"]["resets_at_s"], 1794178200)
+        windows["five_hour"]["utilization"] = 1
+        self.assertEqual(opencode.normalize_message(msg)["rate_limit"]["windows"]["five_hour"]["utilization_fraction"], 1)
+        windows["five_hour"]["utilization"] = True
+        assert_error_hides(self, opencode.normalize_message, msg)
         self.assertEqual(result["rate_limit"]["overage_status"], "rejected")
         self.assertNotIn('"OK"', json.dumps(result))
 
@@ -406,6 +425,12 @@ class HostileInput(unittest.TestCase):
         result = opencode.normalize_hook("model.request", payload)
         self.assertEqual((result["input"]["header_names"], result["input"]["header_names_dropped"]), (["ok-name"], 1))
 
+    def test_dropped_counts_invalid_names_not_case_collisions(self):
+        payload = model_request("primary")
+        payload["headers"] = {"Authorization": "x", "authorization": "y", "bad name": "z"}
+        result = opencode.normalize_hook("model.request", payload)["input"]
+        self.assertEqual((result["header_names"], result["header_names_dropped"]), (["authorization"], 1))
+
     def test_non_json_values_and_keys(self):
         payload = model_request("primary")
         payload["headers"] = {1: "HOSTILE-MARKER"}
@@ -465,6 +490,16 @@ class Probe(unittest.TestCase):
                                      "worker_tools": tools})
             self.assertEqual((result["managed_launch"], result["enforcement_profile"]), ("allow", "advisory"))
             self.assertIn("worker_unmediated_tools", result["unsupported"])
+
+    def test_narrow_is_enforceable_except_for_shell(self):
+        narrow = {"shell": "deny", "mcp": "narrow", "execute": "narrow", "webfetch": "narrow"}
+        result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
+                                 "worker_tools": narrow})
+        self.assertEqual(result["enforcement_profile"], "enforced")
+        result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
+                                 "worker_tools": {**narrow, "shell": "narrow"}})
+        self.assertEqual(result["enforcement_profile"], "advisory")
+        self.assertIn("worker_unmediated_tools", result["unsupported"])
 
     def test_missing_hook_and_unqualified_version(self):
         result = opencode.probe({"version": "2.3.0", "hooks": self.HOOKS[:2], "plugin_health": "ok",
