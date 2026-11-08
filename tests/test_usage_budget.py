@@ -759,12 +759,41 @@ class ParallelLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
             self.begin('run', 1)  # S1 begin sees the hold (holds are part of R)
 
+    def test_faulty_decisions_are_refused_by_the_ledger_itself(self):
+        """Ledger.admit re-checks a decision; each case below fails if its check is removed."""
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+
+        def decide(vector, account='acct', **outcome):
+            values = dict(now=101, revision=1)
+            values.update(outcome)
+            return lambda data: dict(record=self.record('x'), vector=vector, account=account,
+                                     **{k: v for k, v in values.items() if v is not None})
+        cases = dict(overdraw=(decide({'org:org': 30 * M + 1}), 'insufficient_headroom'),
+                     stale=(decide({'org:org': M}, now=100 + budget.FRESH_SECONDS + 1), 'balance_stale_or_missing'),
+                     revision=(decide({'org:org': M}, revision=7), 'policy_revision_changed'),
+                     missing_now=(decide({'org:org': M}, now=None), 'invalid_integer'),
+                     two_orgs=(decide({'org:org': M, 'org:org2': M}), 'invalid_admission'),
+                     negative_window=(decide({'win:p/w': -1}), 'invalid_integer'))
+        for label, (faulty, reason) in cases.items():
+            with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, reason):
+                self.ledger.admit('x', faulty)
+        self.ledger.set_caps(total=2, per_account=1)
+        self.begin('run', M)  # counts under its organization
+        for label, account in (('per_account', 'org'), ('total', 'other')):
+            if label == 'total':
+                self.ledger.admit('y', lambda data: dict(record=self.record('y'), vector={}, account='third'))
+            with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+                self.ledger.admit('x', decide({}, account=account))
+        self.assertEqual(sorted(self.ledger.snapshot()['holds']), ['y'])
+
     def test_written_ledgers_with_the_old_hold_shape_are_repaired(self):
         def old(data):
-            data['holds'] = {'x': dict(account='acct', task='t', vector={'p/w': 7}, closed=False, state='admitted')}
+            data['holds'] = {'x': dict(account='acct', task='t', vector={'p/w': 7}, closed=False)}
             data.pop('seen_attempts')
         self.raw(old)
         state = self.ledger.snapshot()
+        self.assertEqual(state['holds']['x']['state'], 'admitted')
+        self.ledger.close_attempt('x', 'not_dispatched')  # no raw KeyError on a pre-fix hold
         self.assertEqual(state['seen_attempts'], [])
         self.assertEqual(state['holds']['x']['windows'], {'win:p/w': 7})
         self.assertEqual((state['holds']['x']['organization'], state['holds']['x']['amount']), (None, 0))

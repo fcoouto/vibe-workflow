@@ -167,14 +167,16 @@ class SharedOrganizationTests(Funded):
         self.assertEqual(second['status'], 'pending')
         self.assertEqual(self.ledger.headroom('org'), 9_800_000 - 8_400_000)
 
-    def test_one_route_demanding_two_windows_on_one_organization_sums_into_one_key(self):
+    def test_a_funded_pool_with_several_windows_reserves_its_dollars_once(self):
+        """Windows of one dollar pool measure the same spend: the organization is charged the largest, not the sum."""
         self.fund(balance=10 * M)
         pools = dict(g=dict(billing_class='api_grant', windows=[window('a', organization='org'),
-                                                                window('b', organization='org')]))
-        result = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 4_500_000})], pools)
-        self.assertEqual(result['status'], 'pending')  # 2 x 5.4M > 9.8M, though each window alone fits
-        ok = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'a': 3 * M, 'b': 3 * M})], pools)
-        self.assertEqual(ok['reserved'], {'org:org': 7_200_000})
+                                                                window('b', organization='org', limit=5 * M)]))
+        ok = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 3 * M})], pools)
+        self.assertEqual(ok['reserved'], {'org:org': 5_400_000})
+        self.assertEqual(self.ledger.headroom('org'), 9_800_000 - 5_400_000)
+        strict = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'a': M, 'b': 4 * M})], pools)
+        self.assertEqual(strict['status'], 'pending')  # window b alone: 4.8M > 5M - 5.4M already held
 
     def test_collector_numbers_only_add_a_stricter_minimum(self):
         self.fund(balance=10 * M)
@@ -311,6 +313,33 @@ class OptionalOrganizationTests(Funded):
         self.assertEqual(self.admit('c', routes[:1], pools)['status'], 'admitted')
 
 
+class ObservationNitTests(Funded):
+    def test_negative_protected_cannot_inflate_subscription_headroom(self):
+        pools = dict(s=dict(windows=[dict(id='5h', limit=100, used=100, protected=-1e9, length=18000, reset_at=None,
+                                          rolling=True, fresh=True)]))
+        result = self.admit('a', [route('s', 's', 'included_subscription', 'B', {'5h': 10_000})], pools)
+        self.assertEqual(result['status'], 'pending')
+        self.assertIn('invalid_observation', result['reason_codes'])
+        self.assertEqual(self.ledger.snapshot()['holds'], {})
+
+    def test_slash_in_pool_or_window_ids_is_rejected_so_keys_cannot_collide(self):
+        for label, pools, demand in (('pool', {'a/b': sub_pool()}, {'5h': 1}),
+                                     ('window', dict(s=dict(windows=[dict(id='b/5h', limit=1000, used=0, length=1,
+                                                                          reset_at=None, rolling=True, fresh=True)])),
+                                      {'b/5h': 1})):
+            with self.subTest(label):
+                pool = next(iter(pools))
+                result = self.admit('a-' + label, [route('s', pool, 'included_subscription', 'B', demand)], pools)
+                self.assertEqual((result['status'], result['reason_code']), ('pending', 'invalid_observation'))
+
+    def test_a_key_that_is_not_ready_is_the_pending_reason(self):
+        self.fund()
+        api = route('r', 'g', 'api_grant', 'acct', {'credit': M})
+        api['credential']['state'] = 'locked'
+        result = self.admit('a', [api], dict(g=funded_pool('org')))
+        self.assertEqual((result['status'], result['reason_code']), ('pending', 'credential_unavailable'))
+
+
 class ConversionTests(Funded):
     def setUp(self):
         super().setUp()
@@ -354,6 +383,28 @@ class ConversionTests(Funded):
             self.ledger.top_up('a', 9 * M, 1, NOW)
         self.ledger.top_up('a', 8_600_000, 1, NOW)
         self.assertEqual(self.ledger.headroom('org'), 0)
+
+    def test_a_mixed_hold_keeps_its_window_claim_until_the_run_closes(self):
+        pools = dict(g=funded_pool('org'), s=sub_pool())
+        mixed = self.admit('m', [route('r', 'g', 'api_grant', 'acct-M', {'credit': M})], pools)
+        self.assertEqual(mixed['status'], 'admitted')
+        with self.ledger.transaction() as data:  # one attempt holding both a dollar and a window claim
+            data['holds']['m']['windows'] = {'win:s/5h': 12}
+        self.ledger.convert_hold('m', 'org', 'packet', M, 1, NOW, native('m'))
+        state = self.ledger.snapshot()
+        self.assertEqual(state['holds']['m']['state'], 'converted')
+        self.assertEqual(budget.Ledger.held(state), {'win:s/5h': 12})
+        self.ledger.dispatch('m', 'count', 1, NOW)
+        for outcome in budget.HOLD_OUTCOMES:
+            with self.subTest(outcome), self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+                self.ledger.close_attempt('m', outcome)  # the run owns the attempt now
+        self.assertEqual(budget.Ledger.held(self.ledger.snapshot()), {'win:s/5h': 12})
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct-A', 'acct-M'])
+        self.ledger.complete('m', 'count', 1)
+        self.ledger.close_run('m')
+        state = self.ledger.snapshot()
+        self.assertEqual(budget.Ledger.held(state), {})  # released together with the run
+        self.assertEqual(budget.Ledger.open_accounts(state), ['acct-A'])
 
     def test_dispatched_hold_cannot_convert(self):
         self.ledger.mark_dispatched('a')
@@ -709,49 +760,105 @@ class RaceTests(Funded):
 # ---------------------------------------------------------------------------------------------------------
 # Capacity (I7)
 # ---------------------------------------------------------------------------------------------------------
-class CapacityTests(Funded):
-    def test_maximum_table_sizes_stay_under_the_record_limit(self):
-        long = lambda tag: (tag + 'x' * 256)[:256]  # noqa: E731
-        organization = long('org')
-        self.ledger.configure(organization, policy(cycle=long('cycle')), 0)
-        self.ledger.observe(organization, 10**12, NOW, issued=10**12)
-        pools = dict(g=funded_pool(organization, wid=long('w')), s=dict(windows=[dict(
-            id=long('5h'), limit=10**9, used=0, length=18000, reset_at=None, rolling=True, fresh=True)]))
-        routes = [route(long('r'), 'g', 'api_grant', long('acct'), {long('w'): M}),
-                  route(long('s'), 's', 'included_subscription', long('b'), {long('5h'): 1})]
-        for item in routes:
-            item.update(strategy_id=long('sid'), model=long('m'), harness=long('h'), provider=long('p'))
-            if 'credential' in item:
-                item['credential']['ref'] = long('ref')
-        obs = dict(observations(routes, pools), snapshot_id=long('snap'))
-        rank = dict(strategy_ids=[long('sid')], reason_codes=[long('code')] * 16, table_version=long('t'),
-                    profile_digest=long('d'))
-        hold_id, run_id = long('attempt'), long('run')
-        admitted = routing.admit(assignment(hold_id, long('task')), rank, settings(), obs, ledger=self.ledger)
-        self.assertEqual(admitted['status'], 'admitted', admitted)
-        self.ledger.begin(organization, long('task'), run_id, long('digest'), M, 1, NOW,
-                          dict(account=long('na'), task=long('task'), windows=[]))
-        self.ledger.dispatch(run_id, 'count', 1, NOW)
-        self.ledger.complete(run_id, 'count', 1)
-        self.ledger.reserve_generation(run_id, long('digest2'), M, 1, NOW)
-        data = self.ledger.snapshot()
-        record, hold, run = data['admissions'][0], data['holds'][hold_id], data['runs'][run_id]
+def long(tag):
+    return (tag + 'x' * 256)[:256]
 
-        def unique(index, value):
-            return ('%05d' % index + value)[:256]
-        data['admissions'] = [dict(record, attempt_id=unique(i, hold_id)) for i in range(budget.MAX_ADMISSIONS)]
-        data['holds'] = {unique(i, hold_id): copy.deepcopy(hold) for i in range(budget.MAX_HOLDS)}
-        data['seen_attempts'] = [unique(i, hold_id) for i in range(budget.MAX_SEEN)]
-        data['runs'] = {unique(i, run_id): copy.deepcopy(run) for i in range(budget.MAX_RUNS)}
+
+def unique(index, value):
+    return ('%05d' % index + value)[:256]
+
+
+def padded(item, size):
+    """`item` with a `pad` field making its compact JSON exactly `size` characters."""
+    item = dict(item, pad='')
+    item['pad'] = 'p' * (size - len(json.dumps(item, separators=(',', ':'))))
+    return item
+
+
+class CapacityTests(Funded):
+    def long_admission(self, attempt, windows):
+        """A real admission with 256-character identifiers everywhere and `windows` demanded windows."""
+        organization = long('org')
+        if organization not in self.ledger.snapshot()['organizations']:
+            self.ledger.configure(organization, policy(cycle=long('cycle')), 0)
+            self.ledger.observe(organization, 10**12, NOW, issued=10**12)
+        ids = [long('w%d' % i) for i in range(windows)]
+        pools = {long('pool'): dict(billing_class='api_grant', windows=[window(i, organization=organization)
+                                                                        for i in ids])}
+        api = route(long('r'), long('pool'), 'api_grant', long('acct%s' % attempt), {i: M for i in ids})
+        api.update(strategy_id=long('sid'), model=long('m'), harness=long('h'), provider=long('p'))
+        api['credential']['ref'] = long('ref')
+        obs = dict(observations([api], pools), snapshot_id=long('snap'))
+        rank = dict(strategy_ids=[long('sid')], reason_codes=[long('code')] * routing.MAX_REASONS,
+                    table_version=long('t'), profile_digest=long('d'))
+        return routing.admit(assignment(long(attempt), long('task')), rank, settings(), obs, ledger=self.ledger)
+
+    def test_an_oversized_admission_is_pending_and_writes_nothing(self):
+        before = self.ledger.snapshot()
+        result = self.long_admission('big', routing.MAX_WINDOWS)
+        self.assertEqual((result['status'], result['reason_code']), ('pending', 'record_too_large'))
+        self.assertEqual(self.ledger.snapshot()['holds'], before['holds'])
+        self.assertEqual(self.long_admission('one', 1)['status'], 'admitted')  # long ids alone still fit
+
+    def test_a_full_admissions_table_never_blocks_and_keeps_open_attempts(self):
+        record = lambda attempt: dict(attempt_id=attempt, task='t', bucket=[], shares={})  # noqa: E731
+        decide = lambda attempt: (lambda data: dict(record=record(attempt), vector={}, account='a%s' % attempt))  # noqa: E731
+        self.ledger.set_caps(budget.MAX_HOLDS, budget.MAX_HOLDS)
+        self.ledger.admit('open', decide('open'))  # the oldest record belongs to an attempt that stays open
+        for i in range(budget.MAX_ADMISSIONS + 3):
+            self.ledger.admit('c%d' % i, decide('c%d' % i))
+            self.ledger.close_attempt('c%d' % i, 'not_dispatched')
+        data = self.ledger.snapshot()
+        self.assertEqual(len(data['admissions']), budget.MAX_ADMISSIONS)
+        self.assertIsNotNone(budget.Ledger.admission(data, 'open'))  # closed attempts' records go first
+        self.assertIsNone(budget.Ledger.admission(data, 'c0'))
+        self.assertTrue(self.ledger.admit('open', decide('open'))['duplicate'])
+
+    def test_the_worst_case_ledger_fits_with_margin(self):
+        """Every table at its bound, every record at its size bound, every identifier 256 characters."""
+        organization = long('org')
+        self.ledger.configure(organization, policy(cycle=long('cycle'), pilot_limit=budget.MAX_INTEGER,
+                                                   task_limit=budget.MAX_INTEGER), 0)
+        self.ledger.observe(organization, budget.MAX_INTEGER, NOW, issued=budget.MAX_INTEGER,
+                            lots=[dict(id=unique(i, 'lot'), balance=budget.MAX_INTEGER, expiry=budget.MAX_INTEGER,
+                                       verified=True) for i in range(64)])
+        run_id = long('run')
+        self.ledger.begin(organization, long('task'), run_id, long('digest'), M, 1, NOW,
+                          dict(account=long('na'), task=long('task'), windows=[]), provision=M,
+                          live_gate=lambda data, now: dict(pin=long('pin'), maximum=budget.MAX_INTEGER))
+        self.ledger.dispatch(run_id, 'count', 1, NOW,
+                             live_gate=lambda data, now: dict(pin=long('pin'), maximum=budget.MAX_INTEGER))
+        self.ledger.complete(run_id, 'count', 1)
+        self.ledger.reserve_generation(run_id, long('digest2'), M, 1, NOW,
+                                       live_gate=lambda data, now: dict(pin=long('pin'), maximum=budget.MAX_INTEGER))
+        data = self.ledger.snapshot()
+        run = data['runs'][run_id]
+        # Optional run fields at their largest: consent pin, transfer, converted account, maximal integers.
+        run.update(consent=dict(scope=long('scope'), revision=budget.MAX_INTEGER,
+                                qualification_revision=budget.MAX_INTEGER),
+                   transferred_from=dict(run=long('parent'), amount=budget.MAX_INTEGER), account=long('acct'),
+                   revision=budget.MAX_INTEGER)
+        for call in run['calls'].values():
+            call.update(maximum=budget.MAX_INTEGER, cost=budget.MAX_INTEGER, provision=budget.MAX_INTEGER)
         native_key = run['native']
-        data['native'] = {unique(i, native_key): dict(data['native'][native_key]) for i in range(budget.MAX_RUNS)}
+        native_entry = dict(data['native'][native_key], latest_at=budget.MAX_INTEGER)
+        data['organizations'][organization]['revision'] = budget.MAX_INTEGER
+        data['admissions'] = [padded(dict(attempt_id=unique(i, 'a')), budget.MAX_ADMISSION_BYTES)
+                              for i in range(budget.MAX_ADMISSIONS)]
+        data['holds'] = {unique(i, 'h'): padded(dict(closed=False), budget.MAX_HOLD_BYTES)
+                         for i in range(budget.MAX_HOLDS)}
+        data['seen_attempts'] = [unique(i, 's') for i in range(budget.MAX_SEEN)]
+        data['runs'] = {unique(i, run_id): copy.deepcopy(run) for i in range(budget.MAX_RUNS)}
+        data['native'] = {unique(i, native_key): dict(native_entry) for i in range(budget.MAX_RUNS)}
+        data['finished_native'] = []
+        data['caps'] = dict(total=budget.MAX_INTEGER, per_account=budget.MAX_INTEGER)
         raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
-        self.assertLessEqual(len(raw), budget.MAX_RECORD)
+        sizes = {key: len(json.dumps(value, separators=(',', ':'))) for key, value in data.items()}
+        self.assertLessEqual(len(raw), budget.MAX_RECORD * 0.9, sizes)  # at least 10% margin
         with closing(sqlite3.connect(self.path)) as db:
             db.execute('UPDATE ledger SET body=?', (raw,)); db.commit()
         self.ledger.set_caps(5, 2)  # a full ledger still reads and commits
         self.assertEqual(len(self.ledger.snapshot()['holds']), budget.MAX_HOLDS)
-
 
 if __name__ == '__main__':
     unittest.main()
