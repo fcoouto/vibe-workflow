@@ -37,6 +37,14 @@ if step == 'user_edit':
 if step == 'sleep':
     json.dump(state, open(state_path, 'w'))
     time.sleep(10); sys.exit(0)
+if step == 'missing_tag':
+    json.dump(state, open(state_path, 'w'))
+    print(json.dumps({'_tag': 'SessionNotFoundError', 'message': 'Session not found'}))
+    sys.stderr.write('Request failed\n'); sys.exit(1)
+if step == 'missing_status':
+    json.dump(state, open(state_path, 'w'))
+    print('<html>gateway</html>')
+    sys.stderr.write('HTTP 404 Not Found\n'); sys.exit(1)
 if step == 'missing' or session not in state['titles']:
     json.dump(state, open(state_path, 'w'))
     print(json.dumps({'_tag': 'SessionNotFoundError', 'message': 'Session not found'}))
@@ -141,6 +149,14 @@ class OpenCodeTitleTests(unittest.TestCase):
         with patch('shutil.which', return_value=None):
             result = self.deliver()
         self.assertEqual(result, dict(ok=False, deferred=True, reason='unavailable'))
+        self.assertEqual(self.clock.sleeps, [])
+
+    def test_non_executable_binary_is_not_retried(self):
+        fake = FakeOpenCode(self)
+        (fake.directory / 'opencode').chmod(0o644)
+        with patch('shutil.which', return_value=str(fake.directory / 'opencode')):
+            self.assertEqual(self.deliver(), dict(ok=False, deferred=True, reason='unavailable'))
+        self.assertEqual(self.clock.sleeps, [])
 
     def test_timeout_is_bounded_and_deferred(self):
         fake = FakeOpenCode(self, steps=['sleep'] * 3)
@@ -157,11 +173,14 @@ class OpenCodeTitleTests(unittest.TestCase):
 
     def test_malformed_mismatched_or_missing_sessions_defer(self):
         for step, reason in (('malformed', 'malformed'), ('shape', 'malformed'),
-                             ('mismatch', 'identity'), ('missing', 'not_found')):
+                             ('mismatch', 'identity'), ('missing', 'not_found'),
+                             ('missing_tag', 'not_found'), ('missing_status', 'not_found')):
             with self.subTest(step=step):
                 fake = FakeOpenCode(self, steps=[step] * 3)
                 self.assertEqual(self.deliver(), dict(ok=False, deferred=True, reason=reason))
                 self.assertEqual(fake.title, '')
+                self.assertEqual(self.clock.sleeps, [])
+                self.assertEqual(len(fake.calls), 1)
                 self.assertNotIn('session.update', [call[1] for call in fake.calls])
 
     def test_failure_messages_do_not_contain_identifiers_or_output(self):
@@ -252,7 +271,8 @@ class OpenCodeTitleTests(unittest.TestCase):
     def test_adopt_overwrites_unknown_title_once_then_baseline_protects_later_edits(self):
         fake = FakeOpenCode(self, title='Generated summary of the chat')
         result = self.deliver(adopt=True)
-        self.assertEqual(result, dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
+        self.assertEqual(result, dict(ok=True, deferred=False, reason=None, baseline=DESIRED,
+                                      previous='Generated summary of the chat'))
         self.assertEqual(fake.title, DESIRED)
         state = fake.state()
         state['titles'][SESSION] = 'Renamed by the user'
@@ -262,6 +282,17 @@ class OpenCodeTitleTests(unittest.TestCase):
                          dict(ok=False, deferred=True, reason='manual_title'))
         self.assertEqual(fake.title, 'Renamed by the user')
         self.assertEqual([call[1] for call in fake.calls].count('session.update'), 1)
+
+    def test_adoption_reports_previous_title_only_when_it_replaced_one(self):
+        fake = FakeOpenCode(self, title=DESIRED)
+        self.assertEqual(self.deliver(adopt=True),
+                         dict(ok=True, deferred=False, reason=None, baseline=DESIRED, previous=None))
+        long_title = 'x' * (title_sync.MAX_TITLE_BODY + 1)
+        fake = FakeOpenCode(self, title=long_title)
+        self.assertEqual(self.deliver(adopt=True)['previous'], None)
+        self.assertEqual(fake.title, DESIRED)
+        self.assertNotIn('previous', self.deliver(desired=title_sync.format_title(
+            'W1', 'P', 'Thread naming', 'WORKING', 2), baseline=DESIRED))
 
     def test_adopt_is_not_sticky_across_calls(self):
         fake = FakeOpenCode(self, title='Generated summary of the chat')
@@ -317,7 +348,8 @@ class OpenCodeTitleCommandTests(unittest.TestCase):
         completed = self.run_command(json.dumps(dict(session_id=SESSION, title=DESIRED, adopt=True)), path)
         self.assertEqual((completed.returncode, completed.stderr), (0, ''))
         self.assertEqual(json.loads(completed.stdout),
-                         dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
+                         dict(ok=True, deferred=False, reason=None, baseline=DESIRED,
+                              previous='Generated summary of the chat'))
         self.assertEqual(fake.title, DESIRED)
 
     def test_command_reports_deferral_as_json_and_exits_zero(self):
@@ -327,6 +359,33 @@ class OpenCodeTitleCommandTests(unittest.TestCase):
                 self.assertEqual(completed.returncode, 0)
                 self.assertEqual(completed.stderr, '')
                 self.assertEqual(json.loads(completed.stdout)['ok'], False)
+
+    def test_interrupt_still_yields_one_json_line_and_success_exit(self):
+        import importlib.util
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location('opencode_title_script', root / 'scripts' / 'opencode_title.py')
+        script = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(script)
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(opencode_titles, 'deliver', side_effect=KeyboardInterrupt), \
+                patch('sys.stdin', io.StringIO(json.dumps(dict(session_id=SESSION, title=DESIRED)))), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            self.assertEqual(script.main(), 0)
+        self.assertEqual(err.getvalue(), '')
+        self.assertEqual(out.getvalue().count('\n'), 1)
+        self.assertEqual(json.loads(out.getvalue()), dict(ok=False, deferred=True, reason='interrupted'))
+
+    def test_closed_stdout_prints_nothing_and_exits_zero(self):
+        root = Path(__file__).resolve().parents[1]
+        read, write = os.pipe()
+        os.close(read)
+        try:
+            completed = subprocess.run([sys.executable, '-I', '-B', str(root / 'scripts' / 'opencode_title.py')],
+                                       input=b'{}', stdout=write, stderr=subprocess.PIPE, timeout=30,
+                                       env=dict(os.environ, PATH='/nonexistent'))
+        finally:
+            os.close(write)
+        self.assertEqual((completed.returncode, completed.stderr), (0, b''))
 
 
 if __name__ == '__main__':
