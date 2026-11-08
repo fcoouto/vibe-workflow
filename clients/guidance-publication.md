@@ -38,3 +38,22 @@ The guidance/request limit is 64 KiB; unknown fields reject. Verify sources and
 applicability independently. A cache record establishes neither model
 availability nor execution authority. Keep requested, configured and observed
 settings separate, and preserve the coordinator's model and authentication.
+
+## Strategy table refresh
+
+After a successful guidance record, or a relevant catalog or benchmark change, a
+maintenance run may recompile the Smart Routing strategy table with
+`runtime.routing_evidence.refresh_table`. Run it only during that maintenance
+session, never from a spawn path, hook or startup check. Extract prose guidance
+into structured rows first; code then drops rows naming unavailable models,
+unsupported efforts or harnesses, and rows without cited evidence. Profiling or
+ranking models also need zero-retention, no-training terms. A failed or invalid
+refresh keeps the last verified table with its original age. A refresh re-ranks
+later assignments without re-profiling them. A refresh that compiles but leaves no
+qualified rows also keeps the previous table.
+
+An empty ranking (`no_recommendation`) is a missing suggestion, not a refusal. The
+caller continues on the deterministic admission path or the user's explicit worker
+choices; only admission can block. Ranking results also return `review_policy` and
+`scope_ref` so callers can key a cache by profile digest, table version, review
+policy and route scope.
