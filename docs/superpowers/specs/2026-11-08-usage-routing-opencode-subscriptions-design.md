@@ -5,6 +5,12 @@
 - **Status:** Agreed product direction recorded and amended for incremental delivery (Appendix B); execution and enforcement remain gated by P0 qualification.
 - **Product:** Vibe Router is vibe-workflow's built-in, default-enabled routing component, replacing existing selection logic. Workstreams owns orchestration; API Usage supplies opt-in API-credit funding. OpenCode V2 is the first target for enforced worker routing.
 
+**Terminology:** [Agent Delegation](../../../policies/03-agent-delegation.md#outcome-ownership)
+distinguishes a workstream session from a tool-invoked subagent. In this draft,
+worker routing describes delegated execution and never by itself creates a
+workstream session or proves native parentage. Session creation/resumption needs
+its own supported client capability; no such adapter is implied by this design.
+
 ## 1. Decision and scope
 
 Use one routing pipeline for delegated implementation, research, review, repair and escalation work. The coordinator keeps the user's selected model and effort. It decides what to delegate, prepares bounded assignments, supervises execution, verifies results and synthesizes the response. The router chooses the workers' execution strategies.
@@ -12,7 +18,7 @@ Use one routing pipeline for delegated implementation, research, review, repair 
 This design takes precedence over conflicting routing provisions in the earlier Vibe Router draft and existing vibe-workflow features. In particular:
 
 - Ship Vibe Router inside vibe-workflow with Smart Routing enabled by default. Replace the automatic selection logic of native delegation, API Usage and OpenRouter with one routing service; transport and permission checks retain their separate responsibilities.
-- Keep Workstreams as the owner of decomposition, dependencies, readiness and child supervision. Reuse its canonical job records and valid profiles; Jev enriches missing or ambiguous task fields only when needed.
+- Keep Workstreams as the owner of decomposition, dependencies, readiness and workstream-session coordination. Reuse its canonical job records and valid profiles; Jev enriches missing or ambiguous task fields only when needed.
 - Keep the coordinator's model, effort and authentication under user control; Smart Routing never switches them.
 - Route every managed worker spawn, including nested workers and independent reviewers, through the same admission path.
 - Select model versions and reasoning settings from current vendor recommendations and comparable benchmark evidence. Portable workflow rules contain no hard-coded commercial model IDs, effort ladders or hand-maintained model tiers.
@@ -54,7 +60,7 @@ Ranking is a small selection operation, not the coordinator or the worker. A tab
 
 Smart Routing is built in and defaults to **ON** when no explicit setting exists. Users can set OFF at any time; their explicit choice survives restarts and updates. There is no separate Vibe Router installation or activation step. This setting chooses the routing mechanism; it does not create tasks, enable API Usage, configure paid services or broaden existing permissions.
 
-Keep three controls independent: Workstreams governs optional automatic decomposition/delegation under its project preference; Smart Routing governs selection for work that is delegated; API Usage remains OFF until explicitly enabled with a secure key binding. Workstreams OFF still permits explicit delegation and required review through the same routing service. Smart Routing OFF uses configured worker choices through the new allocator, not the retired selector implementations.
+Keep three controls independent: Workstreams governs optional automatic workstream-session coordination under its project preference; ordinary subagent assistance follows Agent Delegation. Smart Routing governs selection for work that is delegated; API Usage remains OFF until explicitly enabled with a secure key binding. Workstreams OFF still permits explicit delegation and required review through the same routing service. Smart Routing OFF uses configured worker choices through the new allocator, not the retired selector implementations.
 
 OpenRouter, Council, observability, naming and recovery also retain their feature-specific activation rules. Default-on routing does not invoke optional features. Startup, status, naming/rendering, deterministic checks and management commands use local metadata and do not invoke Jev or a model ranker merely to report readiness. Appendix A defines each integration boundary.
 

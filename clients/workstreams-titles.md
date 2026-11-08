@@ -5,7 +5,7 @@ task progress, resolving a manual rename, or diagnosing missed title updates.
 The [naming contract](workstreams-naming.md) owns the format, attention rules
 and adoption trigger.
 
-## Adopt a parent or child
+## Adopt a coordinator or associated context
 
 First apply the [new-thread scope](workstreams-naming.md#new-thread-scope), then
 resolve the [display-family association](workstreams-naming.md#resolve-the-display-family),
@@ -40,7 +40,7 @@ reference. Use the current task identity and revision:
 python3 -I -B <package>/scripts/workflow.py task title configure --cwd <checkout> < title.json
 ```
 
-Parent request:
+Root coordinator request (the default member is `COORD`):
 
 ```json
 {
@@ -59,13 +59,36 @@ explicit user choice. Supply only one. The saved presentation records workflow
 ownership when established. Older records without that observation retain their
 topic during an automatic switch. `workflow_topic` is a configure input only.
 
-For an explicitly associated member, supply its recorded root coordinator UUID as
-`parent_session_id` and `member: "C"`. Store and display the same literal `P` or
-`C` role; the actual native UUID identifies the context.
-Title controls use `parent_session_id` for the display root; delegation and worker
-visibility use that field for the actual native parent. This display binding must
-satisfy the selected runtime's validation; it never changes native lineage,
+For an explicitly associated member, supply the recorded display-family root
+coordinator ID as `parent_session_id` and explicitly set `member` to `STREAM`
+for a workstream session or `AGENT` for a subagent. Do not infer the label from
+the root ID. The actual native ID identifies the context. Title controls use the
+wire field `parent_session_id` for the display root; delegation and worker
+visibility use that same field for the actual native parent. This display binding
+must satisfy the selected runtime's validation; it never changes native lineage,
 ownership or dispatch authority. Existing delegation admission remains required.
+Existing `P`/`C` presentations retain their literal members on sync, resume and
+task replacement; no automatic conversion is performed.
+
+For example, a supported bound Codex workstream session's configure request is:
+
+```json
+{
+  "client": "codex",
+  "session_id": "<actual_workstream_session_id>",
+  "task_id": "<bound_task_id>",
+  "scope_ref": "<bound_scope_reference>",
+  "expected_revision": 1,
+  "reference": "<user_or_workflow_decision>",
+  "parent_session_id": "<display_root_coordinator_id>",
+  "member": "STREAM",
+  "workflow_topic": "Backend"
+}
+```
+
+For a helper, use its actual ID and `member: "AGENT"`; even when invoked by a
+workstream owner, the display root remains the root coordinator. These examples
+describe title configuration, not a client session-creation adapter.
 
 Configuration resolves the declared root's shared family code, records the current
 title, then synchronizes the managed format. The same bound task cannot be configured twice. After an authorized task
@@ -75,8 +98,8 @@ The family/member binding remains stable; an existing manual-title pause survive
 configuration until the user explicitly requests resumption. Unmanaged threads and unrelated chats stay outside
 automatic title synchronization.
 
-Choose the path per native thread: a bound parent does not bind its workers or
-reviewers. For an already-adopted bound thread, use `task title sync` rather than
+Choose the path per native thread: a bound coordinator does not bind associated sessions or
+subagents. For an already-adopted bound thread, use `task title sync` rather than
 configure again. A failed runtime synchronization retains its pending state;
 do not bypass it with a direct write.
 
@@ -105,8 +128,8 @@ Apply the [PR merge gate](workstreams-naming.md#status-and-accepted-progress) to
 every PR the thread opened or took over; for required PR delivery also use
 [delivery completion](delivery.md#completion-and-retention).
 The existing `WAITING` state covers merge waits; its reason identifies the dependency.
-One or several PRs do not change the title format. A child's wait never assigns
-the parent's state or progress; the parent follows its own accepted scope.
+One or several PRs do not change the title format. An assignment's wait never assigns
+the coordinator's state or progress; the coordinator follows its own accepted scope.
 
 For direct display controls, use the same phase meanings and next-action owner
 in the existing task plan without creating runtime state. For runtime-bound
@@ -119,8 +142,8 @@ Generated waits for manual merge use the retained delivery plan and readiness.
 Optional `milestones` entries are exactly `{id, weight, accepted, reference}`. IDs are
 unique; weights are positive bounded integers; accepted is boolean; references
 record the coordinator's acceptance decision. Keep milestones in this task plan,
-including required review and integration. Do not accept a worker's self-report
-as independent acceptance or count child work twice.
+including required review and integration. Do not accept an executor's self-report
+as independent acceptance or count delegated work twice.
 
 Use the [meter rules](workstreams-naming.md#status-and-accepted-progress) for both title
 paths. The activity indicator for unmeasured `WORKING` belongs only to the title.

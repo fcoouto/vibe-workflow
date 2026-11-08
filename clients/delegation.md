@@ -6,9 +6,9 @@ For automatic Workstreams coordination, first honor the saved [project preferenc
 
 The [cooperative D6 contract](../docs/d6-native-delegation-plan.md#normal-completion-and-uncertain-ownership) uses normal native completion and independent result inspection. The [Mac CLI pilot](../docs/superpowers/plans/2026-11-04-d6-successor-release-packet.md) qualified one bounded guarded canary. Preserve selected protections and historical proof meanings.
 
-The launch and observation controls below apply to native children. For an authorized Usage Routing proposal, use the [Usage Routing delegation procedure](../skills/manage-usage-routing/references/delegation.md).
+The launch and observation controls below apply to actual native subagent children, not independently created workstream sessions. A subagent invocation does not create a workstream session. For an authorized Usage Routing proposal, use the [Usage Routing delegation procedure](../skills/manage-usage-routing/references/delegation.md).
 
-Load the [display naming rules](workstreams-naming.md) for native parent/child eligibility, including ordinary delegation and review. Follow their implementation trigger and applicable [title synchronization](workstreams-titles.md) procedure without changing prepared creation markers or launch permissions.
+Load the [display naming rules](workstreams-naming.md) for context eligibility, including ordinary delegation and review. Follow their implementation trigger and applicable [title synchronization](workstreams-titles.md) procedure without changing prepared creation markers or launch permissions.
 
 ## Observe the route and select settings
 

@@ -4,6 +4,21 @@ from runtime import title_sync
 
 
 class TitleSyncTests(unittest.TestCase):
+    def test_new_labels_support_topic_edits_and_pause_on_identity_change(self):
+        for member in ('COORD', 'STREAM', 'AGENT'):
+            with self.subTest(member=member):
+                applied = title_sync.format_title('W42', member, 'Original', 'WORKING', 2)
+                self.assertEqual(applied, f'\uFFFB▰▰▱▱▱ [W42] {member} · Original')
+                saved = self.saved() | dict(family='W42', member=member, topic='Original', applied=applied)
+                edited, desired = title_sync.reconcile(saved, applied.replace('Original', 'Chosen'),
+                                                       self.task('REVIEW') | dict(user_attention=True))
+                self.assertFalse(edited['paused'])
+                self.assertEqual(edited['topic'], 'Chosen')
+                self.assertEqual(desired, f'\uFFFB▰▰▱▱▱ REVIEW · [W42] {member} · Chosen')
+                changed, desired = title_sync.reconcile(saved, applied.replace(member, 'P'), self.task())
+                self.assertTrue(changed['paused'])
+                self.assertIsNone(desired)
+
     def task(self, status='WORKING'):
         return dict(state=status, revision=3)
 

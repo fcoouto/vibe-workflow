@@ -7,16 +7,18 @@ database, qualification or separate activation is required.
 
 ## Meaning and scope
 
-Enabled automatically selects useful cooperative delivery through native children.
-Follow [Agent Delegation](../../../policies/03-agent-delegation.md), including its
-[outcome ownership rules](../../../policies/03-agent-delegation.md#outcome-ownership).
-Native children execute this saved preference; it selects no separate service.
+Enabled authorizes automatic, suitable task-scoped creation or reuse and coordination
+of workstream sessions without repeated approval for each session, within the user's
+scope, permissions and available capacity. Follow [Agent Delegation](../../../policies/03-agent-delegation.md),
+including its [outcome ownership rules](../../../policies/03-agent-delegation.md#outcome-ownership).
+It selects no separate service and does not authorize control of unrelated peer chats.
 
-Disabled stops optional future automatic native child work. Explicit user
-delegation requests and required independent review still apply. Reconcile
-existing children safely; disabling never cancels them or releases their claims.
-Unknown ownership stays reserved. [Naming](../../../clients/workstreams-naming.md)
-remains independent of this choice.
+Disabled stops optional automatic workstream-session coordination. Explicit user
+delegation and required independent review still apply. Ordinary subagent assistance
+follows Agent Delegation and is not evidence Workstreams ran. Reconcile existing
+assignments safely; disabling never cancels them or releases their claims. Unknown
+ownership stays reserved. [Naming](../../../clients/workstreams-naming.md) remains
+independent of this choice.
 
 This choice does not change resource admission, capacity recovery, schedules,
 managed-runtime authority or existing protections. Load [advanced controls](advanced-controls.md)

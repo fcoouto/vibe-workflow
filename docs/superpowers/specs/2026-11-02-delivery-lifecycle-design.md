@@ -1,5 +1,8 @@
 # Task delivery and client owned worktrees
 
+Naming note: the `P`/`C` examples below record the earlier design. New-context
+labels and preservation of adopted titles follow [Thread Naming](../../../clients/workstreams-naming.md).
+
 Status: lifecycle direction approved in chat on 2 November 2026, including onboarding selection of merge policy, manual merge by default, explicit per-task overrides, separate worktrees by default, and client-owned local cleanup. The user selected the existing `WAITING` status for merge waits, with the reason recorded in the task rather than a new status. This document does not activate runtime behavior or authorize publication from this chat.
 
 ## Purpose

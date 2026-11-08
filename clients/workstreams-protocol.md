@@ -1,6 +1,7 @@
 # Workstreams dispatch and continuation protocol
 
-Load for managed child identity and delivery details. For context planning,
+Load for managed native subagent identity and delivery details, not workstream-session
+creation. For context planning,
 ownership, naming and acceptance, use the [execution contract](workstreams.md).
 Feature settings do not authorize ordinary delegation. Continuation ownership and
 limits remain in base delegation; this file does not add a combined-mode permission.

@@ -3,6 +3,8 @@
 This procedure handles provider-capacity failures in eligible parent threads.
 Capacity recovery is independently enabled and adds no resource lease. Local
 CPU/RAM admission remains a separate mechanism.
+Here “parent” means the eligible registered coordinator thread for this monitor;
+it does not establish native ancestry of any workstream session.
 
 Read the purpose below and [shared controls](#shared-controls), then the applicable
 section: [register or depart](#register-and-depart),
@@ -75,7 +77,7 @@ JSON
 After existing task activation and delegation planning, and only when
 `capacity_recovery` is enabled, call `register --cwd CHECKOUT` with `client`,
 `session_id`, `task_id`, `scope_ref`, `expected_revision` and `recovery_revision`.
-The session must be the exact native parent thread ID. Registration verifies
+The session must be the exact registered coordinator's native thread ID. Registration verifies
 enrolled task authority, current pins, recovery preference and original delegation
 deadline. It does not require resource admission or repin old tasks. An unavailable
 or incompatible task must use its existing pinned recovery path.

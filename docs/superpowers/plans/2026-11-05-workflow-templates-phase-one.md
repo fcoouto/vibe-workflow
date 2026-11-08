@@ -1,5 +1,9 @@
 # Workflow Templates Phase 1 Implementation Plan
 
+Terminology note: this historical plan's “native child” wording describes its
+original assignments. For current workstream-session ownership and subagent
+distinctions, use [Agent Delegation](../../../policies/03-agent-delegation.md#outcome-ownership).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Clarify ordinary versus managed instruction loading, prove two useful example patterns, and simplify delegation code only where the audit establishes a safe improvement.

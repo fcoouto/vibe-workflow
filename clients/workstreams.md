@@ -1,6 +1,6 @@
 # Workstreams execution
 
-Load only for managed child delivery or when a Workstreams-specific operation is
+Load only for managed native subagent delivery or when a Workstreams-specific operation is
 needed. Ordinary delegation always uses [Agent Delegation](../policies/03-agent-delegation.md),
 regardless of either feature preference. For independent acceptance, load the applicable D5
 [planning](evidence-plan.md), [request fields](evidence.md#request-fields)
@@ -27,7 +27,7 @@ or budgets.
 
 ## Runtime controls
 
-For managed child dispatch or continuation, load the
+For managed native subagent dispatch or continuation, load the
 [dispatch and continuation protocol](workstreams-protocol.md). It owns native
 identity and one-use delivery reconciliation. Ordinary task continuation uses
 base delegation's allocated `continuation_limits`; it does not depend on a
@@ -39,21 +39,24 @@ separate management procedure and do not load this execution contract.
 Follow [shared outcome ownership](../policies/03-agent-delegation.md#outcome-ownership)
 using the existing task plan.
 
-Each context retains its stable task/job ID, native child identity, bounded brief,
-files/resources, dependencies, acceptance/checks and next action. Native children
-remain distinct from external executions. Any separately available external route needs its own supported contract; this
-skill grants none. Do not invent native lineage or external same-thread resumption.
+Each assignment retains its stable task/job ID, actual context identity, bounded brief,
+files/resources, dependencies, acceptance/checks and next action. This managed
+contract applies to native subagents, not independently created workstream sessions;
+follow [outcome ownership](../policies/03-agent-delegation.md#outcome-ownership) for the
+latter. Native subagents remain distinct from external executions. Any separately
+available external route needs its own supported contract; this skill grants none.
+Do not invent native lineage or external same-thread resumption.
 
 Reconcile the implementation owner
 before independent review so retained write claims do not block its readers.
 Before resuming, reconcile review readers; continuation preparation reserves no
 claims for a settled owner. Consume rechecks and atomically reacquires original
 resources, including current aliases, available capacity and dependent work. Old
-completion/readiness cannot authorize a resumed assignment. Replace a child only
+completion/readiness cannot authorize a resumed assignment. Replace an assignment context only
 for a changed outcome, unusable history or a demonstrated recovery need, after
 reconciling its writers and partial changes.
 
-### Names identify the parent and its children
+### Names identify the workflow family
 
 For allocation, display titles, progress and status changes, load the
 [naming rules](workstreams-naming.md). Naming-only requests do not require the
@@ -79,10 +82,10 @@ token enforcement. Material reassessment uses remaining authorized totals.
 
 Add a coordination level only when it removes observed root work.
 
-The host owns its internal retries. Admitted child continuations need recognized
+The host owns its internal retries. Admitted native subagent continuations need recognized
 terminal cause, known-finished host retry, supported recovery, reconciled writer
 state and remaining task allowance. Unknown retry intent cannot establish those
-child conditions. Parent capacity recovery follows the separate monitor procedure
+subagent conditions. Coordinator capacity recovery follows the separate monitor procedure
 below, including its user-authorized waiver of native retry-exhaustion proof.
 `rateLimitExceeded` and `usageLimitExceeded` wait for human `continue`.
 Coordinator shutdown also waits for human continuation. An eligible activated

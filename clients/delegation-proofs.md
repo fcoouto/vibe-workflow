@@ -36,6 +36,8 @@ original admission, a freshly captured `current_candidate_digest`, `d6_plan_dige
 `parent_session_id`, `task_name`, `parent_turn_id`, `spawn_item_id`, `worker_id`,
 `worker_turn_id`, `result_item_id`. The first four come from admission; the last
 five come from the latest observed native receipt, including null when absent.
+Here `parent_session_id` is the observed native parent, not the title contract's
+display-family root; only actual client lineage establishes the relationship.
 `observation_digest` is that observation artifact's digest; `result_digest` is
 the receipt's result digest. Neither is a digest of the report text.
 

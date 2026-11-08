@@ -1,6 +1,8 @@
 # Worker declarations and visibility
 
 Use this contract for subagent declarations and optional display.
+It does not create or identify a workstream session. Native parent/child claims
+require actual client lineage, not a display association or task ownership.
 
 ## Declare before dispatch
 
@@ -71,7 +73,7 @@ requires no enrollment, runtime task or database:
 python3 -I -B <package>/scripts/worker_visibility.py prepare
 ```
 
-Supply `parent_session_id` (actual native UUID), `checkout` (the chat's current
+Supply `parent_session_id` (actual native parent UUID, not the title display root), `checkout` (the chat's current
 canonical absolute working directory), `task_name` (the immutable creation name),
 `message` (the full assignment brief), and an explicit `visibility` for a fresh
 assignment on stdin; the entire JSON request must fit 128 KiB. An existing context

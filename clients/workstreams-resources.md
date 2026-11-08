@@ -19,7 +19,7 @@ original assignment/phase authority; they do not require an enabled resource fea
 For `resource-run`, add `argv` (an argument array, no shell wrapping required),
 `cpu`, `memory_bytes`, `capacity_cpu` and `capacity_memory_bytes`. Demand and the
 shared allowance are selected for the task; use known command parallelism and
-leave user headroom. Each participating parent must use this same host helper.
+leave user headroom. Each participating coordinator must use this same host helper.
 Smaller active declared allowances constrain the shared pool. Choose allowances
 honestly; these declarations are cooperative, not independent hardware enforcement.
 Optional fields: `wait_seconds` (0–60, default 0), `timeout_seconds` (positive,

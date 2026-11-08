@@ -12,6 +12,9 @@ Use `python3 -I -B <package>/scripts/workflow.py delegation ACTION --cwd CHECKOU
 Mutations accept one JSON object on stdin: `client:"codex"`, `session_id`, `task_id`,
 `scope_ref` and the current integer `expected_revision`, plus the action payload.
 Copy identity from the accepted task and revision from its latest response/status.
+In this native subagent contract, `parent_session_id` means the actual native
+parent session, not the display-family root used by title configuration. Neither
+the prepared request nor a display association establishes native lineage.
 Replace every angle-bracket placeholder with actual values; a reference string is
 an assertion, never proof of capability. JSON payloads below omit this common
 envelope. Input is bounded at 128 KiB; extra fields reject. Revision conflict means

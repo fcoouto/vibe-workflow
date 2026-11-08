@@ -1,5 +1,9 @@
 # Workflow Templates Phase 2 Implementation Plan
 
+Terminology note: original child identities and reports below are historical;
+current workstream-session and subagent terminology is defined in
+[Agent Delegation](../../../policies/03-agent-delegation.md#outcome-ownership).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans for authorized execution. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Pilot one lifecycle layout, compact child reports and useful project-document adaptation while preserving existing authority and reducing repeated composition.

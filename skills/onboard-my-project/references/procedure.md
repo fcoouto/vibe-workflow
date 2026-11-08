@@ -59,8 +59,8 @@ affected choice as inapplicable or pending, respectively.
    - No. I will review and merge them myself. (default)
    - Yes. Merge independently reviewed PRs marked `[READY]` when all required checks pass.
 3. **Enable Workstreams for `<project_name>`?**
-   Explain that Enabled automatically uses suitable native child work; small
-   tasks can stay with the coordinator. Show one choice:
+   Explain that Enabled permits suitable task-scoped workstream sessions without
+   repeated per-session approval; small tasks can stay with the coordinator. Show one choice:
    - Disabled. (default)
    - Enabled. (recommended)
    Reuse an existing explicit answer or saved choice. Apply a submitted answer

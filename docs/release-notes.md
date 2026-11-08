@@ -1,5 +1,8 @@
 # Release notes
 
+Historical entries retain their original terminology and observed titles; current
+workstream-session and subagent distinctions are in [Agent Delegation](../policies/03-agent-delegation.md#outcome-ownership).
+
 ## 0.1.33
 
 - A Workstreams thread is `DONE` only after every PR it opened or took over is observed merged on the remote; until then it shows `WAITING`. Threads whose scope excludes publication need no extra step, and other editable threads record an explicit no-PR decision. Runtime verification still enforces required publications only.

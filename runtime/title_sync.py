@@ -9,14 +9,15 @@ MAX_TITLE_BODY = 4096
 MAX_STATUS_LENGTH = max(map(len, ATTENTION_STATES))
 METER_PREFIX = '\uFFFB'  # Keeps the five cells in the compact Codex fallback font.
 # Accept saved titles with routine labels, no meter prefix, or status at the end.
-TITLE = re.compile(r'(?P<meter>\uFFFB?▰{0,5}▱{0,5}) (?:(?P<status>[A-Z ]+) · )?\[(?P<family>W[1-9][0-9]*)\] (?P<member>P|C) · (?P<topic>.+)')
-LEGACY_TITLE = re.compile(r'(?P<meter>▰{0,5}▱{0,5}) \[(?P<family>W[1-9][0-9]*)\] (?P<member>P|C) · (?P<topic>.+) · (?P<status>[A-Z ]+)')
+MEMBER_PATTERN = r'COORD|STREAM|AGENT|P|C'
+TITLE = re.compile(r'(?P<meter>\uFFFB?▰{0,5}▱{0,5}) (?:(?P<status>[A-Z ]+) · )?\[(?P<family>W[1-9][0-9]*)\] (?P<member>' + MEMBER_PATTERN + r') · (?P<topic>.+)')
+LEGACY_TITLE = re.compile(r'(?P<meter>▰{0,5}▱{0,5}) \[(?P<family>W[1-9][0-9]*)\] (?P<member>' + MEMBER_PATTERN + r') · (?P<topic>.+) · (?P<status>[A-Z ]+)')
 
 
 def format_title(family, member, topic, status, cells, *, user_attention=False):
     if not isinstance(family,str) or not re.fullmatch(r'W[1-9][0-9]*',family):
         raise ValueError('Invalid family code')
-    if not isinstance(member,str) or not re.fullmatch(r'P|C',member):
+    if not isinstance(member,str) or not re.fullmatch(MEMBER_PATTERN,member):
         raise ValueError('Invalid member code')
     if not isinstance(topic,str) or not topic.strip() or topic!=topic.strip() or len(topic)>160 or not topic.isprintable() or ' · ' in topic:
         raise ValueError('Topic must be short, printable and contain no field separator')
@@ -257,10 +258,10 @@ def operate(scope, action, request, transport=None, *, force=False):
                 from pathlib import Path
                 import sqlite3
                 parent = request.get('parent_session_id', session)
-                state._text(parent, 'native family parent', 4096)
-                member = request.get('member', 'P')
-                if (member == 'P') != (parent == session):
-                    raise ValueError('Member role differs from declared family parent')
+                state._text(parent, 'display family root', 4096)
+                member = request.get('member', 'COORD')
+                if (member in ('P', 'COORD')) != (parent == session):
+                    raise ValueError('Member role differs from declared display family root')
                 topic = request.get('topic', workflow_topic)
                 format_title('W1', member, topic, task['state'], 0)
                 try:

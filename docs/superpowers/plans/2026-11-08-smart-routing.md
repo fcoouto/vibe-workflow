@@ -6,6 +6,8 @@
 
 **Architecture:** Workstreams owns the canonical task graph. One Python routing core (settings, profiles, compiled evidence, deterministic ranker, allocator and the existing SQLite ledger) serves every client through one local JSON command. Host adapters stay thin: the OpenCode V2 adapter is a policy-free shim that blocks unadmitted launches and requests before transmission.
 
+**Terminology:** Follow [outcome ownership](../../../policies/03-agent-delegation.md#outcome-ownership): a workstream session is not a tool-invoked subagent, and neither a route nor a display association establishes native lineage. This plan does not claim a workstream-session adapter exists.
+
 **Tech Stack:** Python 3.11+ standard library and SQLite (the repo's runtime contract), `unittest`, one OpenCode V2 plugin shim whose loader and test runner P0.1 pins.
 
 **Spec:** [Smart Routing — Vibe Router integration design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) v1.5, which includes amendments A1–A14.

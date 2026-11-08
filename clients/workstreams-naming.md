@@ -4,13 +4,14 @@ For adoption, event repair and manual edits, read [title synchronization](workst
 
 ## New-thread scope
 
-Apply this revision only to a native context created under it. Establish creation
+Apply this revision only to a context created under it. Establish creation
 from the existing native observation, creation brief or task record. First
 implementation, first adoption, continuation, resume or task replacement does not
 make an existing thread new; an absent saved title proves nothing. If creation
 cannot be established, leave its title and record untouched and continue
 authorized work. Existing contexts keep their current titles, records, original
-controls, readers and pins; this fix adds no migration or repair. Once an eligible
+controls, readers and pins, including adopted `P`/`C` members; this revision adds
+no automatic conversion or bulk rename. Once an eligible
 new context is adopted, its ordinary title lifecycle continues through that record.
 
 ## Automatic implementation naming
@@ -23,8 +24,8 @@ or runtime activation. Question-only, exploratory and planning chats do not
 activate naming, even when they delegate work.
 
 Once active, keep naming through tests, review, fixes, waits and integration.
-Native children supporting that implementation, including read-only investigators
-and independent reviewers, are eligible. A follow-up question alone does not
+Workstream sessions and subagents supporting that implementation, including read-only
+investigators and independent reviewers, are eligible. A follow-up question alone does not
 reopen a completed task. Explicit naming-only requests remain supported without
 starting implementation. Naming changes display metadata only; it does not
 activate managed task controls.
@@ -50,17 +51,17 @@ the status field and its separator only when the user needs to act. The examples
 include the leading character.
 
 ```text
-<U+FFFB><meter> [W<number>] <P|C> · <short_topic>
-<U+FFFB><meter> <STATUS> · [W<number>] <P|C> · <short_topic>
+<U+FFFB><meter> [W<number>] <COORD|STREAM|AGENT> · <short_topic>
+<U+FFFB><meter> <STATUS> · [W<number>] <COORD|STREAM|AGENT> · <short_topic>
 ```
 
 ```text
-￻▰▰▱▱▱ [W1] P · Thread naming
-￻▰▰▰▰▰ [W1] C · Naming rules
-￻▰▰▰▰▱ REVIEW · [W1] C · Status tags
-￻▰▰▰▱▱ BLOCKED · [W1] C · Search support
-￻▰▰▰▱▱ WAITING · [W1] C · Client check
-￻▰▱▱▱▱ [W2] P · Solo fix
+￻▰▰▱▱▱ [W42] COORD · Feature delivery
+￻▰▰▰▰▰ [W42] STREAM · Backend
+￻▰▰▰▰▱ REVIEW · [W42] AGENT · Review backend
+￻▰▰▰▱▱ BLOCKED · [W42] STREAM · Search support
+￻▰▰▰▱▱ WAITING · [W42] AGENT · Client check
+￻▰▱▱▱▱ [W43] COORD · Solo fix
 ```
 
 The literal brackets enclose the shared family code. Keep display identities
@@ -73,19 +74,21 @@ deliverable association. A source-thread ID or title alone does not establish it
 Keep native lineage, user-owned peer chats, task associations, display identity
 and worktree scope distinct.
 
-`P` identifies only the root coordinator; associated deliverable chats and native
-workers display `C`. A deliverable chat stays in that root's family even when it
-coordinates workers. Nested owners do not allocate another family for the same objective.
+`COORD` identifies the root workflow coordinator, `STREAM` a workstream session,
+and `AGENT` a helper subagent. Review is a responsibility or topic, not another
+context kind. A workstream session stays in the root's family even when it
+coordinates subagents or nested workstream owners. Nested owners do not allocate another family for the same objective.
 Standalone unrelated chats start their own families. An uncertain or unavailable
 association is a naming limitation: report it without guessing; continue authorized
 work.
 
-Before new native dispatch or explicitly requested sidebar-chat creation, carry
-the root coordinator UUID, family, role `C` and mapping owner in the brief. Record
-the actual returned native UUID as the context's identity, then verify title
-readback through the title procedure. Follow-ups reuse that binding; a new context
-has its own returned UUID. Recognizable topics distinguish children; repeated `C`
-roles need no counter. Never represent display association as native parentage.
+When naming applies, before creating a workstream session or invoking a subagent, carry the root
+coordinator ID, family, explicit `STREAM` or `AGENT` member and mapping owner in
+the brief. Record the actual returned native ID as the context's identity, then
+verify title readback through the title procedure. Follow-ups reuse that binding;
+a new context has its own returned ID. Recognizable topics distinguish contexts;
+repeated members need no counter. Never infer `STREAM` or `AGENT` from native parent
+IDs, or represent display association as native parentage.
 
 ## Allocate a family once across projects
 
@@ -93,10 +96,10 @@ For a standalone root without a recorded family, reserve its code with the
 package helper, even when no children exist:
 
 ```text
-python3 -I -B <package>/scripts/workstreams_family.py --client codex --parent <root_coordinator_uuid>
+python3 -I -B <package>/scripts/workstreams_family.py --client codex --parent <root_coordinator_id>
 ```
 
-Use the actual client identifier and stable root coordinator UUID, never a title
+Use the actual client identifier and stable root coordinator ID, never a title
 or checkout path. The helper returns `{"ok": true, "family": "W1"}`. It serializes
 allocation in `~/.vibe-workflow/workstreams-families.sqlite3`, shared across
 all projects, linked checkouts and package copies for this OS user. The same
@@ -112,7 +115,7 @@ the register. This allocator covers projects sharing the user register, not sepa
 machines or OS accounts; those require one coordinated allocation authority before
 claiming a shared namespace.
 
-The intended search keys are `[W1]` for a family and `[W1] C` for its children.
+The intended search keys are `[W42]` for a family and `[W42] STREAM` or `[W42] AGENT` for its associated contexts.
 Verify literal matching on the current client before promising those search results;
 search behavior and proportional fonts may prevent exact filtering or alignment.
 Keep topics short and recognizable. Shorten only standard
@@ -156,19 +159,19 @@ thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
 remote state cannot be read, report it unverified and withhold `DONE`.
 
 A thread that opened no PR needs no extra step when its recorded scope excludes
-publication, such as read-only, investigation or review work, or a child scoped
+publication, such as read-only, investigation or review work, or an assignment scoped
 away from PRs. Any other editable thread needs an explicit no-PR decision in its
 task plan. A PR the plan marks optional under the user's recorded scope decision is
 such a decision; marking it optional after opening it, without that decision,
 is not. Opening a PR after `DONE` reopens the thread to `WORKING`, `REVIEW` or
-`WAITING` by its actual next action. A child's PR gates that child; a parent whose
-deliverable depends on it is gated too.
+`WAITING` by its actual next action. An assignment's PR gates that assignment; a
+coordinator whose deliverable depends on it is gated too.
 
 Compute each thread's progress from currently accepted milestones in its existing
 task plan, with task-appropriate weights when outcomes differ substantially.
-Parent progress covers the combined deliverable, including required independent
-review and integration; do not average child meters or count work twice. Child
-progress covers its own scope. Elapsed time, token consumption and worker
+Coordinator progress covers the combined deliverable, including required independent
+review and integration; do not average assigned-context meters or count work twice.
+Each assigned context's progress covers its own scope. Elapsed time, token consumption and executor
 self-reports do not establish acceptance. Reopened or invalidated milestones stop
 counting and may reduce the meter or reopen a `DONE` thread.
 
