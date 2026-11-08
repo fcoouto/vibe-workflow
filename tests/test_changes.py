@@ -125,7 +125,7 @@ class ChangesTests(d3_tests.OnboardingTests):
         self.assertEqual(checked['attempt']['status'], 'uncertain')
 
     def test_linked_foreign_review_requires_exact_plain_prompt_and_pair_before_independence(self):
-        from tests.test_delegation import Stage4NativeReviewTests
+        from tests.test_delegation_review import Stage4NativeReviewTests
         from runtime import state
         from runtime.startup import ProjectScope, StartupError
         fixture = Stage4NativeReviewTests(methodName='runTest')

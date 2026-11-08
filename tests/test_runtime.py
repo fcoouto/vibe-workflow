@@ -1052,7 +1052,7 @@ class DelegationLifecycleDispatcherTests(unittest.TestCase):
     cli = DelegationDispatcherTests.cli
 
     def setUp(self):
-        from tests.test_delegation import Stage4NativeReviewTests
+        from tests.test_delegation_review import Stage4NativeReviewTests
         self.fixture=Stage4NativeReviewTests(methodName='runTest');self.fixture.setUp();self.addCleanup(self.fixture.doCleanups)
         self.base,self.repo=self.fixture.root,self.fixture.repo
         self.nested=self.repo/'nested';self.nested.mkdir()

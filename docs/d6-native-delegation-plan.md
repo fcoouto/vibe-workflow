@@ -111,7 +111,7 @@ not commit or publish implicitly; use current main when integrating completed wo
 
 ### 1. Align normal completion — implemented
 
-**Files:** `runtime/delegation.py`, `tests/test_delegation.py`,
+**Files:** `runtime/delegation.py`, `tests/test_delegation*.py`,
 `tests/test_evidence.py` and the native delegation instructions.
 
 - [x] Observed failing worker and reviewer cases before accepting the new proof.
@@ -126,7 +126,7 @@ not commit or publish implicitly; use current main when integrating completed wo
 ### 2. Make the complete cooperative flow usable
 
 **Files:** `runtime/delegation.py`, `runtime/evidence.py`,
-`tests/test_delegation.py`, `tests/test_evidence.py` and the check/delegation
+`tests/test_delegation*.py`, `tests/test_evidence.py` and the check/delegation
 instructions. The Codex adapter binds patch events to the child and the existing
 reservation. The state schema is unchanged.
 
