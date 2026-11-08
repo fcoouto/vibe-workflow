@@ -1,4 +1,5 @@
 """S3.5 (RF3): fresh gates at dispatch re-validate the admission's workflow binding against current state."""
+from contextlib import closing
 import copy
 import hashlib
 import json
@@ -112,7 +113,7 @@ class GateBase(DispatchBase):
         self.service = command.Service(self.settings, self.ledger, workflow=self.workflow)
 
     def ledger_body(self):
-        with sqlite3.connect(self.ledger) as db:
+        with closing(sqlite3.connect(self.ledger)) as db:
             return db.execute('SELECT body FROM ledger WHERE id=1').fetchone()[0]
 
     def prepared(self, attempt='a1', job_id='build', **extra):
@@ -557,7 +558,8 @@ class CanonicalWorkflowTests(unittest.TestCase):
 
     def job(self, job_id, brief=False):
         found = next(j for j in self.jobs if j['id'] == job_id)
-        value = dict(id=job_id, role=found['role'], scope_ref=self.f.identity['scope_ref'], claims=found['claims'])
+        value = dict(id=job_id, role=found['role'], scope_ref=self.f.identity['scope_ref'], claims=found['claims'],
+                     profile=job()['profile'])  # the profile is not part of the semantic digest
         if brief:
             value.update(objective='Implement bounded edit', context='Inspect existing callers first')
         return value
@@ -569,7 +571,7 @@ class CanonicalWorkflowTests(unittest.TestCase):
         return {str(p): p.read_bytes() for p in self.scope.runtime.state_dir.rglob('*') if p.is_file()}
 
     def ledger_body(self):
-        with sqlite3.connect(self.ledger) as db:
+        with closing(sqlite3.connect(self.ledger)) as db:
             return db.execute('SELECT body FROM ledger WHERE id=1').fetchone()[0]
 
     def assertRefused(self, attempt, reason):

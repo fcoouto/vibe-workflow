@@ -26,8 +26,10 @@ MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
 # Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
-# A larger admission is refused with `record_too_large` and writes nothing.
-MAX_ADMISSION_BYTES = 4096
+# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow
+# binding (S3.5, runtime/routing_gates.py), bounded by MAX_BINDING_BYTES on top of the S3.4 record allowance.
+MAX_BINDING_BYTES = 2560
+MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES
 MAX_HOLD_BYTES = 2048
 # Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
 # worst-case capacity test counts every hold at both bounds.
