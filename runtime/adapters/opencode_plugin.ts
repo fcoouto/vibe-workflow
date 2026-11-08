@@ -7,7 +7,7 @@
 // fixed reason codes only, never payload, header, environment, prompt or authority content.
 import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
-import { createHash, timingSafeEqual } from "node:crypto"
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -33,7 +33,8 @@ const MAX_PENDING = 1024  // ledger-known sessions waiting for attach, and their
 const PENDING_MS = 5 * 60 * 1000  // a pending entry is dropped after this and the ledger is asked again
 const MAX_CLOSED = 1024  // sessions of finished attempts; evicting, an evicted one is asked again
 const MAX_PROBES = 1024  // recent unmanaged or failed answers; evicting, used only to avoid asking again
-const MAX_PROBING = 8  // ledger questions in flight; beyond it a session counts as unmanaged for now
+const MAX_PROBING = 8  // ledger questions in flight, for creation events and for hooks each; beyond it, no answer for now
+const MAX_RETIRED = 4096  // managed descendants of detached roots; evicting, an evicted one is asked about no more
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
 const DENY_MESSAGE = "Blocked by Smart Routing: this managed session may not use this action."
@@ -144,6 +145,7 @@ class RoutingChild {
   seq = 0
   failures = 0
   retryAt = 0
+  stopped = false  // after shutdown nothing starts a child again
   buffer = ""
   pending = new Map<string, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>()
 
@@ -201,6 +203,7 @@ class RoutingChild {
   }
 
   send(op: string, fields: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (this.stopped) return Promise.reject(new RoutingBlocked("routing_stopped"))
     const id = `r${++this.seq}`
     const line = JSON.stringify({ v: PROTOCOL, op, id, ...fields })
     if (line.length > MAX_REQUEST) return Promise.reject(new RoutingBlocked("request_too_large"))
@@ -218,6 +221,7 @@ class RoutingChild {
 
   /** Send once; on a child fault respawn once and retry, then fail closed. Never waits beyond two bounded tries. */
   async call(op: string, fields: Record<string, unknown>) {
+    if (this.stopped) throw new RoutingBlocked("routing_stopped")
     if (this.failures >= 2 && performance.now() < this.retryAt) throw new RoutingBlocked("routing_unavailable")
     let respawned = false
     for (let attempt = 0; ; attempt++) {
@@ -235,6 +239,7 @@ class RoutingChild {
         return { response, respawned }
       } catch (error) {
         if (!(error instanceof ChildFault)) throw error
+        if (this.stopped) throw new RoutingBlocked("routing_stopped")
         if (attempt >= 1) {
           this.failures += 1
           if (this.failures >= 2) this.retryAt = performance.now() + BACKOFF_MS
@@ -245,6 +250,7 @@ class RoutingChild {
   }
 
   stop() {
+    this.stopped = true
     if (this.proc) this.fault(this.proc)
   }
 }
@@ -297,6 +303,10 @@ export function createRoutingPlugin(config: Config = {}) {
       const failed = new Map<string, number>()
       const probes = new Map<string, number>()  // session -> until when an unmanaged or failed answer stands
       const probing = new Map<string, Promise<Answer>>()
+      const asking = { event: 0, hook: 0 }  // questions in flight by who started them
+      // Managed descendants of detached roots -> that root, so a finished attempt's sessions stay blocked after detach.
+      const retired = new Map<string, string>()
+      const unattached = randomBytes(32).toString("base64url")  // compared against when there is no attachment
       const bounded = <V>(map: Map<string, V>, limit: number, key: string, value: V) => {
         map.delete(key)
         if (map.size >= limit) map.delete(map.keys().next().value as string)
@@ -365,21 +375,22 @@ export function createRoutingPlugin(config: Config = {}) {
        * Ask the ledger, read-only, about a derived session id: "known" (an open attempt owns it), "closed" (a finished
        * attempt did) or "no". Shared while in flight and at most MAX_PROBING at once; errors and overflow mean no.
        */
-      function probe(session: string): Promise<Answer> {
+      function probe(session: string, origin: "event" | "hook"): Promise<Answer> {
         if (holderOf(session) !== undefined) return Promise.resolve("known")
         if (closed.has(session)) return Promise.resolve("closed")
         if ((probes.get(session) ?? 0) > performance.now()) return Promise.resolve("no")
         let running = probing.get(session)
         if (running === undefined) {
-          if (probing.size >= MAX_PROBING) {
-            negative(session)  // asked again after the window
-            return Promise.resolve("no")
-          }
+          // Creation events and hooks each have their own limit, so a burst of creations never uses up a hook's
+          // question. Past a limit there is no answer for now, and it is not remembered: a hook asks again.
+          if (asking[origin] >= MAX_PROBING) return Promise.resolve("no")
+          asking[origin] += 1
           running = child.call("check", { session_id: session, request: PROBE_REQUEST }).then(({ response }): Answer => {
             const answer = response.state === "blocked" ? response.reason : response.state
             return answer === "attempt_closed" ? "closed" : typeof answer === "string" && LEDGER_KNOWS.has(answer) ? "known" : "no"
           }, (): Answer => "no").then((answer) => {
             probing.delete(session)
+            asking[origin] -= 1
             // A late answer still counts: it only adds protection.
             if (answer === "known") markPending(session, session)
             else if (answer === "closed") bounded(closed, MAX_CLOSED, session, true)
@@ -394,7 +405,7 @@ export function createRoutingPlugin(config: Config = {}) {
       /** The probe's answer within one request budget; a hook never waits longer, and a timeout counts as no. */
       async function ledgerAnswer(session: string): Promise<Answer> {
         try {
-          return await within(probe(session), child.timeoutMs + child.graceMs)
+          return await within(probe(session, "hook"), child.timeoutMs + child.graceMs)
         } catch {
           negative(session)
           return "no"
@@ -428,7 +439,7 @@ export function createRoutingPlugin(config: Config = {}) {
               const root = parent === null ? undefined : rootOf(parent)
               if (root !== undefined) recordDescendant(data.sessionID, root)
               else if (parent !== null && holderOf(parent) !== undefined) markPending(data.sessionID, holderOf(parent)!)
-              else if (derivedSession(data.sessionID) && rootOf(data.sessionID) === undefined) void probe(data.sessionID)
+              else if (derivedSession(data.sessionID) && rootOf(data.sessionID) === undefined) void probe(data.sessionID, "event")
             }
           } catch { /* live-only stream: lookups cover what it misses */ }
         })()
@@ -468,6 +479,17 @@ export function createRoutingPlugin(config: Config = {}) {
         if (known !== undefined) return attached.get(known) ?? null
         if (holderOf(session) !== undefined) return "pending"
         if (closed.has(session)) return "closed"
+        const former = retired.get(session)
+        if (former !== undefined) {
+          const again = rootOf(former)
+          if (again !== undefined) {
+            recordDescendant(session, again)
+            return attached.get(again)!
+          }
+          const answer = await ledgerAnswer(former)
+          if (answer === "closed") return "closed"
+          if (answer === "known") return markPending(session, former)
+        }
         if (derivedSession(session)) {
           const answer = await ledgerAnswer(session)
           if (answer === "known") return markPending(session, session)
@@ -497,10 +519,14 @@ export function createRoutingPlugin(config: Config = {}) {
           }
           const holder = holderOf(parent)
           if (holder !== undefined) return markPending(session, holder)
-          if (derivedSession(parent) && !closed.has(parent)) {
+          // A finished attempt's derived session blocks the sessions recorded under it too (never shells or lookups).
+          if (closed.has(parent)) return "closed"
+          if (derivedSession(parent)) {
             if (lookups >= MAX_LOOKUPS) return null
             lookups += 1
-            if (await ledgerAnswer(parent) === "known") return markPending(session, parent)
+            const answer = await ledgerAnswer(parent)
+            if (answer === "known") return markPending(session, parent)
+            if (answer === "closed") return "closed"
           }
           current = parent
         }
@@ -670,11 +696,16 @@ export function createRoutingPlugin(config: Config = {}) {
           }
           const session = body.session_id as string
           const attachment = attached.get(session)
-          // One reason for every refusal, so a caller learns nothing about which part was wrong.
-          if (!attachment || attachment.attempt !== body.attempt_id || !sameToken(attachment.authority, body.authority as string)) {
-            throw new RoutingBlocked("detach_refused")
+          // One reason for every refusal, and the token is always compared, so a caller learns nothing about which
+          // part was wrong or whether the session is attached here.
+          const matches = sameToken(attachment?.authority ?? unattached, body.authority as string)
+          if (!attachment || attachment.attempt !== body.attempt_id || !matches) throw new RoutingBlocked("detach_refused")
+          for (const [key, entry] of descendants) {
+            if (entry.root === session) {
+              forget(key)
+              bounded(retired, MAX_RETIRED, key, session)
+            }
           }
-          for (const [key, entry] of descendants) if (entry.root === session) forget(key)
           attached.delete(session)  // with it go its count, saturation and token
           probes.delete(session)  // a derived id is asked about again, so a ledger-known one is pending, not interactive
           return { state: "detached", session_id: session }
@@ -688,6 +719,7 @@ export function createRoutingPlugin(config: Config = {}) {
         descendants.clear()
         pending.clear()
         closed.clear()
+        retired.clear()
         probes.clear()
         probing.clear()
         recorded = 0
