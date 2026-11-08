@@ -35,23 +35,25 @@ The [capability matrix](../docs/smart-routing-capability-matrix.md#opencode-enfo
 
 ### Managed and interactive sessions
 
-Only managed sessions are protected (user decision in the capability matrix). A session is **managed** when a managed launcher attached it in this plugin instance with `routing.attach`, or when its parent chain (read with `session.get`, at most 8 levels) reaches an attached session. Every other session is **interactive**: the shim sends no check, starts no child process and blocks nothing for it, even when the routing command is missing or broken.
+Only managed sessions are protected (user decision in the capability matrix). A session is **managed** when a managed launcher attached it in this plugin instance with `routing.attach`, or when its parent chain reaches an attached session. Every other session is **interactive**: the shim sends no check, starts no child process and blocks nothing for it, even when the routing command is missing or broken.
+
+The shim learns parents from `session.created` events and, for sessions it has not seen, from `session.get` (at most 8 lookups of about 300 ms each per question). An attached session counts as a root. When the chain cannot be determined (a lookup fails, hangs or finds no parent ID), the session is blocked only if a session on the walked chain was created while any session was attached; otherwise it is interactive. A missing or invalid session ID, a known root, a cycle and a chain longer than the limits are interactive unless an attached session was reached first.
 
 Attachments live in the plugin instance's memory, and each project directory spelling gets its own instance. A managed launcher therefore, before every attempt, calls `routing.health` and then `routing.attach` for the session's canonical directory (symlinks resolved), and refuses to send if either fails. Attaching through another spelling of the path reaches a different instance and protects nothing (observed).
 
 ### What the shim does for a managed session
 
 - `model.request`: checks the request with its kind (`primary`, `title`, `compaction` or `generate`). An unknown kind or a malformed model blocks without a check.
-- `tool.execute.before` for `subagent`: checks the spawn with kind `subagent` and the requested `provider/model#variant`. A spawn without an explicit model, or with a malformed one, blocks without a check.
+- `tool.execute.before` for `subagent`: checks the spawn with kind `subagent` and the requested `provider/model#variant`. Managed spawns must name their model: a spawn without one (`subagent_model_required`) or with a malformed one blocks without a check. A route without a variant never matches an admission, because the admitted identity includes it.
 - Every other tool, including MCP and Code Mode nested calls: no check. The worker profile's policy deny rules govern them; see [What can be enforced](#what-can-be-enforced).
-- `permission.evaluate`: sets `webfetch` and any action listed in the attachment's `deny_actions` to `deny`. It only tightens; a configured `deny` is final and never reaches the hook.
-- `shell.create.before`: the hook carries no session ID, so while any session is attached in this instance every shell started by the instance loses its environment variables whose names look like credentials (the adapter's rule) or cannot be classified. Interactive shells in the same instance lose them too for that time.
+- `permission.evaluate`: sets `webfetch` and any action listed in the attachment's `deny_actions` to `deny`, with the shim's message; an action that is already denied keeps its message. It only tightens; a configured `deny` is final and never reaches the hook.
+- `shell.create.before`: the hook carries no session ID, so while any session is attached in this instance every shell started by the instance loses its environment variables whose names look like credentials. The rule is the adapter's `CREDENTIAL_ENV` (API keys, keys, tokens, secrets, passwords, credentials, auth, cookies, private, DSNs, connection strings and `DATABASE_URL`), applied to names outside the usual pattern after splitting camelCase and punctuation. Interactive shells in the same instance lose them too for that time; for example `SSH_AUTH_SOCK` goes, so git over SSH fails in that instance until the attached sessions are detached. Not stripped: names that only point at credential files (`AWS_PROFILE`, `KUBECONFIG`), passwords embedded in other URL variables, and the files themselves.
 
-A session passes only when the answer is `allow`. Everything else blocks the request before it is sent: a `blocked` answer, `unmanaged`, a timeout, an unreadable line, an answer with an unknown ID or another version, a missing state, the child exiting, a failed parent lookup while any session is attached, or a request over 4 KiB.
+A managed session passes only when the answer is `allow`. Everything else blocks the request before it is sent: a `blocked` answer, `unmanaged`, a timeout, an unreadable line, an answer with an unknown ID or another version, a missing state, the child exiting, an undeterminable chain with the evidence above, or a request over 4 KiB.
 
 ### Routing child
 
-The shim starts one `python3 -I -B scripts/routing.py --serve` child per plugin instance on first use, with the `--settings` and `--ledger` pins from the plugin options and an environment without credential names. Requests are JSON lines `{"v": 1, "op", "id", ...}` and answers are matched by ID, so concurrent hooks share the child. Each request has about 500 ms, plus a one-time start-up allowance of 1 s after a spawn. On a stall, exit, unreadable line or unknown ID, the shim kills the child, starts a new one and retries once; if that also fails, the hook throws `routing_unavailable`.
+The shim starts one `python3 -I -B scripts/routing.py --serve` child per plugin instance on first use, with the `--settings` and `--ledger` pins from the plugin options and an environment without credential names. Requests are JSON lines `{"v": 1, "op", "id", ...}` and answers are matched by ID, so concurrent hooks share the child. Each request has about 500 ms, plus a one-time start-up allowance of 1 s after a spawn. On a stall, exit, unreadable line or unknown ID, the shim kills the child, starts a new one and retries once; if that also fails, the hook throws `routing_unavailable`. Killing the child fails every request waiting on it, and each of those is retried once on the new child, so one stalled request can delay the others by one timeout. After two such failures in a row the shim fails fast for about 1 s before starting a child again; it never gives up for good.
 
 Plugin options: `python` (interpreter, default `python3`), `settings`, `ledger` and `timeout_ms` (at most 5000).
 
@@ -59,9 +61,11 @@ Plugin options: `python` (interpreter, default `python3`), `settings`, `ledger` 
 
 The plugin registers RPC `routing` (`POST /api/rpc/routing/<method>` with `{"input": {...}}` and the `x-opencode-directory` header):
 
-- `health` `{}`: the child must answer a `status` ping with `ok`. Returns `{state: "ok", child: "up" | "respawned", version: 1, respawn_ms}`; anything else is an error (observed HTTP 500 with the child down; HTTP 400 `rpc.unavailable` when the plugin did not load).
-- `attach` `{session_id, attempt_id, funding_pool, deny_actions?}`: marks the session managed with the admitted attempt and pool that every check uses. Re-attaching replaces the attempt and releases inherited children. At most 256 sessions.
+- `health` `{}`: asks the child for `status` within the request budget. Returns `{state: "ok", child: "up" | "respawned", version: 1, respawn_ms}` only when the settings are readable and the ledger exists and opens; `{state: "not_ready", reason: "settings_unavailable" | "ledger_absent" | "ledger_unavailable", version: 1}` when the child answers but cannot yet answer a check; and an error when the child does not answer (observed HTTP 500 with the child down; HTTP 400 `rpc.unavailable` when the plugin did not load). A launcher sends only after `ok`, so the order is `prepare` (which creates the ledger), then `health`, then `attach` and dispatch.
+- `attach` `{session_id, attempt_id, funding_pool, deny_actions?}`: marks the session managed with the admitted attempt and pool that every check uses. Re-attaching replaces the attempt. At most 256 attached sessions; children found through them are not counted.
 - `detach` `{session_id}`: returns the session and the children found through it to interactive.
+
+The RPC checks no caller authority: any client of the server, including an interactive agent or a worker that can reach it through a shell, can attach a session or detach a managed one. Enforced worker profiles deny shell, Code Mode `execute` and `webfetch`, so they cannot reach it. Task S3.4's single-use dispatch authority must gate `attach` and `detach`.
 
 ### The `unmanaged` answer
 
@@ -70,6 +74,7 @@ The plugin registers RPC `routing` (`POST /api/rpc/routing/<method>` with `{"inp
 ### Residual risks
 
 - A plugin instance that restarts or reloads during an attempt forgets its attachments; until the launcher attaches again, that session runs unguarded.
+- A managed child whose `session.created` event was missed and whose `session.get` lookup fails passes as interactive unless another session on its chain was seen being created while a session was attached.
 - A managed session in an instance the launcher did not attach (another directory spelling, another server) is unguarded.
 - Commands run inside an allowed shell, and a plugin that failed to load, stay unenforceable (capability matrix).
 

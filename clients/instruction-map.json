@@ -194,15 +194,15 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "3be722825666bbcd4ab8d84203ccdec930e11ccdaf556be3bc4f241c0269b528",
+      "sha256": "6d7516727d22f87c6071b3ca747fc61f127a9881058a936685a2fae62e0a8966",
       "ranges": [
         [
           1,
-          59
+          49
         ],
         [
-          60,
-          78
+          50,
+          83
         ]
       ]
     },
