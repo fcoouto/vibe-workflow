@@ -36,8 +36,10 @@ READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
 FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
-              check=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
-              set=(set(), {'expected_revision', 'change', 'organization'}))
+              check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
+              dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
+              set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}))
+EVENT_FIELDS = {'event_id', 'attempt_id', 'kind'}
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
 ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
@@ -296,22 +298,39 @@ class Service:
                                  table_version=ranking.get('table_version')),
                     profile={key: profile[key] for key in PROFILE_FIELDS})
 
-    def _check(self, body):
-        attempt, facts = body['attempt_id'], _facts(body['request'])
-        require(_text(attempt), 'invalid_request')
-        now = self.clock()
+    def _now(self, body):
+        """The command's clock; only the `--test-inputs` flag lets a request supply `now`."""
         if self.test_inputs and 'now' in body:
-            now = body['now']
-            require(_amount(now), 'invalid_request')
+            require(_amount(body['now']), 'invalid_request')
+            return body['now']
+        return self.clock()
+
+    def _check(self, body):
+        facts = _facts(body['request'])
+        require(('attempt_id' in body or 'session_id' in body)
+                and all(_text(body[key]) for key in ('attempt_id', 'session_id') if key in body), 'invalid_request')
+        authority = body.get('authority')
+        require(authority is None or (type(authority) is str and 0 < len(authority) <= routing.MAX_AUTHORITY
+                                      and authority.isascii() and authority.isprintable()), 'invalid_request')
+        now = self._now(body)
         settings = self._settings()
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        return routing.check_request(ledger.snapshot(), attempt, facts, settings, now)
+        return routing.check(ledger.snapshot(), facts, settings, now, attempt_id=body.get('attempt_id'),
+                             session_id=body.get('session_id'), authority=authority)
+
+    def _dispatch(self, body):
+        attempt, facts = body['attempt_id'], _facts(body['request'])
+        require(_text(attempt), 'invalid_request')
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
+        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body))
 
     def _record(self, body):
         event = body['event']
-        require(type(event) is dict and set(event) == {'event_id', 'attempt_id', 'kind'}
-                and all(_text(event[key]) for key in event), 'invalid_request')
+        require(type(event) is dict and set(event) == EVENT_FIELDS and all(_text(event[key]) for key in event),
+                'invalid_request')
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
         result = routing.record_event(ledger, event['attempt_id'], event['kind'])
@@ -346,15 +365,45 @@ class Service:
         if 'organization' in body:
             require(set(body) == {'organization'}, 'invalid_request')
             return self._organization(body['organization'])
+        if 'authority_required' in body:
+            value = body['authority_required']
+            require(set(body) == {'authority_required'} and type(value) is bool, 'invalid_request')
+            require(value, 'authority_required_one_way')
+            self._ledger(True, write=True).require_authority()
+            return dict(state='updated', authority_required=True)
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
+        # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
+        # so a change and a dispatch are totally ordered and `invalidated_attempts` is exact. A ledger that is absent,
+        # busy, corrupt or unsafe must not stop a change (turning API Usage or Smart Routing off is a money stop):
+        # the settings are still written (the revision check applies) and the list is null with `ledger_state`.
+        # That stays safe because `dispatch` re-reads the settings inside its transaction and `check` compares revisions.
+        stage = {}
+        try:
+            ledger = self._ledger(False, write=True)
+            if ledger is not None:
+                with ledger.transaction() as data:
+                    stage['entered'] = True
+                    return self._update_settings(body, data, stage)
+            problem = 'absent'
+        except Exception as error:  # noqa: BLE001 - every ledger failure falls back; settings refusals re-raise
+            if stage.get('entered') and 'updated' not in stage:
+                raise  # the settings change itself was refused or failed: nothing was written
+            self.close()
+            problem = (error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError)
+                       else 'ledger_busy' if _busy(error) else 'ledger_unavailable')
+            if 'updated' in stage:  # written under the lock, then the ledger failed: report it as unordered
+                return dict(stage['updated'], invalidated_attempts=None, ledger_state=problem)
+        return dict(self._update_settings(body, None, stage), invalidated_attempts=None, ledger_state=problem)
+
+    def _update_settings(self, body, data, stage):
         try:
             updated = routing_settings.update(self.settings_path, body['change'], body['expected_revision'])
         except SettingsError as error:
             raise Blocked(str(error)) from None
         revision = updated.pop('revision')
-        ledger = self._ledger(False)
-        stale = routing.unsent_admissions(ledger.snapshot(), revision) if ledger is not None else []
-        return dict(state='updated', revision=revision, settings=updated, invalidated_attempts=stale)
+        stage['updated'] = dict(state='updated', revision=revision, settings=updated)
+        stale = routing.unsent_admissions(data, revision) if data is not None else None
+        return dict(stage['updated'], invalidated_attempts=stale)
 
     def _organization(self, value):
         """Explicit user action through the ledger's own enable/disable paths; routing never calls this itself."""

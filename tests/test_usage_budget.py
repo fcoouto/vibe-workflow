@@ -730,6 +730,9 @@ class ParallelLedgerTests(unittest.TestCase):
                                                  account='acct', now=101, revision=1))
         self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)  # the hold is part of R before conversion
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct'])
+        # S3.4: only a hold dispatched with an issued authority converts.
+        self.ledger.dispatch_hold('a', '0' * 64, dict(session_id='ses_a', message_id='msg_a'),
+                                  lambda data, moment: None, 101)
         run = self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'), next_request_bound=0)
         self.assertEqual((run['calls']['count']['maximum'], run['account']), (6 * M, 'acct'))
         state = self.ledger.snapshot()
