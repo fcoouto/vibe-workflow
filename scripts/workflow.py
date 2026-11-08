@@ -138,7 +138,14 @@ def control_main():
             action.add_argument("--plan-dir", required=True)
             if name == "inspect":
                 action.add_argument("--cwd", required=True)
+        upgrade = commands.add_parser("upgrade", add_help=False)
+        upgrade.add_argument("action", choices=("status", "record"))
         args = parser.parse_args()
+        if args.command == "upgrade":
+            from runtime import package_versions
+            report = (package_versions.status if args.action == "status" else package_versions.record)(PACKAGE)
+            print(json.dumps(report))
+            return 0 if report["ok"] else 1
         if args.command == "onboard":
             from runtime.onboarding import MAX_REQUEST, inspect_project, read_request, record_plan
             request = read_request(sys.stdin.buffer.read(MAX_REQUEST + 1))
@@ -278,7 +285,7 @@ def control_main():
 
 
 def main():
-    control = len(sys.argv) > 1 and sys.argv[1] in {"task", "doctor", "onboard", "evidence", "delivery", "delegation"}
+    control = len(sys.argv) > 1 and sys.argv[1] in {"task", "doctor", "onboard", "evidence", "delivery", "delegation", "upgrade"}
     if sys.version_info < (3, 11):
         print(json.dumps({"ok": False, "error": "Vibe Coding Workflow requires Python 3.11+"} if control else
                          {"systemMessage": "Vibe Coding Workflow requires Python 3.11+ on the hook PATH."}))
@@ -323,6 +330,15 @@ def main():
                             output["systemMessage"] = (output.get("systemMessage", "") + " " + presentation["notification"]).strip()
                 except Exception:
                     # Optional title repair must preserve the startup result.
+                    pass
+            if output is not None and time.monotonic() < deadline:
+                try:
+                    from runtime import package_versions
+                    warning = package_versions.drift_warning(PACKAGE, start.client)
+                    if warning:
+                        output = package_versions.append_warning(output, warning)
+                except Exception:
+                    # The optional drift warning must preserve the startup result.
                     pass
         else:
             event = codex.normalize_runtime(payload)

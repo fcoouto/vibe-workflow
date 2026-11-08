@@ -194,11 +194,15 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "7c2c6df0f8ce78adf048fd0fbd7e52b2f770efc5c28ca1052bc6848753d97383",
+      "sha256": "d06ef83a11e4624024ffe97eb89520421f2db80714246f0eca954fdfefc761bf",
       "ranges": [
         [
           1,
-          34
+          50
+        ],
+        [
+          51,
+          86
         ]
       ]
     },
@@ -401,7 +405,7 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "9d40a4b3e82a9c8454fe6f7e186e87f38bd5987d5cb55b8cb0e09fdb1d0da775",
+      "sha256": "c6087eeadb580c6c13156cedc3cbe3f3238964da8d58bee07705f831187f1ef0",
       "ranges": [
         [
           1,
@@ -687,11 +691,20 @@
       ]
     },
     "skills/prepare-my-workspace/SKILL.md": {
-      "sha256": "85d62781f5ed2e02ee58a591b6dace85e069eae0bcbfe208758cf53c60f58b50",
+      "sha256": "a1eb5a8864d5f33b302dea0ca0cacc237c94e0f7c9a65d0086e78e06eb8a3c05",
       "ranges": [
         [
           1,
           12
+        ]
+      ]
+    },
+    "skills/prepare-my-workspace/references/upgrade.md": {
+      "sha256": "18bdccf0ca821779dad787f84b01f0cbe935cd0dddc77d82bf2d041ead750e96",
+      "ranges": [
+        [
+          1,
+          45
         ]
       ]
     },
