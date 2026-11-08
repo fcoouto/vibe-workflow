@@ -1,0 +1,11 @@
+{
+  "name": "vibe-workflow-local",
+  "owner": {"name": "fcoouto"},
+  "plugins": [
+    {
+      "name": "vibe-workflow",
+      "source": "./",
+      "description": "Prepare development environments with the Vibe Coding Toolkit."
+    }
+  ]
+}
