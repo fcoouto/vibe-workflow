@@ -4,7 +4,7 @@ Use existing coordinator task scoping, native worker selection and independent
 review contracts. API proposals receive only the bounded approved task packet;
 no shell, tools, native connector access, external writes or reviewer authority.
 For foreground work, load [Codex host admission](codex-host.md). For optional
-local tests, use `Controller.run_shadow` with synthetic connections.
+local tests, drive the private runner with a connection factory and credential resolver fixture.
 
 For external consideration and reusable source permission, apply the [shared contract](../../../clients/external-delegation.md).
 
@@ -17,7 +17,7 @@ For external consideration and reusable source permission, apply the [shared con
    Smart Balance may choose within standing consent. Require independently
    checkable output and a ready native reviewer. Unknown consent, funding, price, expiry or budget pauses the API assignment.
 3. Pin current consent and admission evidence through atomic begin/dispatch. Count
-   and generation have separate attempt IDs under one run/slot. Reserve count's
+   and generation have separate attempt IDs under one run, which holds its own claim. Reserve count's
    known maximum first; generation needs its own bound after the exact count.
    Never assume counting is free or shrink the maximum using cache discounts.
 4. Prepare IO before the final atomic dispatch grant. Disable ordered before that
@@ -44,7 +44,7 @@ task through existing context and evidence references.
 | --- | --- |
 | Task, scope, bounded brief, source snapshots, role, specialty and custom name | Coordinator assignment context and original visibility declaration |
 | Requested selection | Proposal `provider` (`openai-api` or Smart `auto`) and existing local and API-only choices |
-| Actual route | Successful generation result `execution_route: openai-api` from the runner. The host verifies it. A simulation still reports its runner and cannot register. A replay of stored state makes no execution claim. |
+| Actual route | Successful generation result `execution_route: openai-api` from the runner. The host verifies it. A replay of stored state makes no execution claim. |
 | Attempts and costs | Existing ledger run ID, `<run_id>:count`, `<run_id>:generation`, consent scope, admission pin and generation state and cost |
 | Configured and observed model | Approved profile and validated provider response. The display name is for presentation. |
 | Native child | Observed native spawn and its parent and attempt. Foreground generation creates no child. |
@@ -59,8 +59,8 @@ canonical role and retains any custom role name in the declaration.
 
 Each attempt sends at most once. A repeated run/attempt ID returns stored state,
 never another generation. A host transport result proving no send can reject that
-attempt with zero cost and release its API slot. Sent or uncertain failures retain
-maximum reservations and unknown slot ownership; do not infer zero cost from
+attempt with zero cost and close its claim. Sent or uncertain failures retain
+maximum reservations and unresolved exposure; do not infer zero cost from
 elapsed time, process death or a refreshed balance. No automatic retry, provider
 switch, new purchases or paid funding is permitted.
 
@@ -69,7 +69,7 @@ source, price or affordability checks fail before sending generation, retain the
 count charge and release only the proven-unsent generation reservation. A scoped
 correction uses a new run within the original task budget; it requires reasoned selection under the accepted envelope.
 
-Known generation completion can release the API slot while retaining credit
+Known generation completion can close the run's claim while retaining credit
 charges. Native integration and independent review establish task completion.
 An account-wide change alone does not measure the cost of one task.
 Unknown or insufficient evidence never waives review.
@@ -91,7 +91,7 @@ is not execution, review or completion evidence. Unclaimed handoffs recheck the
 latest task choices and reviewer readiness.
 
 Native continuation can proceed independently of a pending tool-free API result,
-with all API maximum charges and unknown slots retained. Do not duplicate external
+with all API maximum charges and unresolved claims retained. Do not duplicate external
 actions, assume upstream cancellation or accept late API text without fresh checks.
 The native agent owns remaining implementation/checks and still needs an independent
 reviewer before acceptance. Complete or abandon under the existing native workflow;

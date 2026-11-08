@@ -96,14 +96,13 @@ class LiveAdmissionTests(unittest.TestCase):
         self.factory.side_effect = [counted, generated]
 
         result = self.run_candidate(self.proof)
-        self.assertTrue(result['simulation_only'])
         self.assert_generation_route(result, (counted, generated))
         self.assertEqual(self.resolver.call_count, 2)
         self.assertEqual([conn.requests[0][1] for conn in (counted, generated)],
                          ['/v1/responses/input_tokens', '/v1/responses'])
         data = self.ledger.snapshot()
         self.assertEqual(len(data['native']), 1)
-        self.assertIsNone(data['slot'])
+        self.assertNotIn('slot', data)
         self.assertEqual(data['runs']['run']['calls']['count']['cost'], 7)
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
             self.run_candidate(self.proof)
@@ -122,7 +121,7 @@ class LiveAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(budget.BudgetError, 'incomplete_response'):
             self.run_candidate(self.proof)
         before = self.ledger.snapshot()
-        self.assertEqual(before['slot'], 'run')
+        self.assertFalse(before['runs']['run']['closed'])
         self.assertEqual(len(before['native']), 1)
         generation = before['runs']['run']['calls']['generation']
         self.assertEqual(generation['state'], 'unresolved')
@@ -134,9 +133,10 @@ class LiveAdmissionTests(unittest.TestCase):
         with patch('runtime.usage_settings.controller') as controller:
             controller.return_value.__enter__.return_value = self.controller
             result = routing.reconcile(self.controller.root, {})
-        self.assertEqual(result, dict(state='manual_recovery_required',
-            pending=dict(attempt_id='run:generation', reserved_usd_micros=generation['maximum'],
-                         incomplete=diagnostic)))
+        pending = dict(attempt_id='run:generation', reserved_usd_micros=generation['maximum'],
+                       incomplete=diagnostic)
+        self.assertEqual(result, dict(state='manual_recovery_required', pending=pending,
+                                      pending_attempts=[pending]))
         self.assertEqual(self.ledger.reconcile(scope='other'), {'state': 'manual_recovery_required'})
         self.assertEqual(self.ledger.snapshot(), before)
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
@@ -266,7 +266,7 @@ class LiveAdmissionTests(unittest.TestCase):
         with self.assertRaisesRegex(budget.BudgetError, 'live_cap_exceeded'):
             self.run_candidate(proof, candidate)
         self.assertEqual(len(self.factory.return_value.requests), 1)
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
         self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['cost'], 7)
 
     def test_disable_while_transport_prepares_prevents_count_post(self):
@@ -281,7 +281,7 @@ class LiveAdmissionTests(unittest.TestCase):
         with self.assertRaises(budget.BudgetError):
             self.run_candidate(self.proof)
         self.assertEqual(connection.requests, [])
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
         self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['state'],
                          'rejected-before-send')
 
@@ -307,7 +307,7 @@ class LiveAdmissionTests(unittest.TestCase):
         restored = replace(self.proof, grant=replace(self.proof.grant, balance=1, observed_at=102))
         with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
             self.run_candidate(restored)
-        self.assertEqual(self.ledger.snapshot()['organizations']['org']['floor'], 1)
+        self.assertEqual(self.ledger.snapshot()['organizations']['org']['issued'], 1)
         self.resolver.assert_not_called()
         self.factory.assert_not_called()
 
@@ -331,7 +331,7 @@ class LiveAdmissionTests(unittest.TestCase):
             self.controller._run_live(self.task, self.proof, scope_check=check_scope,
                                       connection_factory=self.factory, credential_resolver=self.resolver)
         self.assertEqual(connection.requests, [])
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
 
 
 if __name__ == '__main__':
