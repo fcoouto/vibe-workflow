@@ -1,24 +1,26 @@
 """S3.4: single-use dispatch authority, derived host ids, `unmanaged` sessions and lost acknowledgments."""
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
+import time
 import unittest
 from unittest import mock
 
-from runtime import routing, usage_budget as budget
+from runtime import routing, routing_settings, usage_budget as budget
 from runtime.adapters import opencode
 from scripts import routing as command
-from tests.test_routing_command import (API, Base, POLICY, SCRIPT, api_observations, check, facts, now,
-                                        observations, prepare)
+from tests.test_routing_command import (API, Base, SCRIPT, api_observations, check, facts, now, observations,
+                                        prepare)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONSERVATIVE_SESSION = re.compile(r'ses_[0-9a-f]{32}')
 CONSERVATIVE_MESSAGE = re.compile(r'msg_[0-9a-f]{32}')
+LEDGER_A, LEDGER_B = 'a' * 32, 'b' * 32
 
 
 def dispatch(attempt, **extra):
@@ -33,21 +35,42 @@ def record(attempt, kind, event_id=None, **extra):
     return dict(v=1, op='record', event=event)
 
 
-def proof(attempt, observed_at, **change):
-    ids = routing.derive_ids(attempt)
-    value = dict(kind='message_absent', session_id=ids['session_id'], message_id=ids['message_id'],
-                 observed_at=observed_at)
-    value.update(change)
-    return value
-
-
 def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def authorize(ledger, attempt, now=1):
+    """Ledger-level dispatch with an issued authority and no gate (for conversion tests)."""
+    ids = routing.derive_ids(attempt, ledger.snapshot()['identity'])
+    return ledger.dispatch_hold(attempt, digest('token-' + attempt), ids, lambda data, moment: None, now)
+
+
+class DispatchBase(Base):
+    def ids(self, attempt):
+        return routing.derive_ids(attempt, self.snapshot()['identity'])
+
+    def spawn(self, op, request):
+        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), op, '--settings', str(self.settings),
+                                  '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        child.stdin.write(json.dumps(request).encode())
+        return child
+
+    @staticmethod
+    def collect(children):
+        for child in children:
+            child.stdin.close()
+        results = []
+        for child in children:
+            results.append(json.loads(child.stdout.read()))
+            child.wait(timeout=60)
+            child.stdout.close(); child.stderr.close()
+        return results
+
+
 class DeriveIdsTests(unittest.TestCase):
     def test_ids_are_deterministic_and_match_the_host_patterns(self):
-        first, again = routing.derive_ids('attempt-1'), routing.derive_ids('attempt-1')
+        first, again = routing.derive_ids('attempt-1', LEDGER_A), routing.derive_ids('attempt-1', LEDGER_A)
         self.assertEqual(first, again)
         self.assertEqual(set(first), {'session_id', 'message_id'})
         self.assertTrue(opencode.SESSION.fullmatch(first['session_id']))
@@ -55,39 +78,49 @@ class DeriveIdsTests(unittest.TestCase):
         self.assertTrue(CONSERVATIVE_SESSION.fullmatch(first['session_id']))
         self.assertTrue(CONSERVATIVE_MESSAGE.fullmatch(first['message_id']))
         first['session_id'] = 'mutated'
-        self.assertNotEqual(routing.derive_ids('attempt-1')['session_id'], 'mutated')
+        self.assertNotEqual(routing.derive_ids('attempt-1', LEDGER_A)['session_id'], 'mutated')
 
-    def test_ids_are_unique_over_a_hundred_thousand_attempts(self):
+    def test_two_ledgers_never_share_ids_for_one_attempt_id(self):
+        a, b = routing.derive_ids('a1', LEDGER_A), routing.derive_ids('a1', LEDGER_B)
+        self.assertFalse(set(a.values()) & set(b.values()))
+        # Field boundaries are unambiguous: moving characters between the ledger and attempt parts changes the ids.
+        self.assertNotEqual(routing.derive_ids('b', 'ledgera'), routing.derive_ids('ab', 'ledger'))
+
+    def test_ids_are_injective_over_a_two_hundred_thousand_sample(self):
         sessions, messages = set(), set()
-        for i in range(100_000):
-            ids = routing.derive_ids('attempt-%d' % i)
-            sessions.add(ids['session_id'][4:])
-            messages.add(ids['message_id'][4:])
-        self.assertEqual((len(sessions), len(messages)), (100_000, 100_000))
+        for identity in (LEDGER_A, LEDGER_B):
+            for i in range(100_000):
+                ids = routing.derive_ids('attempt-%d' % i, identity)
+                sessions.add(ids['session_id'][4:])
+                messages.add(ids['message_id'][4:])
+        self.assertEqual((len(sessions), len(messages)), (200_000, 200_000))
         self.assertFalse(sessions & messages)  # the session and message spaces are domain-separated
 
     def test_near_identical_attempts_differ_and_bad_input_is_refused(self):
         variants = ['a', 'A', 'a ', ' a', 'aé', 'a' * 256, 'b' * 256]
-        self.assertEqual(len({routing.derive_ids(v)['session_id'] for v in variants}), len(variants))
+        self.assertEqual(len({routing.derive_ids(v, LEDGER_A)['session_id'] for v in variants}), len(variants))
         for bad in ('', 'x' * 257, 'tab\tid', None, 7, b'a'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                routing.derive_ids(bad)
+                routing.derive_ids(bad, LEDGER_A)
+            with self.subTest(identity=bad), self.assertRaises(ValueError):
+                routing.derive_ids('a1', bad)
 
 
-class DispatchTests(Base):
+class DispatchTests(DispatchBase):
     def setUp(self):
         super().setUp()
         self.assertEqual(self.call(prepare('a1'))['state'], 'admitted')
 
     def test_dispatch_issues_one_authority_and_moves_the_hold(self):
         response = self.call(dispatch('a1', id='d1'))
-        ids = routing.derive_ids('a1')
+        ids = self.ids('a1')
         self.assertEqual(response['state'], 'dispatched', response)
         self.assertEqual((response['v'], response['id'], response['attempt_id']), (1, 'd1', 'a1'))
         self.assertEqual((response['session_id'], response['message_id']), (ids['session_id'], ids['message_id']))
         self.assertRegex(response['authority'], r'^[A-Za-z0-9_-]{43}$')
         self.assertEqual(response['reconcile_hint'], dict(
-            read='message', method='GET', session_id=ids['session_id'], message_id=ids['message_id'],
+            read='message', method='GET', authoritative=False, session_id=ids['session_id'],
+            message_id=ids['message_id'],
             path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id'])))
         hold = self.snapshot()['holds']['a1']
         self.assertEqual(hold['state'], 'dispatched')
@@ -176,15 +209,15 @@ class DispatchTests(Base):
     def test_derived_id_collision_is_refused(self):
         self.call(prepare('a2'))
         self.assertEqual(self.call(dispatch('a1'))['state'], 'dispatched')
-        taken = routing.derive_ids('a1')
+        taken = self.ids('a1')
         for clash in (taken, dict(session_id='ses_' + '0' * 32, message_id=taken['message_id'])):
             with self.subTest(clash=clash), \
-                    mock.patch.object(routing, 'derive_ids', side_effect=lambda attempt: dict(clash)):
+                    mock.patch.object(routing, 'derive_ids', side_effect=lambda attempt, identity: dict(clash)):
                 self.assertEqual(self.call(dispatch('a2')), dict(v=1, state='blocked', reason='id_collision'))
             self.assertEqual(self.snapshot()['holds']['a2']['state'], 'admitted')
 
 
-class FundedDispatchTests(Base):
+class FundedDispatchTests(DispatchBase):
     def setUp(self):
         super().setUp()
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(api_usage_enabled=True)))
@@ -193,7 +226,7 @@ class FundedDispatchTests(Base):
         request = prepare('api1', observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']))
         self.assertEqual(self.call(request)['admission']['class'], 'api')
 
-    def test_disabled_organization_or_api_usage_blocks_dispatch_and_consumes_nothing(self):
+    def test_disabled_organization_blocks_dispatch_and_consumes_nothing(self):
         held = budget.Ledger.held(self.snapshot())
         self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=False)))
         self.assertEqual(self.call(dispatch('api1', request=facts(**API))),
@@ -203,7 +236,7 @@ class FundedDispatchTests(Base):
 
     def test_api_usage_off_blocks_dispatch(self):
         # Through the command the settings revision gate would fire first; this isolates API Usage.
-        settings = dict(routing.routing_settings.resolve({}), api_usage_enabled=False, revision=1)
+        settings = dict(routing_settings.resolve({}), api_usage_enabled=False, revision=1)
         with self.open_ledger() as ledger:
             result = routing.dispatch(ledger, 'api1', facts(**API), settings, now())
         self.assertEqual(result, dict(state='blocked', reason='api_usage_disabled'))
@@ -217,51 +250,109 @@ class FundedDispatchTests(Base):
         self.assertEqual((allowed['state'], allowed['remaining']), ('allow', {'org:personal': 6 * 1_000_000}))
 
 
-class GateSeamTests(Base):
-    """S3.5 adds fresh gates through `gates`; a refusal there consumes nothing."""
-    def test_an_extra_gate_refuses_inside_the_transaction(self):
+class ConversionTests(DispatchBase):
+    """`convert_hold` takes only a hold dispatched with an issued authority, and keeps its dispatch record."""
+    def setUp(self):
+        super().setUp()
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(api_usage_enabled=True)))
+        budget.initialize(self.ledger)
+        self.fund()
+        for attempt in ('c1', 'c2'):
+            request = prepare(attempt, observations=api_observations(),
+                              constraints=dict(allowed_strategy_ids=['s-api']))
+            self.assertEqual(self.call(request)['state'], 'admitted')
+
+    def convert(self, attempt):
+        task = self.snapshot()['holds'][attempt]['task']
+        with self.open_ledger() as ledger:
+            return ledger.convert_hold(attempt, 'personal', 'packet', 5_000_000, 1, now(),
+                                       dict(account='na', task=task, windows=[]))
+
+    def test_only_an_authority_dispatched_hold_converts(self):
+        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+            self.convert('c1')  # admitted, never dispatched
+        self.call(record('c2', 'dispatched'))  # an S3.1 recorded dispatch carries no authority
+        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+            self.convert('c2')
+        self.assertEqual(self.call(dispatch('c1', request=facts(**API)))['state'], 'dispatched')
+        issued = self.snapshot()['holds']['c1']['dispatch']
+        run = self.convert('c1')
+        hold = self.snapshot()['holds']['c1']
+        self.assertEqual((run['organization'], hold['state'], hold['dispatch']), ('personal', 'converted', issued))
+
+    def test_an_uncertain_hold_never_converts(self):
+        self.call(dispatch('c1', request=facts(**API)))
+        self.call(record('c1', 'uncertain'))
+        before = self.snapshot()
+        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+            self.convert('c1')
+        self.assertEqual(self.snapshot(), before)
+
+
+class GateSeamTests(DispatchBase):
+    """S3.5 adds fresh gates through `gates`; a refusal there consumes nothing and gates cannot write."""
+    def setUp(self):
+        super().setUp()
         self.call(prepare('a1'))
+        self.settings_value = dict(routing_settings.resolve({}), revision=0)
+
+    def test_an_extra_gate_refuses_inside_the_transaction(self):
         seen = []
 
         def reopened(data, record):
             seen.append(record['attempt_id'])
             return 'dependency_reopened'
-        settings = dict(routing.routing_settings.resolve({}), revision=0)
         with self.open_ledger() as ledger:
-            result = routing.dispatch(ledger, 'a1', facts(), settings, now(), gates=(reopened,))
+            result = routing.dispatch(ledger, 'a1', facts(), self.settings_value, now(), gates=(reopened,))
             self.assertEqual(result, dict(state='blocked', reason='dependency_reopened'))
             self.assertEqual(seen, ['a1'])
             self.assertEqual(ledger.snapshot()['holds']['a1']['state'], 'admitted')
-            passed = routing.dispatch(ledger, 'a1', facts(), settings, now(), gates=(lambda data, record: None,))
+            passed = routing.dispatch(ledger, 'a1', facts(), self.settings_value, now(),
+                                      gates=(lambda data, record: None,))
         self.assertEqual(passed['state'], 'dispatched')
 
+    def test_a_gate_cannot_change_the_ledger(self):
+        def meddle(data, record):
+            data['caps'] = dict(total=99, per_account=99)
+            data['holds']['a1']['amount'] = 0
+            record['route'] = 'elsewhere'
+            return None
+        before = self.snapshot()
+        with self.open_ledger() as ledger:
+            result = routing.dispatch(ledger, 'a1', facts(), self.settings_value, now(), gates=(meddle,))
+        self.assertEqual((result['state'], result['route']), ('dispatched', 'sub'))
+        after = self.snapshot()
+        self.assertNotIn('caps', after)
+        self.assertEqual(after['holds']['a1']['amount'], before['holds']['a1']['amount'])
+        self.assertEqual(budget.Ledger.admission(after, 'a1')['route'], 'sub')
 
-class CheckAuthorityTests(Base):
+
+class CheckAuthorityTests(DispatchBase):
     def setUp(self):
         super().setUp()
         self.call(prepare('a1'))
         self.token = self.call(dispatch('a1'))['authority']
-        self.ids = routing.derive_ids('a1')
+        self.derived = self.ids('a1')
 
     def test_the_right_token_allows_on_every_path(self):
         for extra in (dict(authority=self.token),
-                      dict(authority=self.token, session_id=self.ids['session_id']),
+                      dict(authority=self.token, session_id=self.derived['session_id']),
                       dict(authority=self.token, session_id='ses_childsession1')):  # a child session of the attempt
             with self.subTest(extra=sorted(extra)):
                 response = self.call(check('a1', **extra))
                 self.assertEqual((response['state'], response['authority'], response['attempt_id']),
                                  ('allow', 'verified', 'a1'))
                 self.assertNotIn(self.token, json.dumps(response))
-        by_session = self.call(dict(v=1, op='check', session_id=self.ids['session_id'], authority=self.token,
+        by_session = self.call(dict(v=1, op='check', session_id=self.derived['session_id'], authority=self.token,
                                     request=facts()))
         self.assertEqual((by_session['state'], by_session['attempt_id']), ('allow', 'a1'))
 
     def test_a_missing_or_wrong_token_blocks(self):
-        other = 'x' * 43
+        session = self.derived['session_id']
         cases = [(check('a1'), 'authority_required'),
-                 (check('a1', session_id=self.ids['session_id']), 'authority_required'),
-                 (dict(v=1, op='check', session_id=self.ids['session_id'], request=facts()), 'authority_required'),
-                 (check('a1', authority=other), 'authority_invalid'),
+                 (check('a1', session_id=session), 'authority_required'),
+                 (dict(v=1, op='check', session_id=session, request=facts()), 'authority_required'),
+                 (check('a1', authority='x' * 43), 'authority_invalid'),
                  (check('a1', authority=self.token[:-1]), 'authority_invalid'),
                  (check('a1', authority=digest(self.token)), 'authority_invalid')]
         for request, reason in cases:
@@ -275,20 +366,22 @@ class CheckAuthorityTests(Base):
                          dict(v=1, state='blocked', reason='route_mismatch'))
 
     def test_unknown_sessions_are_unmanaged(self):
-        for session in ('ses_interactive1', routing.derive_ids('never-admitted')['session_id']):
+        for session in ('ses_interactive1', self.ids('never-admitted')['session_id'],
+                        routing.derive_ids('a1', LEDGER_B)['session_id'],  # the same attempt id in another ledger
+                        self.derived['message_id']):  # a message id is never a session id
             with self.subTest(session=session):
                 self.assertEqual(self.call(dict(v=1, op='check', session_id=session, request=facts(), id='q')),
                                  dict(v=1, state='unmanaged', id='q'))
 
     def test_another_attempts_session_is_a_mismatch(self):
         self.call(prepare('a2'))
-        other = routing.derive_ids('a2')['session_id']
+        other = self.ids('a2')['session_id']
         self.assertEqual(self.call(check('a1', authority=self.token, session_id=other)),
                          dict(v=1, state='blocked', reason='session_mismatch'))
 
     def test_strict_checks_need_a_dispatched_attempt(self):
         self.call(prepare('a2'))
-        session = routing.derive_ids('a2')['session_id']
+        session = self.ids('a2')['session_id']
         for request in (dict(v=1, op='check', session_id=session, request=facts()),
                         check('a2', session_id=session), check('a2', authority=self.token)):
             with self.subTest(request=sorted(request)):
@@ -299,7 +392,7 @@ class CheckAuthorityTests(Base):
                          dict(v=1, state='blocked', reason='dispatch_required'))
 
     def test_closed_uncertain_and_forgotten_sessions_stay_blocked(self):
-        session = self.ids['session_id']
+        session = self.derived['session_id']
         self.call(record('a1', 'uncertain'))
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
                          dict(v=1, state='blocked', reason='attempt_uncertain'))
@@ -314,7 +407,7 @@ class CheckAuthorityTests(Base):
         before = self.snapshot()
         for request in (check('a1', authority=self.token), check('a1'), check('a1', authority='y' * 43),
                         dict(v=1, op='check', session_id='ses_unknown1', request=facts()),
-                        dict(v=1, op='check', session_id=self.ids['session_id'], authority=self.token,
+                        dict(v=1, op='check', session_id=self.derived['session_id'], authority=self.token,
                              request=facts())):
             self.call(request)
         self.assertEqual(self.snapshot(), before)
@@ -331,104 +424,106 @@ class CheckAuthorityTests(Base):
                 self.assertEqual(self.call(request), dict(v=1, state='blocked', reason='invalid_request'))
 
 
-class LostAcknowledgmentTests(Base):
+class AuthorityRequiredTests(DispatchBase):
+    """The one-way ledger flag, stamped on each admission: in-flight holds keep the rule they were admitted under."""
+    def require(self):
+        return self.call(dict(v=1, op='set', authority_required=True))
+
+    def test_it_is_off_by_default_and_one_way(self):
+        self.call(prepare('a1'))
+        self.assertIs(self.call(dict(v=1, op='status'))['ledger']['authority_required'], False)
+        self.assertEqual(self.call(check('a1'))['state'], 'allow')  # S3.1 rules while off
+        self.assertEqual(self.require(), dict(v=1, state='updated', authority_required=True))
+        self.assertEqual(self.require(), dict(v=1, state='updated', authority_required=True))
+        self.assertEqual(self.call(dict(v=1, op='set', authority_required=False)),
+                         dict(v=1, state='blocked', reason='authority_required_one_way'))
+        for bad in ('yes', 1, None):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.call(dict(v=1, op='set', authority_required=bad)),
+                                 dict(v=1, state='blocked', reason='invalid_request'))
+        self.assertEqual(self.call(dict(v=1, op='set', authority_required=True, expected_revision=0)),
+                         dict(v=1, state='blocked', reason='invalid_request'))
+        self.assertIs(self.call(dict(v=1, op='status'))['ledger']['authority_required'], True)
+
+    def test_turning_it_on_creates_the_ledger_when_absent(self):
+        self.assertEqual(self.require()['state'], 'updated')
+        self.assertTrue(self.snapshot()['authority_required'])
+
+    def test_stamped_admissions_need_dispatch_and_in_flight_ones_keep_their_rule(self):
+        self.call(prepare('old'))
+        self.require()
+        self.call(prepare('new'))
+        data = self.snapshot()
+        self.assertNotIn('authority_required', budget.Ledger.admission(data, 'old'))
+        self.assertIs(budget.Ledger.admission(data, 'new')['authority_required'], True)
+        self.assertEqual(self.call(check('old'))['state'], 'allow')
+        self.assertEqual(self.call(check('new')), dict(v=1, state='blocked', reason='dispatch_required'))
+        self.assertEqual(self.call(record('new', 'dispatched')), dict(v=1, state='blocked', reason='dispatch_required'))
+        self.assertEqual(self.snapshot()['holds']['new']['state'], 'admitted')
+        self.assertEqual(self.call(record('old', 'dispatched'))['state'], 'recorded')
+        self.assertEqual(self.call(check('old'))['state'], 'allow')
+        token = self.call(dispatch('new'))['authority']
+        self.assertEqual(self.call(check('new', authority=token))['authority'], 'verified')
+        self.assertEqual(self.call(check('new')), dict(v=1, state='blocked', reason='authority_required'))
+        self.assertEqual(self.call(record('new', 'dispatched'))['duplicate'], True)
+
+
+class LostAcknowledgmentTests(DispatchBase):
     def setUp(self):
         super().setUp()
-        self.clocked = command.Service(self.settings, self.ledger, test_inputs=True)
-        self.addCleanup(self.clocked.close)
-        self.at = now()
-        self.assertEqual(self.timed(prepare('a1', observations=observations(self.at)))['state'], 'admitted')
-        self.ids = routing.derive_ids('a1')
-
-    def timed(self, request, at=None):
-        if at is not None:
-            request = dict(request, now=at)
-        return self.clocked.handle(json.dumps(request).encode())
+        self.assertEqual(self.call(prepare('a1'))['state'], 'admitted')
+        self.derived = self.ids('a1')
 
     def test_a_lost_dispatch_response_cannot_be_recovered(self):
-        self.timed(dispatch('a1'), self.at)  # the response is lost: nobody holds the token
-        again = self.timed(dispatch('a1'), self.at + 1)
+        self.call(dispatch('a1'))  # the response is lost: nobody holds the token
+        again = self.call(dispatch('a1'))
         self.assertEqual((again['state'], again['hold_state']), ('already_dispatched', 'dispatched'))
         self.assertNotIn('authority', again)
-        self.assertEqual(again['reconcile_hint']['message_id'], self.ids['message_id'])
+        self.assertEqual(again['reconcile_hint']['message_id'], self.derived['message_id'])
+        self.assertIs(again['reconcile_hint']['authoritative'], False)
         self.assertEqual(self.snapshot()['holds']['a1']['state'], 'dispatched')
-        self.assertEqual(self.call(dict(v=1, op='check', session_id=self.ids['session_id'], request=facts())),
+        self.assertEqual(self.call(dict(v=1, op='check', session_id=self.derived['session_id'], request=facts())),
                          dict(v=1, state='blocked', reason='authority_required'))
 
-    def test_uncertain_keeps_exposure_and_the_concurrency_place(self):
-        self.timed(dispatch('a1'), self.at)
+    def test_uncertain_keeps_exposure_the_concurrency_place_and_blocks_checks(self):
+        token = self.call(dispatch('a1'))['authority']
         held = budget.Ledger.held(self.snapshot())
-        self.assertEqual(self.timed(record('a1', 'uncertain'), self.at + 1)['state'], 'recorded')
-        data = self.snapshot()
-        self.assertEqual(budget.Ledger.held(data), held)
-        self.assertEqual(data['holds']['a1']['dispatch']['uncertain_at'], self.at + 1)
-        self.assertEqual(self.timed(prepare('a2', observations=observations(self.at)))['state'], 'admitted')
-        third = self.timed(prepare('a3', observations=observations(self.at)))
+        self.assertEqual(self.call(record('a1', 'uncertain'))['state'], 'recorded')
+        self.assertEqual(budget.Ledger.held(self.snapshot()), held)
+        self.assertEqual(self.call(check('a1', authority=token)), dict(v=1, state='blocked', reason='attempt_uncertain'))
+        self.assertEqual(self.call(prepare('a2'))['state'], 'admitted')
+        third = self.call(prepare('a3'))
         self.assertEqual((third['state'], third['reason']), ('pending', 'concurrency_cap'))
         self.assertEqual(self.call(dict(v=1, op='status'))['ledger']['holds'], dict(uncertain=1, admitted=1))
 
-    def test_release_needs_proof(self):
-        self.timed(dispatch('a1'), self.at)
-        self.assertEqual(self.timed(record('a1', 'not_dispatched'), self.at + 1),
-                         dict(v=1, state='blocked', reason='proof_required'))
-        self.assertEqual(self.timed(record('a1', 'not_dispatched', proof=proof('a1', self.at + 1)), self.at + 2),
-                         dict(v=1, state='blocked', reason='uncertain_required'))
-        self.timed(record('a1', 'uncertain'), self.at + 3)
-        self.assertEqual(self.timed(record('a1', 'not_dispatched', event_id='nd2'), self.at + 4),
-                         dict(v=1, state='blocked', reason='proof_required'))
-        self.assertEqual(self.snapshot()['holds']['a1']['state'], 'uncertain')
-
-    def test_a_valid_proof_after_the_uncertain_mark_frees_capacity(self):
-        self.timed(dispatch('a1'), self.at)
-        self.timed(prepare('a2', observations=observations(self.at)))
-        self.timed(record('a1', 'uncertain'), self.at + 1)
-        before = budget.Ledger.held(self.snapshot())
-        response = self.timed(record('a1', 'not_dispatched', proof=proof('a1', self.at + 2)), self.at + 3)
-        self.assertEqual(response, dict(v=1, state='recorded', event_id='not_dispatched-a1', duplicate=False))
+    def test_nothing_releases_a_dispatched_or_uncertain_hold_before_s36(self):
+        """No proof of non-launch is accepted in S3.4: `not_dispatched` is only for never-dispatched holds."""
+        self.assertFalse(hasattr(budget.Ledger, 'release_unlaunched'))
+        self.call(dispatch('a1'))
+        held = budget.Ledger.held(self.snapshot())
+        absent = dict(kind='message_absent', observed_at=now(), **self.derived)
+        self.assertEqual(self.call(record('a1', 'not_dispatched')),
+                         dict(v=1, state='blocked', reason='hold_state_forbidden'))
+        self.assertEqual(self.call(record('a1', 'not_dispatched', proof=absent)),
+                         dict(v=1, state='blocked', reason='invalid_request'))
+        self.call(record('a1', 'uncertain'))
+        for request in (record('a1', 'not_dispatched', 'nd2'), record('a1', 'not_dispatched', 'nd3', proof=absent),
+                        record('a1', 'complete', 'c1')):
+            with self.subTest(request=json.dumps(request)[:90]):
+                self.assertEqual(self.call(request)['state'], 'blocked')
         hold = self.snapshot()['holds']['a1']
-        self.assertEqual((hold['closed'], hold['state']), (True, 'released'))
-        self.assertEqual(hold['dispatch']['released'], dict(proof='message_absent', observed_at=self.at + 2))
-        self.assertLess(budget.Ledger.held(self.snapshot())['win:sub/5h'], before['win:sub/5h'])
-        self.assertEqual(self.call(dict(v=1, op='check', session_id=self.ids['session_id'], request=facts())),
-                         dict(v=1, state='blocked', reason='attempt_closed'))
-        self.assertEqual(self.timed(prepare('a3', observations=observations(self.at)))['state'], 'admitted')
-        self.assertEqual(self.timed(record('a1', 'not_dispatched', proof=proof('a1', self.at + 2)), self.at + 4),
-                         dict(v=1, state='blocked', reason='attempt_closed'))
-
-    def test_forged_or_malformed_proofs_are_refused(self):
-        self.timed(dispatch('a1'), self.at)
-        self.timed(record('a1', 'uncertain'), self.at + 5)
-        other = routing.derive_ids('a2')
-        cases = [proof('a1', self.at + 5), proof('a1', self.at + 4), proof('a1', self.at + 50),
-                 proof('a1', self.at + 6, message_id=other['message_id']),
-                 proof('a1', self.at + 6, session_id=other['session_id']),
-                 proof('a1', self.at + 6, kind='message_present'), proof('a1', self.at + 6, kind='timeout'),
-                 proof('a1', True), proof('a1', -1), proof('a1', 1.5), proof('a1', str(self.at + 6)),
-                 dict(proof('a1', self.at + 6), extra=1),
-                 {k: v for k, v in proof('a1', self.at + 6).items() if k != 'message_id'},
-                 'message_absent', [proof('a1', self.at + 6)], None]
-        for value in cases:
-            with self.subTest(proof=json.dumps(value)[:90]):
-                self.assertEqual(self.timed(record('a1', 'not_dispatched', proof=value), self.at + 10),
-                                 dict(v=1, state='blocked', reason='proof_invalid'))
-                self.assertEqual(self.snapshot()['holds']['a1']['state'], 'uncertain')
-        self.assertEqual(self.timed(record('a1', 'uncertain', event_id='u2', proof=proof('a1', self.at + 6)),
-                                    self.at + 10), dict(v=1, state='blocked', reason='invalid_request'))
-
-    def test_proof_does_not_apply_without_an_issued_authority(self):
-        self.timed(record('a1', 'dispatched'), self.at)
-        self.timed(record('a1', 'uncertain'), self.at + 1)
-        self.assertEqual(self.timed(record('a1', 'not_dispatched', proof=proof('a1', self.at + 2)), self.at + 3),
-                         dict(v=1, state='blocked', reason='proof_not_applicable'))
-        self.assertEqual(self.snapshot()['holds']['a1']['state'], 'uncertain')
+        self.assertEqual((hold['state'], hold['closed']), ('uncertain', False))
+        self.assertEqual(budget.Ledger.held(self.snapshot()), held)
+        self.assertEqual(set(hold['dispatch']), {'session_id', 'message_id', 'authority', 'at'})
 
     def test_s31_events_after_dispatch(self):
-        self.timed(dispatch('a1'), self.at)
-        self.assertEqual(self.timed(record('a1', 'dispatched'), self.at)['duplicate'], True)
-        self.assertEqual(self.timed(record('a1', 'complete'), self.at + 1)['state'], 'recorded')
+        self.call(dispatch('a1'))
+        self.assertEqual(self.call(record('a1', 'dispatched'))['duplicate'], True)
+        self.assertEqual(self.call(record('a1', 'complete'))['state'], 'recorded')
         self.assertTrue(self.snapshot()['holds']['a1']['closed'])
 
     def test_a_process_killed_after_commit_leaves_one_dispatch_and_no_token(self):
+        self.service.close()
         code = ('import os, sys; sys.path.insert(0, %r); from scripts import routing as c; '
                 'c._write = lambda stdout, response: os._exit(9); '
                 'sys.exit(c.main(["dispatch", "--settings", %r, "--ledger", %r]))'
@@ -444,28 +539,112 @@ class LostAcknowledgmentTests(Base):
         self.assertNotIn('authority', again)
 
 
-class RaceTests(Base):
-    def spawn(self, request):
-        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), 'dispatch', '--settings', str(self.settings),
-                                  '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
-        child.stdin.write(json.dumps(request).encode())
-        return child
+class SettingsOrderingTests(DispatchBase):
+    """A settings change and a dispatch are totally ordered: `set` reports an attempt invalidated only if no
+    dispatch of it can still succeed, and a dispatch that wins the lock first is not reported as invalidated."""
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.call(prepare('a1'))['state'], 'admitted')
 
-    def collect(self, children):
-        for child in children:
-            child.stdin.close()
-        results = []
-        for child in children:
-            results.append(json.loads(child.stdout.read()))
-            child.wait(timeout=60)
-            child.stdout.close(); child.stderr.close()
-        return results
+    def off(self, revision=0):
+        return dict(v=1, op='set', expected_revision=revision, change=dict(smart_routing=False))
 
+    def assertConsistent(self, dispatched, changed, attempt='a1'):
+        listed = attempt in changed['invalidated_attempts']
+        if listed:
+            self.assertEqual(dispatched, dict(v=1, state='blocked', reason='settings_revision_changed'))
+        else:
+            self.assertEqual(dispatched['state'], 'dispatched', dispatched)
+        hold = self.snapshot()['holds'][attempt]
+        self.assertEqual(hold['state'], 'admitted' if listed else 'dispatched')
+
+    def test_a_dispatch_waiting_behind_set_is_refused(self):
+        real = routing_settings.update
+        children = []
+
+        def slow_update(*args, **kwargs):  # runs while `set` holds the ledger's write lock
+            children.append(self.spawn('dispatch', dispatch('a1')))
+            children[0].stdin.close()
+            time.sleep(0.5)
+            return real(*args, **kwargs)
+        with mock.patch.object(command.routing_settings, 'update', side_effect=slow_update):
+            changed = self.call(self.off())
+        result = json.loads(children[0].stdout.read())
+        children[0].wait(timeout=60); children[0].stdout.close(); children[0].stderr.close()
+        self.assertEqual(changed['invalidated_attempts'], ['a1'])
+        self.assertEqual(result, dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertNotIn('dispatch', self.snapshot()['holds']['a1'])
+
+    def test_a_set_waiting_behind_dispatch_does_not_report_it(self):
+        self.service.close()
+        entered, results = threading.Event(), []
+        settings_value = dict(routing_settings.resolve({}), revision=0)
+
+        def slow_settings():  # runs inside the dispatch's write transaction
+            entered.set()
+            time.sleep(0.5)
+            return settings_value
+
+        def worker():
+            with self.open_ledger() as ledger:
+                results.append(routing.dispatch(ledger, 'a1', facts(), slow_settings, now))
+        thread = threading.Thread(target=worker)
+        thread.start()
+        self.assertTrue(entered.wait(10))
+        changed = self.call(self.off())
+        thread.join(60)
+        self.assertEqual(results[0]['state'], 'dispatched')
+        self.assertEqual(changed['invalidated_attempts'], [])
+
+    def test_the_reviewers_probe_is_never_inconsistent(self):
+        """Hold the ledger lock, start a dispatch, then `set`; release. Whichever takes the lock first, the
+        outcome is consistent, and a `set` that lists the attempt always means the dispatch was refused."""
+        self.service.close()
+        lock = sqlite3.connect(self.ledger, isolation_level=None)
+        lock.execute('BEGIN IMMEDIATE')
+        try:
+            waiting = self.spawn('dispatch', dispatch('a1'))
+            waiting.stdin.close()
+            time.sleep(0.3)
+            setter = self.spawn('set', self.off())
+            setter.stdin.close()
+            time.sleep(0.3)
+        finally:
+            lock.execute('ROLLBACK')
+            lock.close()
+        dispatched, changed = (json.loads(child.stdout.read()) for child in (waiting, setter))
+        for child in (waiting, setter):
+            child.wait(timeout=60); child.stdout.close(); child.stderr.close()
+        self.assertEqual(changed['state'], 'updated', changed)
+        self.assertConsistent(dispatched, changed)
+
+    def test_dispatch_racing_set_stays_consistent(self):
+        self.service.close()
+        revision = 0
+        for i in range(12):
+            attempt = 'r%d' % i
+            if i:
+                self.assertEqual(self.call(prepare(attempt))['state'], 'admitted')
+            else:
+                attempt = 'a1'
+            margin = 2000 + i + 1
+            children = [self.spawn('dispatch', dispatch(attempt)),
+                        self.spawn('set', dict(v=1, op='set', expected_revision=revision, change=dict(margin_bp=margin)))]
+            dispatched, changed = self.collect(children)
+            with self.subTest(round=i):
+                self.assertEqual(changed['state'], 'updated', changed)
+                self.assertConsistent(dispatched, changed, attempt)
+            revision = changed['revision']
+            kind = 'complete' if dispatched['state'] == 'dispatched' else 'not_dispatched'
+            self.assertEqual(self.call(record(attempt, kind))['state'], 'recorded')
+            self.service.close()
+
+
+class RaceTests(DispatchBase):
     def test_fifteen_racing_processes_yield_one_authority(self):
         self.assertEqual(self.call(prepare('race'))['state'], 'admitted')
         self.service.close()
-        results = self.collect([self.spawn(dispatch('race')) for _ in range(15)])
+        results = self.collect([self.spawn('dispatch', dispatch('race')) for _ in range(15)])
         states = sorted(r['state'] for r in results)
         self.assertEqual(states, ['already_dispatched'] * 14 + ['dispatched'], results)
         tokens = [r['authority'] for r in results if 'authority' in r]
@@ -478,14 +657,14 @@ class RaceTests(Base):
             self.assertEqual(self.call(prepare(attempt, observations=observations(account=account)))['state'],
                              'admitted')
         self.service.close()
-        results = self.collect([self.spawn(dispatch(attempt)) for attempt in attempts])
+        results = self.collect([self.spawn('dispatch', dispatch(attempt)) for attempt in attempts])
         self.assertEqual([r['state'] for r in results], ['dispatched'] * 4, results)
         self.assertEqual(len({r['authority'] for r in results}), 4)
         self.assertEqual(sorted(r['attempt_id'] for r in results), sorted(attempts))
 
     def test_threads_on_separate_ledger_instances_yield_one_authority(self):
         self.call(prepare('t1'))
-        settings = dict(routing.routing_settings.resolve({}), revision=0)
+        settings = dict(routing_settings.resolve({}), revision=0)
         results, start = [], threading.Barrier(15)
 
         def worker():
@@ -500,9 +679,10 @@ class RaceTests(Base):
         self.assertEqual(sorted(r['state'] for r in results), ['already_dispatched'] * 14 + ['dispatched'], results)
 
 
-class ServeDispatchTests(Base):
+class ServeDispatchTests(DispatchBase):
     def test_serve_handles_dispatch_and_authority_checks_with_ids(self):
         self.call(prepare('s1'))
+        session = self.ids('s1')['session_id']
         self.service.close()
         child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
                                   '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -513,7 +693,6 @@ class ServeDispatchTests(Base):
                 return json.loads(child.stdout.readline())
             first = ask(dispatch('s1', id='r1'))
             second = ask(dispatch('s1', id=2))
-            session = routing.derive_ids('s1')['session_id']
             allowed = ask(dict(v=1, op='check', id='r3', attempt_id='s1', session_id=session,
                                authority=first['authority'], request=facts()))
             unmanaged = ask(dict(v=1, op='check', id='r4', session_id='ses_someoneelse', request=facts()))
@@ -525,7 +704,7 @@ class ServeDispatchTests(Base):
         self.assertEqual(unmanaged, dict(v=1, id='r4', state='unmanaged'))
 
 
-class HostileInputTests(Base):
+class HostileInputTests(DispatchBase):
     def test_malformed_dispatch_requests_are_refused(self):
         self.call(prepare('a1'))
         cases = [(dispatch(7), 'invalid_request'), (dispatch(''), 'invalid_request'),
@@ -539,17 +718,19 @@ class HostileInputTests(Base):
                 self.assertEqual(self.call(request), dict(v=1, state='blocked', reason=reason))
         self.assertEqual(self.snapshot()['holds']['a1']['state'], 'admitted')
 
-    def test_dispatch_without_a_ledger_creates_nothing(self):
+    def test_dispatch_and_check_without_a_ledger_fail_closed(self):
         self.assertEqual(self.call(dispatch('a1')), dict(v=1, state='blocked', reason='ledger_absent'))
+        self.assertEqual(self.call(dict(v=1, op='check', session_id='ses_any1', request=facts())),
+                         dict(v=1, state='blocked', reason='ledger_absent'))
         self.assertFalse(self.ledger.exists())
 
 
 class DispatchCapacityTests(Base):
     def test_dispatch_fields_stay_within_their_fixed_allowance(self):
         hold = dict(dispatch=dict(session_id='ses_' + 'f' * 32, message_id='msg_' + 'f' * 32, authority='f' * 64,
-                                  at=budget.MAX_INTEGER, uncertain_at=budget.MAX_INTEGER,
-                                  released=dict(proof='message_absent', observed_at=budget.MAX_INTEGER)))
+                                  at=budget.MAX_INTEGER))
         self.assertLessEqual(len(json.dumps(hold, separators=(',', ':'))) - len('{}'), budget.DISPATCH_HOLD_BYTES)
+        self.assertLessEqual(budget.DISPATCH_HOLD_BYTES, 256)
 
 
 if __name__ == '__main__':

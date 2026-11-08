@@ -353,6 +353,12 @@ class ObservationNitTests(Funded):
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'credential_unavailable'))
 
 
+def authorize(ledger, attempt, now=None):
+    """Dispatch a hold with an issued authority (S3.4); `convert_hold` accepts only such holds."""
+    ids = dict(session_id='ses_' + attempt, message_id='msg_' + attempt)
+    return ledger.dispatch_hold(attempt, '0' * 64, ids, lambda data, moment: None, NOW if now is None else now)
+
+
 class ConversionTests(Funded):
     def setUp(self):
         super().setUp()
@@ -361,6 +367,7 @@ class ConversionTests(Funded):
         pools = dict(g=funded_pool('org'), s=sub_pool())
         routes = [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})]
         self.assertEqual(self.admit('a', routes, pools)['reserved'], {'org:org': 1_200_000})
+        authorize(self.ledger, 'a')
 
     def convert(self, estimate, organization='org', **options):
         return self.ledger.convert_hold('a', organization, 'packet', estimate, 1, NOW, native('a'), **options)
@@ -403,6 +410,7 @@ class ConversionTests(Funded):
         self.assertEqual(mixed['status'], 'admitted')
         with self.ledger.transaction() as data:  # one attempt holding both a dollar and a window claim
             data['holds']['m']['windows'] = {'win:s/5h': 12}
+        authorize(self.ledger, 'm')
         self.ledger.convert_hold('m', 'org', 'packet', M, 1, NOW, native('m'))
         state = self.ledger.snapshot()
         self.assertEqual(state['holds']['m']['state'], 'converted')
@@ -420,10 +428,19 @@ class ConversionTests(Funded):
         self.assertEqual(budget.Ledger.held(state), a)  # the window claim is released together with the run
         self.assertEqual(budget.Ledger.open_accounts(state), ['acct-A'])
 
-    def test_dispatched_hold_cannot_convert(self):
-        self.ledger.mark_dispatched('a')
-        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
-            self.convert(M)
+    def test_only_a_hold_dispatched_with_an_authority_converts(self):
+        """S3.4 inverts the S2 rule: the dispatched hold converts; admitted, bare-dispatched and uncertain ones do not."""
+        issued = self.ledger.snapshot()['holds']['a'].pop('dispatch')
+        for label, change in (('admitted', dict(state='admitted')), ('bare dispatch', dict(state='dispatched')),
+                              ('uncertain', dict(state='uncertain', dispatch=issued))):
+            with self.subTest(label):
+                with self.ledger.transaction() as data:
+                    data['holds']['a'].pop('dispatch', None)
+                    data['holds']['a'].update(change)
+                before = self.ledger.snapshot()
+                with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+                    self.convert(M)
+                self.assertEqual(self.ledger.snapshot(), before)
 
     def test_per_account_cap_counts_provider_accounts_across_runs_and_holds(self):
         self.ledger.set_caps(40, 1)
@@ -601,7 +618,7 @@ class Property:
             self.test.assertLessEqual(accounts.count(account), CAPS[1], 'I5 ' + where)
 
     def step(self, index):
-        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'convert', 'convert',
+        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'authorize', 'convert', 'convert',
                               'dispatched', 'uncertain', 'close', 'run_dispatch', 'complete', 'observe', 'toggle'))
         self.clock += 1
         before = self.ledger.snapshot()
@@ -643,6 +660,11 @@ class Property:
         runs = self.open_runs(before)
         if runs:
             self.ledger.top_up(self.rng.choice(runs), self.amount(), 1, self.clock)
+
+    def op_authorize(self, before):
+        attempt = self.pick_hold(before, ('admitted',))
+        if attempt:
+            authorize(self.ledger, attempt, self.clock)
 
     def op_convert(self, before):
         holds = sorted(i for i, h in before['holds'].items() if not h['closed'] and h['amount'])
@@ -944,6 +966,7 @@ class SoftLimitTests(Funded):
         self.ledger.close_attempt('h1', 'not_dispatched')
         self.ledger.close_attempt('h2', 'uncertain')
         self.ledger.mark_uncertain('h3')
+        authorize(self.ledger, 'h4')
         self.ledger.convert_hold('h4', 'org', 'packet', M, 1, NOW, native('h4'))
         self.ledger.dispatch('h4', 'count', 1, NOW)
         self.ledger.complete('h4', 'count', M)
