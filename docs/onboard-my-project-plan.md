@@ -65,6 +65,26 @@ The entry point is **Onboard my Project**, skill ID `onboard-my-project`; keep i
 | Apply | Execute approved changes in dependency order with recovery records | Progress and specific blockers |
 | Prove | Check configuration, new-session loading, actual execution and reruns | Evidence, remaining limitations and next actions |
 
+### Policy discovery follow-up · 8 November 2026
+
+The user authorized this follow-up after the project entry-point audit and PR
+#133. The onboarding procedure will own [entry-point authoring and discovery
+verification](../skills/onboard-my-project/references/procedure.md#author-the-policy-entry-point).
+It applies the existing local contracts rather than adding runtime enforcement.
+
+| Improvement | Owner and completion evidence |
+| --- | --- |
+| Explicit starting instructions | Generated shared instructions lead directly to the canonical policy index; its trigger table remains the single routing authority. |
+| Portable installed-source resolution | Shared guidance locates `vibe-workflow` through the current client's startup or installed-skill pointers, or uses an existing portable repository-relative target. Unreadable links fall back to those local pointers, never upstream retrieval. Exact machine/cache paths stay in private setup evidence. Missing/conflicting sources and active-task pins are reconciled before dependent changes. |
+| Recoverable reapplication | Existing file configuration preserves custom rules, memory, preferences and later edits; equivalent guidance is a no-op and updates replace owned stale pointers. |
+| Task-based discovery checks | Project-relevant requests start at the generated entry point. Static routing walkthroughs and observed fresh-context behavior are recorded separately; required procedures precede actions and unrelated procedures stay unloaded. |
+| Honest completion reporting | The existing setup record and [Reviewed Configuration](../skills/onboard-my-project/references/reviewed-configuration.md) distinguish written guidance, checked paths/preservation, startup integration and observed routing. |
+
+Implementation follows coordinator and Opus plan validation; Opus then reviews
+the finalized guidance before merge. Fresh-client routing and startup observations
+remain unverified until a selected native run supplies evidence; documentation or
+a passing package check does not qualify those behaviors.
+
 ### Installation capabilities
 
 | Feature | Mandatory? | Installation establishes |
