@@ -298,12 +298,12 @@ class ResourceExecutionTests(unittest.TestCase):
         self.assertTrue(result['uncertain'])
 
     def test_feature_combinations_apply_to_every_role(self):
-        from tests import test_delegation
+        from tests import test_delegation, test_delegation_review
         from runtime import resource_execution, delegation
         for role in ('worker', 'review', 'coordinator'):
             for resource, recovery in ((False, False), (False, True), (True, False), (True, True)):
                 with self.subTest(role=role, resource=resource, recovery=recovery):
-                    stage = (test_delegation.Stage4NativeReviewTests if role == 'review' else
+                    stage = (test_delegation_review.Stage4NativeReviewTests if role == 'review' else
                         test_delegation.AdmissionTests)('runTest')
                     stage.setUp()
                     self.addCleanup(stage.doCleanups)

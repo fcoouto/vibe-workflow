@@ -18,7 +18,7 @@ from unittest.mock import patch
 from tests.fixture_canonical_birth import test_acquisition
 from runtime import delegation, evidence, state, workstreams
 from runtime.startup import RuntimeSettings
-from tests import test_delegation
+from tests import test_delegation, test_delegation_review
 
 
 class WorkstreamsTests(unittest.TestCase):
@@ -379,7 +379,7 @@ print(json.dumps(result))
         prepared = f.prepare(workstream_revision=enabled['revision'], workstream_limits=self.limits)
         self.observe(prepared)
         f.api.reconcile_assignment(self.scope, f.worker_reconciliation_request(prepared))
-        helper = test_delegation.Stage4NativeReviewTests
+        helper = test_delegation_review.Stage4NativeReviewTests
         review = evidence.prepare_review(self.scope, helper.review_request(f))
         with self.assertRaises(state.StateError):
             self.api.prepare_continuation(self.scope, self.continuation(prepared, reason='review-fixes'))
@@ -474,7 +474,7 @@ print(json.dumps(result))
                     workstream_limits=limits)
 
     def test_grouped_d5_review_creation_name_and_collection_work_while_mode_is_off(self):
-        helper = test_delegation.Stage4NativeReviewTests
+        helper = test_delegation_review.Stage4NativeReviewTests
         f = self.fixture
         f.plan(f.plan_value(jobs=[dict(id='review', role='review', claims=[f.path_claim(mode='read')],
             dependencies=[], max_attempts=2)]))
@@ -612,7 +612,7 @@ print(json.dumps(result))
                 delegation._worker_receipt(self.scope, record, request, malformed)
 
     def test_d5_updated_reader_collection_retains_admitted_version_and_truthful_provenance(self):
-        helper = test_delegation.Stage4NativeReviewTests
+        helper = test_delegation_review.Stage4NativeReviewTests
         f = self.fixture
         f.plan(f.plan_value(jobs=[dict(id='review', role='review', claims=[f.path_claim(mode='read')],
             dependencies=[], max_attempts=2)]))
