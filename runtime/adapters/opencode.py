@@ -37,11 +37,12 @@ CALL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 HEADER = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 # Mirrored in runtime/adapters/opencode_plugin.ts; tests/test_opencode_plugin.py checks that they agree.
-# Matched against the name with camelCase split (`githubToken` -> `github_Token`); `*PASSWORD` also as a suffix.
+# Matched against the name with camelCase split (`githubToken` -> `github_Token`); `*PASSWORD` and `*_PWD` (not `PWD`)
+# also as suffixes.
 CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWORD|PASSWD|PASS|PASSPHRASE|CREDENTIALS?|AUTH"
-                            r"|COOKIE|PRIVATE|JWT|PAT|DSN|CONNECTION_STRING|MYSQL_PWD"
+                            r"|COOKIE|PRIVATE|JWT|PAT|OAUTH|CREDS|ACCESSKEY|SECRETKEY|DSN|CONNECTION_STRING"
                             r"|(?:DATABASE|DB|REDIS|MONGO|MONGODB|POSTGRES|POSTGRESQL|PG|MYSQL|AMQP|RABBITMQ)_UR[LI])(?:_|$)"
-                            r"|(?:PASSWORD|PASSWD)$", re.IGNORECASE)
+                            r"|(?:PASSWORD|PASSWD)$|_PWD$", re.IGNORECASE)
 CAMEL_CASE = re.compile(r"([a-z0-9])([A-Z])")
 ORIGIN = re.compile(r"(https?)://(?:[^/?#@\s]*@)?([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(?::(\d{1,5}))?(?:[/?#]|$)")
 SPAWN_MODEL = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)"

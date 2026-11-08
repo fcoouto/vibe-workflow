@@ -487,11 +487,11 @@ test("a long or cyclic recorded chain is managed only when it reaches an attache
 
 test("the attach limit counts attached roots, not their children", async () => {
   const sessions: Record<string, { parentID?: string }> = {}
-  for (let index = 0; index < 300; index++) sessions[`ses_kid${index}`] = { parentID: "ses_root0" }
+  for (let index = 0; index < 250; index++) sessions[`ses_kid${index}`] = { parentID: "ses_root0" }  // within one root's budget
   const t = await start({}, sessions)
   try {
     await t.attach("ses_root0")
-    for (let index = 0; index < 300; index++) await t.hooks["session.model.request"](modelRequest(`ses_kid${index}`))
+    for (let index = 0; index < 250; index++) await t.hooks["session.model.request"](modelRequest(`ses_kid${index}`))
     for (let index = 1; index < 256; index++) await t.attach(`ses_root${index}`)
     await t.attach("ses_root5")  // re-attaching an attached root is allowed at the limit
     await assert.rejects(Promise.resolve().then(() => t.attach("ses_root999")), blocked)

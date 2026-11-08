@@ -21,8 +21,9 @@ const MAX_ATTACHED = 256  // attached roots; children found through them are not
 const MAX_LOOKUPS = 8  // session.get calls per lineage question
 const MAX_CHAIN = 64  // sessions walked per lineage question
 const MAX_LINEAGE_CACHE = 4096  // parents of sessions seen; evicting, used only to answer lookups faster
-const MAX_DESCENDANTS = 1024  // managed descendants recorded from events; never evicted
-const MAX_OVER_LIMIT = 1024  // managed descendants created beyond that limit, recorded only to block them
+const MAX_DESCENDANTS_PER_ROOT = 256  // each attached root's own budget of recorded managed descendants
+const MAX_DESCENDANTS = 4096  // memory ceiling across roots; recorded descendants are never evicted
+const MAX_OVER_LIMIT = 1024  // managed descendants created beyond a limit, recorded only to block them
 const FAILED_LOOKUP_MS = 5000
 const MAX_FAILED_LOOKUPS = 1024
 const MAX_DENY = 16
@@ -36,16 +37,17 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/
 const ATTEMPT = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const CREDENTIAL_ENV = new RegExp("(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWORD|PASSWD|PASS|PASSPHRASE|CREDENTIALS?|AUTH"
-  + "|COOKIE|PRIVATE|JWT|PAT|DSN|CONNECTION_STRING|MYSQL_PWD"
+  + "|COOKIE|PRIVATE|JWT|PAT|OAUTH|CREDS|ACCESSKEY|SECRETKEY|DSN|CONNECTION_STRING"
   + "|(?:DATABASE|DB|REDIS|MONGO|MONGODB|POSTGRES|POSTGRESQL|PG|MYSQL|AMQP|RABBITMQ)_UR[LI])(?:_|$)"
-  + "|(?:PASSWORD|PASSWD)$", "i")
+  + "|(?:PASSWORD|PASSWD)$|_PWD$", "i")
 const SPAWN_MODEL = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/
 const REASON = /^[a-z][a-z0-9_]{0,63}$/
 
 type Facts = { provider: string; model: string; variant: string | null; harness: string }
-type Attachment = { attempt: string; pool: string; deny: Set<string>; saturated: boolean }
+// `count` is the root's recorded descendants; `saturated` means its own tree exceeded its own budget.
+type Attachment = { attempt: string; pool: string; deny: Set<string>; count: number; saturated: boolean }
 type Descendant = { root: string; overLimit: boolean }
-type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number }
+type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number; failedLookupMs?: number }
 
 class RoutingBlocked extends Error {
   constructor(reason: string) {
@@ -249,7 +251,9 @@ export function createRoutingPlugin(config: Config = {}) {
         if (map.size >= limit) map.delete(map.keys().next().value as string)
         map.set(key, value)
       }
-      const regular = () => [...descendants.values()].filter((entry) => !entry.overLimit).length
+      const failedLookupMs = config.failedLookupMs ?? FAILED_LOOKUP_MS
+      let recorded = 0  // regular descendants across roots
+      let overRecorded = 0
 
       /** The root a session is managed under when that is already known, without lookups. */
       const rootOf = (session: string): string | undefined => {
@@ -258,16 +262,36 @@ export function createRoutingPlugin(config: Config = {}) {
         return root !== undefined && attached.has(root) ? root : undefined
       }
 
+      /** Record a managed descendant against its root's own budget; limits fail closed for that root only. */
       function recordDescendant(session: string, root: string) {
-        if (descendants.has(session)) return
-        if (regular() < MAX_DESCENDANTS) {
+        const attachment = attached.get(root)
+        if (descendants.has(session) || !attachment) return
+        if (attachment.count < MAX_DESCENDANTS_PER_ROOT && recorded < MAX_DESCENDANTS) {
           descendants.set(session, { root, overLimit: false })
+          attachment.count += 1
+          recorded += 1
           return
         }
-        // Fail closed for this managed tree only: every session in it is blocked from now on.
-        const attachment = attached.get(root)
-        if (attachment) attachment.saturated = true
-        if (descendants.size < MAX_DESCENDANTS + MAX_OVER_LIMIT) descendants.set(session, { root, overLimit: true })
+        // Over the root's own budget, its whole tree is blocked. At the instance ceiling only the new session is.
+        if (attachment.count >= MAX_DESCENDANTS_PER_ROOT) attachment.saturated = true
+        if (overRecorded < MAX_OVER_LIMIT) {
+          descendants.set(session, { root, overLimit: true })
+          overRecorded += 1
+        } else {
+          attachment.saturated = true  // cannot be recorded, so fail closed for this root
+        }
+      }
+
+      function forget(session: string) {
+        const entry = descendants.get(session)
+        if (!entry) return
+        descendants.delete(session)
+        if (entry.overLimit) overRecorded -= 1
+        else {
+          recorded -= 1
+          const attachment = attached.get(entry.root)
+          if (attachment) attachment.count -= 1
+        }
       }
 
       // Lineage from the live event stream. Only a creation whose parent is already managed is evidence of a managed
@@ -294,13 +318,16 @@ export function createRoutingPlugin(config: Config = {}) {
         if ((failed.get(session) ?? 0) > performance.now()) return undefined
         if (typeof ctx?.session?.get === "function") {
           try {
-            const info: any = await within(Promise.resolve().then(() => ctx.session.get({ sessionID: session })), LOOKUP_TIMEOUT_MS)
-            const parent = info?.parentID ?? info?.data?.parentID
-            if (parent == null) return null
-            if (text(parent, SESSION)) return parent
+            const answer: any = await within(Promise.resolve().then(() => ctx.session.get({ sessionID: session })), LOOKUP_TIMEOUT_MS)
+            // Only an answer about this session counts; an error object or another session is a failed lookup.
+            const info = answer?.id === session ? answer : answer?.data?.id === session ? answer.data : undefined
+            if (info !== undefined) {
+              if (info.parentID == null) return null
+              if (text(info.parentID, SESSION)) return info.parentID
+            }
           } catch { /* fall through: undetermined */ }
         }
-        bounded(failed, MAX_FAILED_LOOKUPS, session, performance.now() + FAILED_LOOKUP_MS)
+        bounded(failed, MAX_FAILED_LOOKUPS, session, performance.now() + failedLookupMs)
         return undefined
       }
 
@@ -337,8 +364,8 @@ export function createRoutingPlugin(config: Config = {}) {
         }
       }
 
-      async function check(attachment: Attachment, facts: Facts, kind: string) {
-        if (attachment.saturated) throw new RoutingBlocked("descendant_limit")
+      async function check(session: string, attachment: Attachment, facts: Facts, kind: string) {
+        if (attachment.saturated || descendants.get(session)?.overLimit) throw new RoutingBlocked("descendant_limit")
         const { response } = await child.call("check", {
           attempt_id: attachment.attempt,
           request: { ...facts, kind, funding_pool: attachment.pool },
@@ -355,7 +382,7 @@ export function createRoutingPlugin(config: Config = {}) {
         if (!KINDS.has(event?.kind)) throw new RoutingBlocked("invalid_kind")
         const facts = routeFacts(event?.model)
         if (!facts) throw new RoutingBlocked("invalid_model")
-        await check(attachment, facts, event.kind)
+        await check(event.sessionID, attachment, facts, event.kind)
       })
 
       // Only subagent spawns are checked; built-in, MCP and Code Mode tools are governed by policy deny rules.
@@ -367,8 +394,10 @@ export function createRoutingPlugin(config: Config = {}) {
         if (model == null) throw new RoutingBlocked("subagent_model_required")
         const requested = spawnModel(model)
         if (!requested) throw new RoutingBlocked("invalid_subagent_model")
-        if (regular() >= MAX_DESCENDANTS) throw new RoutingBlocked("descendant_limit")
-        await check(attachment, { ...requested, harness: harnessFor(requested.provider) }, "subagent")
+        if (attachment.count >= MAX_DESCENDANTS_PER_ROOT || recorded >= MAX_DESCENDANTS) {
+          throw new RoutingBlocked("descendant_limit")
+        }
+        await check(event.sessionID, attachment, { ...requested, harness: harnessFor(requested.provider) }, "subagent")
       })
 
       // Tightens only; a configured deny is final and never reaches this hook.
@@ -419,9 +448,10 @@ export function createRoutingPlugin(config: Config = {}) {
           }
           const session = body.session_id as string
           if (!attached.has(session) && attached.size >= MAX_ATTACHED) throw new RoutingBlocked("attach_limit")
+          forget(session)  // a session attached as a root is no longer another root's descendant
+          const previous = attached.get(session)
           attached.set(session, { attempt: body.attempt_id as string, pool: body.funding_pool as string,
-            deny: new Set(deny as string[]), saturated: attached.get(session)?.saturated ?? false })
-          descendants.delete(session)
+            deny: new Set(deny as string[]), count: previous?.count ?? 0, saturated: previous?.saturated ?? false })
           // A launcher attaches the sessions it created, which are roots; after detach its children resolve to it.
           if (!lineage.has(session)) bounded(lineage, MAX_LINEAGE_CACHE, session, null)
           return { state: "attached", session_id: session }
@@ -431,8 +461,8 @@ export function createRoutingPlugin(config: Config = {}) {
           if (!text(body.session_id, SESSION)) throw new RoutingBlocked("invalid_detach")
           const session = body.session_id as string
           const was = attached.has(session)
-          attached.delete(session)
-          for (const [key, entry] of descendants) if (entry.root === session) descendants.delete(key)
+          for (const [key, entry] of descendants) if (entry.root === session) forget(key)
+          attached.delete(session)  // with it go its count and saturation
           return { state: "detached", session_id: session, was_attached: was }
         },
       })
@@ -442,6 +472,8 @@ export function createRoutingPlugin(config: Config = {}) {
         child.stop()
         attached.clear()
         descendants.clear()
+        recorded = 0
+        overRecorded = 0
         lineage.clear()
         failed.clear()
       }
