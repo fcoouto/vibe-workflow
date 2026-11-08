@@ -387,7 +387,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 Rules the command applies:
 
 - **Roles.** `prepare` maps the job's profile role to a worker-choice role with `routing_settings.PROFILE_ROLES`. An explicit `researcher` or `repair` role is accepted; any other explicit role must match the mapping (`role_mismatch`). A coordinator is never routed (`coordinator_not_routed`).
-- **Strategy table.** `prepare` ranks from the compiled table stored next to the settings (`strategy-table.json`, or `--table`). A missing or unusable table falls back to worker choices or the explicit choice, with a reason code; it never blocks.
+- **Strategy table.** `prepare` ranks from the compiled table stored next to the settings (`strategy-table.json`, or `--table`). A missing, unreadable or malformed table falls back to worker choices or the explicit choice with `table_unavailable`; it never blocks. A table or ranking with a non-string strategy id or an unbounded version counts as malformed.
 - **Clock.** The command uses its own clock. `prepare` refuses a snapshot whose `now` differs from it by more than 60 s (`observation_stale`) and stamps the admission with its own time.
 - **Unsent admissions.** An unsent (`admitted`) attempt passes `check` only under the same settings revision and at an age of 0–900 s; exactly 900 s still passes. Otherwise it is blocked with `settings_revision_changed`, `admission_expired` or `clock_invalid`.
 - **Dispatched attempts.** A dispatched attempt skips the revision and age checks, so turning Smart Routing OFF does not stop started subscription work.
@@ -396,13 +396,15 @@ Rules the command applies:
   - its organization is enabled and not blocked;
   - the policy revision, balance freshness and cycle are still valid;
   - the reconciled credit still covers what is held.
+
+  S3.1 records no consumption, so a dispatched hold's own spend is counted twice: once in the reservation and once in the lower observed balance. A long funded job therefore stops once its observed spend exceeds the unspent part of its reservation; S3.6 records consumption and removes the double count. While any organization hold is open, the collector must refresh the balance at least every 900 s (ideally about every 5 minutes) and must never timestamp an observation ahead of the command's clock. A policy edit (new organization revision) blocks all in-flight funded work.
 - **Envelope.** S3.1 records no consumption, so the remaining envelope is the full reservation. A request `bound` larger than it is blocked with `envelope_exhausted`; an absent or empty bound passes while any amount is reserved.
 - **Request kinds.** `check` covers model requests and subagent spawns (`primary`, `subagent`, `title`, `compaction`, `generate`). Tool, MCP and webfetch calls are governed by S3.3's policy deny rules; any other kind is blocked with `unsupported_kind`.
 - **Smart Routing OFF.** `set smart_routing=false`, like any settings change, persists a new revision, and unsent admissions from the old revision fail `check`. Nothing is released until a `not_dispatched` record establishes non-dispatch, because `check` is not single-use in S3.1.
 - **Recording outcomes.** A bare `complete` on an uncertain attempt is refused with `reconciliation_required` until S3.6 adds evidence-based reconciliation.
 - **Busy ledger.** `check` and `status` wait at most 200 ms for a busy ledger and then answer `ledger_busy`. Writes wait at most 300 ms under `--serve` and 5 s in one-shot mode.
 - **Caps.** Effective caps are the stricter of the settings and ledger caps, so `set` can only lower them. Raising them is an explicit ledger action (`Ledger.set_caps`).
-- **Test switch.** Setting `VIBE_ROUTING_TEST_INPUTS=1` lets tests supply `now` to `check`, an off-clock snapshot and a `table` to `prepare`. Production never sets it.
+- **Test switch.** The `--test-inputs` command-line flag lets tests supply `now` to `check`, an off-clock snapshot and a `table` to `prepare`. No request, configuration, table or environment variable can enable it. It is a usage error unless both `--settings` and `--ledger` are given and differ from the production defaults, and `status` reports `test_inputs`.
 
 ### Task S3.2: OpenCode adapter and client contract
 
