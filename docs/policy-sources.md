@@ -1,5 +1,18 @@
 # Policy source map
 
+## Explicit project policy entry points — 8 November 2026
+
+The user requested direct policy discovery in this repository and the existing
+Opus checkout after an audit found that their root instructions relied on indirect
+links or startup delivery. This applies the existing local loading contracts;
+it adopts no new Toolkit component and changes no hook or runtime authority.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit, selective retrieval of complete local policies before the affected action; reassessment and context recovery | `policies/00-index.md` and `policies/07-context-and-handoff.md`; this repository's `AGENTS.md` now starts at the index and preserves its canonical trigger table. |
+| Installed-package resolution, preserved project instructions, current state and task pins; block only dependent actions on unresolved instructions | `policies/01-project-scope.md` and `policies/10-project-onboarding.md#apply-compatible-changes`; Opus's local entry point links its existing installed package, retains its project rules and Workstreams choice, and requires source reconciliation when pointers conflict. |
+| Separate guidance, enforcement and observed execution; maintain authoring coverage without routine provenance loading | Existing startup and instruction-authoring contracts; repository sections route conditional client/skill procedures and keep source coverage in authoring. Package checks and instruction walkthroughs are distinct from fresh-client delivery evidence. |
+
 ## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
 
 Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.
