@@ -110,8 +110,8 @@ python3 -I -B <package>/scripts/opencode_title.py < title.json
 
 The command reads and writes only the session title through `opencode api`
 and never starts a model turn. It always exits successfully and prints one
-JSON result. `{"ok": true}` means readback confirmed the title; record it as
-the new baseline.
+JSON result. `{"ok": true}` means readback confirmed the title; record its
+`baseline` value as the new baseline.
 
 A failed rename never interrupts the chat or appears as an error to the user.
 The command tries up to three times within a few seconds, then returns
@@ -122,6 +122,14 @@ the returned `topic`. Without a baseline, the command writes only over an empty
 title, OpenCode's default `New session - <time>` or `Child session - <time>`
 title, or a title in the managed format. Any other existing title counts as a
 manual title.
+
+At the [implementation naming trigger](workstreams-naming.md#automatic-implementation-naming),
+which permits replacing a title of unknown ownership, add `"adopt": true` to
+that first request only, without a baseline. It may replace the title that
+request first observes, such as OpenCode's generated summary. Never save or
+repeat `adopt`. Later requests pass the returned baseline, so any title the
+workflow did not write counts as manual and is not overwritten. A non-boolean
+`adopt`, or `adopt` with a baseline, is rejected as `invalid_request`.
 
 Only tests with a fake `opencode` executable check this command, not OpenCode
 itself.
