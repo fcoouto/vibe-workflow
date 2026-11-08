@@ -760,6 +760,42 @@ test("S-a: sessions under a finished attempt stay blocked after their root is de
   } finally { t.stop() }
 })
 
+test("LOW-1: a session created after detach under a retired child stays blocked after a cache flood", async () => {
+  const t = await start({ check: ["blocked"] }, {}, { pendingMs: 60000 })
+  try {
+    await t.attach()
+    await t.emit(created("ses_rkid1", MANAGED))
+    await t.attach(D("other9"))  // another root stays attached, so lookups are allowed and must not decide this
+    t.fake.set({ check: ["blocked"], closed_sessions: [MANAGED] })
+    await t.detach()
+    await flood(t, 4100)  // evicts ses_rkid1 -> MANAGED from the parent cache
+    await t.emit(created("ses_rgrand1", "ses_rkid1"))  // created through the API after detach
+    await t.emit(created("ses_rgreat1", "ses_rgrand1"))
+    t.state.failLookup = true
+    for (const session of ["ses_rgrand1", "ses_rgreat1"]) {
+      await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attempt_closed"))
+      await assert.rejects(t.hooks["tool.execute.before"](spawnCall(session, "claude-agent/haiku#low")), refused("attempt_closed"))
+    }
+  } finally { t.stop() }
+})
+
+test("LOW-1: the same under a detached attempt that is still open blocks with attach_required", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created("ses_okid2", MANAGED))
+    t.fake.set({ check: ["blocked"], known_sessions: [MANAGED] })
+    await t.detach()
+    await flood(t, 4100)
+    await t.emit(created("ses_ograndkid2", "ses_okid2"))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_ograndkid2")), refused("attach_required"))
+    const shell = { env: shellEnv() }
+    await t.hooks["shell.create.before"](shell)
+    assert.deepEqual(shell.env, shellEnv())
+    assert.deepEqual(t.lookups, [])
+  } finally { t.stop() }
+})
+
 test("S-a: sessions under a detached open attempt are blocked until attached, then closed when it finishes", async () => {
   const t = await start({ check: ["blocked"] }, {}, { pendingMs: 200 })
   try {
