@@ -5,7 +5,7 @@
     "provider": "claude-agent/haiku",
     "sanitized": true
   },
-  "note": "Excerpt of the same probe runs' sanitized hook observations and live /api/event stream. Hook entries are the probe plugin's summaries: 'keys' lists the payload's top-level keys and the other fields record selected values; baseURL, header and env values were never recorded. Events are verbatim sanitized SSE records; durable events carry durable.{aggregateID,seq,version}, volatile ones none.",
+  "note": "Excerpt of the same probe runs' sanitized hook observations and live /api/event stream. Hook entries are the probe plugin's summaries: 'keys' lists the payload's top-level keys and the other fields record selected values; baseURL, header and env values were never recorded. Events are verbatim sanitized SSE records; durable events carry durable.{aggregateID,seq,version}, volatile ones none. Reshaping from the source observations: the probe's timing and instance fields (t, inst, spawn_ms, shim) were removed, and in the shell.create.before entry the opencode_env map was reduced to its key names (env_keys_recorded) and the has_probe_secret flag removed.",
   "hooks": [
     {
       "hook": "model.request",
