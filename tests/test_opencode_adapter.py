@@ -42,13 +42,13 @@ SESSION_F = load("p0r2-mcp-codemode-messages.json")["messages"]
 
 
 def hook_record(hook, **match):
-    return next(h for h in EXCERPT["hooks"]
-                if h["hook"] == hook and all(h.get(k) == v for k, v in match.items()))
+    return copy.deepcopy(next(h for h in EXCERPT["hooks"]
+                              if h["hook"] == hook and all(h.get(k) == v for k, v in match.items())))
 
 
 def event_record(event_type, **data):
-    return next(e for e in EXCERPT["events"]
-                if e["type"] == event_type and all(e["data"].get(k) == v for k, v in data.items()))
+    return copy.deepcopy(next(e for e in EXCERPT["events"]
+                              if e["type"] == event_type and all(e["data"].get(k) == v for k, v in data.items())))
 
 
 def model_request(kind):
