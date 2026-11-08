@@ -52,10 +52,10 @@ advanced prerequisites do not prevent this project choice from taking effect.
    this owned block while preserving later edits.
 
 ```markdown
-<!-- vibe-coding-workflow:workstreams:start -->
+<!-- vibe-workflow:workstreams:start -->
 - [x] Workstreams
 Follow the [Workstreams project preference](<resolved-local-procedure-path>).
-<!-- vibe-coding-workflow:workstreams:end -->
+<!-- vibe-workflow:workstreams:end -->
 ```
 
 The instruction block is the current source of truth. Onboarding records may

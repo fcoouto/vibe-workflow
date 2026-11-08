@@ -53,10 +53,10 @@ Read skills/prepare-my-workspace/SKILL.md and use it to prepare this machine.
 For Codex releases, register the Git-backed marketplace:
 
 ```sh
-codex plugin marketplace add https://github.com/fcoouto/vibe-coding-workflow.git --ref codex/marketplace-release
+codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref codex/marketplace-release
 ```
 
-In Codex Desktop, select **Vibe Coding Workflow**, install `vibe-coding-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-coding-workflow-local`. Start a new chat to load the updated plugin.
+In Codex Desktop, select **Vibe Coding Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
 
 For local plugin testing, run `codex plugin marketplace add .` from this checkout in a separate Codex profile. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
 

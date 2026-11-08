@@ -103,7 +103,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "PostToolUse")
         self.assertIn("truncation marker", output["hookSpecificOutput"]["additionalContext"])
         self.assertNotIn("PRIVATE_OUTPUT", json.dumps(output))
-        self.assertFalse((self.repo / ".vibe-coding-workflow" / "runtime.sqlite3").exists())
+        self.assertFalse((self.repo / ".vibe-workflow" / "runtime.sqlite3").exists())
 
     def test_runtime_scope_reuses_validated_checkout_and_never_initializes_state(self):
         self.enroll(runtime=self.runtime())

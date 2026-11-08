@@ -35,7 +35,7 @@ def main():
     parser.add_argument('--parent', required=True, help='Stable native parent identity, never its title or project path')
     args = parser.parse_args()
     try:
-        store = Path.home() / '.vibe-coding-workflow' / 'workstreams-families.sqlite3'
+        store = Path.home() / '.vibe-workflow' / 'workstreams-families.sqlite3'
         print(json.dumps(dict(ok=True, family=reserve(store, args.client, args.parent))))
         return 0
     except (ValueError, OSError, sqlite3.Error) as error:

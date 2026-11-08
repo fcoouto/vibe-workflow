@@ -14,7 +14,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 
 def directory():
-    return Path.home() / '.local/state/vibe-coding-workflow/usage'
+    return Path.home() / '.local/state/vibe-workflow/usage'
 
 
 def scope(cwd):

@@ -264,7 +264,7 @@ def operate(scope, action, request, transport=None, *, force=False):
                 topic = request.get('topic', workflow_topic)
                 format_title('W1', member, topic, task['state'], 0)
                 try:
-                    family = reserve(Path.home() / '.vibe-coding-workflow' / 'workstreams-families.sqlite3', client, parent)
+                    family = reserve(Path.home() / '.vibe-workflow' / 'workstreams-families.sqlite3', client, parent)
                 except sqlite3.Error:
                     raise OSError('Family code register unavailable') from None
                 saved = dict(identity=identity, family=family, member=member, topic=topic,

@@ -44,7 +44,7 @@ These illustrate wording, not plans or approval for any real project. Replace ex
 >
 > **Scope:** Set up the selected managed workflow for this checkout in Codex, preserving existing project settings.
 >
-> **Changes:** Add the project setup guide at `docs/setup.md` and the project registration at `.vibe-coding-workflow/project.json`. Keep private recovery records beside the setup plan.
+> **Changes:** Add the project setup guide at `docs/setup.md` and the project registration at `.vibe-workflow/project.json`. Keep private recovery records beside the setup plan.
 >
 > **Next:** Apply these changes, run the required checks, and enable the agreed workflow once those checks qualify. Create runtime state only when the selected managed operation needs it.
 >

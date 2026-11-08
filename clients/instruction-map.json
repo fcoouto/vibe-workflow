@@ -2,7 +2,7 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "29f34b4cb8a2549c70168daea8f15eb223ad5099132b4c2fa613f9beacc6d836",
+      "sha256": "b5b004df4b8db81fb278269e18caba23cef6be7d7da200a7bf47e83ebc87dac3",
       "ranges": [
         [
           1,
@@ -229,7 +229,7 @@
       ]
     },
     "clients/startup.md": {
-      "sha256": "e5317ca85ec59a2aa0477eaee319ee663bec4dc2064f65fb22851f97cdd333dd",
+      "sha256": "9c00c9be28d4c156fd9c560ed5ba002f7b66b0c3e8cfb1810d4aec0afbac77e5",
       "ranges": [
         [
           1,
@@ -251,7 +251,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "a745caf061c4f8494a70bbef315c8f067c6958bb5ff736b2861e91829e6e2b35",
+      "sha256": "0e2bc216a9343f7249638acac49641f06472d7ef5cf7933578d9565629fc8c44",
       "ranges": [
         [
           1,
@@ -481,14 +481,14 @@
       ]
     },
     "skills/manage-openrouter/references/procedure.md": {
-      "sha256": "5dce2a1238f6622af9f599596bded1d922ae6599c0f6d62c425811a0acc15b5a",
+      "sha256": "239c0d7033db299c2e7309bf3743c3ebc267565ecb3e67f45684501452dd218c",
       "ranges": [
         [
           1,
-          130
+          131
         ],
         [
-          131,
+          132,
           150
         ]
       ]
@@ -539,7 +539,7 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "435855ab9db95daa6debdeb47e1aa1878ba318e8de345dd534e83fbdf0c78bc3",
+      "sha256": "8fa0bfb9d61f8d1644bf3268701818a924565c9eb36fe805bcd282d5bd2e6b00",
       "ranges": [
         [
           1,
@@ -609,7 +609,7 @@
       ]
     },
     "skills/onboard-my-project/references/reviewed-configuration.md": {
-      "sha256": "42d38588e65621958ba37cff0584d12b8590445f109812296d07fd2fbf6f9719",
+      "sha256": "7be1dd9485f177906e195a5c6c43c2e0dd6befa0b3e7f83d3f9f09e9978c3c35",
       "ranges": [
         [
           1,
@@ -693,7 +693,7 @@
       ]
     },
     "skills/workstreams/references/procedure.md": {
-      "sha256": "f757d3e2b9f6cc63586b550f8971584cd305b446707810c69252d9c662df95dd",
+      "sha256": "60b5065df7fc756b4a2a78cd00289a1b10c92920f0a6f79e8bacce52a1a8bccc",
       "ranges": [
         [
           1,

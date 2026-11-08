@@ -22,7 +22,7 @@ or a missing, replaced or corrupt database do not prevent viewing or disabling
 established consent. Preserve historical bindings, expected revisions and atomic
 ownership checks; never repin or renew consent during recovery. A basic checkout
 without saved consent reports unconfigured. This skill supplies no native qualification reader. Enrollment lives in
-`.vibe-coding-workflow/project.json`; managed settings live outside Git in that runtime’s
+`.vibe-workflow/project.json`; managed settings live outside Git in that runtime’s
 private state directory. A repository clone, sibling worktree, parent directory or
 account connection does not inherit consent. Consent remains checkout-bound;
 Project-wide consent and other client adapters are not implemented.

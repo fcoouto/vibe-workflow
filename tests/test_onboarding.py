@@ -99,7 +99,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(plan["identity"]["repository_root"], str(self.repo))
         self.assertEqual(len(plan["requirements"]), 13)
         self.assertEqual(self.git("status", "--porcelain=v1", "-z"), before)
-        self.assertFalse((self.repo / ".vibe-coding-workflow").exists())
+        self.assertFalse((self.repo / ".vibe-workflow").exists())
         self.assertEqual((self.directory / "plan.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(plan["sources"]["observed"]["catalog.md"]["sha256"],
                          self.record["toolkit"]["files"][0]["sha256"])

@@ -218,7 +218,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.fixture.repo.rename(moved)
         self.fixture.repo.mkdir()
         (moved / ".git").rename(self.fixture.repo / ".git")
-        (moved / ".vibe-coding-workflow").rename(self.fixture.repo / ".vibe-coding-workflow")
+        (moved / ".vibe-workflow").rename(self.fixture.repo / ".vibe-workflow")
         with self.assertRaises(self.settings.SettingsError):
             self.settings.status(self.scope)
 

@@ -81,7 +81,7 @@ class OnboardingFixture(unittest.TestCase):
             self.directory = directory
             self.source = directory / "catalog.md"
             self.record["toolkit"]["files"][0]["local_path"] = str(self.source)
-        authority = root / ".vibe-coding-workflow/project.json"
+        authority = root / ".vibe-workflow/project.json"
         return copy.deepcopy(self.record) | {"project_scope": {
             "kind": kind, "project_root": str(root),
             "member_checkouts": [str(p) for p in (members or [self.repo])],

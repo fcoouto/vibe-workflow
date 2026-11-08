@@ -16,7 +16,7 @@ from types import MappingProxyType
 
 
 MAX_INPUT = 128 * 1024
-PROJECT_FILE = Path(".vibe-coding-workflow/project.json")
+PROJECT_FILE = Path(".vibe-workflow/project.json")
 
 
 class StartupError(ValueError):

@@ -332,7 +332,7 @@ class StartupTests(unittest.TestCase):
     def test_package_validator_rejects_shadowing_root_manifest(self):
         package = self.base / "package"
         shutil.copytree(PACKAGE, package, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        (package / "plugin.json").write_text('{"name":"vibe-coding-workflow"}')
+        (package / "plugin.json").write_text('{"name":"vibe-workflow"}')
         with self.assertRaisesRegex(ValueError, "root manifest hides hooks"):
             validate(package)
 
@@ -433,7 +433,7 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
         self.event=startup.StartupEvent('codex','machine-family-session',self.fixture.repo,'startup')
         home=patch.dict(os.environ,HOME=str(self.fixture.base))
         home.start();self.addCleanup(home.stop)
-        self.family=self.fixture.base/'.vibe-coding-workflow/workstreams-families.sqlite3'
+        self.family=self.fixture.base/'.vibe-workflow/workstreams-families.sqlite3'
 
     def test_session_start_keeps_ordinary_guidance_for_active_runtime(self):
         from runtime import startup
@@ -456,7 +456,7 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
 
     def reserve(self,home=None):
         from scripts.workstreams_family import reserve
-        path=(home or Path.home())/'.vibe-coding-workflow/workstreams-families.sqlite3'
+        path=(home or Path.home())/'.vibe-workflow/workstreams-families.sqlite3'
         self.assertEqual(reserve(path,'codex','fixture:machine-parent'),'W1')
         return path
 

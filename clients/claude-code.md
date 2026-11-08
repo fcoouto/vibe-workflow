@@ -12,7 +12,7 @@ Normal output adds local client/policy pointers through `hookSpecificOutput.addi
 
 ## Installation and qualification
 
-For local testing, use `claude --plugin-dir /absolute/path/to/vibe-coding-workflow`. Review the package before enabling it. Claude's plugin installation/trust rules apply; it does not use Codex's per-definition hash approval flow. Preserve existing hooks, permissions, model selection and authentication.
+For local testing, use `claude --plugin-dir /absolute/path/to/vibe-workflow`. Review the package before enabling it. Claude's plugin installation/trust rules apply; it does not use Codex's per-definition hash approval flow. Preserve existing hooks, permissions, model selection and authentication.
 
 Qualify the actual client version and launch environment. A disposable `--init-only` run executes startup hooks without starting a conversation; inspect native debug output for handler count and returned context. Package checks and direct script execution do not establish native loading.
 

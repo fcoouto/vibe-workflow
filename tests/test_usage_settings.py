@@ -54,7 +54,7 @@ class UsageSettingsTests(unittest.TestCase):
             self.assertTrue(controller.enable(1)['enabled'])
         self.assertEqual(routing.disable(self.root,dict(expected_revision=2))['reason'],'disabled')
         with self.assertRaises(BudgetError): routing.disable(self.root,dict(expected_revision=2))
-        self.assertFalse((self.root / '.vibe-coding-workflow').exists())
+        self.assertFalse((self.root / '.vibe-workflow').exists())
         self.assertFalse((self.root / '.env').exists())
 
     def test_live_consent_requires_explicit_keychain_enable_and_can_be_revoked(self):

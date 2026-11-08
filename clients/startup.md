@@ -2,7 +2,7 @@
 
 Read this when implementing or diagnosing startup, or preparing enrollment records. Ordinary tasks follow the [policy index](../policies/00-index.md) and their selected client instructions.
 
-The shared runtime resolves the nearest Git checkout and common Git directory. Legacy `.vibe-coding-workflow/project.json` enrollment is checkout-root scoped. Canonical Project authority may live at an accepted Project ancestor, with explicit repository, checkout and current-client membership. Ancestry alone never grants enrollment. Without enrollment, startup produces no output; invalid, conflicting or unavailable authority produces a diagnostic. Startup supplies orientation only, without onboarding, task state, action guards or merge enforcement.
+The shared runtime resolves the nearest Git checkout and common Git directory. Legacy `.vibe-workflow/project.json` enrollment is checkout-root scoped. Canonical Project authority may live at an accepted Project ancestor, with explicit repository, checkout and current-client membership. Ancestry alone never grants enrollment. Without enrollment, startup produces no output; invalid, conflicting or unavailable authority produces a diagnostic. Startup supplies orientation only, without onboarding, task state, action guards or merge enforcement.
 
 ## Enrollment input
 

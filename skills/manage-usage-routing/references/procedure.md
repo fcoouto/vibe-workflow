@@ -132,7 +132,7 @@ actual authorized grant coverage before a live request; a numerical setting is
 not proof. Stop time precedes cycle end/expiry.
 
 Configuration requires the supported enrolled Codex scope. It explicitly creates
-owner-only feature state under `~/.local/state/vibe-coding-workflow/usage/` and
+owner-only feature state under `~/.local/state/vibe-workflow/usage/` and
 pins the one canonical database identity in checkout binding files. It saves a
 requested mode while leaving the feature OFF and acquires no account connection. A missing
 or replaced pinned database requires recovery, not a new allowance. This feature

@@ -42,7 +42,7 @@ def bootstrap_reads():
     # Sanitized Mac rollout shape. The loader emitted both a result and a named notification.
     inputs = [
         'const r = await tools.exec_command({cmd:"python3 -I -B /package/scripts/read_instructions.py --batch bootstrap"}); text(r.output);\n',
-        'const r = await tools.exec_command({cmd:"cat /public/disposable/.vibe-coding-workflow/project.json"}); text(r.output);\n',
+        'const r = await tools.exec_command({cmd:"cat /public/disposable/.vibe-workflow/project.json"}); text(r.output);\n',
         'text(await drain({root, paths, exec:tools.exec_command, emit:notify}));\n',
     ]
     rows = []
