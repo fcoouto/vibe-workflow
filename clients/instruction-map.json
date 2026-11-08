@@ -687,11 +687,20 @@
       ]
     },
     "skills/prepare-my-workspace/SKILL.md": {
-      "sha256": "85d62781f5ed2e02ee58a591b6dace85e069eae0bcbfe208758cf53c60f58b50",
+      "sha256": "a1eb5a8864d5f33b302dea0ca0cacc237c94e0f7c9a65d0086e78e06eb8a3c05",
       "ranges": [
         [
           1,
           12
+        ]
+      ]
+    },
+    "skills/prepare-my-workspace/references/upgrade.md": {
+      "sha256": "18bdccf0ca821779dad787f84b01f0cbe935cd0dddc77d82bf2d041ead750e96",
+      "ranges": [
+        [
+          1,
+          45
         ]
       ]
     },
