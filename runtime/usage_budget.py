@@ -11,7 +11,7 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
 # begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
 # within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
-# dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, release_unlaunched,
+# dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, require_authority,
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
@@ -28,9 +28,9 @@ MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are th
 # A larger admission is refused with `record_too_large` and writes nothing.
 MAX_ADMISSION_BYTES = 4096
 MAX_HOLD_BYTES = 2048
-# Fixed-size fields `dispatch_hold`, `mark_uncertain` and `release_unlaunched` add to an admitted hold (two derived
-# ids, an authority hash and three times); the worst-case capacity test counts every hold at both bounds.
-DISPATCH_HOLD_BYTES = 384
+# Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
+# worst-case capacity test counts every hold at both bounds.
+DISPATCH_HOLD_BYTES = 256
 MAX_CLAIMS = 9  # one `org:` claim plus at most eight window claims per hold
 # Uncertainty evidence kept on a call; a larger record is replaced by {'omitted': 'too_large'} so recording
 # uncertainty never fails. `finished_native` needs no own bound: it holds only keys of `native`, which has at
@@ -549,7 +549,9 @@ class Ledger:
                      next_request_bound=None, margin_bp=None, provision=0, consent=None, live_gate=None):
         """Turn an admitted hold's dollar amount into the attempt's run claim in ONE transaction.
 
-        S3 must use this (not `begin`) to dispatch a funded attempt. The organization, task and provider account
+        S3 must use this (not `begin`) for a funded attempt, and only after `dispatch_hold`: the hold must be
+        `dispatched` with an issued authority (never admitted, bare-dispatched or uncertain), and it keeps its
+        dispatch record. The organization, task and provider account
         come from the hold; another `organization` raises `hold_organization_mismatch`. The run's own bound
         (`estimate` padded as in `begin`) must fit the hold, else `hold_exceeded`: a larger need goes through
         an explicit `top_up` and its headroom check. The whole hold amount moves 1:1 into the run's envelope,
@@ -561,8 +563,8 @@ class Ledger:
         require(integer(provision) <= maximum, 'provision_exceeded')
         with self.transaction() as data:
             hold = data['holds'].get(attempt_id)
-            require(hold is not None and not hold['closed'] and hold['state'] == 'admitted' and hold['amount'] > 0
-                    and attempt_id not in data['runs'], 'convert_forbidden')
+            require(hold is not None and not hold['closed'] and hold['state'] == 'dispatched' and 'dispatch' in hold
+                    and hold['amount'] > 0 and attempt_id not in data['runs'], 'convert_forbidden')
             require(organization == hold['organization'], 'hold_organization_mismatch')
             require(maximum <= hold['amount'], 'hold_exceeded')
             require(len(data['runs']) < MAX_RUNS, 'ledger_capacity_reached')
@@ -728,6 +730,8 @@ class Ledger:
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
             self._check_caps(data, account)
+            if data.get('authority_required'):
+                record = dict(record, authority_required=True)  # one-way rule this admission keeps for its life
             hold = dict(account=account, task=task, organization=organization, amount=amount, cycle=cycle,
                         windows={k: v for k, v in vector.items() if k.startswith(WIN)}, closed=False, state='admitted')
             for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
@@ -773,18 +777,24 @@ class Ledger:
         return hold
 
     def mark_dispatched(self, attempt_id):
-        """The send may have begun: from here the hold is released only by completion or reconciliation."""
+        """The send may have begun: from here the hold is released only by completion or reconciliation.
+
+        An admission stamped `authority_required` refuses this bare transition (`dispatch_required`): it is
+        dispatched only through `dispatch_hold`, which issues an authority."""
         with self.transaction() as data:
-            self._hold(data, attempt_id, ('admitted',))['state'] = 'dispatched'
+            hold = self._hold(data, attempt_id, ('admitted',))
+            require(not (self.admission(data, attempt_id) or {}).get('authority_required'), 'dispatch_required')
+            hold['state'] = 'dispatched'
 
     def dispatch_hold(self, attempt_id, authority, ids, gate, now):
         """Move an admitted hold to `dispatched` with a single-use authority in ONE write transaction (spec 8).
 
         `authority` is the SHA-256 hex of the caller's token; the token itself is never stored. `ids` are the
         attempt's derived host ids, refused with `id_collision` when another hold already owns either of them.
-        `gate(data)` is pure, runs on the locked state and returns None or a fixed refusal, which writes nothing.
-        A hold already `dispatched` or `uncertain` returns `issued=False` and never gains another authority."""
-        name(attempt_id); integer(now)
+        `now` is an integer or a clock callable read inside the transaction. `gate(data, now)` runs on the locked
+        state and returns None or a fixed refusal, which writes nothing. A hold already `dispatched` or
+        `uncertain` returns `issued=False` and never gains another authority."""
+        name(attempt_id)
         require(type(authority) is str and len(authority) == 64, 'invalid_authority')
         fields(ids, 'session_id message_id')
         name(ids['session_id']); name(ids['message_id'])
@@ -795,51 +805,29 @@ class Ledger:
             if hold['state'] in ('dispatched', 'uncertain'):
                 return dict(issued=False, state=hold['state'])
             require(hold['state'] == 'admitted', 'hold_state_unsupported')
-            owned = {value for other, entry in data['holds'].items() if other != attempt_id and 'dispatch' in entry
-                     for value in (entry['dispatch']['session_id'], entry['dispatch']['message_id'])}
-            require(not owned & set(ids.values()), 'id_collision')
-            reason = gate(data)
+            moment = integer(now() if callable(now) else now)
+            taken = [(entry['dispatch']['session_id'], entry['dispatch']['message_id'])
+                     for other, entry in data['holds'].items() if other != attempt_id and 'dispatch' in entry]
+            require(all(ids['session_id'] != session and ids['message_id'] != message for session, message in taken),
+                    'id_collision')
+            reason = gate(data, moment)
             require(reason is None, reason)
             hold['state'] = 'dispatched'
             hold['dispatch'] = dict(session_id=ids['session_id'], message_id=ids['message_id'], authority=authority,
-                                    at=now)
+                                    at=moment)
             return dict(issued=True, state='dispatched')
 
-    def mark_uncertain(self, attempt_id, now=None):
+    def mark_uncertain(self, attempt_id):
         """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
 
-        A hold dispatched with an authority records the first uncertain time (`now`); `release_unlaunched` needs it."""
-        if now is not None:
-            integer(now)
+        S3.4 accepts no proof of non-launch: an uncertain hold stays counted until S3.6 reconciliation."""
         with self.transaction() as data:
-            hold = self._hold(data, attempt_id, ('admitted', 'dispatched'))
-            hold['state'] = 'uncertain'
-            if now is not None and 'dispatch' in hold:
-                hold['dispatch'].setdefault('uncertain_at', now)
+            self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
 
-    def release_unlaunched(self, attempt_id, proof, now):
-        """Release an uncertain dispatched hold on proof that the host never admitted its message.
-
-        Applies only to a hold dispatched with an authority (`dispatch_hold`) and marked uncertain with a time.
-        From that mark every check of the attempt is blocked, so the derived message being absent at a host read
-        made strictly after it (`uncertain_at < observed_at <= now`) proves no request of the attempt was sent.
-        `proof` is exactly `{kind: 'message_absent', session_id, message_id, observed_at}` naming the hold's
-        derived ids; anything else is `proof_invalid` and changes nothing."""
-        integer(now)
+    def require_authority(self):
+        """One-way operator switch: every later admission is stamped `authority_required` (S3.4). Never cleared."""
         with self.transaction() as data:
-            hold = data['holds'].get(attempt_id)
-            require(hold is not None, 'attempt_missing')
-            require(not hold['closed'] and hold['state'] in ('dispatched', 'uncertain'), 'close_forbidden')
-            issued = hold.get('dispatch')
-            require(issued is not None, 'proof_not_applicable')
-            require(hold['state'] == 'uncertain', 'uncertain_required')
-            require('uncertain_at' in issued, 'proof_not_applicable')
-            require(type(proof) is dict and set(proof) == {'kind', 'session_id', 'message_id', 'observed_at'}
-                    and proof['kind'] == 'message_absent' and proof['session_id'] == issued['session_id']
-                    and proof['message_id'] == issued['message_id'] and type(proof['observed_at']) is int
-                    and issued['uncertain_at'] < proof['observed_at'] <= now, 'proof_invalid')
-            hold.update(closed=True, state='released')
-            issued['released'] = dict(proof='message_absent', observed_at=proof['observed_at'])
+            data['authority_required'] = True
 
     def close_attempt(self, attempt_id, outcome, *, reconciled=True):
         """Release a hold only on an established outcome: `not_dispatched` or `complete`.

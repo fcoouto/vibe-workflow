@@ -618,7 +618,7 @@ class Property:
             self.test.assertLessEqual(accounts.count(account), CAPS[1], 'I5 ' + where)
 
     def step(self, index):
-        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'authorize', 'convert', 'convert',
+        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'authorize', 'authorize', 'convert', 'convert',
                               'dispatched', 'uncertain', 'close', 'run_dispatch', 'complete', 'observe', 'toggle'))
         self.clock += 1
         before = self.ledger.snapshot()
@@ -662,12 +662,17 @@ class Property:
             self.ledger.top_up(self.rng.choice(runs), self.amount(), 1, self.clock)
 
     def op_authorize(self, before):
-        attempt = self.pick_hold(before, ('admitted',))
+        funded = sorted(i for i, h in before['holds'].items() if not h['closed'] and h['state'] == 'admitted'
+                        and h['amount'])
+        attempt = self.rng.choice(funded) if funded else self.pick_hold(before, ('admitted',))
         if attempt:
             authorize(self.ledger, attempt, self.clock)
 
     def op_convert(self, before):
         holds = sorted(i for i, h in before['holds'].items() if not h['closed'] and h['amount'])
+        authorized = [i for i in holds if 'dispatch' in before['holds'][i] and before['holds'][i]['state'] == 'dispatched']
+        if authorized and self.rng.random() < 0.8:  # S3.4: only these convert; the rest exercise the refusal
+            holds = authorized
         if not holds:
             return
         attempt = self.rng.choice(holds)

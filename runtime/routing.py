@@ -8,6 +8,7 @@ the caller-supplied, optional ``jev`` enrichment callable. ``admit`` and ``dispa
 exceptions: each writes the local ledger in one short transaction of pure arithmetic. ``dispatch``
 issues the single-use dispatch authority (S3.4).
 """
+import copy
 import functools
 import hashlib
 import hmac
@@ -846,7 +847,7 @@ def _funding_block(data, hold, record, settings, now):
     return None
 
 
-def check_request(data, attempt_id, facts, settings, now, *, authority=None, strict=False):
+def check_request(data, attempt_id, facts, settings, now, *, authority=None, strict=False, dispatching=False):
     """Pre-transmission check over a ledger snapshot; reads only, never writes or consumes.
 
     ``facts`` is ``{provider, model, variant, harness, kind, funding_pool, bound?}`` already shape-checked by the
@@ -860,8 +861,10 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
 
     Authority (S3.4): a hold dispatched through ``dispatch`` allows only a request carrying its token
     (``authority_required`` / ``authority_invalid``), and the allow result then says ``authority='verified'``.
-    ``strict`` (the caller sent a session id or a token) also refuses a hold that has no issued authority
-    (``dispatch_required``): an admitted attempt, or one dispatched by a bare S3.1 ``record dispatched``.
+    ``strict`` (the caller sent a session id or a token), or an admission stamped ``authority_required``, also
+    refuses a hold that has no issued authority (``dispatch_required``): an admitted attempt, or one dispatched by
+    a bare S3.1 ``record dispatched``. ``dispatching`` is set only by ``dispatch``'s own gate, which is how such a
+    hold obtains its authority.
     """
     hold, record = data['holds'].get(attempt_id), Ledger.admission(data, attempt_id)
     if hold is None or record is None:
@@ -873,7 +876,7 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
     if hold['state'] not in ('admitted', 'dispatched'):
         return _blocked('hold_state_unsupported')
     issued = hold.get('dispatch')
-    if issued is None and strict:
+    if issued is None and not dispatching and (strict or record.get('authority_required')):
         return _blocked('dispatch_required')
     if issued is not None:
         if authority is None:
@@ -910,13 +913,12 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
 
 
 # ---------------------------------------------------------------------------------------------------
-# Single-use dispatch authority (S3.4). The handshake, id derivation and proof rules are defined once in
+# Single-use dispatch authority (S3.4). The handshake, id derivation and uncertainty rules are defined once in
 # the plan's S3.1 contract (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
 # ---------------------------------------------------------------------------------------------------
 AUTHORITY_BYTES = 32  # secrets.token_urlsafe(32): 43 URL-safe characters, 256 random bits
 MAX_AUTHORITY = 128
-_ID_DOMAIN = 'vibe-routing/%s/v1\0'
-_NO_PROOF = object()
+_ID_DOMAIN = 'vibe-routing/%s/v2\0'
 
 
 def authority_hash(token):
@@ -925,48 +927,55 @@ def authority_hash(token):
 
 
 @functools.lru_cache(maxsize=4096)
-def _derived(attempt_id):
-    session, message = (hashlib.sha256((_ID_DOMAIN % kind + attempt_id).encode()).hexdigest()[:32]
+def _derived(ledger_identity, attempt_id):
+    key = json.dumps([ledger_identity, attempt_id], ensure_ascii=True, separators=(',', ':'))
+    session, message = (hashlib.sha256((_ID_DOMAIN % kind + key).encode()).hexdigest()[:32]
                         for kind in ('session', 'message'))
     return 'ses_' + session, 'msg_' + message
 
 
-def derive_ids(attempt_id):
-    """The OpenCode session and message ids a managed launch of ``attempt_id`` must use.
+def derive_ids(attempt_id, ledger_identity):
+    """The OpenCode session and message ids a managed launch of ``attempt_id`` from this ledger must use.
 
-    Pure and deterministic: domain-separated SHA-256 of the attempt id, 128 bits each, written as
-    ``ses_<32 lowercase hex>`` and ``msg_<32 lowercase hex>``. That is a conservative subset of the adapter's
-    ``SESSION`` and ``MESSAGE`` patterns; the probe fixtures are sanitized, so the server's own id body format is
-    not on record. Hashing is not injective in principle, so ``dispatch`` refuses an id another known attempt
-    already owns (``id_collision``)."""
-    if not _text(attempt_id):
-        raise ValueError('invalid attempt id')
-    session, message = _derived(attempt_id)
+    Pure and deterministic: domain-separated SHA-256 over the ledger identity and the attempt id (JSON-encoded,
+    so the two parts cannot run into each other), 128 bits each, written as ``ses_<32 lowercase hex>`` and
+    ``msg_<32 lowercase hex>``. Two ledgers (a test and the real one) never share ids for one attempt id. That is
+    a conservative subset of the adapter's ``SESSION`` and ``MESSAGE`` patterns; the probe fixtures are
+    sanitized, so the server's own id body format is not on record. Hashing is not injective in principle, so
+    ``dispatch`` refuses an id another remembered attempt already owns (``id_collision``)."""
+    if not _text(attempt_id) or not _text(ledger_identity):
+        raise ValueError('invalid attempt id or ledger identity')
+    session, message = _derived(ledger_identity, attempt_id)
     return dict(session_id=session, message_id=message)
 
 
 def reconcile_hint(ids):
-    """The one host read a launcher makes to settle a lost acknowledgment; routing makes no host call itself."""
-    return dict(read='message', method='GET', session_id=ids['session_id'], message_id=ids['message_id'],
+    """The host read an operator can make about a lost acknowledgment. Informational only (``authoritative``
+    false): an absent message can also mean a deleted or reverted message or another server or directory, so
+    nothing in S3.4 accepts its result; S3.6 reconciles. Routing makes no host call itself."""
+    return dict(read='message', method='GET', authoritative=False, session_id=ids['session_id'],
+                message_id=ids['message_id'],
                 path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id']))
 
 
 def _known_attempts(data):
-    """Every attempt id the ledger still remembers: open and pruned-later holds, records and recent ids."""
+    """Every attempt id the ledger still remembers: holds, admission records and the recent-id list."""
     known = dict.fromkeys(data['holds'])
     known.update(dict.fromkeys(record['attempt_id'] for record in data['admissions']))
     known.update(dict.fromkeys(data.get('seen_attempts', [])))
     return [attempt for attempt in known if _text(attempt)]
 
 
-def _owner(data, values):
-    """The known attempt whose derived or stored ids include any of ``values``, or None."""
+def _owner(data, kind, value):
+    """The remembered attempt whose ``kind`` id (``session_id`` or ``message_id``) is ``value``, or None.
+
+    Each kind matches only its own kind, so a message id sent as a session id resolves to nothing."""
     for attempt, hold in data['holds'].items():
         issued = hold.get('dispatch')
-        if issued and {issued['session_id'], issued['message_id']} & values:
+        if issued and issued[kind] == value:
             return attempt
     for attempt in _known_attempts(data):
-        if set(derive_ids(attempt).values()) & values:
+        if derive_ids(attempt, data['identity'])[kind] == value:
             return attempt
     return None
 
@@ -974,12 +983,13 @@ def _owner(data, values):
 def check(data, facts, settings, now, *, attempt_id=None, session_id=None, authority=None):
     """``check`` with S3.4 session resolution; reads only.
 
-    With only ``session_id``: a session no remembered attempt derives is ``{'state': 'unmanaged'}`` (interactive
-    sessions stay unguarded); a remembered attempt whose hold is gone is ``attempt_closed``. With both, a session
+    With only ``session_id``: a session that no attempt the ledger remembers derives (it was never admitted
+    here) is ``{'state': 'unmanaged'}``: interactive sessions stay unguarded, and the shim blocks this answer for
+    a session it attached. A remembered attempt whose hold is gone is ``attempt_closed``. With both ids, a session
     that belongs to another attempt is ``session_mismatch``; an unknown one (a child session) is checked under
     ``attempt_id``. A session id or token makes the check strict (see ``check_request``)."""
     if session_id is not None:
-        owner = _owner(data, {session_id})
+        owner = _owner(data, 'session_id', session_id)
         if attempt_id is None:
             if owner is None:
                 return dict(state='unmanaged')
@@ -995,30 +1005,36 @@ def check(data, facts, settings, now, *, attempt_id=None, session_id=None, autho
 def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
     """Issue the single-use authority for an admitted attempt, or return the existing decision.
 
-    One write transaction re-runs every ``check`` gate on the unsent admission (settings revision, age, dollar
-    funding, route identity, envelope), then each extra ``gates`` entry ``gate(data, record) -> reason | None``
-    (S3.5's fresh gates), then moves the hold to ``dispatched`` with the token's hash and the derived ids. A refusal
-    writes nothing and the hold stays ``admitted``. The token is generated here, before the transaction, and is
-    returned only in this ``dispatched`` result; repeated or racing callers get ``already_dispatched`` without one.
-    No host or network call happens here or inside the transaction."""
+    ``settings`` (resolved settings with ``revision``) and ``now`` may be callables; they are read INSIDE the
+    write transaction, so a settings change that holds the same lock (the command's ``set``) is ordered wholly
+    before or after the dispatch. The transaction re-runs every ``check`` gate on the unsent admission (settings
+    revision, age, dollar funding, route identity, envelope), refuses ids another remembered attempt owns, then
+    runs each ``gates`` entry ``gate(data, record) -> reason | None`` (S3.5's fresh gates) on a deep copy, so a
+    gate cannot change the ledger. It then moves the hold to ``dispatched`` with the token's hash and the
+    derived ids. A refusal writes nothing and the hold stays ``admitted``. The token is generated before the
+    transaction and returned only in this ``dispatched`` result; repeated or racing callers get
+    ``already_dispatched`` without one. No host or network call happens here or inside the transaction."""
     if not _text(attempt_id):
         return _blocked('invalid_request')
-    ids = derive_ids(attempt_id)
+    ids = derive_ids(attempt_id, ledger.identity)
     token = secrets.token_urlsafe(AUTHORITY_BYTES)
     admitted = {}
 
-    def gate(data):
-        found = check_request(data, attempt_id, facts, settings, now)
+    def gate(data, moment):
+        current = settings() if callable(settings) else settings
+        found = check_request(data, attempt_id, facts, current, moment, dispatching=True)
         if found['state'] != 'allow':
             return found['reason']
-        if _owner(data, set(ids.values())) not in (None, attempt_id):
+        if any(_owner(data, kind, ids[kind]) not in (None, attempt_id) for kind in ('session_id', 'message_id')):
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
         admitted.update(route=record['route'], pool=record['pool'])
-        for extra in gates:
-            reason = extra(data, record)
-            if reason is not None:
-                return reason if _text(reason) else 'gate_invalid'
+        if gates:
+            copied = copy.deepcopy(data)
+            for extra in gates:
+                reason = extra(copied, Ledger.admission(copied, attempt_id))
+                if reason is not None:
+                    return reason if _text(reason) else 'gate_invalid'
         return None
     try:
         outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), ids, gate, now)
@@ -1031,31 +1047,25 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
                 reconcile_hint=reconcile_hint(ids))
 
 
-def record_event(ledger, attempt_id, kind, *, now=None, proof=_NO_PROOF):
+def record_event(ledger, attempt_id, kind):
     """Apply one lifecycle event as its ledger hold transition; a repeat that already took effect is a duplicate.
 
     Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it. A bare
     ``complete`` never releases an uncertain hold (``reconciliation_required``): S3.6 adds evidence-based reconciliation.
     A closed attempt refuses every later event (``attempt_closed``): S3.1 keeps no event store, so it cannot tell
     a late duplicate from a conflicting report. S3.6 adds durable event-id deduplication, usage and settlement.
-
-    S3.4: ``uncertain`` stamps ``now`` on a hold dispatched with an authority. ``not_dispatched`` after dispatch needs
-    ``proof`` of non-launch (``proof_required``), accepted only by ``Ledger.release_unlaunched``; a proof on any
-    other event is ``invalid_request``.
+    S3.4 accepts no proof of non-launch: ``not_dispatched`` after dispatch stays ``hold_state_forbidden``, and a
+    bare ``dispatched`` on an admission stamped ``authority_required`` is ``dispatch_required``.
     """
     if kind not in RECORD_KINDS:
         return _blocked('record_unsupported')
-    if proof is not _NO_PROOF and kind != 'not_dispatched':
-        return _blocked('invalid_request')
     if attempt_id not in ledger.snapshot()['holds']:
         return _blocked('unknown_attempt')
     try:
         if kind == 'dispatched':
             ledger.mark_dispatched(attempt_id)
         elif kind == 'uncertain':
-            ledger.mark_uncertain(attempt_id, now=now)
-        elif proof is not _NO_PROOF:
-            ledger.release_unlaunched(attempt_id, proof, now)
+            ledger.mark_uncertain(attempt_id)
         else:
             ledger.close_attempt(attempt_id, kind, reconciled=False)
         return dict(state='recorded', duplicate=False)
@@ -1067,8 +1077,6 @@ def record_event(ledger, attempt_id, kind, *, now=None, proof=_NO_PROOF):
             return _blocked('attempt_closed')
         if hold['state'] in _ALREADY[kind]:
             return dict(state='recorded', duplicate=True)
-        if str(error) == 'close_forbidden' and kind == 'not_dispatched' and hold['state'] in ('dispatched', 'uncertain'):
-            return _blocked('proof_required')
         return _blocked('hold_state_forbidden' if str(error) == 'close_forbidden' else str(error))
 
 
@@ -1094,4 +1102,5 @@ def ledger_summary(data):
     organizations = [dict(id=key, enabled=not org.get('disabled', False))
                      for key, org in sorted(data['organizations'].items())]
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
+                authority_required=bool(data.get('authority_required')),
                 caps=dict(total=total, per_account=per_account), organizations=organizations)

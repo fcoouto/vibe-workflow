@@ -37,8 +37,8 @@ WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
 FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
-              dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, {'now'}), status=(set(), set()),
-              set=(set(), {'expected_revision', 'change', 'organization'}))
+              dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
+              set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}))
 EVENT_FIELDS = {'event_id', 'attempt_id', 'kind'}
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
@@ -322,20 +322,18 @@ class Service:
     def _dispatch(self, body):
         attempt, facts = body['attempt_id'], _facts(body['request'])
         require(_text(attempt), 'invalid_request')
-        now = self._now(body)
-        settings = self._settings()
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        return routing.dispatch(ledger, attempt, facts, settings, now)
+        # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
+        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body))
 
     def _record(self, body):
         event = body['event']
-        require(type(event) is dict and EVENT_FIELDS <= set(event) <= EVENT_FIELDS | {'proof'}
-                and all(_text(event[key]) for key in EVENT_FIELDS), 'invalid_request')
+        require(type(event) is dict and set(event) == EVENT_FIELDS and all(_text(event[key]) for key in event),
+                'invalid_request')
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        extra = dict(proof=event['proof']) if 'proof' in event else {}
-        result = routing.record_event(ledger, event['attempt_id'], event['kind'], now=self._now(body), **extra)
+        result = routing.record_event(ledger, event['attempt_id'], event['kind'])
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _status(self, body):
@@ -367,14 +365,28 @@ class Service:
         if 'organization' in body:
             require(set(body) == {'organization'}, 'invalid_request')
             return self._organization(body['organization'])
+        if 'authority_required' in body:
+            value = body['authority_required']
+            require(set(body) == {'authority_required'} and type(value) is bool, 'invalid_request')
+            require(value, 'authority_required_one_way')
+            self._ledger(True, write=True).require_authority()
+            return dict(state='updated', authority_required=True)
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
+        # Write the settings while holding the ledger's write lock, the lock `dispatch` reads settings under, so a
+        # change and a dispatch are totally ordered and `invalidated_attempts` is exact at the change.
+        ledger = self._ledger(False, write=True)
+        if ledger is None:
+            return self._update_settings(body, None)
+        with ledger.transaction() as data:
+            return self._update_settings(body, data)
+
+    def _update_settings(self, body, data):
         try:
             updated = routing_settings.update(self.settings_path, body['change'], body['expected_revision'])
         except SettingsError as error:
             raise Blocked(str(error)) from None
         revision = updated.pop('revision')
-        ledger = self._ledger(False)
-        stale = routing.unsent_admissions(ledger.snapshot(), revision) if ledger is not None else []
+        stale = routing.unsent_admissions(data, revision) if data is not None else []
         return dict(state='updated', revision=revision, settings=updated, invalidated_attempts=stale)
 
     def _organization(self, value):
