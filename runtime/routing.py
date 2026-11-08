@@ -3,12 +3,16 @@
 An empty ranking (``no_recommendation``) is never a refusal: callers fall through to the
 deterministic admission path or the user's explicit worker choices. Only admission can block.
 
-Pure functions: no network, subprocess or model call happens here except through
-the caller-supplied, optional ``jev`` enrichment callable. Nothing in this module
-grants spending, launch or review authority.
+Profiling and ranking are pure: no network, subprocess or model call happens here except through
+the caller-supplied, optional ``jev`` enrichment callable. ``admit`` is the one exception: it
+reserves and records through the local ledger in one short transaction of pure arithmetic. Nothing
+here grants single-use dispatch authority; that is a later layer.
 """
 import hashlib
 import json
+
+from runtime import routing_allocator as allocator
+from runtime.usage_budget import BudgetError, Ledger
 
 CONTRACT_VERSION = 1
 ROLES = ('worker', 'review', 'coordinator', 'check')
@@ -309,3 +313,236 @@ def rank(profile, table, constraints):
                 table_version=table.get('version') if isinstance(table, dict) else None,
                 profile_digest=profile.get('semantic_digest'), review_policy=profile.get('review_policy'),
                 scope_ref=profile.get('scope_ref'))
+
+
+# ---------------------------------------------------------------------------------------------------
+# Admission (spec 6.4, 7.1, 7.2, 7.3, 7.4 and 8)
+# ---------------------------------------------------------------------------------------------------
+# Billing class -> funding class (A12). purchased_usage and ineligible routes never become candidates.
+FUNDING_OF = dict(included_subscription='subscription', api_grant='api', api_prepaid='api', gateway='api')
+DIRECT_API = ('api_grant', 'api_prepaid')
+ROUTE_IDENTITY = ('provider', 'model', 'effort', 'harness')
+SECONDS_PER_HOUR = 3600
+DEFAULT_MINIMUM_HORIZON = 900
+
+
+def _pending(reason, reasons=()):
+    return dict(status='pending', reason_code=reason, reason_codes=list(dict.fromkeys([reason, *reasons])))
+
+
+def _key(pool, window):
+    return '%s/%s' % (pool, window)
+
+
+def _headroom(data, window, pool, held, task, now):
+    """Usable units in one window after caps, outstanding holds and (for a funded pool) the organization."""
+    if window.get('organization') is not None:
+        base = Ledger._headroom(data, window['organization'], task, int(now))
+    else:
+        base = window['limit'] - window['used'] - window.get('protected', 0)
+    return base - held.get(_key(pool, window['id']), 0)
+
+
+def _credential_reasons(route, scope, settings):
+    """Spec 6.4: enablement, secure binding readiness, scope match. Gateways use only their own gate."""
+    reasons = []
+    cls = route['billing_class']
+    if cls in DIRECT_API and settings['api_usage_enabled'] is not True:
+        reasons.append('api_usage_disabled')
+    if cls == 'gateway' and route.get('integration_enabled') is not True:
+        reasons.append('integration_disabled')
+    if cls in DIRECT_API or cls == 'gateway':
+        credential = route.get('credential')
+        if not isinstance(credential, dict) or credential.get('state') != 'ready':
+            reasons.append('credential_unavailable')
+        elif credential.get('scope') != scope:
+            reasons.append('credential_scope_mismatch')
+        if route.get('funding_verified') is not True:
+            reasons.append('funding_unverified')
+    elif route.get('binding_enforceable', True) is not True:
+        reasons.append('binding_unenforceable')
+    return reasons
+
+
+def _candidate(data, route, observations, assignment, settings, held, accounts, now):
+    """Return (candidate or None, reasons) for one route; eligibility, billing class, then feasibility."""
+    cls = FUNDING_OF.get(route.get('billing_class'))
+    if cls is None:
+        return None, ['billing_class_excluded']
+    reasons = _credential_reasons(route, assignment['scope'], settings)
+    pool = observations.get('pools', {}).get(route['pool'])
+    if pool is None:
+        reasons.append('pool_unknown')
+    elif pool.get('billing_class', route['billing_class']) != route['billing_class']:
+        reasons.append('pool_funding_mismatch')  # a direct grant never funds a gateway, nor the reverse
+    if route.get('capable', True) is not True:
+        reasons.append('capability_missing')
+    if route.get('permitted', True) is not True:
+        reasons.append('not_permitted')
+    if accounts.count(route['account']) >= settings['caps']['per_account']:
+        reasons.append('concurrency_cap')
+    if reasons:
+        return None, reasons
+    windows = {window['id']: window for window in pool['windows']}
+    vector, constraints = {}, []
+    bounds = route.get('next_request_bound', {})
+    for window_id, estimate in route.get('demand', {}).items():
+        window = windows.get(window_id)
+        if window is None:
+            return None, ['pool_unknown']
+        stale = (window.get('used') is None or window.get('fresh', True) is not True
+                 or (window.get('reset_at') is not None and window['reset_at'] <= now))
+        if stale:
+            return None, ['stale_observation']
+        try:
+            reserve = Ledger._reserve(estimate, bounds.get(window_id), settings['margin_bp'])
+            room = _headroom(data, window, route['pool'], held, assignment['task'], now)
+        except BudgetError:
+            return None, ['funding_unverified']
+        if reserve > room:
+            return None, ['insufficient_headroom']
+        vector[_key(route['pool'], window_id)] = reserve
+        constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
+                                resets_at=window.get('reset_at')))
+    return dict(route=route['route'], pool=route['pool'], constraints=constraints, vector=vector, cls=cls,
+                spec=route, windows=pool['windows']), []
+
+
+def _utilization(candidates, held, settings, now):
+    """Lowest projected maximum over feasible subscription routes; unknown is conservative, never zero."""
+    best, reasons = None, []
+    for item in candidates:
+        windows, reserve_new = [], {}
+        for window in item['windows']:
+            limit = window['limit']
+            windows.append(dict(id=window['id'], used=None if window.get('used') is None else window['used'] / limit,
+                                reserved=held.get(_key(item['pool'], window['id']), 0) / limit,
+                                length=window.get('length'), reset_at=window.get('reset_at'),
+                                fresh=window.get('fresh', True), rolling=window.get('rolling', False)))
+            reserve_new[window['id']] = item['vector'].get(_key(item['pool'], window['id']), 0) / limit
+        value, why = allocator.projected_utilization(windows, reserve_new, now, settings['min_elapsed_fraction'])
+        reasons += why
+        best = value if best is None or (value is not None and value < best) else best
+    if best is None:
+        reasons.append('utilization_unknown')
+        best = 1.0
+    return best, list(dict.fromkeys(reasons))
+
+
+def _expiry(candidates, observations, settings, now):
+    """E from the earliest-expiring grant of a feasible, eligible direct route; gateways never contribute."""
+    grants = [observations['pools'][item['pool']]['grant'] for item in candidates
+              if item['spec']['billing_class'] == 'api_grant' and 'grant' in observations['pools'][item['pool']]]
+    grants = [grant for grant in grants if grant['expires_at'] > now]
+    if not grants:
+        return 0.0
+    grant = min(grants, key=lambda item: item['expires_at'])
+    return allocator.expiry_pressure(grant['remaining'], grant.get('expected_spend', 0),
+                                     (grant['expires_at'] - now) / SECONDS_PER_HOUR, settings['T_hours'])
+
+
+def _snapshot(item, now, horizon):
+    found = allocator._binding(item['constraints'], now, horizon)
+    pressure = None if found is None or found[1] is None else float(found[0] / found[1])
+    return dict(pressure=pressure, constraints=[dict(c) for c in item['constraints']])
+
+
+def _choice_matches(entry, item):
+    spec = item['spec']
+    return all(spec.get(field) == entry[field] for field in ROUTE_IDENTITY) and item['cls'] == entry['funding']
+
+
+def _decide(data, assignment, ranking, settings, observations):
+    now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
+    accounts, held = Ledger.open_accounts(data), Ledger.held(data)
+    if len(accounts) >= settings['caps']['total']:
+        return _pending('concurrency_cap')
+    candidates, excluded = [], []
+    for route in observations['routes']:
+        item, why = _candidate(data, route, observations, assignment, settings, held, accounts, now)
+        if item is not None:
+            candidates.append(item)
+        excluded += why
+    bucket = [assignment['role'], assignment['complexity_band']]
+    explicit = assignment.get('choice')
+    ranked = settings['smart_routing'] and not explicit and bool(ranking.get('strategy_ids'))
+    reasons = list(ranking.get('reason_codes', [])) if ranked else []
+    u = e = None
+    if ranked:
+        order = {sid: i for i, sid in enumerate(ranking['strategy_ids'])}
+        pool = sorted((c for c in candidates if c['spec'].get('strategy_id') in order),
+                      key=lambda c: order[c['spec']['strategy_id']])
+        by_class = {cls: [c for c in pool if c['cls'] == cls] for cls in ('api', 'subscription')}
+        feasible = [cls for cls, items in by_class.items() if items]
+        if not feasible:
+            return _pending(_dominant(excluded), excluded)
+        if len(feasible) == 2:
+            u, why = _utilization(by_class['subscription'], held, settings, now)
+            e = _expiry(by_class['api'], observations, settings, now)
+            reasons += why
+            api = allocator.api_share(u, e, settings['L'], settings['H'])
+        else:
+            api = 1.0 if feasible == ['api'] else 0.0  # hard overrides
+        shares = dict(api=api, subscription=1 - api)
+        rows = [r for r in data['admissions'] if r.get('settings_revision') == settings.get('revision', 0)]
+        cls = allocator.choose_class(shares, rows, bucket, observations.get('epoch_at', 0), feasible)
+        chosen = allocator.choose_route(by_class[cls], now, horizon) if cls else None
+        mode = 'ranked'
+    else:
+        entries = [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
+        chosen, shares, mode = None, None, 'worker_choice'
+        for entry in entries:
+            matching = [c for c in candidates if _choice_matches(entry, c)]
+            chosen = allocator.choose_route(matching, now, horizon) if matching else None
+            if chosen is not None:
+                cls = entry['funding']
+                shares = dict(api=float(cls == 'api'), subscription=float(cls == 'subscription'))
+                break
+        if chosen is None:
+            return _pending('explicit_choice_unavailable' if explicit else 'worker_choice_unavailable', excluded)
+    if chosen is None:
+        return _pending(_dominant(excluded), excluded)
+    item = next(c for c in candidates if c['route'] == chosen)
+    spec = item['spec']
+    credential = spec.get('credential') or {}
+    record = dict(attempt_id=assignment['attempt_id'], task=assignment['task'], bucket=bucket, shares=shares,
+                  **{'class': item['cls']}, route=item['route'], pool=item['pool'], account=spec['account'],
+                  billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
+                  pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
+                  settings_revision=settings.get('revision', 0), at=now, mode=mode,
+                  reason_codes=list(dict.fromkeys(reasons)),
+                  ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
+    return dict(record=record, vector=item['vector'], account=spec['account'])
+
+
+def _dominant(excluded):
+    """The reason a pending assignment reports: a concurrency place first, then the commonest exclusion."""
+    if 'concurrency_cap' in excluded:
+        return 'concurrency_cap'
+    return 'no_feasible_route'
+
+
+def _valid_assignment(assignment):
+    return (isinstance(assignment, dict) and all(isinstance(assignment.get(key), str) and assignment[key]
+                                                 for key in ('attempt_id', 'task', 'role', 'complexity_band', 'scope')))
+
+
+def admit(assignment, ranking, settings, observations, *, ledger):
+    """Choose a funding class and route, reserve the padded claim and record the decision atomically.
+
+    ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
+    result of ``rank`` (empty ``strategy_ids`` falls back to worker choices, never blocks); ``settings`` a
+    resolved ``routing_settings`` dict plus ``revision``; ``observations`` the cached, already-collected
+    ``{now, routes, pools, epoch_at?, minimum_horizon?}``. Returns the admission record with
+    ``status='admitted'`` (``duplicate=True`` for a repeated attempt) or ``status='pending'`` with a
+    ``reason_code``. Pending and duplicate decisions consume nothing and create no record. This is not
+    dispatch authority.
+    """
+    if not _valid_assignment(assignment):
+        return _pending('invalid_assignment')
+    try:
+        outcome = ledger.admit(assignment['attempt_id'],
+                               lambda data: _decide(data, assignment, ranking, settings, observations))
+    except BudgetError as error:
+        return _pending(str(error))
+    return outcome if outcome.get('status') == 'pending' else dict(outcome, status='admitted')

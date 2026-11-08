@@ -10,7 +10,9 @@ import uuid
 MAX_INTEGER = 2**53 - 1
 MAX_RECORD = 2_000_000
 FRESH_SECONDS = 900
-STATE_VERSION = 2
+STATE_VERSION = 3
+MAX_ADMISSIONS = 500
+MAX_HOLDS = 1000
 BASIS_POINTS = 10000
 DEFAULT_ALLOWANCE_BP = 9800
 DEFAULT_MARGIN_BP = 2000
@@ -62,7 +64,8 @@ def initialize(path):
         raise BudgetError('ledger_exists') from error
     os.close(fd)
     identity = uuid.uuid4().hex
-    state = dict(version=STATE_VERSION, identity=identity, organizations={}, runs={}, native={}, finished_native=[])
+    state = dict(version=STATE_VERSION, identity=identity, organizations={}, runs={}, native={}, finished_native=[],
+                 holds={}, admissions=[])
     with closing(sqlite3.connect(path)) as db:
         db.execute('CREATE TABLE ledger (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
         db.execute('INSERT INTO ledger VALUES (1, ?)', (json.dumps(state),))
@@ -116,7 +119,7 @@ class Ledger:
             row = self.db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
             require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
-            require(data['version'] in (1, STATE_VERSION) and data['identity'] == self.identity,
+            require(data['version'] in (1, 2, STATE_VERSION) and data['identity'] == self.identity,
                     'ledger_identity_changed')
             self._migrate(data)
             yield data
@@ -132,19 +135,24 @@ class Ledger:
 
     @staticmethod
     def _migrate(data):
-        """Upgrade version 1 state in place: drop the global slot and the 20% floor.
+        """Upgrade older state in place, version by version.
 
-        Open runs keep their exposure through their own calls; the old floor
-        seeds the issued allowance (a floor was one fifth of the first balance).
+        1 -> 2 drops the global slot and the 20% floor: open runs keep their exposure through their own
+        calls, and the old floor seeds the issued allowance (a floor was one fifth of the first balance).
+        2 -> 3 adds the multi-pool `holds` and the bounded `admissions` records; both start empty, so
+        every in-flight run claim is preserved untouched.
         """
-        if data['version'] == STATE_VERSION:
-            return
-        data.pop('slot', None)
-        for org in data['organizations'].values():
-            floor = org.pop('floor', None)
-            if org.get('issued') is None:
-                org['issued'] = floor * 5 if floor is not None else None
-        data['version'] = STATE_VERSION
+        if data['version'] == 1:
+            data.pop('slot', None)
+            for org in data['organizations'].values():
+                floor = org.pop('floor', None)
+                if org.get('issued') is None:
+                    org['issued'] = floor * 5 if floor is not None else None
+            data['version'] = 2
+        if data['version'] == 2:
+            data.setdefault('holds', {})
+            data.setdefault('admissions', [])
+            data['version'] = STATE_VERSION
 
     def snapshot(self):
         with self.transaction(False) as data:
@@ -356,12 +364,17 @@ class Ledger:
         with self.transaction() as data:
             data['caps'] = dict(total=total, per_account=per_account)
 
+    @staticmethod
+    def open_accounts(data):
+        """The account of every open attempt: open runs (by organization) and open multi-pool holds."""
+        return ([run['organization'] for run in data['runs'].values() if not run['closed']]
+                + [hold['account'] for hold in data.get('holds', {}).values() if not hold['closed']])
+
     @classmethod
     def _check_caps(cls, data, organization):
         total, per_account = cls._caps(data)
-        open_runs = [run for run in data['runs'].values() if not run['closed']]
-        require(len(open_runs) < total and
-                sum(run['organization'] == organization for run in open_runs) < per_account, 'concurrency_cap')
+        accounts = cls.open_accounts(data)
+        require(len(accounts) < total and accounts.count(organization) < per_account, 'concurrency_cap')
 
     @staticmethod
     def _active_call(run):
@@ -507,6 +520,65 @@ class Ledger:
             for call in run['calls'].values():
                 if call['state'] == 'reserved': call.update(cost=0, state='rejected-before-send')
             run['closed'] = True
+
+    @staticmethod
+    def held(data):
+        """Outstanding multi-pool claims per `pool/window` key; closed holds are released."""
+        held = {}
+        for hold in data.get('holds', {}).values():
+            if not hold['closed']:
+                for key, amount in hold['vector'].items():
+                    held[key] = held.get(key, 0) + amount
+        return held
+
+    @staticmethod
+    def admission(data, attempt_id):
+        for record in data.get('admissions', []):
+            if record['attempt_id'] == attempt_id:
+                return record
+        return None
+
+    def admit(self, attempt_id, decide):
+        """Reserve and record one admission in a single short transaction.
+
+        `decide(data)` is pure and runs against the locked state. It returns either a block
+        (any dict without `record`) or `{record, vector, account}`. A block, an error or a duplicate attempt
+        writes nothing: a duplicate returns its existing record without another hold. Otherwise the whole
+        `pool/window` vector is held and the admission record is appended atomically.
+        """
+        name(attempt_id)
+        with self.transaction() as data:
+            known = self.admission(data, attempt_id)
+            if known is not None:
+                return dict(known, duplicate=True)
+            require(attempt_id not in data['holds'] and attempt_id not in data['runs'], 'attempt_id_in_use')
+            outcome = decide(data)
+            if 'record' not in outcome:
+                return outcome
+            record, vector, account = outcome['record'], outcome['vector'], name(outcome['account'])
+            require(record['attempt_id'] == attempt_id, 'invalid_admission')
+            for key, amount in vector.items():
+                name(key); integer(amount)
+            self._prune(data)
+            require(len(data['holds']) < MAX_HOLDS, 'ledger_capacity_reached')
+            data['holds'][attempt_id] = dict(account=account, task=record['task'], vector=dict(vector), closed=False)
+            data['admissions'].append(record)
+            del data['admissions'][:-MAX_ADMISSIONS]
+            return dict(record)
+
+    @staticmethod
+    def _prune(data):
+        """Drop the oldest released holds once the table is full; open holds are never dropped."""
+        if len(data['holds']) >= MAX_HOLDS:
+            for key in [k for k, hold in data['holds'].items() if hold['closed']][:MAX_HOLDS // 2]:
+                del data['holds'][key]
+
+    def close_attempt(self, attempt_id):
+        """Release an admission's holds so its capacity and concurrency place are free again."""
+        with self.transaction() as data:
+            hold = data['holds'].get(attempt_id)
+            require(hold is not None, 'attempt_missing')
+            hold['closed'] = True
 
     def release_native(self, account, task, evidence, now):
         with self.transaction() as data:

@@ -455,7 +455,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.org()
         state = self.ledger.snapshot()
         self.assertNotIn('slot', state)
-        self.assertEqual(state['version'], 2)
+        self.assertEqual(state['version'], 3)
         self.begin('first', 5 * M); self.begin('second', 5 * M)
         self.assertEqual(self.ledger.credit_headroom('org'), 18 * M)
 
@@ -495,7 +495,7 @@ class ParallelLedgerTests(unittest.TestCase):
                 org['floor'] = 160; del org['issued']
             db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
         migrated = self.ledger.snapshot()
-        self.assertEqual(migrated['version'], 2)
+        self.assertEqual(migrated['version'], 3)
         self.assertNotIn('slot', migrated)
         self.assertNotIn('floor', migrated['organizations']['org'])
         self.assertEqual(migrated['organizations']['org']['issued'], 800)
@@ -503,7 +503,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.ledger.observe('org', 790, 110)  # A write persists the migration.
         with closing(sqlite3.connect(self.path)) as db:
             stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
-        self.assertEqual(stored['version'], 2)
+        self.assertEqual(stored['version'], 3)
         self.assertNotIn('slot', stored)
 
     # S1.3 padded reservations
@@ -625,6 +625,69 @@ class ParallelLedgerTests(unittest.TestCase):
         self.ledger.set_caps(total=1, per_account=1)
         self.begin('a', M)
         self.assertEqual(self.begin('a', M)['task'], 'a')
+
+    # S2.6 multi-pool holds and persisted admission records
+    def raw(self, mutate):
+        with closing(sqlite3.connect(self.path)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            mutate(data)
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+
+    def record(self, attempt, **extra):
+        return dict(attempt_id=attempt, task=attempt, bucket=['implementer', 'medium'], shares=dict(api=1.0, subscription=0.0),
+                    route='r', **extra)
+
+    def decide(self, attempt, vector, account='acct'):
+        return lambda data: dict(record=self.record(attempt), vector=vector, account=account)
+
+    def test_version_two_state_migrates_and_keeps_in_flight_claims(self):
+        self.org()
+        self.begin('open', 5 * M)
+        self.raw(lambda data: (data.update(version=2), data.pop('holds'), data.pop('admissions')))
+        migrated = self.ledger.snapshot()
+        self.assertEqual((migrated['version'], migrated['holds'], migrated['admissions']), (3, {}, []))
+        self.assertEqual(migrated['runs']['open']['calls']['count']['maximum'], 5 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 23 * M)  # 30 - 2% protected - 5 held
+        self.ledger.admit('new', self.decide('new', {'pool/w': 5}))  # A write persists the migration.
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 3)
+
+    def test_admit_writes_hold_and_record_together_and_duplicates_return_the_record(self):
+        first = self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        before = self.ledger.snapshot()
+        self.assertEqual(before['holds']['a']['vector'], {'p/w': 7})
+        self.assertEqual(self.ledger.held(before), {'p/w': 7})
+        again = self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        self.assertEqual(again, dict(first, duplicate=True))
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    def test_blocked_and_failed_decisions_change_nothing(self):
+        before = self.ledger.snapshot()
+        self.assertEqual(self.ledger.admit('a', lambda data: dict(status='pending')), dict(status='pending'))
+        def boom(data): raise budget.BudgetError('boom')
+        with self.assertRaisesRegex(budget.BudgetError, 'boom'):
+            self.ledger.admit('b', boom)
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    def test_closing_an_attempt_releases_its_hold_and_its_concurrency_place(self):
+        self.ledger.set_caps(total=1, per_account=1)
+        self.ledger.admit('a', self.decide('a', {'p/w': 7}, 'org'))
+        self.org()
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('run', M)  # a hold counts against the same caps as a run
+        self.ledger.close_attempt('a')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
+        self.begin('run', M)
+        with self.assertRaisesRegex(budget.BudgetError, 'attempt_missing'):
+            self.ledger.close_attempt('nope')
+
+    def test_admission_records_are_bounded_and_never_prune_open_holds(self):
+        for i in range(budget.MAX_ADMISSIONS + 5):
+            self.ledger.admit('a%d' % i, self.decide('a%d' % i, {}))
+            self.ledger.close_attempt('a%d' % i)
+        state = self.ledger.snapshot()
+        self.assertEqual(len(state['admissions']), budget.MAX_ADMISSIONS)
+        self.assertEqual(state['admissions'][-1]['attempt_id'], 'a%d' % (budget.MAX_ADMISSIONS + 4))
 
 
 if __name__ == '__main__': unittest.main()
