@@ -5,14 +5,43 @@ import tempfile
 import unittest
 import uuid
 import os
+import selectors
 import signal
 import sys
+import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 from runtime import openrouter_settings as settings
 from tests.openrouter_fixtures import enroll, configure, fixture_command
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/openrouter_workers.py'
+
+
+class FakeClock:
+    """Runner-local monotonic time that passes only when a test or an idle wait says so."""
+    def __init__(self):
+        self.now, self.idle = 1000.0, False
+
+    def monotonic(self): return self.now
+    def time(self): return time.time()
+    def advance(self, seconds): self.now += seconds
+
+    def sleep(self, seconds):
+        # Process-retirement polling still waits for the real process group.
+        time.sleep(seconds)
+        self.advance(seconds)
+
+    def selectors(self):
+        clock = self
+
+        class Selector(selectors.DefaultSelector):
+            def select(self, timeout=None):
+                events = super().select(timeout)
+                if not events and clock.idle and timeout: clock.advance(timeout)
+                return events
+        return SimpleNamespace(DefaultSelector=Selector, EVENT_READ=selectors.EVENT_READ,
+                               EVENT_WRITE=selectors.EVENT_WRITE)
 
 
 class WorkerTests(unittest.TestCase):
@@ -26,6 +55,11 @@ class WorkerTests(unittest.TestCase):
 
     def setUp(self):
         self.assertIsNotNone(self.api, 'worker runner must exist')
+        self.clock = FakeClock()
+        for name, value in (('time', self.clock), ('selectors', self.clock.selectors())):
+            clock_patch = patch.object(self.api, name, value)
+            clock_patch.start()
+            self.addCleanup(clock_patch.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -156,15 +190,16 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             '--opencode', exe, '--auth-data', self.root / 'auth'), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            child.stdin.write(json.dumps(self.brief)); child.stdin.close(); child.stdin = None
-            deadline = time.monotonic() + 10
+            # The CLI runs in its own process on the real clock; keep its deadline out of reach.
+            child.stdin.write(json.dumps(dict(self.brief, timeout_seconds=300))); child.stdin.close(); child.stdin = None
+            deadline = time.monotonic() + 30
             while not started.exists() and child.poll() is None and time.monotonic() < deadline: time.sleep(.01)
             self.assertTrue(started.exists(), 'worker must launch before disable')
             report = settings.disable(self.source, {'expected_revision': self.settings['revision']})
             self.assertFalse(report['enabled'])
             self.assertIsNone(child.poll(), 'disable must not wait for or stop admitted work')
             release.touch()
-            output, error = child.communicate(timeout=10)
+            output, error = child.communicate(timeout=30)
             self.assertEqual(child.returncode, 0, error)
             result = json.loads(output.splitlines()[-1])
             self.assertEqual(result['state'], 'awaiting_verification')
@@ -313,7 +348,15 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         exe = self.fixture("sys.stdin.read()\n"
                            "print(json.dumps({'type':'text','part':{'text':'Fixture answer'}}))\n"
                            "print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0,'tokens':{}}}))\n")
-        result = self.api.execute(run, exe, self.root / 'auth', lambda phase: time.sleep(1.2))
+        finished, progress = threading.Event(), self.api.progress
+        def observed(path, phase):
+            progress(path, phase)
+            if phase in ('Awaiting verification', 'failed', 'unresolved'): finished.set()
+        def slow(phase):
+            # Delivery outlasts the run; on the worker's thread it would spend 1.2 s of its 1 s deadline.
+            if not finished.wait(30): self.clock.advance(1.2)
+        with patch.object(self.api, 'progress', observed):
+            result = self.api.execute(run, exe, self.root / 'auth', slow)
         self.assertEqual(result['state'], 'awaiting_verification')
         self.assertTrue(result['local_execution_stopped'])
 
@@ -378,7 +421,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
 
     def test_missing_visibility_adapter_does_not_prevent_worker_execution(self):
         import subprocess
-        brief = dict(self.brief)
+        brief = dict(self.brief, timeout_seconds=300)
         exe = self.fixture("sys.stdin.read()\n"
                            "print(json.dumps({'type':'error','error':{'message':'provider unavailable'}}))\n")
         result = subprocess.run(fixture_command(self, SCRIPT, 'run', '--root', self.runs,
@@ -498,7 +541,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         brief,_,_=self.sized_brief(1);brief['timeout_seconds']=1
         read=self.api.onboarding._read_file
         def slow(path,*args,**kwargs):
-            if Path(path)==self.source/'input-0.txt': time.sleep(1.1)
+            if Path(path)==self.source/'input-0.txt': self.clock.advance(1.1)
             return read(path,*args,**kwargs)
         with patch.object(self.api.onboarding,'_read_file',side_effect=slow):
             with self.assertRaises(TimeoutError): self.api.prepare(self.runs,brief)
@@ -590,7 +633,8 @@ for event in [
         launches = self.root / 'launches.txt'
         error = {'name': 'APIError', 'data': {'statusCode': 503,
                  'message': 'SECRET', 'responseBody': 'SECRET'}}
-        exe = self.fixture("with open(%r, 'a') as stream: stream.write('launch\\n')\n" % str(launches) +
+        # Consume the objective so the runner's write cannot race the worker's exit.
+        exe = self.fixture("sys.stdin.read()\nwith open(%r, 'a') as stream: stream.write('launch\\n')\n" % str(launches) +
                            "print(json.dumps({'type':'error','error':%r}), flush=True)\n" % error)
         run = self.api.prepare(self.runs, self.brief)
         result = self.api.execute(run, exe, self.root / 'auth')
@@ -606,7 +650,8 @@ for event in [
         self.assertNotIn('SECRET', (run / 'progress.jsonl').read_text())
 
     def test_partial_usage_survives_terminal_error_without_becoming_a_complete_bill(self):
-        exe = self.fixture("""for event in [
+        exe = self.fixture("""sys.stdin.read()
+for event in [
  {'type':'text','part':{'text':'Partial finding'}},
  {'type':'step_finish','part':{'reason':'tool-calls','cost':0.02,'tokens':{'input':20}}},
  {'type':'error','error':{'name':'APIError','data':{'statusCode':402}}}
@@ -627,9 +672,16 @@ for event in [
         exe = self.fixture("with open(%r, 'a') as stream: stream.write('launch\\n')\n" % str(launches) +
                            "for _ in range(100):\n print(json.dumps({'type':'step_start','part':{}}), flush=True)\n time.sleep(.1)\n")
         run = self.api.prepare(self.runs, dict(self.brief, timeout_seconds=1))
-        started = time.monotonic()
-        result = self.api.execute(run, exe, self.root / 'auth')
-        self.assertLess(time.monotonic() - started, 5)
+        progress = self.api.progress
+        def observed(path, phase):
+            progress(path, phase)
+            if phase == 'Generating': self.clock.advance(.3)
+        started = self.clock.monotonic()
+        with patch.object(self.api, 'progress', observed):
+            result = self.api.execute(run, exe, self.root / 'auth')
+        self.assertLess(self.clock.monotonic() - started, 5)
+        events = [json.loads(line)['phase'] for line in (run / 'progress.jsonl').read_text().splitlines()]
+        self.assertLess(events.count('Generating'), 100, 'deadline must stop the worker before its own end')
         self.assertEqual(launches.read_text().splitlines(), ['launch'])
         self.assertEqual(result.get('failure'), {'category': 'deadline'})
         self.assertEqual(result['state'], 'unresolved')
@@ -652,12 +704,14 @@ for event in [
         exe = self.fixture('time.sleep(4)\n')
         run = self.api.prepare(self.runs, dict(self.brief, objective='😀' * 15000,
                                                        timeout_seconds=1))
-        started = time.monotonic()
+        self.clock.idle = True
+        started = self.clock.monotonic()
         result, processes = self.execute_with_backpressure(run, exe)
-        self.assertLess(time.monotonic() - started, 2.5)
+        self.assertLess(self.clock.monotonic() - started, 2.5)
         self.assertEqual(result.get('failure'), {'category': 'deadline'})
         self.assertEqual(len(processes), 1)
         self.assertIsNotNone(processes[0].poll())
+        self.assertLess(processes[0].returncode, 0, 'deadline must stop the worker before its own end')
         self.assertIs(result.get('local_execution_stopped'), True)
         self.assertIs(result.get('native_fallback_ready'), True)
 
@@ -691,9 +745,9 @@ for event in [
             "print(json.dumps({'type':'text','part':{'text':hashlib.sha256(payload).hexdigest()}}))\n"
             "print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0,'tokens':{}}}))\n")
         run = self.api.prepare(self.runs, dict(self.brief, objective=objective, timeout_seconds=2))
-        started = time.monotonic()
+        started = self.clock.monotonic()
         result, processes = self.execute_with_backpressure(run, exe)
-        self.assertLess(time.monotonic() - started, 4)
+        self.assertLess(self.clock.monotonic() - started, 4)
         self.assertEqual(len(processes), 1)
         self.assertEqual(result['state'], 'awaiting_verification')
         self.assertEqual(result['response'].splitlines()[-1], expected)
@@ -709,7 +763,7 @@ for event in [
         processes = []
         def delayed(command, **kwargs):
             process = launch(command, **kwargs)
-            if command[0] == str(exe): processes.append(process); time.sleep(1.2)
+            if command[0] == str(exe): processes.append(process); self.clock.advance(1.2)
             return process
         with patch.object(self.api.subprocess, 'Popen', side_effect=delayed):
             result = self.api.execute(run, exe, self.root / 'auth')
@@ -727,7 +781,7 @@ for event in [
         @contextmanager
         def slow(*args, **kwargs):
             with admission(*args, **kwargs) as report:
-                time.sleep(1.2)
+                self.clock.advance(1.2)
                 yield report
         def observed(command, **kwargs):
             process = launch(command, **kwargs)
@@ -767,10 +821,11 @@ for event in [
                                     '--opencode', exe, '--auth-data', self.root / 'auth'),
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            process.stdin.write(json.dumps(self.brief))
+            # The CLI runs in its own process on the real clock; only the interruption may stop it.
+            process.stdin.write(json.dumps(dict(self.brief, timeout_seconds=300)))
             process.stdin.close()
             process.stdin = None
-            until = time.monotonic() + 5
+            until = time.monotonic() + 30
             while not pidfile.exists() and time.monotonic() < until: time.sleep(.01)
             self.assertTrue(pidfile.exists(), 'fixture worker must start before interruption')
             result_path = self.runs / 'pilot-1/result.json'
@@ -780,7 +835,7 @@ for event in [
                 time.sleep(.01)
             self.assertEqual(json.loads(result_path.read_text()).get('known_cost_subtotal_usd'), 0.02)
             process.send_signal(signal.SIGTERM)
-            output, error = process.communicate(timeout=5)
+            output, error = process.communicate(timeout=30)
             self.assertEqual(process.returncode, 0, error)
             result = json.loads(output.splitlines()[-1])
             self.assertEqual(result['state'], 'unresolved')
@@ -806,6 +861,7 @@ for event in [
         self.assertIs(rejected.get('native_fallback_ready'), True)
 
     def test_timeout_and_missing_finish_remain_unresolved(self):
+        self.clock.idle = True
         for index, body in enumerate(['time.sleep(5)\n', "print(json.dumps({'type':'text','part':{'text':'unfinished'}}))\n"]):
             brief = dict(self.brief, task_id=f'timeout-{index}', timeout_seconds=1)
             run = self.api.prepare(self.runs, brief, now=100)
@@ -820,7 +876,8 @@ for event in [
         self.assertEqual(json.loads((run / 'result.json').read_text())['state'], 'unresolved')
 
     def test_missing_step_cost_is_not_a_complete_total(self):
-        exe = self.fixture("""for part in [{'reason':'tool-calls','cost':0.1}, {'reason':'stop'}]:
+        exe = self.fixture("""sys.stdin.read()
+for part in [{'reason':'tool-calls','cost':0.1}, {'reason':'stop'}]:
  print(json.dumps({'type':'step_finish','part':part}))
 print(json.dumps({'type':'text','part':{'text':'answer'}}))
 """)
@@ -846,7 +903,12 @@ else:
         self.api.execute(run, exe, self.root / 'auth')
         pid = int(pidfile.read_text())
         try:
-            time.sleep(.1)
+            # Wait only for reaping; a surviving descendant would live for 20 s.
+            until = time.monotonic() + 5
+            while time.monotonic() < until:
+                try: os.kill(pid, 0)
+                except ProcessLookupError: break
+                time.sleep(.01)
             with self.assertRaises(ProcessLookupError): os.kill(pid, 0)
         finally:
             try: os.kill(pid, signal.SIGKILL)

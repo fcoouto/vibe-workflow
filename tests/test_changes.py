@@ -1029,9 +1029,28 @@ class ChangesTests(d3_tests.OnboardingTests):
     def orphan_command_case(self, descendant_closes_lock):
         import sys
         import time
-        child = "from pathlib import Path; import time; Path('started.txt').write_text('started'); time.sleep(1.5); Path('result.txt').write_text('result')"
-        program = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child) +
-                   "],close_fds=True); time.sleep(0.15)") if descendant_closes_lock else child
+        # Gates replace fixed delays: the command writes its result only when released, and the
+        # descendant's parent stays until the helper dies so the helper cannot observe completion.
+        release, child_pid, parent_pid = (self.base / name for name in ("release-command", "child.pid", "parent.pid"))
+        self.addCleanup(release.touch)
+        child = ("import os,time; from pathlib import Path; Path(%r).write_text(str(os.getpid())); "
+                 "Path('started.txt').write_text('started'); until=time.monotonic()+60\n"
+                 "while not Path(%r).exists() and time.monotonic()<until: time.sleep(0.01)\n"
+                 "Path('result.txt').write_text('result')" % (str(child_pid), str(release)))
+        program = ("import os,subprocess,sys,time; from pathlib import Path; Path(%r).write_text(str(os.getpid())); "
+                   "helper=os.getppid(); subprocess.Popen([sys.executable,'-c',%r],close_fds=True); until=time.monotonic()+60\n"
+                   "while os.getppid()==helper and time.monotonic()<until: time.sleep(0.01)"
+                   % (str(parent_pid), child)) if descendant_closes_lock else child
+
+        def wait_for_exit(path):
+            pid = int(path.read_text())
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return
+                time.sleep(0.01)
+            self.fail("fixture process did not exit")
         request = self.command_request(program)
         request["manifest"]["actions"][0]["effects"].append({"path": "started.txt", "before": None,
             "after": {"sha256": hashlib.sha256(b"started").hexdigest(), "mode": 0o644}})
@@ -1043,14 +1062,14 @@ class ChangesTests(d3_tests.OnboardingTests):
         try:
             helper.stdin.write(json.dumps(request).encode())
             helper.stdin.close()
-            deadline = time.monotonic() + 4
+            deadline = time.monotonic() + 60
             while not (self.repo / "started.txt").exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertTrue((self.repo / "started.txt").exists())
             helper.kill()
-            helper.wait(timeout=2)
+            helper.wait(timeout=10)
             if descendant_closes_lock:
-                time.sleep(0.25)
+                wait_for_exit(parent_pid)
             result = self.changes.rollback_plan(self.directory, request)
             self.assertIn(result["exit_code"], (1, 2), result)
             self.assertFalse((self.repo / "result.txt").exists())
@@ -1064,10 +1083,9 @@ class ChangesTests(d3_tests.OnboardingTests):
             if descendant_closes_lock:
                 self.assertEqual(result["exit_code"], 2, result)
                 self.assertIn("owner", str(result["blocked"]))
-            while not (self.repo / "result.txt").exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
+            release.touch()
+            wait_for_exit(child_pid)
             self.assertEqual((self.repo / "result.txt").read_text(), "result")
-            time.sleep(0.05)
             result = self.changes.rollback_plan(self.directory, request)
             self.assertEqual(result["exit_code"], 2, result)
             self.assertIn("lifecycle", str(result["blocked"]))

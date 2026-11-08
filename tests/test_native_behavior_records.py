@@ -1094,12 +1094,15 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
                         assert_denied(payload | changes)
                 self.assertEqual(original['canary'].read_text(), 'before\n')
 
+                deadline = time.monotonic() + 60
+
                 def expire_resolution(_scope, _db, _event, *, budget):
-                    time.sleep(max(0, budget['deadline'] - time.monotonic()))
+                    # The lookup is bounded by the hook deadline; simulate spending all of it.
+                    self.assertEqual(budget['deadline'], deadline)
                     raise startup.StartupError('fixture ownership lookup expired')
 
                 with patch.object(delegation, '_qualified_child_patch', side_effect=expire_resolution) as resolver:
-                    result = state.process_event(scope, codex.normalize_runtime(payload), deadline=time.monotonic() + 2)
+                    result = state.process_event(scope, codex.normalize_runtime(payload), deadline=deadline)
                 resolver.assert_called_once()
                 self.assertEqual(result.action, 'deny')
                 data.update(rollout=str(child_rollout), child_patch=True)

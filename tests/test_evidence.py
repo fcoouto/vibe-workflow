@@ -99,6 +99,33 @@ class EvidenceTests(unittest.TestCase):
     def check(self):
         return self.api.run_check(self.scope, self.request(check_id='unit'))
 
+    def check_clock(self, ready):
+        """Check timeouts expire on a fake clock once ``ready()`` holds, never from host slowness."""
+        import selectors
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+        clock = SimpleNamespace(now=0.0)
+
+        class Time:
+            def __getattr__(self, name): return getattr(time, name)
+            def monotonic(self): return clock.now
+
+        class Selector(selectors.DefaultSelector):
+            def select(self, timeout=None):
+                until = time.monotonic() + 60
+                while True:
+                    events = super().select(.05)
+                    if events: return events
+                    if ready() or time.monotonic() >= until:
+                        clock.now += timeout
+                        return []
+
+        stack = ExitStack()
+        stack.enter_context(patch.object(self.api, 'time', Time()))
+        stack.enter_context(patch.object(self.api, 'selectors', SimpleNamespace(DefaultSelector=Selector,
+            EVENT_READ=selectors.EVENT_READ, EVENT_WRITE=selectors.EVENT_WRITE)))
+        return stack
+
     def checked(self):
         result = self.check()
         if result['attempt'].get('process_started') and result['attempt'].get('observed_status') != 'uncertain':
@@ -698,7 +725,13 @@ class EvidenceTests(unittest.TestCase):
         applicability = dict(applicability='inapplicable', reason='Trivial local synthetic fixture', independent=False)
         self.plan(nontrivial=False, reviews={'general': applicability, 'security': applicability})
         plan = self.api._load_plan(self.scope, self.identity)
-        child = "import time; from pathlib import Path; time.sleep(2); Path('app.py').write_text('late detached write')"
+        # The detached writer waits for the test's release instead of a fixed delay.
+        release = self.root / 'release-detached-writer'
+        self.addCleanup(release.touch)
+        child = ("import time; from pathlib import Path\n"
+                 "until = time.monotonic() + 60\n"
+                 "while not Path(%r).exists() and time.monotonic() < until: time.sleep(.01)\n"
+                 "Path('app.py').write_text('late detached write')" % str(release))
         parent = "import subprocess,sys; subprocess.Popen([sys.executable,'-c',%r], start_new_session=True,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)" % child
         plan['checks'][0]['argv'] = [sys.executable, '-c', parent]
         self.api.plan_evidence(self.scope, self.request(plan=plan, change_decision_ref='user:detached-fixture'))
@@ -706,7 +739,10 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result['attempt']['status'], 'uncertain')
         self.assertEqual(result['attempt']['observed_status'], 'passed')
         self.assertFalse(self.verify()['verified'])
-        time.sleep(2.2)
+        release.touch()
+        until = time.monotonic() + 30
+        while (self.repo / 'app.py').read_text() != 'late detached write' and time.monotonic() < until:
+            time.sleep(.01)
         self.assertEqual((self.repo / 'app.py').read_text(), 'late detached write')
 
     def test_reconciliation_rejects_bare_assertions_and_mismatched_bindings(self):
@@ -924,11 +960,18 @@ class EvidenceTests(unittest.TestCase):
         self.plan()
         plan = self.api._load_plan(self.scope, self.identity)
         # The child drops stdout, so parent exit/pipe EOF cannot establish its lifecycle.
+        # It survives the timeout until released; the timeout expires only after it ignores SIGTERM.
+        ready, release = self.root / 'descendant-ready', self.root / 'release-descendant'
+        self.addCleanup(release.touch)
+        child = ("import signal,time; from pathlib import Path; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                 "Path(%r).touch(); until=time.monotonic()+60\n"
+                 "while not Path(%r).exists() and time.monotonic()<until: time.sleep(.01)" % (str(ready), str(release)))
         plan['checks'][0]['argv'] = [sys.executable, '-c',
-            "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(1.5)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); time.sleep(3)"]
+            "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',%r],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); time.sleep(60)" % child]
         plan['checks'][0]['timeout'] = 1
         self.api.plan_evidence(self.scope, self.request(plan=plan, change_decision_ref='user:timeout'))
-        outcome = self.checked()['attempt']
+        with self.check_clock(ready.exists):
+            outcome = self.checked()['attempt']
         self.assertEqual(outcome['status'], 'uncertain')
         with self.assertRaises(state.StateError):
             self.api.plan_evidence(self.scope, self.request(plan=plan, change_decision_ref='user:retry'))
@@ -953,10 +996,11 @@ class EvidenceTests(unittest.TestCase):
         first = self.api.capture_candidate(self.scope, plan)
         (self.repo / 'ignored.txt').write_text('second')
         self.assertNotEqual(first, self.api.capture_candidate(self.scope, plan))
-        plan['checks'][0]['argv'] = [sys.executable, '-c', 'import time; time.sleep(3)']
+        plan['checks'][0]['argv'] = [sys.executable, '-c', 'import time; time.sleep(60)']
         plan['checks'][0]['timeout'] = 1
         self.api.plan_evidence(self.scope, self.request(plan=plan, change_decision_ref='user:timeout-proof'))
-        self.assertIn(self.checked()['attempt']['status'], {'timed-out', 'uncertain'})
+        with self.check_clock(lambda: True):
+            self.assertIn(self.checked()['attempt']['status'], {'timed-out', 'uncertain'})
         self.assertFalse(self.verify()['verified'])
 
     def test_changed_content_cannot_erase_surviving_writer_uncertainty(self):
