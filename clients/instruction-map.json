@@ -86,7 +86,7 @@
       ]
     },
     "clients/evidence-completion.md": {
-      "sha256": "34c78fd9909f37a950e487030752b5cbe46ddeb84c4c071324ddd90da8bdf0bd",
+      "sha256": "dc845baa7940cc4ec37e953362f095829e01162e3fa982f2b1fd28577bde9914",
       "ranges": [
         [
           1,
@@ -295,7 +295,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "bebbc8124624bb73bbe88d65393c7f2aa0a20a7f25969b7ef8dff63c1f2bc857",
+      "sha256": "98900e9ffc3d39270adcaec65b1f2e5bb036a309e4e37009ee05d681880f4e0e",
       "ranges": [
         [
           1,

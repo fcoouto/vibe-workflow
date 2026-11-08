@@ -102,7 +102,7 @@ implementation and fixes use `WORKING`. A concrete result awaiting acceptance us
 not complete the whole task. A neutral acknowledgment changes no state.
 
 Apply the [PR merge gate](workstreams-naming.md#status-and-accepted-progress) to
-every PR the thread opened; for required PR delivery also use
+every PR the thread opened or took over; for required PR delivery also use
 [delivery completion](delivery.md#completion-and-retention).
 The existing `WAITING` state covers merge waits; its reason identifies the dependency.
 One or several PRs do not change the title format. A child's wait never assigns
