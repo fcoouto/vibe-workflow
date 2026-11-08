@@ -38,15 +38,15 @@
       ]
     },
     "clients/delegation-requests.md": {
-      "sha256": "f8a9ee20791bdd74c94991a093986b5e2647e47af42dfca9655ccbad95472c3f",
+      "sha256": "4961cc917a607996104f0b2457e8ff070d84fd9e8e6d64543892f4d5ec98c09a",
       "ranges": [
         [
           1,
-          210
+          208
         ],
         [
-          211,
-          291
+          209,
+          298
         ]
       ]
     },
@@ -158,11 +158,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "be7d1d96a40e4e42b6e1bf92d51771e7b192235f58cc64f0618392f3afaf49af",
+      "sha256": "ecf32211fb7aa9bc9653e899af5fba6f9fbb101bb29717855d289b04bb496f3f",
       "ranges": [
         [
           1,
-          40
+          52
         ]
       ]
     },
@@ -264,11 +264,11 @@
       ]
     },
     "clients/workstreams-protocol.md": {
-      "sha256": "458819d1b2ca2e3698683b93cbdb3a6059f243bb439b01531a7eea1113371852",
+      "sha256": "7e2975c7ab0d0880e7dfeba2cf52fc3ba940c26c353de711198bf377848f121c",
       "ranges": [
         [
           1,
-          64
+          71
         ]
       ]
     },

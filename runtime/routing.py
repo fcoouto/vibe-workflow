@@ -103,6 +103,14 @@ def semantic_digest(job):
                         tools=_tools(job), floors=_floors(job)))
 
 
+def row_key(role, task_family, complexity_band, risk_band):
+    """Stable string key for a strategy-table row."""
+    parts = (role, task_family, complexity_band, risk_band)
+    if not all(isinstance(part, str) and part and '|' not in part for part in parts):
+        raise ValueError('Invalid strategy row key')
+    return '|'.join(parts)
+
+
 def _estimate_tokens(job):
     return (len(str(job.get('objective') or '')) + len(str(job.get('context') or ''))) // 4
 
@@ -185,3 +193,76 @@ def ensure_profile(job, *, jev=None):
                 tools=tools, uncertainty=uncertainty, uncertain_fields=gaps, reasons=reasons,
                 provenance=dict(provenance, context=context_source, tools=tools_source),
                 semantic_digest=digest)
+
+
+CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'allowed_harnesses',
+                     'allowed_strategy_ids')
+
+
+def resolve_row(table, profile):
+    """Pick the table row for a profile: exact, then the nearest stricter band, then the strongest row.
+
+    Returns ``(strategies, reason)``; an empty list means no qualified strategy exists for the role.
+    Bands only rise: a weaker row is never used.
+    """
+    rows = table.get('rows') or {}
+    role, family = profile['role'], profile['task_family']
+    c, r = COMPLEXITY_BANDS.index(profile['complexity_band']), RISK_BANDS.index(profile['risk_band'])
+    exact = rows.get(row_key(role, family, profile['complexity_band'], profile['risk_band']))
+    if exact:
+        return exact, 'ranking_exact'
+    stricter, strongest = [], []
+    for name, strategies in rows.items():
+        parts = name.split('|')
+        if len(parts) != 4 or parts[0] != role or not strategies:
+            continue
+        ci, ri = COMPLEXITY_BANDS.index(parts[2]), RISK_BANDS.index(parts[3])
+        strongest.append((ci + ri, name, strategies))
+        if parts[1] == family and ci >= c and ri >= r:
+            stricter.append((ci + ri, ci, ri, name, strategies))
+    if stricter:
+        return min(stricter, key=lambda item: item[:4])[4], 'ranking_stricter_band'
+    if strongest:
+        return max(strongest, key=lambda item: (item[0], [-ord(ch) for ch in item[1]]))[2], 'ranking_conservative'
+    return [], 'no_strategy'
+
+
+def _narrow(strategies, constraints):
+    allowed = {field: set(constraints[field]) for field in ('allowed_models', 'allowed_efforts', 'allowed_harnesses',
+                                                            'allowed_strategy_ids') if field in constraints}
+    keys = dict(allowed_models='model', allowed_efforts='effort', allowed_harnesses='harness',
+                allowed_strategy_ids='strategy_id')
+    excluded = set(constraints.get('excluded_models', ()))
+    return [item for item in strategies if item['model'] not in excluded and
+            all(item[keys[field]] in values for field, values in allowed.items())]
+
+
+def rank(profile, table, constraints):
+    """Order qualified strategies for a profile from the compiled table.
+
+    Pure lookup: no network, subprocess or model call, no funding or launch
+    authority. Constraints can only remove candidates; they never add one or
+    trigger a wider search.
+    """
+    constraints = constraints or {}
+    if not isinstance(constraints, dict) or set(constraints) - set(CONSTRAINT_FIELDS):
+        raise ValueError('Unsupported ranking constraint')
+    for field in CONSTRAINT_FIELDS:
+        if field in constraints and not (isinstance(constraints[field], (list, tuple)) and
+                                         all(isinstance(item, str) for item in constraints[field])):
+            raise ValueError('Invalid ranking constraint ' + field)
+    strategies, reason = resolve_row(table, profile)
+    reasons = [reason]
+    if strategies:
+        tokens = (profile.get('context') or {}).get('tokens')
+        if type(tokens) is int:
+            fitting = [item for item in strategies if item.get('context_limit') is None or item['context_limit'] >= tokens]
+            if len(fitting) != len(strategies):
+                reasons.append('context_exceeds_limit' if not fitting else 'context_filtered')
+            strategies = fitting
+    if strategies and constraints:
+        narrowed = _narrow(strategies, constraints)
+        reasons.append('constraints_applied' if narrowed else 'constraints_exclude_all')
+        strategies = narrowed
+    return dict(strategy_ids=[item['strategy_id'] for item in strategies], reason_codes=reasons,
+                table_version=table.get('version'), profile_digest=profile.get('semantic_digest'))
