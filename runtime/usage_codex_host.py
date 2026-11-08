@@ -109,7 +109,7 @@ def _settings(control, data, *, one_shot=False):
     require('canary_owner' not in config and 'manual_test_owner' not in config, 'live_mode_unqualified')
     if one_shot:
         require(config['enabled'] is False and config['requested_mode'] == 'manual', 'manual_test_requires_off')
-        require(data['slot'] is None, 'manual_test_in_use')
+        require(all(run['closed'] for run in data['runs'].values()), 'manual_test_in_use')
     else:
         require(config['enabled'] is True and config['disabled'] is False
                 and config['requested_mode'] in ('manual', 'smart'), 'live_mode_unqualified')

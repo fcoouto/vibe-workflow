@@ -327,7 +327,7 @@ class CodexUsageHostTests(unittest.TestCase):
         self.assertEqual(len(counted.requests), 1)
         state = self.ledger.snapshot()
         run_id = self.dispatch.call_args.args[1]['run_id']
-        self.assertIsNone(state['slot'])
+        self.assertNotIn('slot', state)
         self.assertEqual(state['runs'][run_id]['calls']['count']['state'], 'completed')
         self.assertNotIn('generation', state['runs'][run_id]['calls'])
 

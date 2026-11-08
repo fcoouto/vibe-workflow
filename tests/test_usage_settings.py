@@ -355,7 +355,7 @@ class UsageSettingsTests(unittest.TestCase):
         self.assertEqual((result['revision'], result['mode']), (1, 'manual'))
         with settings.controller(self.root) as control:
             after = control.ledger.snapshot()
-            for key in ('identity', 'organizations', 'runs', 'native', 'slot'):
+            for key in ('identity', 'organizations', 'runs', 'native'):
                 self.assertEqual(after[key], before[key])
             target = control._config(after)
             self.assertIsNone(target['qualification'])

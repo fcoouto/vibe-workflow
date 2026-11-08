@@ -10,6 +10,12 @@ import uuid
 MAX_INTEGER = 2**53 - 1
 MAX_RECORD = 2_000_000
 FRESH_SECONDS = 900
+STATE_VERSION = 2
+BASIS_POINTS = 10000
+DEFAULT_ALLOWANCE_BP = 9800
+DEFAULT_MARGIN_BP = 2000
+DEFAULT_CAPS = dict(total=4, per_account=2)
+POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit'
 
 
 class BudgetError(ValueError):
@@ -56,7 +62,7 @@ def initialize(path):
         raise BudgetError('ledger_exists') from error
     os.close(fd)
     identity = uuid.uuid4().hex
-    state = dict(version=1, identity=identity, organizations={}, runs={}, native={}, finished_native=[], slot=None)
+    state = dict(version=STATE_VERSION, identity=identity, organizations={}, runs={}, native={}, finished_native=[])
     with closing(sqlite3.connect(path)) as db:
         db.execute('CREATE TABLE ledger (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
         db.execute('INSERT INTO ledger VALUES (1, ?)', (json.dumps(state),))
@@ -110,7 +116,9 @@ class Ledger:
             row = self.db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
             require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
-            require(data['version'] == 1 and data['identity'] == self.identity, 'ledger_identity_changed')
+            require(data['version'] in (1, STATE_VERSION) and data['identity'] == self.identity,
+                    'ledger_identity_changed')
+            self._migrate(data)
             yield data
             self._check()
             if write:
@@ -121,6 +129,22 @@ class Ledger:
         except BaseException:
             self.db.execute('ROLLBACK')
             raise
+
+    @staticmethod
+    def _migrate(data):
+        """Upgrade version 1 state in place: drop the global slot and the 20% floor.
+
+        Open runs keep their exposure through their own calls; the old floor
+        seeds the issued allowance (a floor was one fifth of the first balance).
+        """
+        if data['version'] == STATE_VERSION:
+            return
+        data.pop('slot', None)
+        for org in data['organizations'].values():
+            floor = org.pop('floor', None)
+            if org.get('issued') is None:
+                org['issued'] = floor * 5 if floor is not None else None
+        data['version'] = STATE_VERSION
 
     def snapshot(self):
         with self.transaction(False) as data:
@@ -133,7 +157,14 @@ class Ledger:
     @staticmethod
     def _configure(data, organization, policy, expected_revision):
         name(organization); integer(expected_revision)
-        fields(policy, 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit')
+        optional = [key for key in ('allowance_bp', 'allowance') if isinstance(policy, dict) and key in policy]
+        fields(policy, POLICY_FIELDS + ' ' + ' '.join(optional))
+        require(len(optional) <= 1, 'invalid_allowance')
+        if optional == ['allowance_bp']:
+            require(type(policy['allowance_bp']) is int and 0 <= policy['allowance_bp'] <= BASIS_POINTS,
+                    'invalid_allowance')
+        elif optional:
+            require(policy['allowance'] == 'no-limit', 'invalid_allowance')
         name(policy['cycle'])
         for key in ('start', 'end', 'expiry', 'stop_at', 'grant_amount'):
             integer(policy[key])
@@ -159,21 +190,51 @@ class Ledger:
                 require(policy['start'] >= old['end'], 'overlapping_cycle')
             # A new cycle does not create credits or clear retained exposure.
         else:
-            org = dict(revision=0, balance=None, observed_at=None, floor=None, blocked=False)
+            org = dict(revision=0, balance=None, observed_at=None, issued=None, blocked=False)
             data['organizations'][organization] = org
         org['revision'] += 1
         org['policy'] = policy.copy()
         return org['revision']
 
-    def observe(self, organization, balance, observed_at):
+    def observe(self, organization, balance, observed_at, *, issued=None, lots=None):
+        """Record a balance. `issued` is an observed issuance (G); `lots` itemize eligible credit."""
         integer(balance); integer(observed_at)
+        if issued is not None:
+            integer(issued)
         with self.transaction() as data:
             org = data['organizations'][organization]
             require(org['observed_at'] is None or observed_at > org['observed_at'], 'observation_not_newer')
-            org['balance'] = min(org['balance'], balance) if org['balance'] is not None else balance
-            if org['floor'] is None:
-                org['floor'] = (balance + 4) // 5
+            lots = self._lots(org, lots)
+            self._note_balance(org, balance, issued)
+            if lots is not None:
+                org['lots'] = lots
             org['observed_at'] = observed_at
+
+    @staticmethod
+    def _note_balance(org, balance, issued=None):
+        """Lower the usable balance; only an observed issuance (or the first balance) sets G."""
+        org['balance'] = min(org['balance'], balance) if org['balance'] is not None else balance
+        if issued is not None:
+            org['issued'] = issued
+        elif org.get('issued') is None:
+            org['issued'] = balance
+
+    @staticmethod
+    def _lots(org, lots):
+        if lots is None:
+            return None
+        require(type(lots) is list and len(lots) <= 64, 'invalid_lots')
+        known = {lot['id']: lot for lot in org.get('lots', [])}
+        result = []
+        for lot in lots:
+            fields(lot, 'id balance expiry verified')
+            name(lot['id']); integer(lot['balance']); integer(lot['expiry'])
+            require(type(lot['verified']) is bool, 'invalid_lots')
+            old = known.get(lot['id'])
+            balance = min(old['balance'], lot['balance']) if old else lot['balance']
+            result.append(dict(lot, balance=balance))
+        require(len({lot['id'] for lot in result}) == len(result), 'invalid_lots')
+        return result
 
     @staticmethod
     def _cost(call):
@@ -185,16 +246,37 @@ class Ledger:
                    if run['organization'] == organization and (task is None or run['task'] == task)
                    for call in run['calls'].values() if cycle is None or call['cycle'] == cycle)
 
-    @classmethod
-    def _credit(cls, data, organization):
-        org = data['organizations'][organization]
-        require(org['balance'] is not None, 'balance_unverified')
-        return max(0, org['balance'] - org['floor'] - cls._total(data, organization))
+    @staticmethod
+    def _protected(org):
+        """Share of the issued allowance G that stays unspent: ceil((10000 - bp) * G / 10000)."""
+        policy = org['policy']
+        if policy.get('allowance') == 'no-limit':
+            return 0
+        bp = policy.get('allowance_bp', DEFAULT_ALLOWANCE_BP)
+        return -(-((BASIS_POINTS - bp) * (org.get('issued') or 0)) // BASIS_POINTS)
+
+    @staticmethod
+    def _available(org, now=None):
+        """B: the reconciled balance, or in no-limit mode the verified eligible lots only."""
+        if org['policy'].get('allowance') == 'no-limit':
+            return sum(lot['balance'] for lot in org.get('lots', [])
+                       if lot['verified'] and (now is None or now < lot['expiry']))
+        return org['balance']
 
     @classmethod
-    def _headroom(cls, data, organization, task=None):
+    def _credit_raw(cls, data, organization, now=None):
+        org = data['organizations'][organization]
+        require(org['balance'] is not None, 'balance_unverified')
+        return cls._available(org, now) - cls._protected(org) - cls._total(data, organization)
+
+    @classmethod
+    def _credit(cls, data, organization, now=None):
+        return max(0, cls._credit_raw(data, organization, now))
+
+    @classmethod
+    def _headroom(cls, data, organization, task=None, now=None):
         org = data['organizations'][organization]; policy = org['policy']
-        limits = [cls._credit(data, organization)]
+        limits = [cls._credit(data, organization, now)]
         if policy['pilot_limit'] is not None:
             limits.append(policy['pilot_limit'] - cls._total(data, organization))
         if task is not None and policy['task_limit'] is not None:
@@ -208,9 +290,10 @@ class Ledger:
         with self.transaction(False) as data:
             return self._headroom(data, organization)
 
-    def credit_headroom(self, organization):
+    def credit_headroom(self, organization, now=None):
+        """max(0, B - protected - R - U) in micro-units; R is every hold and retained charge."""
         with self.transaction(False) as data:
-            return self._credit(data, organization)
+            return self._credit(data, organization, now)
 
     @classmethod
     def _admit(cls, data, organization, task, maximum, revision, now):
@@ -221,7 +304,7 @@ class Ledger:
         require(org['observed_at'] is not None and 0 <= now - org['observed_at'] <= FRESH_SECONDS,
                 'balance_stale_or_missing')
         require(policy['start'] <= now < policy['stop_at'], 'expiry_or_cycle_boundary')
-        require(maximum <= cls._headroom(data, organization, task), 'insufficient_headroom')
+        require(maximum <= cls._headroom(data, organization, task, now), 'insufficient_headroom')
 
     @classmethod
     def _live_admit(cls, data, organization, added, now, gate, run=None):
@@ -251,8 +334,68 @@ class Ledger:
             data['native'][key] = dict(account=account, task=task, latest_at=now)
         return key
 
-    def begin(self, organization, task, run_id, digest, maximum, revision, now, native, *, consent=None, live_gate=None):
+    @staticmethod
+    def _reserve(estimate, next_request_bound, margin_bp):
+        """max(ceil(estimate * (10000 + margin) / 10000), next_request_bound); a bare bound is held as given."""
+        integer(estimate)
+        if next_request_bound is None and margin_bp is None:
+            return estimate
+        margin = DEFAULT_MARGIN_BP if margin_bp is None else margin_bp
+        require(type(margin) is int and 0 <= margin <= BASIS_POINTS, 'invalid_margin')
+        bound = integer(next_request_bound or 0)
+        return max(-(-(estimate * (BASIS_POINTS + margin)) // BASIS_POINTS), bound)
+
+    @staticmethod
+    def _caps(data):
+        caps = data.get('caps', DEFAULT_CAPS)
+        return caps['total'], caps['per_account']
+
+    def set_caps(self, total, per_account):
+        """Persist the concurrency caps (spec 7.4); defaults are 4 total and 2 per account."""
+        require(integer(total) > 0 and integer(per_account) > 0, 'invalid_caps')
+        with self.transaction() as data:
+            data['caps'] = dict(total=total, per_account=per_account)
+
+    @classmethod
+    def _check_caps(cls, data, organization):
+        total, per_account = cls._caps(data)
+        open_runs = [run for run in data['runs'].values() if not run['closed']]
+        require(len(open_runs) < total and
+                sum(run['organization'] == organization for run in open_runs) < per_account, 'concurrency_cap')
+
+    @staticmethod
+    def _active_call(run):
+        """The call that still holds an envelope: reserved or in flight."""
+        active = [call for call in run['calls'].values() if call['state'] in ('reserved', 'dispatching')]
+        return active[-1] if active else None
+
+    @classmethod
+    def _transfer(cls, data, organization, transfer_from, amount_limit):
+        """Move part of a parent's review provision to a new child claim; total holds are unchanged."""
+        require(type(transfer_from) is tuple and len(transfer_from) == 2, 'invalid_transfer')
+        parent_id, amount = transfer_from
+        name(parent_id); integer(amount)
+        parent = data['runs'].get(parent_id)
+        require(parent is not None and not parent['closed'] and parent['organization'] == organization,
+                'transfer_forbidden')
+        call = cls._active_call(parent)
+        require(call is not None, 'transfer_forbidden')
+        require(amount <= call.get('provision', 0) and amount <= amount_limit, 'provision_exceeded')
+        call['maximum'] -= amount
+        call['provision'] = call.get('provision', 0) - amount
+        return amount
+
+    def begin(self, organization, task, run_id, digest, estimate, revision, now, native, *,
+              next_request_bound=None, margin_bp=None, provision=0, transfer_from=None,
+              consent=None, live_gate=None):
+        """Admit one task's own claim. Reserve max(padded estimate, next request bound).
+
+        Without `next_request_bound` and `margin_bp` the estimate is already a hard bound and is held unpadded.
+        `provision` marks part of the hold as review budget a child may take over via `transfer_from`.
+        """
         for value in (organization, task, run_id, digest): name(value)
+        maximum = self._reserve(estimate, next_request_bound, margin_bp)
+        require(integer(provision) <= maximum, 'provision_exceeded')
         with self.transaction() as data:
             if run_id in data['runs']:
                 run = data['runs'][run_id]
@@ -260,7 +403,10 @@ class Ledger:
                 require((run['organization'], run['task'], run['digest']) == (organization, task, digest), 'run_identity_changed')
                 return run
             require(len(data['runs']) < 1000, 'ledger_capacity_reached')
-            require(data['slot'] is None, 'request_in_flight')
+            self._check_caps(data, organization)
+            moved = 0
+            if transfer_from is not None:
+                moved = self._transfer(data, organization, transfer_from, maximum)
             admission = self._live_admit(data, organization, maximum, now, live_gate)
             self._admit(data, organization, task, maximum, revision, now)
             require(native.get('task') == task, 'native_task_mismatch')
@@ -272,10 +418,25 @@ class Ledger:
                        native=key, closed=False, calls={})
             if admission is not None:
                 run['live_admission'] = admission
+            if moved:
+                run['transferred_from'] = dict(run=transfer_from[0], amount=moved)
             data['runs'][run_id] = run
             run['calls']['count'] = self._call(data, run, maximum, digest)
-            data['slot'] = run_id
+            if provision:
+                run['calls']['count']['provision'] = provision
             return run
+
+    def top_up(self, run_id, added, revision, now, *, live_gate=None):
+        """Extend the open envelope atomically, or raise insufficient_headroom and change nothing."""
+        integer(added)
+        with self.transaction() as data:
+            run = data['runs'][run_id]
+            call = self._active_call(run)
+            require(not run['closed'] and call is not None, 'top_up_forbidden')
+            require(run['revision'] == revision, 'policy_revision_changed')
+            self._live_admit(data, run['organization'], added, now, live_gate, run)
+            self._admit(data, run['organization'], run['task'], added, revision, now)
+            call['maximum'] += added
 
     @staticmethod
     def _call(data, run, maximum, digest):
@@ -286,8 +447,7 @@ class Ledger:
         name(digest)
         with self.transaction() as data:
             run = data['runs'][run_id]
-            require(data['slot'] == run_id and not run['closed'] and
-                    run['calls']['count']['state'] == 'completed', 'count_not_completed')
+            require(not run['closed'] and run['calls']['count']['state'] == 'completed', 'count_not_completed')
             require('generation' not in run['calls'], 'attempt_exists')
             require(run['revision'] == revision, 'policy_revision_changed')
             self._live_admit(data, run['organization'], maximum, now, live_gate, run)
@@ -299,7 +459,7 @@ class Ledger:
             run = data['runs'][run_id]; call = run['calls'][phase]
             if run.get('consent') is not None:
                 self._consent(data, run['consent'])
-            require(data['slot'] == run_id and not run['closed'] and call['state'] == 'reserved', 'dispatch_forbidden')
+            require(not run['closed'] and call['state'] == 'reserved', 'dispatch_forbidden')
             require(run['revision'] == revision, 'policy_revision_changed')
             # The call's own reservation has already reduced headroom.
             self._live_admit(data, run['organization'], 0, now, live_gate, run)
@@ -312,8 +472,7 @@ class Ledger:
                     'limits_changed')
             cap = policy['amount'] if policy['ceiling'] == 'custom' else policy['grant_amount']
             require(policy['ceiling'] == 'none' or self._total(data, run['organization'], cycle=policy['cycle']) <= cap, 'limits_changed')
-            require(data['organizations'][run['organization']]['balance'] >=
-                    data['organizations'][run['organization']]['floor'] + self._total(data, run['organization']), 'credit_changed')
+            require(self._credit_raw(data, run['organization'], now) >= 0, 'credit_changed')
             call['state'] = 'dispatching'
             data['native'][run['native']]['latest_at'] = now
 
@@ -327,9 +486,10 @@ class Ledger:
                 data['organizations'][run['organization']]['blocked'] = True
                 call['state'] = 'unresolved'; overrun = True
             else:
-                call.update(cost=actual, state='completed')
+                call.update(cost=actual, state='completed')  # Charges actual; unused padding is released.
+                call.pop('provision', None)
                 if phase == 'generation':
-                    data['slot'] = None; run['closed'] = True
+                    run['closed'] = True
         require(not overrun, 'cost_exceeds_bound')
 
     def uncertain(self, run_id, phase, *, incomplete=None):
@@ -347,7 +507,6 @@ class Ledger:
             for call in run['calls'].values():
                 if call['state'] == 'reserved': call.update(cost=0, state='rejected-before-send')
             run['closed'] = True
-            if data['slot'] == run_id: data['slot'] = None
 
     def release_native(self, account, task, evidence, now):
         with self.transaction() as data:
@@ -366,7 +525,6 @@ class Ledger:
             require(call['state'] == 'dispatching', 'rejection_forbidden')
             call.update(cost=0, state='rejected-before-send')
             run['closed'] = True
-            if data['slot'] == run_id: data['slot'] = None
 
     @staticmethod
     def _consent(data, pin):
@@ -381,14 +539,12 @@ class Ledger:
         result = {'state': 'manual_recovery_required'}
         if scope is None:
             return result
-        data = self.snapshot()
-        run_id = data['slot']
-        run = data['runs'].get(run_id)
-        if run and (run.get('consent') or {}).get('scope') == scope:
-            for phase, call in run['calls'].items():
-                if call['state'] == 'unresolved':
-                    result['pending'] = dict(attempt_id=run_id + ':' + phase,
-                                             reserved_usd_micros=call['maximum'],
-                                             incomplete=call.get('incomplete'))
-                    break
+        pending = [dict(attempt_id=run_id + ':' + phase, reserved_usd_micros=call['maximum'],
+                        incomplete=call.get('incomplete'))
+                   for run_id, run in sorted(self.snapshot()['runs'].items())
+                   if (run.get('consent') or {}).get('scope') == scope
+                   for phase, call in run['calls'].items() if call['state'] == 'unresolved']
+        if pending:
+            result['pending'] = pending[0]
+            result['pending_attempts'] = pending
         return result

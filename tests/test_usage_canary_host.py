@@ -188,7 +188,7 @@ class CanaryHostTests(unittest.TestCase):
             self.assertEqual([c.requests[0][1] for c in (count, generate)],
                              ['/v1/responses/input_tokens', '/v1/responses'])
             data = control.ledger.snapshot()
-            self.assertIsNone(data['slot'])
+            self.assertNotIn('slot', data)
             self.assertEqual(len(data['native']), 1)
             old_org = data['organizations'][self.plan.organization]
             request = dict(version=2, expected_revision=3, expected_org_revision=1, binding=self.binding,

@@ -13,7 +13,7 @@ FUNDING_WARNING = ('Grant-only funding is best effort. Account auto-reload may b
                    'the provider may consume other funding; local limits cannot guarantee otherwise.')
 HANDOFF_REASONS = frozenset(('insufficient_headroom', 'balance_stale_or_missing',
     'expiry_or_cycle_boundary', 'evidence_deadline_expired', 'observation_stale',
-    'request_in_flight'))
+    'concurrency_cap'))
 
 
 def status(cwd=None):
@@ -359,8 +359,7 @@ class Controller:
                     (org['policy']['ceiling'] != 'subscription_benefit' or observation['pool'] == 'benefit'), 'pool_unqualified')
             require(0 <= self.clock() - observation['observed_at'] <= 900, 'observation_stale')
             require(org['observed_at'] is None or observation['observed_at'] > org['observed_at'], 'observation_not_newer')
-            org['balance'] = min(org['balance'], observation['balance']) if org['balance'] is not None else observation['balance']
-            if org['floor'] is None: org['floor'] = (observation['balance'] + 4)//5
+            self.ledger._note_balance(org, observation['balance'])
             org['observed_at'] = observation['observed_at']
             org['observation_source'] = observation['source']
             org['funding_state'] = 'unverified'
@@ -409,7 +408,7 @@ class Controller:
         require(task['native'].get('task') == task['task_id'], 'native_task_mismatch')
         # Operate on a deserialized snapshot: selection must not reserve or write.
         self.ledger._native(data, task['native'], self.clock())
-        require(data['slot'] is None, 'request_in_flight')
+        self.ledger._check_caps(data, org_id)
         self.ledger._admit(data, org_id, task['task_id'],
                            bound['maximum_usd_micros'] + bound['count_maximum_usd_micros'],
                            config['org_revision'], self.clock())
@@ -548,11 +547,10 @@ class Controller:
         require(previous is None or current == previous or
                 current['observed_at'] > previous['observed_at'], 'live_grant_observation_changed')
         # Prior shadow observations can only lower the usable balance. The first
-        # trusted observation establishes a floor even if shadow data set one.
-        balance = org['balance']
-        org['balance'] = grant.balance if balance is None else min(balance, grant.balance)
+        # trusted observation establishes the issued allowance even if shadow data set one.
+        self.ledger._note_balance(org, grant.balance)
         if previous is None or previous['digest'] is None:
-            org['floor'] = max(org['floor'] or 0, (grant.balance + 4) // 5)
+            org['issued'] = max(org.get('issued') or 0, grant.balance)
         org['observed_at'] = max(org['observed_at'] or 0, grant.observed_at)
         org['live_funding'] = current
         return deadline, dict(pin=usage_admission.digest(asdict(evidence)),

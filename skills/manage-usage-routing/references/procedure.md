@@ -242,7 +242,9 @@ Explicit API-only/provider choices require resolution; a missing reviewer
 waits rather than switching to another paid API. The existing native workflow owns
 actual child identity, permissions, completion and fresh independent review.
 
-Keep all pending API reservations and unknown slots while native work proceeds.
+Keep all pending API reservations and unresolved claims while native work proceeds.
+Independent tasks that fit the shared headroom and the concurrency caps (default 4 total,
+2 per account) may run in parallel; one unresolved task holds only its own exposure.
 Tool-free API output cannot modify the source; the native agent must reread source
 and avoid applying late output without new checks/review. Handoff never asserts
 that the provider request stopped, settled, was free or consumed only the grant.

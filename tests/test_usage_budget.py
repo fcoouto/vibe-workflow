@@ -1,16 +1,20 @@
 """Offline spending invariants; all state is disposable and no network is used."""
+from contextlib import closing
+import json
 import multiprocessing
+import sqlite3
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 
 from runtime import usage_budget as budget
 
 
-def competing(path, identity, name, queue):
+def competing(path, identity, name, queue, maximum=10):
     try:
         with budget.Ledger(path, identity) as ledger:
-            ledger.begin('org', name, name, 'packet', 10, 1, 101, native(name))
+            ledger.begin('org', name, name, 'packet', maximum, 1, 101, native(name))
         queue.put('accepted')
     except budget.BudgetError:
         queue.put('blocked')
@@ -82,9 +86,9 @@ class BudgetTests(unittest.TestCase):
         with self.assertRaises(budget.BudgetError): budget.Ledger(self.path, 'wrong')
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
-    def test_missing_observation_blocks_without_claiming_slot(self):
+    def test_missing_observation_blocks_without_creating_a_claim(self):
         with self.assertRaises(budget.BudgetError): self.begin()
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertEqual(self.ledger.snapshot()['runs'], {})
 
     def test_count_and_generation_settle_separately_without_retiring_credit_cost(self):
         self.observe()
@@ -94,27 +98,33 @@ class BudgetTests(unittest.TestCase):
         self.ledger.dispatch('run', 'generation', 1, 104)
         self.ledger.complete('run', 'generation', 12)
         state = self.ledger.snapshot()
-        self.assertIsNone(state['slot'])
+        self.assertNotIn('slot', state)
+        self.assertTrue(state['runs']['run']['closed'])
         self.assertEqual(self.ledger.headroom('org'), 487)
         self.assertEqual(len(state['runs']['run']['calls']), 2)
         self.ledger.observe('org', 787, 110)
         self.assertEqual(self.ledger.headroom('org'), 487)
-        self.assertEqual(self.ledger.credit_headroom('org'), 614)
+        self.assertEqual(self.ledger.credit_headroom('org'), 758)
         self.assertEqual(len(state['native']), 1)  # Task identity remains for integration/review.
 
-    def test_unknown_count_blocks_generation_and_other_sessions_after_restart(self):
+    def test_unknown_count_blocks_generation_but_keeps_only_its_own_exposure_after_restart(self):
         self.observe(); self.begin(); self.ledger.dispatch('run', 'count', 1, 102)
         self.ledger.uncertain('run', 'count')
         self.ledger.close(); self.ledger = budget.Ledger(self.path, self.identity)
         with self.assertRaises(budget.BudgetError): self.ledger.reserve_generation('run', 'g', 10, 1, 103)
-        with self.assertRaises(budget.BudgetError): self.begin('other', 'other')
-        self.assertEqual(self.ledger.snapshot()['slot'], 'run')
+        before = self.ledger.headroom('org')
+        self.begin('other', 'other')  # Unrelated work that fits is not serialized behind the unknown.
+        self.assertEqual(self.ledger.headroom('org'), before - 10)
+        state = self.ledger.snapshot()
+        self.assertNotIn('slot', state)
+        self.assertEqual(state['runs']['run']['calls']['count']['state'], 'unresolved')
+        self.assertFalse(state['runs']['run']['closed'])
 
-    def test_generation_denied_preserves_count_and_close_releases_slot(self):
+    def test_generation_denied_preserves_count_and_close_releases_the_claim(self):
         self.observe(); self.begin(); self.count_done()
         with self.assertRaises(budget.BudgetError): self.ledger.reserve_generation('run', 'g', 201, 1, 103)
         self.ledger.close_run('run')
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertTrue(self.ledger.snapshot()['runs']['run']['closed'])
         self.assertEqual(self.ledger.headroom('org'), 499)
         with self.assertRaises(budget.BudgetError): self.ledger.dispatch('run', 'count', 1, 104)
 
@@ -166,7 +176,7 @@ class BudgetTests(unittest.TestCase):
 
     def test_lowest_balance_is_monotonic_and_refresh_never_clears_deductions(self):
         self.observe(); self.begin(); self.count_done(); self.ledger.close_run('run')
-        self.ledger.observe('org', 50, 110)
+        self.ledger.observe('org', 12, 110)
         self.assertEqual(self.ledger.headroom('org'), 0)
         self.ledger.observe('org', 1000, 120)
         self.assertEqual(self.ledger.headroom('org'), 0)
@@ -188,10 +198,10 @@ class BudgetTests(unittest.TestCase):
         for value in (True, -1, 1.2, 2**63):
             with self.assertRaises(budget.BudgetError): self.begin(maximum=value)
 
-    def test_two_processes_share_single_slot(self):
-        self.observe()
+    def test_two_processes_share_the_last_headroom(self):
+        self.observe(400)  # Credit 392 after the protected share: only one 200 fits.
         ctx = multiprocessing.get_context('spawn'); queue = ctx.Queue()
-        processes = [ctx.Process(target=competing, args=(self.path, self.identity, name, queue)) for name in ('a','b')]
+        processes = [ctx.Process(target=competing, args=(self.path, self.identity, name, queue, 200)) for name in ('a','b')]
         for process in processes: process.start()
         for process in processes: process.join(10); self.assertEqual(process.exitcode, 0)
         self.assertEqual(sorted(queue.get(timeout=2) for _ in processes), ['accepted', 'blocked'])
@@ -214,7 +224,7 @@ class BudgetTests(unittest.TestCase):
 
     def test_live_gate_credit_staging_rolls_back_on_failure(self):
         def gate(data, now):
-            data['organizations']['org'].update(balance=300, floor=60, observed_at=now)
+            data['organizations']['org'].update(balance=300, issued=300, observed_at=now)
             return dict(pin='a' * 64, maximum=20)
 
         def reject(data, now):
@@ -312,7 +322,7 @@ class BudgetTests(unittest.TestCase):
     def test_lower_grant_balance_revokes_a_reservation_with_both_optional_caps_omitted(self):
         self.observe()
         policy = dict(self.ledger.snapshot()['organizations']['org']['policy'], ceiling='subscription_benefit',
-                      amount=None, pilot_limit=None, task_limit=None)
+                      amount=None, pilot_limit=None, task_limit=None, allowance_bp=8000)  # protected 160
         self.ledger.configure('org', policy, 1)
         self.ledger.begin('org', 'task', 'run', 'packet', 300, 2, 101, native())
         self.ledger.observe('org', 459, 102)
@@ -327,12 +337,12 @@ class BudgetTests(unittest.TestCase):
         policy.update(cycle='cycle2', start=10000, end=20000, expiry=20000, stop_at=19000)
         self.ledger.configure('org', policy, 1)
         self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['cycle'], 'cycle1')
-        self.assertEqual(self.ledger.credit_headroom('org'), 639)
+        self.assertEqual(self.ledger.credit_headroom('org'), 783)
         self.assertEqual(self.ledger.headroom('org'), 499)  # Pilot accounting does not reset.
 
     def test_refresh_can_revoke_an_existing_reservation_before_dispatch(self):
         self.observe(); self.begin()
-        self.ledger.observe('org', 160, 102)
+        self.ledger.observe('org', 20, 102)  # Below the 2% protected share (16) plus the 10 held.
         with self.assertRaises(budget.BudgetError): self.ledger.dispatch('run', 'count', 1, 103)
 
     def test_missing_replaced_and_permissive_ledger_fail_closed(self):
@@ -356,6 +366,265 @@ class BudgetTests(unittest.TestCase):
     def test_symlink_database_rejected(self):
         alias = self.path.parent / 'alias'; alias.symlink_to(self.path)
         with self.assertRaises(budget.BudgetError): budget.Ledger(alias, self.identity)
+
+
+M = 1_000_000
+
+
+class ParallelLedgerTests(unittest.TestCase):
+    """Allowance policy, per-task padded claims and concurrency caps in integer micro-units."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.path = Path(self.temp.name) / 'private' / 'organizations.sqlite3'
+        self.identity = budget.initialize(self.path)
+        self.ledger = budget.Ledger(self.path, self.identity)
+
+    def tearDown(self):
+        self.ledger.close()
+        self.temp.cleanup()
+
+    def policy(self, **updates):
+        policy = dict(cycle='cycle1', start=0, end=10000, expiry=10000, stop_at=9000, ceiling='none',
+                      amount=None, grant_amount=0, pilot_limit=None, task_limit=None)
+        policy.update(updates)
+        return policy
+
+    def org(self, name='org', balance=30 * M, issued=100 * M, revision=0, **policy):
+        self.ledger.configure(name, self.policy(**policy), revision)
+        self.ledger.observe(name, balance, 100, issued=issued)
+
+    def begin(self, run, estimate, *, org='org', revision=1, now=101, **options):
+        return self.ledger.begin(org, run, run, 'packet', estimate, revision, now, native(run), **options)
+
+    def finish(self, run, actual, phase='count'):
+        self.ledger.dispatch(run, phase, 1, 102)
+        self.ledger.complete(run, phase, actual)
+
+    # S1.1 allowance policy
+    def test_allowance_policy_replaces_the_twenty_percent_floor(self):
+        self.org()
+        self.begin('held', 5 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 23 * M)  # 30 - ceil(2% of 100) - 5
+        for bp, expected in ((0, 0), (10000, 25 * M), (9800, 23 * M)):
+            with self.subTest(allowance_bp=bp):
+                policy = self.ledger.snapshot()['organizations']['org']['policy']
+                revision = self.ledger.snapshot()['organizations']['org']['revision']
+                self.ledger.configure('org', dict(policy, allowance_bp=bp), revision)
+                self.assertEqual(self.ledger.credit_headroom('org'), expected)
+
+    def test_allowance_defaults_to_98_percent_and_rejects_invalid_values(self):
+        self.org()
+        self.assertEqual(self.ledger.credit_headroom('org'), 28 * M)
+        for bad in (dict(allowance_bp=-1), dict(allowance_bp=10001), dict(allowance_bp=True),
+                    dict(allowance='unlimited'), dict(allowance='no-limit', allowance_bp=9800)):
+            with self.subTest(bad=bad), self.assertRaises(budget.BudgetError):
+                self.ledger.configure('org', self.policy(**bad), 1)
+
+    def test_protected_share_rounds_up_in_integers(self):
+        self.org(balance=10 * M, issued=333_333, allowance_bp=9999)
+        self.assertEqual(self.ledger.credit_headroom('org'), 10 * M - 34)  # ceil(1 * 333_333 / 10_000)
+
+    def test_no_limit_uses_only_verified_eligible_lots(self):
+        self.org(allowance='no-limit')
+        self.ledger.observe('org', 30 * M, 101, lots=[
+            dict(id='grant', balance=20 * M, expiry=10000, verified=True),
+            dict(id='unknown', balance=10 * M, expiry=10000, verified=False)])
+        self.assertEqual(self.ledger.credit_headroom('org'), 20 * M)
+        self.begin('held', 5 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 15 * M)
+
+    def test_no_limit_without_verified_lots_has_no_headroom(self):
+        self.org(allowance='no-limit')
+        self.assertEqual(self.ledger.credit_headroom('org'), 0)
+
+    def test_billing_date_change_without_observed_issuance_mints_nothing(self):
+        self.org()
+        self.begin('held', 5 * M)
+        before = self.ledger.credit_headroom('org')
+        self.ledger.configure('org', self.policy(cycle='cycle2', start=10000, end=20000, expiry=20000,
+                                                 stop_at=19000, grant_amount=500 * M), 1)
+        data = self.ledger.snapshot()
+        self.assertEqual(data['organizations']['org']['issued'], 100 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), before)
+        self.assertEqual(data['runs']['held']['calls']['count']['state'], 'reserved')
+        self.ledger.observe('org', 30 * M, 101, issued=120 * M)  # Only an observed issuance changes G.
+        self.assertEqual(self.ledger.credit_headroom('org'), before - 400_000)
+
+    # S1.2 per-task claims
+    def test_new_state_has_no_slot_and_two_affordable_runs_both_begin(self):
+        self.org()
+        state = self.ledger.snapshot()
+        self.assertNotIn('slot', state)
+        self.assertEqual(state['version'], 2)
+        self.begin('first', 5 * M); self.begin('second', 5 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 18 * M)
+
+    def test_repeated_run_id_returns_existing_run_without_another_hold(self):
+        self.org()
+        first = self.begin('first', 5 * M)
+        before = self.ledger.snapshot()
+        again = self.begin('first', 5 * M)
+        self.assertEqual(first, again)
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    def test_ledger_instances_racing_for_the_last_headroom_admit_what_fits(self):
+        self.org(balance=500 * M, issued=500 * M, allowance_bp=10000, pilot_limit=500 * M)
+        results = []
+
+        def race(name):
+            try:
+                with budget.Ledger(self.path, self.identity) as ledger:
+                    ledger.begin('org', name, name, 'packet', 300 * M, 1, 101, native(name))
+                results.append('accepted')
+            except budget.BudgetError as error:
+                results.append(str(error))
+
+        threads = [threading.Thread(target=race, args=(name,)) for name in ('a', 'b')]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(10)
+        self.assertEqual(sorted(results), ['accepted', 'insufficient_headroom'])
+        self.assertEqual(len(self.ledger.snapshot()['runs']), 1)
+
+    def test_legacy_state_migrates_without_losing_exposure(self):
+        self.org(balance=800, issued=800)
+        self.begin('open', 10)
+        with closing(sqlite3.connect(self.path)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data.update(version=1, slot='open')
+            for org in data['organizations'].values():
+                org['floor'] = 160; del org['issued']
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+        migrated = self.ledger.snapshot()
+        self.assertEqual(migrated['version'], 2)
+        self.assertNotIn('slot', migrated)
+        self.assertNotIn('floor', migrated['organizations']['org'])
+        self.assertEqual(migrated['organizations']['org']['issued'], 800)
+        self.assertEqual(migrated['runs']['open']['calls']['count']['maximum'], 10)
+        self.ledger.observe('org', 790, 110)  # A write persists the migration.
+        with closing(sqlite3.connect(self.path)) as db:
+            stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+        self.assertEqual(stored['version'], 2)
+        self.assertNotIn('slot', stored)
+
+    # S1.3 padded reservations
+    def test_reservations_are_padded_and_release_padding_on_completion(self):
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+        self.ledger.set_caps(total=10, per_account=10)
+        for run, estimate, held in (('a', 5, 6), ('b', 10, 12), ('c', 8, 9.6)):
+            self.begin(run, estimate * M, next_request_bound=0)
+            self.assertEqual(self.ledger.snapshot()['runs'][run]['calls']['count']['maximum'], int(held * M))
+        self.assertEqual(self.ledger.credit_headroom('org'), 2_400_000)
+        with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
+            self.begin('d', 3 * M, next_request_bound=0)
+        self.assertNotIn('d', self.ledger.snapshot()['runs'])
+        self.finish('a', 4 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 4_400_000)
+        self.begin('d', 3 * M, next_request_bound=0)
+        self.assertEqual(self.ledger.snapshot()['runs']['d']['calls']['count']['maximum'], 3_600_000)
+
+    def test_request_bound_can_exceed_the_padded_estimate_and_margin_is_configurable(self):
+        self.org(allowance_bp=10000)
+        self.begin('a', 5 * M, next_request_bound=7 * M)
+        self.begin('b', 5 * M, next_request_bound=1, margin_bp=500)
+        calls = self.ledger.snapshot()['runs']
+        self.assertEqual(calls['a']['calls']['count']['maximum'], 7 * M)
+        self.assertEqual(calls['b']['calls']['count']['maximum'], 5_250_000)
+
+    def test_unpadded_legacy_bound_and_free_pricing_never_divide_or_hold(self):
+        self.org(allowance_bp=10000)
+        self.begin('bounded', 3 * M)
+        self.assertEqual(self.ledger.snapshot()['runs']['bounded']['calls']['count']['maximum'], 3 * M)
+        self.begin('free', 0, next_request_bound=0)
+        self.assertEqual(self.ledger.snapshot()['runs']['free']['calls']['count']['maximum'], 0)
+        self.finish('free', 0)
+        self.assertEqual(self.ledger.credit_headroom('org'), 27 * M)
+        self.org('empty', balance=0, issued=0)
+        self.assertEqual(self.ledger.credit_headroom('empty'), 0)
+
+    def test_timeout_keeps_the_full_hold_and_late_completion_charges_actual(self):
+        self.org(allowance_bp=10000)
+        self.begin('slow', 5 * M, next_request_bound=0)
+        self.ledger.dispatch('slow', 'count', 1, 102)
+        self.ledger.uncertain('slow', 'count')
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
+        self.assertEqual(self.ledger.reconcile(scope='x'), {'state': 'manual_recovery_required'})
+        self.ledger.complete('slow', 'count', 4 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 26 * M)
+
+    def test_top_up_is_atomic_and_fails_without_changing_state(self):
+        self.org(balance=10 * M, issued=10 * M, allowance_bp=10000)
+        self.begin('a', 4 * M, next_request_bound=0)
+        self.assertEqual(self.ledger.snapshot()['runs']['a']['calls']['count']['maximum'], 4_800_000)
+        before = self.ledger.snapshot()
+        with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
+            self.ledger.top_up('a', 6 * M, 1, 102)
+        self.assertEqual(self.ledger.snapshot(), before)
+        self.ledger.top_up('a', 5 * M, 1, 102)
+        self.assertEqual(self.ledger.snapshot()['runs']['a']['calls']['count']['maximum'], 9_800_000)
+        self.assertEqual(self.ledger.credit_headroom('org'), 200_000)
+        for run, revision in (('missing', 1), ('a', 2)):
+            with self.assertRaises((budget.BudgetError, KeyError)):
+                self.ledger.top_up(run, 1, revision, 102)
+
+    def test_top_up_requires_an_open_reservation(self):
+        self.org(allowance_bp=10000)
+        self.begin('a', 1 * M); self.finish('a', 1 * M); self.ledger.close_run('a')
+        with self.assertRaisesRegex(budget.BudgetError, 'top_up_forbidden'):
+            self.ledger.top_up('a', 1, 1, 103)
+
+    def test_parent_provision_transferred_to_a_child_is_counted_once(self):
+        self.org(allowance_bp=10000)
+        self.ledger.set_caps(total=10, per_account=10)
+        self.begin('parent', 5 * M, next_request_bound=0, provision=2 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
+        self.begin('child', 1 * M, next_request_bound=0, transfer_from=('parent', M))
+        self.assertEqual(self.ledger.credit_headroom('org'), 23_800_000)  # 6 + 1.2 - 1, not 7.2
+        calls = self.ledger.snapshot()['runs']
+        self.assertEqual(calls['parent']['calls']['count']['maximum'], 5 * M)
+        self.assertEqual(calls['parent']['calls']['count']['provision'], M)
+        self.begin('child', 1 * M, next_request_bound=0, transfer_from=('parent', M))  # Replay moves nothing.
+        self.assertEqual(self.ledger.credit_headroom('org'), 23_800_000)
+        before = self.ledger.snapshot()
+        with self.assertRaisesRegex(budget.BudgetError, 'provision_exceeded'):
+            self.begin('greedy', 1 * M, transfer_from=('parent', 2 * M))
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    # S1.4 concurrency caps
+    def test_default_caps_limit_open_runs_per_account_and_in_total(self):
+        self.org('org'); self.org('other', revision=0)
+        self.begin('a', M); self.begin('b', M)
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('c', M)
+        self.begin('d', M, org='other')
+        self.ledger.close_run('a')
+        self.begin('c', M)
+        self.begin('e', M, org='other')
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('f', M, org='other')
+
+    def test_total_cap_counts_every_account_and_caps_are_configurable(self):
+        for name in ('o1', 'o2', 'o3'): self.org(name)
+        self.ledger.set_caps(total=2, per_account=2)
+        self.begin('a', M, org='o1'); self.begin('b', M, org='o2')
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('c', M, org='o3')
+        self.ledger.set_caps(total=3, per_account=1)
+        self.begin('c', M, org='o3')
+        with self.assertRaises(budget.BudgetError): self.ledger.set_caps(total=0, per_account=1)
+
+    def test_unresolved_runs_keep_their_place_until_closed(self):
+        self.org()
+        self.ledger.set_caps(total=1, per_account=1)
+        self.begin('a', M); self.ledger.dispatch('a', 'count', 1, 102); self.ledger.uncertain('a', 'count')
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('b', M)
+        self.assertEqual(len(self.ledger.snapshot()['runs']), 1)
+
+    def test_replay_of_an_open_run_is_not_blocked_by_the_caps(self):
+        self.org()
+        self.ledger.set_caps(total=1, per_account=1)
+        self.begin('a', M)
+        self.assertEqual(self.begin('a', M)['task'], 'a')
 
 
 if __name__ == '__main__': unittest.main()
