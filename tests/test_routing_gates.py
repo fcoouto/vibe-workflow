@@ -4,12 +4,17 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import os
 import sqlite3
+import subprocess
+import sys
+import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
-from runtime import routing, routing_gates, routing_settings, usage_budget as budget
+from runtime import routing, routing_gates, routing_settings, state, usage_budget as budget
 from scripts import routing as command
 from tests.test_routing_command import (API, KEY_REF, SCOPE, SECRET, Base, api_observations, facts, job, now,
                                         observations, prepare, table)
@@ -618,12 +623,214 @@ class CanonicalWorkflowTests(unittest.TestCase):
         self.assertRefused('r-a', 'resource_authority_lost')
 
     def test_the_cheap_etag_tracks_every_canonical_write(self):
-        from runtime import delegation
-        before = delegation.routing_etag(self.scope)
-        self.assertEqual(delegation.routing_etag(self.scope), before)
-        self.assertEqual(delegation.routing_view(self.scope, self.where('a'))['etag'], before)
+        view = self.reader.view(self.where('a'))
+        self.assertEqual(self.reader.etag(self.where('a')), view['etag'])
+        self.assertEqual(self.reader.etag(self.where('a')), view['etag'])
         self.native('a', 'a-writer')
-        self.assertNotEqual(delegation.routing_etag(self.scope), before)
+        self.assertNotEqual(self.reader.etag(self.where('a')), view['etag'])
+
+    def test_the_view_is_one_read_transaction_and_keeps_its_lock(self):
+        """Regression (review B1): no extra descriptor on the database is ever closed, so the view's read lock
+        holds until it ends and another process cannot commit underneath it."""
+        from runtime import delegation
+        path, seen = state._path(self.scope), []
+        real = delegation._routing_job_view
+
+        def inside(*args, **kwargs):
+            result = real(*args, **kwargs)
+            seen.append(other_process_write(path))  # still inside the view's read transaction
+            return result
+        with mock.patch.object(delegation, '_routing_job_view', side_effect=inside):
+            view = self.reader.view(self.where('a'))
+            self.reader.etag(self.where('a'))
+        self.assertEqual(seen, ['blocked'])
+        self.assertTrue(routing_gates.valid_view(view))
+
+    def test_an_in_process_write_transaction_survives_view_and_etag(self):
+        path = state._path(self.scope)
+        writer = sqlite3.connect(path, isolation_level=None, timeout=1)
+        try:
+            writer.execute('BEGIN IMMEDIATE')  # RESERVED, as a delegation write in this process would hold
+            self.reader.view(self.where('a'))
+            for _ in range(3):
+                self.reader.etag(self.where('a'))
+            self.reader.view(self.where('b'))  # replaces and closes cached watches
+            self.assertEqual(other_process_write(path, immediate_only=True), 'blocked')
+        finally:
+            writer.execute('ROLLBACK')
+            writer.close()
+
+    def test_routing_job_is_the_exact_canonical_semantic_job(self):
+        from runtime import delegation
+        unbound = delegation.routing_job(self.scope, self.where('a'))
+        self.assertEqual(routing.semantic_digest(unbound), self.reader.view(self.where('a'))['job']['semantic_digest'])
+        self.assertEqual(self.call(prepare('r-a', job=dict(unbound, profile=job()['profile']),
+                                           workflow=self.where('a')))['state'], 'admitted')
+        child = self.native('a', 'a-bound')
+        bound = delegation.routing_job(self.scope, self.where('a', attempt_id=child['attempt_id']))
+        self.assertEqual((bound['objective'], bound['context']),
+                         ('Implement bounded edit', 'Inspect existing callers first'))
+        self.assertEqual(self.call(prepare('r-b', job=dict(bound, profile=job()['profile']),
+                                           workflow=self.where('a', attempt_id=child['attempt_id'])))['state'],
+                         'admitted')
+        self.assertIsNone(delegation.routing_job(self.scope, self.where('missing')))
+
+
+WRITER = '''
+import sqlite3, sys
+try:
+    db = sqlite3.connect(sys.argv[1], timeout=0.2, isolation_level=None)
+    db.execute('BEGIN IMMEDIATE')
+    if sys.argv[2] == 'commit':
+        db.execute("CREATE TABLE IF NOT EXISTS probe_s35(x)")
+        db.execute('COMMIT')
+    else:
+        db.execute('ROLLBACK')
+    print('committed')
+except sqlite3.OperationalError:
+    print('blocked')
+'''
+
+
+def other_process_write(path, immediate_only=False):
+    """Another process tries to write: `blocked` while any lock this process holds forbids it."""
+    done = subprocess.run([sys.executable, '-I', '-c', WRITER, str(path), 'begin' if immediate_only else 'commit'],
+                          capture_output=True, text=True, timeout=30)
+    return done.stdout.strip()
+
+
+def other_process_rollback(path):
+    subprocess.run([sys.executable, '-I', '-c', '''
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1], isolation_level=None)
+db.execute('BEGIN IMMEDIATE'); db.execute("CREATE TABLE rolled_back(x)"); db.execute('ROLLBACK')
+''', str(path)], check=True, timeout=30)
+
+
+class ChangeWatchTests(unittest.TestCase):
+    """The cheap change marker over a rollback-journal SQLite database (review B1)."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.path = Path(temp.name) / 'runtime.sqlite3'
+        with closing(sqlite3.connect(self.path, isolation_level=None)) as db:
+            db.execute('PRAGMA journal_mode=delete')
+            db.execute('CREATE TABLE t(x)')
+        self.path.chmod(0o600)
+
+    def watch(self):
+        watch = state.ChangeWatch(self.path)
+        self.addCleanup(watch.close)
+        return watch
+
+    def test_a_marker_read_keeps_a_readers_lock(self):
+        reader = sqlite3.connect(self.path, isolation_level=None)
+        try:
+            reader.execute('BEGIN')
+            reader.execute('SELECT count(*) FROM t').fetchone()  # SHARED
+            self.assertEqual(other_process_write(self.path), 'blocked')
+            for _ in range(3):
+                watch = state.ChangeWatch(self.path)
+                watch.marker()
+                watch.close()
+                self.assertEqual(other_process_write(self.path), 'blocked')
+        finally:
+            reader.execute('COMMIT')
+            reader.close()
+        self.assertEqual(other_process_write(self.path), 'committed')
+
+    def test_an_in_process_writer_keeps_its_lock(self):
+        writer = sqlite3.connect(self.path, isolation_level=None)
+        try:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute('INSERT INTO t VALUES (1)')
+            watch = state.ChangeWatch(self.path)
+            watch.marker()
+            watch.close()
+            self.assertEqual(other_process_write(self.path, immediate_only=True), 'blocked')
+            writer.execute('COMMIT')
+        finally:
+            writer.close()
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM t').fetchone()[0], 1)
+
+    def test_commits_change_the_marker_and_rollbacks_do_not(self):
+        watch = self.watch()
+        first = watch.marker()
+        self.assertEqual(watch.marker(), first)
+        other_process_rollback(self.path)
+        self.assertEqual(watch.marker(), first)
+        self.assertEqual(other_process_write(self.path), 'committed')
+        second = watch.marker()
+        self.assertNotEqual(second, first)
+        self.assertEqual(watch.marker(), second)
+        replacement = self.path.with_name('new.sqlite3')
+        with closing(sqlite3.connect(replacement, isolation_level=None)) as db:
+            db.execute('PRAGMA journal_mode=delete')
+            db.execute('CREATE TABLE t(x)')
+        replacement.chmod(0o600)
+        os.replace(replacement, self.path)
+        self.assertNotEqual(watch.marker(), second)  # a replaced file is a change
+
+    def test_a_busy_database_is_reported_quickly(self):
+        holder = sqlite3.connect(self.path, isolation_level=None)
+        try:
+            holder.execute('BEGIN EXCLUSIVE')
+            watch = self.watch()
+            start = time.perf_counter()
+            self.assertIsNone(watch.marker())
+            self.assertLess(time.perf_counter() - start, 0.5)
+        finally:
+            holder.execute('ROLLBACK')
+            holder.close()
+
+
+class ReviewFollowUpTests(GateBase):
+    def test_unbound_admissions_are_visible(self):
+        bound = self.call(prepare('b1', workflow=locator()))
+        unbound = self.call(prepare('u1', observations=observations(account='other:acct')))
+        self.assertEqual((bound['workflow_bound'], unbound['workflow_bound']), (True, False))
+        ledger = self.call(dict(v=1, op='status'))['ledger']
+        self.assertEqual(ledger['unbound_open_holds'], 1)
+        self.release('u1')
+        self.assertEqual(self.call(dict(v=1, op='status'))['ledger']['unbound_open_holds'], 0)
+
+    def test_a_pinned_project_refuses_other_checkouts(self):
+        root = Path(self.temp.name) / 'project'
+        (root / 'sub').mkdir(parents=True)
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow, project=root)
+        self.assertEqual(self.call(dict(v=1, op='status'))['project_pinned'], True)
+        for cwd in ('/work/elsewhere', str(root) + '-other', str(root / '..' / 'project-other')):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(self.call(prepare('p1', workflow=locator(cwd=cwd))),
+                                 dict(v=1, state='blocked', reason='project_mismatch'))
+        self.assertEqual(self.workflow.views, 0)
+        for attempt, cwd in (('p2', str(root)), ('p3', str(root / 'sub'))):
+            with self.subTest(cwd=cwd):
+                self.assertEqual(self.call(prepare(attempt, workflow=locator(cwd=cwd),
+                                                   observations=observations(account=attempt)))['state'], 'admitted')
+        unpinned = command.Service(self.settings, self.ledger, workflow=self.workflow)
+        self.addCleanup(unpinned.close)
+        self.assertIs(unpinned.handle(json.dumps(dict(v=1, op='status')).encode())['project_pinned'], False)
+
+    def test_the_project_pin_is_a_command_line_option(self):
+        root = Path(self.temp.name) / 'project'
+        root.mkdir()
+        parsed = command._arguments(['status', '--project', str(root)])
+        self.assertEqual(parsed[3]['--project'], str(root))
+        self.assertIsNone(command._arguments(['status', '--project']))
+
+    def test_an_oversized_serialized_binding_is_refused_at_prepare(self):
+        wide = '/' + '\u00e9' * 500  # within the character bound, but escapes to six bytes per character
+        response = self.call(prepare('big', workflow=locator(cwd=wide)))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large'))
+        self.assertFalse(self.ledger.exists() and budget.Ledger.open_holds(self.snapshot()))
+        oversized = routing_gates.job_binding(locator(cwd=wide), self.workflow.view(locator()))
+        self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='implementer', complexity_band='medium',
+                                            scope=SCOPE), dict(strategy_ids=[], reason_codes=[]),
+                                       dict(routing_settings.resolve({}), revision=0), observations(),
+                                       ledger=None, workflow=oversized)['reason_code'], 'invalid_binding')
 
 
 if __name__ == '__main__':
