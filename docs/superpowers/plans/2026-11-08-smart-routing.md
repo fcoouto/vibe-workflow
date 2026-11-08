@@ -420,7 +420,7 @@ Rules the command applies:
 **Files:** create `runtime/adapters/opencode_plugin.ts`; extend `tests/test_opencode_adapter.py`.
 
 - [ ] Use the hooks recorded in the [capability matrix](../../smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08): `model.request` for every model request, `tool.execute.before` for subagent, MCP and nested tool calls, `permission.evaluate` for `webfetch`, and `shell.create.before` to strip credentials from the command environment. Each forwards to `scripts/routing.py check` and blocks unless it returns an admission. A missing, failing or slow command blocks (fail closed). The shim contains no selection or funding logic.
-- [ ] Run one persistent child over stdio per plugin instance with a timeout of about 500 ms on every check; kill and respawn on a stall, and throw if the respawn fails.
+- [x] Run one persistent child over stdio per plugin instance with a timeout of about 500 ms on every check; kill and respawn on a stall, and throw if the respawn fails.
 - [ ] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
 - [ ] Worker profiles are enforced only when policy rules deny `shell`, MCP tools, Code Mode `execute` and `webfetch` (or allow a narrow list). Profiles that keep full shell access run advisory-only, with no funding guarantee. Install the plugin globally; it enforces nothing outside the bounded canary project until C.4.
 - [ ] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.

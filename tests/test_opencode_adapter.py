@@ -237,12 +237,73 @@ class ToolAndPolicyHooks(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
         self.assertNotIn("touch", json.dumps(result))
 
+    def test_connection_string_names_are_credentials(self):
+        env = dict.fromkeys(["DATABASE_URL", "SENTRY_DSN", "PG_CONNECTION_STRING", "DATABASE_HOST", "AWS_PROFILE"], "x")
+        result = opencode.normalize_hook("shell.create.before", {"env": env})
+        self.assertEqual(result["credential_env_names"], ["DATABASE_URL", "PG_CONNECTION_STRING", "SENTRY_DSN"])
+
+    def test_password_token_and_url_names_are_credentials_and_common_names_are_not(self):
+        credentials = ["PASS", "PASSPHRASE", "SECRETS", "JWT", "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "REDIS_URL",
+                       "MONGODB_URI", "githubToken", "dbPassword", "GITHUB_OAUTH", "AWS_CREDS", "DB_PWD",
+                       "AWS_ACCESSKEY", "MY_SECRETKEY"]
+        ordinary = ["PATH", "HOME", "LANG", "EDITOR", "TERM", "PWD", "npm_config_cache", "GIT_AUTHOR_NAME",
+                    "TOKENIZERS_PARALLELISM", "AUTHOR", "OLDPWD", "HTTP_PROXY", "PIP_INDEX_URL"]
+        result = opencode.normalize_hook("shell.create.before", {"env": dict.fromkeys(credentials + ordinary, "x")})
+        self.assertEqual(result["credential_env_names"], sorted(credentials))
+
     def test_unknown_hook_is_typed(self):
         result = opencode.normalize_hook("session.prompt", {"sessionID": "ses_hook1", "prompt": SECRET})
         self.assertEqual(result, {"schema": 1, "client": "opencode", "kind": "unknown", "source": "hook",
                                   "name": "session.prompt"})
         bad_name = opencode.normalize_hook("bad name‮", {})
         self.assertEqual((bad_name["kind"], bad_name["name"]), ("unknown", None))
+
+
+class LiveShimPayloads(unittest.TestCase):
+    """Full sanitized hook payloads recorded with the S3.3 shim loaded (s3-3-shim-live.json)."""
+    LIVE = load("s3-3-shim-live.json")
+
+    def payload(self, hook, **match):
+        record = next(h for h in self.LIVE["hooks"]
+                      if h["hook"] == hook and all(h["payload"].get(k) == v for k, v in match.items()))
+        payload = copy.deepcopy(record["payload"])
+        for field in ("headers", "env"):  # only the name count was recorded
+            if field in payload:
+                payload[field] = {}
+        return payload
+
+    def test_recorded_top_level_keys_match_the_adapter_shapes(self):
+        self.assertEqual(sorted(self.payload("model.request", kind="primary")),
+                         hook_record("model.request", kind="primary")["keys"])
+        self.assertEqual(sorted(self.payload("tool.execute.before", tool="subagent")),
+                         ["agent", "id", "input", "messageID", "sessionID", "tool"])
+        self.assertEqual(sorted(self.payload("permission.evaluate")),
+                         hook_record("permission.evaluate", action="subagent")["keys"])
+        self.assertEqual(sorted(self.payload("shell.create.before")), ["command", "cwd", "env", "shell", "timeout"])
+
+    def test_live_payloads_normalize(self):
+        for kind in ("title", "primary"):
+            result = opencode.normalize_hook("model.request", self.payload("model.request", kind=kind), families=FAMILIES)
+            self.assertEqual((result["session_id"], result["request_kind"]), ("ses_hook1", kind))
+            self.assertEqual(result["route_identity"]["catalog_family"], "claude-haiku")
+        spawn = opencode.normalize_hook("tool.execute.before", self.payload("tool.execute.before", tool="subagent"))
+        self.assertEqual(spawn["spawn"]["requested_model"],
+                         {"provider_id": "claude-agent", "model_alias": "haiku", "variant": "low"})
+        self.assertEqual(spawn["tool_call_id"], "toolu_hook1")
+        fetch = opencode.normalize_hook("tool.execute.before", self.payload("tool.execute.before", tool="webfetch"))
+        self.assertEqual(fetch["tool_class"], "builtin")
+        permission = opencode.normalize_hook("permission.evaluate", self.payload("permission.evaluate"))
+        self.assertEqual((permission["action"], permission["effect"], permission["resource_count"]), ("webfetch", "allow", 1))
+        shell = opencode.normalize_hook("shell.create.before", self.payload("shell.create.before"))
+        self.assertIsNone(shell["session_id"])
+
+    def test_child_session_read_carries_parent_id(self):
+        self.assertIn("parentID", self.LIVE["session_get_child_keys"])
+
+    def test_model_call_ledger_is_bounded(self):
+        calls = self.LIVE["model_calls"]
+        self.assertLessEqual(calls["sent"], 4)
+        self.assertEqual(calls["blocked_by_shim_before_sending"], 7)
 
 
 class Events(unittest.TestCase):
