@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONSERVATIVE_SESSION = re.compile(r'ses_[0-9a-f]{32}')
 CONSERVATIVE_MESSAGE = re.compile(r'msg_[0-9a-f]{32}')
 LEDGER_A, LEDGER_B = 'a' * 32, 'b' * 32
+NONCE_A, NONCE_B = '1' * 32, '2' * 32
 
 
 def dispatch(attempt, **extra):
@@ -39,15 +40,9 @@ def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def authorize(ledger, attempt, now=1):
-    """Ledger-level dispatch with an issued authority and no gate (for conversion tests)."""
-    ids = routing.derive_ids(attempt, ledger.snapshot()['identity'])
-    return ledger.dispatch_hold(attempt, digest('token-' + attempt), ids, lambda data, moment: None, now)
-
-
 class DispatchBase(Base):
     def ids(self, attempt):
-        return routing.derive_ids(attempt, self.snapshot()['identity'])
+        return routing.admission_ids(self.snapshot(), attempt)
 
     def spawn(self, op, request):
         child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), op, '--settings', str(self.settings),
@@ -70,7 +65,7 @@ class DispatchBase(Base):
 
 class DeriveIdsTests(unittest.TestCase):
     def test_ids_are_deterministic_and_match_the_host_patterns(self):
-        first, again = routing.derive_ids('attempt-1', LEDGER_A), routing.derive_ids('attempt-1', LEDGER_A)
+        first, again = (routing.derive_ids('attempt-1', LEDGER_A, NONCE_A) for _ in range(2))
         self.assertEqual(first, again)
         self.assertEqual(set(first), {'session_id', 'message_id'})
         self.assertTrue(opencode.SESSION.fullmatch(first['session_id']))
@@ -78,32 +73,82 @@ class DeriveIdsTests(unittest.TestCase):
         self.assertTrue(CONSERVATIVE_SESSION.fullmatch(first['session_id']))
         self.assertTrue(CONSERVATIVE_MESSAGE.fullmatch(first['message_id']))
         first['session_id'] = 'mutated'
-        self.assertNotEqual(routing.derive_ids('attempt-1', LEDGER_A)['session_id'], 'mutated')
+        self.assertNotEqual(routing.derive_ids('attempt-1', LEDGER_A, NONCE_A)['session_id'], 'mutated')
 
-    def test_two_ledgers_never_share_ids_for_one_attempt_id(self):
-        a, b = routing.derive_ids('a1', LEDGER_A), routing.derive_ids('a1', LEDGER_B)
-        self.assertFalse(set(a.values()) & set(b.values()))
-        # Field boundaries are unambiguous: moving characters between the ledger and attempt parts changes the ids.
-        self.assertNotEqual(routing.derive_ids('b', 'ledgera'), routing.derive_ids('ab', 'ledger'))
+    def test_ledger_and_admission_nonce_both_change_the_ids(self):
+        base = routing.derive_ids('a1', LEDGER_A, NONCE_A)
+        for other in (routing.derive_ids('a1', LEDGER_B, NONCE_A), routing.derive_ids('a1', LEDGER_A, NONCE_B),
+                      routing.derive_ids('a1', LEDGER_A, None)):  # None: an admission recorded before nonces
+            self.assertFalse(set(base.values()) & set(other.values()))
+        # Field boundaries are unambiguous: moving characters between the parts changes the ids.
+        self.assertNotEqual(routing.derive_ids('b', 'ledgera', NONCE_A), routing.derive_ids('ab', 'ledger', NONCE_A))
 
     def test_ids_are_injective_over_a_two_hundred_thousand_sample(self):
         sessions, messages = set(), set()
         for identity in (LEDGER_A, LEDGER_B):
-            for i in range(100_000):
-                ids = routing.derive_ids('attempt-%d' % i, identity)
-                sessions.add(ids['session_id'][4:])
-                messages.add(ids['message_id'][4:])
+            for i in range(50_000):
+                for nonce in (NONCE_A, NONCE_B):  # one attempt id reused with a fresh admission nonce
+                    ids = routing.derive_ids('attempt-%d' % i, identity, nonce)
+                    sessions.add(ids['session_id'][4:])
+                    messages.add(ids['message_id'][4:])
         self.assertEqual((len(sessions), len(messages)), (200_000, 200_000))
         self.assertFalse(sessions & messages)  # the session and message spaces are domain-separated
 
     def test_near_identical_attempts_differ_and_bad_input_is_refused(self):
-        variants = ['a', 'A', 'a ', ' a', 'aé', 'a' * 256, 'b' * 256]
-        self.assertEqual(len({routing.derive_ids(v, LEDGER_A)['session_id'] for v in variants}), len(variants))
+        variants = ['a', 'A', 'a ', ' a', 'a\u00e9', 'a' * 256, 'b' * 256]
+        self.assertEqual(len({routing.derive_ids(v, LEDGER_A, NONCE_A)['session_id'] for v in variants}),
+                         len(variants))
         for bad in ('', 'x' * 257, 'tab\tid', None, 7, b'a'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                routing.derive_ids(bad, LEDGER_A)
+                routing.derive_ids(bad, LEDGER_A, NONCE_A)
             with self.subTest(identity=bad), self.assertRaises(ValueError):
-                routing.derive_ids('a1', bad)
+                routing.derive_ids('a1', bad, NONCE_A)
+        for bad in ('', 'x' * 257, 'tab\tid', 7, b'a'):
+            with self.subTest(nonce=bad), self.assertRaises(ValueError):
+                routing.derive_ids('a1', LEDGER_A, bad)
+
+
+class AdmissionNonceTests(DispatchBase):
+    """A random per-admission nonce makes a reused attempt id get new host ids; one admission keeps its ids."""
+    def test_each_admission_records_a_nonce_and_a_duplicate_prepare_keeps_it(self):
+        first = self.call(prepare('a1'))
+        nonce = budget.Ledger.admission(self.snapshot(), 'a1')['nonce']
+        self.assertRegex(nonce, r'^[0-9a-f]{32}$')
+        ids = self.ids('a1')
+        self.assertEqual(ids, routing.derive_ids('a1', self.snapshot()['identity'], nonce))
+        again = self.call(prepare('a1'))
+        self.assertIs(again['duplicate'], True)
+        self.assertEqual(again['admission'], first['admission'])
+        self.assertEqual(budget.Ledger.admission(self.snapshot(), 'a1')['nonce'], nonce)
+        self.assertEqual(self.ids('a1'), ids)
+        dispatched = self.call(dispatch('a1'))
+        self.assertEqual((dispatched['session_id'], dispatched['message_id']), (ids['session_id'], ids['message_id']))
+        self.call(prepare('a2'))
+        self.assertNotEqual(budget.Ledger.admission(self.snapshot(), 'a2')['nonce'], nonce)
+
+    def test_an_attempt_id_reused_after_pruning_gets_new_ids(self):
+        self.call(prepare('a1'))
+        old = self.ids('a1')
+        self.call(record('a1', 'not_dispatched'))
+        with self.open_ledger() as ledger, ledger.transaction() as data:  # the id ages out of every table
+            del data['holds']['a1']
+            data['admissions'] = [r for r in data['admissions'] if r['attempt_id'] != 'a1']
+            data['seen_attempts'].remove('a1')
+        self.assertEqual(self.call(prepare('a1'))['state'], 'admitted')
+        new = self.ids('a1')
+        self.assertFalse(set(old.values()) & set(new.values()))
+        self.assertEqual(self.call(dispatch('a1'))['session_id'], new['session_id'])
+        self.assertEqual(self.call(dict(v=1, op='check', session_id=old['session_id'], request=facts())),
+                         dict(v=1, state='unmanaged'))
+
+    def test_admissions_without_a_nonce_still_dispatch(self):
+        """Admissions recorded before nonces existed derive with no nonce."""
+        self.call(prepare('a1'))
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            del budget.Ledger.admission(data, 'a1')['nonce']
+        expected = routing.derive_ids('a1', self.snapshot()['identity'], None)
+        self.assertEqual(self.ids('a1'), expected)
+        self.assertEqual(self.call(dispatch('a1'))['session_id'], expected['session_id'])
 
 
 class DispatchTests(DispatchBase):
@@ -212,7 +257,7 @@ class DispatchTests(DispatchBase):
         taken = self.ids('a1')
         for clash in (taken, dict(session_id='ses_' + '0' * 32, message_id=taken['message_id'])):
             with self.subTest(clash=clash), \
-                    mock.patch.object(routing, 'derive_ids', side_effect=lambda attempt, identity: dict(clash)):
+                    mock.patch.object(routing, 'derive_ids', side_effect=lambda *args: dict(clash)):
                 self.assertEqual(self.call(dispatch('a2')), dict(v=1, state='blocked', reason='id_collision'))
             self.assertEqual(self.snapshot()['holds']['a2']['state'], 'admitted')
 
@@ -366,8 +411,9 @@ class CheckAuthorityTests(DispatchBase):
                          dict(v=1, state='blocked', reason='route_mismatch'))
 
     def test_unknown_sessions_are_unmanaged(self):
-        for session in ('ses_interactive1', self.ids('never-admitted')['session_id'],
-                        routing.derive_ids('a1', LEDGER_B)['session_id'],  # the same attempt id in another ledger
+        nonce = budget.Ledger.admission(self.snapshot(), 'a1')['nonce']
+        for session in ('ses_interactive1', routing.derive_ids('never-admitted', LEDGER_A, NONCE_A)['session_id'],
+                        routing.derive_ids('a1', LEDGER_B, nonce)['session_id'],  # the same admission, another ledger
                         self.derived['message_id']):  # a message id is never a session id
             with self.subTest(session=session):
                 self.assertEqual(self.call(dict(v=1, op='check', session_id=session, request=facts(), id='q')),
@@ -391,17 +437,20 @@ class CheckAuthorityTests(DispatchBase):
         self.assertEqual(self.call(check('a2', session_id=session)),
                          dict(v=1, state='blocked', reason='dispatch_required'))
 
-    def test_closed_uncertain_and_forgotten_sessions_stay_blocked(self):
+    def test_closed_uncertain_and_forgotten_sessions(self):
         session = self.derived['session_id']
         self.call(record('a1', 'uncertain'))
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
                          dict(v=1, state='blocked', reason='attempt_uncertain'))
-        with self.open_ledger() as ledger, ledger.transaction() as data:  # pruned hold and record, id remembered
-            del data['holds']['a1']
+        with self.open_ledger() as ledger, ledger.transaction() as data:  # the record ages out; the hold remains
             data['admissions'] = [r for r in data['admissions'] if r['attempt_id'] != 'a1']
-        self.assertIn('a1', self.snapshot()['seen_attempts'])
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
                          dict(v=1, state='blocked', reason='attempt_closed'))
+        with self.open_ledger() as ledger, ledger.transaction() as data:  # then the hold is pruned too
+            del data['holds']['a1']
+        # Without its nonce the session no longer resolves; the shim blocks `unmanaged` for an attached session.
+        self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
+                         dict(v=1, state='unmanaged'))
 
     def test_check_stays_read_only(self):
         before = self.snapshot()
@@ -723,6 +772,117 @@ class HostileInputTests(DispatchBase):
         self.assertEqual(self.call(dict(v=1, op='check', session_id='ses_any1', request=facts())),
                          dict(v=1, state='blocked', reason='ledger_absent'))
         self.assertFalse(self.ledger.exists())
+
+
+class SettingsFallbackTests(DispatchBase):
+    """A settings change lands even when the ledger is absent, busy, corrupt or unsafe: only the exact
+    invalidated list is lost, and dispatch and check still refuse the old admissions afterwards."""
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.call(prepare('a1'))['state'], 'admitted')
+        self.service.close()
+
+    def off(self, service=None, revision=0):
+        request = dict(v=1, op='set', expected_revision=revision, change=dict(smart_routing=False))
+        return (service or self.service).handle(json.dumps(request).encode())
+
+    def assertLanded(self, changed, ledger_state):
+        self.assertEqual((changed['state'], changed['revision'], changed['invalidated_attempts'],
+                          changed['ledger_state']), ('updated', 1, None, ledger_state), changed)
+        self.assertIs(changed['settings']['smart_routing'], False)
+        self.assertIs(self.call(dict(v=1, op='status'))['settings']['smart_routing'], False)
+
+    def assertRefused(self):
+        self.assertEqual(self.call(dispatch('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertEqual(self.snapshot()['holds']['a1']['state'], 'admitted')
+
+    def test_the_healthy_path_is_unchanged(self):
+        changed = self.off()
+        self.assertEqual(changed['invalidated_attempts'], ['a1'])
+        self.assertNotIn('ledger_state', changed)
+
+    def test_a_locked_ledger_does_not_stop_a_settings_change(self):
+        serving = command.Service(self.settings, self.ledger, serving=True)
+        self.addCleanup(serving.close)
+        lock = sqlite3.connect(self.ledger, isolation_level=None)
+        lock.execute('BEGIN IMMEDIATE')
+        try:
+            start = time.perf_counter()
+            changed = self.off(serving)
+            self.assertLess(time.perf_counter() - start, 2.0)
+        finally:
+            lock.execute('ROLLBACK')
+            lock.close()
+        self.assertLanded(changed, 'ledger_busy')
+        self.assertRefused()
+
+    def test_an_unsafe_ledger_path_does_not_stop_a_settings_change(self):
+        self.ledger.chmod(0o644)
+        try:
+            changed = self.off()
+        finally:
+            self.ledger.chmod(0o600)
+        self.assertLanded(changed, 'unsafe_ledger_path')
+        self.assertRefused()
+
+    def test_a_corrupt_ledger_does_not_stop_a_settings_change(self):
+        with sqlite3.connect(self.ledger) as db:
+            body = db.execute('SELECT body FROM ledger WHERE id=1').fetchone()[0]
+            db.execute('UPDATE ledger SET body=? WHERE id=1', ('{not json',))
+        changed = self.off()
+        self.assertEqual((changed['state'], changed['invalidated_attempts']), ('updated', None), changed)
+        self.assertIn(changed['ledger_state'], ('ledger_unavailable', 'invalid_ledger'))
+        self.assertEqual(self.call(dispatch('a1'))['state'], 'blocked')  # the corrupt ledger refuses everything
+        self.service.close()
+        with sqlite3.connect(self.ledger) as db:
+            db.execute('UPDATE ledger SET body=? WHERE id=1', (body,))
+        self.assertRefused()
+
+    def test_an_absent_ledger_does_not_stop_a_settings_change(self):
+        self.ledger.unlink()
+        self.assertLanded(self.off(), 'absent')
+        self.assertFalse(self.ledger.exists())
+
+    def test_the_revision_check_still_applies_without_a_ledger_lock(self):
+        self.ledger.chmod(0o644)
+        try:
+            self.assertEqual(self.off()['state'], 'updated')
+            self.assertEqual(self.off(revision=0), dict(v=1, state='blocked', reason='stale_revision'))
+        finally:
+            self.ledger.chmod(0o600)
+
+
+class UnstampedStatusTests(DispatchBase):
+    """Pre-canary check: `status` counts open holds admitted before `authority_required` (unstamped)."""
+    def count(self):
+        return self.call(dict(v=1, op='status'))['ledger']['unstamped_open_holds']
+
+    def test_open_unstamped_holds_are_counted_until_they_close(self):
+        self.call(prepare('old1'))
+        self.call(prepare('old2'))
+        self.assertEqual(self.count(), 2)
+        self.call(dict(v=1, op='set', authority_required=True))
+        self.call(prepare('new', observations=observations(account='other:acct')))
+        self.assertEqual(self.count(), 2)  # stamped admissions are not counted
+        self.call(record('old1', 'not_dispatched'))
+        self.assertEqual(self.count(), 1)
+        self.call(record('old2', 'dispatched'))  # a bare S3.1 dispatch stays open, and counted, until it completes
+        self.assertEqual(self.count(), 1)
+        self.call(record('old2', 'complete'))
+        status = self.call(dict(v=1, op='status'))['ledger']
+        self.assertEqual((status['unstamped_open_holds'], status['authority_required']), (0, True))
+
+
+class ProtocolNoteTests(DispatchBase):
+    def test_record_refuses_a_now_field(self):
+        self.call(prepare('a1'))
+        for service in (self.service, command.Service(self.settings, self.ledger, test_inputs=True)):
+            with self.subTest(test_inputs=service.test_inputs):
+                response = service.handle(json.dumps(dict(record('a1', 'uncertain'), now=now())).encode())
+                self.assertEqual(response, dict(v=1, state='blocked', reason='invalid_request'))
+                service.close()
+        self.assertEqual(self.snapshot()['holds']['a1']['state'], 'admitted')
 
 
 class DispatchCapacityTests(Base):
