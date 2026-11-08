@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
+
+Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.
+
+| Local contract | Requirements carried locally | Basis |
+| --- | --- | --- |
+| [OpenCode client](../clients/opencode.md) and `runtime/adapters/opencode.py` | Loaded only for OpenCode Smart Routing work; normalization of the four routing hooks, lineage and usage events and stored messages; prompts, text, command text and header/environment values never carried; unknown fields stay unknown; fixed-reason errors without payload content; ID patterns; route identity as alias + requested variant + catalog family with the resolved model `unknown`; `probe` classes from the capability matrix (fail-open plugin load, unenforceable shell contents, health check before managed launches, advisory-only shell-keeping profiles); the four user decisions; no observed-behavior claim beyond the committed fixtures | Spec §8; plan Task S3.2; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08) and the user's decisions of 8 November 2026; OpenCode 2.2.6 probe fixtures, including the hook and event excerpt `p0-hook-event-excerpt.json` taken from the same runs' sanitized observations |
+
 ## Review my Project (D10) — 8 November 2026
 
 The review instructions from the [D10 plan](d10-project-review-plan.md) were ported to current `main` with their instruction-delivery tests and fixtures. The report and retention runtime candidates were not merged. Validation evidence is in the [D10 validation record](d10-validation.md).
