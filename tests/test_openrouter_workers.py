@@ -252,7 +252,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
 
     def test_worker_without_role_gets_a_badge_and_can_execute(self):
         from runtime import habblaud, worker_visibility
-        from tests.test_worker_visibility import fixture_transport
+        from tests.fixture_worker_visibility import fixture_transport
         client, transport = fixture_transport()
         brief = {key: value for key, value in self.brief.items() if key not in {'role', 'specialty'}}
         run = self.api.prepare(self.runs, brief)
@@ -267,7 +267,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
 
     def test_openrouter_reuses_external_display_identity_through_verification(self):
         from runtime import habblaud, worker_visibility
-        from tests.test_worker_visibility import fixture_transport
+        from tests.fixture_worker_visibility import fixture_transport
         client, transport = fixture_transport()
         run = self.api.prepare(self.runs, dict(self.brief, custom_role_name='Evidence scout'))
         exe = self.fixture("sys.stdin.read()\n"
@@ -291,7 +291,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
 
     def test_existing_openrouter_receipt_keeps_its_original_badge(self):
         from runtime import habblaud, worker_visibility
-        from tests.test_worker_visibility import fixture_transport
+        from tests.fixture_worker_visibility import fixture_transport
         client, transport = fixture_transport()
         run = self.api.prepare(self.runs, dict(self.brief, custom_role_name='Evidence scout'))
         endpoint, account = 'http://127.0.0.1:1', 'account'
@@ -310,7 +310,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         from runtime import habblaud, worker_visibility
         from runtime.adapters import codex
         from scripts import worker_visibility as native_helper
-        from tests.test_worker_visibility import fixture_transport
+        from tests.fixture_worker_visibility import fixture_transport
 
         client, transport = fixture_transport()
         run = self.api.prepare(self.runs, dict(self.brief, custom_role_name='Evidence scout'))
