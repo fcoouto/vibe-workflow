@@ -1,6 +1,6 @@
 # D10: Review my Project
 
-Implementation candidate · 5 November 2026 · The standalone review instructions are implemented against current `main`; bounded native behavior checks and independent review are tracked below. Managed detailed-report retention and complete client qualification remain unavailable.
+Instructions on `main` · 8 November 2026 · The review skill, its instruction-delivery tests and fixtures are on `main`, ported from the 5 November candidate below. The later report and retention runtime candidates described below (R1 and the original-report locator) were not merged; they are kept on the local `archive/d10-project-review` branch. Managed detailed-report retention and complete client qualification remain unavailable.
 
 **Goal:** let the user review selected repositories or an umbrella, enrolled or not, without required or silent enrollment. The skill is **Review my Project**, ID `review-my-project`. D10 is a separate deliverable in the [canonical implementation plan](onboard-my-project-plan.md#5-small-deliverables); it does not block D6/D7 or become a mandatory onboarding step.
 
