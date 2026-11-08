@@ -595,6 +595,7 @@ def _decide(data, assignment, ranking, settings, observations):
     credential = spec.get('credential') or {}
     record = dict(attempt_id=assignment['attempt_id'], task=assignment['task'], bucket=bucket, shares=shares,
                   **{'class': item['cls']}, route=item['route'], pool=item['pool'], account=spec['account'],
+                  route_identity=route_identity(*(spec.get(field) for field in ROUTE_IDENTITY)),
                   billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
                   pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
                   settings_revision=settings.get('revision', 0), at=now, mode=mode,
@@ -779,3 +780,130 @@ def admit(assignment, ranking, settings, observations, *, ledger):
     except Exception:  # noqa: BLE001 - the transaction rolled back; nothing was reserved or recorded
         return _pending('admission_error')
     return outcome if outcome.get('status') == 'pending' else dict(outcome, status='admitted')
+
+
+# ---------------------------------------------------------------------------------------------------
+# Command support (S3.1): pre-transmission check, lifecycle intake and local summaries
+# ---------------------------------------------------------------------------------------------------
+# An admitted-but-unsent decision is usable for this long (seconds, in the observations' clock). A dispatched
+# attempt does not expire here: lease expiry never proves non-execution, and started workers finish their budget.
+ADMISSION_TTL = 900
+# Model-request kinds a host may check. Tool, MCP and webfetch calls carry no model facts; S3.3 decides them.
+REQUEST_KINDS = ('primary', 'subagent', 'title', 'compaction', 'generate')
+REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_pool')
+# Lifecycle events S3.1 accepts, each an existing ledger hold transition; S3.6 adds usage and settlement.
+RECORD_KINDS = ('dispatched', 'uncertain', 'not_dispatched', 'complete')
+# Hold states that mean a repeated event already took effect.
+_ALREADY = dict(dispatched=('dispatched', 'uncertain'), uncertain=('uncertain',), not_dispatched=(), complete=())
+
+
+def route_identity(provider, model, effort, harness):
+    """Compact digest of the admitted route identity (alias + requested variant + harness), or None if unknown."""
+    parts = [provider, model, effort, harness]
+    if not all(_text(part) for part in parts):
+        return None
+    return hashlib.sha256(json.dumps(parts, separators=(',', ':')).encode()).hexdigest()
+
+
+def _blocked(reason):
+    return dict(state='blocked', reason=reason)
+
+
+def remaining_envelope(hold):
+    """The open claims of a hold by typed key. S3.1 records no consumption, so this is the full reservation."""
+    claims = dict(hold['windows'])
+    if hold.get('amount'):
+        claims[ORG + hold['organization']] = hold['amount']
+    return claims
+
+
+def check_request(data, attempt_id, facts, settings_revision, now):
+    """Pre-transmission check over a ledger snapshot; reads only, never writes or consumes.
+
+    ``facts`` is ``{provider, model, variant, harness, kind, funding_pool, bound?}`` already shape-checked by the
+    caller; ``bound`` maps typed claim keys to the request's upper bound. Returns ``state='allow'`` or a fixed
+    blocked reason. An unsent (``admitted``) attempt must still match the current settings revision and be
+    younger than ``ADMISSION_TTL``; a dispatched attempt keeps running under the revision that admitted it.
+    S3.4 adds single-use dispatch authority to the allow result; nothing here grants it.
+    """
+    hold, record = data['holds'].get(attempt_id), Ledger.admission(data, attempt_id)
+    if hold is None or record is None:
+        return _blocked('unknown_attempt')
+    if hold['closed']:
+        return _blocked('attempt_closed')
+    if hold['state'] == 'uncertain':
+        return _blocked('attempt_uncertain')
+    if hold['state'] not in ('admitted', 'dispatched'):
+        return _blocked('hold_state_unsupported')
+    if hold['state'] == 'admitted':
+        if record.get('settings_revision') != settings_revision:
+            return _blocked('settings_revision_changed')
+        if type(record.get('at')) is not int or now - record['at'] > ADMISSION_TTL:
+            return _blocked('admission_expired')
+    identity = route_identity(facts['provider'], facts['model'], facts['variant'], facts['harness'])
+    if record.get('pool') != facts['funding_pool'] or identity is None or identity != record.get('route_identity'):
+        return _blocked('route_mismatch')
+    remaining = remaining_envelope(hold)
+    bound = facts.get('bound')
+    if bound:
+        if any(key not in remaining or amount > remaining[key] for key, amount in bound.items()):
+            return _blocked('envelope_exhausted')
+    elif not any(amount > 0 for amount in remaining.values()):
+        return _blocked('envelope_exhausted')
+    return dict(state='allow', attempt_id=attempt_id, route=record['route'], pool=record['pool'],
+                settings_revision=record['settings_revision'], remaining=remaining)
+
+
+def record_event(ledger, attempt_id, kind):
+    """Apply one lifecycle event as its ledger hold transition; a repeat that already took effect is a duplicate.
+
+    Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it.
+    A closed attempt refuses every later event (``attempt_closed``): S3.1 keeps no event store, so it cannot tell
+    a late duplicate from a conflicting report. S3.6 adds durable event-id deduplication, usage and settlement.
+    """
+    if kind not in RECORD_KINDS:
+        return _blocked('record_unsupported')
+    if attempt_id not in ledger.snapshot()['holds']:
+        return _blocked('unknown_attempt')
+    try:
+        if kind == 'dispatched':
+            ledger.mark_dispatched(attempt_id)
+        elif kind == 'uncertain':
+            ledger.mark_uncertain(attempt_id)
+        else:
+            ledger.close_attempt(attempt_id, kind)
+        return dict(state='recorded', duplicate=False)
+    except BudgetError as error:
+        hold = ledger.snapshot()['holds'].get(attempt_id)
+        if hold is None:
+            return _blocked('unknown_attempt')
+        if hold['closed']:
+            return _blocked('attempt_closed')
+        if hold['state'] in _ALREADY[kind]:
+            return dict(state='recorded', duplicate=True)
+        return _blocked('hold_state_forbidden' if str(error) == 'close_forbidden' else str(error))
+
+
+def unsent_admissions(data, settings_revision):
+    """Open, never-dispatched attempts admitted under another settings revision: `check` refuses them.
+
+    They keep their claims (counted until a `not_dispatched` record or reconciliation releases them)."""
+    stale = []
+    for record in data['admissions']:
+        hold = data['holds'].get(record['attempt_id'])
+        if hold is not None and not hold['closed'] and hold['state'] == 'admitted' \
+                and record.get('settings_revision') != settings_revision:
+            stale.append(record['attempt_id'])
+    return stale
+
+
+def ledger_summary(data):
+    """Counts and nonsecret labels only: open holds by state, caps and the user's organizations."""
+    holds = {}
+    for hold in Ledger.open_holds(data).values():
+        holds[hold['state']] = holds.get(hold['state'], 0) + 1
+    total, per_account = Ledger._caps(data)
+    organizations = [dict(id=key, enabled=not org.get('disabled', False))
+                     for key, org in sorted(data['organizations'].items())]
+    return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
+                caps=dict(total=total, per_account=per_account), organizations=organizations)
