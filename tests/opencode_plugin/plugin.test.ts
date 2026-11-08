@@ -287,7 +287,7 @@ test("other tools never call check", async () => {
 })
 
 test("webfetch and the profile's denied actions are tightened to deny for managed sessions only", async () => {
-  const t = await start()
+  const t = await start({}, { [OTHER]: {} })
   try {
     await t.attach(MANAGED, { deny_actions: ["execute"] })
     const evaluate = (sessionID: string, action: string, effect = "allow") => {
@@ -300,6 +300,7 @@ test("webfetch and the profile's denied actions are tightened to deny for manage
     assert.equal((await evaluate(MANAGED, "execute")).effect, "deny")
     assert.equal((await evaluate(MANAGED, "read")).effect, "allow")
     assert.equal((await evaluate(OTHER, "webfetch")).effect, "allow")
+    assert.equal((await evaluate("ses_unknown1", "read")).effect, "deny")  // lineage unknown while attached: fail closed
     assert.equal(t.fake.requests().length, 0)
   } finally { t.stop() }
 })

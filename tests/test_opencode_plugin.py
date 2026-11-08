@@ -74,7 +74,7 @@ class OpenCodePluginTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             parity = Path(directory) / "parity.json"
             parity.write_text(json.dumps(parity_cases()))
-            result = subprocess.run([node, "--test", "--test-timeout=60000", str(SUITE)], cwd=ROOT,
+            result = subprocess.run([node, "--test", "--test-reporter=tap", "--test-timeout=60000", str(SUITE)], cwd=ROOT,
                                     capture_output=True, text=True, timeout=170,
                                     env={**os.environ, "OPENCODE_PLUGIN_PARITY": str(parity)})
         self.assertEqual(result.returncode, 0, result.stdout[-6000:] + result.stderr[-2000:])
