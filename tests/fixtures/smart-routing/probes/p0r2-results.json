@@ -1,0 +1,158 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "round": 2,
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "results": {
+    "mcp_direct": {
+      "hook": "tool.execute.before tool=<server>_<tool> (mkd_touch_marker), input={name}",
+      "blocked_by_throw": true,
+      "marker_written": false
+    },
+    "mcp_codemode_nested": {
+      "hooks": [
+        "tool.execute.before tool=execute",
+        "tool.execute.before tool=mk_touch_marker (nested, own name)"
+      ],
+      "blocked_by_throw": true,
+      "marker_written": false
+    },
+    "codemode_fetch": {
+      "tool_execute_before": false,
+      "permission_evaluate": {
+        "action": "webfetch",
+        "resources": [
+          "<url>"
+        ]
+      },
+      "reached_listener_when_allowed": true
+    },
+    "policy_tool_use_deny": {
+      "keys": [
+        "policies[].action=tool.use",
+        "resource=<server>_<tool>:*",
+        "resource=webfetch:*"
+      ],
+      "direct_mcp": "permission.rejected 'Blocked by configuration policy'",
+      "nested_mcp": "blocked",
+      "codemode_fetch": "blocked",
+      "tool_still_listed": true,
+      "evaluate_hook_saw": "allow (policy applies after hook)"
+    },
+    "shell_create_before": {
+      "keys": [
+        "command",
+        "cwd",
+        "env",
+        "shell",
+        "timeout"
+      ],
+      "session_link": "none",
+      "throw_blocks": true,
+      "http_status_session_shell": 500,
+      "env_strip_works": true
+    },
+    "session_env": {
+      "OPENCODE_SESSION_ID_set_by_opencode": false,
+      "note": "with OPENCODE_* removed from the server env, neither session.shell, the agent shell tool, nor a subagent child shell had OPENCODE_SESSION_ID; earlier value was inherited from the launching process"
+    },
+    "rpc_health": {
+      "route": "POST /api/rpc/routing/health body {input:{}}",
+      "ok": {
+        "output": {
+          "state": "ok"
+        }
+      },
+      "plugin_setup_failed": {
+        "http": 400,
+        "type": "rpc.unavailable"
+      },
+      "location_without_plugin": {
+        "http": 400
+      },
+      "location_scoped": "x-opencode-directory /tmp/... and /private/tmp/... map to different plugin instances",
+      "curl_latency_s": 0.01,
+      "needs_input_schema": true
+    },
+    "make_load_failure_fatal": {
+      "required_plugin_key": "none found",
+      "plugin_use_policy": "deny only (disables)",
+      "model_disabled_in_config_then_enabled_by_transform": "not possible: config disabled removes model after transforms"
+    },
+    "persistent_child": {
+      "respawn_ms_n10": [
+        16.85,
+        16.69,
+        16.97,
+        17.25,
+        16.25,
+        18.16,
+        17.14,
+        17.56,
+        17.47,
+        17.66
+      ],
+      "steady_ms": "0.14-0.31",
+      "no_respawn": "throws immediately, shell not run, model request not sent (tokens 0)",
+      "stalled_child_SIGSTOP": "timeout at 501 ms -> throw, not run"
+    },
+    "resolved_model": {
+      "fields": {
+        "assistant": [
+          "id",
+          "time",
+          "type",
+          "agent",
+          "model{id,providerID,variant}",
+          "finish",
+          "rawFinish",
+          "cost",
+          "tokens",
+          "native?{rateLimit}"
+        ],
+        "content_part.native": [
+          "sessionID",
+          "messageID"
+        ],
+        "step.started": [
+          "agent",
+          "assistantMessageID",
+          "model",
+          "sessionID",
+          "snapshot",
+          "started"
+        ],
+        "step.ended": [
+          "assistantMessageID",
+          "cost",
+          "files",
+          "finish",
+          "native",
+          "rawFinish",
+          "sessionID",
+          "snapshot",
+          "tokens"
+        ],
+        "model.request": [
+          "agent",
+          "baseURL",
+          "headers",
+          "kind",
+          "model",
+          "sessionID"
+        ]
+      },
+      "resolved_model_id_anywhere": false,
+      "catalog": {
+        "id": "haiku",
+        "family": "claude-haiku",
+        "name": "Haiku 5.5"
+      },
+      "retry_hook_fired": 0,
+      "attempt_fields": "none"
+    }
+  }
+}

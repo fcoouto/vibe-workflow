@@ -1,0 +1,588 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "round": 2,
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "description": "session F: direct MCP blocked by hook; Code Mode nested MCP blocked by hook while nested fetch reached a local listener; then tool.use policy denies; then subagent env probe",
+  "messages": [
+    {
+      "id": "<msg_1>",
+      "time": {
+        "created": 1794171608421
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_2>",
+      "time": {
+        "created": 1794171607793,
+        "streamed": 1794171608411,
+        "completed": 1794171608420
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Done",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_2>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 4,
+        "reasoning": 0,
+        "cache": {
+          "read": 27786,
+          "write": 351
+        }
+      }
+    },
+    {
+      "id": "<msg_3>",
+      "time": {
+        "created": 1794171603724,
+        "streamed": 1794171605449,
+        "completed": 1794171607786
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I'm going to launch the subagent to echo the environment variables, which is harmless since it only prints session IDs. After it runs, I'll relay its output exactly as requested, then give a one-word closing reply.\n\n",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_3>"
+          },
+          "time": {
+            "created": 1794171604459,
+            "completed": 1794171605426
+          }
+        },
+        {
+          "type": "tool",
+          "id": "<toolu_1>",
+          "name": "subagent",
+          "executed": false,
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_4>"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "Echo session env vars",
+              "prompt": "Run the shell command: echo SID=$OPENCODE_SESSION_ID PARENT=$OPENCODE_PARENT_SESSION_ID ; then reply with its exact output."
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"<ses_1>\" state=\"completed\">\nSID=<ses_1> PARENT=\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "<ses_1>",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1794171605427,
+            "ran": 1794171605428,
+            "completed": 1794171607778
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 169,
+        "reasoning": 71,
+        "cache": {
+          "read": 27680,
+          "write": 106
+        }
+      }
+    },
+    {
+      "id": "<msg_4>",
+      "time": {
+        "created": 1794171603718
+      },
+      "text": "Use the subagent tool exactly once to launch the general agent with this task: Run the shell command: echo SID=$OPENCODE_SESSION_ID PARENT=$OPENCODE_PARENT_SESSION_ID ; then reply with its exact output. After it finishes, reply with one word.",
+      "type": "user"
+    },
+    {
+      "id": "<msg_5>",
+      "time": {
+        "created": 1794171554744
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_6>",
+      "time": {
+        "created": 1794171554126,
+        "streamed": 1794171554734,
+        "completed": 1794171554742
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Blocked",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_5>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 6,
+        "reasoning": 0,
+        "cache": {
+          "read": 27079,
+          "write": 601
+        }
+      }
+    },
+    {
+      "id": "<msg_7>",
+      "time": {
+        "created": 1794171551685,
+        "streamed": 1794171554111,
+        "completed": 1794171554119
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I'm going to call the marker tool first, then run the second step, and I'm weighing whether to do them one after the other or in a single batch. Since the user asked for them in order, I'll just issue both calls together in one block.\n\nNow I'm fetching the /policy endpoint on localhost, since the user asked for it and the earlier pong response from that same host was fine.\n\n",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_6>"
+          },
+          "time": {
+            "created": 1794171552309,
+            "completed": 1794171554099
+          }
+        },
+        {
+          "type": "tool",
+          "id": "<toolu_2>",
+          "name": "mkd_touch_marker",
+          "executed": false,
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_7>"
+          },
+          "state": {
+            "status": "error",
+            "input": {
+              "name": "c1"
+            },
+            "error": {
+              "type": "permission.rejected",
+              "message": "Blocked by configuration policy"
+            }
+          },
+          "time": {
+            "created": 1794171554100,
+            "ran": 1794171554101,
+            "completed": 1794171554107
+          }
+        },
+        {
+          "type": "tool",
+          "id": "<toolu_3>",
+          "name": "execute",
+          "executed": false,
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_8>"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "code": "const out = {};\ntry { out.mcp = await tools.mk.touch_marker({ name: \"c2\" }) } catch (e) { out.mcp = \"error: \" + e.message }\ntry { out.http = await (await fetch(\"http://127.0.0.1:47392/policy\")).text() } catch (e) { out.http = \"error: \" + e.message }\nreturn out"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "{\n  \"mcp\": \"error: Blocked by configuration policy\",\n  \"http\": \"error: Blocked by configuration policy\"\n}"
+              }
+            ],
+            "metadata": {
+              "toolCalls": [
+                {
+                  "tool": "mk.touch_marker",
+                  "status": "error",
+                  "input": {
+                    "name": "c2"
+                  }
+                },
+                {
+                  "tool": "fetch",
+                  "status": "error",
+                  "input": {
+                    "method": "GET",
+                    "url": "http://127.0.0.1:47392/policy"
+                  }
+                }
+              ],
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1794171554102,
+            "ran": 1794171554102,
+            "completed": 1794171554109
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 227,
+        "reasoning": 191,
+        "cache": {
+          "read": 26901,
+          "write": 178
+        }
+      }
+    },
+    {
+      "id": "<msg_8>",
+      "time": {
+        "created": 1794171551680
+      },
+      "text": "Do both steps, then reply with one word. Step 1: call the tool mkd_touch_marker with name c1 if it is available. Step 2: call the execute tool once with this code:\nconst out = {};\ntry { out.mcp = await tools.mk.touch_marker({ name: \"c2\" }) } catch (e) { out.mcp = \"error: \" + e.message }\ntry { out.http = await (await fetch(\"http://127.0.0.1:47392/policy\")).text() } catch (e) { out.http = \"error: \" + e.message }\nreturn out",
+      "type": "user"
+    },
+    {
+      "id": "<msg_9>",
+      "time": {
+        "created": 1794171495213
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_10>",
+      "time": {
+        "created": 1794171494571,
+        "streamed": 1794171495203,
+        "completed": 1794171495211
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Done",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_9>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 4,
+        "reasoning": 0,
+        "cache": {
+          "read": 26670,
+          "write": 231
+        }
+      }
+    },
+    {
+      "id": "<msg_11>",
+      "time": {
+        "created": 1794171493095,
+        "streamed": 1794171494547,
+        "completed": 1794171494564
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "<toolu_4>",
+          "name": "execute",
+          "executed": false,
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_10>"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "code": "const out = {};\ntry { out.mcp = await tools.mk.touch_marker({ name: \"b1\" }) } catch (e) { out.mcp = \"error: \" + e.message }\ntry { out.http = await (await fetch(\"http://127.0.0.1:47392/codemode\")).text() } catch (e) { out.http = \"error: \" + e.message }\nreturn out"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "{\n  \"mcp\": \"error: routing: blocked by probe\",\n  \"http\": \"pong\"\n}"
+              }
+            ],
+            "metadata": {
+              "toolCalls": [
+                {
+                  "tool": "mk.touch_marker",
+                  "status": "error",
+                  "input": {
+                    "name": "b1"
+                  }
+                },
+                {
+                  "tool": "fetch",
+                  "status": "completed",
+                  "input": {
+                    "method": "GET",
+                    "url": "http://127.0.0.1:47392/codemode"
+                  }
+                }
+              ],
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1794171494544,
+            "ran": 1794171494546,
+            "completed": 1794171494556
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 168,
+        "reasoning": 0,
+        "cache": {
+          "read": 26409,
+          "write": 261
+        }
+      }
+    },
+    {
+      "id": "<msg_12>",
+      "time": {
+        "created": 1794171493090
+      },
+      "text": "Call the execute tool exactly once with this code and nothing else:\nconst out = {};\ntry { out.mcp = await tools.mk.touch_marker({ name: \"b1\" }) } catch (e) { out.mcp = \"error: \" + e.message }\ntry { out.http = await (await fetch(\"http://127.0.0.1:47392/codemode\")).text() } catch (e) { out.http = \"error: \" + e.message }\nreturn out\nThen reply with one word.",
+      "type": "user"
+    },
+    {
+      "id": "<msg_13>",
+      "time": {
+        "created": 1794171448618
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_14>",
+      "time": {
+        "created": 1794171446652,
+        "streamed": 1794171448608,
+        "completed": 1794171448616
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The tool call failed, and I'm only supposed to call it once with no other tools and a one-word reply. I'll skip a retry and answer \"Failed,\" since that's the honest word for what happened.\n\n",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_11>"
+          },
+          "time": {
+            "created": 1794171447287,
+            "completed": 1794171448602
+          }
+        },
+        {
+          "type": "text",
+          "text": "Failed",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_12>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 5,
+        "reasoning": 109,
+        "cache": {
+          "read": 26163,
+          "write": 246
+        }
+      }
+    },
+    {
+      "id": "<msg_15>",
+      "time": {
+        "created": 1794171443930,
+        "streamed": 1794171446636,
+        "completed": 1794171446645
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I need to call the direct mkd_touch_marker tool once with name a1, rather than the Code Mode version, since the normal function tool is in the top-level list.\n\n",
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_13>"
+          },
+          "time": {
+            "created": 1794171445493,
+            "completed": 1794171446624
+          }
+        },
+        {
+          "type": "tool",
+          "id": "<toolu_5>",
+          "name": "mkd_touch_marker",
+          "executed": false,
+          "native": {
+            "sessionID": "<hash_1>",
+            "messageID": "<hash_14>"
+          },
+          "state": {
+            "status": "error",
+            "input": {
+              "name": "a1"
+            },
+            "error": {
+              "type": "unknown",
+              "message": "routing: blocked by probe"
+            }
+          },
+          "time": {
+            "created": 1794171446625,
+            "ran": 1794171446626,
+            "completed": 1794171446628
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "native": {
+        "rateLimit": {
+          "status": "allowed",
+          "resetsAt": 1794178200,
+          "rateLimitType": "five_hour",
+          "overageStatus": "rejected",
+          "overageDisabledReason": "org_level_disabled",
+          "isUsingOverage": false,
+          "unifiedWindows": {
+            "five_hour": {
+              "utilization": 0.2,
+              "resetsAt": 1794178200,
+              "status": "allowed"
+            },
+            "seven_day": {
+              "utilization": 0.05,
+              "resetsAt": 1794477600,
+              "status": "allowed"
+            }
+          }
+        }
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 63,
+        "reasoning": 115,
+        "cache": {
+          "read": 0,
+          "write": 26163
+        }
+      }
+    },
+    {
+      "id": "<msg_16>",
+      "time": {
+        "created": 1794171443924
+      },
+      "text": "Call the tool mkd_touch_marker once with name a1. Do not use any other tool. Then reply with one word.",
+      "type": "user"
+    }
+  ]
+}

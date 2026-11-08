@@ -385,15 +385,20 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 **Files:** create `runtime/adapters/opencode_plugin.ts`; extend `tests/test_opencode_adapter.py`.
 
-- [ ] The shim forwards each worker spawn, nested spawn, model switch and provider request to `scripts/routing.py check`, blocking unless it returns an admission. A missing or failing command blocks (fail closed). The shim contains no selection or funding logic.
-- [ ] Qualify P0.6 live: built-in, nested and alternate launch paths are blocked before transmission. Record any unblockable path as unsupported in the capability matrix.
+- [ ] Use the hooks recorded in the [capability matrix](../../smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08): `model.request` for every model request, `tool.execute.before` for subagent, MCP and nested tool calls, `permission.evaluate` for `webfetch`, and `shell.create.before` to strip credentials from the command environment. Each forwards to `scripts/routing.py check` and blocks unless it returns an admission. A missing, failing or slow command blocks (fail closed). The shim contains no selection or funding logic.
+- [ ] Run one persistent child over stdio per plugin instance with a timeout of about 500 ms on every check; kill and respawn on a stall, and throw if the respawn fails.
+- [ ] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
+- [ ] Worker profiles are enforced only when policy rules deny `shell`, MCP tools, Code Mode `execute` and `webfetch` (or allow a narrow list). Profiles that keep full shell access run advisory-only, with no funding guarantee. Install the plugin globally; it enforces nothing outside the bounded canary project until C.4.
+- [ ] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.
+- [ ] Re-qualify P0.6 on the finished shim: model requests, subagent and nested spawns, tool and MCP calls, and `webfetch` are blocked before transmission, and a failed plugin load makes the health check fail. Record any unblockable path as unsupported in the capability matrix.
 
 ### Task S3.4: Single-use dispatch authority
 
 **Files:** modify `runtime/usage_budget.py`, `runtime/routing.py`; create `tests/test_routing_dispatch.py`.
 
 - [ ] Write failing tests: 15 callers racing for one attempt produce at most one authority; distinct affordable attempts run concurrently; a lost acknowledgment leaves the claim `unknown` and is not retried without proven host deduplication or proof of non-launch.
-- [ ] Run, implement, re-run; expected PASS. Qualify P0.7 live.
+- [ ] Derive the session and message IDs from the attempt ID. The server deduplicates them (observed), but the `prompt` hook can run more than once for one message, so key the ledger on the message ID and recover an unknown attempt by reading the message by ID.
+- [ ] Run, implement, re-run; expected PASS. Re-qualify P0.7 on the finished path.
 
 ### Task S3.5: Fresh gates at dispatch (RF3)
 
@@ -413,7 +418,8 @@ Read the owning spec section and amendment before each task. Do not invent provi
   - Ambiguous timeouts keep their exposure.
   - Expired diagnostic evidence cannot influence a decision, while active caps, unknown claims and ownership survive retention (spec §11 defaults).
   - Observability OFF exports nothing and loses no local accounting.
-- [ ] Run, implement, re-run; expected PASS. Qualify P0.8 live.
+- [ ] Account from message and session token totals, not from usage events (not durable). Title requests create no message, so their tokens are the session total minus the sum of its messages. Detect event gaps with `durable.seq` and re-read session and message state to resync.
+- [ ] Run, implement, re-run; expected PASS. Re-qualify P0.8 on the finished path.
 
 ### Task S3.7: Canary
 

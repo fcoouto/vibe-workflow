@@ -43,13 +43,69 @@ OpenCode 2.2.6, Codex 0.167.0, Claude Code 2.1.311. `opencode auth list` shows f
 - When the grant runs out, usage continues on purchased credit or auto-reload if the organization has them, otherwise API requests stop; the router must enforce the allowance cap itself.
 - For annual Business plans the grant cycle and expiry are annual.
 
+## OpenCode enforcement (P0.1, P0.5–P0.8)
+
+Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate config, data and state directories, no credentials copied) and the `claude-agent/haiku` route only. Two rounds sent 26 tiny model requests and blocked 3 before sending. Compact fixtures are in [tests/fixtures/smart-routing/probes/](../tests/fixtures/smart-routing/probes/) (`p0-*` and `p0r2-*`); the large raw event and hook dumps were not committed.
+
+| Question | Status | Evidence |
+|---|---|---|
+| Plugin loader and runner (P0.1) | qualified | Plugins load from `.opencode/plugins/<dir>/index.{js,ts}` or `plugins` in the config and run in the Bun embedded in the `opencode` binary; no host Bun is needed. Hooks can be unit-tested with a fake context under `node --test`. |
+| Hook latency (P0.1) | qualified | Spawning a trivial `python3` takes about 15–20 ms per call (p95 about 23 ms); one persistent child answering JSON lines takes about 0.02–0.3 ms. A real routing command doing SQLite work will cost more. |
+| Requested model and variant visible (P0.5) | qualified | Hooks, assistant messages and sessions carry `model{providerID,id,variant}`. |
+| Resolved model and applied effort (P0.5) | unsupported | Only the requested alias is stored. Route identity is therefore alias + requested variant + catalog family; the resolved model is recorded as unknown. |
+| Block before a model request (P0.6) | qualified | `model.request` and `context` hooks throwing sent nothing (no tokens). A hanging hook has no host timeout, so the shim needs its own. |
+| Block a subagent spawn, including a nested one (P0.6) | qualified | `tool.execute.before` sees `tool:"subagent"` with its input before the child exists; a nested spawn was blocked. |
+| Block a built-in tool, MCP tool, or a Code Mode nested MCP call (P0.6) | qualified | Throwing in `tool.execute.before` stopped each one (no marker file); nested calls appear under their own names. |
+| Deny by policy (P0.6) | qualified | `tool.use` policy rules blocked an MCP tool and `webfetch`; a policy holds even when the plugin did not load, and a plugin cannot loosen it. |
+| Block a model or variant switch (P0.6) | partial | No hook runs before the switch; the next request passes through `model.request` carrying the new model. |
+| Block a shell command by a plugin hook (P0.6) | qualified | Throwing in `shell.create.before` stopped the command; the hook can also delete environment keys. It carries no session ID. |
+| Commands run inside the shell (`opencode run`, `claude -p`, `curl` to a provider) (P0.6) | unsupported | Can only be matched on command text, which is best-effort. |
+| Code Mode `fetch` (P0.6) | bypasses the tool hook | It reaches only `permission.evaluate` (`action:"webfetch"`), so deny `webfetch` by policy. |
+| Plugin fails to load (P0.6) | unsupported (fail-open) | The server logs the failure and continues; no setting makes a plugin required. |
+| Health check a launcher can call (P0.6) | qualified | A plugin RPC `routing.health` answered `ok` in about 10 ms and returned HTTP 400 `rpc.unavailable` when the plugin failed to load. It is tied to one directory: a symlinked path loaded a separate instance. |
+| Duplicate session or message IDs (P0.7) | qualified | The same session ID created twice or ten times at once gives one session; the same message ID sent five times at once gives one message and one model request, though the `prompt` hook ran five times. |
+| Lost acknowledgment (P0.7) | qualified | A dropped client left no message; after admission the message can be read back by ID, so retrying with the same ID is safe. |
+| Lineage (P0.8) | qualified | Child sessions carry `parentID` and `agent`. |
+| Auxiliary requests (P0.8) | partial | `model.request` reports `kind` (`primary`, `title`, `compaction`, `generate`). Title requests create no message, so their tokens appear only in the session total. |
+| Retries (P0.8) | unsupported | The `retry` hook never fired; Claude retries internally and no attempt field exists. |
+| Event stream (P0.8) | partial | Live-only, no replay or reconnection. Durable events carry `durable.seq`; a gap was seen once without a disconnect. Re-reading session and message state resyncs. |
+| Subagent environment (P0.8) | unsupported | `OPENCODE_SESSION_ID` is absent in a child's shell, and where it appeared it held the ID of the session that launched the server. Take session IDs from hook context instead. |
+| Persistent child in a plugin (P0.1/P0.6) | qualified | After a kill the next hook respawned the child in about 16–18 ms; with respawn disabled the hook threw and nothing was sent; a stalled child timed out at about 500 ms and the hook threw. |
+
+### Hooks S3 uses
+
+- `ctx.session.hook("model.request", …)` for every model request, including title, compaction and generate.
+- `ctx.tool.hook("execute.before", …)` for built-in, MCP and Code Mode nested tool calls, including subagent spawns (it can check `input.model`).
+- `ctx.permission.hook("evaluate", …)` for `webfetch` inside Code Mode.
+- `ctx.shell.hook("create.before", …)` to strip credentials from the command environment.
+- A plugin RPC `routing.health` that the launcher calls before every managed attempt.
+
+### What stays unenforceable, and the controls
+
+- Plugin load failure for sessions the launcher does not control: the user chose to protect managed launches only. A managed launch checks `routing.health` for its canonical directory and refuses to send when it fails.
+- Arbitrary commands in the shell: **worker profiles that keep full shell access are advisory-only** and get no funding guarantee. Enforced mode applies only to profiles that deny `shell`, MCP, Code Mode `execute` and `webfetch` by policy, or allow a narrow list.
+- Claude-internal retries and the resolved model: recorded as unknown.
+- Any directory the plugin did not load for (including a symlink variant of the same path).
+
+### Decisions taken (2026-11-08)
+
+1. Only managed launches are protected from plugin failure; interactive sessions stay unguarded.
+2. Workers keep full shell; those profiles are advisory-only.
+3. The plugin is installed globally from the start and does nothing outside the bounded canary project until cutover (Task C.4).
+4. Route identity is alias + requested variant + catalog family; the resolved model is unknown.
+
 ## Gate status (P0)
 
 | Gate | Status | Basis |
 |---|---|---|
-| P0.0 Billing/terms | **partly established** | Table above. The reference route stays disputed; ChatGPT-via-OpenCode and API grant debit order need live checks. |
-| P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset. Account identity between a harness and the OpenCode route is unverified, and no rate-limit data appeared in the OpenCode CLI JSON stream. |
-| P0.1, P0.3–P0.8 | unverified | Not probed in this task. |
+| P0.0 Billing/terms | **partly established** | Route table above. The reference route stays disputed; ChatGPT-via-OpenCode and API grant debit order need live checks. |
+| P0.1 Source/runtime | **qualified** for the plugin loader, test approach and latency; the workflow baseline was recorded in Task 0.1 | OpenCode enforcement section. |
+| P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
+| P0.3, P0.4 API grants and key binding | unverified | Not probed. |
+| P0.5 Model/effort | **partly established** | Requested model and variant observed; resolved model unsupported. |
+| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. |
+| P0.7 Dispatch recovery | **qualified** | Server deduplicates IDs; lost acknowledgments are recoverable by ID. |
+| P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. |
 
 ## Live checks still open
 
