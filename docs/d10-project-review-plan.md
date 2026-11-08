@@ -1,6 +1,6 @@
 # D10: Review my Project
 
-Instructions on `main` · 8 November 2026 · The review skill, its instruction-delivery tests and fixtures are on `main`, ported from the 5 November candidate below. The later report and retention runtime candidates described below (R1 and the original-report locator) were not merged; they are kept on the local `archive/d10-project-review` branch. Managed detailed-report retention and complete client qualification remain unavailable.
+Instructions on `main` · 8 November 2026 · The review skill, its instruction-delivery tests and fixtures are on `main`, ported from the 5 November candidate below. The later report and retention runtime candidates described below (R1 and the original-report locator) were not merged; they are kept on the local-only `archive/d10-project-review` branch (commit `0465c93`). Managed detailed-report retention and complete client qualification remain unavailable.
 
 **Goal:** let the user review selected repositories or an umbrella, enrolled or not, without required or silent enrollment. The skill is **Review my Project**, ID `review-my-project`. D10 is a separate deliverable in the [canonical implementation plan](onboard-my-project-plan.md#5-small-deliverables); it does not block D6/D7 or become a mandatory onboarding step.
 
@@ -91,13 +91,7 @@ Private persistence stays unavailable, rather than creating another registry,
 allowance or mandatory database. Later persistence work belongs to the existing
 evidence/state owners and requires coordinated interface ownership before edits.
 
-Coordinator-owned source-map update proposed for `docs/policy-sources.md`:
-
-| Local contract | Requirements carried locally | Basis |
-| --- | --- | --- |
-| `skills/review-my-project/SKILL.md` and `references/procedure.md` | Repositories before areas, native selection/fallback, preserved selection, unenrolled/temporary scope, bounded Full Scan, project rules, safe command inspection, canonical check reuse, complete selected security/dependency coverage, honest actionable findings, separate installation and fix authority | Approved D10 plan; Toolkit Prompt 13 and existing local policies 01/04/05/06; user-approved standalone chat-first outcome |
-| `references/source-structure.md` | Explicit analysis approval, fresh shortlist, per-repository partial coverage and sample-only priorities, supported refactoring recommendations, separate implementation approval, no measured workflow-savings claim | Approved 28 October source-structure extension preserved from the saved D10 draft |
-| `references/retention.md` | Existing canonical evidence owners; original ages/allowances, enrolled accounting, protected overlaps/unknowns, seven-day detail/four-month compact/100 MiB Project rules, no new store, chat-only detailed reporting until the complete existing retention path is available | Canonical membership/retention plan and inspected D5/private ownership interfaces; no runtime qualification claimed |
+The source-map entry for these contracts is recorded in [policy sources](policy-sources.md#review-my-project-d10--8-november-2026).
 
 The coordinator owns the final canonical source-map and onboarding-plan status
 reconciliation. This outcome does not edit those shared files, core state/evidence,
@@ -551,7 +545,7 @@ source protocol is not accepted architecture. The 8/16 MiB implementation bounds
 are not user retention policy. R1's future finite semantic acquisition is a
 separate outcome; R2 expiry and this reader do not require early cap eviction.
 
-The implementation adds `evidence.review_report()` and the existing CLI route
+The archived implementation (not on `main`) adds `evidence.review_report()` and the existing CLI route
 `python3 -B scripts/workflow.py evidence review report --cwd <enrolled-checkout>`.
 Its JSON stdin has only `client`, `session_id`, `task_id`, `scope_ref`,
 `expected_revision`, `attempt_id`, `save_decision_ref`. The last field records the

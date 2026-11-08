@@ -1,5 +1,7 @@
 # D10 review instruction validation
 
+Status on `main` (8 November 2026): only the review skill, its instruction-delivery tests and fixtures were merged. The report locator (L1), the R1/R1b retention changes and their tests described later in this record are not on `main`; they are kept on the local-only `archive/d10-project-review` branch (commit `0465c93`).
+
 5 November 2026. Candidate based on
 `be0d1cb48590a7035a033cf920964df8e3099dbf`; startup package `0.1.26`.
 The candidate adds the requested review skill and selected local procedures.
