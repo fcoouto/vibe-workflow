@@ -64,14 +64,14 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "d749f15e62fcb719d8307f4c88eb6e01bf5ce8cf6f0150a096fdc02ce73d8acd",
+      "sha256": "c2ff1e8bd2fec6798471a7fa6a97ed023d2813d2ee3eb99b6e942bd587a3b214",
       "ranges": [
         [
           1,
-          52
+          48
         ],
         [
-          53,
+          49,
           63
         ]
       ]
@@ -251,7 +251,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "0e2bc216a9343f7249638acac49641f06472d7ef5cf7933578d9565629fc8c44",
+      "sha256": "e2527fe76617e468863794f42fb00a8f85286ab534ff2a213d9cb2b2a241e828",
       "ranges": [
         [
           1,
@@ -259,7 +259,7 @@
         ],
         [
           151,
-          183
+          196
         ]
       ]
     },
@@ -295,15 +295,15 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "3e2181c162ed99f440c7cdd0e10117072169502d270938a040b98594c552cf99",
+      "sha256": "e44966d2012a6b910b2bc516a983967e6d40a70f9dc80cbb925a4fed64e195e0",
       "ranges": [
         [
           1,
-          140
+          141
         ],
         [
-          141,
-          243
+          142,
+          246
         ]
       ]
     },

@@ -135,7 +135,7 @@ Use these canonical task states in the existing task plan:
 | `WAITING` | Work awaits an expected reply, dependency or event. |
 | `BLOCKED` | Work cannot continue without intervention. |
 | `PAUSED` | Work was deliberately put aside. |
-| `DONE` | The thread's agreed scope is complete and verified. |
+| `DONE` | The thread's agreed scope is complete and verified, and the PR merge gate below holds. |
 | `CANCELLED` | Work was closed without completing its agreed scope. |
 
 Show `REVIEW` when the user is asked to review a result, `WAITING` when the
@@ -145,6 +145,19 @@ review, agent-owned next steps, background dependencies and all other states.
 Decide from the actual next action and its owner. Clear the label when the user
 has acted or the next action moves to someone else, even if the task state stays
 the same.
+
+**PR merge gate.** `DONE` also requires every PR the thread opened to be observed
+merged on the remote: provider state closed and merged, with a merge commit (for
+example `gh pr view <PR> --json state,mergedAt,mergeCommit`). A local merge, an
+approval, a `[READY]` marker, the user's statement or a title does not count. Until
+then show `WAITING` for the manual merge, or the actual `WORKING`/`REVIEW` state
+while other work remains. A PR closed unmerged keeps the thread out of `DONE` until
+the user chooses another scope or `CANCELLED`. If the remote state cannot be read,
+report it unverified and withhold `DONE`. A thread that opened no PR needs an
+explicit no-PR decision, such as local-only work, recorded in its task plan; a PR
+the plan explicitly marks optional is such a decision. Opening a PR after `DONE`
+reopens the thread. A child's PR gates that child; the parent adopts it only when
+its accepted scope includes it.
 
 Compute each thread's progress from currently accepted milestones in its existing
 task plan, with task-appropriate weights when outcomes differ substantially.
