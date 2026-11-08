@@ -107,7 +107,6 @@ class MalformedInputTests(Base):
         cases = [(b'{not json', 'invalid_json'), (b'[1, 2]', 'invalid_request'), (b'', 'invalid_json'),
                  (b'{"v": 1, "op": "status", "op": "set"}', 'invalid_json'),
                  (b'{"v": NaN, "op": "status"}', 'invalid_json'),
-                 (b'[' * 100000 + b']' * 100000, 'invalid_json'),
                  (b'\xff\xfe', 'invalid_json'),
                  (json.dumps(dict(op='status')).encode(), 'unsupported_version'),
                  (json.dumps(dict(v=2, op='status')).encode(), 'unsupported_version'),
@@ -119,6 +118,8 @@ class MalformedInputTests(Base):
         for raw, reason in cases:
             with self.subTest(reason=reason, raw=raw[:40]):
                 self.assertBlocked(self.call(raw), reason)
+        # Deep nesting either exceeds the parser's recursion limit or parses to a non-object: both fixed refusals.
+        self.assertIn(self.call(b'[' * 100000 + b']' * 100000)['reason'], ('invalid_json', 'invalid_request'))
 
     def test_cli_blocks_without_traceback_and_exits_zero(self):
         for args, raw, reason in ((['status'], b'{oops', 'invalid_json'), (['launch'], b'{"v":1}', 'unknown_op'),
@@ -215,10 +216,10 @@ class SettingsTests(Base):
     def test_organization_enablement_uses_the_ledger_paths(self):
         policy = dict(cycle='c', start=0, end=2 * 10**10, expiry=2 * 10**10, stop_at=10**10, ceiling='none',
                       amount=None, grant_amount=0, pilot_limit=None, task_limit=None)
-        blocked = self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=True, policy=policy,
-                                                                  expected_revision=0)))
-        self.assertEqual(blocked, dict(v=1, state='blocked', reason='ledger_absent'))
+        blocked = self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=False)))
+        self.assertEqual(blocked, dict(v=1, state='blocked', reason='organization_unconfigured'))
         self.call(prepare('a1'))  # creates the ledger, not an organization
+        self.assertEqual(self.snapshot()['organizations'], {})
         enabled = self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=True, policy=policy,
                                                                   expected_revision=0)))
         self.assertEqual((enabled['state'], enabled['organization']), ('updated', dict(id='personal', enabled=True,
@@ -320,8 +321,10 @@ class CheckTests(Base):
         self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='attempt_uncertain'))
 
     def test_turning_smart_routing_off_invalidates_unsent_admissions_and_keeps_running_claims(self):
-        self.call(prepare('run'))
-        self.call(prepare('lost'))
+        self.assertEqual(self.call(prepare('run'))['state'], 'admitted')
+        # The default cap is two open attempts per account, so the third uses another account.
+        self.assertEqual(self.call(prepare('lost', observations=observations(account='other:acct')))['state'],
+                         'admitted')
         self.call(dict(v=1, op='record', event=dict(event_id='e-run', attempt_id='run', kind='dispatched')))
         self.call(dict(v=1, op='record', event=dict(event_id='e-lost', attempt_id='lost', kind='uncertain')))
         held = budget.Ledger.held(self.snapshot())
