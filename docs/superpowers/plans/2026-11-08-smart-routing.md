@@ -428,7 +428,7 @@ Rules the command applies:
 - [ ] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
 - [ ] Worker profiles are enforced only when policy rules deny `shell`, MCP tools, Code Mode `execute` and `webfetch` (or allow a narrow list). Profiles that keep full shell access run advisory-only, with no funding guarantee. Install the plugin globally; it enforces nothing outside the bounded canary project until C.4.
 - [ ] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.
-- [x] S3.3b: the shim sends `attempt_id`, the hook's `session_id` and the `authority` token on every `check` for attached sessions and their children; `routing.attach` verifies the token through a strict `check` before recording anything and `routing.detach` needs the same attempt and token; derived session IDs the ledger knows are blocked until attached. The contract is in [clients/opencode.md](../../../clients/opencode.md#handshake).
+- [x] S3.3b: the shim sends `attempt_id`, the hook's `session_id` and the `authority` token on every `check` for attached sessions and their children; `routing.attach` accepts only the attempt's own derived session, verifies the token and that ownership through the child before recording anything, and answers every refusal with `attach_refused`; `routing.detach` needs the same attempt and token; derived session IDs an open attempt owns are blocked until attached (expiring after 5 minutes), a finished attempt's session blocks only itself, and only attached roots strip shells or start lookups. The contract is in [clients/opencode.md](../../../clients/opencode.md#handshake).
 - [ ] Re-qualify P0.6 on the finished shim: model requests, subagent and nested spawns, tool and MCP calls, and `webfetch` are blocked before transmission, and a failed plugin load makes the health check fail. Record any unblockable path as unsupported in the capability matrix.
 
 ### Task S3.4: Single-use dispatch authority
@@ -437,7 +437,7 @@ Rules the command applies:
 
 - [x] Write failing tests: 15 callers racing for one attempt produce at most one authority; distinct affordable attempts run concurrently; a lost acknowledgment leaves the claim `unknown` and is not retried without proven host deduplication or proof of non-launch.
 - [x] Derive the session and message IDs from the attempt ID. The server deduplicates them (observed), but the `prompt` hook can run more than once for one message, so key the ledger on the message ID and recover an unknown attempt by reading the message by ID.
-- [ ] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request.
+- [ ] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request, and that OpenCode's own session ids never have the derived shape (`ses_` + 32 lowercase hex), which the S3.3b shim assumes when it decides which sessions to ask the ledger about.
 
 The contract (dispatch, derived ids, the shim handshake, `authority_required`, `unmanaged` and lost acknowledgments) is defined once in the [S3.1 contract](#task-s31-single-routing-command).
 
