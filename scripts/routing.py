@@ -372,22 +372,38 @@ class Service:
             self._ledger(True, write=True).require_authority()
             return dict(state='updated', authority_required=True)
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
-        # Write the settings while holding the ledger's write lock, the lock `dispatch` reads settings under, so a
-        # change and a dispatch are totally ordered and `invalidated_attempts` is exact at the change.
-        ledger = self._ledger(False, write=True)
-        if ledger is None:
-            return self._update_settings(body, None)
-        with ledger.transaction() as data:
-            return self._update_settings(body, data)
+        # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
+        # so a change and a dispatch are totally ordered and `invalidated_attempts` is exact. A ledger that is absent,
+        # busy, corrupt or unsafe must not stop a change (turning API Usage or Smart Routing off is a money stop):
+        # the settings are still written (the revision check applies) and the list is null with `ledger_state`.
+        # That stays safe because `dispatch` re-reads the settings inside its transaction and `check` compares revisions.
+        stage = {}
+        try:
+            ledger = self._ledger(False, write=True)
+            if ledger is not None:
+                with ledger.transaction() as data:
+                    stage['entered'] = True
+                    return self._update_settings(body, data, stage)
+            problem = 'absent'
+        except Exception as error:  # noqa: BLE001 - every ledger failure falls back; settings refusals re-raise
+            if stage.get('entered') and 'updated' not in stage:
+                raise  # the settings change itself was refused or failed: nothing was written
+            self.close()
+            problem = (error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError)
+                       else 'ledger_busy' if _busy(error) else 'ledger_unavailable')
+            if 'updated' in stage:  # written under the lock, then the ledger failed: report it as unordered
+                return dict(stage['updated'], invalidated_attempts=None, ledger_state=problem)
+        return dict(self._update_settings(body, None, stage), invalidated_attempts=None, ledger_state=problem)
 
-    def _update_settings(self, body, data):
+    def _update_settings(self, body, data, stage):
         try:
             updated = routing_settings.update(self.settings_path, body['change'], body['expected_revision'])
         except SettingsError as error:
             raise Blocked(str(error)) from None
         revision = updated.pop('revision')
-        stale = routing.unsent_admissions(data, revision) if data is not None else []
-        return dict(state='updated', revision=revision, settings=updated, invalidated_attempts=stale)
+        stage['updated'] = dict(state='updated', revision=revision, settings=updated)
+        stale = routing.unsent_admissions(data, revision) if data is not None else None
+        return dict(stage['updated'], invalidated_attempts=stale)
 
     def _organization(self, value):
         """Explicit user action through the ledger's own enable/disable paths; routing never calls this itself."""

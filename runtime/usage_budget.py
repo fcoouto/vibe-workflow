@@ -3,6 +3,7 @@ from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
+import secrets
 import sqlite3
 import stat
 import uuid
@@ -730,8 +731,10 @@ class Ledger:
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
             self._check_caps(data, account)
+            # A random nonce per admission keeps a reused attempt id from deriving the same host ids (S3.4).
+            record = dict(record, nonce=secrets.token_hex(16))
             if data.get('authority_required'):
-                record = dict(record, authority_required=True)  # one-way rule this admission keeps for its life
+                record['authority_required'] = True  # one-way rule this admission keeps for its life
             hold = dict(account=account, task=task, organization=organization, amount=amount, cycle=cycle,
                         windows={k: v for k, v in vector.items() if k.startswith(WIN)}, closed=False, state='admitted')
             for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
@@ -790,20 +793,26 @@ class Ledger:
         """Move an admitted hold to `dispatched` with a single-use authority in ONE write transaction (spec 8).
 
         `authority` is the SHA-256 hex of the caller's token; the token itself is never stored. `ids` are the
-        attempt's derived host ids, refused with `id_collision` when another hold already owns either of them.
+        attempt's derived host ids, or a callable `ids(data)` read inside the transaction; they are refused with
+        `id_collision` when another hold already owns either of them. The outcome carries the ids.
         `now` is an integer or a clock callable read inside the transaction. `gate(data, now)` runs on the locked
         state and returns None or a fixed refusal, which writes nothing. A hold already `dispatched` or
         `uncertain` returns `issued=False` and never gains another authority."""
         name(attempt_id)
         require(type(authority) is str and len(authority) == 64, 'invalid_authority')
-        fields(ids, 'session_id message_id')
-        name(ids['session_id']); name(ids['message_id'])
         with self.transaction() as data:
             hold = data['holds'].get(attempt_id)
             require(hold is not None, 'unknown_attempt')
             require(not hold['closed'], 'attempt_closed')
+            stored = hold.get('dispatch')
+            if stored is not None:
+                ids = dict(session_id=stored['session_id'], message_id=stored['message_id'])
+            elif callable(ids):
+                ids = ids(data)
+            fields(ids, 'session_id message_id')
+            name(ids['session_id']); name(ids['message_id'])
             if hold['state'] in ('dispatched', 'uncertain'):
-                return dict(issued=False, state=hold['state'])
+                return dict(issued=False, state=hold['state'], ids=dict(ids))
             require(hold['state'] == 'admitted', 'hold_state_unsupported')
             moment = integer(now() if callable(now) else now)
             taken = [(entry['dispatch']['session_id'], entry['dispatch']['message_id'])
@@ -815,7 +824,7 @@ class Ledger:
             hold['state'] = 'dispatched'
             hold['dispatch'] = dict(session_id=ids['session_id'], message_id=ids['message_id'], authority=authority,
                                     at=moment)
-            return dict(issued=True, state='dispatched')
+            return dict(issued=True, state='dispatched', ids=dict(ids))
 
     def mark_uncertain(self, attempt_id):
         """Delivery cannot be established; the hold keeps its exposure and its concurrency place.

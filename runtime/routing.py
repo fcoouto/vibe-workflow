@@ -918,7 +918,7 @@ def check_request(data, attempt_id, facts, settings, now, *, authority=None, str
 # ---------------------------------------------------------------------------------------------------
 AUTHORITY_BYTES = 32  # secrets.token_urlsafe(32): 43 URL-safe characters, 256 random bits
 MAX_AUTHORITY = 128
-_ID_DOMAIN = 'vibe-routing/%s/v2\0'
+_ID_DOMAIN = 'vibe-routing/%s/v3\0'
 
 
 def authority_hash(token):
@@ -927,26 +927,34 @@ def authority_hash(token):
 
 
 @functools.lru_cache(maxsize=4096)
-def _derived(ledger_identity, attempt_id):
-    key = json.dumps([ledger_identity, attempt_id], ensure_ascii=True, separators=(',', ':'))
+def _derived(ledger_identity, attempt_id, nonce):
+    key = json.dumps([ledger_identity, attempt_id, nonce], ensure_ascii=True, separators=(',', ':'))
     session, message = (hashlib.sha256((_ID_DOMAIN % kind + key).encode()).hexdigest()[:32]
                         for kind in ('session', 'message'))
     return 'ses_' + session, 'msg_' + message
 
 
-def derive_ids(attempt_id, ledger_identity):
-    """The OpenCode session and message ids a managed launch of ``attempt_id`` from this ledger must use.
+def derive_ids(attempt_id, ledger_identity, nonce):
+    """The OpenCode session and message ids a managed launch of one admission must use.
 
-    Pure and deterministic: domain-separated SHA-256 over the ledger identity and the attempt id (JSON-encoded,
-    so the two parts cannot run into each other), 128 bits each, written as ``ses_<32 lowercase hex>`` and
-    ``msg_<32 lowercase hex>``. Two ledgers (a test and the real one) never share ids for one attempt id. That is
-    a conservative subset of the adapter's ``SESSION`` and ``MESSAGE`` patterns; the probe fixtures are
-    sanitized, so the server's own id body format is not on record. Hashing is not injective in principle, so
-    ``dispatch`` refuses an id another remembered attempt already owns (``id_collision``)."""
-    if not _text(attempt_id) or not _text(ledger_identity):
-        raise ValueError('invalid attempt id or ledger identity')
-    session, message = _derived(ledger_identity, attempt_id)
+    Pure and deterministic: domain-separated SHA-256 over the ledger identity, the attempt id and the
+    admission's random ``nonce`` (JSON-encoded, so the parts cannot run into each other; ``None`` for an
+    admission recorded before nonces), 128 bits each, written as ``ses_<32 lowercase hex>`` and
+    ``msg_<32 lowercase hex>``. Two ledgers never share ids, and an attempt id reused in one ledger gets a new
+    nonce and new ids; a duplicate ``prepare`` returns the same admission, so the same ids. That is a
+    conservative subset of the adapter's ``SESSION`` and ``MESSAGE`` patterns; the probe fixtures are sanitized,
+    so the server's own id body format is not on record. Hashing is not injective in principle, so ``dispatch``
+    refuses an id another remembered attempt already owns (``id_collision``)."""
+    if not _text(attempt_id) or not _text(ledger_identity) or not (nonce is None or _text(nonce)):
+        raise ValueError('invalid attempt id, ledger identity or nonce')
+    session, message = _derived(ledger_identity, attempt_id, nonce)
     return dict(session_id=session, message_id=message)
+
+
+def admission_ids(data, attempt_id):
+    """The derived ids of the attempt's recorded admission, or None when the ledger has no record of it."""
+    record = Ledger.admission(data, attempt_id)
+    return None if record is None else derive_ids(attempt_id, data['identity'], record.get('nonce'))
 
 
 def reconcile_hint(ids):
@@ -958,34 +966,29 @@ def reconcile_hint(ids):
                 path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id']))
 
 
-def _known_attempts(data):
-    """Every attempt id the ledger still remembers: holds, admission records and the recent-id list."""
-    known = dict.fromkeys(data['holds'])
-    known.update(dict.fromkeys(record['attempt_id'] for record in data['admissions']))
-    known.update(dict.fromkeys(data.get('seen_attempts', [])))
-    return [attempt for attempt in known if _text(attempt)]
-
-
 def _owner(data, kind, value):
-    """The remembered attempt whose ``kind`` id (``session_id`` or ``message_id``) is ``value``, or None.
+    """The attempt whose ``kind`` id (``session_id`` or ``message_id``) is ``value``, or None.
 
-    Each kind matches only its own kind, so a message id sent as a session id resolves to nothing."""
+    Looks at ids stored on dispatched holds and ids derived from admission records (they need the record's
+    nonce). Each kind matches only its own kind, so a message id sent as a session id resolves to nothing."""
     for attempt, hold in data['holds'].items():
         issued = hold.get('dispatch')
         if issued and issued[kind] == value:
             return attempt
-    for attempt in _known_attempts(data):
-        if derive_ids(attempt, data['identity'])[kind] == value:
-            return attempt
+    for record in data['admissions']:
+        ids = admission_ids(data, record['attempt_id']) if _text(record.get('attempt_id')) else None
+        if ids and ids[kind] == value:
+            return record['attempt_id']
     return None
 
 
 def check(data, facts, settings, now, *, attempt_id=None, session_id=None, authority=None):
     """``check`` with S3.4 session resolution; reads only.
 
-    With only ``session_id``: a session that no attempt the ledger remembers derives (it was never admitted
-    here) is ``{'state': 'unmanaged'}``: interactive sessions stay unguarded, and the shim blocks this answer for
-    a session it attached. A remembered attempt whose hold is gone is ``attempt_closed``. With both ids, a session
+    With only ``session_id``: a session that no hold or admission record of this ledger derives (never admitted
+    here, or aged out of both tables) is ``{'state': 'unmanaged'}``: interactive sessions stay unguarded, and the
+    shim blocks this answer for a session it attached. A known attempt whose hold or record is gone is
+    ``attempt_closed``. With both ids, a session
     that belongs to another attempt is ``session_mismatch``; an unknown one (a child session) is checked under
     ``attempt_id``. A session id or token makes the check strict (see ``check_request``)."""
     if session_id is not None:
@@ -1016,15 +1019,21 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
     ``already_dispatched`` without one. No host or network call happens here or inside the transaction."""
     if not _text(attempt_id):
         return _blocked('invalid_request')
-    ids = derive_ids(attempt_id, ledger.identity)
     token = secrets.token_urlsafe(AUTHORITY_BYTES)
     admitted = {}
+
+    def derived(data):
+        found = admission_ids(data, attempt_id)
+        if found is None:
+            raise BudgetError('unknown_attempt')
+        return found
 
     def gate(data, moment):
         current = settings() if callable(settings) else settings
         found = check_request(data, attempt_id, facts, current, moment, dispatching=True)
         if found['state'] != 'allow':
             return found['reason']
+        ids = derived(data)
         if any(_owner(data, kind, ids[kind]) not in (None, attempt_id) for kind in ('session_id', 'message_id')):
             return 'id_collision'
         record = Ledger.admission(data, attempt_id)
@@ -1037,9 +1046,10 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
                     return reason if _text(reason) else 'gate_invalid'
         return None
     try:
-        outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), ids, gate, now)
+        outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), derived, gate, now)
     except BudgetError as error:
         return _blocked(str(error))
+    ids = outcome['ids']
     if not outcome['issued']:
         return dict(state='already_dispatched', attempt_id=attempt_id, hold_state=outcome['state'], **ids,
                     reconcile_hint=reconcile_hint(ids))
@@ -1094,13 +1104,16 @@ def unsent_admissions(data, settings_revision):
 
 
 def ledger_summary(data):
-    """Counts and nonsecret labels only: open holds by state, caps and the user's organizations."""
+    """Counts and nonsecret labels only: open holds by state and unstamped, caps and the user's organizations."""
     holds = {}
     for hold in Ledger.open_holds(data).values():
         holds[hold['state']] = holds.get(hold['state'], 0) + 1
     total, per_account = Ledger._caps(data)
     organizations = [dict(id=key, enabled=not org.get('disabled', False))
                      for key, org in sorted(data['organizations'].items())]
+    # Holds admitted before `authority_required` keep the old rules; the canary needs this count at zero.
+    unstamped = sum(1 for attempt in Ledger.open_holds(data)
+                    if not (Ledger.admission(data, attempt) or {}).get('authority_required'))
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
-                authority_required=bool(data.get('authority_required')),
+                authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
                 caps=dict(total=total, per_account=per_account), organizations=organizations)
