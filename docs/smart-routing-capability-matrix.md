@@ -20,7 +20,7 @@ OpenCode 2.2.6, Codex 0.167.0, Claude Code 2.1.311. `opencode auth list` shows f
 | Interactive Claude Code with an API key; Bedrock, Vertex, Foundry | not covered by the grant | D | Paid API usage. |
 | Codex signed in with ChatGPT | `included_subscription` | D and observed | Weekly window observed ([probe](../tests/fixtures/smart-routing/probes/codex_rate_limits_exhausted.json)). |
 | Codex after buying ChatGPT credits | `purchased_usage` | D | Excluded from automatic routing. |
-| OpenCode "Sign in with ChatGPT" | `included_subscription` for Plus and Pro; Business undocumented | D | OpenAI documents plan use for Plus and Pro; OpenCode says usage counts against the plan. Whether it shares Codex's pool is unverified. |
+| OpenCode "Sign in with ChatGPT" | `included_subscription` for Plus and Pro; Business undocumented | D | OpenCode's provider page names Plus and Pro and says usage counts against the plan; OpenAI's own page for this path was not confirmed. Whether it shares Codex's pool is unverified. |
 | OpenAI API key from the linked organization (Pro, Business) | `api_grant`, then `api_prepaid` | D | Business annual plans get the year's grant in one issuance expiring at the annual cycle end. Free credits are used before purchased; with none left, HTTP 429 `credit_balance_exhausted`. Plus and Enterprise are not eligible. |
 | Codex with an OpenAI API key | not covered by the grant (`api_prepaid`) | D | "Codex usage through API keys is not supported by this benefit." |
 | OpenCode Console pay-as-you-go ("Personal") | `gateway` (prepaid) | D | Paid requests fail with HTTP 402 at zero balance. |
@@ -29,8 +29,8 @@ OpenCode 2.2.6, Codex 0.167.0, Claude Code 2.1.311. `opencode auth list` shows f
 ## Contradictions and risks
 
 1. **Anthropic's documents disagree.** Support pages say plan-signed Agent SDK usage draws from subscription limits. The Agent SDK overview says third-party products may not offer claude.ai login or rate limits unless previously approved. The OpenCode provider specification itself asks whether Anthropic approval is needed. Treat the reference route as **tolerated, not guaranteed**.
-2. **Policy has moved since April.** The April announcement covered all third-party tools. Later help text says third-party app usage still draws from subscription limits. A later user report shows a direct-login tool pushed to extra usage. The working reading, not a documented rule, is that launching the real Claude binary is tolerated and calling the API directly with a plan login is not.
-3. **Fair-use fine print.** Limits "assume ordinary, individual usage" and may be enforced without notice. Heavy automated parallel routing on a subscription is a risk the router should respect with its concurrency caps.
+2. **Policy has moved since April.** The April announcement covered all third-party tools. Anthropic's help text (15 June 2026 update) says the announced changes were paused and third-party app usage still draws from subscription limits. A later user report shows a direct-login tool pushed to extra usage. The working reading, not a documented rule, is that launching the real Claude binary is tolerated and calling the API directly with a plan login is not.
+3. **Fair-use fine print** (from Anthropic's legal and compliance page; the quoted wording was not independently re-checked). Limits "assume ordinary, individual usage" and may be enforced without notice. Heavy automated parallel routing on a subscription is a risk the router should respect with its concurrency caps.
 4. **OpenCode's cost of 0 is not billing evidence.** It is derived from the login type.
 5. **Units differ.** Claude reports a 0–1 utilization fraction in `unifiedWindows`; Codex reports `usedPercent` 0–100. The router must normalize and never compare raw numbers across providers.
 
@@ -40,7 +40,7 @@ OpenCode 2.2.6, Codex 0.167.0, Claude Code 2.1.311. `opencode auth list` shows f
 - No OpenCode document describes launching the Codex binary. OpenCode reaches OpenAI through Sign in with ChatGPT or an API key.
 - API grants apply only to Claude Max, Ultra and Team and to ChatGPT Pro and Business.
 - Every key in the linked organization shares the grant, including a key stored in OpenCode Console or OpenRouter. The router cannot rely on key separation.
-- Both vendors spill silently into purchased credit when the grant runs out; the router must enforce the allowance cap itself.
+- When the grant runs out, usage continues on purchased credit or auto-reload if the organization has them, otherwise API requests stop; the router must enforce the allowance cap itself.
 - For annual Business plans the grant cycle and expiry are annual.
 
 ## Gate status (P0)

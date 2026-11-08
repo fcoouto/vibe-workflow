@@ -80,7 +80,7 @@ Amendments A1–A14 are defined in the spec; the IDs below are used throughout t
 | A9 | Within class, admit the highest-pressure feasible strategy; no deficit state. Changes case 7. | §7.3, §13 cases 7–8 |
 | A10 | Concurrency caps: onboarding limit, else 4 total and 2 per provider account. | §7.4 |
 | A11 | Allocator replay and a bounded enforced canary before cutover; budgeted quality re-execution. | §10.4, §13 |
-| A12 | Billing class per route. **Claude and OpenAI use the same model:** each offers subscription routes (subscription login through a harness the vendor bills as included usage, such as Codex or Claude Code, directly or via OpenCode) and API Usage routes (secure key, `api_grant`, plus `api_prepaid` only under `no-limit`). Extra or purchased usage is excluded for both. | §1, §6.1, §12 |
+| A12 | Billing class per route. **Claude and OpenAI use the same model:** each offers subscription routes (subscription login through a harness the vendor bills as included usage, such as Codex or Sign in with ChatGPT for OpenAI, and Claude Code or OpenCode's Claude Agent provider for Anthropic) and API Usage routes (secure key, `api_grant`, plus `api_prepaid` only under `no-limit`). Extra or purchased usage is excluded for both. | §1, §6.1, §12 |
 | A13 | OFF-mode `worker_choices`: ordered per-role list; first feasible entry admitted. | §3 |
 | A14 | No shadow or simulation mode: a route is active or it is not. API Usage and live funding are explicit enabled/disabled states with their P0 gates, not a third mode. | §3, §10.4, §12, §13 |
 
@@ -201,8 +201,8 @@ Read the owning spec section and amendment before each task. Do not invent provi
 **Interface:** one manifest record per route: `{route_id, provider, account_ref, harness, billing_class, terms_source, terms_checked_at, evidence_refs, status: qualified | unsupported | unverified}`. No secrets, prompts or account identifiers.
 
 - [ ] Classify every route currently reachable from the user's configured clients under A12, citing current vendor terms and observed billing.
-- [ ] Record the reference Claude subscription route first: OpenCode running Claude through the Claude Code harness on the Claude subscription, the user's working setup (spec §6.1). Capture its harness identity and rate-limit telemetry as the first `included_subscription` fixture.
-- [ ] For Claude and OpenAI alike, find the remaining subscription routes the vendor bills as included usage: the provider's harness (Claude Code, Codex) launched directly and as a harness managed by OpenCode. Record each as `included_subscription`, or as `purchased_usage` if it bills extra usage.
+- [ ] Record the reference Claude subscription route first: OpenCode running Claude through its Claude Agent provider (the Claude Agent SDK) on the Claude subscription, the user's working setup (spec §6.1; standing disputed, see the capability matrix). Capture its harness identity and rate-limit telemetry as an `included_subscription` fixture.
+- [ ] For Claude and OpenAI alike, find the remaining subscription routes the vendor bills as included usage: the provider's own harness (Claude Code, Codex) launched directly, OpenCode's Claude Agent provider, and OpenCode's Sign in with ChatGPT. Record each as `included_subscription`, or as `purchased_usage` if it bills extra usage.
 - [ ] For both providers, confirm that API Usage key routes draw on the subscription-linked API allowance (`api_grant`) before any other credit.
 - [ ] Stop work on any slice whose required routes are all `unsupported` or `unverified`, and report it.
 
