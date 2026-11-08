@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing accounting core (S3.6a) — 9 November 2026
+
+Task S3.6a of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds lifecycle event deduplication, completion settlement, root-task settlement and retention to the routing ledger and command. It makes no model or OpenCode call and changes no client file; S3.6b owns host token accounting, event-gap resync and evidence-based reconciliation.
+
+| Contract | Source |
+| --- | --- |
+| [S3.6a contract](superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention), `runtime/usage_budget.py`, `runtime/routing.py`, `scripts/routing.py` (`record`, `settle`), `routing_gates.valid_root_locator`/`D6Workflow.acceptances` and read-only `delegation.routing_acceptances` | Remembered event ids in a bounded table written in the ledger transaction (duplicate returns the original outcome, `event_conflict` on a different payload, refusals not remembered, needed transitions of open holds kept); bounded usage with no content; dollar settlement in integer micro-units that charges and reduces the reservation together and releases padding once; labelled estimates never below the admitted estimate; `overrun` counted, never dropped or topped up; `cost_unknown` keeps exposure; subscription holds release with units observed, never charged; units never mixed; settled charges stay in R by total, cycle and task; root settlement per unit with rescue as rework, unresolved exposure separate, receipts counted once, and a ratio only over canonical acceptances; spec §11 retention with filtered reads and cleanup at command start | Spec §7.4 (charge and reduce holds together, release confirmed padding, retain uncertain exposure; the $30 example), §8 (reconciliation, bounded uncertainty), §11 (accounting units, rescue versus review, 190 per accepted delivery, retention defaults, filtered reads, cleanup never resets an active cap, no prompts or credentials) and §13 cases 11–14; plan Task S3.6 and the coordinator's 9 November 2026 brief; delegation's `validate_dependencies` reused as the acceptance rule; `tests/test_routing_accounting.py` and the extended capacity test in `tests/test_routing_funding.py` |
+
 ## Smart Routing fresh gates at dispatch (S3.5) — 8 November 2026
 
 Task S3.5 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) binds each admission to its canonical workflow job and re-validates that binding inside `dispatch`. It adds read-only accessors to the workflow modules, makes no OpenCode or model call and changes no client file.
