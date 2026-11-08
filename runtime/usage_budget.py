@@ -11,8 +11,8 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
 # begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
 # within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
-# complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, convert_hold, observe,
-# disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
+# dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, release_unlaunched,
+# convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
 # identifiers, every native task finished, every call with a maximal `incomplete` record): 9.83M, 82%.
@@ -28,6 +28,9 @@ MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are th
 # A larger admission is refused with `record_too_large` and writes nothing.
 MAX_ADMISSION_BYTES = 4096
 MAX_HOLD_BYTES = 2048
+# Fixed-size fields `dispatch_hold`, `mark_uncertain` and `release_unlaunched` add to an admitted hold (two derived
+# ids, an authority hash and three times); the worst-case capacity test counts every hold at both bounds.
+DISPATCH_HOLD_BYTES = 384
 MAX_CLAIMS = 9  # one `org:` claim plus at most eight window claims per hold
 # Uncertainty evidence kept on a call; a larger record is replaced by {'omitted': 'too_large'} so recording
 # uncertainty never fails. `finished_native` needs no own bound: it holds only keys of `native`, which has at
@@ -774,10 +777,69 @@ class Ledger:
         with self.transaction() as data:
             self._hold(data, attempt_id, ('admitted',))['state'] = 'dispatched'
 
-    def mark_uncertain(self, attempt_id):
-        """Delivery cannot be established; the hold keeps its exposure and its concurrency place."""
+    def dispatch_hold(self, attempt_id, authority, ids, gate, now):
+        """Move an admitted hold to `dispatched` with a single-use authority in ONE write transaction (spec 8).
+
+        `authority` is the SHA-256 hex of the caller's token; the token itself is never stored. `ids` are the
+        attempt's derived host ids, refused with `id_collision` when another hold already owns either of them.
+        `gate(data)` is pure, runs on the locked state and returns None or a fixed refusal, which writes nothing.
+        A hold already `dispatched` or `uncertain` returns `issued=False` and never gains another authority."""
+        name(attempt_id); integer(now)
+        require(type(authority) is str and len(authority) == 64, 'invalid_authority')
+        fields(ids, 'session_id message_id')
+        name(ids['session_id']); name(ids['message_id'])
         with self.transaction() as data:
-            self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
+            hold = data['holds'].get(attempt_id)
+            require(hold is not None, 'unknown_attempt')
+            require(not hold['closed'], 'attempt_closed')
+            if hold['state'] in ('dispatched', 'uncertain'):
+                return dict(issued=False, state=hold['state'])
+            require(hold['state'] == 'admitted', 'hold_state_unsupported')
+            owned = {value for other, entry in data['holds'].items() if other != attempt_id and 'dispatch' in entry
+                     for value in (entry['dispatch']['session_id'], entry['dispatch']['message_id'])}
+            require(not owned & set(ids.values()), 'id_collision')
+            reason = gate(data)
+            require(reason is None, reason)
+            hold['state'] = 'dispatched'
+            hold['dispatch'] = dict(session_id=ids['session_id'], message_id=ids['message_id'], authority=authority,
+                                    at=now)
+            return dict(issued=True, state='dispatched')
+
+    def mark_uncertain(self, attempt_id, now=None):
+        """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
+
+        A hold dispatched with an authority records the first uncertain time (`now`); `release_unlaunched` needs it."""
+        if now is not None:
+            integer(now)
+        with self.transaction() as data:
+            hold = self._hold(data, attempt_id, ('admitted', 'dispatched'))
+            hold['state'] = 'uncertain'
+            if now is not None and 'dispatch' in hold:
+                hold['dispatch'].setdefault('uncertain_at', now)
+
+    def release_unlaunched(self, attempt_id, proof, now):
+        """Release an uncertain dispatched hold on proof that the host never admitted its message.
+
+        Applies only to a hold dispatched with an authority (`dispatch_hold`) and marked uncertain with a time.
+        From that mark every check of the attempt is blocked, so the derived message being absent at a host read
+        made strictly after it (`uncertain_at < observed_at <= now`) proves no request of the attempt was sent.
+        `proof` is exactly `{kind: 'message_absent', session_id, message_id, observed_at}` naming the hold's
+        derived ids; anything else is `proof_invalid` and changes nothing."""
+        integer(now)
+        with self.transaction() as data:
+            hold = data['holds'].get(attempt_id)
+            require(hold is not None, 'attempt_missing')
+            require(not hold['closed'] and hold['state'] in ('dispatched', 'uncertain'), 'close_forbidden')
+            issued = hold.get('dispatch')
+            require(issued is not None, 'proof_not_applicable')
+            require(hold['state'] == 'uncertain', 'uncertain_required')
+            require('uncertain_at' in issued, 'proof_not_applicable')
+            require(type(proof) is dict and set(proof) == {'kind', 'session_id', 'message_id', 'observed_at'}
+                    and proof['kind'] == 'message_absent' and proof['session_id'] == issued['session_id']
+                    and proof['message_id'] == issued['message_id'] and type(proof['observed_at']) is int
+                    and issued['uncertain_at'] < proof['observed_at'] <= now, 'proof_invalid')
+            hold.update(closed=True, state='released')
+            issued['released'] = dict(proof='message_absent', observed_at=proof['observed_at'])
 
     def close_attempt(self, attempt_id, outcome, *, reconciled=True):
         """Release a hold only on an established outcome: `not_dispatched` or `complete`.

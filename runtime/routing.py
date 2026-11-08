@@ -4,14 +4,17 @@ An empty ranking (``no_recommendation``) is never a refusal: callers fall throug
 deterministic admission path or the user's explicit worker choices. Only admission can block.
 
 Profiling and ranking are pure: no network, subprocess or model call happens here except through
-the caller-supplied, optional ``jev`` enrichment callable. ``admit`` is the one exception: it
-reserves and records through the local ledger in one short transaction of pure arithmetic. Nothing
-here grants single-use dispatch authority; that is a later layer.
+the caller-supplied, optional ``jev`` enrichment callable. ``admit`` and ``dispatch`` are the
+exceptions: each writes the local ledger in one short transaction of pure arithmetic. ``dispatch``
+issues the single-use dispatch authority (S3.4).
 """
+import functools
 import hashlib
+import hmac
 import json
-
 import math
+import secrets
+
 
 from runtime import routing_allocator as allocator, routing_settings
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
@@ -757,9 +760,9 @@ def admit(assignment, ranking, settings, observations, *, ledger):
     and funding. Returns the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt)
     or ``status='pending'`` with a ``reason_code``. Pending and duplicate decisions consume nothing, create
     no record and leave the ledger unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while
-    it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority; S3 issues phase
-    authority inside the hold, calls ``mark_dispatched``/``mark_uncertain``/``close_attempt``, and uses
-    ``Ledger.convert_hold`` to turn a dollar hold into the attempt's run claim without changing R.
+    it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority: ``dispatch`` issues it
+    for the hold, and lifecycle events go through ``record_event``. ``Ledger.convert_hold`` (which turns a
+    dollar hold into the attempt's run claim without changing R) still requires an admitted hold.
 
     The whole input shape is validated first (types, finite numbers within ``MAX_INTEGER``, integer
     demands and bounds, identifiers within the ledger's 256-character name limit, table sizes); a malformed
@@ -843,7 +846,7 @@ def _funding_block(data, hold, record, settings, now):
     return None
 
 
-def check_request(data, attempt_id, facts, settings, now):
+def check_request(data, attempt_id, facts, settings, now, *, authority=None, strict=False):
     """Pre-transmission check over a ledger snapshot; reads only, never writes or consumes.
 
     ``facts`` is ``{provider, model, variant, harness, kind, funding_pool, bound?}`` already shape-checked by the
@@ -853,7 +856,12 @@ def check_request(data, attempt_id, facts, settings, now):
     An unsent (``admitted``) attempt must match the current settings revision and be at most ``ADMISSION_TTL``
     old. A ``dispatched`` attempt skips both, so turning Smart Routing OFF never stops started subscription work,
     but every send on a dollar-funded hold (dispatched or not) re-checks API Usage and its organization. The
-    envelope applies to both. S3.4 adds single-use dispatch authority to the allow result; nothing here grants it.
+    envelope applies to both.
+
+    Authority (S3.4): a hold dispatched through ``dispatch`` allows only a request carrying its token
+    (``authority_required`` / ``authority_invalid``), and the allow result then says ``authority='verified'``.
+    ``strict`` (the caller sent a session id or a token) also refuses a hold that has no issued authority
+    (``dispatch_required``): an admitted attempt, or one dispatched by a bare S3.1 ``record dispatched``.
     """
     hold, record = data['holds'].get(attempt_id), Ledger.admission(data, attempt_id)
     if hold is None or record is None:
@@ -864,6 +872,14 @@ def check_request(data, attempt_id, facts, settings, now):
         return _blocked('attempt_uncertain')
     if hold['state'] not in ('admitted', 'dispatched'):
         return _blocked('hold_state_unsupported')
+    issued = hold.get('dispatch')
+    if issued is None and strict:
+        return _blocked('dispatch_required')
+    if issued is not None:
+        if authority is None:
+            return _blocked('authority_required')
+        if not hmac.compare_digest(authority_hash(authority), issued['authority']):
+            return _blocked('authority_invalid')
     if hold['state'] == 'admitted':
         if record.get('settings_revision') != settings['revision']:
             return _blocked('settings_revision_changed')
@@ -886,27 +902,160 @@ def check_request(data, attempt_id, facts, settings, now):
             return _blocked('envelope_exhausted')
     elif not any(amount > 0 for amount in remaining.values()):
         return _blocked('envelope_exhausted')
-    return dict(state='allow', attempt_id=attempt_id, route=record['route'], pool=record['pool'],
-                settings_revision=record['settings_revision'], remaining=remaining)
+    result = dict(state='allow', attempt_id=attempt_id, route=record['route'], pool=record['pool'],
+                  settings_revision=record['settings_revision'], remaining=remaining)
+    if issued is not None:
+        result['authority'] = 'verified'
+    return result
 
 
-def record_event(ledger, attempt_id, kind):
+# ---------------------------------------------------------------------------------------------------
+# Single-use dispatch authority (S3.4). The handshake, id derivation and proof rules are defined once in
+# the plan's S3.1 contract (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
+# ---------------------------------------------------------------------------------------------------
+AUTHORITY_BYTES = 32  # secrets.token_urlsafe(32): 43 URL-safe characters, 256 random bits
+MAX_AUTHORITY = 128
+_ID_DOMAIN = 'vibe-routing/%s/v1\0'
+_NO_PROOF = object()
+
+
+def authority_hash(token):
+    """The only form of an authority the ledger stores: SHA-256 hex of the token."""
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+@functools.lru_cache(maxsize=4096)
+def _derived(attempt_id):
+    session, message = (hashlib.sha256((_ID_DOMAIN % kind + attempt_id).encode()).hexdigest()[:32]
+                        for kind in ('session', 'message'))
+    return 'ses_' + session, 'msg_' + message
+
+
+def derive_ids(attempt_id):
+    """The OpenCode session and message ids a managed launch of ``attempt_id`` must use.
+
+    Pure and deterministic: domain-separated SHA-256 of the attempt id, 128 bits each, written as
+    ``ses_<32 lowercase hex>`` and ``msg_<32 lowercase hex>``. That is a conservative subset of the adapter's
+    ``SESSION`` and ``MESSAGE`` patterns; the probe fixtures are sanitized, so the server's own id body format is
+    not on record. Hashing is not injective in principle, so ``dispatch`` refuses an id another known attempt
+    already owns (``id_collision``)."""
+    if not _text(attempt_id):
+        raise ValueError('invalid attempt id')
+    session, message = _derived(attempt_id)
+    return dict(session_id=session, message_id=message)
+
+
+def reconcile_hint(ids):
+    """The one host read a launcher makes to settle a lost acknowledgment; routing makes no host call itself."""
+    return dict(read='message', method='GET', session_id=ids['session_id'], message_id=ids['message_id'],
+                path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id']))
+
+
+def _known_attempts(data):
+    """Every attempt id the ledger still remembers: open and pruned-later holds, records and recent ids."""
+    known = dict.fromkeys(data['holds'])
+    known.update(dict.fromkeys(record['attempt_id'] for record in data['admissions']))
+    known.update(dict.fromkeys(data.get('seen_attempts', [])))
+    return [attempt for attempt in known if _text(attempt)]
+
+
+def _owner(data, values):
+    """The known attempt whose derived or stored ids include any of ``values``, or None."""
+    for attempt, hold in data['holds'].items():
+        issued = hold.get('dispatch')
+        if issued and {issued['session_id'], issued['message_id']} & values:
+            return attempt
+    for attempt in _known_attempts(data):
+        if set(derive_ids(attempt).values()) & values:
+            return attempt
+    return None
+
+
+def check(data, facts, settings, now, *, attempt_id=None, session_id=None, authority=None):
+    """``check`` with S3.4 session resolution; reads only.
+
+    With only ``session_id``: a session no remembered attempt derives is ``{'state': 'unmanaged'}`` (interactive
+    sessions stay unguarded); a remembered attempt whose hold is gone is ``attempt_closed``. With both, a session
+    that belongs to another attempt is ``session_mismatch``; an unknown one (a child session) is checked under
+    ``attempt_id``. A session id or token makes the check strict (see ``check_request``)."""
+    if session_id is not None:
+        owner = _owner(data, {session_id})
+        if attempt_id is None:
+            if owner is None:
+                return dict(state='unmanaged')
+            if owner not in data['holds'] or Ledger.admission(data, owner) is None:
+                return _blocked('attempt_closed')
+            attempt_id = owner
+        elif owner is not None and owner != attempt_id:
+            return _blocked('session_mismatch')
+    return check_request(data, attempt_id, facts, settings, now, authority=authority,
+                         strict=session_id is not None or authority is not None)
+
+
+def dispatch(ledger, attempt_id, facts, settings, now, *, gates=()):
+    """Issue the single-use authority for an admitted attempt, or return the existing decision.
+
+    One write transaction re-runs every ``check`` gate on the unsent admission (settings revision, age, dollar
+    funding, route identity, envelope), then each extra ``gates`` entry ``gate(data, record) -> reason | None``
+    (S3.5's fresh gates), then moves the hold to ``dispatched`` with the token's hash and the derived ids. A refusal
+    writes nothing and the hold stays ``admitted``. The token is generated here, before the transaction, and is
+    returned only in this ``dispatched`` result; repeated or racing callers get ``already_dispatched`` without one.
+    No host or network call happens here or inside the transaction."""
+    if not _text(attempt_id):
+        return _blocked('invalid_request')
+    ids = derive_ids(attempt_id)
+    token = secrets.token_urlsafe(AUTHORITY_BYTES)
+    admitted = {}
+
+    def gate(data):
+        found = check_request(data, attempt_id, facts, settings, now)
+        if found['state'] != 'allow':
+            return found['reason']
+        if _owner(data, set(ids.values())) not in (None, attempt_id):
+            return 'id_collision'
+        record = Ledger.admission(data, attempt_id)
+        admitted.update(route=record['route'], pool=record['pool'])
+        for extra in gates:
+            reason = extra(data, record)
+            if reason is not None:
+                return reason if _text(reason) else 'gate_invalid'
+        return None
+    try:
+        outcome = ledger.dispatch_hold(attempt_id, authority_hash(token), ids, gate, now)
+    except BudgetError as error:
+        return _blocked(str(error))
+    if not outcome['issued']:
+        return dict(state='already_dispatched', attempt_id=attempt_id, hold_state=outcome['state'], **ids,
+                    reconcile_hint=reconcile_hint(ids))
+    return dict(state='dispatched', attempt_id=attempt_id, authority=token, **ids, **admitted,
+                reconcile_hint=reconcile_hint(ids))
+
+
+def record_event(ledger, attempt_id, kind, *, now=None, proof=_NO_PROOF):
     """Apply one lifecycle event as its ledger hold transition; a repeat that already took effect is a duplicate.
 
     Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it. A bare
     ``complete`` never releases an uncertain hold (``reconciliation_required``): S3.6 adds evidence-based reconciliation.
     A closed attempt refuses every later event (``attempt_closed``): S3.1 keeps no event store, so it cannot tell
     a late duplicate from a conflicting report. S3.6 adds durable event-id deduplication, usage and settlement.
+
+    S3.4: ``uncertain`` stamps ``now`` on a hold dispatched with an authority. ``not_dispatched`` after dispatch needs
+    ``proof`` of non-launch (``proof_required``), accepted only by ``Ledger.release_unlaunched``; a proof on any
+    other event is ``invalid_request``.
     """
     if kind not in RECORD_KINDS:
         return _blocked('record_unsupported')
+    if proof is not _NO_PROOF and kind != 'not_dispatched':
+        return _blocked('invalid_request')
     if attempt_id not in ledger.snapshot()['holds']:
         return _blocked('unknown_attempt')
     try:
         if kind == 'dispatched':
             ledger.mark_dispatched(attempt_id)
         elif kind == 'uncertain':
-            ledger.mark_uncertain(attempt_id)
+            ledger.mark_uncertain(attempt_id, now=now)
+        elif proof is not _NO_PROOF:
+            ledger.release_unlaunched(attempt_id, proof, now)
         else:
             ledger.close_attempt(attempt_id, kind, reconciled=False)
         return dict(state='recorded', duplicate=False)
@@ -918,6 +1067,8 @@ def record_event(ledger, attempt_id, kind):
             return _blocked('attempt_closed')
         if hold['state'] in _ALREADY[kind]:
             return dict(state='recorded', duplicate=True)
+        if str(error) == 'close_forbidden' and kind == 'not_dispatched' and hold['state'] in ('dispatched', 'uncertain'):
+            return _blocked('proof_required')
         return _blocked('hold_state_forbidden' if str(error) == 'close_forbidden' else str(error))
 
 

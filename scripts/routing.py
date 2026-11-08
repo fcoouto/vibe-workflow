@@ -36,8 +36,10 @@ READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
 FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
-              check=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
+              check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
+              dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, {'now'}), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization'}))
+EVENT_FIELDS = {'event_id', 'attempt_id', 'kind'}
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
 ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
@@ -296,25 +298,44 @@ class Service:
                                  table_version=ranking.get('table_version')),
                     profile={key: profile[key] for key in PROFILE_FIELDS})
 
-    def _check(self, body):
-        attempt, facts = body['attempt_id'], _facts(body['request'])
-        require(_text(attempt), 'invalid_request')
-        now = self.clock()
+    def _now(self, body):
+        """The command's clock; only the `--test-inputs` flag lets a request supply `now`."""
         if self.test_inputs and 'now' in body:
-            now = body['now']
-            require(_amount(now), 'invalid_request')
+            require(_amount(body['now']), 'invalid_request')
+            return body['now']
+        return self.clock()
+
+    def _check(self, body):
+        facts = _facts(body['request'])
+        require(('attempt_id' in body or 'session_id' in body)
+                and all(_text(body[key]) for key in ('attempt_id', 'session_id') if key in body), 'invalid_request')
+        authority = body.get('authority')
+        require(authority is None or (type(authority) is str and 0 < len(authority) <= routing.MAX_AUTHORITY
+                                      and authority.isascii() and authority.isprintable()), 'invalid_request')
+        now = self._now(body)
         settings = self._settings()
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        return routing.check_request(ledger.snapshot(), attempt, facts, settings, now)
+        return routing.check(ledger.snapshot(), facts, settings, now, attempt_id=body.get('attempt_id'),
+                             session_id=body.get('session_id'), authority=authority)
+
+    def _dispatch(self, body):
+        attempt, facts = body['attempt_id'], _facts(body['request'])
+        require(_text(attempt), 'invalid_request')
+        now = self._now(body)
+        settings = self._settings()
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        return routing.dispatch(ledger, attempt, facts, settings, now)
 
     def _record(self, body):
         event = body['event']
-        require(type(event) is dict and set(event) == {'event_id', 'attempt_id', 'kind'}
-                and all(_text(event[key]) for key in event), 'invalid_request')
+        require(type(event) is dict and EVENT_FIELDS <= set(event) <= EVENT_FIELDS | {'proof'}
+                and all(_text(event[key]) for key in EVENT_FIELDS), 'invalid_request')
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        result = routing.record_event(ledger, event['attempt_id'], event['kind'])
+        extra = dict(proof=event['proof']) if 'proof' in event else {}
+        result = routing.record_event(ledger, event['attempt_id'], event['kind'], now=self._now(body), **extra)
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _status(self, body):

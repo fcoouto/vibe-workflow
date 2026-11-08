@@ -857,7 +857,8 @@ class CapacityTests(Funded):
         data['organizations'][organization]['revision'] = budget.MAX_INTEGER
         data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
-        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES)
+        # An admitted hold at its bound plus the fixed fields dispatch, uncertainty and proof add later (S3.4).
+        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES + budget.DISPATCH_HOLD_BYTES)
                          for i in range(budget.MAX_HOLDS)}
         data['seen_attempts'] = [unique(i, long('s')) for i in range(budget.MAX_SEEN)]
         runs, native = {}, {}

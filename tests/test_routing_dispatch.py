@@ -175,11 +175,13 @@ class DispatchTests(Base):
 
     def test_derived_id_collision_is_refused(self):
         self.call(prepare('a2'))
-        fixed = dict(session_id='ses_' + '0' * 32, message_id='msg_' + '0' * 32)
-        with mock.patch.object(routing, 'derive_ids', return_value=dict(fixed)):
-            self.assertEqual(self.call(dispatch('a1'))['state'], 'dispatched')
-            self.assertEqual(self.call(dispatch('a2')), dict(v=1, state='blocked', reason='id_collision'))
-        self.assertEqual(self.snapshot()['holds']['a2']['state'], 'admitted')
+        self.assertEqual(self.call(dispatch('a1'))['state'], 'dispatched')
+        taken = routing.derive_ids('a1')
+        for clash in (taken, dict(session_id='ses_' + '0' * 32, message_id=taken['message_id'])):
+            with self.subTest(clash=clash), \
+                    mock.patch.object(routing, 'derive_ids', side_effect=lambda attempt: dict(clash)):
+                self.assertEqual(self.call(dispatch('a2')), dict(v=1, state='blocked', reason='id_collision'))
+            self.assertEqual(self.snapshot()['holds']['a2']['state'], 'admitted')
 
 
 class FundedDispatchTests(Base):
