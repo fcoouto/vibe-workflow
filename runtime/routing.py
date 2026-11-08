@@ -598,7 +598,8 @@ def _decide(data, assignment, ranking, settings, observations):
                   route_identity=route_identity(*(spec.get(field) for field in ROUTE_IDENTITY)),
                   billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
                   pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
-                  settings_revision=settings.get('revision', 0), at=now, mode=mode,
+                  settings_revision=settings.get('revision', 0), organization_revision=item['revision'], at=now,
+                  mode=mode,
                   snapshot_id=observations.get('snapshot_id'),
                   reason_codes=list(dict.fromkeys(reasons)),
                   ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
@@ -785,10 +786,13 @@ def admit(assignment, ranking, settings, observations, *, ledger):
 # ---------------------------------------------------------------------------------------------------
 # Command support (S3.1): pre-transmission check, lifecycle intake and local summaries
 # ---------------------------------------------------------------------------------------------------
-# An admitted-but-unsent decision is usable for this long (seconds, in the observations' clock). A dispatched
-# attempt does not expire here: lease expiry never proves non-execution, and started workers finish their budget.
+# An admitted-but-unsent decision is usable for this long, in seconds of the command's own clock; an age of
+# exactly ADMISSION_TTL is still allowed and a negative age (a clock that went back) is refused.
 ADMISSION_TTL = 900
-# Model-request kinds a host may check. Tool, MCP and webfetch calls carry no model facts; S3.3 decides them.
+# The largest difference between a collector snapshot's `now` and the command's clock that `prepare` accepts.
+MAX_CLOCK_DRIFT = 60
+# `check` covers model requests and subagent spawns only. Tool, MCP and webfetch calls carry no model facts; S3.3
+# governs them with policy deny rules, and `check` refuses any other kind with `unsupported_kind`.
 REQUEST_KINDS = ('primary', 'subagent', 'title', 'compaction', 'generate')
 REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_pool')
 # Lifecycle events S3.1 accepts, each an existing ledger hold transition; S3.6 adds usage and settlement.
@@ -817,14 +821,39 @@ def remaining_envelope(hold):
     return claims
 
 
-def check_request(data, attempt_id, facts, settings_revision, now):
+def _funding_block(data, hold, record, settings, now):
+    """Why a dollar-funded hold may not send now, or None. Re-read on every check, dispatched or not.
+
+    Uses the ledger's own admission gates (enabled, not blocked, policy revision, fresh balance, cycle), the
+    hold's cycle and the reconciled credit, plus API Usage enablement for direct API routes. Subscription-only
+    holds have no organization claim and are not affected."""
+    organization = hold.get('organization')
+    if not organization or not hold.get('amount'):
+        return None
+    if record.get('billing_class') in DIRECT_API and settings['api_usage_enabled'] is not True:
+        return 'api_usage_disabled'
+    try:
+        Ledger._admission_checks(data, organization, record.get('organization_revision'), now)
+        org = data['organizations'][organization]
+        if hold.get('cycle') != org['policy']['cycle'] or Ledger._credit_raw(data, organization, now) < 0:
+            return 'funding_unverified'
+    except BudgetError as error:
+        unavailable = ('organization_unconfigured', 'organization_disabled', 'manual_recovery_required')
+        return 'organization_unavailable' if str(error) in unavailable else 'funding_unverified'
+    return None
+
+
+def check_request(data, attempt_id, facts, settings, now):
     """Pre-transmission check over a ledger snapshot; reads only, never writes or consumes.
 
     ``facts`` is ``{provider, model, variant, harness, kind, funding_pool, bound?}`` already shape-checked by the
-    caller; ``bound`` maps typed claim keys to the request's upper bound. Returns ``state='allow'`` or a fixed
-    blocked reason. An unsent (``admitted``) attempt must still match the current settings revision and be
-    younger than ``ADMISSION_TTL``; a dispatched attempt keeps running under the revision that admitted it.
-    S3.4 adds single-use dispatch authority to the allow result; nothing here grants it.
+    caller; ``bound`` maps typed claim keys to the request's upper bound. ``settings`` is the resolved settings
+    with ``revision``; ``now`` is the command's clock. Returns ``state='allow'`` or a fixed blocked reason.
+
+    An unsent (``admitted``) attempt must match the current settings revision and be at most ``ADMISSION_TTL``
+    old. A ``dispatched`` attempt skips both, so turning Smart Routing OFF never stops started subscription work,
+    but every send on a dollar-funded hold (dispatched or not) re-checks API Usage and its organization. The
+    envelope applies to both. S3.4 adds single-use dispatch authority to the allow result; nothing here grants it.
     """
     hold, record = data['holds'].get(attempt_id), Ledger.admission(data, attempt_id)
     if hold is None or record is None:
@@ -836,10 +865,17 @@ def check_request(data, attempt_id, facts, settings_revision, now):
     if hold['state'] not in ('admitted', 'dispatched'):
         return _blocked('hold_state_unsupported')
     if hold['state'] == 'admitted':
-        if record.get('settings_revision') != settings_revision:
+        if record.get('settings_revision') != settings['revision']:
             return _blocked('settings_revision_changed')
-        if type(record.get('at')) is not int or now - record['at'] > ADMISSION_TTL:
+        if type(record.get('at')) is not int:
             return _blocked('admission_expired')
+        if now < record['at']:
+            return _blocked('clock_invalid')
+        if now - record['at'] > ADMISSION_TTL:
+            return _blocked('admission_expired')
+    funding = _funding_block(data, hold, record, settings, now)
+    if funding is not None:
+        return _blocked(funding)
     identity = route_identity(facts['provider'], facts['model'], facts['variant'], facts['harness'])
     if record.get('pool') != facts['funding_pool'] or identity is None or identity != record.get('route_identity'):
         return _blocked('route_mismatch')
@@ -857,7 +893,8 @@ def check_request(data, attempt_id, facts, settings_revision, now):
 def record_event(ledger, attempt_id, kind):
     """Apply one lifecycle event as its ledger hold transition; a repeat that already took effect is a duplicate.
 
-    Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it.
+    Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it. A bare
+    ``complete`` never releases an uncertain hold (``reconciliation_required``): S3.6 adds evidence-based reconciliation.
     A closed attempt refuses every later event (``attempt_closed``): S3.1 keeps no event store, so it cannot tell
     a late duplicate from a conflicting report. S3.6 adds durable event-id deduplication, usage and settlement.
     """
@@ -871,7 +908,7 @@ def record_event(ledger, attempt_id, kind):
         elif kind == 'uncertain':
             ledger.mark_uncertain(attempt_id)
         else:
-            ledger.close_attempt(attempt_id, kind)
+            ledger.close_attempt(attempt_id, kind, reconciled=False)
         return dict(state='recorded', duplicate=False)
     except BudgetError as error:
         hold = ledger.snapshot()['holds'].get(attempt_id)
