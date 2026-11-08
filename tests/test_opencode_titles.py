@@ -30,6 +30,10 @@ session = params.get('sessionID', '')
 if step == 'down':
     json.dump(state, open(state_path, 'w'))
     sys.stderr.write('Unable to connect to the server\n'); sys.exit(1)
+if step == 'user_edit':
+    state['titles'][session] = 'Manual rename'
+    json.dump(state, open(state_path, 'w'))
+    sys.exit(1)
 if step == 'sleep':
     json.dump(state, open(state_path, 'w'))
     time.sleep(10); sys.exit(0)
@@ -109,7 +113,7 @@ class OpenCodeTitleTests(unittest.TestCase):
 
     def test_success_reads_writes_and_acknowledges_by_readback(self):
         fake = FakeOpenCode(self)
-        self.assertEqual(self.deliver(), dict(ok=True, deferred=False, reason=None))
+        self.assertEqual(self.deliver(), dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
         self.assertEqual(fake.title, DESIRED)
         self.assertEqual([call[1] for call in fake.calls], ['session.get', 'session.update', 'session.get'])
 
@@ -120,7 +124,7 @@ class OpenCodeTitleTests(unittest.TestCase):
 
     def test_server_down_then_success_on_second_attempt(self):
         fake = FakeOpenCode(self, steps=['down'])
-        self.assertEqual(self.deliver(), dict(ok=True, deferred=False, reason=None))
+        self.assertEqual(self.deliver(), dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
         self.assertEqual(fake.title, DESIRED)
         self.assertEqual(len(self.clock.sleeps), 1)
 
@@ -245,6 +249,49 @@ class OpenCodeTitleTests(unittest.TestCase):
         self.assertEqual(self.deliver(baseline=baseline)['ok'], True)
         self.assertEqual(fake.title, DESIRED)
 
+    def test_adopt_overwrites_unknown_title_once_then_baseline_protects_later_edits(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat')
+        result = self.deliver(adopt=True)
+        self.assertEqual(result, dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
+        self.assertEqual(fake.title, DESIRED)
+        state = fake.state()
+        state['titles'][SESSION] = 'Renamed by the user'
+        fake.save(state)
+        later = title_sync.format_title('W1', 'P', 'Thread naming', 'REVIEW', 2, user_attention=True)
+        self.assertEqual(self.deliver(desired=later, baseline=result['baseline']),
+                         dict(ok=False, deferred=True, reason='manual_title'))
+        self.assertEqual(fake.title, 'Renamed by the user')
+        self.assertEqual([call[1] for call in fake.calls].count('session.update'), 1)
+
+    def test_adopt_is_not_sticky_across_calls(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat')
+        self.assertEqual(self.deliver(adopt=True)['ok'], True)
+        state = fake.state()
+        state['titles'][SESSION] = 'Another generated title'
+        fake.save(state)
+        self.assertEqual(self.deliver(), dict(ok=False, deferred=True, reason='manual_title'))
+        self.assertEqual(fake.title, 'Another generated title')
+
+    def test_adopt_with_failing_transport_defers_silently(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat', steps=['down'] * 10)
+        self.assertEqual(self.deliver(adopt=True), dict(ok=False, deferred=True, reason='failed'))
+        self.assertEqual(fake.title, 'Generated summary of the chat')
+
+    def test_adopt_covers_only_the_title_first_observed(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat', steps=['ok', 'user_edit'])
+        self.assertEqual(self.deliver(adopt=True), dict(ok=False, deferred=True, reason='manual_title'))
+        self.assertEqual(fake.title, 'Manual rename')
+
+    def test_invalid_adopt_is_rejected_without_spawning(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat')
+        for adopt in (1, 0, 'true', None, [True]):
+            with self.subTest(adopt=adopt):
+                self.assertEqual(self.deliver(adopt=adopt),
+                                 dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(self.deliver(adopt=True, baseline=DESIRED),
+                         dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(fake.calls, [])
+
     def test_unexpected_errors_never_escape(self):
         def broken():
             raise RuntimeError('private detail')
@@ -252,11 +299,26 @@ class OpenCodeTitleTests(unittest.TestCase):
 
 
 class OpenCodeTitleCommandTests(unittest.TestCase):
-    def run_command(self, payload):
+    def run_command(self, payload, path='/nonexistent'):
         root = Path(__file__).resolve().parents[1]
         return subprocess.run([sys.executable, '-I', '-B', str(root / 'scripts' / 'opencode_title.py')],
                               input=payload, capture_output=True, text=True, timeout=30,
-                              env=dict(os.environ, PATH='/nonexistent'))
+                              env=dict(os.environ, PATH=path))
+
+    def test_command_accepts_adopt_with_the_same_validation(self):
+        fake = FakeOpenCode(self, title='Generated summary of the chat')
+        path = os.environ['PATH']
+        for adopt in ('true', 1, None):
+            with self.subTest(adopt=adopt):
+                completed = self.run_command(json.dumps(dict(session_id=SESSION, title=DESIRED, adopt=adopt)), path)
+                self.assertEqual(json.loads(completed.stdout),
+                                 dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(fake.calls, [])
+        completed = self.run_command(json.dumps(dict(session_id=SESSION, title=DESIRED, adopt=True)), path)
+        self.assertEqual((completed.returncode, completed.stderr), (0, ''))
+        self.assertEqual(json.loads(completed.stdout),
+                         dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
+        self.assertEqual(fake.title, DESIRED)
 
     def test_command_reports_deferral_as_json_and_exits_zero(self):
         for payload in ('not json', json.dumps(dict(session_id=SESSION, title=DESIRED))):
