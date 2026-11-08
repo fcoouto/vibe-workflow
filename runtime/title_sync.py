@@ -6,6 +6,7 @@ import re
 from runtime.task_statuses import ATTENTION_STATES, STATES as STATUSES
 from runtime.evidence import _digest
 MAX_TITLE_BODY = 4096
+TITLE_CLIENTS = ('codex', 'claude-code')
 MAX_STATUS_LENGTH = max(map(len, ATTENTION_STATES))
 METER_PREFIX = '\uFFFB'  # Keeps the five cells in the compact Codex fallback font.
 # Accept saved titles with routine labels, no meter prefix, or status at the end.
@@ -148,8 +149,8 @@ def _task(scope, client, session, *, revalidate=False, presentation=False):
 def _path(scope, client, session):
     from runtime import state
     state._text(session, 'native session', 4096)
-    if client != 'codex' or scope is None or scope.runtime is None:
-        raise ValueError('Supported enrolled Codex task required')
+    if client not in TITLE_CLIENTS or scope is None or scope.runtime is None:
+        raise ValueError('Supported enrolled task required')
     with state._database(scope) as db:
         if db is None:raise ValueError('Managed titles require current canonical authority')
     return scope.runtime.state_dir / ('title-' + _digest([state._scope_id(scope), client, session]) + '.json')
@@ -243,6 +244,9 @@ def operate(scope, action, request, transport=None, *, force=False):
             raise ValueError('Resume cannot change family or member identity')
         with (transport or NativeTitles)() as native:
             current = native.read(session)
+            if current is None:
+                # No live observation (a control command or tool event): assume the saved baseline.
+                current = saved['applied'] if saved is not None else ''
             if len(current.removeprefix(METER_PREFIX)) > MAX_TITLE_BODY and (action == 'resume' or (action == 'configure' and saved is None)):
                 raise ValueError('Native title is too long for managed adoption')
             if action == 'configure' and rebind:
@@ -288,7 +292,8 @@ def operate(scope, action, request, transport=None, *, force=False):
                 ready_to_write = False
                 try:
                     # Re-read immediately before mutation to detect edits during preparation.
-                    if native.read(session) != current:
+                    recheck = native.read(session)
+                    if recheck is not None and recheck != current:
                         return dict(ok=True, managed=True, pending=True, reason='title changed before write')
                     latest = _task(scope, client, session)
                     if latest['revision'] != task['revision'] or any(latest[key] != value for key, value in identity.items()):
@@ -298,11 +303,15 @@ def operate(scope, action, request, transport=None, *, force=False):
                     if not ready_to_write:
                         _atomic(path, dict(saved, applied_revision=None))
                 native.write(session, desired)
-                observed = native.read(session)
-                if observed == desired:
-                    saved.update(applied=observed, pending=None, applied_revision=task['revision'])
+                if getattr(native, 'deferred', False):
+                    # Delivery rides a later hook response; a later observation of this title acknowledges it.
+                    saved.update(pending=desired)
                 else:
-                    saved.update(paused=True, pending=None)
+                    observed = native.read(session)
+                    if observed == desired:
+                        saved.update(applied=observed, pending=None, applied_revision=task['revision'])
+                    else:
+                        saved.update(paused=True, pending=None)
             if saved['paused'] and not saved['notified']:
                 saved['notified'] = True
                 notification = 'Manual title edit preserved. Automatic title updates are paused until you request resumption.'
@@ -315,10 +324,10 @@ def operate(scope, action, request, transport=None, *, force=False):
         os.close(descriptor)
 
 
-def repair(scope, client, session, *, force=False):
+def repair(scope, client, session, *, force=False, transport=None):
     """Hook-safe presentation failure; retain pending data for the next event."""
     try:
-        return operate(scope, 'sync', dict(client=client, session_id=session), force=force)
+        return operate(scope, 'sync', dict(client=client, session_id=session), transport=transport, force=force)
     except Exception:
         try:
             managed = _path(scope, client, session).exists()

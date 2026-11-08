@@ -2,11 +2,11 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "5aaaa343f0b8582e9e4a0f62b8f3e831e1f77f1dcf9a01ad3e73c1ac4dedd702",
+      "sha256": "44e17e2d2c7ca4cb40f87827d5ec87ef1a8272b73886109679dcd2399ffed012",
       "ranges": [
         [
           1,
-          34
+          40
         ]
       ]
     },
@@ -254,19 +254,19 @@
       ]
     },
     "clients/runtime.md": {
-      "sha256": "818ceecfb8b62deef9cdcd8ec21ef1743fd42a28e682df2d8d43bf1e764a4570",
+      "sha256": "416ae3ccd0a33adf6d9e89e535d31513f5f3f7a5eeabcbb5a1f0754a48df5fe1",
       "ranges": [
         [
           1,
-          43
+          45
         ],
         [
-          44,
-          93
+          46,
+          95
         ],
         [
-          94,
-          98
+          96,
+          100
         ]
       ]
     },
@@ -337,7 +337,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "ed9952431dedf2985dea288f9a1b9b948ac02ee8a6784956fb81054f324fa2cf",
+      "sha256": "b6374b77a3a55499e469b0936bb30464cfea0e7385a7a9a5493dbd40b8db6c49",
       "ranges": [
         [
           1,
@@ -345,11 +345,11 @@
         ],
         [
           147,
-          280
+          271
         ],
         [
-          281,
-          328
+          272,
+          332
         ]
       ]
     },

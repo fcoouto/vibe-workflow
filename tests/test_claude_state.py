@@ -135,6 +135,38 @@ class ClaudeStateTests(unittest.TestCase):
             self.assertIn("unverified", result.reason)
         self.assertEqual(self.generation(), before)
 
+    def cli(self, arguments, request=None, expected=0):
+        import io
+        import json
+        from unittest.mock import patch
+        from tests.fixture_canonical_birth import test_acquisition
+        from scripts import workflow
+        output = io.StringIO()
+        raw = json.dumps(request or {}).encode()
+        with patch("sys.argv", ["workflow.py", *arguments, "--cwd", str(self.repo)]), \
+                patch("sys.stdin", type("In", (), {"buffer": io.BytesIO(raw)})()), patch("sys.stdout", output), \
+                patch("runtime.startup.acquire_project_entry",
+                      side_effect=lambda *args, **kwargs: test_acquisition(self.scope)):
+            code = workflow.main()
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, expected, result)
+        return result
+
+    def test_task_controls_start_update_and_read_status_for_claude_only(self):
+        identity = self.identity()
+        started = self.cli(["task", "start"], identity | dict(mode="editable", decision_ref="user:1"))
+        self.assertEqual((started["task"]["client"], started["task"]["state"]), ("claude-code", "TRIAGE"))
+        self.cli(["task", "update"], identity | dict(expected_revision=started["task"]["revision"],
+                 state="WORKING", reason="work", reference="user:1"))
+        status = self.cli(["task", "status", "--client", "claude-code", "--session", "main"])
+        self.assertEqual(status["task"]["state"], "WORKING")
+        # The state layer keeps evidence, delegation and retirement Codex-only; the CLI must not suggest otherwise.
+        for arguments in (["task", "retire"], ["evidence", "plan"], ["delegation", "plan"]):
+            result = self.cli(arguments, identity, expected=1)
+            self.assertIn("supported native task client", result["error"], arguments)
+        result = self.cli(["delivery", "status", "--client", "claude-code", "--session", "main"], expected=1)
+        self.assertIn("Invalid task, evidence", result["error"])
+
     def test_ordinary_update_cannot_declare_done(self):
         self.start()
         with self.assertRaises(state.StateError):

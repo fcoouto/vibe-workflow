@@ -21,7 +21,13 @@ The package also registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and
 - **Input bound.** Runtime events read up to 8 MiB because `Write` carries a whole file; larger input reports a diagnostic and is not guarded.
 - **Failure.** A crashed or timed-out hook lets the action proceed, as on Codex. `onFailure: "block"` is deliberately unused: the hooks are plugin-wide and would block ordinary editing in unenrolled projects.
 
-Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. Titles, evidence, delegation and `doctor` follow in later slices; until then Claude task records cannot reach `DONE`. Package tests do not establish native hook execution, which needs its own `claude` observation.
+Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. Evidence and delegation follow in later slices; until then Claude task records cannot reach `DONE`, and only `task start`, `update`, `status` and `title` accept `client: "claude-code"`.
+
+## Titles and doctor
+
+Claude accepts a title only in hook output, so [title synchronization](workstreams-titles.md#claude-code-delivery) stages a change and delivers it on the next `SessionStart` (startup, resume, fork) or `UserPromptSubmit`. A final `DONE` title appears one prompt late.
+
+`doctor --client claude-code --executable <claude>` reports the package, enrollment, state, `claude --version`, whether this plugin is installed and enabled, and `disableAllHooks`/`allowManagedHooksOnly`. Claude exposes no hook-trust or hook-list call, so hook execution stays unverified and a healthy result exits 2, never 0. MDM, registry and cloud managed policy are not file-observable. Package tests do not establish native hook execution, which needs its own `claude` observation.
 
 ## Installation and qualification
 

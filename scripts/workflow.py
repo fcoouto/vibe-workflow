@@ -12,12 +12,21 @@ from types import SimpleNamespace
 
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
+TASK_CLIENTS = ("codex", "claude-code")
+
+
+def title_transport(client):
+    """Codex uses its native transport; Claude Code only stages a title for its next hook response."""
+    if client == "claude-code":
+        from runtime.adapters.claude_code import HookTitles
+        return lambda: HookTitles()
+    return None
 
 
 def title_report(scope, client, session, report):
-    if client == "codex" and session:
+    if client in TASK_CLIENTS and session:
         from runtime.title_sync import repair
-        result = repair(scope, client, session)
+        result = repair(scope, client, session, transport=title_transport(client))
         if result.get("managed"):
             report = dict(report, title_sync=result)
     return report
@@ -106,7 +115,7 @@ def control_main():
             action = actions.add_parser(name, add_help=False)
             action.add_argument("--cwd", required=True)
             if name == "status":
-                action.add_argument("--client", required=True, choices=("codex",))
+                action.add_argument("--client", required=True, choices=TASK_CLIENTS)
                 action.add_argument("--session", required=True)
                 action.add_argument("--prepare-observability", action="store_true")
         title = actions.add_parser("title", add_help=False)
@@ -160,7 +169,7 @@ def control_main():
         coordinator_actions.add_parser("reserve", add_help=False).add_argument("--cwd", required=True)
         doctor = commands.add_parser("doctor", add_help=False)
         doctor.add_argument("--cwd", required=True)
-        doctor.add_argument("--client", required=True, choices=("codex",))
+        doctor.add_argument("--client", required=True, choices=TASK_CLIENTS)
         doctor.add_argument("--executable", required=True)
         onboard = commands.add_parser("onboard", add_help=False)
         onboarding = onboard.add_subparsers(dest="action", required=True)
@@ -215,7 +224,9 @@ def control_main():
                 args.command == "evidence" and args.action != "status"):
             request = json_object(sys.stdin.buffer.read(MAX_INPUT + 1))
             client = request.get("client")
-            if client != "codex":
+            # Claude task records carry no evidence, delegation or retirement, so only start and update apply.
+            supported = TASK_CLIENTS if args.command == "task" and args.action in ("start", "update", "title") else ("codex",)
+            if client not in supported:
                 raise StartupError("Expected a supported native task client")
         else:
             client = args.client
@@ -227,7 +238,8 @@ def control_main():
             except (StartupError, ImportError, ValueError):
                 acquisition = None
                 unavailable = True
-            report = inspect_runtime(None, args.executable, acquisition=acquisition, enrollment_unavailable=unavailable)
+            report = inspect_runtime(None, args.executable, acquisition=acquisition, enrollment_unavailable=unavailable,
+                                     client=client)
             print(json.dumps(report))
             return report["exit_code"]
         acquisition = acquire_project_entry(SimpleNamespace(client=client, cwd=Path(args.cwd)), PACKAGE)
@@ -244,7 +256,7 @@ def control_main():
             return 0
         if args.command == "task" and args.action == "title":
             from runtime.title_sync import operate
-            report = operate(scope, args.title_action, request, force=True)
+            report = operate(scope, args.title_action, request, transport=title_transport(client), force=True)
             print(json.dumps(report))
             return 0
         if args.command == "delegation":
@@ -340,6 +352,8 @@ def main():
     runtime_kind = requested_event if adapter is not None and requested_event in adapter.RUNTIME_EVENTS else None
 
     def failure(reason):
+        if requested_event in getattr(adapter, "PROMPT_EVENTS", ()):
+            return None  # Prompt events only carry optional title presentation; never disturb a prompt.
         if runtime_kind is not None:
             return hook_events.runtime_diagnostic(runtime_kind, reason)
         return session_start.diagnostic(reason)
@@ -348,7 +362,7 @@ def main():
     try:
         if adapter is None:
             raise StartupError("Expected a supported client and event")
-        if requested_event != "SessionStart" and runtime_kind is None:
+        if requested_event != "SessionStart" and runtime_kind is None and requested_event not in getattr(adapter, "PROMPT_EVENTS", ()):
             raise StartupError("Unsupported client runtime event")
         limit = MAX_INPUT if requested_event == "SessionStart" else getattr(adapter, "RUNTIME_INPUT_LIMIT", MAX_INPUT)
         payload = json_object(sys.stdin.buffer.read(limit + 1), limit=limit)
@@ -359,12 +373,20 @@ def main():
             # SessionStart uses managed scope only for restricted qualification context.
             acquisition = acquire_project_entry(start, PACKAGE, managed=None, deadline=deadline)
             output = adapter.render(orient(start, PACKAGE, acquisition=acquisition))
-            if start.client == "codex":
+            if start.client in TASK_CLIENTS:
                 try:
                     scope = _entry_scope(acquisition, managed=False)
                     if scope is not None and scope.runtime is not None and not qualification_only(scope):
                         from runtime.title_sync import repair
-                        presentation = repair(scope, start.client, payload.get("session_id"), force=True)
+                        transport = None
+                        if start.client == "claude-code":
+                            observed = claude_code.observed_title(payload)
+                            transport = claude_code.HookTitles(observed, deliverable=observed is not None
+                                and payload.get("source") in claude_code.TITLE_SOURCES)
+                        presentation = repair(scope, start.client, payload.get("session_id"), force=True,
+                                              transport=(lambda: transport) if transport else None)
+                        if transport is not None and transport.emit:
+                            output = claude_code.title_output("SessionStart", transport.emit, output)
                         if presentation.get("notification"):
                             output = dict(output or {})
                             output["systemMessage"] = (output.get("systemMessage", "") + " " + presentation["notification"]).strip()
@@ -380,6 +402,21 @@ def main():
                 except Exception:
                     # The optional drift warning must preserve the startup result.
                     pass
+        elif requested_event in getattr(adapter, "PROMPT_EVENTS", ()):
+            output = None
+            event = adapter.normalize_prompt(payload)
+            acquisition = acquire_project_entry(event, PACKAGE, deadline=deadline)
+            scope = _entry_scope(acquisition, managed=False)
+            if scope is not None and scope.runtime is not None and not qualification_only(scope):
+                from runtime.title_sync import repair
+                observed = claude_code.observed_title(payload)
+                transport = claude_code.HookTitles(observed, deliverable=observed is not None)
+                presentation = repair(scope, event.client, event.session_id, transport=lambda: transport)
+                if transport.emit:
+                    output = claude_code.title_output("UserPromptSubmit", transport.emit)
+                if presentation.get("notification"):
+                    output = dict(output or {})
+                    output["systemMessage"] = presentation["notification"]
         else:
             event = adapter.normalize_runtime(payload)
             acquisition = acquire_project_entry(event, PACKAGE, deadline=deadline)

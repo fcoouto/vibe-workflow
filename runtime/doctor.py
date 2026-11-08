@@ -358,7 +358,10 @@ class NativeProcess:
             return response["result"]
 
 
-def version(executable, deadline):
+CODEX_VERSION = rb"codex-cli ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?)\s*"
+
+
+def version(executable, deadline, pattern=CODEX_VERSION):
     child = NativeProcess([str(executable), "--version"], deadline)
     try:
         output = b""
@@ -375,7 +378,7 @@ def version(executable, deadline):
             raise ObservationError("timeout")
         if child.process.wait(timeout=remaining) != 0:
             raise ObservationError("unavailable")
-        match = re.fullmatch(rb"codex-cli ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?)\s*", output)
+        match = re.fullmatch(pattern, output)
         if not match or len(match[1]) > 80:
             raise ObservationError("unknown_version")
         return match[1].decode("ascii")
@@ -474,9 +477,12 @@ def inspect_hooks(response, scope, definitions, *, package=PACKAGE):
             "error_count": len(errors), "warning_count": len(warnings), "unexpected_count": unexpected}
 
 
-def inspect_runtime(scope, executable, *, acquisition=None, enrollment_unavailable=False):
-    """Return JSON-safe independent observations; exit_code is 0, failure 1, incomplete 2."""
-    deadline = time.monotonic() + TOTAL_TIMEOUT - 0.25
+CLIENT_FILES = {"codex": (".codex-plugin/plugin.json", "hooks/codex.json"),
+                "claude-code": (".claude-plugin/plugin.json", "hooks/claude-code.json")}
+
+
+def _inspect_common(scope, *, acquisition, enrollment_unavailable, client):
+    """Package, enrollment and state observations shared by every client."""
     report = {
         "package": {"status": "failed"}, "enrollment": {"status": "missing"},
         "state": {"status": "not_checked"}, "native": {"status": "not_checked"},
@@ -487,11 +493,12 @@ def inspect_runtime(scope, executable, *, acquisition=None, enrollment_unavailab
     failed = False
     incomplete = False
     definitions = None
+    manifest_file, hook_file = CLIENT_FILES[client]
     try:
         validation = validate(PACKAGE)
         installed_policy = policy_digest(PACKAGE)
-        manifest = json_object((PACKAGE / ".codex-plugin/plugin.json").read_bytes())
-        definitions = json_object((PACKAGE / "hooks/codex.json").read_bytes())["hooks"]
+        manifest = json_object((PACKAGE / manifest_file).read_bytes())
+        definitions = json_object((PACKAGE / hook_file).read_bytes())["hooks"]
         report["package"] = {"status": "passed", "name": validation["package"],
                              "version": manifest["version"], "policy_digest": installed_policy}
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
@@ -537,6 +544,19 @@ def inspect_runtime(scope, executable, *, acquisition=None, enrollment_unavailab
         except (StartupError, OSError, ValueError, KeyError, TypeError):
             report["state"] = {"status": "unsafe_or_incompatible"}
             failed = True
+    return report, scope, definitions, failed, incomplete
+
+
+def inspect_runtime(scope, executable, *, acquisition=None, enrollment_unavailable=False, client="codex"):
+    """Return JSON-safe independent observations; exit_code is 0, failure 1, incomplete 2."""
+    deadline = time.monotonic() + TOTAL_TIMEOUT - 0.25
+    report, scope, definitions, failed, incomplete = _inspect_common(
+        scope, acquisition=acquisition, enrollment_unavailable=enrollment_unavailable, client=client)
+    if client == "claude-code":
+        from runtime.adapters import claude_code
+        native_failed, native_incomplete = claude_code.observe_native(report, scope, executable, definitions, deadline)
+        report["exit_code"] = 1 if failed or native_failed else 2 if incomplete or native_incomplete else 0
+        return report
     try:
         observed = version(executable, deadline)
         report["native"] = {"status": "observed", "version": observed,
