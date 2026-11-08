@@ -771,6 +771,17 @@ class AdmissionTests(unittest.TestCase):
                 with self.assertRaises(state.StateError):
                     self.plan(value)
 
+    def test_plan_jobs_accept_an_optional_task_profile_and_reject_invalid_ones(self):
+        value = self.plan_value()
+        value['jobs'][0]['profile'] = dict(task_family='implementation', complexity_band='medium',
+                                           risk_band='high', review_policy='independent', tools=['edit'])
+        self.assertTrue(self.plan(value)['ok'])
+        for bad in (dict(complexity_band='enormous'), dict(unknown=1), 'text'):
+            invalid = self.plan_value()
+            invalid['jobs'][0]['profile'] = bad
+            with self.assertRaises(state.StateError):
+                self.plan(invalid)
+
     def test_dependency_cycles_unknowns_and_unsettled_predecessors_block(self):
         value = self.plan_value()
         value['jobs'].append(dict(id='after', role='worker', claims=[self.path_claim('after.py')],

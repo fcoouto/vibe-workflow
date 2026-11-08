@@ -11,6 +11,11 @@ from tests.test_usage_budget import native
 from tests.test_usage_routing import PACKET, PROFILE
 
 BINDING = dict(organization='org', project='project', credential_ref='OPENAI_API_KEY')
+KEYCHAIN_BINDING = dict(BINDING, credential_ref='vcw_' + '0' * 32, storage_kind='macos_keychain')
+
+
+def resolver(_):
+    return b'synthetic-key'
 POLICY = dict(cycle='cycle1', start=0, end=10000, expiry=10000, stop_at=9000,
               ceiling='custom', amount=500, grant_amount=800, pilot_limit=500, task_limit=200)
 
@@ -36,8 +41,8 @@ class SmartBalanceTests(unittest.TestCase):
         self.identity = budget.initialize(self.path)
         self.ledger = budget.Ledger(self.path, self.identity)
         self.controller = routing.Controller(self.ledger, 'scope', clock=lambda: 101)
-        self.request = dict(version=1, expected_revision=0, expected_org_revision=0,
-                            binding=BINDING, policy=POLICY, profile=PROFILE,
+        self.request = dict(version=2, expected_revision=0, expected_org_revision=0,
+                            binding=KEYCHAIN_BINDING, policy=POLICY, profile=PROFILE,
                             class_name='investigation', mode='smart')
         self.controller.configure(self.request)
         self.ledger.observe('org', 800, 100)
@@ -57,12 +62,10 @@ class SmartBalanceTests(unittest.TestCase):
         self.assertTrue(enabled['warnings'])
         self.assertEqual(enabled['funding_policy'],'best_effort_grant')
 
-    def test_smart_shadow_selects_unmeasured_work_without_writes_or_calls(self):
+    def test_smart_selects_unmeasured_work_without_writes_or_calls(self):
         before = self.ledger.snapshot()
         decision = self.controller.evaluate(task())
         self.assertEqual(decision['decision'], 'eligible')
-        self.assertTrue(decision['simulation_only'])
-        self.assertEqual(decision['live_blocker'], 'live_adapter_unavailable')
         self.assertEqual(self.ledger.snapshot(), before)
 
     def test_provider_and_local_choices_are_preserved(self):
@@ -117,13 +120,12 @@ class SmartBalanceTests(unittest.TestCase):
         def factory(host, timeout):
             connection = Connection(queue.pop(0)); connections.append(connection); return connection
         with patch('runtime.openai_api.time.time',return_value=101):
-            result = self.controller.run_shadow(task(), connection_factory=factory)
+            result = self.controller._run(task(), factory, resolver)
         self.assertFalse(result['accepted']); self.assertTrue(result['requires_native_review'])
-        self.assertTrue(result['simulation_only'])
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
         self.assertEqual(len(self.ledger.snapshot()['native']),1)
         self.assertEqual(len(connections),2)
-        replay = self.controller.run_shadow(task(), connection_factory=factory)
+        replay = self.controller._run(task(), factory, resolver)
         self.assertTrue(replay['replayed']); self.assertEqual(len(connections),2)
 
     def test_disable_between_count_and_generation_prevents_second_send(self):
@@ -140,9 +142,9 @@ class SmartBalanceTests(unittest.TestCase):
             connection.getresponse = receive
             return connection
         with patch('runtime.openai_api.time.time',return_value=101), self.assertRaises(budget.BudgetError):
-            self.controller.run_shadow(task(),connection_factory=factory)
+            self.controller._run(task(), factory, resolver)
         self.assertEqual(sum(len(connection.requests) for connection in sent),1)
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
 
     def test_credential_denial_after_count_preserves_only_the_sent_charge(self):
         from unittest.mock import Mock, patch
@@ -150,8 +152,7 @@ class SmartBalanceTests(unittest.TestCase):
         from tests.test_openai_api import Connection, Response
 
         request = dict(self.request, version=2, expected_revision=1, expected_org_revision=1,
-                       binding=dict(BINDING, storage_kind='macos_keychain',
-                                    credential_ref='vcw_' + '0' * 32),
+                       binding=KEYCHAIN_BINDING,
                        profile=dict(PROFILE, count_maximum=7))
         self.controller.configure(request)
         self.controller.record_qualification(dict(
@@ -162,14 +163,14 @@ class SmartBalanceTests(unittest.TestCase):
 
         with patch('runtime.openai_api.time.time', return_value=101), self.assertRaisesRegex(
                 budget.BudgetError, 'credential_unavailable'):
-            self.controller.run_shadow(task(), connection_factory=factory, credential_resolver=resolver)
+            self.controller._run(task(), factory, resolver)
 
         state = self.ledger.snapshot()
         calls = state['runs']['run']['calls']
         self.assertEqual((calls['count']['state'], calls['count']['cost']), ('completed', 7))
         self.assertEqual((calls['generation']['state'], calls['generation']['cost']),
                          ('rejected-before-send', 0))
-        self.assertIsNone(state['slot'])
+        self.assertNotIn('slot', state)
         self.assertEqual(len(state['native']), 1)
         self.assertEqual(resolver.call_count, 2)
         factory.assert_called_once()
@@ -183,9 +184,9 @@ class SmartBalanceTests(unittest.TestCase):
         def factory(host,timeout):
             calls.append(host);return Connection(Response({}),error=TimeoutError())
         with patch('runtime.openai_api.time.time',return_value=101), self.assertRaises(budget.BudgetError):
-            self.controller.run_shadow(task(),connection_factory=factory)
+            self.controller._run(task(), factory, resolver)
         self.assertEqual(len(calls),1)
-        self.assertEqual(self.ledger.snapshot()['slot'],'run')
+        self.assertFalse(self.ledger.snapshot()['runs']['run']['closed'])
         self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['state'],'unresolved')
 
     def test_config_change_after_selection_cannot_borrow_new_consent(self):
@@ -202,16 +203,16 @@ class SmartBalanceTests(unittest.TestCase):
         def factory(host,timeout):
             sent.append(host);return Connection(Response(dict(object='response.input_tokens',input_tokens=1200)))
         with patch.object(self.controller,'evaluate',side_effect=changed), patch('runtime.openai_api.time.time',return_value=101), self.assertRaises(budget.BudgetError):
-            self.controller.run_shadow(task(),connection_factory=factory)
+            self.controller._run(task(), factory, resolver)
         self.assertEqual(sent,[])
 
-    def test_proven_unsent_failure_releases_slot_and_zeroes_call_reservation(self):
+    def test_proven_unsent_failure_closes_the_claim_and_zeroes_call_reservation(self):
         from unittest.mock import patch
         def factory(host,timeout): raise OSError('not connected')
         with patch('runtime.openai_api.time.time',return_value=101), self.assertRaises(budget.BudgetError):
-            self.controller.run_shadow(task(),connection_factory=factory)
+            self.controller._run(task(), factory, resolver)
         state=self.ledger.snapshot()
-        self.assertIsNone(state['slot'])
+        self.assertNotIn('slot', state)
         self.assertEqual(state['runs']['run']['calls']['count']['state'],'rejected-before-send')
 
     def test_disable_during_connection_preparation_prevents_request(self):
@@ -222,10 +223,10 @@ class SmartBalanceTests(unittest.TestCase):
             self.controller.disable(1)
             return connection
         with patch('runtime.openai_api.time.time',return_value=101),self.assertRaises(budget.BudgetError):
-            self.controller.run_shadow(task(),connection_factory=factory)
+            self.controller._run(task(), factory, resolver)
         self.assertEqual(connection.requests,[])
         self.assertTrue(connection.closed)
-        self.assertIsNone(self.ledger.snapshot()['slot'])
+        self.assertNotIn('slot', self.ledger.snapshot())
 
     def test_quota_reset_does_not_prevent_generation(self):
         from unittest.mock import patch
@@ -244,7 +245,7 @@ class SmartBalanceTests(unittest.TestCase):
             connection.getresponse=received; sent.append(connection)
             return connection
         with patch('runtime.openai_api.time.time',return_value=101):
-            result=self.controller.run_shadow(current,connection_factory=factory)
+            result=self.controller._run(current, factory, resolver)
         self.assertEqual(len(sent),2)
         self.assertTrue(result['requires_native_review'])
 
@@ -267,7 +268,7 @@ class SmartBalanceTests(unittest.TestCase):
         self.assertTrue(first['requires_native_review'])
         self.assertFalse(first['accepted'])
         self.assertEqual(self.ledger.headroom('org'),before)
-        self.assertEqual(self.ledger.snapshot()['slot'],'run')
+        self.assertFalse(self.ledger.snapshot()['runs']['run']['closed'])
         claimed=self.controller.claim_handoff('task','native-child')
         self.assertEqual(claimed['state'],'claimed')
         self.assertTrue(claimed['new_claim'])
@@ -288,7 +289,7 @@ class SmartBalanceTests(unittest.TestCase):
         self.assertTrue(self.controller.claim_handoff('task','child')['new_claim'])
 
     def test_funding_stop_recommends_native_handoff_without_sending(self):
-        self.ledger.observe('org',160,102)
+        self.ledger.observe('org',10,102)  # Below the 2% protected share of the issued allowance.
         self.controller.clock=lambda:103
         decision=self.controller.evaluate(task())
         self.assertEqual(decision['decision'],'paused')

@@ -1,5 +1,15 @@
 # Policy source map
 
+## Review my Project (D10) — 8 November 2026
+
+The review instructions from the [D10 plan](d10-project-review-plan.md) were ported to current `main` with their instruction-delivery tests and fixtures. The report and retention runtime candidates were not merged. Validation evidence is in the [D10 validation record](d10-validation.md).
+
+| Local contract | Requirements carried locally | Basis |
+| --- | --- | --- |
+| `skills/review-my-project/SKILL.md` and `references/procedure.md` | Repositories before areas, native selection/fallback, preserved selection, unenrolled/temporary scope, bounded Full Scan, project rules, safe command inspection, canonical check reuse, complete selected security/dependency coverage, honest actionable findings, separate installation and fix authority | Approved D10 plan; Toolkit Prompt 13 and existing local policies 01/04/05/06; user-approved standalone chat-first outcome |
+| `references/source-structure.md` | Explicit analysis approval, fresh shortlist, per-repository partial coverage and sample-only priorities, supported refactoring recommendations, separate implementation approval, no measured workflow-savings claim | Approved 28 October source-structure extension preserved from the saved D10 draft |
+| `references/retention.md` | Existing canonical evidence owners; original ages/allowances, enrolled accounting, protected overlaps/unknowns, seven-day detail/four-month compact/100 MiB Project rules, no new store, chat-only detailed reporting until the complete existing retention path is available | Canonical membership/retention plan and inspected D5/private ownership interfaces; no runtime qualification claimed |
+
 ## Reusable native evaluation — Phase 3, 5 November 2026
 
 The user authorized reusable evaluation packaging after Phase 2 integration.
@@ -210,7 +220,7 @@ checks retained canonical pins and source evidence before new bindings, preservi
 recovery for replacements or incomplete restores; it retains enrollment and ledger identity;
 `runtime/usage_budget.py` reuses validated unchanged policy revisions without
 clearing charges or reservations. Real policy changes still invalidate stale
-consent. Stale, expired, simulation-only and smoke-only setups cannot enable
+consent. Stale, expired, unqualified-binding and smoke-only setups cannot enable
 regular live routing through reuse. The public heading and UI metadata change;
 the `manage-usage-routing` identifier and reference paths remain compatible.
 No live activation, credential lookup, billing change, purchase or publication
@@ -619,3 +629,7 @@ The [scope-routing extension](superpowers/specs/2026-11-03-instruction-scope-rou
 The former Codex startup-implementation section is retained verbatim in [its triggered reference](../clients/codex-startup-implementation.md). Routine startup, implementation, review and resume use the client entry and triggered contracts. Startup implementation, enrollment preparation, adapter qualification and registration/trust/packaging changes additionally load that reference and its shared startup contract. Package proof, actual client observations and version-specific qualification limits remain separate.
 
 A subsequent instruction-only trial still omitted host-skill text despite receiving the full budgeting rule first. A bounded Codex 0.165.0 diagnostic established that existing `PostToolUse` callbacks receive child warning text and can deliver `additionalContext`; outer clipping occurred after that boundary. The [Codex adapter](../runtime/adapters/codex.py) therefore adds a constant advisory for the observed anchored `Bash` response prefix after the [dispatcher](../scripts/workflow.py) resolves an enrolled scope. It preserves existing feedback and successful-path silence, creates no state or subprocess, and performs no automatic recovery. The string is not authenticated clipping metadata: stdout can imitate it. Tests cover scope, malformed and ordinary results, quoted and spoofed markers, privacy and existing feedback. This is neither a completion gate nor universal truncation protection; behavioral recovery and incremental costs require separate observation.
+
+### PR merge gate for `DONE` · 8 November 2026
+
+The user decided that a thread is `DONE` only after every PR it opened or took over is observed merged on the remote, with an explicit no-PR decision as the exemption. The [naming contract](../clients/workstreams-naming.md#status-and-accepted-progress) owns the rule once; the [title procedure](../clients/workstreams-titles.md#record-status-and-accepted-progress) applies it to direct and runtime-bound threads, [completion evidence](../clients/evidence-completion.md) and [delivery completion](../clients/delivery.md#completion-and-retention) point to it and state the runtime boundary. Threads whose recorded scope excludes publication need no extra step. This supersedes the earlier statement in the [delivery design](superpowers/specs/2026-11-02-delivery-lifecycle-design.md) that work with no required publication reaches `DONE` through its ordinary gate. Runtime verification still enforces only required publications. As a deliberate carve-out, kept so the existing optional-PR completion test remains valid, a PR the plan marks optional under the user's recorded scope decision is exempt; marking a PR optional after opening it without that decision is not. Other opened PRs are withheld by the coordinator, not by runtime code. Package validation does not observe client behavior.

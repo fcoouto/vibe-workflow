@@ -1,0 +1,8 @@
+{
+  "probe": "opencode run --model claude-agent/haiku --format json (OpenCode 2.2.6)",
+  "observed": "2026-11-08",
+  "route": {"provider": "anthropic", "harness": "claude-agent-sdk via OpenCode Claude Agent provider", "credential": "subscription-login"},
+  "result": {"step_finish": {"reason": "stop", "cost": 0, "tokens": {"input": 2, "output": 4, "reasoning": 0, "cache": {"read": 6163, "write": 20271}}}},
+  "not_observed": ["rate-limit data in the CLI JSON stream", "native.rateLimit in stored session metadata (not inspected in this run)"],
+  "notes": ["cost 0 is derived by OpenCode from the login type, not read from a bill"]
+}

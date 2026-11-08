@@ -15,7 +15,7 @@ When using packaged file tools for standalone basic setup, select `project_scope
 
 Use [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish) to assess completion, including startup integration and the local procedures reached through generated project guidance. This does not establish AcceptedScope, task readiness, managed runtime activation, qualification, merge readiness or external authority.
 
-Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup.
+Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup, except questions 4 and 5, which apply their default as described there.
 
 ## Adapt project documents
 
@@ -67,6 +67,37 @@ affected choice as inapplicable or pending, respectively.
    through the shared [Workstreams project preference](../../workstreams/references/procedure.md)
    during this setup. Verify readback before reporting it enabled or disabled.
    Ordinary coordination needs no runtime activation or qualification campaign.
+4. **Set up Graphify for `<project_name>`?**
+   Explain that a local code map lets agents answer "what depends on this?"
+   without reading many files. Setup adds `.graphifyignore` (secrets, `.env*`,
+   caches, tool state) and a Git ignore for `graphify-out/`, then builds a
+   code-only graph with `GRAPHIFY_NO_AUTO_REFRESH=1 graphify extract . --code-only
+   --no-cluster`: no model call, no Git hook. It reuses the installed Graphify and
+   client skill; for a missing one, the reviewed plan shows the exact install
+   command and scope. The graph excludes documents and goes stale until
+   regenerated. Skip the question when the project has no code.
+   - Yes, set it up now. (default, recommended)
+   - Not now. Nothing changes; I'll ask again at the next onboarding update, or you can tell me not to.
+5. **Connect `<project_name>` to a long-term memory vault?**
+   Explain that lasting facts stay outside the always-loaded instructions so
+   those stay short. With an existing vault, add a pointer to the shared and
+   client instructions; agents read it when relevant, write only when asked, and
+   never copy its content into the repository. With none, create plain Markdown
+   files at the location shown in the reviewed plan: no server, dependency or
+   hook.
+   - Yes, connect or set it up now. (default, recommended)
+   - Not now. Nothing changes; I'll ask again at the next onboarding update, or you can tell me not to.
+
+Apply questions 4 and 5 from the Toolkit revision resolved for this setup. Yes
+plans and completes the setup with its evidence (graph query result, readable
+pointer). If a question is unanswered, apply its default and report it as
+"default applied, not answered"; the reviewed plan names any install command or
+location outside the project. Not now is a deferral: record the user's decision
+as its prerequisite and the next onboarding update as the resume condition, never
+a silent omission. If the user declines in their own words, record that decision
+and do not ask again. Reuse a recorded Yes or decline; ask again about a recorded
+Not now only at the next onboarding update. Report a question that cannot apply
+(for example Graphify with no code) as inapplicable, with the reason.
 
 Retain submitted choices in the setup record with their scope and provenance.
 Publication and merge choices are separate. The `[READY]` marker summarizes

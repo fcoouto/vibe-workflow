@@ -87,7 +87,7 @@ Disabling Smart Routing:
 3. Release only claims for which non-dispatch is established. Running and uncertain attempts retain their claims and accounting.
 4. Let already-started workers finish within their assigned budgets. Subsequent spawns use the OFF behavior. Explicit interruption remains a separate action.
 
-Re-enabling does not revive stale decisions. Rollout `shadow`/`canary`/`enforced` states describe qualification, not extra user selection modes. Shadow evaluation does not grant dispatch authority.
+Re-enabling does not revive stale decisions. Rollout `canary`/`enforced` states describe qualification, not extra user selection modes. There is no shadow or simulation mode: a route is active or it is not, and unready routes are reported as blocked or unsupported rather than computed without enforcement.
 
 Coordinator consumption is included in root-task accounting where observable and in shared-account headroom reconciliation. The coordinator does not need a worker route lease, and the router does not rewrite its session settings.
 
@@ -224,7 +224,7 @@ Represent execution as `provider + account/organization + credential binding + e
 
 API Usage becomes the grant/key discovery, credit settings and funding-observation capability of this pipeline. A provider API grant cannot be spent through OpenRouter or OpenCode Console merely because they expose the same model; each has its own billing route. Existing OpenRouter routes retain their separately configured funding and endpoint restrictions under the common allocator.
 
-Keys identify access to an organization/project, not an exclusive grant. Deduplicate pools across all keys, projects, sessions and worktrees that share the actual allowance. Match subscription telemetry to the intended account before using it for automatic allocation.
+Keys identify access to an organization/project, not an exclusive grant. Every key in the linked organization shares one grant, including a key stored in OpenCode Console or OpenRouter. Grants exist only for Claude Max, Ultra and Team and ChatGPT Pro and Business; when the grant runs out, usage continues on purchased credit or auto-reload if the organization has them (and is billed as usual if invoiced), otherwise API requests stop, so the router enforces the allowance cap itself. Annual ChatGPT Business grants are issued yearly and expire at the annual cycle end. Deduplicate pools across all keys, projects, sessions and worktrees that share the actual allowance. Match subscription telemetry to the intended account before using it for automatic allocation.
 
 **Billing classification.** Before telemetry or allocation, classify each route (`provider + account + credential + harness/endpoint`) as `included_subscription`, `purchased_usage`, `api_grant`, `api_prepaid`, `gateway` or `ineligible`, from current vendor terms and observed billing (P0.0). Rate-limit telemetry never reclassifies a route, and `purchased_usage` never counts as subscription headroom or enters automatic routing.
 
@@ -232,12 +232,12 @@ Keys identify access to an organization/project, not an exclusive grant. Dedupli
 
 | Route kind | Credential | Funding pool |
 |---|---|---|
-| Subscription | The provider's subscription login, through a harness the vendor bills as included usage (for example Codex for OpenAI and Claude Code for Anthropic), launched directly or as a harness managed by OpenCode | Subscription headroom across that account's windows |
+| Subscription | The provider's subscription login, through a harness the vendor bills as included usage (for example Codex or Sign in with ChatGPT for OpenAI, and Claude Code or OpenCode's Claude Agent provider for Anthropic) | Subscription headroom across that account's windows |
 | API | API Usage's scoped enablement and secure key binding | The subscription-linked API allowance (`api_grant`), plus other verified credits only under `no-limit` |
 
 The allocator considers both kinds for each provider and chooses between them with section 7.2's preference. API Usage OFF removes only the API routes; a provider's subscription routes stay available. Billing class belongs to the route (credential plus harness), not to the provider, and P0.0 discovers it the same way for both providers. A route the vendor bills as extra or purchased usage is `purchased_usage` for either provider and is excluded from automatic routing.
 
-**Reference Claude subscription route.** OpenCode running Claude through the Claude Code harness on the user's Claude subscription is the user's working setup (observed 2026-11-08; the user reports subscription usage, not API calls). It is a subscription route under this model, routed just like Codex. The harness distinction exists only because Anthropic announced in April 2026 that Claude subscriptions do not cover third-party tools calling its models directly. That excludes OpenCode calling Anthropic directly with a subscription login, not this route.
+**Reference Claude subscription route.** OpenCode running Claude through its Claude Agent provider on the user's Claude plan is the user's working setup (observed 2026-11-08; no API key, cost 0). That provider launches the installed Claude binary through the Claude Agent SDK, so the harness is the Agent SDK, not interactive Claude Code. It is a subscription route under this model, pending P0.0 confirmation, and is routed like Codex only while its standing holds. Its standing is disputed: Anthropic's support text says plan-signed Agent SDK usage draws from subscription limits, while its Agent SDK overview says third-party developers may not offer claude.ai login or rate limits unless previously approved, and an April 2026 announcement said subscriptions no longer cover third-party tools. Treat the route as tolerated, not guaranteed, keep its concurrency caps conservative, and see the [capability matrix](../../smart-routing-capability-matrix.md).
 
 ### 6.2 Credit controls
 
@@ -279,6 +279,8 @@ Both vendors can continue spending purchased credits after subscription-linked c
 Subscription and API routes must have independently bound credentials. Do not switch a shared active credential to dispatch concurrent jobs. If the host cannot supply an isolated/request-bound route, that combination is unsupported until the adapter establishes it. Endpoint hostnames alone do not establish who pays.
 
 ### 6.4 API Usage enablement and secure keys
+
+**Organizations are the user's choice.** The user defines the organizations and API keys they want to use, and is never required to define one. A built-in **Personal** workspace is available to enable for API funding on the user's own account; named organizations (for example a team workspace) may be added, each with its own opaque secure-key binding. An organization is enabled explicitly. Routing, onboarding and updates never create, enable or fill in an organization or key. With none enabled there are simply no API-funded routes and subscription routes work unchanged. Organization identity is independent of its key: an enabled organization whose key is not yet ready is unavailable with a reason, not an error. Disabling an organization removes its routes and expiry pressure but keeps its in-flight claims and holds.
 
 API Usage starts excluded from routing until the user has explicitly enabled it for the provider/organization and workflow scope and connected an API key through secure setup. Connection and activation can be one user action; merely discovering a stored key or a subscription login does not enable API Usage.
 
@@ -460,10 +462,10 @@ One logical ledger authority owns financial decisions across worktrees. The Open
 ### 10.4 Breaking cutover
 
 1. Select the reconciled source baseline and map every current admission/selection writer.
-2. Run shadow decisions alongside the current selectors: compute profile, ranking and allocation against an isolated ledger copy, with no dispatch authority and no live-ledger writes. Then canary enforced routing on one explicitly chosen project. Proceed only when the cutover criteria, recorded before shadow starts, pass (section 13); otherwise the current selectors remain.
+2. Replay recorded arrivals against isolated ledgers as ordinary tests, then canary enforced routing on one explicitly chosen project within recorded bounds: a project allowlist, a spend cap per funding pool, a maximum duration, the concurrency caps, an abort condition and the Smart Routing OFF kill switch. Proceed only when the cutover criteria, recorded before the canary starts, pass (section 13); otherwise the current selectors remain.
 3. Stop legacy new admissions, finish or authoritatively reconcile outstanding work, and retain historical costs/minimal unresolved ownership evidence.
 4. Install the built-in routing service and new schema with Smart Routing ON by default, honoring an explicit new Smart Routing OFF choice and the existing Workstreams preference. Configure readiness separately. API Usage remains excluded until explicit enablement/key setup; do not translate legacy Manual/Smart Balance state into new API spending authority implicitly.
-5. Remove superseded runtime selectors, aliases, schemas, wrappers, shadow hooks and obsolete tests when the new path qualifies. No compatibility layer or simultaneous old/new writer is retained.
+5. Remove superseded runtime selectors, aliases, schemas, wrappers and obsolete tests when the new path qualifies. No compatibility layer or simultaneous old/new writer is retained.
 
 Unresolved old executions block affected cutover until their ownership can be established. No-backward-compatibility does not mean deleting charges or making uncertain capacity available again. The user can later delete the standalone planning checkout without affecting the feature.
 
@@ -485,7 +487,7 @@ Earlier local probes reported OpenCode 2.2.6, Codex 0.167.0 and Claude Code 2.1.
 
 | Area | Evidence available | Remaining qualification |
 |---|---|---|
-| Billing/terms (P0.0) | The user's OpenCode session runs Claude through the Claude Code harness on the Claude subscription (user-reported, 2026-11-08). Anthropic announced in April 2026 that Claude subscriptions do not cover third-party tools calling its models directly. | Classify every route (section 6.1) from current terms and observed billing. For each provider, confirm which harness/credential combinations bill as included subscription usage (for example Codex and Claude Code, launched directly or through OpenCode) and that API Usage key routes bill the API allowance. |
+| Billing/terms (P0.0) | The user's OpenCode session runs Claude through its Claude Agent provider (the Claude Agent SDK) on the Claude subscription (observed 2026-11-08). Anthropic announced in April 2026 that subscriptions would no longer cover third-party tools, later paused those changes (support page update of 15 June 2026), and its Agent SDK overview still says third-party products may not offer claude.ai login or rate limits unless previously approved. | Classify every route (section 6.1) from current terms and observed billing. For each provider, confirm which harness/credential combinations bill as included subscription usage (for example Codex, Claude Code, OpenCode's Claude Agent provider and Sign in with ChatGPT) and that API Usage key routes bill the API allowance. |
 | Model/effort and lineage | Installed schema exposes session model/variant, parent IDs and metadata. | Verify requested versus observed settings, lifecycle attribution and native harness boundaries. |
 | OpenAI subscription quota | Read-only Codex app-server `account/rateLimits/read` returned usage percentages, windows and reset times. | Establish account identity equivalence with the OpenCode route; simultaneous exhaustion or correlated deltas alone are not identity proof. Qualify freshness/units and successful OpenCode telemetry. |
 | Claude subscription quota | One native probe emitted `rate_limit_event`; one OpenCode assistant message exposed `native.rateLimit`. | Applies to every Claude route that P0.0 classifies `included_subscription`, as for OpenAI. Establish account identity equivalence with the selected route, then confirm utilization scale, completeness, freshness and coverage across versions/models; do not assume every response has it. |
@@ -497,7 +499,7 @@ Earlier local probes reported OpenCode 2.2.6, Codex 0.167.0 and Claude Code 2.1.
 
 Produce sanitized feasibility notes, a capability matrix and reproducible fixtures in vibe-workflow. Earlier scratch probe output is not a fixture until prompts, credentials and account identifiers are removed. Live event streams require resynchronization after a gap; do not assume an event subscription replays missed records.
 
-P0 exit is evidence for each enabled route or an explicit unsupported result. Advisory/shadow operation is not a substitute for mandatory-routing proof. In particular, an after-the-fact interrupt does not close the dispatch or funding gate.
+P0 exit is evidence for each enabled route or an explicit unsupported result. Advisory operation is not a substitute for mandatory-routing proof. In particular, an after-the-fact interrupt does not close the dispatch or funding gate.
 
 ## 13. Validation and acceptance cases
 
@@ -511,7 +513,7 @@ Required cases:
 4. Coordinator settings remain fixed with routing ON, OFF, under fallback and during nested delegation. Every managed child/reviewer/repair uses the admission path.
 5. Disable during profiling, ranking and pre-dispatch invalidates pending authority; disable after dispatch preserves in-flight ownership and spend. OFF uses configured worker choices without extra routing-model calls.
 6. A $100 grant at 98% with $30 remaining and $5 reserved admits at most $23 before additional uncertainty. Test 0%, 100%, `no-limit`, purchased-credit exclusion, external usage, duplicate keys, prorated grants, annual expiry and missing renewal.
-7. Within one selected funding class, with equal costs/horizons and comparable capacities, 20 versus 75 remaining comparable tasks send the first 19 admissions to the 75-pool (56 left); the pools alternate once their remaining capacity is equal. With capacities 1,000 versus 100, the same percentages mean 200 versus 75 comparable tasks, not the reverse.
+7. Within one selected funding class, with equal costs/horizons and comparable capacities, 20 versus 75 remaining comparable tasks send the first 55 admissions to the 75-pool (20 left in each pool); the pools alternate once their remaining capacity is equal. With capacities 1,000 versus 100, the same percentages mean 200 versus 75 comparable tasks, not the reverse.
 8. Within a class, twenty comparable tasks expiring in one hour outrank 75 expiring in 24 hours at the initial decision and for 17 admissions. An exhausted short window vetoes the preference.
 9. With default preference settings and distant API expiry, projected subscription utilization of 40%, 75%, 80% and 90% gives API shares of 0%, 50%, 75% and 100%. With 24 hours until an eligible grant expires, 40% and 75% utilization give approximately 67% and 83%. Test the maximum-window rule, a healthier alternative subscription, unavailable classes, expired grants, the separate 98% cap, positive-share-only scheduling and deficits derived from admission records. Expected spend that consumes the grant before expiry gives `E = 0`. A weekly window early in its cycle with a high pace projects above its current utilization; pace is omitted before the minimum elapsed fraction.
 10. Unequal costs, shared review pools, rolling/refill windows, duplicate model aliases and uncalibrated capacity do not create fictional independent capacity.
@@ -532,7 +534,7 @@ Required cases:
 25. Smart Routing OFF admits the first feasible `worker_choices` entry for the role, or leaves the assignment pending with `worker_choice_unavailable`.
 26. Profiling or ranking endpoints that retain, train on or forbid confidential data are never used without the user's per-endpoint opt-in. Strategy-table rows naming unavailable models or unsupported efforts are dropped at compilation.
 
-Evaluate in two parts. Deterministic allocator replay runs identical chronological arrivals, concurrent demand, balances and resets over isolated ledgers as ordinary tests, checking funding violations, stranded quota/credits and recovery errors. Quality evaluation re-executes a pre-registered, budgeted sample of historical tasks with fixed acceptance checks; it is required for shadow disagreements flagged by the cutover criteria and for promoting a model ranker over the deterministic one. Measure routing overhead, acceptance and total delivery cost per policy. Cutover follows shadow and bounded canary (section 10.4). Rolling back automatic selection keeps ledger ownership and limits intact.
+Evaluate in two parts. Deterministic allocator replay runs identical chronological arrivals, concurrent demand, balances and resets over isolated ledgers as ordinary tests, checking funding violations, stranded quota/credits and recovery errors. Quality evaluation re-executes a pre-registered, budgeted sample of historical tasks with fixed acceptance checks; it is required for disagreements flagged by the cutover criteria and for promoting a model ranker over the deterministic one. Measure routing overhead, acceptance and total delivery cost per policy. Cutover follows replay and a bounded canary (section 10.4). Rolling back automatic selection keeps ledger ownership and limits intact.
 
 Run `python3 -B scripts/validate.py` for package checks and, once implementation exists, focused router/adapter tests and representative instruction-loading walkthroughs. Report document/package validation, synthetic tests and observed client/provider execution separately.
 
@@ -597,9 +599,9 @@ Self-reviewed on 2026-11-08 using installed Superpowers `writing-plans` 7.0.2: s
 | Default-on could cause inference during setup/status or imply approval of optional features. | Section 3 and F01/F02/F08/F10/F15/F17 separate local controls from actual inference and feature activation. |
 | Existing phase handoff lacked concrete feature regression ownership and executable checkpoints. | The accompanying implementation handoff adds a writing-plans header, review focus, file/interface boundaries and phase-owned checks. |
 
-### v1.5 amendments (2026-11-08)
+### v1.5 amendments (2026-11-08; A14 added later the same day)
 
-Amendments A1–A13 from the [v1.7 implementation plan](../plans/2026-11-08-smart-routing.md), accepted by the user, with A12 applied identically to every provider:
+Amendments A1–A14 from the [v1.7 implementation plan](../plans/2026-11-08-smart-routing.md), accepted by the user, with A12 applied identically to every provider:
 
 | ID | Amendment | Sections |
 |---|---|---|
@@ -613,9 +615,10 @@ Amendments A1–A13 from the [v1.7 implementation plan](../plans/2026-11-08-smar
 | A8 | Class deficits derived from admission records. | 7.2 |
 | A9 | Stateless within-class selection by highest pressure. | 7.3, 13 cases 7–8 |
 | A10 | Default global and per-provider-account concurrency caps. | 7.4, 13 case 24 |
-| A11 | Shadow and canary before cutover; two-part evaluation. | 10.4, 13 |
+| A11 | Replay and canary before cutover; two-part evaluation. | 10.4, 13 |
 | A12 | Billing classification per route; Claude and OpenAI offer the same subscription and API route kinds under one model. | 1, 6.1, 12, 13 case 23 |
 | A13 | OFF-mode `worker_choices` settings shape. | 3, 13 case 25 |
+| A14 | No shadow or simulation mode: a route is active or it is not; the canary is bounded. | 3, 10.4, 12, 13 |
 
 This is an author revision, not an independent review.
 

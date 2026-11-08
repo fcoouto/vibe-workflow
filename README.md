@@ -19,6 +19,8 @@ implementation, including solo work, independently of delegation and these
 features. Question-only and planning chats stay untouched. Manual-title overrides
 remain protected. See the [main-runtime boundary](docs/workstreams-main-port.md).
 
+Use [Review my Project](skills/review-my-project/SKILL.md) to review selected repositories against their own project rules. It runs only the local checks it can confirm are safe and returns findings in chat; it needs no enrollment or database, and it never installs tools or applies fixes without your separate approval.
+
 Use the separate [Manage Observability Integration](skills/manage-observability/SKILL.md) skill for optional observability requests. Langfuse is the first provider; exports are metrics-only and collection stays off. Connection controls use the current canonical checkout and private consent; local task preparation uses current task states. Required local evidence stays intact. Native collection and live execution remain separately qualified; see the [port boundary](docs/d9-observability-preparation.md#selective-port-to-current-main).
 
 Observability activation stays outside project onboarding; successful onboarding may propose the separate skill as an optional follow-up.

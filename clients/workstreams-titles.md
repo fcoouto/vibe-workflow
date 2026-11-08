@@ -101,7 +101,9 @@ implementation and fixes use `WORKING`. A concrete result awaiting acceptance us
 `REVIEW`. Approval that starts another agreed phase returns to `WORKING`; it does
 not complete the whole task. A neutral acknowledgment changes no state.
 
-For required PR delivery, use [delivery completion](delivery.md#completion-and-retention).
+Apply the [PR merge gate](workstreams-naming.md#status-and-accepted-progress) to
+every PR the thread opened or took over; for required PR delivery also use
+[delivery completion](delivery.md#completion-and-retention).
 The existing `WAITING` state covers merge waits; its reason identifies the dependency.
 One or several PRs do not change the title format. A child's wait never assigns
 the parent's state or progress; the parent follows its own accepted scope.
@@ -122,8 +124,10 @@ as independent acceptance or count child work twice.
 
 Use the [meter rules](workstreams-naming.md#status-and-accepted-progress) for both title
 paths. The activity indicator for unmeasured `WORKING` belongs only to the title.
-`DONE` still requires the normal completion evidence gate. Reopening work retains
-accepted milestones unless scope or evidence invalidates them.
+`DONE` still requires the normal completion evidence gate and the PR merge gate;
+observe each PR's remote state before any `DONE` write or completion
+verification, on either path. Reopening work retains accepted milestones unless
+scope or evidence invalidates them.
 
 ### Reopen a completed objective
 

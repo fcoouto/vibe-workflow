@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local settings, quotes and Smart Balance shadow decisions; no live requests."""
+"""Local settings, quotes and Smart Balance decisions; the CLI sends no provider requests."""
 import argparse
 import json
 from pathlib import Path

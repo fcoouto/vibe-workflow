@@ -38,15 +38,15 @@
       ]
     },
     "clients/delegation-requests.md": {
-      "sha256": "f8a9ee20791bdd74c94991a093986b5e2647e47af42dfca9655ccbad95472c3f",
+      "sha256": "4961cc917a607996104f0b2457e8ff070d84fd9e8e6d64543892f4d5ec98c09a",
       "ranges": [
         [
           1,
-          210
+          208
         ],
         [
-          211,
-          291
+          209,
+          298
         ]
       ]
     },
@@ -64,14 +64,14 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "d749f15e62fcb719d8307f4c88eb6e01bf5ce8cf6f0150a096fdc02ce73d8acd",
+      "sha256": "5ea3a7c0c68f87e6b4d9a158e877fb1c990d5901c1063a98975ea8f9501b1f25",
       "ranges": [
         [
           1,
-          52
+          48
         ],
         [
-          53,
+          49,
           63
         ]
       ]
@@ -86,7 +86,7 @@
       ]
     },
     "clients/evidence-completion.md": {
-      "sha256": "b9856b1894e81e7fd2843cf2aea2a0d2bc8e097aab2a243ff001a0bb5d7bab4b",
+      "sha256": "dc845baa7940cc4ec37e953362f095829e01162e3fa982f2b1fd28577bde9914",
       "ranges": [
         [
           1,
@@ -158,11 +158,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "be7d1d96a40e4e42b6e1bf92d51771e7b192235f58cc64f0618392f3afaf49af",
+      "sha256": "3d4297e56f734160e8804eb4f49d771d55796c3836f87c16f48bfebe59b55d04",
       "ranges": [
         [
           1,
-          40
+          59
         ]
       ]
     },
@@ -251,7 +251,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "0e2bc216a9343f7249638acac49641f06472d7ef5cf7933578d9565629fc8c44",
+      "sha256": "7ee67244aba9b9b869d277e9cbebcb66036b5d63b4e8470d85e8c028c947e7f0",
       "ranges": [
         [
           1,
@@ -259,16 +259,16 @@
         ],
         [
           151,
-          183
+          201
         ]
       ]
     },
     "clients/workstreams-protocol.md": {
-      "sha256": "458819d1b2ca2e3698683b93cbdb3a6059f243bb439b01531a7eea1113371852",
+      "sha256": "7e2975c7ab0d0880e7dfeba2cf52fc3ba940c26c353de711198bf377848f121c",
       "ranges": [
         [
           1,
-          64
+          71
         ]
       ]
     },
@@ -295,15 +295,15 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "3e2181c162ed99f440c7cdd0e10117072169502d270938a040b98594c552cf99",
+      "sha256": "98900e9ffc3d39270adcaec65b1f2e5bb036a309e4e37009ee05d681880f4e0e",
       "ranges": [
         [
           1,
-          140
+          141
         ],
         [
-          141,
-          243
+          142,
+          247
         ]
       ]
     },
@@ -512,7 +512,7 @@
       ]
     },
     "skills/manage-usage-routing/references/delegation.md": {
-      "sha256": "a706aae9968c57bd7ae46594f0df20715636eda6a5f544f3a7fadfc0fac4abc2",
+      "sha256": "518602780bb7da2742a90a3c9f3dc977db91c10b9daa400183c35d31058ee10a",
       "ranges": [
         [
           1,
@@ -539,15 +539,19 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "8fa0bfb9d61f8d1644bf3268701818a924565c9eb36fe805bcd282d5bd2e6b00",
+      "sha256": "32341d79db294ecd5efea4f9c2e3bb034eb98754295dd5f33995c92b14e95bbe",
       "ranges": [
         [
           1,
-          124
+          123
         ],
         [
-          125,
+          124,
           248
+        ],
+        [
+          249,
+          250
         ]
       ]
     },
@@ -583,15 +587,15 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "0cb148be1aa4bf217b708c8d11ba4053a34c19c4e1db76a71ee896c6c6ecfc52",
+      "sha256": "28e369aa12bc5f4915dc046af2cdc200510ee19f67459003449743c30a400622",
       "ranges": [
         [
           1,
-          62
+          61
         ],
         [
-          63,
-          85
+          62,
+          116
         ]
       ]
     },
@@ -671,6 +675,42 @@
         [
           1,
           12
+        ]
+      ]
+    },
+    "skills/review-my-project/SKILL.md": {
+      "sha256": "9612243164d3bd741fd6bfd571543a260d8c11a51d74319f392baf1ae86ebc63",
+      "ranges": [
+        [
+          1,
+          12
+        ]
+      ]
+    },
+    "skills/review-my-project/references/procedure.md": {
+      "sha256": "bdda960054041a8db0e5d66232fe0543b566f3baef65d9b5cc5c851e3221c539",
+      "ranges": [
+        [
+          1,
+          44
+        ]
+      ]
+    },
+    "skills/review-my-project/references/retention.md": {
+      "sha256": "bb1b8d39ac26dbe01ab6e5313374b6c8e348577b0b4d9148e2f22db7fb33dc4a",
+      "ranges": [
+        [
+          1,
+          33
+        ]
+      ]
+    },
+    "skills/review-my-project/references/source-structure.md": {
+      "sha256": "d636c0efb74e596b00bbdff64f17853a04ea260ffdfa399be57514f730bd1b13",
+      "ranges": [
+        [
+          1,
+          11
         ]
       ]
     },

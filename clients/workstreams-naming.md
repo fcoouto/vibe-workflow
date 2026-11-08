@@ -135,7 +135,7 @@ Use these canonical task states in the existing task plan:
 | `WAITING` | Work awaits an expected reply, dependency or event. |
 | `BLOCKED` | Work cannot continue without intervention. |
 | `PAUSED` | Work was deliberately put aside. |
-| `DONE` | The thread's agreed scope is complete and verified. |
+| `DONE` | The thread's agreed scope is complete and verified, and the PR merge gate below holds. |
 | `CANCELLED` | Work was closed without completing its agreed scope. |
 
 Show `REVIEW` when the user is asked to review a result, `WAITING` when the
@@ -145,6 +145,24 @@ review, agent-owned next steps, background dependencies and all other states.
 Decide from the actual next action and its owner. Clear the label when the user
 has acted or the next action moves to someone else, even if the task state stays
 the same.
+
+**PR merge gate.** `DONE` also requires every PR the thread opened or took over to
+be observed merged on the remote: provider state merged, with a merge commit (for
+example `gh pr view <PR> --json state,mergedAt,mergeCommit`). A local merge, an
+approval, a readiness marker such as `[READY]`, the user's statement or a title
+does not count. Until then show `WAITING` for the manual merge, or the actual
+`WORKING`/`REVIEW` state while other work remains. A PR closed unmerged keeps the
+thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
+remote state cannot be read, report it unverified and withhold `DONE`.
+
+A thread that opened no PR needs no extra step when its recorded scope excludes
+publication, such as read-only, investigation or review work, or a child scoped
+away from PRs. Any other editable thread needs an explicit no-PR decision in its
+task plan. A PR the plan marks optional under the user's recorded scope decision is
+such a decision; marking it optional after opening it, without that decision,
+is not. Opening a PR after `DONE` reopens the thread to `WORKING`, `REVIEW` or
+`WAITING` by its actual next action. A child's PR gates that child; a parent whose
+deliverable depends on it is gated too.
 
 Compute each thread's progress from currently accepted milestones in its existing
 task plan, with task-appropriate weights when outcomes differ substantially.

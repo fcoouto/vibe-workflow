@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review my Project"
+  short_description: "Review selected repositories with clear evidence and limits"
+  default_prompt: "Use $review-my-project to review the selected repositories."

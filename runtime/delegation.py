@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import evidence, state
+from runtime import evidence, routing, state
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -937,7 +937,12 @@ def _delegation_plan(scope, plan):
     _require(isinstance(jobs, list) and jobs, 'Invalid bounded job plan')
     by_id, claims = {}, {}
     for job in jobs:
-        state._fields(job, ('id', 'role', 'claims', 'dependencies', 'max_attempts'))
+        state._fields(job, ('id', 'role', 'claims', 'dependencies', 'max_attempts'), ('profile',))
+        if 'profile' in job:  # Optional coordinator-written TaskProfile; distinct from guidance profile_ids.
+            try:
+                routing.validate_supplied_profile(job['profile'])
+            except ValueError as error:
+                raise state.StateError(str(error)) from None
         state._text(job['id'], 'delegation job id', 128)
         _require(job['id'] not in by_id and job['role'] in {'worker', 'review', 'coordinator', 'check'}, 'Invalid job identity or role')
         state._integer(job['max_attempts'], 'job attempt limit', 1)
