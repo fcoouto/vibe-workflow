@@ -882,10 +882,15 @@ class CapacityTests(Funded):
             call.update(maximum=budget.MAX_INTEGER, cost=budget.MAX_INTEGER, provision=budget.MAX_INTEGER,
                         incomplete=incomplete)
         data['organizations'][organization]['revision'] = budget.MAX_INTEGER
+        # S3.6 settlement: per-cycle settled charges, per-task charges and the settlement each closed hold carries.
+        data['organizations'][organization]['settled'] = dict(total=budget.MAX_INTEGER, cycles={
+            unique(i, long('cycle')): budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_CYCLES)})
+        data['settled_tasks'] = {'%064x' % i: budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_TASKS)}
         data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
         # An admitted hold at its bound plus the fixed fields dispatch, uncertainty and proof add later (S3.4).
-        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES + budget.DISPATCH_HOLD_BYTES)
+        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES + budget.DISPATCH_HOLD_BYTES
+                                                     + budget.SETTLEMENT_HOLD_BYTES)
                          for i in range(budget.MAX_HOLDS)}
         data['seen_attempts'] = [unique(i, long('s')) for i in range(budget.MAX_SEEN)]
         runs, native = {}, {}
