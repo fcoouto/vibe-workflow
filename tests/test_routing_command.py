@@ -533,14 +533,29 @@ class ClockTests(Base):
         finally:
             service.close()
 
-    def test_cli_switch_is_an_environment_variable(self):
+    def test_cli_switch_is_an_explicit_flag_with_pinned_paths(self):
         self.call(prepare('a1'))
         late = check('a1', now=now() + 10**7)
-        self.assertEqual(json.loads(self.run_cli(['check'], late).stdout)['state'], 'allow')
-        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'check', '--settings', str(self.settings),
-                               '--ledger', str(self.ledger)], input=json.dumps(late).encode(), capture_output=True,
-                              timeout=60, env=dict(os.environ, **{command.TEST_SWITCH: '1'}))
-        self.assertEqual(json.loads(done.stdout)['reason'], 'admission_expired')
+        # The environment cannot turn test inputs on.
+        inherited = subprocess.run([sys.executable, '-B', str(SCRIPT), 'check', '--settings', str(self.settings),
+                                    '--ledger', str(self.ledger)], input=json.dumps(late).encode(),
+                                   capture_output=True, timeout=60,
+                                   env=dict(os.environ, VIBE_ROUTING_TEST_INPUTS='1'))
+        self.assertEqual(json.loads(inherited.stdout)['state'], 'allow')
+        self.assertEqual(json.loads(self.run_cli(['check', '--test-inputs'], late).stdout)['reason'],
+                         'admission_expired')
+        status = json.loads(self.run_cli(['status', '--test-inputs'], dict(v=1, op='status')).stdout)
+        self.assertIs(status['test_inputs'], True)
+        self.assertIs(json.loads(self.run_cli(['status'], dict(v=1, op='status')).stdout)['test_inputs'], False)
+        # Refused unless both stores are pinned explicitly, away from the production defaults.
+        for args in (['check', '--test-inputs'], ['check', '--test-inputs', '--ledger', str(self.ledger)],
+                     ['check', '--test-inputs', '--settings', str(command.default_settings()),
+                      '--ledger', str(self.ledger)]):
+            with self.subTest(args=args):
+                done = subprocess.run([sys.executable, '-B', str(SCRIPT), *args], input=json.dumps(late).encode(),
+                                      capture_output=True, timeout=60)
+                self.assertEqual(done.returncode, 2)
+                self.assertEqual(json.loads(done.stdout), dict(v=1, state='blocked', reason='usage_error'))
 
 
 API = dict(harness='api', funding_pool='api')
@@ -596,6 +611,22 @@ class FundingCheckTests(Base):
         self.call(dict(v=1, op='set', expected_revision=1, change=dict(smart_routing=False)))
         self.assertEqual(self.call(check('api1', request=facts(**API)))['state'], 'allow')
 
+    def test_in_flight_spend_is_counted_twice_until_s36(self):
+        """Pins today's conservative semantics: a dispatched 6M hold on a 10M balance stops once the collector
+        reports 5M, though only ~1M of the hold is still at risk. S3.6 records consumption and replaces this."""
+        with self.open_ledger() as ledger:
+            ledger.enable_organization('small', dict(POLICY, allowance_bp=10000), 0)
+            ledger.observe('small', 10 * M, now(), issued=10 * M)
+        request = prepare('api1', observations=api_observations(organization='small'),
+                          constraints=dict(allowed_strategy_ids=['s-api']))
+        self.assertEqual(self.call(request)['admission']['reserved'], {'org:small': 6 * M})
+        self.dispatch('api1')
+        self.assertEqual(self.call(check('api1', request=facts(**API)))['state'], 'allow')
+        with self.open_ledger() as ledger:
+            ledger.observe('small', 5 * M, now() + 1)
+        self.assertEqual(self.call(check('api1', request=facts(**API))),
+                         dict(v=1, state='blocked', reason='funding_unverified'))
+
     def test_blocked_stale_short_or_expired_funding_blocks_dispatched_api_work(self):
         service = command.Service(self.settings, self.ledger, test_inputs=True)
         self.addCleanup(service.close)
@@ -615,6 +646,59 @@ class FundingCheckTests(Base):
             data['organizations']['personal']['blocked'] = True
         self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'organization_unavailable')
 
+
+
+class TableTests(Base):
+    """A bad stored table falls back to worker choices exactly like a missing one; it never blocks."""
+    def setUp(self):
+        super().setUp()
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[CHOICE]))))
+
+    def raw_table(self, raw, mode=0o600):
+        path = self.settings.parent / 'strategy-table.json'
+        path.unlink(missing_ok=True)
+        path.write_bytes(raw)
+        path.chmod(mode)
+        return path
+
+    def assertFallsBack(self, attempt):
+        response = self.call(prepare(attempt))
+        self.assertEqual((response['state'], response['admission']['mode']), ('admitted', 'worker_choice'), response)
+        self.assertIn('table_unavailable', response['ranking']['reason_codes'])
+        self.release(attempt)
+
+    def test_corrupt_strategy_ids_or_version_fall_back(self):
+        good = dict(strategy_id='s-sub', model='m', effort='high', harness='h')
+        for label, value in (('numeric id', dict(version='t', rows={'worker|code|medium|medium': [dict(good, strategy_id=5)]})),
+                             ('object version', dict(version={}, rows={'worker|code|medium|medium': [good]})),
+                             ('reviewer table', dict(version={}, rows={'worker|code|medium|medium': [dict(good, strategy_id=5)]})),
+                             ('empty id', dict(version='t', rows={'worker|code|medium|medium': [dict(good, strategy_id='')]})),
+                             ('rows not lists', dict(version='t', rows={'worker|code|medium|medium': 'x'}))):
+            with self.subTest(label):
+                self.raw_table(json.dumps(value).encode())
+                self.assertFallsBack('t-' + label.replace(' ', '-'))
+
+    def test_unreadable_tables_still_fall_back(self):
+        folder = self.settings.parent
+        cases = [('nan', lambda: self.raw_table(b'{"version": NaN, "rows": {}}')),
+                 ('nested', lambda: self.raw_table(b'{"rows": ' + b'[' * 100000 + b']' * 100000 + b'}')),
+                 ('huge', lambda: self.raw_table(b'{"rows": {}, "pad": "' + b'x' * (command.MAX_TABLE + 1) + b'"}')),
+                 ('world-writable', lambda: self.raw_table(json.dumps(table()).encode(), 0o666))]
+        for label, make in cases:
+            with self.subTest(label):
+                make()
+                self.assertFallsBack('u-' + label)
+        target = folder / 'real-table.json'
+        target.write_text(json.dumps(table()))
+        target.chmod(0o600)
+        link = folder / 'strategy-table.json'
+        link.unlink()
+        link.symlink_to(target)
+        self.assertFallsBack('u-symlink')
+        outside = command.Service(self.settings, self.ledger, folder / '..' / 'missing' / 'table.json')
+        self.addCleanup(outside.close)
+        response = outside.handle(json.dumps(prepare('u-dotdot')).encode())
+        self.assertEqual((response['state'], response['admission']['mode']), ('admitted', 'worker_choice'))
 
 class RoleTests(Base):
     def test_profile_roles_map_to_worker_choice_roles_once(self):
