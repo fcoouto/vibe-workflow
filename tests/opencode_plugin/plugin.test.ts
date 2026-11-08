@@ -274,18 +274,137 @@ test("session.created events answer lineage without lookups", async () => {
   } finally { t.stop() }
 })
 
-test("an unresolvable session blocks only with positive evidence it may be a managed child", async () => {
+// Every hook an interactive session reaches; none may block, deny or throw.
+async function assertUntouched(t: Awaited<ReturnType<typeof start>>, sessionID: string) {
+  await t.hooks["session.model.request"](modelRequest(sessionID))
+  await t.hooks["tool.execute.before"](spawnCall(sessionID, "other/model"))
+  await t.hooks["tool.execute.before"](spawnCall(sessionID))
+  for (const action of ["webfetch", "read", "execute"]) {
+    const event = { sessionID, action, resources: [], effect: "ask" } as any
+    await t.hooks["permission.evaluate"](event)
+    assert.equal(event.effect, "ask")
+    assert.equal(event.message, undefined)
+  }
+}
+
+const flood = async (t: Awaited<ReturnType<typeof start>>, count: number) => {
+  for (let index = 0; index < count; index++) await t.emit(created(`ses_flood${index}`))
+}
+
+test("probe (i): an interactive subagent of a pre-existing interactive parent is untouched when lookups fail", async () => {
   const t = await start({ check: ["blocked"] })
   try {
+    await t.attach(MANAGED, { deny_actions: ["read", "execute"] })
+    await t.emit(created("ses_isub1", "ses_preexisting1"))  // the parent was created before the plugin loaded
     t.state.failLookup = true
-    await t.emit(created("ses_early1", "ses_lost1"))  // created before any attach
+    await assertUntouched(t, "ses_isub1")
+    t.state.failLookup = false
+    t.state.hangLookup = true
+    await assertUntouched(t, "ses_isub1")
+    assert.equal(t.fake.requests("check").length, 0)
+  } finally { t.stop() }
+})
+
+test("probe (ii): an interactive grandchild stays interactive after its root is flooded out of the cache", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
     await t.attach()
-    await t.emit(created("ses_late1", "ses_lost2"))  // created while a session was attached, parent unresolvable
-    await t.hooks["session.model.request"](modelRequest("ses_early1"))
-    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_late1")), blocked)
-    const event = { sessionID: "ses_late1", action: "read", resources: [], effect: "allow" } as any
-    await t.hooks["permission.evaluate"](event)
-    assert.equal(event.effect, "deny")
+    await t.emit(created("ses_iroot1"))
+    await flood(t, 4100)  // evicts the interactive root's record
+    await t.emit(created("ses_ikid1", "ses_iroot1"))
+    await t.emit(created("ses_igrand1", "ses_ikid1"))
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_igrand1")
+    assert.equal(t.fake.requests("check").length, 0)
+  } finally { t.stop() }
+})
+
+test("probe (iii): failed lookups are remembered briefly, so repeated requests neither block nor wait", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    t.state.hangLookup = true
+    await t.hooks["session.model.request"](modelRequest("ses_slow1"))
+    const lookups = t.lookups.length
+    const began = performance.now()
+    for (let index = 0; index < 5; index++) await assertUntouched(t, "ses_slow1")
+    assert.ok(performance.now() - began < 200, "a remembered failure must not wait again")
+    assert.equal(t.lookups.length, lookups)
+    assert.equal(t.fake.requests("check").length, 0)
+  } finally { t.stop() }
+})
+
+test("a session created while something is attached, with an unknown parent, is interactive", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created("ses_late1", "ses_lost2"))
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_late1")
+  } finally { t.stop() }
+})
+
+test("managed descendants recorded from events survive a cache flood, at any depth, without lookups", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created("ses_mkid1", MANAGED))
+    await t.emit(created("ses_mgrand1", "ses_mkid1"))
+    await t.emit(created("ses_mgreat1", "ses_mgrand1"))
+    await flood(t, 4100)
+    t.state.failLookup = true
+    for (const session of ["ses_mkid1", "ses_mgrand1", "ses_mgreat1"]) {
+      await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), blocked)
+      const event = { sessionID: session, action: "webfetch", resources: [], effect: "allow" } as any
+      await t.hooks["permission.evaluate"](event)
+      assert.equal(event.effect, "deny")
+    }
+    assert.deepEqual(t.lookups, [])
+  } finally { t.stop() }
+})
+
+test("a parent ID naming an attached session makes the new session managed (fails closed)", async () => {
+  const t = await start({ admitted: { provider: "claude-agent", model: "haiku", variant: "low" } })
+  try {
+    await t.attach()
+    await t.emit(created("ses_spoof1", MANAGED))  // e.g. created through the API with that parentID
+    await t.hooks["session.model.request"](modelRequest("ses_spoof1"))
+    assert.equal(t.fake.requests("check").at(-1).attempt_id, "att-1")
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_spoof1", "primary", { ...HAIKU, id: "sonnet" })), blocked)
+  } finally { t.stop() }
+})
+
+test("detaching the root releases its recorded descendants", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created("ses_mkid1", MANAGED))
+    await t.emit(created("ses_mgrand1", "ses_mkid1"))
+    await t.rpc("detach", { session_id: MANAGED })
+    await t.attach("ses_other9")
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_mgrand1")
+  } finally { t.stop() }
+})
+
+test("a full managed-descendant set blocks only managed sessions", async () => {
+  const t = await start({})
+  try {
+    await t.attach()
+    for (let index = 0; index < 1024; index++) await t.emit(created(`ses_many${index}`, MANAGED))
+    await t.emit(created("ses_iroot1"))
+    await t.emit(created("ses_ikid1", "ses_iroot1"))
+    await assert.rejects(t.hooks["tool.execute.before"](spawnCall(MANAGED, "claude-agent/haiku#low")),
+      (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
+    await t.hooks["session.model.request"](modelRequest(MANAGED))  // the full set alone does not stop the root
+    await t.emit(created("ses_many1024", MANAGED))  // one more managed descendant despite the limit
+    for (const session of [MANAGED, "ses_many3", "ses_many1024"]) {
+      await assert.rejects(t.hooks["session.model.request"](modelRequest(session)),
+        (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
+    }
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_ikid1")
+    await assertUntouched(t, "ses_iroot1")
   } finally { t.stop() }
 })
 
@@ -540,8 +659,12 @@ test("helper extraction matches the documented adapter shapes", () => {
   assert.deepEqual(spawnModel("claude-agent/haiku#low"), { provider: "claude-agent", model: "haiku", variant: "low" })
   assert.equal(spawnModel("haiku"), null)
   for (const name of ["GITHUB_TOKEN", "OPENAI_API_KEY", "APIKEY", "SSH_AUTH_SOCK", "DB_PASSWORD", "DATABASE_URL", "SENTRY_DSN",
-    "PG_CONNECTION_STRING"]) assert.ok(credentialEnvName(name), name)
-  for (const name of ["PATH", "HOME", "KEYBOARD", "TOKENIZER_PATH", "MONKEY", "AWS_PROFILE", "KUBECONFIG", "DATABASE_HOST"]) {
+    "PG_CONNECTION_STRING", "PASS", "DB_PASS", "PASSPHRASE", "SSH_PASSPHRASE", "SECRETS", "APP_SECRETS", "JWT", "JWT_SIGNING",
+    "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "PAT", "REDIS_URL", "MONGODB_URI", "MONGO_URL", "POSTGRES_URL", "githubToken",
+    "dbPassword", "apiKey"]) assert.ok(credentialEnvName(name), name)
+  for (const name of ["PATH", "HOME", "KEYBOARD", "TOKENIZER_PATH", "MONKEY", "AWS_PROFILE", "KUBECONFIG", "DATABASE_HOST",
+    "LANG", "EDITOR", "TERM", "PWD", "npm_config_cache", "GIT_AUTHOR_NAME", "GIT_DIR", "TOKENIZERS_PARALLELISM", "AUTHOR",
+    "PASSENGER", "NODE_PATH", "REDIS_HOST", "OLDPWD"]) {
     assert.ok(!credentialEnvName(name), name)
   }
 })

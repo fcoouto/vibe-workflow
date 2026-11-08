@@ -242,6 +242,14 @@ class ToolAndPolicyHooks(unittest.TestCase):
         result = opencode.normalize_hook("shell.create.before", {"env": env})
         self.assertEqual(result["credential_env_names"], ["DATABASE_URL", "PG_CONNECTION_STRING", "SENTRY_DSN"])
 
+    def test_password_token_and_url_names_are_credentials_and_common_names_are_not(self):
+        credentials = ["PASS", "PASSPHRASE", "SECRETS", "JWT", "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "REDIS_URL",
+                       "MONGODB_URI", "githubToken", "dbPassword"]
+        ordinary = ["PATH", "HOME", "LANG", "EDITOR", "TERM", "PWD", "npm_config_cache", "GIT_AUTHOR_NAME",
+                    "TOKENIZERS_PARALLELISM", "AUTHOR"]
+        result = opencode.normalize_hook("shell.create.before", {"env": dict.fromkeys(credentials + ordinary, "x")})
+        self.assertEqual(result["credential_env_names"], sorted(credentials))
+
     def test_unknown_hook_is_typed(self):
         result = opencode.normalize_hook("session.prompt", {"sessionID": "ses_hook1", "prompt": SECRET})
         self.assertEqual(result, {"schema": 1, "client": "opencode", "kind": "unknown", "source": "hook",
