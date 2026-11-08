@@ -8,6 +8,32 @@ Task S3.4 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing
 | --- | --- | --- |
 | [S3.1 command contract](superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command) (dispatch, derived ids, handshake, unmanaged sessions, lost acknowledgments), `runtime/routing.py`, `runtime/usage_budget.py` and `scripts/routing.py` | One write transaction re-checks the admission and issues one random token stored only as a hash; repeated callers get the decision, never a token; refusals consume nothing; no host call inside the transaction; deterministic domain-separated `ses_`/`msg_` ids with collision refusal; strict token checks for sessions and tokens, S3.1 rules for attempt-only checks without one; `unmanaged` for sessions no remembered attempt derives; `uncertain` keeps exposure; release after dispatch only with a `message_absent` proof read strictly after the uncertain mark; retry only by re-sending the same ids; `check` stays read-only; tokens never in the ledger, `status` or logs | Spec §7.4 and §8 (atomic authorization, dispatch identity, lost acknowledgments, bounded uncertainty); plan Task S3.4 and the coordinator's 8 November 2026 brief; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08) P0.7 rows and `p0-7-dispatch-recovery.json`; S3.3 shim attach contract on branch `smart-routing-s33`; `tests/test_routing_dispatch.py` |
 
+## Onboarding policy discovery follow-up — 8 November 2026
+
+The user authorized the onboarding improvements proposed after the entry-point
+audit. This is an authoring-procedure clarification of the existing accepted
+contracts, not a new Toolkit adoption, hook, state store or runtime gate.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit selective entry point, complete procedures, context recovery and canonical ownership | Policy index and Context/Handoff; `skills/onboard-my-project/references/procedure.md#author-the-policy-entry-point` adapts a compact starting section without copying the policy trigger table. |
+| Portable lookup of installed local targets, retained task pins, customization and recoverable updates | Project Scope and Project Onboarding's authoring/recovery rules; shared guidance uses the package name and startup/skill resolution or an existing repository-relative target. Exact machine/cache paths stay in private setup evidence. The procedure preserves project-owned sections and uses existing file configuration for idempotence, stale-pointer replacement and undo. |
+| Representative instruction paths and honest observed/unobserved outcomes | Project Onboarding's completion rules and Workflow Maintenance; `#verify-policy-discovery` separates static delivery from fresh-context routing and client startup proof without introducing a mandatory maintainer campaign. |
+| Plan and user-facing completion remain aligned with evidence | `docs/onboard-my-project-plan.md#policy-discovery-follow-up--8-november-2026` records the authorized slice; Reviewed Configuration reuses the procedure's evidence layers. Package validation and independent instruction review do not establish fresh-client execution. |
+
+## Explicit project policy entry points — 8 November 2026
+
+The user requested direct policy discovery in this repository and the existing
+Opus checkout after an audit found that their root instructions relied on indirect
+links or startup delivery. This applies the existing local loading contracts;
+it adopts no new Toolkit component and changes no hook or runtime authority.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit, selective retrieval of complete local policies before the affected action; reassessment and context recovery | `policies/00-index.md` and `policies/07-context-and-handoff.md`; this repository's `AGENTS.md` now starts at the index and preserves its canonical trigger table. |
+| Installed-package resolution, preserved project instructions, current state and task pins; block only dependent actions on unresolved instructions | `policies/01-project-scope.md` and `policies/10-project-onboarding.md#apply-compatible-changes`; Opus's local entry point links its existing installed package, retains its project rules and Workstreams choice, and requires source reconciliation when pointers conflict. |
+| Separate guidance, enforcement and observed execution; maintain authoring coverage without routine provenance loading | Existing startup and instruction-authoring contracts; repository sections route conditional client/skill procedures and keep source coverage in authoring. Package checks and instruction walkthroughs are distinct from fresh-client delivery evidence. |
+
 ## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
 
 Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.

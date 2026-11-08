@@ -7,10 +7,10 @@ Write a readable Markdown file beside the private plan, outside source control a
 Explain the following when relevant, using short paragraphs or a small table:
 
 - **Scope:** selected project, checkout and clients; preserve the user's existing choices.
-- **Changes:** each concrete path or resource, what changes and why. Use the [document adaptation](procedure.md#adapt-project-documents) mapping; explain reuse of canonical equivalents rather than imply every template creates a file. Link large exact proposals rather than pasting JSON or hashes into the summary.
+- **Changes:** each concrete path or resource, what changes and why. Use the [document adaptation](procedure.md#adapt-project-documents) mapping; identify the actual shared entry point and its portable local-policy lookup. Keep exact machine/cache paths in private setup evidence. Explain reuse of canonical equivalents rather than imply every template creates a file. Link large exact proposals rather than pasting JSON or hashes into the summary.
 - **Next:** the next authorized action, checks and remaining prerequisites. Do not turn internal transaction stages into user approval steps.
 - **Decisions needed:** only unresolved material exceptions. Say “None” when none remain. Describe each exception, its consequence and recommendation; identify the dependent work that waits.
-- **Status:** what has actually completed and what remains. Distinguish completed file configuration from client startup integration and any selected managed activation. Report missing startup proof under [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish); say managed activation is pending only when selected and its required proof is missing. Never translate a successful helper exit into native qualification.
+- **Status:** what has actually completed and what remains. Use the [policy-discovery evidence layers](procedure.md#verify-policy-discovery) to distinguish written guidance, checked local paths/preservation, startup integration and observed agent routing. Report missing startup proof under [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish); say managed activation is pending only when selected and its required proof is missing. Never translate a successful helper exit into native qualification.
 - **Recovery:** what can resume or be undone, which later edits or uncertain ownership will be preserved, and any limit that affects the user. Link exact recovery instructions and retained records; do not promise lossless recovery without those records.
 - **Technical records:** direct links to the concrete plan, proposed file contents, check results and recovery material. Keep internal stage codes, schema fields, digests and receipt identifiers here.
 
@@ -26,13 +26,13 @@ These illustrate wording, not plans or approval for any real project. Replace ex
 >
 > **Scope:** Set up useful project guidance for this checkout in Codex, preserving existing project settings.
 >
-> **Changes:** Add verified project commands and local workflow pointers to the existing `handbook/development.md`, which already owns preparation, quality and setup notes; link it from the existing project instructions. Preserve the custom README, shared and nested instructions, product overview and architecture filenames. Keep their useful content and update only affected links; record why no interface-design document or unselected-client file is needed. Reuse valid startup-only membership. Retain private preimages and recovery instructions beside the setup plan.
+> **Changes:** Add verified project commands to the existing `handbook/development.md`, which already owns preparation, quality and setup notes. Make the shared project instructions resolve the installed `vibe-workflow` package through the current client's startup or skill pointers and read its policy index before task work; link the handbook for project details. Preserve the custom README, shared and nested rules, memory pointers, preferences, product overview and architecture filenames. Update only affected content; record why no interface-design document or unselected-client file is needed. Reuse valid startup-only membership. Retain private preimages and recovery instructions beside the setup plan.
 >
 > **Next:** Apply the reviewed file changes and run the project's accepted checks natively. Verify startup integration through the [onboarding procedure](../../../policies/10-project-onboarding.md#client-startup-integration). This basic setup creates no runtime database and requires no managed task activation.
 >
 > **Decisions needed:** None. The onboarding request covers these effects.
 >
-> **Status:** The file proposal is reviewed; application and project checks remain. Startup membership is present, but native-session delivery has not been observed, so client integration remains pending.
+> **Status:** The file proposal is reviewed; application, local-path/preservation checks and project checks remain. Startup membership is present; trust and handler execution still need verification, and native-session delivery and agent policy routing have not been observed. Client integration remains pending.
 >
 > **Recovery:** Use the retained preimages and file-operation record to resume or undo changes still matching this operation's results. Preserve later edits and reconcile uncertain ownership.
 >
