@@ -455,7 +455,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.org()
         state = self.ledger.snapshot()
         self.assertNotIn('slot', state)
-        self.assertEqual(state['version'], 2)
+        self.assertEqual(state['version'], 3)
         self.begin('first', 5 * M); self.begin('second', 5 * M)
         self.assertEqual(self.ledger.credit_headroom('org'), 18 * M)
 
@@ -495,7 +495,7 @@ class ParallelLedgerTests(unittest.TestCase):
                 org['floor'] = 160; del org['issued']
             db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
         migrated = self.ledger.snapshot()
-        self.assertEqual(migrated['version'], 2)
+        self.assertEqual(migrated['version'], 3)
         self.assertNotIn('slot', migrated)
         self.assertNotIn('floor', migrated['organizations']['org'])
         self.assertEqual(migrated['organizations']['org']['issued'], 800)
@@ -503,7 +503,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.ledger.observe('org', 790, 110)  # A write persists the migration.
         with closing(sqlite3.connect(self.path)) as db:
             stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
-        self.assertEqual(stored['version'], 2)
+        self.assertEqual(stored['version'], 3)
         self.assertNotIn('slot', stored)
 
     # S1.3 padded reservations
@@ -626,5 +626,190 @@ class ParallelLedgerTests(unittest.TestCase):
         self.begin('a', M)
         self.assertEqual(self.begin('a', M)['task'], 'a')
 
+    # S2.6 multi-pool holds and persisted admission records
+    def raw(self, mutate):
+        with closing(sqlite3.connect(self.path)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            mutate(data)
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+
+    def record(self, attempt, **extra):
+        return dict(attempt_id=attempt, task=attempt, bucket=['implementer', 'medium'], shares=dict(api=1.0, subscription=0.0),
+                    route='r', **extra)
+
+    def decide(self, attempt, vector, account='acct'):
+        return lambda data: dict(record=self.record(attempt), vector=vector, account=account)
+
+    def test_version_two_state_migrates_and_keeps_in_flight_claims(self):
+        self.org()
+        self.begin('open', 5 * M)
+        self.raw(lambda data: (data.update(version=2), data.pop('holds'), data.pop('admissions')))
+        migrated = self.ledger.snapshot()
+        self.assertEqual((migrated['version'], migrated['holds'], migrated['admissions']), (3, {}, []))
+        self.assertEqual(migrated['runs']['open']['calls']['count']['maximum'], 5 * M)
+        self.assertEqual(self.ledger.credit_headroom('org'), 23 * M)  # 30 - 2% protected - 5 held
+        self.ledger.admit('new', self.decide('new', {'win:pool/w': 5}))  # A write persists the migration.
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 3)
+
+    def test_admit_writes_hold_and_record_together_and_duplicates_return_the_record(self):
+        first = self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
+        before = self.ledger.snapshot()
+        self.assertEqual(before['holds']['a']['windows'], {'win:p/w': 7})
+        self.assertEqual(self.ledger.held(before), {'win:p/w': 7})
+        again = self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
+        self.assertEqual(again, dict(first, duplicate=True))
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    def test_blocked_and_failed_decisions_change_nothing(self):
+        before = self.ledger.snapshot()
+        self.assertEqual(self.ledger.admit('a', lambda data: dict(status='pending')), dict(status='pending'))
+        def boom(data): raise budget.BudgetError('boom')
+        with self.assertRaisesRegex(budget.BudgetError, 'boom'):
+            self.ledger.admit('b', boom)
+        self.assertEqual(self.ledger.snapshot(), before)
+
+    def test_closing_an_attempt_releases_its_hold_and_its_concurrency_place(self):
+        self.ledger.set_caps(total=1, per_account=1)
+        self.ledger.admit('a', self.decide('a', {'win:p/w': 7}, 'org'))
+        self.org()
+        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+            self.begin('run', M)  # a hold counts against the same caps as a run
+        self.ledger.close_attempt('a', 'not_dispatched')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
+        self.begin('run', M)
+        with self.assertRaisesRegex(budget.BudgetError, 'attempt_missing'):
+            self.ledger.close_attempt('nope', 'complete')
+
+    def test_admission_records_are_bounded_and_never_prune_open_holds(self):
+        for i in range(budget.MAX_ADMISSIONS + 5):
+            self.ledger.admit('a%d' % i, self.decide('a%d' % i, {}))
+            self.ledger.close_attempt('a%d' % i, 'not_dispatched')
+        state = self.ledger.snapshot()
+        self.assertEqual(len(state['admissions']), budget.MAX_ADMISSIONS)
+        self.assertEqual(state['admissions'][-1]['attempt_id'], 'a%d' % (budget.MAX_ADMISSIONS + 4))
+
+    # S2.6 review follow-up: hold states, reuse and hold-to-run conversion
+    def test_only_established_outcomes_release_a_hold(self):
+        self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
+        for bad in ('timeout', None, 'released', 3):
+            with self.subTest(bad=bad), self.assertRaisesRegex(budget.BudgetError, 'invalid_outcome'):
+                self.ledger.close_attempt('a', bad)
+        self.ledger.mark_dispatched('a')
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'not_dispatched')  # a dispatched attempt did run
+        self.ledger.close_attempt('a', 'uncertain')
+        self.assertEqual(self.ledger.snapshot()['holds']['a']['state'], 'uncertain')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {'win:p/w': 7})
+        self.ledger.close_attempt('a', 'complete')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'complete')  # already released
+
+    def test_hold_state_transitions_are_ordered(self):
+        self.ledger.admit('a', self.decide('a', {}))
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'complete')  # never dispatched
+        self.ledger.mark_uncertain('a')
+        with self.assertRaisesRegex(budget.BudgetError, 'hold_state_forbidden'):
+            self.ledger.mark_dispatched('a')
+
+    def test_recent_attempt_ids_stay_rejected_after_their_records_are_pruned(self):
+        for i in range(budget.MAX_ADMISSIONS + 3):
+            self.ledger.admit('a%d' % i, self.decide('a%d' % i, {}))
+            self.ledger.close_attempt('a%d' % i, 'not_dispatched')
+        self.assertIsNone(self.ledger.admission(self.ledger.snapshot(), 'a0'))
+        with self.assertRaisesRegex(budget.BudgetError, 'attempt_id_in_use'):
+            self.ledger.admit('a0', self.decide('a0', {}))
+        self.assertLessEqual(len(self.ledger.snapshot()['seen_attempts']), budget.MAX_SEEN)
+
+    def test_hold_converts_to_a_run_claim_counted_once(self):
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+        self.ledger.set_caps(total=1, per_account=1)
+        self.ledger.admit('a', lambda data: dict(record=self.record('a'), vector={'org:org': 6 * M, 'win:sub/5h': 12},
+                                                 account='acct', now=101, revision=1))
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)  # the hold is part of R before conversion
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct'])
+        run = self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'), next_request_bound=0)
+        self.assertEqual((run['calls']['count']['maximum'], run['account']), (6 * M, 'acct'))
+        state = self.ledger.snapshot()
+        self.assertEqual(budget.Ledger.open_accounts(state), ['acct'])  # one place: the attempt, not run plus hold
+        self.assertEqual(self.ledger.held(state), {'win:sub/5h': 12})  # the dollar amount moved to the run
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
+        # The run owns the attempt now; its window claim stays held until the run closes.
+        self.assertEqual((state['holds']['a']['state'], state['holds']['a']['amount']), ('converted', 0))
+        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+            self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'))
+
+    def test_dollar_holds_pass_the_same_gates_as_begin(self):
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+        decide = lambda vector, revision=1, now=101: (lambda data: dict(  # noqa: E731
+            record=self.record('a'), vector=vector, account='acct', now=now, revision=revision))
+        for vector, revision, now, reason in (({'org:org': 31 * M}, 1, 101, 'insufficient_headroom'),
+                                              ({'org:ghost': M}, 1, 101, 'organization_unconfigured'),
+                                              ({'org:org': M}, 2, 101, 'policy_revision_changed'),
+                                              ({'org:org': M}, 1, 5000, 'balance_stale_or_missing'),
+                                              ({'org:org': M, 'org:other': M}, 1, 101, 'invalid_admission'),
+                                              ({'pool/w': 1}, 1, 101, 'invalid_admission'),
+                                              ({'win:p/w': 10**30}, 1, 101, 'invalid_integer')):
+            with self.subTest(vector=vector, reason=reason), self.assertRaisesRegex(budget.BudgetError, reason):
+                self.ledger.admit('a', decide(vector, revision, now))
+        self.assertEqual(self.ledger.snapshot()['holds'], {})
+        self.ledger.admit('a', decide({'org:org': 30 * M}))
+        self.assertEqual(self.ledger.headroom('org'), 0)
+        with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
+            self.begin('run', 1)  # S1 begin sees the hold (holds are part of R)
+
+    def test_faulty_decisions_are_refused_by_the_ledger_itself(self):
+        """Ledger.admit re-checks a decision; each case below fails if its check is removed."""
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+
+        def decide(vector, account='acct', **outcome):
+            values = dict(now=101, revision=1)
+            values.update(outcome)
+            return lambda data: dict(record=self.record('x'), vector=vector, account=account,
+                                     **{k: v for k, v in values.items() if v is not None})
+        cases = dict(overdraw=(decide({'org:org': 30 * M + 1}), 'insufficient_headroom'),
+                     stale=(decide({'org:org': M}, now=100 + budget.FRESH_SECONDS + 1), 'balance_stale_or_missing'),
+                     revision=(decide({'org:org': M}, revision=7), 'policy_revision_changed'),
+                     missing_now=(decide({'org:org': M}, now=None), 'invalid_integer'),
+                     two_orgs=(decide({'org:org': M, 'org:org2': M}), 'invalid_admission'),
+                     negative_window=(decide({'win:p/w': -1}), 'invalid_integer'))
+        for label, (faulty, reason) in cases.items():
+            with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, reason):
+                self.ledger.admit('x', faulty)
+        self.ledger.set_caps(total=2, per_account=1)
+        self.begin('run', M)  # counts under its organization
+        for label, account in (('per_account', 'org'), ('total', 'other')):
+            if label == 'total':
+                self.ledger.admit('y', lambda data: dict(record=self.record('y'), vector={}, account='third'))
+            with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
+                self.ledger.admit('x', decide({}, account=account))
+        self.assertEqual(sorted(self.ledger.snapshot()['holds']), ['y'])
+
+    def test_written_ledgers_with_the_old_hold_shape_are_repaired(self):
+        def old(data):
+            data['holds'] = {'x': dict(account='acct', task='t', vector={'p/w': 7}, closed=False)}
+            data.pop('seen_attempts')
+        self.raw(old)
+        state = self.ledger.snapshot()
+        self.assertEqual(state['holds']['x']['state'], 'admitted')
+        self.ledger.close_attempt('x', 'not_dispatched')  # no raw KeyError on a pre-fix hold
+        self.assertEqual(state['seen_attempts'], [])
+        self.assertEqual(state['holds']['x']['windows'], {'win:p/w': 7})
+        self.assertEqual((state['holds']['x']['organization'], state['holds']['x']['amount']), (None, 0))
+
+    def test_pruning_never_drops_open_or_uncertain_holds(self):
+        with self.ledger.transaction() as data:
+            for i in range(budget.MAX_HOLDS - 1):
+                data['holds']['c%d' % i] = dict(account='a', task='t', organization=None, amount=0, cycle=None,
+                                                windows={}, closed=True, state='released')
+            data['holds']['u'] = dict(account='a', task='t', organization=None, amount=0, cycle=None,
+                                      windows={'win:p/w': 1}, closed=False, state='uncertain')
+        self.ledger.admit('n', self.decide('n', {}))
+        holds = self.ledger.snapshot()['holds']
+        self.assertIn('u', holds)
+        self.assertIn('n', holds)
+        self.assertLess(len(holds), budget.MAX_HOLDS)
 
 if __name__ == '__main__': unittest.main()
