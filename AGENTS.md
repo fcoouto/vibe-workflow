@@ -12,7 +12,7 @@
 - Run the full suite with `python3 -B -m unittest discover -s tests` when runtime, hook or policy behavior changes; it takes many minutes.
 - Publish completed task changes by committing, pushing a task branch and opening a draft PR. Merge into `main` only an independently reviewed PR marked `[READY]` after the local checks pass; the repository has no CI or branch protection.
 - Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
-- Obsidian memory: the user's vault at `~/ai-memory-vault` (start with `MEMORY.md`) is user-level and separate from this repository. Read it for cross-project context when relevant; write to it only when asked, and never copy vault content into repository files.
+- Memory: the user-level vault `~/ai-memory-vault` is plain files, with no vault software or MCP server. Before project work, read its `MEMORY.md` index and open topic files only when relevant. Before saving, updating, migrating or pruning, read its `INSTRUCTIONS.md` in full and follow its narrow test and growth policy. Keep this section intact; it is the vault's load path.
 - Create release archives only when requested.
 - Report package validation and observed client execution separately.
 - Use `main` as the integration branch and PR destination. Merge only completed, reviewed slices against current `main`; preserve unfinished work separately and retain newer changes when reconciling older branches.
