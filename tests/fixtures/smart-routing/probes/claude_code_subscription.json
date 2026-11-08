@@ -1,0 +1,26 @@
+{
+  "probe": "claude -p on the Claude subscription (Claude Code 2.1.311, --output-format stream-json)",
+  "observed": "2026-11-08",
+  "route": {"provider": "anthropic", "harness": "claude-code", "credential": "subscription-login", "api_key_source": "none"},
+  "result": {
+    "model": "claude-haiku-5-5",
+    "rate_limit_event": {
+      "status": "allowed",
+      "rateLimitType": "five_hour",
+      "overageStatus": "rejected",
+      "overageDisabledReason": "org_level_disabled",
+      "isUsingOverage": false,
+      "unifiedWindows": {
+        "five_hour": {"utilization": 0.11, "resetsAt": 1794178200, "status": "allowed"},
+        "seven_day": {"utilization": 0.03, "resetsAt": 1794477600, "status": "allowed"}
+      }
+    },
+    "usage_tokens": {"input": 2, "output": 4},
+    "total_cost_usd_notional": 0.00459472
+  },
+  "notes": [
+    "utilization is a 0-1 fraction per window; resetsAt is epoch seconds",
+    "extra usage was rejected at the organization level, so this route cannot spill into paid overage",
+    "total_cost_usd is a token-price estimate, not a charge to a subscription"
+  ]
+}

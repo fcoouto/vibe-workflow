@@ -1,0 +1,21 @@
+{
+  "probe": "codex app-server account/rateLimits/read (Codex 0.167.0), read-only, no model tokens",
+  "observed": "2026-11-08",
+  "route": {"provider": "openai", "harness": "codex", "credential": "chatgpt-login"},
+  "result": {
+    "ordinaryUsageAllowed": false,
+    "rateLimits": {
+      "limitId": "codex",
+      "primary": {"usedPercent": 100, "windowDurationMins": 10080, "resetsAt": 1794254316},
+      "secondary": null,
+      "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+      "spendControlReached": false,
+      "rateLimitReachedType": "rate_limit_reached"
+    }
+  },
+  "notes": [
+    "usedPercent is 0-100 here, unlike the Claude 0-1 fraction: units differ per provider",
+    "an exhausted weekly window with no credits: the route has no headroom until resetsAt",
+    "account id, plan type and upsell text removed"
+  ]
+}
