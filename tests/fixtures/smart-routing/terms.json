@@ -1,0 +1,16 @@
+[
+ {
+  "model": "free-open",
+  "zero_retention": true,
+  "no_training": true,
+  "forbids_confidential": false,
+  "user_opt_in": false
+ },
+ {
+  "model": "free-private",
+  "zero_retention": false,
+  "no_training": false,
+  "forbids_confidential": true,
+  "user_opt_in": false
+ }
+]

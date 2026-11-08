@@ -1,0 +1,103 @@
+[
+ {
+  "id": "guide-1",
+  "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "checked_at": "2026-11-01T00:00:00Z",
+  "rows": [
+   {
+    "role": "worker",
+    "task_family": "implementation",
+    "complexity_band": "medium",
+    "risk_band": "medium",
+    "strategies": [
+     {
+      "model": "alpha-large",
+      "effort": "high",
+      "harness": "native",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     },
+     {
+      "model": "alpha-small",
+      "effort": "low",
+      "harness": "native",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     }
+    ]
+   },
+   {
+    "role": "worker",
+    "task_family": "implementation",
+    "complexity_band": "high",
+    "risk_band": "high",
+    "strategies": [
+     {
+      "model": "alpha-large",
+      "effort": "max",
+      "harness": "native",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     },
+     {
+      "model": "ghost-model",
+      "effort": "high",
+      "harness": "native",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     },
+     {
+      "model": "alpha-large",
+      "effort": "turbo",
+      "harness": "native",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     }
+    ]
+   },
+   {
+    "role": "worker",
+    "task_family": "implementation",
+    "complexity_band": "low",
+    "risk_band": "low",
+    "strategies": [
+     {
+      "model": "beta-new",
+      "effort": "low",
+      "harness": "native",
+      "evidence_refs": []
+     }
+    ]
+   },
+   {
+    "role": "profiler",
+    "task_family": "general",
+    "complexity_band": "low",
+    "risk_band": "low",
+    "strategies": [
+     {
+      "model": "free-open",
+      "effort": "low",
+      "harness": "gateway",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     },
+     {
+      "model": "free-private",
+      "effort": "low",
+      "harness": "gateway",
+      "evidence_refs": [
+       "guide-1"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+]
