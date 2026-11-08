@@ -9,6 +9,10 @@
 - Preserve the user's permissions, model choices, subscriptions, and customizations.
 - Preserve the user's chosen coordinator model and reasoning. Before delegating implementation or review, follow [worker selection](policies/03-agent-delegation.md#select-capability-and-dispatch), including cached official platform guidance and its refresh rules.
 - Validate with `python3 -B scripts/validate.py`.
+- Run the full suite with `python3 -B -m unittest discover -s tests` when runtime, hook or policy behavior changes; it takes many minutes.
+- Publish completed task changes by committing, pushing a task branch and opening a draft PR. Merge into `main` only an independently reviewed PR marked `[READY]` after the local checks pass; the repository has no CI or branch protection.
+- Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
+- Obsidian memory: the user's vault at `~/ai-memory-vault` (start with `MEMORY.md`) is user-level and separate from this repository. Read it for cross-project context when relevant; write to it only when asked, and never copy vault content into repository files.
 - Create release archives only when requested.
 - Report package validation and observed client execution separately.
 - Use `main` as the integration branch and PR destination. Merge only completed, reviewed slices against current `main`; preserve unfinished work separately and retain newer changes when reconciling older branches.
