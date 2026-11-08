@@ -103,17 +103,24 @@ def _blocked(current, baseline):
     return dict(ok=False, deferred=True, reason='manual_title')
 
 
-def deliver(session, desired, baseline=None, *, transport=None, attempts=ATTEMPTS, backoff=BACKOFF,
+def deliver(session, desired, baseline=None, *, adopt=False, transport=None, attempts=ATTEMPTS, backoff=BACKOFF,
             timeout=CALL_TIMEOUT, deadline=DEADLINE, sleep=time.sleep, clock=time.monotonic):
-    """Write one managed title; never raise or print. A deferral leaves the next update to retry."""
+    """Write one managed title; never raise or print. A deferral leaves the next update to retry.
+
+    `adopt=True` is the one-time initial adoption: it may replace the title first
+    observed by this call. The caller keeps the returned baseline afterwards.
+    """
     try:
         _session(session)
         _title(desired)
         if baseline is not None and not isinstance(baseline, str):
             raise ValueError('Invalid baseline')
+        if type(adopt) is not bool or (adopt and baseline is not None):
+            raise ValueError('Adoption applies only before a baseline exists')
     except ValueError:
         return dict(ok=False, deferred=False, reason='invalid_request')
     reason = 'failed'
+    adopted = None  # The unknown-owner title this call is authorized to replace.
     try:
         end = clock() + deadline
         for attempt in range(attempts):
@@ -126,15 +133,18 @@ def deliver(session, desired, baseline=None, *, transport=None, attempts=ATTEMPT
                 with (transport or (lambda: OpenCodeTitles(timeout=timeout, deadline=end, clock=clock)))() as native:
                     current = native.read(session)
                     if current == desired:
-                        return dict(ok=True, deferred=False, reason=None)
-                    blocked = _blocked(current, baseline)
-                    if blocked is not None:
-                        return blocked
+                        return dict(ok=True, deferred=False, reason=None, baseline=desired)
+                    if adopt and adopted is None:
+                        adopted = current
+                    if not adopt or current != adopted:
+                        blocked = _blocked(current, baseline)
+                        if blocked is not None:
+                            return blocked
                     native.write(session, desired)
                     if native.read(session) != desired:
                         # A concurrent edit may own the title now; never write over it.
                         return dict(ok=False, deferred=True, reason='readback')
-                    return dict(ok=True, deferred=False, reason=None)
+                    return dict(ok=True, deferred=False, reason=None, baseline=desired)
             except TitleTransportError as error:
                 reason = error.reason
     except Exception:
