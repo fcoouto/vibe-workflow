@@ -19,6 +19,8 @@ _ACTUAL_ACQUIRE = startup.acquire_project_entry
 
 
 class OnboardingFixture(unittest.TestCase):
+    client = 'codex'
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-")
         self.addCleanup(self.temp.cleanup)
@@ -41,7 +43,7 @@ class OnboardingFixture(unittest.TestCase):
         self.source = self.directory / "catalog.md"
         self.source.write_text("# Complete catalog\nfixture\nnew-tool\n")
         self.source.chmod(0o600)
-        self.record = {"schema_version": 1, "clients": ["codex"],
+        self.record = {"schema_version": 1, "clients": [self.client],
             "toolkit": {"commit": "a" * 40, "origin": "https://example.invalid/toolkit",
                 "acquisition": "online", "provenance": "fixture retrieval, not live evidence",
                 "trust": "recorded", "files": [{"path": "catalog.md", "local_path": str(self.source),
@@ -241,13 +243,13 @@ class ScopedBirthFixture(OnboardingFixture):
             identity = assessment["identity"]
             configuration = dict(policy_digest=plan["package_pins"]["policy_digest"],
                 runtime_digest=plan["package_pins"]["runtime_digest"], runtime=None, shared_dependencies=[], evidence=[ref])
-            entry = dict(client="codex", configuration=configuration, activation=dict(status="configured",
+            entry = dict(client=self.client, configuration=configuration, activation=dict(status="configured",
                 qualification="pending", accepted_scope_digest=None, transaction_id=None, evidence=[], qualification_binding=None))
             repositories.append(dict(repository_id=owner["repository_id"], primary_root=owner["primary_root"],
                 git_common_dir=owner["git_common_dir"], binding={k:identity["binding"][k] for k in ("primary_root","git_common_dir")},
                 membership="joined", checkouts=[dict(checkout_id=owner["checkout_id"], root=owner["root"], git_dir=owner["git_dir"],
                     binding={k:identity["binding"][k] for k in ("root","git_dir")}, clients=[entry])]))
-            member = dict(repository_id=owner["repository_id"], checkout_id=owner["checkout_id"], client="codex")
+            member = dict(repository_id=owner["repository_id"], checkout_id=owner["checkout_id"], client=self.client)
             affected.append(member)
             qualification.append(member | dict(requirements=[r["id"] for r in assessment["coverage"] if r["mandatory"] and r["applicability"] == "applicable"], security_required=True))
         common_directories=[repository['git_common_dir'] for repository in repositories]
@@ -278,9 +280,12 @@ class ScopedBirthFixture(OnboardingFixture):
 
 
 class CanonicalBirthFixture(unittest.TestCase):
+    client = 'codex'
+
     def prepare(self, *, umbrella=False, history=True, linked=False, peer=False, delivery_policy=None):
         from runtime import review_storage
         f = ScopedBirthFixture(methodName='runTest')
+        f.client = self.client
         self.addCleanup(f.doCleanups); f.setUp()
         private = tempfile.TemporaryDirectory(prefix='vcw-birth-private-')
         self.addCleanup(private.cleanup)
@@ -363,12 +368,12 @@ class CanonicalBirthFixture(unittest.TestCase):
             for checkout in repository['checkouts']:
                 entry=checkout['clients'][0]
                 projection = startup.canonical_scope_projection(startup.decode_project_record(value),
-                    repository_id=repository['repository_id'], checkout_id=checkout['checkout_id'], client='codex')
+                    repository_id=repository['repository_id'], checkout_id=checkout['checkout_id'], client=self.client)
                 scope_digest = startup._canonical_digest(startup._canonical_plain(projection))
                 info = state.PACKAGE.stat()
-                hook = state.PACKAGE / 'hooks/codex.json'
+                hook = state.PACKAGE / f'hooks/{self.client}.json'
                 proof = dict(reference='fixture:synthetic-trusted-owner-only', sha256='e' * 64)
-                binding = dict(client='codex', surface='fixture-only', version='1', configuration_digest='f' * 64,
+                binding = dict(client=self.client, surface='fixture-only', version='1', configuration_digest='f' * 64,
                     hook_owner=dict(root=str(state.PACKAGE), binding=dict(device=info.st_dev, inode=info.st_ino),
                         source=str(hook), sha256=hashlib.sha256(hook.read_bytes()).hexdigest()),
                     accepted_scope_digest=scope_digest, receipt=proof)
@@ -380,13 +385,13 @@ class CanonicalBirthFixture(unittest.TestCase):
                 fixture.test_observations[checkout['root']]=observation
         path.write_text(json.dumps(value))
         observation=fixture.test_observations[str(fixture.repo)]
-        event = SimpleNamespace(client='codex', cwd=fixture.repo, session_id='canonical-session')
+        event = SimpleNamespace(client=self.client, cwd=fixture.repo, session_id='canonical-session')
         self.assertIsNone(startup.acquire_project_entry(event, state.PACKAGE).resolution.scope)
         self.assertEqual(startup.acquire_project_entry(event, state.PACKAGE, qualifier=observation).resolution.status, 'conflict')
         acquired = startup.acquire_project_entry(event, state.PACKAGE, qualifier=lambda record, facts: observation)
         self.assertEqual(acquired.resolution.status, 'active', acquired.resolution)
         fixture.member_acquisitions = {root: startup.acquire_project_entry(
-            SimpleNamespace(client="codex", cwd=Path(root)), state.PACKAGE,
+            SimpleNamespace(client=self.client, cwd=Path(root)), state.PACKAGE,
             qualifier=lambda record, facts, value=value: value)
             for root, value in fixture.test_observations.items()}
         for member in fixture.member_acquisitions.values():
@@ -409,7 +414,7 @@ class CanonicalBirthFixture(unittest.TestCase):
             prepared=self.prepare()
             self.assert_applied_configured(prepared,self.invoke(prepared))
             fixture=prepared[0]
-            original_acquisition=startup.acquire_project_entry(SimpleNamespace(client='codex',cwd=fixture.repo),state.PACKAGE)
+            original_acquisition=startup.acquire_project_entry(SimpleNamespace(client=self.client,cwd=fixture.repo),state.PACKAGE)
             self.assertEqual(original_acquisition.resolution.status,'configured')
             self.assertIsNone(original_acquisition.resolution.scope)
         original_authority=Path(fixture.plan()['identity']['project_root'])/startup.PROJECT_FILE
@@ -480,6 +485,7 @@ class CanonicalBirthFixture(unittest.TestCase):
 def fresh_canonical(testcase):
     """Return a genuinely born scope plus explicit software-only trusted-owner proof."""
     owner=CanonicalBirthFixture('runTest')
+    owner.client=getattr(testcase,"_canonical_client","codex")
     testcase.addCleanup(owner.doCleanups)
     if getattr(testcase,"_canonical_common_git",False):return owner.accepted_common_git_members()
     return owner.accepted_birth(linked=getattr(testcase, "_canonical_linked", False),
@@ -498,7 +504,7 @@ def acquire_test_scope(path):
     observation=value['observation']
     if observation['current']['surface']!='fixture-only':
         raise AssertionError('Only explicit synthetic test qualification is supported')
-    acquisition=startup.acquire_project_entry(SimpleNamespace(client='codex',cwd=Path(value['root'])),state.PACKAGE,
+    acquisition=startup.acquire_project_entry(SimpleNamespace(client=observation['current']['client'],cwd=Path(value['root'])),state.PACKAGE,
         qualifier=lambda record,facts:observation)
     return startup._entry_scope(acquisition)
 

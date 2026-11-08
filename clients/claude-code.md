@@ -10,6 +10,19 @@ The [adapter](../runtime/adapters/claude_code.py) identifies the native client a
 
 Normal output adds local client/policy pointers through `hookSpecificOutput.additionalContext`, without an activation announcement. Invalid integration returns diagnostic context and a warning. The shared startup code makes the enrollment decision; installation does not enroll a project.
 
+## Runtime hooks
+
+The package also registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and `Stop` for the shared task runtime. They need an enrolled checkout with runtime state; otherwise they stay silent and startup-only behavior applies. Read the [task runtime contract](runtime.md) for task controls and limits.
+
+- **Guard.** `PreToolUse` guards only `Edit`, `Write` and `NotebookEdit`, under the same rules as Codex's patch guard. Shell commands, MCP tools and external edits stay outside it. A subagent's edit uses the `agent_id` from the hook and inherits its parent's task authority.
+- **Identity.** `prompt_id` is the turn and `tool_use_id` the call. Without them an event stays uncertain, never continues and still advances freshness.
+- **Freshness.** `PostToolUse` and `PostToolUseFailure` advance checkout generation; a failed command may still have changed files.
+- **Continuation.** `Stop` may continue once per prompt, shown to Claude as hook feedback. `stop_hook_active` must be an explicit `false`.
+- **Input bound.** Runtime events read up to 8 MiB because `Write` carries a whole file; larger input reports a diagnostic and is not guarded.
+- **Failure.** A crashed or timed-out hook lets the action proceed, as on Codex. `onFailure: "block"` is deliberately unused: the hooks are plugin-wide and would block ordinary editing in unenrolled projects.
+
+Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. Titles, evidence, delegation and `doctor` follow in later slices; until then Claude task records cannot reach `DONE`. Package tests do not establish native hook execution, which needs its own `claude` observation.
+
 ## Installation and qualification
 
 For local testing, use `claude --plugin-dir /absolute/path/to/vibe-workflow`. Review the package before enabling it. Claude's plugin installation/trust rules apply; it does not use Codex's per-definition hash approval flow. Preserve existing hooks, permissions, model selection and authentication.
