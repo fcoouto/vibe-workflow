@@ -675,9 +675,10 @@ test("B1: a finished attempt's session blocks only itself and never turns on str
     await assertUntouched(t, "ses_ichild1")
     assert.ok(performance.now() - began < 100)
     assert.deepEqual(t.lookups, [])
-    // A child of the closed session is not blocked by it.
+    // A session recorded under the closed one is blocked too (S-a), still without stripping or lookups.
     await t.emit(created("ses_closedkid1", MANAGED))
-    await assertUntouched(t, "ses_closedkid1")
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_closedkid1")), refused("attempt_closed"))
+    assert.deepEqual(t.lookups, [])
     assert.equal(t.fake.requests("check").filter((r) => r.session_id === MANAGED && !("attempt_id" in r)).length, 1)
   } finally { t.stop() }
 })
@@ -793,8 +794,8 @@ test("S-c: shutting the plugin down with a request in flight leaves no routing c
     const pids = readFileSync(join(dirname(fake.argv[fake.argv.indexOf("--log") + 1]), "log.jsonl"), "utf8").trim().split("\n")
       .map((line) => JSON.parse(line)).filter((r) => r.spawn).map((r) => r.spawn)
     for (const pid of pids) assert.throws(() => process.kill(pid, 0), undefined, `child ${pid} still running`)
-    // After shutdown nothing starts a child again.
-    await assert.rejects(Promise.resolve().then(() => hooks["session.model.request"](modelRequest(MANAGED))), blocked)
+    // After shutdown nothing starts a child again (attachments are gone, so the session is interactive).
+    await hooks["session.model.request"](modelRequest(MANAGED))
     await assert.rejects(Promise.resolve().then(() => state.handlers.health({})), blocked)
     assert.equal(fake.spawns(), spawned)
   } finally { fake.cleanup() }
