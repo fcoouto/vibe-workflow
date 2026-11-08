@@ -10,8 +10,9 @@ allow, unmanaged, blocked, stall, exit, garbage, wrong_id, wrong_version, no_sta
 authority_required without a token, authority_invalid with another one, and otherwise adds `authority: "verified"`,
 like the S3.4 command. Further check modes: allow_unverified (allow without `authority`), allow_other_attempt (allow
 for another attempt) and echo_authority (a blocked answer whose reason and fields repeat the token sent).
-A session-only check (no attempt id) is the shim's ledger probe; its modes come from the `probe` key and it answers
-authority_required for a session listed in `known_sessions`, otherwise unmanaged.
+A session-only check (no attempt id) is the shim's ledger question; its modes come from the `probe` key and it
+answers attempt_closed for a session in `closed_sessions`, authority_required for one in `known_sessions` or `owners`
+(session -> attempt), otherwise unmanaged. A check naming another attempt's `owners` session is session_mismatch.
 Every spawn and request is appended to the log file so tests can count spawns and calls.
 """
 import json
@@ -92,11 +93,20 @@ def answer(request):
     elif mode == "echo_authority":
         sent = str(request.get("authority"))
         response.update(state="blocked", reason=sent, detail=sent)
+    owners = control.get("owners", {})
     if probe and response["state"] == "allow":
-        known = request["session_id"] in control.get("known_sessions", [])
-        response.update(state="blocked", reason="authority_required") if known else response.update(state="unmanaged")
+        session = request["session_id"]
+        if session in control.get("closed_sessions", []):
+            response.update(state="blocked", reason="attempt_closed")
+        elif session in control.get("known_sessions", []) or session in owners:
+            response.update(state="blocked", reason="authority_required")
+        else:
+            response.update(state="unmanaged")
         write(response)
         return
+    if op == "check" and response["state"] == "allow" and owners.get(request.get("session_id"), request.get("attempt_id")) \
+            != request.get("attempt_id"):
+        response.update(state="blocked", reason="session_mismatch")
     if op == "check" and response["state"] == "allow" and mode in ("allow", "shuffle"):
         token = control.get("tokens", {}).get(request.get("attempt_id"))
         if "authority" not in request:
