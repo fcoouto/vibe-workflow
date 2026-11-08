@@ -167,6 +167,18 @@ class ClaudeStateTests(unittest.TestCase):
         result = self.cli(["delivery", "status", "--client", "claude-code", "--session", "main"], expected=1)
         self.assertIn("Invalid task, evidence", result["error"])
 
+    def test_managed_startup_orientation_names_the_claude_session_within_the_word_limit(self):
+        from runtime import startup
+        from tests.fixture_canonical_birth import test_acquisition
+        start = claude_code.normalize(dict(hook_event_name="SessionStart", source="startup",
+                                           session_id="claude-session-1", cwd=str(self.repo)))
+        context = startup.orient(start, startup.Path(startup.__file__).resolve().parents[1],
+                                 acquisition=test_acquisition(self.scope))
+        self.assertIn("native Claude Code session: \"claude-session-1\"", context)
+        self.assertIn(str(self.scope.runtime.state_dir / "runtime.sqlite3"), context)
+        self.assertNotIn("Codex", context)
+        self.assertLessEqual(len(context.split()), 150)
+
     def test_ordinary_update_cannot_declare_done(self):
         self.start()
         with self.assertRaises(state.StateError):
