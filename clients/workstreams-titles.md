@@ -132,8 +132,9 @@ python3 -I -B <package>/scripts/opencode_title.py < title.json
 ```
 
 Use the session ID from the plugin hook context (the `sessionID` on the tool
-or model event for that session), or the ID recorded for a child in your task
-plan. Do not use the `OPENCODE_SESSION_ID` environment variable: OpenCode 2.2.6
+or model event for that session), or the actual returned ID recorded for a
+workstream session or subagent in your task plan. Do not use the
+`OPENCODE_SESSION_ID` environment variable: OpenCode 2.2.6
 does not set it, so any value is inherited from whatever launched the server and
 can name an unrelated session. Until the routing plugin or a recorded handoff
 supplies an ID, an agent cannot title its own session; this path then does

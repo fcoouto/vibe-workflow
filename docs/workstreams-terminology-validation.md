@@ -9,7 +9,7 @@ while existing P/C presentation records retain their identities and lifecycle.
 The [source map](policy-sources.md#workstream-sessions-and-subagents--8-november-2026)
 records the preserved Toolkit requirements and the user's local extensions.
 
-The implementation branch starts at `563d64b` from current `origin/main`. A separate
+The initial implementation branch started at `563d64b`, then current `origin/main`. A separate
 worktree preserves unrelated work in the original checkout. This task does not
 install a package, migrate active records or introduce a session-launching service.
 
@@ -112,11 +112,30 @@ it does not establish live dispatch or a general reliability rate.
   passing full suite nor proof that the errors are unrelated to this change. The
   reviewed candidate remained byte-identical when the command ended.
 
-### Remaining gate
+### Authorized Opus review and release follow-up
 
-The implementation and focused review are ready for a draft PR, but the branch is
-**not ready to merge**. Complete and diagnose the full suite, and reconcile/recheck
-against newer `main`, before marking it ready. No live rendering, installed rollout,
-stored-title conversion or managed OpenCode session adapter was tested. The final
-documentation-only addition records these outcomes; runtime/instruction behavior
-remains the independently reviewed candidate.
+The user subsequently requested Opus 5.5 review and authorized merge, release and
+local installation updates after approval and passing checks. The branch was
+reconciled with main `5a92a12` in merge commit `31f184b`, preserving newer OpenCode
+title support, Smart Routing work and onboarding-policy discovery. Both policy
+source-map additions were retained and the instruction map was regenerated.
+
+The native catalog identified `claude-agent/opus` as Opus 5.5; the review requested
+its supported high effort. The reviewer approved the code and instructions after
+checking the 33-file candidate against `5a92a12`, verifying unchanged hashes and
+running 115 focused title, OpenCode title, compact-status and delivery tests. Its
+two required documentation findings were to update this historical verification
+record and disclose the changed meaning of existing Enabled choices in the release
+notes. Version 0.1.34 notes now explicitly disclose that authorization change.
+
+The previously suspected OpenRouter-worker module passed all 49 tests in a
+separate verbose diagnostic run. That run did not establish the cause of the old
+two error markers, so no speculative test or production fix was applied. A new
+focused regression covers all three new labels through the ordinary OpenCode
+delivery path and preserves a user's topic-only edit.
+
+The release candidate's full discovery run remains pending. It is not yet
+merge-ready. Final readiness requires a passing current full-suite result and a
+recheck of the reviewed candidate against `main`. No stored-title conversion or
+managed OpenCode session-creation adapter is part of this release; fresh-client
+loading and visible rendering remain separate from package checks.

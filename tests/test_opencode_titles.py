@@ -125,6 +125,22 @@ class OpenCodeTitleTests(unittest.TestCase):
         self.assertEqual(fake.title, DESIRED)
         self.assertEqual([call[1] for call in fake.calls], ['session.get', 'session.update', 'session.get'])
 
+    def test_new_context_labels_deliver_and_preserve_topic_edits(self):
+        for member in ('COORD', 'STREAM', 'AGENT'):
+            with self.subTest(member=member):
+                desired = title_sync.format_title('W42', member, 'Backend', 'WORKING', 1)
+                fake = FakeOpenCode(self)
+                self.assertEqual(self.deliver(desired)['baseline'], desired)
+                self.assertEqual(fake.title, desired)
+                edited = desired.replace('Backend', 'Chosen topic')
+                fake.save(dict(titles={SESSION: edited}, steps=[]))
+                writes_before = sum(call[1] == 'session.update' for call in fake.calls)
+                result = self.deliver(desired, baseline=desired)
+                self.assertEqual(result['reason'], 'topic_changed')
+                self.assertEqual(result['topic'], 'Chosen topic')
+                self.assertEqual(fake.title, edited)
+                self.assertEqual(sum(call[1] == 'session.update' for call in fake.calls), writes_before)
+
     def test_current_title_needs_no_write(self):
         fake = FakeOpenCode(self, title=DESIRED)
         self.assertEqual(self.deliver(baseline=DESIRED)['ok'], True)

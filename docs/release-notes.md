@@ -3,6 +3,14 @@
 Historical entries retain their original terminology and observed titles; current
 workstream-session and subagent distinctions are in [Agent Delegation](../policies/03-agent-delegation.md#outcome-ownership).
 
+## 0.1.34
+
+- Distinguish outcome-owning **workstream sessions** from tool-invoked **subagents** throughout the workflow. A resumable subagent does not substitute for a requested workstream session; unavailable session creation is reported explicitly.
+- **Workstreams Enabled changes meaning, including for existing saved Enabled choices:** it now permits creating and reusing suitable task-scoped workstream sessions without asking again for each session. Existing task scope, client permissions, capacity and review requirements still apply. It does not authorize control of unrelated chats or peer messaging. Disabled stops optional automatic workstream-session coordination; explicit delegation and required review remain available.
+- Use **COORD**, **STREAM** and **AGENT** in newly adopted titles. Preserve existing P/C records, manual titles, paused synchronization and native identities without automatic conversion.
+- Include current main's ordinary OpenCode title support, explicit project-policy discovery and Smart Routing groundwork. Runtime enforcement and installed-client behavior retain their separately documented qualification limits.
+- Package validation and tests are separate from fresh-client loading and visible title rendering.
+
 ## 0.1.33
 
 - A Workstreams thread is `DONE` only after every PR it opened or took over is observed merged on the remote; until then it shows `WAITING`. Threads whose scope excludes publication need no extra step, and other editable threads record an explicit no-PR decision. Runtime verification still enforces required publications only.
