@@ -109,8 +109,7 @@ One or several PRs do not change the title format. A child's wait never assigns
 the parent's state or progress; the parent follows its own accepted scope.
 
 For direct display controls, use the same phase meanings and next-action owner
-in the existing task plan without creating runtime state. Observe each opened
-PR's remote state before writing `DONE`. For runtime-bound
+in the existing task plan without creating runtime state. For runtime-bound
 threads, pass `user_attention: true` in the revision-checked task update when
 the [attention rules](workstreams-naming.md#status-and-accepted-progress) apply.
 Use a same-state update if the next action changes without a phase change. Pass
@@ -125,8 +124,10 @@ as independent acceptance or count child work twice.
 
 Use the [meter rules](workstreams-naming.md#status-and-accepted-progress) for both title
 paths. The activity indicator for unmeasured `WORKING` belongs only to the title.
-`DONE` still requires the normal completion evidence gate and the PR merge gate. Reopening work retains
-accepted milestones unless scope or evidence invalidates them.
+`DONE` still requires the normal completion evidence gate and the PR merge gate;
+observe each PR's remote state before any `DONE` write or completion
+verification, on either path. Reopening work retains accepted milestones unless
+scope or evidence invalidates them.
 
 ### Reopen a completed objective
 

@@ -64,7 +64,7 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "c2ff1e8bd2fec6798471a7fa6a97ed023d2813d2ee3eb99b6e942bd587a3b214",
+      "sha256": "5ea3a7c0c68f87e6b4d9a158e877fb1c990d5901c1063a98975ea8f9501b1f25",
       "ranges": [
         [
           1,
@@ -86,7 +86,7 @@
       ]
     },
     "clients/evidence-completion.md": {
-      "sha256": "b9856b1894e81e7fd2843cf2aea2a0d2bc8e097aab2a243ff001a0bb5d7bab4b",
+      "sha256": "34c78fd9909f37a950e487030752b5cbe46ddeb84c4c071324ddd90da8bdf0bd",
       "ranges": [
         [
           1,
@@ -251,7 +251,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "e2527fe76617e468863794f42fb00a8f85286ab534ff2a213d9cb2b2a241e828",
+      "sha256": "7ee67244aba9b9b869d277e9cbebcb66036b5d63b4e8470d85e8c028c947e7f0",
       "ranges": [
         [
           1,
@@ -259,7 +259,7 @@
         ],
         [
           151,
-          196
+          201
         ]
       ]
     },
@@ -295,7 +295,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "e44966d2012a6b910b2bc516a983967e6d40a70f9dc80cbb925a4fed64e195e0",
+      "sha256": "bebbc8124624bb73bbe88d65393c7f2aa0a20a7f25969b7ef8dff63c1f2bc857",
       "ranges": [
         [
           1,
@@ -303,7 +303,7 @@
         ],
         [
           142,
-          246
+          247
         ]
       ]
     },

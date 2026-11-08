@@ -146,18 +146,23 @@ Decide from the actual next action and its owner. Clear the label when the user
 has acted or the next action moves to someone else, even if the task state stays
 the same.
 
-**PR merge gate.** `DONE` also requires every PR the thread opened to be observed
-merged on the remote: provider state closed and merged, with a merge commit (for
+**PR merge gate.** `DONE` also requires every PR the thread opened or took over to
+be observed merged on the remote: provider state merged, with a merge commit (for
 example `gh pr view <PR> --json state,mergedAt,mergeCommit`). A local merge, an
-approval, a `[READY]` marker, the user's statement or a title does not count. Until
-then show `WAITING` for the manual merge, or the actual `WORKING`/`REVIEW` state
-while other work remains. A PR closed unmerged keeps the thread out of `DONE` until
-the user chooses another scope or `CANCELLED`. If the remote state cannot be read,
-report it unverified and withhold `DONE`. A thread that opened no PR needs an
-explicit no-PR decision, such as local-only work, recorded in its task plan; a PR
-the plan explicitly marks optional is such a decision. Opening a PR after `DONE`
-reopens the thread. A child's PR gates that child; the parent adopts it only when
-its accepted scope includes it.
+approval, a readiness marker such as `[READY]`, the user's statement or a title
+does not count. Until then show `WAITING` for the manual merge, or the actual
+`WORKING`/`REVIEW` state while other work remains. A PR closed unmerged keeps the
+thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
+remote state cannot be read, report it unverified and withhold `DONE`.
+
+A thread that opened no PR needs no extra step when its recorded scope excludes
+publication, such as read-only, investigation or review work, or a child scoped
+away from PRs. Any other editable thread needs an explicit no-PR decision in its
+task plan. A PR the plan marks optional under the user's recorded scope decision is
+such a decision; marking it optional after opening it, without that decision,
+is not. Opening a PR after `DONE` reopens the thread to `WORKING`, `REVIEW` or
+`WAITING` by its actual next action. A child's PR gates that child; a parent whose
+deliverable depends on it is gated too.
 
 Compute each thread's progress from currently accepted milestones in its existing
 task plan, with task-appropriate weights when outcomes differ substantially.
