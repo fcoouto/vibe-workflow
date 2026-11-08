@@ -374,6 +374,36 @@ Read the owning spec section and amendment before each task. Do not invent provi
 - [ ] Write failing tests: malformed input is blocked; `status` and `set` make zero model, network or secret-store calls (RF5); `set smart_routing=false` invalidates unsent automatic admissions under the old revision.
 - [ ] Run, implement, re-run; expected PASS.
 
+**Contract (v1).** `scripts/routing.py <op>` reads one request on stdin. `scripts/routing.py --serve` reads one request per line and writes one response per line, for the OpenCode shim's persistent child. Both accept `--settings`, `--ledger` and `--table` paths. A request is `{"v":1,"op":…,"id"?,…}`; a valid `id` is echoed back. A response is `{"v":1,"state":…}`: either a result or `{"state":"blocked","reason":<fixed code>}`. Blocked is an outcome, so the exit code is 0; only a usage error exits 2. Malformed, oversized (1 MiB) or unknown input is blocked with no traceback, input text or secret in the output. Consumers ignore unknown response fields: S3.4 adds `authority` to `check` results without changing `v`.
+
+| op | Request | Result |
+|---|---|---|
+| `prepare` | `assignment{attempt_id, task, scope, role?, choice?}`, `job`, `observations`, `constraints?` | `admitted{duplicate, admission, ranking, profile}` or `pending{reason, reasons}` |
+| `check` | `attempt_id`, `request{provider, model, variant, harness, kind, funding_pool, bound?}` | `allow{attempt_id, route, pool, settings_revision, remaining}`; reads only |
+| `record` | `event{event_id, attempt_id, kind: dispatched / uncertain / not_dispatched / complete}` | `recorded{event_id, duplicate}` |
+| `status` | — | `ok{settings, settings_revision, effective_caps, ledger}`; local files only |
+| `set` | `expected_revision` + `change`, or `organization{id, enabled, policy?, expected_revision?}` | `updated{revision, settings, invalidated_attempts}` or `updated{organization}` |
+
+Rules the command applies:
+
+- **Roles.** `prepare` maps the job's profile role to a worker-choice role with `routing_settings.PROFILE_ROLES`. An explicit `researcher` or `repair` role is accepted; any other explicit role must match the mapping (`role_mismatch`). A coordinator is never routed (`coordinator_not_routed`).
+- **Strategy table.** `prepare` ranks from the compiled table stored next to the settings (`strategy-table.json`, or `--table`). A missing or unusable table falls back to worker choices or the explicit choice, with a reason code; it never blocks.
+- **Clock.** The command uses its own clock. `prepare` refuses a snapshot whose `now` differs from it by more than 60 s (`observation_stale`) and stamps the admission with its own time.
+- **Unsent admissions.** An unsent (`admitted`) attempt passes `check` only under the same settings revision and at an age of 0–900 s; exactly 900 s still passes. Otherwise it is blocked with `settings_revision_changed`, `admission_expired` or `clock_invalid`.
+- **Dispatched attempts.** A dispatched attempt skips the revision and age checks, so turning Smart Routing OFF does not stop started subscription work.
+- **Dollar-funded holds.** On every `check`, dispatched or not, a dollar-funded hold re-checks the following, blocking with `api_usage_disabled`, `organization_unavailable` or `funding_unverified`:
+  - API Usage is still enabled (direct API routes);
+  - its organization is enabled and not blocked;
+  - the policy revision, balance freshness and cycle are still valid;
+  - the reconciled credit still covers what is held.
+- **Envelope.** S3.1 records no consumption, so the remaining envelope is the full reservation. A request `bound` larger than it is blocked with `envelope_exhausted`; an absent or empty bound passes while any amount is reserved.
+- **Request kinds.** `check` covers model requests and subagent spawns (`primary`, `subagent`, `title`, `compaction`, `generate`). Tool, MCP and webfetch calls are governed by S3.3's policy deny rules; any other kind is blocked with `unsupported_kind`.
+- **Smart Routing OFF.** `set smart_routing=false`, like any settings change, persists a new revision, and unsent admissions from the old revision fail `check`. Nothing is released until a `not_dispatched` record establishes non-dispatch, because `check` is not single-use in S3.1.
+- **Recording outcomes.** A bare `complete` on an uncertain attempt is refused with `reconciliation_required` until S3.6 adds evidence-based reconciliation.
+- **Busy ledger.** `check` and `status` wait at most 200 ms for a busy ledger and then answer `ledger_busy`. Writes wait at most 300 ms under `--serve` and 5 s in one-shot mode.
+- **Caps.** Effective caps are the stricter of the settings and ledger caps, so `set` can only lower them. Raising them is an explicit ledger action (`Ledger.set_caps`).
+- **Test switch.** Setting `VIBE_ROUTING_TEST_INPUTS=1` lets tests supply `now` to `check`, an off-clock snapshot and a `table` to `prepare`. Production never sets it.
+
 ### Task S3.2: OpenCode adapter and client contract
 
 **Files:** create `runtime/adapters/opencode.py`, `clients/opencode.md`, `tests/test_opencode_adapter.py`; modify `clients/index.md`, `clients/instruction-map.json` and the support targets in `docs/onboard-my-project-plan.md#client-scope-and-adapter-organization`.
