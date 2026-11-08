@@ -185,11 +185,20 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "dd8da23ef85970da7f40a047738b6a2bc9f33389b848bc95e766deab3f0c36e9",
+      "sha256": "2cce718c27b85d662308cc6bbe46bcf978c3c0dd972fe2854c2800338af02c9d",
       "ranges": [
         [
           1,
-          14
+          15
+        ]
+      ]
+    },
+    "clients/opencode.md": {
+      "sha256": "7c2c6df0f8ce78adf048fd0fbd7e52b2f770efc5c28ca1052bc6848753d97383",
+      "ranges": [
+        [
+          1,
+          34
         ]
       ]
     },

@@ -132,7 +132,7 @@ Keep shared workflow contracts in `policies/`, entry skills in `skills/`, and de
 
 ### Client scope and adapter organization
 
-Support targets are Codex, Claude Code and Claude Desktop's Code and Cowork surfaces. Claude Chat is out of scope. Keep client implementations under `runtime/adapters/`; add modules or subdirectories only when implementing that client. Share policy and procedures, loading only the adapter instructions needed for the current task.
+Support targets are Codex, Claude Code and Claude Desktop's Code and Cowork surfaces. Claude Chat is out of scope. OpenCode is a routing client only: its managed worker routing belongs to the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md), with the adapter in `runtime/adapters/opencode.py`. It has no onboarding, startup or qualification support here. Keep client implementations under `runtime/adapters/`; add modules or subdirectories only when implementing that client. Share policy and procedures, loading only the adapter instructions needed for the current task.
 
 Codex and Claude Code share the compatible `SessionStart` JSON subset in `runtime/adapters/session_start.py`, with a thin module per native client.
 
