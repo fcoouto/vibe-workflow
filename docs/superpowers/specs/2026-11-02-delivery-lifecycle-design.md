@@ -61,7 +61,7 @@ The implementation plan uses fetched `origin/main` at `8d21679bdc60f0f8808a15679
 | Progress awaits an expected merge, reply, or dependency and no independent work can advance | `WAITING` |
 | The agent is actively carrying out an authorized merge | `WORKING` |
 | Readiness is invalidated or a conflict, failed requirement, or unresolved delivery needs intervention | `BLOCKED`, or `WORKING`/`REVIEW` while the responsible actor resolves it |
-| Required merges and the thread's other agreed completion obligations are verified | `DONE` |
+| Required merges, every PR the thread opened (merged remotely) and the thread's other agreed completion obligations are verified | `DONE` |
 
 Manual handoff and merge-queue waits use `WAITING` when no other work can advance; a prerequisite merge before later implementation uses the same status. Agent merge needs no mandatory intermediate title write. `WAITING` alone claims neither PR readiness nor implementation completion. Keep an explicit pause as `PAUSED` and an intervention-required failure as `BLOCKED`. A closed-unmerged PR cannot become `DONE` without an explicit scope change or cancellation. Record unavailable observations as pending verification, not passing evidence.
 
@@ -72,7 +72,7 @@ Accepted implementation milestones remain counted while awaiting merge. Required
 ▰▰▰▰▰ [W7] P · Search filters · DONE
 ```
 
-Work with no required publication may reach `DONE` through its ordinary completion gate. Client-owned local cleanup never delays `DONE`; remote cleanup is reported separately unless expressly included in the thread's required completion scope.
+Work that opened no PR may reach `DONE` through its ordinary completion gate when its recorded scope excludes publication or carries an explicit no-PR decision; any PR the thread opened must be observed merged first (superseded 8 November 2026 by the PR merge gate in `clients/workstreams-naming.md`). Client-owned local cleanup never delays `DONE`; remote cleanup is reported separately unless expressly included in the thread's required completion scope.
 
 ### Multiple PRs and parent scope
 
