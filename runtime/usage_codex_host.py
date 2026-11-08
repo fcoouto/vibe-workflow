@@ -109,7 +109,7 @@ def _settings(control, data, *, one_shot=False):
     require('canary_owner' not in config and 'manual_test_owner' not in config, 'live_mode_unqualified')
     if one_shot:
         require(config['enabled'] is False and config['requested_mode'] == 'manual', 'manual_test_requires_off')
-        require(data['slot'] is None, 'manual_test_in_use')
+        require(all(run['closed'] for run in data['runs'].values()), 'manual_test_in_use')
     else:
         require(config['enabled'] is True and config['disabled'] is False
                 and config['requested_mode'] in ('manual', 'smart'), 'live_mode_unqualified')
@@ -327,7 +327,7 @@ def _run_temporary_manual(plan, task, evidence, config, case_index, prior_review
 
 def _publish_generation(plan, task, evidence, result, habblaud, *, visibility):
     run_id = task['run_id']
-    if (result.get('run_id') != run_id or result.get('simulation_only') is not False
+    if (result.get('run_id') != run_id
             or result.get('accepted') is not False or result.get('requires_native_review') is not True
             or result.get('execution_route') != 'openai-api'
             or type(result.get('reported_cost_usd_micros')) is not int):

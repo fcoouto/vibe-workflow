@@ -13,9 +13,9 @@ from runtime.usage_budget import BudgetError
 
 PACKET = dict(version=1, model='gpt-test', reasoning='high', text='Synthetic prompt',
               input_tokens=11, max_output_tokens=64)
-BINDING = dict(organization='org-synthetic', project='proj-synthetic', credential_ref='env:SYNTHETIC_KEY')
 KEYCHAIN_BINDING = dict(organization='org-synthetic', project='proj-synthetic',
                         credential_ref='vcw_' + '1' * 32, storage_kind='macos_keychain')
+BINDING = KEYCHAIN_BINDING
 SYNTHETIC_KEY = b'sk-proj-fixture-only'
 
 
@@ -77,6 +77,10 @@ class OpenAITransportTests(unittest.TestCase):
         return dict(phase=phase, attempt_id='synthetic-attempt', packet_digest=hashlib.sha256(raw).hexdigest(),
                     deadline=time.time() + 60, committed=True)
 
+    def call(self, phase, packet, binding, dispatch, factory, admit=lambda: None):
+        return self.api._authenticated_call(packet, binding, dispatch, phase, admit=admit,
+                                            connection_factory=factory, resolver=lambda _: SYNTHETIC_KEY)
+
     def invoke(self, phase, response, **kwargs):
         conn = Connection(response, kwargs.pop('error', None))
         factory_calls = []
@@ -85,9 +89,8 @@ class OpenAITransportTests(unittest.TestCase):
             factory_calls.append((host, timeout))
             return conn
 
-        result = getattr(self.api, 'count' if phase == 'count' else 'generate')(
-            kwargs.pop('packet', PACKET), kwargs.pop('binding', BINDING),
-            kwargs.pop('dispatch', self.dispatch(phase)), connection_factory=factory)
+        result = self.call(phase, kwargs.pop('packet', PACKET), kwargs.pop('binding', BINDING),
+                           kwargs.pop('dispatch', self.dispatch(phase)), factory)
         self.assertEqual(factory_calls[0][0], 'api.openai.com')
         self.assertTrue(0 < factory_calls[0][1] <= 300)
         self.assertEqual(len(factory_calls), 1)
@@ -95,19 +98,20 @@ class OpenAITransportTests(unittest.TestCase):
         self.assertTrue(conn.closed)
         return result, conn.requests[0]
 
-    def test_default_transport_cannot_read_credentials_or_connect(self):
-        with patch.dict('os.environ', {}, clear=True), patch('os.getenv', side_effect=AssertionError('credential read')):
-            for phase, operation in [('count', self.api.count), ('generation', self.api.generate)]:
+    def test_no_unauthenticated_entry_point_and_admission_is_required_before_any_access(self):
+        self.assertFalse(hasattr(self.api, 'count') or hasattr(self.api, 'generate'))
+        with patch.dict('os.environ', {}, clear=True), patch('os.getenv', side_effect=AssertionError('credential read')), \
+             patch('runtime.openai_api.usage_credentials.resolve_key', side_effect=AssertionError('credential read')):
+            for phase in ('count', 'generation'):
                 with self.assertRaises(self.api.TransportError) as caught:
-                    operation(PACKET, BINDING, self.dispatch(phase))
-                self.assertEqual(str(caught.exception), 'live_execution_unavailable')
-                self.assertFalse(caught.exception.uncertain)
+                    self.api._authenticated_call(PACKET, BINDING, self.dispatch(phase), phase, admit=None)
+                self.assertEqual(str(caught.exception), 'live_admission_required')
                 self.assertIsInstance(caught.exception, BudgetError)
 
     def test_count_and_generation_have_same_frozen_semantic_input(self):
         count, count_request = self.invoke('count', Response(dict(object='response.input_tokens', input_tokens=11)))
         generation, generation_request = self.invoke('generation', Response(completed()))
-        self.assertEqual(count, dict(input_tokens=11, request_id='req_synthetic', simulation_only=True))
+        self.assertEqual(count, dict(input_tokens=11, request_id='req_synthetic'))
         self.assertEqual(count_request[:3], ('POST', '/v1/responses/input_tokens',
                                           dict(model='gpt-test', input='Synthetic prompt', reasoning=dict(effort='high'))))
         self.assertEqual(generation_request[0:2], ('POST', '/v1/responses'))
@@ -115,13 +119,13 @@ class OpenAITransportTests(unittest.TestCase):
                                                    max_output_tokens=64, service_tier='default', store=False,
                                                    background=False, tools=[]))
         for request in (count_request, generation_request):
-            self.assertEqual(request[3]['Authorization'], 'Bearer simulation-only')
+            self.assertEqual(request[3]['Authorization'], 'Bearer sk-proj-fixture-only')
             self.assertEqual(request[3]['OpenAI-Organization'], 'org-synthetic')
             self.assertEqual(request[3]['OpenAI-Project'], 'proj-synthetic')
-            self.assertNotIn('SYNTHETIC_KEY', json.dumps(request))
+            self.assertNotIn('sk-proj-fixture-only', json.dumps(request[:3]))
         self.assertEqual(generation, dict(input_tokens=11, output_tokens=17, cached_tokens=3,
                                           cache_write_tokens=2, request_id='req_synthetic',
-                                          text='Untrusted proposal', simulation_only=True))
+                                          text='Untrusted proposal'))
 
     def test_invalid_admission_never_constructs_connection(self):
         variants = [dict(phase='generation'), dict(committed=False), dict(committed=1),
@@ -131,8 +135,8 @@ class OpenAITransportTests(unittest.TestCase):
             with self.subTest(update=update):
                 dispatch = self.dispatch('count') | update
                 with self.assertRaises(self.api.TransportError) as caught:
-                    self.api.count(PACKET, BINDING, dispatch,
-                                   connection_factory=lambda *_: self.fail('constructed connection'))
+                    self.call('count', PACKET, BINDING, dispatch,
+                              lambda *_: self.fail('constructed connection'))
                 self.assertFalse(caught.exception.uncertain)
 
     def test_untrusted_packet_and_binding_rejected_before_connection(self):
@@ -144,9 +148,9 @@ class OpenAITransportTests(unittest.TestCase):
         for key, value in variants:
             with self.subTest(key=key, value=value):
                 with self.assertRaises(self.api.TransportError) as caught:
-                    self.api.count(value if key == 'packet' else PACKET,
-                                   value if key == 'binding' else BINDING, self.dispatch('count'),
-                                   connection_factory=lambda *_: self.fail('constructed connection'))
+                    self.call('count', value if key == 'packet' else PACKET,
+                              value if key == 'binding' else BINDING, self.dispatch('count'),
+                              lambda *_: self.fail('constructed connection'))
                 self.assertFalse(caught.exception.uncertain)
 
     def test_count_rejects_nonintegers_duplicates_and_oversized_json(self):
@@ -224,7 +228,7 @@ class OpenAITransportTests(unittest.TestCase):
         for status in [301, 302, 400, 401, 403, 402, 429, 500, 503]:
             conn = Connection(Response(dict(error=dict(message='secret synthetic provider text')), status))
             with self.subTest(status=status), self.assertRaises(self.api.TransportError) as caught:
-                self.api.count(PACKET, BINDING, self.dispatch('count'), connection_factory=lambda *_: conn)
+                self.call('count', PACKET, BINDING, self.dispatch('count'), lambda *_: conn)
             self.assertTrue(caught.exception.uncertain)
             self.assertNotIn('secret', str(caught.exception))
             self.assertEqual(len(conn.requests), 1)
@@ -232,7 +236,7 @@ class OpenAITransportTests(unittest.TestCase):
         for error in [TimeoutError('secret timeout'), OSError('secret disconnect')]:
             conn = Connection(Response({}), error)
             with self.subTest(error=type(error)), self.assertRaises(self.api.TransportError) as caught:
-                self.api.count(PACKET, BINDING, self.dispatch('count'), connection_factory=lambda *_: conn)
+                self.call('count', PACKET, BINDING, self.dispatch('count'), lambda *_: conn)
             self.assertTrue(caught.exception.uncertain)
             self.assertNotIn('secret', str(caught.exception))
             self.assertEqual(len(conn.requests), 1)
@@ -242,7 +246,7 @@ class OpenAITransportTests(unittest.TestCase):
         def fail(*_):
             raise OSError('secret synthetic failure')
         with self.assertRaises(self.api.TransportError) as caught:
-            self.api.count(PACKET, BINDING, self.dispatch('count'), connection_factory=fail)
+            self.call('count', PACKET, BINDING, self.dispatch('count'), fail)
         self.assertFalse(caught.exception.uncertain)
         self.assertEqual(str(caught.exception), 'transport_failure')
 
@@ -250,7 +254,7 @@ class OpenAITransportTests(unittest.TestCase):
         def fail(*_):
             raise BudgetError('synthetic-private-provider-text')
         with self.assertRaises(self.api.TransportError) as caught:
-            self.api.count(PACKET, BINDING, self.dispatch('count'), connection_factory=fail)
+            self.call('count', PACKET, BINDING, self.dispatch('count'), fail)
         self.assertEqual(str(caught.exception), 'transport_failure')
 
     def test_packet_digest_uses_documented_canonical_encoding(self):
@@ -262,16 +266,16 @@ class OpenAITransportTests(unittest.TestCase):
     def test_elapsed_deadline_blocks_send_and_marks_late_response_uncertain(self):
         dispatch = self.dispatch('count') | dict(deadline=200)
         conn = Connection(Response(dict(object='response.input_tokens', input_tokens=11)))
-        with patch('runtime.openai_api.time.time', side_effect=[100, 201]):
+        with patch('runtime.openai_api.time.time', side_effect=[100, 100, 100, 201]):
             with self.assertRaises(self.api.TransportError) as caught:
-                self.api.count(PACKET, BINDING, dispatch, connection_factory=lambda *_: conn)
+                self.call('count', PACKET, BINDING, dispatch, lambda *_: conn)
         self.assertFalse(caught.exception.uncertain)
         self.assertEqual(conn.requests, [])
         self.assertTrue(conn.closed)
         conn = Connection(Response(dict(object='response.input_tokens', input_tokens=11)))
-        with patch('runtime.openai_api.time.time', side_effect=[100, 100, 201]):
+        with patch('runtime.openai_api.time.time', side_effect=[100, 100, 100, 100, 100, 201]):
             with self.assertRaises(self.api.TransportError) as caught:
-                self.api.count(PACKET, BINDING, dispatch, connection_factory=lambda *_: conn)
+                self.call('count', PACKET, BINDING, dispatch, lambda *_: conn)
         self.assertTrue(caught.exception.uncertain)
         self.assertEqual(len(conn.requests), 1)
         self.assertTrue(conn.closed)
@@ -284,7 +288,7 @@ class OpenAITransportTests(unittest.TestCase):
             packet['text'] = 'changed after admission'
             return conn
 
-        self.api.count(packet, BINDING, self.dispatch('count'), connection_factory=mutate)
+        self.call('count', packet, BINDING, self.dispatch('count'), mutate)
         self.assertEqual(conn.requests[0][2]['input'], 'Synthetic prompt')
 
     def test_authenticated_admission_follows_credential_and_connection_preparation(self):
@@ -316,7 +320,6 @@ class OpenAITransportTests(unittest.TestCase):
         self.assertEqual(headers['OpenAI-Organization'], 'org-synthetic')
         self.assertEqual(headers['OpenAI-Project'], 'proj-synthetic')
         self.assertNotIn('sk-proj-fixture-only', json.dumps([body, result]))
-        self.assertTrue(result['simulation_only'])
         self.assertTrue(conn.closed)
 
     def test_authenticated_rejections_before_post_never_send(self):
@@ -324,7 +327,7 @@ class OpenAITransportTests(unittest.TestCase):
             raise RuntimeError('private host diagnostic')
 
         for key, value, expected in [
-            ('binding', BINDING, 'invalid_credential_reference'),
+            ('binding', BINDING | dict(credential_ref='env:SYNTHETIC_KEY'), 'invalid_credential_reference'),
             ('resolver', lambda _: b'sk-fake\r\nHeader: forged', 'credential_unavailable'),
             ('resolver', lambda _: deny(), 'credential_unavailable'),
             ('admit', None, 'live_admission_required'),

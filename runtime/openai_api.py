@@ -1,6 +1,6 @@
-"""Bounded Responses transport with public simulation-only entry points.
+"""Bounded Responses transport.
 
-Authenticated dispatch is internal. Its coordinator owns durable admission,
+Every request is authenticated and admitted. Dispatch is internal. Its coordinator owns durable admission,
 attempt uniqueness, ledger gating and recovery. A digest or committed flag
 alone supplies no authority.
 """
@@ -254,10 +254,7 @@ def _generation(body, packet):
     return dict(usage, text=''.join(parts))
 
 
-def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, resolver=None):
-    authenticated = admit is not None
-    if connection_factory is None and not authenticated:
-        raise TransportError('live_execution_unavailable')
+def _call(packet, binding, dispatch, phase, connection_factory, *, admit, resolver):
     connection, sent = None, False
     incomplete = None
     try:
@@ -270,15 +267,10 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
         raw = _canonical(packet)
         require(len(raw) <= MAX_REQUEST, 'request_too_large')
         packet = json.loads(raw)
-        if authenticated or (type(binding) is dict and 'storage_kind' in binding):
-            try:
-                usage_credentials.validate_binding(binding)
-            except usage_credentials.CredentialError:
-                raise BudgetError('invalid_credential_reference') from None
-        else:
-            fields(binding, 'organization project credential_ref')
-            for value in binding.values():
-                _identity(value)
+        try:
+            usage_credentials.validate_binding(binding)
+        except usage_credentials.CredentialError:
+            raise BudgetError('invalid_credential_reference') from None
         fields(dispatch, 'phase attempt_id packet_digest deadline committed')
         require(phase in ('count', 'generation') and dispatch['phase'] == phase
                 and dispatch['committed'] is True, 'uncommitted_dispatch')
@@ -286,8 +278,7 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
         require(dispatch['packet_digest'] == hashlib.sha256(raw).hexdigest(), 'packet_digest_mismatch')
         deadline = dispatch['deadline']
         require(type(deadline) in (int, float) and math.isfinite(deadline), 'invalid_deadline')
-        if authenticated:
-            deadline = min(deadline, time.time() + MAX_WAIT)
+        deadline = min(deadline, time.time() + MAX_WAIT)
         timeout = _remaining(deadline)
         payload = dict(model=packet['model'], input=packet['text'], reasoning=dict(effort=packet['reasoning']))
         if phase == 'generation':
@@ -295,19 +286,18 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
                            store=False, background=False, tools=[])
         body = _canonical(payload)
         require(len(body) <= MAX_REQUEST, 'request_too_large')
-        headers = {'Authorization': 'Bearer simulation-only', 'Content-Type': 'application/json',
+        headers = {'Content-Type': 'application/json',
                    'OpenAI-Organization': binding['organization'], 'OpenAI-Project': binding['project'],
                    'X-Client-Request-Id': dispatch['attempt_id']}
-        if authenticated:
-            try:
-                secret = resolver(binding.copy())
-                if (type(secret) is not bytes or not 0 < len(secret) <= usage_credentials.MAX_SECRET
-                        or any(byte < 33 or byte > 126 for byte in secret)):
-                    raise ValueError()
-                headers['Authorization'] = 'Bearer ' + secret.decode('ascii')
-            except Exception:
-                raise BudgetError('credential_unavailable') from None
-            timeout = _remaining(deadline)
+        try:
+            secret = resolver(binding.copy())
+            if (type(secret) is not bytes or not 0 < len(secret) <= usage_credentials.MAX_SECRET
+                    or any(byte < 33 or byte > 126 for byte in secret)):
+                raise ValueError()
+            headers['Authorization'] = 'Bearer ' + secret.decode('ascii')
+        except Exception:
+            raise BudgetError('credential_unavailable') from None
+        timeout = _remaining(deadline)
         if connection_factory is None:
             connection = _HTTPSConnection()
             connection.prepare(deadline)
@@ -315,13 +305,12 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
             connection = connection_factory(HOST, timeout)
         _remaining(deadline)
         path = '/v1/responses/input_tokens' if phase == 'count' else '/v1/responses'
-        if authenticated:
-            try:
-                if admit() is False:
-                    raise ValueError()
-            except Exception:
-                raise BudgetError('dispatch_admission_denied') from None
-            _remaining(deadline)
+        try:
+            if admit() is False:
+                raise ValueError()
+        except Exception:
+            raise BudgetError('dispatch_admission_denied') from None
+        _remaining(deadline)
         sent = True
         connection.request('POST', path, body, headers)
         response = connection.getresponse()
@@ -337,7 +326,7 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
         request_id = response.getheader('x-request-id') if hasattr(response, 'getheader') else None
         if request_id is not None:
             _identity(request_id)
-        return dict(result, request_id=request_id, simulation_only=connection_factory is not None)
+        return dict(result, request_id=request_id)
     except BudgetError as error:
         reason = str(error)
         raise TransportError(reason if reason in SAFE_REASONS else 'transport_failure', uncertain=sent,
@@ -354,16 +343,6 @@ def _call(packet, binding, dispatch, phase, connection_factory, *, admit=None, r
                 connection.close()
             except Exception:
                 pass
-
-
-def count(packet, binding, dispatch, *, connection_factory=None):
-    """Count one committed synthetic attempt; no retries or credential access."""
-    return _call(packet, binding, dispatch, 'count', connection_factory)
-
-
-def generate(packet, binding, dispatch, *, connection_factory=None):
-    """Return bounded untrusted text/usage for one committed synthetic attempt."""
-    return _call(packet, binding, dispatch, 'generation', connection_factory)
 
 
 def _authenticated_call(packet, binding, dispatch, phase, *, admit, connection_factory=None, resolver=None):

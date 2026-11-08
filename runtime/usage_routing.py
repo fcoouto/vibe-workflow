@@ -13,7 +13,7 @@ FUNDING_WARNING = ('Grant-only funding is best effort. Account auto-reload may b
                    'the provider may consume other funding; local limits cannot guarantee otherwise.')
 HANDOFF_REASONS = frozenset(('insufficient_headroom', 'balance_stale_or_missing',
     'expiry_or_cycle_boundary', 'evidence_deadline_expired', 'observation_stale',
-    'request_in_flight'))
+    'concurrency_cap'))
 
 
 def status(cwd=None):
@@ -26,7 +26,7 @@ def status(cwd=None):
         except (OSError, ValueError, startup.StartupError):
             enrollment = 'unavailable'
     enrolled = True if enrollment in ('active', 'configured') else False if enrollment == 'outside' else None
-    result = dict(version=1, mode='off', live_enabled=False, live_dispatch=False, simulation_only=True,
+    result = dict(version=1, mode='off', live_enabled=False, live_dispatch=False,
                   canary_active=False,
                   review_authority=False, enrolled=enrolled, enrollment=enrollment,
                   reason='live_adapter_unavailable', enabled=False, funding_policy='best_effort_grant',
@@ -100,7 +100,7 @@ def quote(packet, profile, now):
     raw = json.dumps(dict(packet=packet, profile=profile), sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
     require(len(raw) <= MAX_INPUT, 'request_too_large')
     return dict(version=1, digest=hashlib.sha256(raw).hexdigest(), maximum_usd_micros=maximum,
-                count_maximum_usd_micros=profile['count_maximum'], simulation_only=True)
+                count_maximum_usd_micros=profile['count_maximum'])
 
 
 def profile_digest(profile):
@@ -108,9 +108,9 @@ def profile_digest(profile):
 
 
 class Controller:
-    """Durable consent, shadow selection and internal live admission.
+    """Durable consent, route selection and internal live admission.
 
-    Shadow observations and qualifications grant no live authority.
+    Observations and qualifications alone grant no live authority.
     """
     def __init__(self, ledger, scope, *, clock=None, root=None, bind=None, check_authority=None):
         import time
@@ -263,7 +263,7 @@ class Controller:
                     live_enabled=live_enabled, live_dispatch=False, review_authority=False, funding_policy='best_effort_grant',
                     canary_active=canary_active,
                     warnings=[FUNDING_WARNING],
-                    simulation_only=True, requested_mode=config['requested_mode'] if config else None,
+                    requested_mode=config['requested_mode'] if config else None,
                     revision=config['revision'] if config else 0,
                     reusable_setups=reusable, reuse_reason=reuse_reason,
                     reuse_reason_by_mode=by_mode,
@@ -359,8 +359,7 @@ class Controller:
                     (org['policy']['ceiling'] != 'subscription_benefit' or observation['pool'] == 'benefit'), 'pool_unqualified')
             require(0 <= self.clock() - observation['observed_at'] <= 900, 'observation_stale')
             require(org['observed_at'] is None or observation['observed_at'] > org['observed_at'], 'observation_not_newer')
-            org['balance'] = min(org['balance'], observation['balance']) if org['balance'] is not None else observation['balance']
-            if org['floor'] is None: org['floor'] = (observation['balance'] + 4)//5
+            self.ledger._note_balance(org, observation['balance'])
             org['observed_at'] = observation['observed_at']
             org['observation_source'] = observation['source']
             org['funding_state'] = 'unverified'
@@ -409,7 +408,7 @@ class Controller:
         require(task['native'].get('task') == task['task_id'], 'native_task_mismatch')
         # Operate on a deserialized snapshot: selection must not reserve or write.
         self.ledger._native(data, task['native'], self.clock())
-        require(data['slot'] is None, 'request_in_flight')
+        self.ledger._check_caps(data, org_id)
         self.ledger._admit(data, org_id, task['task_id'],
                            bound['maximum_usd_micros'] + bound['count_maximum_usd_micros'],
                            config['org_revision'], self.clock())
@@ -425,8 +424,7 @@ class Controller:
             result = self._evaluate(self.ledger.snapshot(), task)
         except (BudgetError, KeyError, TypeError, OSError, ValueError) as error:
             result = dict(decision='paused', reason=str(error) if isinstance(error,BudgetError) else 'invalid_task_or_state')
-        return result | dict(simulation_only=True, live_blocker='live_adapter_unavailable',
-                             warning_codes=['best_effort_grant_funding'],
+        return result | dict(warning_codes=['best_effort_grant_funding'],
                              handoff_recommended=result['decision'] == 'paused' and result['reason'] in HANDOFF_REASONS)
 
     def request_handoff(self, task, reason):
@@ -493,7 +491,7 @@ class Controller:
             record.update(state='claimed',claim_attempt=attempt_id)
             return dict(record,new_claim=True)
 
-    def _transmit(self, operation, packet, binding, dispatch, factory, run_id, revision, resolver,
+    def _transmit(self, packet, binding, dispatch, factory, run_id, revision, resolver,
                   live_gate=None, final_check=None):
         from runtime import openai_api
 
@@ -512,26 +510,9 @@ class Controller:
                                  live_gate=dispatch_gate if live_gate is not None else None)
 
         require(self.clock() < dispatch['deadline'], 'evidence_deadline_expired')
-        if live_gate is not None or resolver is not None:
-            return openai_api._authenticated_call(
-                packet, binding, dispatch, dispatch['phase'], admit=admit,
-                connection_factory=factory, resolver=resolver)
-        try:
-            connection = factory('api.openai.com', min(300,dispatch['deadline']-self.clock()))
-        except Exception:
-            raise openai_api.TransportError('transport_failure',uncertain=False) from None
-        try:
-            admit()
-            return operation(packet,binding,dispatch,connection_factory=lambda host,timeout: connection)
-        finally:
-            try: connection.close()
-            except Exception: pass
-
-    def run_shadow(self, task, *, connection_factory=None, credential_resolver=None):
-        """Exercise the admitted protocol with explicit connection and credential fixtures."""
-        require(callable(connection_factory), 'live_execution_unavailable')
-        require(credential_resolver is None or callable(credential_resolver), 'invalid_credential_fixture')
-        return self._run(task, connection_factory, credential_resolver)
+        return openai_api._authenticated_call(
+            packet, binding, dispatch, dispatch['phase'], admit=admit,
+            connection_factory=factory, resolver=resolver)
 
     def _stage_live(self, data, task, evidence, now):
         from dataclasses import asdict
@@ -547,12 +528,11 @@ class Controller:
         previous = org.get('live_funding')
         require(previous is None or current == previous or
                 current['observed_at'] > previous['observed_at'], 'live_grant_observation_changed')
-        # Prior shadow observations can only lower the usable balance. The first
-        # trusted observation establishes a floor even if shadow data set one.
-        balance = org['balance']
-        org['balance'] = grant.balance if balance is None else min(balance, grant.balance)
+        # Earlier observations can only lower the usable balance. The first
+        # trusted observation establishes the issued allowance.
+        self.ledger._note_balance(org, grant.balance)
         if previous is None or previous['digest'] is None:
-            org['floor'] = max(org['floor'] or 0, (grant.balance + 4) // 5)
+            org['issued'] = max(org.get('issued') or 0, grant.balance)
         org['observed_at'] = max(org['observed_at'] or 0, grant.observed_at)
         org['live_funding'] = current
         return deadline, dict(pin=usage_admission.digest(asdict(evidence)),
@@ -576,6 +556,8 @@ class Controller:
         import copy
         from runtime import openai_api
 
+        require(evidence is not None or (callable(connection_factory) and callable(credential_resolver)),
+                'live_execution_unavailable')
         task = copy.deepcopy(task)
         data = self.ledger.snapshot()
         existing = data['runs'].get(task.get('run_id'))
@@ -584,7 +566,7 @@ class Controller:
             require(existing.get('consent', {}).get('scope') == self.scope and
                     existing['digest'] == openai_api.packet_digest(task['packet']) and
                     existing['task'] == task['task_id'], 'run_identity_changed')
-            return dict(replayed=True, simulation_only=True, accepted=False,
+            return dict(replayed=True, accepted=False,
                         requires_native_review=True, state=existing['calls'])
         live_gate = final_check = None
         pin_qualification = False
@@ -641,7 +623,7 @@ class Controller:
         try:
             dispatch = dict(phase=phase, attempt_id=run_id+':'+phase, packet_digest=packet_id,
                             committed=True, deadline=deadline)
-            counted = self._transmit(openai_api.count, packet, binding, dispatch, connection_factory,
+            counted = self._transmit(packet, binding, dispatch, connection_factory,
                                      run_id, config['org_revision'], credential_resolver, live_gate, final_check)
             self.ledger.complete(run_id, phase, profile['count_maximum'])
             packet['input_tokens'] = counted['input_tokens']
@@ -652,7 +634,7 @@ class Controller:
                                            config['org_revision'], self.clock(), live_gate=live_gate)
             phase = 'generation'
             dispatch.update(phase=phase, attempt_id=run_id+':'+phase, packet_digest=packet_id)
-            result = self._transmit(openai_api.generate, packet, binding, dispatch, connection_factory,
+            result = self._transmit(packet, binding, dispatch, connection_factory,
                                     run_id, config['org_revision'], credential_resolver, live_gate, final_check)
             require(result['input_tokens'] == counted['input_tokens'], 'counted_input_changed')
             used = dict(packet, input_tokens=result['input_tokens'], max_output_tokens=result['output_tokens'])
@@ -661,7 +643,7 @@ class Controller:
                 raise BudgetError('incomplete_output')
             actual = quote(used, profile, self.clock())['maximum_usd_micros']
             self.ledger.complete(run_id, phase, actual)
-            return dict(simulation_only=connection_factory is not None, accepted=False, requires_native_review=True,
+            return dict(accepted=False, requires_native_review=True,
                         text=result['text'], request_id=result['request_id'], run_id=run_id,
                         execution_route='openai-api',
                         reported_cost_usd_micros=actual, profile_digest=profile_digest(profile))
@@ -698,8 +680,7 @@ def evaluate(cwd, task):
         with controller(cwd) as control:
             return control.evaluate(task)
     except (BudgetError, OSError, KeyError, TypeError, ValueError):
-        return dict(decision='paused', reason='configuration_or_scope_unavailable',
-                    simulation_only=True, live_blocker='live_adapter_unavailable')
+        return dict(decision='paused', reason='configuration_or_scope_unavailable')
 
 
 def reconcile(cwd, request):
