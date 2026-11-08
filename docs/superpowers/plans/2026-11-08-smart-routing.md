@@ -329,7 +329,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
   - A weekly window at 30% after 10% of its length projects above the bare 30%; a 5-hour window at 80% resetting in 10 minutes projects about 83%; before `min_elapsed_fraction`, the pace term is omitted with `pace_unavailable`.
   - A healthier alternative subscription sets `u`; stale observations return `None`.
   - Class choice from recorded admissions matches the shares over 20 sequential decisions, API wins ties, and a rejected decision leaves no record.
-  - Within class, the amended case 7 sends the first 19 to the 75-pool; case 8 picks the 1-hour pool for the first 17 admissions; zero-demand candidates never divide by zero.
+  - Within class, the amended case 7 sends the first 55 to the 75-pool; case 8 picks the 1-hour pool for the first 17 admissions; zero-demand candidates never divide by zero.
 - [ ] Run, implement, re-run; expected PASS.
 
 ### Task S2.6: Allocate and reserve in one transaction
