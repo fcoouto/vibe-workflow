@@ -1,0 +1,34 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "observations": [
+    {
+      "case": "session.create same id twice (different title)",
+      "result": "second call returns the existing session unchanged; no second session"
+    },
+    {
+      "case": "session.create same new id x10 concurrently",
+      "result": "10 identical responses (one winner's title); one session"
+    },
+    {
+      "case": "session.prompt same message id resent with different text",
+      "result": "returns original admission (original text); prompt hook not rerun; no new model request"
+    },
+    {
+      "case": "session.prompt same new message id x5 concurrently",
+      "result": "prompt hook ran 5x; one user message; one model request; ack time.created differed between winner and losers"
+    },
+    {
+      "case": "client disconnect during admission (prompt hook delayed 4s, client timeout 1s)",
+      "result": "message never admitted (MessageNotFound before and after hook completion); no model request"
+    },
+    {
+      "case": "client disconnect after admission",
+      "result": "GET /api/session/{id}/message/{messageID} returns the admitted user message; ack recoverable by id"
+    }
+  ]
+}

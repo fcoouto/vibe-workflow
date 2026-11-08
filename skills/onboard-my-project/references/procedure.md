@@ -9,7 +9,7 @@ Read the [policy index](../../../policies/00-index.md), [Project Scope](../../..
 1. Confirm the selected checkout and applicable instructions. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client. Keep workspace preparation and new-project creation separate; do not enroll the toolkit checkout just because it is the current working directory.
 2. Inspect relevant project configuration, commands and paths. [Adapt project documents](#adapt-project-documents) to those facts. Separate observed facts from assumptions, and preserve user changes, data, permissions, model/provider choices and existing protections. Resolve missing [project preferences](#project-preference-questions) before preparing changes.
 3. Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes; use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations. Load detailed procedures only for a selected capability.
-4. Run useful project commands and relevant local/client checks. Report what they establish and what remains unknown. Leave the user useful guidance, working commands, limitations and an undo location.
+4. Run useful project commands and relevant local/client checks, including [policy discovery](#verify-policy-discovery). Report what they establish and what remains unknown. Leave the user useful guidance, working commands, limitations and an undo location.
 
 When using packaged file tools for standalone basic setup, select `project_scope.inspection_scope: "relevant"`. This inspects only the project inputs needed for the requested edits: applicable ancestor/directory instructions, selected inputs and targets, their preimages, and the physical target scope. The tools capture planned write/delete/evidence paths; unrelated checkout state and a full file census are outside this partial snapshot. It grants no command execution inside the file transaction, runtime activation or managed authority. Run ordinary project checks natively under existing permission. Keep the Toolkit component-catalog assessment complete even when only selected files are inspected. Explain this as “inspect relevant project files”; do not ask users to select an internal JSON mode.
 
@@ -25,7 +25,7 @@ Adapt pinned Toolkit templates to project facts; they authorize neither prompt e
 | --- | --- |
 | Product (`PRODUCT.md`) | Objective, scope, flows and acceptance criteria in the canonical product document or overview; unknown decisions stay explicit. |
 | Overview (`README.md`) | Preserve introduction/commands; link canonical documents. |
-| Shared instructions (`AGENTS.md`) | Preserve custom and ancestor/directory rules plus command/policy pointers; retain nested ownership. |
+| Shared instructions (`AGENTS.md`) | Preserve custom and ancestor/directory rules, commands and nested ownership; [author an explicit policy entry point](#author-the-policy-entry-point). |
 | Client instructions (`CLAUDE.md`) | Supported shared-rule loading and existing customizations for selected clients; explain why an unselected client's file is unnecessary. |
 | Architecture | Observed code, boundaries, dependencies and data decisions in the established file, preserving capitalization. |
 | Design and accessibility | Relevant interface guidance, or a reason when no interface exists. |
@@ -38,6 +38,81 @@ Preserve user-owned sections, selected clients, filenames, commands and stack; r
 Resolve relative links from the generated destination: `handbook/development.md` reaches root instructions via `../AGENTS.md`. Verify adapted targets. Follow [project-guidance authoring](../../../policies/10-project-onboarding.md#apply-compatible-changes) for complete local contracts: selected-client installed-package pointers and explicit loading triggers, never Toolkit retrieval or author-machine paths. For delegated handoff or multi-session continuation, link the local [lifecycle record and reports](../../../policies/07-context-and-handoff.md#lifecycle-record-and-reports) owner instead of embedding another template.
 
 Use the existing [Reviewed Configuration](reviewed-configuration.md) layout; distinguish file configuration, project checks, client startup proof and selected managed activation. Recovery retains its [configuration and undo owner](apply-and-recovery.md#file-configuration-and-undo).
+
+### Author the policy entry point
+
+Use the shared instruction file actually loaded by the selected client, normally
+the project's root `AGENTS.md`. Keep supported client bridges pointing to that
+owner. A hook-supplied pointer or a passive document list does not replace an
+explicit instruction to read the policy index before substantive work.
+
+Resolve the accepted installed package for this checkout/client from its startup
+pointers or the invoked workflow skill's location. Verify its policy index and
+record the package identity in the existing setup record; retain exact machine
+and cache paths in its private evidence. Shared, tracked instructions use the
+package name and package-relative policy path with the local resolution recipe
+below, or an existing portable repository-relative target. Resolve relative links
+from the generated file, not the author's checkout; do not copy policies or create
+an installation just to make a link portable. Missing or conflicting sources
+require reconciliation, not selection of the newest cache directory, a development
+checkout or an upstream prompt. Preserve active-task pins and use the existing
+update/recovery procedure before changing references that affect them.
+
+Adapt this starting section to the project's actual instruction owner:
+
+```markdown
+## Start here
+
+1. Before substantive work, locate the accepted installed `vibe-workflow` package
+   through this client's startup pointers or installed workflow skill location.
+   Read its `policies/00-index.md` unless its complete, current text is already in
+   context. Follow its load triggers to read applicable full contracts and their
+   triggered procedures before acting. Resolve an unreadable direct policy link
+   through those same local pointers; do not fetch upstream prompts.
+2. Read applicable directory instructions. Reassess triggers when scope changes
+   and before implementation, delegation, completion or merge. On resume or
+   context loss, restore missing instructions and verify actual project state.
+3. Resolve missing, conflicting or truncated instructions before dependent work;
+   continue independent authorized work. Preserve instruction precedence and task pins.
+
+Hooks supplement this guidance; their presence or silence proves neither compliance
+nor readiness. Ordinary work needs no managed runtime; preserve selected controls.
+```
+
+Keep the policy index's trigger table authoritative. Add only useful project
+navigation: actual commands, canonical product/architecture documents, conditional
+client/skill entry points, and setup/undo. Preserve existing rules, memory load
+paths and saved preferences, including the Workstreams block. Reapplication of
+the same effective guidance is a no-op. For an authorized update, reconcile owned
+stale pointers through [file configuration and undo](apply-and-recovery.md#file-configuration-and-undo),
+preserving later edits and other clients/checkouts; do not append a competing router.
+
+### Verify policy discovery
+
+Apply [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish)
+to the generated instructions, not just the onboarding agent's loaded context:
+
+1. Check the selected client's actual entry path, readable local links and complete
+   procedure delivery. Check preserved instructions/preferences and safe reapplication
+   through existing configuration/recovery checks. File existence and a successful
+   reader invocation prove neither task selection nor agent compliance.
+2. Walk representative project requests from that entry point: a small change,
+   review-only work, resume, and applicable delegation, setup-repair or merge work.
+   Use the canonical policy triggers to check that required procedures are reached
+   before the affected action and unrelated procedures stay unloaded. Include a
+   missing or conflicting package pointer when changed resolution needs coverage.
+3. For observed routing, use a fresh native context with the request, generated
+   entry point and necessary raw project inputs. Do not preload the expected policy
+   list or the author's conclusions. Observe actual reads and actions using
+   [Workflow Maintenance](../../../policies/09-workflow-maintenance.md)'s existing
+   bounded, disposable evaluation method. A static walkthrough or fresh worker is
+   not proof of a restarted client's startup delivery. Record unavailable or skipped
+   observations explicitly; basic onboarding does not require a maintainer campaign.
+4. In the existing setup record, distinguish **guidance written**, **local paths and
+   preservation checked**, **client startup integration** (registration, trust,
+   handler execution and native delivery), and **agent routing observed**. Record
+   each selected case, actual evidence, limitations and next action. Report only the
+   layers established; hooks and package checks cannot stand in for observed routing.
 
 ## Project preference questions
 

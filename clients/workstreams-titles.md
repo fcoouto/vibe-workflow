@@ -116,6 +116,70 @@ milestone, phase and blocker handling using accepted plan progress. Do not creat
 a runtime task or runtime database, watcher or extra model turn solely for naming. This
 direct path does not acquire the runtime event-repair guarantees below.
 
+### OpenCode sessions
+
+OpenCode titles are supported only on this ordinary path; there is no
+runtime-bound OpenCode title sync until the Smart Routing S3 slice. Pass the
+`ses_` session ID, the formatted title and, once one exists, the last verified
+managed title as `baseline`:
+
+```text
+python3 -I -B <package>/scripts/opencode_title.py < title.json
+```
+
+```json
+{"session_id": "<ses_id>", "title": "<formatted title>", "baseline": "<last verified title>"}
+```
+
+Use the session ID from the plugin hook context (the `sessionID` on the tool
+or model event for that session), or the ID recorded for a child in your task
+plan. Do not use the `OPENCODE_SESSION_ID` environment variable: OpenCode 2.2.6
+does not set it, so any value is inherited from whatever launched the server and
+can name an unrelated session. Until the routing plugin or a recorded handoff
+supplies an ID, an agent cannot title its own session; this path then does
+nothing. Never pick a session from
+`opencode session list` or by any other guess: the command only checks that
+OpenCode answered for the ID you passed, not that it is the right session, so a
+wrong ID could rename another chat.
+
+The command reads and writes only the session title through `opencode api`
+and never starts a model turn. It always exits successfully and prints at most
+one JSON line. `{"ok": true}` means readback confirmed the title; record its
+`baseline` value as the new baseline.
+
+A failed rename never interrupts the chat or appears as an error to the user.
+The command retries a failed or timed-out call up to three times within a few
+seconds, then returns `deferred: true` with a short `reason`. A missing
+`opencode` program, missing session or unexpected response is not retried.
+Keep the plan unchanged and deliver the title again at the next update. The
+`manual_title` and `topic_changed` reasons come from the
+[manual title rules](#manual-titles): record the pause, or adopt the returned
+`topic`.
+
+Without a baseline, the command writes only over an empty title, OpenCode's
+default `New session - <time>` or `Child session - <time>` title, or a title in
+the managed format. A managed-format title may belong to another family, such
+as `W2`; replacing it re-adopts the session after a lost baseline. Any other
+existing title counts as a manual title.
+
+Add `"adopt": true` to one request without a baseline when the
+[implementation naming trigger](workstreams-naming.md#automatic-implementation-naming)
+applies or the user explicitly asks to adopt or rename the session. That
+request may replace the title it first observes, such as OpenCode's generated
+summary, and returns the replaced title as `previous` so you can restore it if
+the user objects. `previous` is `null` when nothing was replaced or the old
+title was too long to return. Never save or repeat `adopt`; later requests pass
+the returned baseline, so any title the workflow did not write counts as manual
+and is not overwritten. A non-boolean `adopt`, or `adopt` with a baseline, is
+rejected as `invalid_request`.
+
+OpenCode has no compare-and-set title update, so a rename made between the
+command's read and its write, usually a fraction of a second, can be
+overwritten. Readback catches a rename that lands after the write.
+
+Only tests with a fake `opencode` executable check this command, not OpenCode
+itself.
+
 ## Record status and accepted progress
 
 For an adopted runtime-bound thread, the coordinator records a task transition when the

@@ -10,5 +10,6 @@ For delivery workspace preparation and task-owned publication evidence, load [de
 | [Codex task runtime](runtime.md) | A Codex task needs explicit task controls, a doctor report, or lifecycle troubleshooting. |
 | [Workstreams](../skills/workstreams/SKILL.md) | Name contexts, manage the project choice, or coordinate suitable workstream sessions. |
 | [Claude Code](claude-code.md) | Claude Code startup activates the workflow, or you implement, validate or diagnose its adapter. |
+| [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch. Not a startup or onboarding client. |
 
 Read the [shared startup contract](startup.md) only when implementing, diagnosing or preparing enrollment. Startup remains distinct from Codex's optional runtime controls. Add another native adapter with its implementation and separate execution evidence; hosting an agent does not create another hook protocol.

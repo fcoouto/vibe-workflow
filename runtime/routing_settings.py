@@ -12,6 +12,10 @@ VERSION = 1
 MAX_BYTES = 65536
 MAX_REVISION = 2 ** 53 - 1
 ROLES = ('implementer', 'reviewer', 'researcher', 'repair')
+# Task-profile role (runtime.routing.ROLES) -> worker-choice role. The coordinator is never routed: the user's
+# coordinator keeps its own model. `researcher` and `repair` have no profile role, so callers state them explicitly.
+PROFILE_ROLES = dict(worker='implementer', review='reviewer', check='reviewer')
+EXPLICIT_ROLES = ('researcher', 'repair')
 FUNDING = ('subscription', 'api')
 CHOICE_FIELDS = {'provider', 'model', 'effort', 'harness', 'funding'}
 MAX_CHOICES = 16
@@ -177,6 +181,17 @@ def update(path, change, expected_revision):
         return dict(resolved, revision=current + 1)
     finally:
         os.close(lock)
+
+
+def assignment_role(profile_role, explicit=None):
+    """The worker-choice role for a profile role; an explicit role must agree with it or be explicit-only."""
+    require(profile_role != 'coordinator', 'coordinator_not_routed')
+    require(profile_role in PROFILE_ROLES, 'invalid_role')
+    if explicit is None:
+        return PROFILE_ROLES[profile_role]
+    require(explicit in ROLES, 'invalid_role')
+    require(explicit in EXPLICIT_ROLES or explicit == PROFILE_ROLES[profile_role], 'role_mismatch')
+    return explicit
 
 
 def workstreams_enabled(scope, *, load=None):

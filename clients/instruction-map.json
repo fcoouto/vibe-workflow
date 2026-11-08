@@ -185,11 +185,20 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "9f79be01137d09ffd59aecf34cc5e9b47a242b4d62b452505ae6f3afe2bedbde",
+      "sha256": "fc5e784e8daebdb58d32e3b48079369a8b85653640af4d5beddaf2e14cc94799",
       "ranges": [
         [
           1,
-          14
+          15
+        ]
+      ]
+    },
+    "clients/opencode.md": {
+      "sha256": "7c2c6df0f8ce78adf048fd0fbd7e52b2f770efc5c28ca1052bc6848753d97383",
+      "ranges": [
+        [
+          1,
+          34
         ]
       ]
     },
@@ -295,15 +304,19 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "922ae1603f406cdbc03d4b24ca2cbe7e2da9d5e3a37d30b25b9685622f76c1c0",
+      "sha256": "20b622b7693f2292a0684a01b586c374f2e322f39945cc64f017da46de700194",
       "ranges": [
         [
           1,
-          145
+          154
         ],
         [
-          146,
-          270
+          155,
+          290
+        ],
+        [
+          291,
+          334
         ]
       ]
     },
@@ -591,15 +604,19 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "915f204c352600897005c1f1717ba60151af6246ac5949f5f7563c034b9363d1",
+      "sha256": "7d18972bfb6d40600a6ea4a04b64c257e73e0dad1381d61e305b35f5611eb950",
       "ranges": [
         [
           1,
-          61
+          58
         ],
         [
-          62,
-          116
+          59,
+          178
+        ],
+        [
+          179,
+          191
         ]
       ]
     },
@@ -617,7 +634,7 @@
       ]
     },
     "skills/onboard-my-project/references/reviewed-configuration.md": {
-      "sha256": "7be1dd9485f177906e195a5c6c43c2e0dd6befa0b3e7f83d3f9f09e9978c3c35",
+      "sha256": "f3013cb02b30a3cff66e05ce4c00c114cc05a95df81298d1e3c7a137be519b7e",
       "ranges": [
         [
           1,
