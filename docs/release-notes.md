@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.1.33
+
+- A Workstreams thread is `DONE` only after every PR it opened or took over is observed merged on the remote; until then it shows `WAITING`. Threads whose scope excludes publication need no extra step, and other editable threads record an explicit no-PR decision. Runtime verification still enforces required publications only.
+- Add **Review my Project** to review selected repositories against their own project rules. It runs only local checks it can confirm are safe, returns findings in chat, and applies no fixes or installs without separate approval.
+- Ask about Graphify and the memory vault during project onboarding, defaulting to yes.
+- Smart Routing's usage ledger now allows parallel managed API runs, with an allowance policy, padded claims and concurrency caps (default 4 total, 2 per account). This replaces the one-run-at-a-time limit described in 0.1.32. Its simulation and shadow modes are removed.
+- **Breaking rename.** The plugin and local marketplace are now `vibe-workflow` and `vibe-workflow-local` (previously `vibe-coding-workflow`), and the repository is `fcoouto/vibe-workflow`. Project enrollment moves to `.vibe-workflow/project.json`, machine settings to `~/.vibe-workflow/machine.json`, the Workstreams family register to `~/.vibe-workflow/workstreams-families.sqlite3`, and usage state to `~/.local/state/vibe-workflow/usage`. Nothing is migrated automatically: reinstall under the new name and re-run onboarding, or move existing state by hand. Old directories are left untouched.
+- Add the Claude Code local marketplace manifest.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.32
 
 - Present the existing credit and routing management skill as **Manage API Usage**, preserving its command and reference paths.
