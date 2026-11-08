@@ -29,7 +29,7 @@ MAX_TEXT = 128
 MAX_ITEMS = 64
 MAX_COUNT = 10 ** 15  # token counts and epoch milliseconds
 
-SESSION = re.compile(r"ses_[A-Za-z0-9]{1,128}")
+SESSION = re.compile(r"ses_[A-Za-z0-9]{1,128}")  # Also used by runtime/opencode_titles.py.
 MESSAGE = re.compile(r"msg_[A-Za-z0-9]{1,128}")
 EVENT = re.compile(r"evt_[A-Za-z0-9]{1,128}")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}")
@@ -172,8 +172,14 @@ def _tokens(value):
             "cache_write": _count(cache.get("write"), "invalid token counts")}
 
 
+def _fraction(value):
+    """Claude reports utilization as a 0-1 fraction; anything above 1 (such as a percentage) stays unknown."""
+    value = _number(value, "invalid rate limit")
+    return value if value is not None and value <= 1 else None
+
+
 def _rate_limit(native):
-    """Claude Agent `native.rateLimit`; utilization is a 0-1 fraction, not a percentage."""
+    """Claude Agent `native.rateLimit`. Reset times are epoch seconds; event and message times are milliseconds."""
     if native is None:
         return None
     limit = _optional_object(_object(native, "invalid native"), "rateLimit")
@@ -187,13 +193,12 @@ def _rate_limit(native):
         window = _object(window, "invalid rate limit")
         if not NAME.fullmatch(name):
             raise AdapterError("invalid rate limit")
-        normalized[name] = {"utilization": _number(window.get("utilization"), "invalid rate limit"),
-                            "unit": "fraction",
-                            "resets_at": _count(window.get("resetsAt"), "invalid rate limit"),
+        normalized[name] = {"utilization_fraction": _fraction(window.get("utilization")),
+                            "resets_at_s": _count(window.get("resetsAt"), "invalid rate limit"),
                             "status": _text(window, "status", reason="invalid rate limit")}
     return {"status": _text(limit, "status", reason="invalid rate limit"),
             "rate_limit_type": _text(limit, "rateLimitType", reason="invalid rate limit"),
-            "resets_at": _count(limit.get("resetsAt"), "invalid rate limit"),
+            "resets_at_s": _count(limit.get("resetsAt"), "invalid rate limit"),
             "overage_status": _text(limit, "overageStatus", reason="invalid rate limit"),
             "overage_disabled_reason": _text(limit, "overageDisabledReason", reason="invalid rate limit"),
             "is_using_overage": _flag(limit.get("isUsingOverage"), "invalid rate limit"),
@@ -240,12 +245,17 @@ def _origin(value):
 
 
 def _names(value, pattern, case=None):
-    """Bounded names of a mapping; invalid names are counted, never echoed. Values are dropped."""
+    """Bounded, deduplicated names of a mapping; values are dropped.
+
+    The dropped count covers names that fail the pattern or exceed the limit, never echoed; names that
+    collide only after case folding are merged, not counted.
+    """
     if value is None:
         return [], 0
-    names = sorted({case(key) if case else key for key in _object(value, "invalid name map")
-                    if pattern.fullmatch(key)})
-    return names[:MAX_ITEMS * 4], len(value) - len(names)
+    valid = [key for key in _object(value, "invalid name map") if pattern.fullmatch(key)]
+    names = sorted({case(key) if case else key for key in valid})
+    limit = MAX_ITEMS * 4
+    return names[:limit], len(value) - len(valid) + max(0, len(names) - limit)
 
 
 def _unknown(source, name):
@@ -327,7 +337,7 @@ def normalize_event(event, families=None):
     durable = _optional_object(record, "durable")
     event_type = record.get("type")
     base = {"schema": SCHEMA, "client": CLIENT, "event_id": _text(record, "id", EVENT, "invalid event id"),
-            "created": _count(record.get("created"), "invalid event time"),
+            "created_ms": _count(record.get("created"), "invalid event time"),
             "session_id": _text(data, "sessionID", SESSION, "invalid session id"),
             "durable_seq": None if durable is None else _count(durable.get("seq"), "invalid durable sequence"),
             "durable_aggregate_id": None if durable is None else _text(durable, "aggregateID", SESSION,
@@ -381,8 +391,8 @@ def normalize_message(message, families=None):
     parts = [_object(part, "invalid message content") for part in content]
     calls = [_tool_part(part) for part in parts if part.get("type") == "tool"]
     return {"schema": SCHEMA, "client": CLIENT, "kind": "message", "type": message_type,
-            "message_id": message_id, "created": _count(time.get("created"), "invalid message time"),
-            "completed": _count(time.get("completed"), "invalid message time"),
+            "message_id": message_id, "created_ms": _count(time.get("created"), "invalid message time"),
+            "completed_ms": _count(time.get("completed"), "invalid message time"),
             "agent": _text(record, "agent"), "requested": requested, "route_identity": route,
             "previous": _model(record.get("previous"), families)[0],
             "finish": _text(record, "finish"), "raw_finish": _text(record, "rawFinish"),
@@ -399,7 +409,8 @@ def probe(capabilities):
     `capabilities`: {"version", "hooks": [registered hook names], "plugin_health": "ok" when the
     `routing.health` RPC answered for the canonical directory, "worker_tools": {shell|mcp|execute|webfetch:
     "deny"|"narrow"|"allow"}}. Managed launches refuse unless health is ok and every hook S3 uses is present;
-    enforcement also needs the qualified version and a worker profile without unmediated tools.
+    enforcement also needs the qualified version, `shell` denied (commands inside any allowed shell stay
+    unenforceable) and the other tools denied or narrowed by the caller's policy rules.
     """
     caps = _object(capabilities, "invalid capabilities")
     version = _text(caps, "version", reason="invalid capabilities")
@@ -419,7 +430,7 @@ def probe(capabilities):
         unsupported.append("hooks_missing")
     if version != QUALIFIED_VERSION:
         unsupported.append("version_unqualified")
-    if any(tools.get(tool) not in ("deny", "narrow") for tool in WORKER_TOOLS):
+    if tools.get("shell") != "deny" or any(tools.get(tool) not in ("deny", "narrow") for tool in WORKER_TOOLS):
         unsupported.append("worker_unmediated_tools")
     managed = "allow" if healthy and not missing else "refuse"
     enforced = managed == "allow" and unsupported == list(ALWAYS_UNSUPPORTED)

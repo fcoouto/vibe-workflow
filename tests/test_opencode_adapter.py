@@ -312,6 +312,8 @@ class Messages(unittest.TestCase):
                          (0.17, 0.04))
         self.assertEqual((result["created_ms"], result["completed_ms"]), (1794170364822, 1794170366331))
         self.assertNotIn("created", result)
+        self.assertEqual(result["rate_limit"]["overage_status"], "rejected")
+        self.assertNotIn('"OK"', json.dumps(result))
 
     def test_percent_looking_utilization_is_unknown_not_a_fraction(self):
         msg = copy.deepcopy(next(m for m in LINEAGE["aux_session_C"]["messages"] if m["type"] == "assistant"))
@@ -326,8 +328,6 @@ class Messages(unittest.TestCase):
         self.assertEqual(opencode.normalize_message(msg)["rate_limit"]["windows"]["five_hour"]["utilization_fraction"], 1)
         windows["five_hour"]["utilization"] = True
         assert_error_hides(self, opencode.normalize_message, msg)
-        self.assertEqual(result["rate_limit"]["overage_status"], "rejected")
-        self.assertNotIn('"OK"', json.dumps(result))
 
     def test_rate_limit_absent_stays_unknown(self):
         msg = next(m for m in SESSION_A if m["id"] == "msg_fixture2")
