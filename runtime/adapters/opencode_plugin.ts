@@ -293,7 +293,7 @@ export function createRoutingPlugin(config: Config = {}) {
       // the failed-lookup cache only speed up questions about other sessions and may forget entries.
       // Pending sessions are derived ids an open attempt of the ledger owns that nobody attached here yet, and children
       // recorded under them; they are blocked until the launcher attaches, and expire to be asked again. Closed
-      // sessions belong to finished attempts and block only themselves. Neither turns on shell stripping or lookups:
+      // sessions belong to finished attempts and block themselves and the sessions recorded under them. Neither turns on shell stripping or lookups:
       // only attached roots do. Probes are the ledger questions about derived ids.
       const attached = new Map<string, Attachment>()
       const descendants = new Map<string, Descendant>()
@@ -464,11 +464,33 @@ export function createRoutingPlugin(config: Config = {}) {
       }
 
       /**
+       * For a session recorded under a root that has since been detached: the root's attachment when it was attached
+       * again (recording `session` under it), "closed" when its attempt finished, "pending" when it is still open, or
+       * undefined when the session is not retired or the ledger gives no answer.
+       */
+      async function underRetired(retiredSession: string, session: string)
+        : Promise<Attachment | "pending" | "closed" | undefined> {
+        const former = retired.get(retiredSession)
+        if (former === undefined) return undefined
+        const again = rootOf(former)
+        if (again !== undefined) {
+          recordDescendant(session, again)
+          return attached.get(again)!
+        }
+        const answer = await ledgerAnswer(former)
+        if (answer === "closed") return "closed"
+        if (answer === "known") return markPending(session, former)
+        return undefined
+      }
+
+      /**
        * The attachment governing a session, "pending" for a session an open attempt owns that nobody attached here,
        * "closed" for a finished attempt's own session, or null when it is interactive. A session is managed when it is
        * attached, a recorded managed descendant, or its parent chain (from events, and bounded lookups only while a
        * root is attached) reaches one of those. It is pending when it, or a session on that chain, is a
-       * derived id an open attempt owns. A closed ancestor blocks nothing below it. A chain that cannot be determined,
+       * derived id an open attempt owns, and closed when it, or a session on that chain, is a finished attempt's
+       * derived id or was recorded under a root that has since been detached and whose attempt finished (the retired
+       * record survives the parent cache). A chain that cannot be determined,
        * a cycle, a root and a chain past the limits are interactive. Only derived ids are ever asked about, each at
        * most once per answer window, so other sessions never wait for the child.
        */
@@ -479,17 +501,8 @@ export function createRoutingPlugin(config: Config = {}) {
         if (known !== undefined) return attached.get(known) ?? null
         if (holderOf(session) !== undefined) return "pending"
         if (closed.has(session)) return "closed"
-        const former = retired.get(session)
-        if (former !== undefined) {
-          const again = rootOf(former)
-          if (again !== undefined) {
-            recordDescendant(session, again)
-            return attached.get(again)!
-          }
-          const answer = await ledgerAnswer(former)
-          if (answer === "closed") return "closed"
-          if (answer === "known") return markPending(session, former)
-        }
+        const retiredAnswer = await underRetired(session, session)
+        if (retiredAnswer !== undefined) return retiredAnswer
         if (derivedSession(session)) {
           const answer = await ledgerAnswer(session)
           if (answer === "known") return markPending(session, session)
@@ -521,6 +534,8 @@ export function createRoutingPlugin(config: Config = {}) {
           if (holder !== undefined) return markPending(session, holder)
           // A finished attempt's derived session blocks the sessions recorded under it too (never shells or lookups).
           if (closed.has(parent)) return "closed"
+          const above = await underRetired(parent, session)
+          if (above !== undefined) return above
           if (derivedSession(parent)) {
             if (lookups >= MAX_LOOKUPS) return null
             lookups += 1
