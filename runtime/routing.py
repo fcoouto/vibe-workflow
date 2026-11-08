@@ -490,6 +490,8 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
             return None, ['insufficient_headroom']
         constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
                                 resets_at=window.get('reset_at')))
+    if funding and any(vector[ORG + funding] > item['headroom'] for item in constraints):
+        return None, ['insufficient_headroom']  # the one dollar charge must fit every window it is counted in
     return dict(route=route['route'], pool=route['pool'], constraints=constraints, vector=vector, cls=cls,
                 spec=route, windows=pool['windows'], revision=revision), []
 

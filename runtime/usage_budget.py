@@ -8,21 +8,31 @@ import stat
 import uuid
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
-# Sized from the computed worst case (tests/test_routing_funding.py CapacityTests): every table at its bound,
-# every entry at its size bound, 256-character identifiers. S1 runs and native entries take about 5.0M, the
-# S2.6 admissions, holds and seen ids about 1.9M: about 6.9M in all, leaving more than 10% margin.
-MAX_RECORD = 8_000_000
+# Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
+# begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
+# within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
+# complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, convert_hold, observe,
+# disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
+# never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
+# (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
+# identifiers, every native task finished, every call with a maximal `incomplete` record): 9.83M, 82%.
+SOFT_RECORD = 6_000_000
+MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900
 STATE_VERSION = 3
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
-# Per-entry bounds (compact JSON characters) so the worst case provably fits MAX_RECORD; see CapacityTests.
+# Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
 # A larger admission is refused with `record_too_large` and writes nothing.
 MAX_ADMISSION_BYTES = 4096
 MAX_HOLD_BYTES = 2048
 MAX_CLAIMS = 9  # one `org:` claim plus at most eight window claims per hold
+# Uncertainty evidence kept on a call; a larger record is replaced by {'omitted': 'too_large'} so recording
+# uncertainty never fails. `finished_native` needs no own bound: it holds only keys of `native`, which has at
+# most one entry per run (MAX_RUNS).
+MAX_INCOMPLETE_BYTES = 1024
 # Organizations are optional and user-defined; none exists until the user enables one. `personal` is the
 # built-in id for the user's own account; named organizations (a team or workspace) sit beside it. Enabling is
 # `enable_organization` (the `configure` path), never a side effect of routing. An organization carries no key:
@@ -134,7 +144,7 @@ class Ledger:
         require((info.st_dev, info.st_ino) == self.file_identity, 'ledger_replaced')
 
     @contextmanager
-    def transaction(self, write=True):
+    def transaction(self, write=True, grows=False):
         self._check()
         self.db.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         try:
@@ -149,7 +159,7 @@ class Ledger:
             self._check()
             if write and data != original:
                 raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
-                require(len(raw) <= MAX_RECORD, 'ledger_capacity_reached')
+                require(len(raw) <= (SOFT_RECORD if grows else MAX_RECORD), 'ledger_capacity_reached')
                 self.db.execute('UPDATE ledger SET body=? WHERE id=1', (raw,))
             self.db.execute('COMMIT')
         except BaseException:
@@ -190,12 +200,12 @@ class Ledger:
             return data
 
     def configure(self, organization, policy, expected_revision):
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             return self._configure(data, organization, policy, expected_revision)
 
     def enable_organization(self, organization, policy, expected_revision):
         """Explicit user action: create or re-enable an organization (for example `PERSONAL`) with its policy."""
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             revision = self._configure(data, organization, policy, expected_revision)
             data['organizations'][organization]['disabled'] = False
             return revision
@@ -484,7 +494,7 @@ class Ledger:
         for value in (organization, task, run_id, digest): name(value)
         maximum = self._reserve(estimate, next_request_bound, margin_bp)
         require(integer(provision) <= maximum, 'provision_exceeded')
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             return self._begin(data, organization, task, run_id, digest, maximum, revision, now, native,
                                provision, transfer_from, consent, live_gate)
 
@@ -565,7 +575,7 @@ class Ledger:
     def top_up(self, run_id, added, revision, now, *, live_gate=None):
         """Extend the open envelope atomically, or raise insufficient_headroom and change nothing."""
         integer(added)
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             run = data['runs'][run_id]
             call = self._active_call(run)
             require(not run['closed'] and call is not None, 'top_up_forbidden')
@@ -581,7 +591,7 @@ class Ledger:
 
     def reserve_generation(self, run_id, digest, maximum, revision, now, *, live_gate=None):
         name(digest)
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             run = data['runs'][run_id]
             require(not run['closed'] and run['calls']['count']['state'] == 'completed', 'count_not_completed')
             require('generation' not in run['calls'], 'attempt_exists')
@@ -634,7 +644,11 @@ class Ledger:
             require(call['state'] == 'dispatching', 'uncertainty_forbidden')
             call['state'] = 'unresolved'
             if incomplete is not None:
-                call['incomplete'] = incomplete
+                try:
+                    size = len(json.dumps(incomplete, allow_nan=False, separators=(',', ':')))
+                except (TypeError, ValueError, RecursionError):
+                    size = MAX_INCOMPLETE_BYTES + 1
+                call['incomplete'] = incomplete if size <= MAX_INCOMPLETE_BYTES else dict(omitted='too_large')
 
     def close_run(self, run_id):
         with self.transaction() as data:
@@ -681,7 +695,7 @@ class Ledger:
         duplicate returns its existing record without another hold.
         """
         name(attempt_id)
-        with self.transaction() as data:
+        with self.transaction(grows=True) as data:
             known = self.admission(data, attempt_id)
             if known is not None:
                 return dict(known, duplicate=True)
@@ -704,7 +718,6 @@ class Ledger:
             organization, amount, cycle = None, 0, None
             if dollars:
                 organization, amount = name(dollars[0][len(ORG):]), vector[dollars[0]]
-                require(organization in data['organizations'], 'organization_unconfigured')
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
             self._check_caps(data, account)

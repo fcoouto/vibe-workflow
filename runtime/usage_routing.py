@@ -155,7 +155,7 @@ class Controller:
         packet = dict(version=1, model=profile['model'], reasoning=profile['reasoning'],
                       text='qualification', input_tokens=0, max_output_tokens=1)
         quote(packet, profile, self.clock())
-        with self.ledger.transaction() as data:
+        with self.ledger.transaction(grows=True) as data:  # creates an organization
             records = data.setdefault('routing', {})
             old = records.get(self.scope)
             require((old['revision'] if old else 0) == request['expected_revision'], 'consent_revision_changed')
