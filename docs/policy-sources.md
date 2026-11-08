@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing OpenCode shim (S3.3) — 8 November 2026
+
+Task S3.3 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode plugin that blocks managed requests before they are sent. The launcher, single-use dispatch authority and the ledger's `unmanaged` answer come in S3.4.
+
+| Local contract | Requirements carried locally | Basis |
+| --- | --- | --- |
+| [OpenCode shim](../clients/opencode.md#pre-transmission-shim) and `runtime/adapters/opencode_plugin.ts` | Dependency-free V2 server plugin with no selection or funding logic; only managed sessions (attached in the instance through `routing.attach`, or reached through `session.get` parent lineage) are checked, and interactive sessions are never checked or blocked; `model.request` and `subagent` spawns forwarded to `check`, other tools left to policy deny rules; `webfetch` and listed actions tightened to `deny`; credential-like environment names stripped from every shell while any session is attached, because the shell hook has no session ID; one persistent `routing.py --serve` child with id-multiplexed JSON lines, about 500 ms per request, kill, one respawn and one retry, then throw; pass only on `allow`, block on everything else including `unmanaged` for an attached session; `routing.health`, `attach` and `detach` RPC; the launcher attaches through the canonical directory; no logging, fixed-reason errors and bounded requests | Spec §8; plan Task S3.3 as amended by the coordinator's 8 November 2026 brief (managed launches only, the `unmanaged` answer for S3.4, policy-governed non-subagent tools); the S3.1 `--serve` and `check` contract on branch `smart-routing-s31`; OpenCode server plugin and RPC documentation; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08); `node --test` with a fake routing child; isolated live check on OpenCode 2.2.6 with `claude-agent/haiku` (4 model calls) recorded in `s3-3-shim-live.json` |
+
 ## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
 
 Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.
