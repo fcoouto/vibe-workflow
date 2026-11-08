@@ -567,6 +567,27 @@ class BoundsTests(Accounting):
         with self.open_ledger() as ledger:
             self.assertIsNotNone(ledger.lookup_event('needed-2', now()))
 
+    def test_an_open_hold_keeps_at_most_three_idempotency_records(self):
+        self.funded('open', task='root')
+        for i in range(5):
+            self.call(complete('open', 'u%d' % i))  # repeated unknown costs: the first takes effect
+            self.call(dict(v=1, op='record', event=dict(event_id='o%d' % i, attempt_id='open', kind='observed',
+                                                       root_task_id='root', stage='worker', usage=usage(1))))
+        with closing(sqlite3.connect(self.ledger)) as db:
+            effects = db.execute("SELECT count(*) FROM events WHERE attempt_id='open' AND effect=1").fetchone()[0]
+        self.assertEqual(effects, 1)
+        self.assertEqual(self.call(complete('open', 'u9'))['duplicate'], True)
+
+    def test_a_long_running_root_keeps_its_aggregate(self):
+        self.funded('early', task='root')
+        self.funded('late', task='root')
+        self.call(complete('early', 'e1', usage=usage(10)))
+        with self.open_ledger() as ledger:
+            ledger.record_event(dict(event_id='e2', attempt_id='late', kind='complete',
+                                     usage=usage(20)), 'd' * 64, now() + 90 * DAY)
+            summary = ledger.root_summary('root', now() + 90 * DAY)
+        self.assertEqual(summary['stages']['worker']['usd_micros'], 30)  # aged, but an open hold kept it
+
     def test_root_aggregates_are_bounded_per_row_and_in_count(self):
         self.funded('a', task='r' * 128)
         receipts = ['%0128d' % i for i in range(budget.MAX_USAGE_RECEIPTS)]
@@ -585,7 +606,7 @@ class PropertyTests(Accounting):
     """Random admit/dispatch/record (with duplicates and conflicts)/complete/expire sequences keep the books."""
     def test_random_sequences_keep_the_invariants(self):
         rng = random.Random(3606)
-        attempts, sent, applied, events, overrun = [], set(), {}, [], False
+        attempts, sent, applied, remembered, events, overrun = [], set(), {}, {}, [], False
         for step in range(160):
             choice = rng.random()
             if choice < 0.25 or not attempts:
@@ -607,15 +628,22 @@ class PropertyTests(Accounting):
                 if events and rng.random() < 0.3:
                     request = rng.choice(events)  # an exact duplicate
                 events.append(request)
+                before = self.snapshot()
                 result = self.call(request)
                 key = request['event']['event_id']
-                if result['state'] == 'recorded' and not result['duplicate']:
-                    self.assertNotIn(key, applied)  # no event applied twice
-                    applied[key] = result
-                    overrun = overrun or result.get('outcome') == 'overrun'
+                if key in remembered and result['state'] == 'recorded':
+                    self.assertEqual(result, dict(remembered[key], duplicate=True))  # the original outcome
+                    self.assertEqual(self.snapshot(), before)
                 elif result['state'] == 'recorded':
-                    self.assertIn(key, applied)
-                    self.assertEqual(dict(result, duplicate=False), applied[key])
+                    remembered[key] = result
+                    if result['duplicate']:  # a new id for an effect that already happened (S3.1): no change
+                        self.assertEqual(self.snapshot(), before)
+                    else:
+                        self.assertNotIn(key, applied)  # no event applied twice
+                        applied[key] = result
+                        overrun = overrun or result.get('outcome') == 'overrun'
+                else:
+                    self.assertEqual(self.snapshot(), before)  # a refusal changes nothing
             else:
                 with self.open_ledger() as ledger:
                     ledger.expire_evidence(now() + rng.choice([0, DAY, 20 * DAY]))
@@ -630,7 +658,9 @@ class PropertyTests(Accounting):
                 if hold['closed'] and 'settlement' in hold:
                     s = hold['settlement']
                     self.assertEqual(s['charged'] - s['overrun'] + s['released'] + hold['amount'], s['reserved'])
-        self.assertTrue(applied)
+        outcomes = {r.get('outcome') for r in applied.values()}
+        self.assertLessEqual({'complete', 'cost_unknown'}, outcomes)  # the sequence really settled dollar holds
+        self.assertTrue(any(key in remembered for key in (e['event']['event_id'] for e in events[:-1])))
 
 
 if __name__ == '__main__':

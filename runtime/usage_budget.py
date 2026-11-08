@@ -1,5 +1,6 @@
 """Usage Routing accounting with transaction-bound coordinator admission."""
 from contextlib import closing, contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,8 +17,9 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.53M, 87.8%
-# since S3.5's binding allowance (it was 9.83M, 82%).
+# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.63M, 88.6%
+# with S3.6a's settlement fields (10.53M, 87.8% after S3.5's binding allowance). S3.6a's event and root tables
+# are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900
@@ -57,6 +59,42 @@ DEFAULT_ALLOWANCE_BP = 9800
 DEFAULT_MARGIN_BP = 2000
 DEFAULT_CAPS = dict(total=4, per_account=2)
 POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit'
+# S3.6a accounting. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
+# Settled charges stay in R (like S1 run costs) until S3.6b reconciles them against observed balances. Only the
+# current cycle's entry feeds a cycle cap, so older cycle entries fold into `total` at the bound; per-task charges
+# feed task limits and are evicted oldest first, never while their task holds an open claim (MAX_HOLDS < bound).
+MAX_SETTLED_CYCLES = 16
+MAX_SETTLED_TASKS = 512
+# `settlement` a closed dollar hold carries: five integers and a source label.
+SETTLEMENT_HOLD_BYTES = 192
+COST_SOURCES = ('host_message_totals', 'provider_receipt', 'estimate')
+TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write')
+# Where an attempt's cost belongs in its root task. `rescue` is a reviewer's rework, kept apart from review.
+STAGES = ('coordinator', 'profiling', 'routing', 'worker', 'review', 'rescue', 'repair', 'check', 'escalation',
+          'auxiliary')
+ROLE_STAGES = dict(implementer='worker', worker='worker', reviewer='review', review='review', repair='repair',
+                   check='check', researcher='auxiliary')
+# Lifecycle events live in their own table of the ledger file, written in the ledger transaction. A body holds
+# ids, labels, integer totals and the outcome; never a prompt, body, transcript or credential. Worst case in
+# characters: two 256-character ids, eight 517-character unit keys in the usage and in the outcome, nine claim
+# keys released, fixed fields: about 15K, so 16K bounds it. Rows: MAX_EVENTS, oldest unneeded first.
+MAX_EVENT_ID = 128
+MAX_EVENTS = 4096
+MAX_EVENT_BYTES = 16384
+EVENT_BODY_FIELDS = ('attempt_id', 'kind', 'stage', 'request_kind', 'funding', 'at', 'recorded_at', 'root',
+                     'outcome', 'usage')
+# Per-root accounting aggregates (one row per root task): attempts keyed by a 16-hex digest, the receipts already
+# counted, observed units. Worst case: 1024 attempts * 31 + 256 receipts * 131 + 16 units * 535 + ten stages
+# * 260 + a 256-character root, about 79K characters; 96K bounds it.
+MAX_ROOTS = 1024
+MAX_ROOT_ATTEMPTS = 1024
+MAX_USAGE_RECEIPTS = 256
+MAX_UNIT_KEYS = 16
+MAX_ROOT_BYTES = 98304
+# Retention defaults (spec 11), in seconds. Authority state (open and uncertain holds, active cycle caps, settled
+# charges, needed event ids, seen attempt ids, runs) is never removed by age.
+DAY = 86400
+RETENTION = dict(snapshot=DAY, diagnostic=14 * DAY, feature=30 * DAY, aggregate=60 * DAY)
 
 
 class BudgetError(ValueError):
@@ -108,8 +146,30 @@ def initialize(path):
     with closing(sqlite3.connect(path)) as db:
         db.execute('CREATE TABLE ledger (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
         db.execute('INSERT INTO ledger VALUES (1, ?)', (json.dumps(state),))
+        _create_tables(db)
         db.commit()
     return identity
+
+
+def _create_tables(db):
+    """S3.6a tables; created by `initialize` and on the first accounting write of an older ledger."""
+    db.execute('CREATE TABLE IF NOT EXISTS events (event_id TEXT PRIMARY KEY, digest TEXT NOT NULL, '
+               'recorded_at INTEGER NOT NULL, attempt_id TEXT NOT NULL, effect INTEGER NOT NULL, body TEXT NOT NULL)')
+    db.execute('CREATE TABLE IF NOT EXISTS roots (root TEXT PRIMARY KEY, updated_at INTEGER NOT NULL, '
+               'body TEXT NOT NULL)')
+
+
+def _compact(value):
+    return json.dumps(value, allow_nan=False, separators=(',', ':'), ensure_ascii=False)
+
+
+def _digest16(value):
+    return hashlib.sha256(value.encode()).hexdigest()[:16]
+
+
+def task_key(organization, task):
+    """The `settled_tasks` key of one organization's task: a digest, so the table stays small."""
+    return hashlib.sha256(json.dumps([organization, task]).encode()).hexdigest()
 
 
 class Ledger:
@@ -315,13 +375,24 @@ class Ledger:
 
     @classmethod
     def _total(cls, data, organization, task=None, cycle=None):
-        """R: every run call plus every open hold on this organization (uncertain holds included)."""
+        """R: every run call, every open hold on this organization (uncertain holds included) and every charge
+        settled from a hold (S3.6a): by task, by cycle, or in total."""
         runs = sum(cls._cost(call) for run in data['runs'].values()
                    if run['organization'] == organization and (task is None or run['task'] == task)
                    for call in run['calls'].values() if cycle is None or call['cycle'] == cycle)
-        return runs + sum(hold['amount'] for hold in data['holds'].values()
-                          if not hold['closed'] and hold['organization'] == organization
-                          and (task is None or hold['task'] == task) and (cycle is None or hold['cycle'] == cycle))
+        held = sum(hold['amount'] for hold in data['holds'].values()
+                   if not hold['closed'] and hold['organization'] == organization
+                   and (task is None or hold['task'] == task) and (cycle is None or hold['cycle'] == cycle))
+        settled = (data['organizations'].get(organization) or {}).get('settled')
+        if settled is None:
+            charged = 0
+        elif task is not None:
+            charged = data.get('settled_tasks', {}).get(task_key(organization, task), 0)
+        elif cycle is not None:
+            charged = settled['cycles'].get(cycle, 0)
+        else:
+            charged = settled['total']
+        return runs + held + charged
 
     @staticmethod
     def _protected(org):
@@ -832,7 +903,7 @@ class Ledger:
     def mark_uncertain(self, attempt_id):
         """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
 
-        S3.4 accepts no proof of non-launch: an uncertain hold stays counted until S3.6 reconciliation."""
+        S3.4 accepts no proof of non-launch: an uncertain hold stays counted until S3.6b reconciliation."""
         with self.transaction() as data:
             self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
 
@@ -862,6 +933,353 @@ class Ledger:
                 hold['state'] = 'uncertain'
             else:
                 hold.update(closed=True, state='released')
+
+    # -- S3.6a: lifecycle events, completion settlement, root aggregates and retention ----------------------------
+    # Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
+    def record_event(self, event, digest, now):
+        """Apply one validated lifecycle event, its settlement and its root aggregate in ONE write transaction.
+
+        `event` is already shape-checked (`runtime.routing.event_error`); `digest` is its canonical SHA-256 and
+        `now` the command's clock. A remembered event id with the same digest returns its original outcome with
+        `duplicate: True` and writes nothing; another digest is `event_conflict`. A refusal raises BudgetError and
+        stores nothing, so the event can be retried once it applies."""
+        integer(now)
+        with self.transaction() as data:
+            _create_tables(self.db)
+            known = self._event(data, event['event_id'], now)
+            if known is not None:
+                require(known[0] == digest, 'event_conflict')
+                return dict(json.loads(known[1])['outcome'], duplicate=True)
+            outcome, effect, body = self._apply_event(data, event, now)
+            self._store_event(data, event['event_id'], digest, body, now, effect=effect)
+            return outcome
+
+    def lookup_event(self, event_id, now):
+        """The stored body of an event id still in force at `now`, or None (expired evidence is never read)."""
+        with self.transaction(False) as data:
+            if not self._has_tables():
+                return None
+            known = self._event(data, event_id, now)
+            return None if known is None else json.loads(known[1])
+
+    def _has_tables(self):
+        return self.db.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('events','roots')"
+                               ).fetchone()[0] == 2
+
+    def _event(self, data, event_id, now):
+        """(digest, body) of a remembered event, filtered by retention: an expired event whose attempt holds no
+        open claim is treated as absent. Applying it again cannot settle twice: its hold is closed or gone."""
+        row = self.db.execute('SELECT digest, body, recorded_at, attempt_id, effect FROM events WHERE event_id=?',
+                              (event_id,)).fetchone()
+        if row is None:
+            return None
+        if row[2] < now - RETENTION['diagnostic'] and not (row[4] and row[3] in self.open_holds(data)):
+            return None
+        return row[0], row[1]
+
+    def _store_event(self, data, event_id, digest, body, now, *, effect):
+        raw = _compact(body)
+        require(len(raw) <= MAX_EVENT_BYTES, 'record_too_large')
+        self.db.execute('INSERT OR REPLACE INTO events VALUES (?, ?, ?, ?, ?, ?)',
+                        (event_id, digest, now, body['attempt_id'], int(bool(effect)), raw))
+        excess = self.db.execute('SELECT count(*) FROM events').fetchone()[0] - MAX_EVENTS
+        if excess > 0:
+            # Oldest first, keeping every event that changed a still-open claim (at most three per open hold).
+            protected = set(self.open_holds(data))
+            drop = []
+            for rowid, attempt, changed in self.db.execute('SELECT rowid, attempt_id, effect FROM events ORDER BY rowid'):
+                if not (changed and attempt in protected):
+                    drop.append((rowid,))
+                    if len(drop) == excess:
+                        break
+            self.db.executemany('DELETE FROM events WHERE rowid=?', drop)
+
+    @staticmethod
+    def _root_of(data, attempt_id, hold):
+        """(root task id, stage from the admitted role) of a ledger attempt: the bound workflow job's root task,
+        else the hold's task."""
+        record = Ledger.admission(data, attempt_id) or {}
+        binding = record.get('binding') if isinstance(record.get('binding'), dict) else {}
+        job = binding.get('job') if isinstance(binding.get('job'), dict) else None
+        root = job['locator']['task_id'] if job else hold['task']
+        bucket = record.get('bucket')
+        role = bucket[0] if isinstance(bucket, list) and bucket else None
+        return root, ROLE_STAGES.get(role, 'worker')
+
+    def _apply_event(self, data, event, now):
+        """(outcome, effect, stored body). Hold transitions keep the S3.1/S3.4 rules; `complete` settles."""
+        attempt, kind = event['attempt_id'], event['kind']
+        usage = event.get('usage')
+        hold = data['holds'].get(attempt)
+        if kind == 'observed':
+            root, stage, funding = event['root_task_id'], event['stage'], event.get('funding')
+            if hold is not None:
+                require(self._root_of(data, attempt, hold)[0] == root, 'root_mismatch')
+        else:
+            require(hold is not None, 'unknown_attempt')
+            require(not hold['closed'], 'attempt_closed')
+            root, stage = self._root_of(data, attempt, hold)
+            stage = event.get('stage', stage)
+            funding = 'api' if hold['amount'] else 'subscription'
+        aggregate = self._root_row(data, root, now)
+        if kind == 'observed':
+            outcome = dict(state='recorded', duplicate=False, outcome='observed')
+        else:
+            # The settlement counts receipts against the same set the aggregate then records.
+            outcome = self._transition(data, attempt, hold, kind, usage, list(aggregate['receipts']))
+        attempts = aggregate['attempts']
+        key = _digest16(attempt)
+        if key in attempts or len(attempts) < MAX_ROOT_ATTEMPTS:
+            attempts[key] = stage
+        else:
+            aggregate['attempts_overflow'] += 1
+        summary = None
+        if outcome['duplicate']:  # an effect that already happened leaves the aggregate as it was
+            if usage is not None:
+                summary = self._summarize(usage, list(aggregate['receipts']))
+        elif usage is not None and outcome.get('outcome') != 'cost_unknown':
+            summary = self._summarize(usage, aggregate['receipts'])
+            usd = 0
+            if outcome.get('settlement', {}).get('kind') == 'usd_micros':
+                usd = outcome['settlement']['charged']
+            elif kind == 'observed' and funding == 'api' and summary['cost'] is not None:
+                usd = summary['cost']
+            self._aggregate(aggregate, stage, summary, usd, usage['source'] == 'estimate')
+        elif usage is not None:  # an unknown cost is counted once, when the hold settles
+            summary = self._summarize(usage, list(aggregate['receipts']))
+        if not outcome['duplicate']:
+            self._save_root(data, root, aggregate, now)
+        body = dict(attempt_id=attempt, kind=kind, stage=stage, root=root, recorded_at=now, outcome=dict(outcome))
+        for field in ('request_kind', 'at'):
+            if field in event:
+                body[field] = event[field]
+        if funding is not None:
+            body['funding'] = funding
+        if summary is not None:
+            body['usage'] = {k: summary[k] for k in ('source', 'tokens', 'cost', 'units', 'requests', 'duplicates')}
+        # Only a transition of a ledger claim is a needed idempotency record (at most three per open hold:
+        # dispatched, uncertain or cost_unknown, and the closing one); `observed` events are diagnostics.
+        return outcome, kind != 'observed' and not outcome['duplicate'], body
+
+    def _transition(self, data, attempt, hold, kind, usage, seen):
+        state = hold['state']
+        if kind == 'dispatched':
+            if state in ('dispatched', 'uncertain'):
+                return dict(state='recorded', duplicate=True)
+            require(state == 'admitted', 'hold_state_forbidden')
+            require(not (self.admission(data, attempt) or {}).get('authority_required'), 'dispatch_required')
+            hold['state'] = 'dispatched'
+        elif kind == 'uncertain':
+            if state == 'uncertain':
+                return dict(state='recorded', duplicate=True)
+            require(state in ('admitted', 'dispatched'), 'hold_state_forbidden')
+            hold['state'] = 'uncertain'
+        elif kind == 'not_dispatched':
+            require(state == 'admitted', 'hold_state_forbidden')  # S3.4: no proof of non-launch after dispatch
+            hold.update(closed=True, state='released')
+        else:
+            require(state != 'uncertain', 'reconciliation_required')
+            require(state in ('dispatched', 'cost_unknown'), 'hold_state_forbidden')
+            return self._settle(data, attempt, hold, usage, seen)
+        return dict(state='recorded', duplicate=False)
+
+    def _settle(self, data, attempt, hold, usage, seen):
+        """Completion settlement. A window-only hold releases its claims (headroom comes from telemetry). A dollar
+        hold charges the cost, reduces its remaining reservation by the same amount and releases the unused rest
+        exactly once; an unknown cost keeps the whole exposure (`cost_unknown`) until a cost is known.
+        `seen` is a copy of the receipts the root already counted."""
+        amount = hold['amount']
+        summary = self._summarize(usage, seen) if usage is not None else None
+        if not amount:
+            released = dict(hold['windows'])
+            hold.update(closed=True, state='released')
+            outcome = dict(state='recorded', duplicate=False)
+            if summary is not None:
+                outcome.update(outcome='complete', settlement=dict(kind='window', released=released,
+                                                                   observed_units=summary['units']))
+            return outcome
+        source = summary['source'] if summary is not None else None
+        cost = summary['cost'] if summary is not None else None
+        if cost is None:
+            repeated = hold['state'] == 'cost_unknown'  # already took effect: no new idempotency record
+            hold['state'] = 'cost_unknown'
+            return dict(state='recorded', duplicate=repeated, outcome='cost_unknown', settlement=dict(
+                kind='usd_micros', reserved=amount, charged=0, released=0, overrun=0, remaining=amount, cost=None,
+                cost_source=source))
+        charge = cost
+        if source == 'estimate':
+            # An estimate is not a measurement: never charge below the admitted estimate, so at most the padding
+            # (reservation minus admitted estimate) is released. Without a readable estimate nothing is released.
+            charge = max(cost, self._admitted_estimate(data, attempt, amount))
+        overrun, released = max(0, charge - amount), max(0, amount - charge)
+        settlement = dict(reserved=amount, charged=charge, released=released, overrun=overrun, cost=cost,
+                          cost_source=source)
+        hold.update(amount=0, closed=True, state='released', settlement=settlement)
+        self._charge(data, hold, charge)
+        return dict(state='recorded', duplicate=False, outcome='overrun' if overrun else 'complete',
+                    settlement=dict(settlement, kind='usd_micros', remaining=0))
+
+    @staticmethod
+    def _admitted_estimate(data, attempt, amount):
+        record = Ledger.admission(data, attempt) or {}
+        constraints = (record.get('pressure') or {}).get('constraints')
+        costs = [item.get('cost') for item in constraints] if isinstance(constraints, list) else []
+        if not costs or not all(type(cost) is int and 0 <= cost <= MAX_INTEGER for cost in costs):
+            return amount
+        return min(max(costs), amount)
+
+    def _charge(self, data, hold, charge):
+        """Add a settled charge to the organization's total, its cycle and its task: R keeps it (spec 7.4)."""
+        organization, task, cycle = hold['organization'], hold['task'], hold['cycle']
+        org = data['organizations'][organization]
+        settled = org.setdefault('settled', dict(total=0, cycles={}))
+        settled['total'] = min(MAX_INTEGER, settled['total'] + charge)
+        cycles = settled['cycles']
+        cycles[cycle] = min(MAX_INTEGER, cycles.pop(cycle, 0) + charge)  # most recently charged last
+        current = org['policy']['cycle']
+        while len(cycles) > MAX_SETTLED_CYCLES:  # an older cycle's cap is never read again; `total` keeps it
+            del cycles[next(c for c in cycles if c != current)]
+        tasks = data.setdefault('settled_tasks', {})
+        key = task_key(organization, task)
+        tasks[key] = min(MAX_INTEGER, tasks.pop(key, 0) + charge)
+        if len(tasks) > MAX_SETTLED_TASKS:
+            busy = {task_key(h['organization'], h['task']) for h in self.open_holds(data).values() if h['organization']}
+            for old in [k for k in tasks if k not in busy][:len(tasks) - MAX_SETTLED_TASKS]:
+                del tasks[old]
+
+    @staticmethod
+    def _summarize(usage, seen):
+        """Totals of one usage report, counting each receipt once against `seen` (extended in place). `cost` is
+        None when any counted request has no cost. Units stay per typed window key; nothing is added across units."""
+        tokens = dict.fromkeys(TOKEN_FIELDS, 0)
+        units, cost, counted, duplicates = {}, 0, 0, 0
+        for request in usage['requests']:
+            receipt = request.get('receipt')
+            if receipt is not None:
+                if receipt in seen:
+                    duplicates += 1
+                    continue
+                seen.append(receipt)
+            counted += 1
+            for field in TOKEN_FIELDS:
+                tokens[field] = min(MAX_INTEGER, tokens[field] + request['tokens'][field])
+            for key, amount in (request.get('units') or {}).items():
+                units[key] = min(MAX_INTEGER, units.get(key, 0) + amount)
+            price = request.get('cost_usd_micros')
+            cost = None if cost is None or price is None else min(MAX_INTEGER, cost + price)
+        del seen[:-MAX_USAGE_RECEIPTS]
+        return dict(source=usage['source'], tokens=tokens, cost=cost, units=units, requests=counted,
+                    duplicates=duplicates, receipts=seen)
+
+    @staticmethod
+    def _aggregate(aggregate, stage, summary, usd, estimated):
+        entry = aggregate['stages'].setdefault(stage, dict(usd_micros=0, usd_micros_estimated=0,
+                                                           tokens=dict.fromkeys(TOKEN_FIELDS, 0)))
+        entry['usd_micros'] = min(MAX_INTEGER, entry['usd_micros'] + usd)
+        if estimated:
+            entry['usd_micros_estimated'] = min(MAX_INTEGER, entry['usd_micros_estimated'] + usd)
+        for field in TOKEN_FIELDS:
+            entry['tokens'][field] = min(MAX_INTEGER, entry['tokens'][field] + summary['tokens'][field])
+        for key, amount in summary['units'].items():
+            if key in aggregate['units'] or len(aggregate['units']) < MAX_UNIT_KEYS:
+                aggregate['units'][key] = min(MAX_INTEGER, aggregate['units'].get(key, 0) + amount)
+            else:
+                aggregate['units_dropped'] += 1
+        aggregate['receipts'] = summary['receipts']
+
+    def _root_row(self, data, root, now):
+        """The root's aggregate to extend: an expired one starts afresh unless the root still has an open claim."""
+        row = self.db.execute('SELECT body, updated_at FROM roots WHERE root=?', (root,)).fetchone()
+        if row is not None and (row[1] >= now - RETENTION['aggregate'] or root in self._open_roots(data)):
+            return json.loads(row[0])
+        return dict(root=root, attempts={}, attempts_overflow=0, stages={}, units={}, units_dropped=0, receipts=[])
+
+    def _save_root(self, data, root, aggregate, now):
+        raw = _compact(aggregate)
+        require(len(raw) <= MAX_ROOT_BYTES, 'record_too_large')
+        self.db.execute('INSERT OR REPLACE INTO roots VALUES (?, ?, ?)', (root, now, raw))
+        excess = self.db.execute('SELECT count(*) FROM roots').fetchone()[0] - MAX_ROOTS
+        if excess > 0:  # oldest first, never a root with an open claim (MAX_HOLDS < MAX_ROOTS)
+            busy = self._open_roots(data)
+            drop = [(name,) for (name,) in self.db.execute('SELECT root FROM roots ORDER BY updated_at, root')
+                    if name not in busy and name != root][:excess]
+            self.db.executemany('DELETE FROM roots WHERE root=?', drop)
+
+    def _open_roots(self, data):
+        return {self._root_of(data, attempt, hold)[0] for attempt, hold in self.open_holds(data).items()}
+
+    def root_summary(self, root, now):
+        """The root's accounting aggregate still within retention, or None. An open hold keeps it readable."""
+        with self.transaction(False) as data:
+            return self._root_summary(data, root, now)
+
+    def _root_summary(self, data, root, now):
+        if not self._has_tables():
+            return None
+        row = self.db.execute('SELECT body, updated_at FROM roots WHERE root=?', (root,)).fetchone()
+        if row is None or (row[1] < now - RETENTION['aggregate'] and root not in self._open_roots(data)):
+            return None
+        aggregate = json.loads(row[0])
+        return dict(aggregate, attempts=len(aggregate['attempts']) + aggregate['attempts_overflow'],
+                    stage_attempts={stage: list(aggregate['attempts'].values()).count(stage)
+                                    for stage in set(aggregate['attempts'].values())})
+
+    def root_report(self, root, now):
+        """One read transaction: the root aggregate and the root's open (unresolved) holds."""
+        with self.transaction(False) as data:
+            summary = self._root_summary(data, root, now)
+            holds = [dict(hold) for attempt, hold in self.open_holds(data).items()
+                     if self._root_of(data, attempt, hold)[0] == root]
+            return summary, holds
+
+    def expire_evidence(self, now):
+        """Delete expired diagnostics in one write transaction; idempotent (spec 11).
+
+        Events after 14 days unless they changed a still-open claim; root aggregates after 60 days unless the root
+        still has an open claim; admission records of closed attempts after 14 days, and their quota snapshot detail
+        (`pressure`, `snapshot_id`) after 24 hours. Never removed by age: open, uncertain and cost-unknown holds,
+        settled charges and cycle caps, seen attempt ids, runs and native tasks. Reads filter the same way, so an
+        expired record cannot influence a decision whether or not this has run."""
+        integer(now)
+        removed = dict(events=0, aggregates=0, admissions=0, snapshots=0)
+        with self.transaction() as data:
+            _create_tables(self.db)
+            open_ids = set(self.open_holds(data))
+            diagnostic, snapshot = now - RETENTION['diagnostic'], now - RETENTION['snapshot']
+            old = [(event_id,) for event_id, attempt, changed in self.db.execute(
+                'SELECT event_id, attempt_id, effect FROM events WHERE recorded_at < ?', (diagnostic,))
+                if not (changed and attempt in open_ids)]
+            self.db.executemany('DELETE FROM events WHERE event_id=?', old)
+            removed['events'] = len(old)
+            busy = self._open_roots(data)
+            old = [(root,) for (root,) in self.db.execute('SELECT root FROM roots WHERE updated_at < ?',
+                                                          (now - RETENTION['aggregate'],)) if root not in busy]
+            self.db.executemany('DELETE FROM roots WHERE root=?', old)
+            removed['aggregates'] = len(old)
+            kept = []
+            for record in data['admissions']:
+                at = record.get('at')
+                closed = record.get('attempt_id') not in open_ids
+                if closed and type(at) is int and at < diagnostic:
+                    removed['admissions'] += 1
+                    continue
+                if closed and type(at) is int and at < snapshot and ('pressure' in record or 'snapshot_id' in record):
+                    record.pop('pressure', None)
+                    record.pop('snapshot_id', None)
+                    removed['snapshots'] += 1
+                kept.append(record)
+            data['admissions'] = kept
+            protected = sum(1 for _, attempt, changed in self.db.execute(
+                'SELECT event_id, attempt_id, effect FROM events') if changed and attempt in open_ids)
+            holds = self.open_holds(data).values()
+            safety = dict(open_holds=len(open_ids), uncertain_holds=sum(h['state'] == 'uncertain' for h in holds),
+                          cost_unknown_holds=sum(h['state'] == 'cost_unknown' for h in holds),
+                          idempotency_events=protected, seen_attempts=len(data['seen_attempts']),
+                          settled_cycles=sum(len((org.get('settled') or {}).get('cycles', {}))
+                                             for org in data['organizations'].values()),
+                          settled_tasks=len(data.get('settled_tasks', {})),
+                          open_runs=sum(not run['closed'] for run in data['runs'].values()))
+        return dict(removed=removed, retained_safety_records=safety)
 
     @staticmethod
     def _close_run(data, run_id):

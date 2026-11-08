@@ -70,6 +70,15 @@ def valid_locator(value):
     return value['cwd'].startswith('/')
 
 
+ROOT_LOCATOR = ('client', 'cwd', 'session_id', 'task_id')
+
+
+def valid_root_locator(value):
+    """A root task's locator for S3.6a settlement: client, absolute cwd, session and task ids (no job)."""
+    return type(value) is dict and set(value) == set(ROOT_LOCATOR) and \
+        all(_text(value[key], LOCATOR_LIMITS[key]) for key in value) and value['cwd'].startswith('/')
+
+
 def valid_view(view):
     """Shape of a reader's view; anything else (extra keys, unbounded or malformed values) is unusable."""
     if type(view) is not dict or set(view) != set(VIEW_FIELDS) or not _text(view['etag'], MAX_ETAG):
@@ -231,6 +240,15 @@ class D6Workflow:
         if entry is None:
             raise LookupError('etag requested before a view')
         return delegation.routing_etag(*entry)
+
+    def acceptances(self, locator):
+        """Sorted ids of the root task's independently accepted jobs, read from canonical delegation state (S3.6a);
+        read-only. The checkout must match the pinned project, as for `view`."""
+        from runtime import delegation
+        scope = self._resolve(locator)
+        if self.project is not None and Path(scope.repository_root).resolve() != self.project:
+            raise ProjectMismatch('locator resolves outside the pinned project')
+        return delegation.routing_acceptances(scope, locator)
 
     def close(self):
         for key in list(self._watches):

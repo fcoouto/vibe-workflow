@@ -18,6 +18,7 @@ import secrets
 
 
 from runtime import routing_allocator as allocator, routing_gates, routing_settings
+from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
 CONTRACT_VERSION = 1
@@ -576,7 +577,7 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
         else:
             api = 1.0 if feasible == ['api'] else 0.0  # hard overrides
         shares = dict(api=api, subscription=1 - api)
-        rows = [r for r in data['admissions'] if r.get('settings_revision') == settings.get('revision', 0)]
+        rows = decision_rows(data, settings.get('revision', 0), now)
         cls = allocator.choose_class(shares, rows, bucket, observations.get('epoch_at', 0), feasible)
         chosen = allocator.choose_route(by_class[cls], now, horizon) if cls else None
         mode = 'ranked'
@@ -609,6 +610,14 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
                   ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
     record['binding'] = routing_gates.binding(copy.deepcopy(workflow), credential_marker(data, record))
     return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])
+
+
+def decision_rows(data, revision, now):
+    """Admission records that may steer the class choice: this settings revision, within the 14-day diagnostic
+    retention (spec 11). Expired records never influence a decision, whether or not cleanup has run."""
+    oldest = now - usage_budget.RETENTION['diagnostic']
+    return [r for r in data['admissions'] if r.get('settings_revision') == revision
+            and type(r.get('at')) in (int, float) and r['at'] >= oldest]
 
 
 def _dominant(excluded):
@@ -806,10 +815,17 @@ MAX_CLOCK_DRIFT = 60
 # governs them with policy deny rules, and `check` refuses any other kind with `unsupported_kind`.
 REQUEST_KINDS = ('primary', 'subagent', 'title', 'compaction', 'generate')
 REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_pool')
-# Lifecycle events S3.1 accepts, each an existing ledger hold transition; S3.6 adds usage and settlement.
+# Lifecycle events: each S3.1 kind is a ledger hold transition; S3.6a adds usage, settlement and `observed` (usage
+# with no transition, e.g. the coordinator's own requests, reported under its root task and never charged).
 RECORD_KINDS = ('dispatched', 'uncertain', 'not_dispatched', 'complete')
-# Hold states that mean a repeated event already took effect.
-_ALREADY = dict(dispatched=('dispatched', 'uncertain'), uncertain=('uncertain',), not_dispatched=(), complete=())
+EVENT_KINDS = RECORD_KINDS + ('observed',)
+EVENT_REQUIRED = ('event_id', 'attempt_id', 'kind')
+EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_task_id', 'funding')
+MAX_USAGE_REQUESTS = 32
+MAX_USAGE_UNITS = 8  # distinct window keys in one report; one hold claims at most eight windows
+MAX_RECEIPT = 128
+MAX_ROOT_ID = routing_gates.LOCATOR_LIMITS['task_id']
+USAGE_REQUEST_FIELDS = ('kind', 'model', 'variant', 'tokens', 'cost_usd_micros', 'units', 'receipt')
 
 
 def route_identity(provider, model, effort, harness):
@@ -825,7 +841,8 @@ def _blocked(reason):
 
 
 def remaining_envelope(hold):
-    """The open claims of a hold by typed key. S3.1 records no consumption, so this is the full reservation."""
+    """The open claims of a hold by typed key: the full reservation. S3.6a settles at completion only, so nothing is
+    consumed while the attempt runs (S3.6b owns progress accounting from host message totals)."""
     claims = dict(hold['windows'])
     if hold.get('amount'):
         claims[ORG + hold['organization']] = hold['amount']
@@ -985,7 +1002,7 @@ def admission_ids(data, attempt_id):
 def reconcile_hint(ids):
     """The host read an operator can make about a lost acknowledgment. Informational only (``authoritative``
     false): an absent message can also mean a deleted or reverted message or another server or directory, so
-    nothing in S3.4 accepts its result; S3.6 reconciles. Routing makes no host call itself."""
+    nothing in S3.4 accepts its result; S3.6b reconciles. Routing makes no host call itself."""
     return dict(read='message', method='GET', authoritative=False, session_id=ids['session_id'],
                 message_id=ids['message_id'],
                 path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id']))
@@ -1157,37 +1174,132 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=Non
                 reconcile_hint=reconcile_hint(ids))
 
 
-def record_event(ledger, attempt_id, kind):
-    """Apply one lifecycle event as its ledger hold transition; a repeat that already took effect is a duplicate.
+def _bounded_id(value, limit):
+    return type(value) is str and 0 < len(value) <= limit and value.isprintable()
 
-    Only established outcomes release a claim: ``not_dispatched`` before dispatch, ``complete`` after it. A bare
-    ``complete`` never releases an uncertain hold (``reconciliation_required``): S3.6 adds evidence-based reconciliation.
-    A closed attempt refuses every later event (``attempt_closed``): S3.1 keeps no event store, so it cannot tell
-    a late duplicate from a conflicting report. S3.6 adds durable event-id deduplication, usage and settlement.
-    S3.4 accepts no proof of non-launch: ``not_dispatched`` after dispatch stays ``hold_state_forbidden``, and a
-    bare ``dispatched`` on an admission stamped ``authority_required`` is ``dispatch_required``.
-    """
-    if kind not in RECORD_KINDS:
-        return _blocked('record_unsupported')
-    if attempt_id not in ledger.snapshot()['holds']:
-        return _blocked('unknown_attempt')
+
+def _usage_error(usage):
+    if type(usage) is not dict or set(usage) != {'source', 'requests'}:
+        return 'invalid_request'
+    requests = usage['requests']
+    if usage['source'] not in usage_budget.COST_SOURCES or type(requests) is not list or \
+            not 0 < len(requests) <= MAX_USAGE_REQUESTS:
+        return 'invalid_request'
+    keys = set()
+    for request in requests:
+        if type(request) is not dict or not {'kind', 'model', 'tokens'} <= set(request) <= set(USAGE_REQUEST_FIELDS):
+            return 'invalid_request'
+        tokens, units = request['tokens'], request.get('units', {})
+        if request['kind'] not in REQUEST_KINDS or not _text(request['model']) or \
+                not _optional(request.get('variant'), _text) or not _optional(request.get('cost_usd_micros'), _amount):
+            return 'invalid_request'
+        if type(tokens) is not dict or set(tokens) != set(usage_budget.TOKEN_FIELDS) or \
+                not all(_amount(amount) for amount in tokens.values()):
+            return 'invalid_request'
+        if type(units) is not dict or not all(
+                type(key) is str and key.startswith(WIN) and 4 < len(key) <= usage_budget.MAX_KEY and key.isprintable()
+                and _amount(amount) for key, amount in units.items()):
+            return 'invalid_request'
+        keys |= set(units)
+        if 'receipt' in request and not _bounded_id(request['receipt'], MAX_RECEIPT):
+            return 'invalid_request'
+    return None if len(keys) <= MAX_USAGE_UNITS else 'invalid_request'
+
+
+def event_error(event):
+    """The fixed reason a lifecycle event is refused before any ledger access, or None.
+
+    Bounded ids, labels and integers only (no prompt, body or secret can pass): `event_id` (128), `attempt_id`,
+    `kind`; optional `stage`, `request_kind`, `at` (the client's time, informational), `usage` (on `complete` and
+    `observed`), and on `observed` the required `root_task_id` and `stage` plus an optional `funding`."""
+    if type(event) is not dict or not set(EVENT_REQUIRED) <= set(event) <= {*EVENT_REQUIRED, *EVENT_OPTIONAL}:
+        return 'invalid_request'
+    if not _bounded_id(event['event_id'], usage_budget.MAX_EVENT_ID) or not _text(event['attempt_id']) \
+            or not _text(event['kind']):
+        return 'invalid_request'
+    if 'stage' in event and event['stage'] not in usage_budget.STAGES or \
+            'request_kind' in event and event['request_kind'] not in REQUEST_KINDS or \
+            'at' in event and not _amount(event['at']):
+        return 'invalid_request'
+    kind = event['kind']
+    if kind not in EVENT_KINDS:
+        return 'record_unsupported'
+    if 'usage' in event and (kind not in ('complete', 'observed') or _usage_error(event['usage'])):
+        return 'invalid_request'
+    observed = kind == 'observed'
+    if observed != ('root_task_id' in event) or ('funding' in event and not observed):
+        return 'invalid_request'
+    if observed and not (_bounded_id(event['root_task_id'], MAX_ROOT_ID) and 'stage' in event and 'usage' in event
+                         and event.get('funding', 'api') in ('api', 'subscription')):
+        return 'invalid_request'
+    return None
+
+
+def event_digest(event):
+    return hashlib.sha256(json.dumps(event, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+def record_event(ledger, event, now):
+    """Apply one lifecycle event (already checked by ``event_error``) in one ledger transaction.
+
+    S3.1/S3.4 transitions are unchanged: only established outcomes release a claim (``not_dispatched`` before
+    dispatch, ``complete`` after it); a bare ``complete`` never releases an uncertain hold
+    (``reconciliation_required``); ``not_dispatched`` after dispatch is ``hold_state_forbidden``; a bare
+    ``dispatched`` on a stamped admission is ``dispatch_required``; a repeat that already took effect is a duplicate.
+    S3.6a: the ledger remembers event ids, so the same event returns its original outcome and a different payload
+    under the same id is ``event_conflict``; ``complete`` settles (``Ledger._settle``). A closed attempt refuses
+    every new event (``attempt_closed``)."""
     try:
-        if kind == 'dispatched':
-            ledger.mark_dispatched(attempt_id)
-        elif kind == 'uncertain':
-            ledger.mark_uncertain(attempt_id)
-        else:
-            ledger.close_attempt(attempt_id, kind, reconciled=False)
-        return dict(state='recorded', duplicate=False)
+        return ledger.record_event(event, event_digest(event), now)
     except BudgetError as error:
-        hold = ledger.snapshot()['holds'].get(attempt_id)
-        if hold is None:
-            return _blocked('unknown_attempt')
-        if hold['closed']:
-            return _blocked('attempt_closed')
-        if hold['state'] in _ALREADY[kind]:
-            return dict(state='recorded', duplicate=True)
-        return _blocked('hold_state_forbidden' if str(error) == 'close_forbidden' else str(error))
+        return _blocked(str(error))
+
+
+def _zero_tokens():
+    return dict.fromkeys(usage_budget.TOKEN_FIELDS, 0)
+
+
+def _ceil_ratio(total, accepted):
+    return -(-total // accepted)
+
+
+def settle_root(report, root_task_id, accepted):
+    """Root-task settlement over one read of the ledger (``Ledger.root_report``): cost to date per unit, by stage,
+    reviewer rescue as incremental rework, unresolved exposure separately, and cost per independently accepted
+    delivery. ``accepted`` is the number of canonical acceptances (``None`` when unknown); with none there is no
+    finite ratio. USD, tokens and window units are never added or compared across units."""
+    summary, holds = report
+    stages, tokens, usd, estimated = {}, _zero_tokens(), 0, 0
+    counts = (summary or {}).get('stage_attempts', {})
+    for stage, entry in sorted(((summary or {}).get('stages') or {}).items()):
+        stages[stage] = dict(entry, attempts=counts.get(stage, 0))
+    for stage in counts:
+        stages.setdefault(stage, dict(usd_micros=0, usd_micros_estimated=0, tokens=_zero_tokens(),
+                                      attempts=counts[stage]))
+    for entry in stages.values():
+        usd += entry['usd_micros']
+        estimated += entry['usd_micros_estimated']
+        for field in tokens:
+            tokens[field] += entry['tokens'][field]
+    units = dict((summary or {}).get('units') or {})
+    cost = dict(usd_micros=usd, usd_micros_estimated=estimated, tokens=tokens, units=units)
+    held_units = {}
+    for hold in holds:
+        for key, amount in hold['windows'].items():
+            held_units[key] = held_units.get(key, 0) + amount
+    unresolved = dict(attempts=len(holds), usd_micros_held=sum(hold['amount'] for hold in holds),
+                      units_held=held_units,
+                      unknown_cost_attempts=sum(hold['state'] == 'cost_unknown' for hold in holds))
+    ratio = None
+    if accepted:
+        ratio = dict(usd_micros=_ceil_ratio(usd, accepted),
+                     tokens={field: _ceil_ratio(value, accepted) for field, value in tokens.items()},
+                     units={key: _ceil_ratio(value, accepted) for key, value in units.items()})
+    rescue = stages.get('rescue') or dict(usd_micros=0, usd_micros_estimated=0, tokens=_zero_tokens(), attempts=0)
+    return dict(state='settled', root_task_id=root_task_id, attempts=(summary or {}).get('attempts', 0),
+                cost_to_date=cost, by_stage=stages, rework=rescue, executor_quality='not_scored',
+                unresolved=unresolved, acceptance='unavailable' if accepted is None else 'canonical',
+                accepted=accepted, ratio=ratio, units_dropped=(summary or {}).get('units_dropped', 0))
 
 
 def unsent_admissions(data, settings_revision):
