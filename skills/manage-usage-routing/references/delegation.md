@@ -4,7 +4,7 @@ Use existing coordinator task scoping, native worker selection and independent
 review contracts. API proposals receive only the bounded approved task packet;
 no shell, tools, native connector access, external writes or reviewer authority.
 For foreground work, load [Codex host admission](codex-host.md). For optional
-local tests, use `Controller.run_shadow` with synthetic connections.
+local tests, drive the private runner with a connection factory and credential resolver fixture.
 
 For external consideration and reusable source permission, apply the [shared contract](../../../clients/external-delegation.md).
 
@@ -44,7 +44,7 @@ task through existing context and evidence references.
 | --- | --- |
 | Task, scope, bounded brief, source snapshots, role, specialty and custom name | Coordinator assignment context and original visibility declaration |
 | Requested selection | Proposal `provider` (`openai-api` or Smart `auto`) and existing local and API-only choices |
-| Actual route | Successful generation result `execution_route: openai-api` from the runner. The host verifies it. A simulation still reports its runner and cannot register. A replay of stored state makes no execution claim. |
+| Actual route | Successful generation result `execution_route: openai-api` from the runner. The host verifies it. A replay of stored state makes no execution claim. |
 | Attempts and costs | Existing ledger run ID, `<run_id>:count`, `<run_id>:generation`, consent scope, admission pin and generation state and cost |
 | Configured and observed model | Approved profile and validated provider response. The display name is for presentation. |
 | Native child | Observed native spawn and its parent and attempt. Foreground generation creates no child. |

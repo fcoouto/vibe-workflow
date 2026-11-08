@@ -512,7 +512,7 @@
       ]
     },
     "skills/manage-usage-routing/references/delegation.md": {
-      "sha256": "469603323101e6a36640744eb1eb5768560b23bc20d27f3d449cea27920cd778",
+      "sha256": "518602780bb7da2742a90a3c9f3dc977db91c10b9daa400183c35d31058ee10a",
       "ranges": [
         [
           1,
@@ -539,18 +539,18 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "ac803d328360ad697317d5ea4f79d3034c4505d7ddc4ff712a019a427c96a15e",
+      "sha256": "32341d79db294ecd5efea4f9c2e3bb034eb98754295dd5f33995c92b14e95bbe",
       "ranges": [
         [
           1,
-          124
+          123
         ],
         [
-          125,
-          249
+          124,
+          248
         ],
         [
-          250,
+          249,
           250
         ]
       ]

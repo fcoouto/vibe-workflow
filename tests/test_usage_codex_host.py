@@ -550,7 +550,7 @@ class CodexUsageHostTests(unittest.TestCase):
         def dispatch(_, task, evidence):
             result = self.control._run_live(task, evidence, connection_factory=lambda *_: next(connections),
                                             credential_resolver=lambda _: b'synthetic-key')
-            return result | dict(simulation_only=False)
+            return result
 
         def event(account, value):
             events.append((account, value))
@@ -584,7 +584,7 @@ class CodexUsageHostTests(unittest.TestCase):
         run_id = task['run_id']
 
         for field, value in (
-            ('run_id', 'another-run'), ('simulation_only', True), ('accepted', True),
+            ('run_id', 'another-run'), ('accepted', True),
             ('requires_native_review', False), ('execution_route', 'auto'),
             ('reported_cost_usd_micros', result['reported_cost_usd_micros'] + 1),
         ):
@@ -625,20 +625,19 @@ class CodexUsageHostTests(unittest.TestCase):
         self.assertEqual(len(events), 3)
         self.assertEqual(self.ledger.snapshot(), baseline)
 
-    def test_habblaud_does_not_publish_simulated_or_unrecorded_generations(self):
+    def test_habblaud_does_not_publish_unrecorded_generations(self):
         context = self.habblaud_context()
         self.configure()
         plan = self.freeze()
 
-        for simulated in (True, False):
-            self.dispatch.side_effect = lambda _, task, evidence: dict(
-                run_id=task['run_id'], simulation_only=simulated, accepted=False,
-                requires_native_review=True, reported_cost_usd_micros=0, execution_route='openai-api',
-                text='unrecorded response')
-            with patch.object(habblaud, 'transport', side_effect=AssertionError('unexpected display')):
-                result = self.execute(plan, habblaud=context)
-                self.assertFalse(result['accepted'])
-                self.assertEqual(result['visibility'], dict(delivered=False, reason='generation_unconfirmed'))
+        self.dispatch.side_effect = lambda _, task, evidence: dict(
+            run_id=task['run_id'], accepted=False,
+            requires_native_review=True, reported_cost_usd_micros=0, execution_route='openai-api',
+            text='unrecorded response')
+        with patch.object(habblaud, 'transport', side_effect=AssertionError('unexpected display')):
+            result = self.execute(plan, habblaud=context)
+            self.assertFalse(result['accepted'])
+            self.assertEqual(result['visibility'], dict(delivered=False, reason='generation_unconfirmed'))
 
     def test_smart_host_and_runner_preserve_review_and_attempt_identity(self):
         self.configure('smart')

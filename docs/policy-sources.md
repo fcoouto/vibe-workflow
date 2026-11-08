@@ -210,7 +210,7 @@ checks retained canonical pins and source evidence before new bindings, preservi
 recovery for replacements or incomplete restores; it retains enrollment and ledger identity;
 `runtime/usage_budget.py` reuses validated unchanged policy revisions without
 clearing charges or reservations. Real policy changes still invalidate stale
-consent. Stale, expired, simulation-only and smoke-only setups cannot enable
+consent. Stale, expired, unqualified-binding and smoke-only setups cannot enable
 regular live routing through reuse. The public heading and UI metadata change;
 the `manage-usage-routing` identifier and reference paths remain compatible.
 No live activation, credential lookup, billing change, purchase or publication

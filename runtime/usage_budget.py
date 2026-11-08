@@ -51,7 +51,7 @@ def private(path, directory=False):
 
 
 def initialize(path):
-    """Explicitly create a private simulation ledger; never replace an existing one."""
+    """Explicitly create a private local ledger; never replace an existing one."""
     path = Path(path).absolute()
     path = path.parent.resolve() / path.name
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

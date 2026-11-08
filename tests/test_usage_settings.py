@@ -414,7 +414,7 @@ class UsageSettingsTests(unittest.TestCase):
             with settings.controller(self.root) as control:
                 self.assertEqual(control.ledger.snapshot(), before)
 
-    def test_reuse_rejects_stale_expired_smoke_and_simulation_setups(self):
+    def test_reuse_rejects_stale_expired_smoke_and_unqualified_binding_setups(self):
         self.configure_source()
         with settings.controller(self.root, create=True) as control:
             before = control.ledger.snapshot()
@@ -424,7 +424,7 @@ class UsageSettingsTests(unittest.TestCase):
             ('future-profile', lambda config, org: config['profile'].update(verified_at=102)),
             ('expired-policy', lambda config, org: org['policy'].update(stop_at=101)),
             ('smoke', lambda config, org: org['policy'].update(cycle='canary-test')),
-            ('simulation', lambda config, org: config.update(binding=BINDING.copy())),
+            ('unqualified-binding', lambda config, org: config.update(binding=BINDING.copy())),
             ('blocked', lambda config, org: org.update(blocked=True)),
             ('canary-owner', lambda config, org: config.update(canary_owner='active')),
             ('manual-test-owner', lambda config, org: config.update(manual_test_owner='active')),

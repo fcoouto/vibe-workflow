@@ -64,8 +64,8 @@ Status creates no state or credentials. It distinguishes enrollment and saved
 live consent (`live_enabled`). `live_dispatch:false` describes the public CLI
 boundary. If the source package is unavailable or untrusted, resolve that
 through the accepted workflow and preserve enrollment. Evaluate is an optional
-read-only preview. `eligible` plus
-`simulation_only:true` never authorizes a send. A paused/unknown decision is not a
+read-only preview. `eligible` never authorizes a send; status `reason` says why routing is not
+active (disabled, not configured, trusted host required, live adapter unavailable). A paused/unknown decision is not a
 reason to start another provider after an API attempt.
 
 For an unconfigured enrolled checkout with an existing ledger, status adds
@@ -114,8 +114,8 @@ For reusable coding-source or automatic-selection permission, use the [shared pe
 `configure --cwd ...` accepts bounded stdin JSON with exactly:
 
 - `version` (1 or 2), `expected_revision`, `expected_org_revision`;
-- `binding`: `organization`, `project`, `credential_ref`. Version 1 accepts a
-  simulation-only environment-variable name. Version 2 also requires
+- `binding`: `organization`, `project`, `credential_ref`. Version 1 accepts an
+  environment-variable name that can never authorize a request. Version 2 also requires
   `storage_kind: macos_keychain` and a reference of the form `vcw_` followed by
   32 lowercase hexadecimal digits. Configuration and status use metadata only.
 - `policy`: `cycle`, `start`, `end`, `expiry`, `stop_at`, `ceiling`, `amount`,

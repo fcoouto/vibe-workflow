@@ -96,7 +96,6 @@ class LiveAdmissionTests(unittest.TestCase):
         self.factory.side_effect = [counted, generated]
 
         result = self.run_candidate(self.proof)
-        self.assertTrue(result['simulation_only'])
         self.assert_generation_route(result, (counted, generated))
         self.assertEqual(self.resolver.call_count, 2)
         self.assertEqual([conn.requests[0][1] for conn in (counted, generated)],

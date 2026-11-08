@@ -258,18 +258,18 @@ class BudgetTests(unittest.TestCase):
                 self.ledger.dispatch('run', 'count', 1, 102, live_gate=gate)
                 self.ledger.complete('run', 'count', 1)
 
-    def test_shadow_and_live_runs_cannot_reuse_each_others_admission(self):
+    def test_ungated_and_live_runs_cannot_reuse_each_others_admission(self):
         self.observe()
         gate = lambda data, now: dict(pin='a' * 64, maximum=20)
-        self.begin('shadow')
+        self.begin('ungated')
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
-            self.begin('shadow', live_gate=gate)
+            self.begin('ungated', live_gate=gate)
         with self.assertRaisesRegex(budget.BudgetError, 'live_admission_mismatch'):
-            self.ledger.dispatch('shadow', 'count', 1, 102, live_gate=gate)
-        self.count_done('shadow')
+            self.ledger.dispatch('ungated', 'count', 1, 102, live_gate=gate)
+        self.count_done('ungated')
         with self.assertRaisesRegex(budget.BudgetError, 'live_admission_mismatch'):
-            self.ledger.reserve_generation('shadow', 'g', 5, 1, 103, live_gate=gate)
-        self.ledger.close_run('shadow')
+            self.ledger.reserve_generation('ungated', 'g', 5, 1, 103, live_gate=gate)
+        self.ledger.close_run('ungated')
         self.begin(live_gate=gate)
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
             self.begin()

@@ -48,7 +48,6 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(quote['maximum_usd_micros'], 1)
         p = {**PROFILE, 'output_rate': 20_000_000}
         self.assertEqual(routing.quote(PACKET, p, 101)['maximum_usd_micros'], 5001)
-        self.assertTrue(quote['simulation_only'])
         self.assertNotEqual(quote['digest'], routing.quote({**PACKET, 'text':'changed'}, PROFILE, 101)['digest'])
 
     def test_quote_rejects_unknown_fields_mismatch_staleness_and_overflows(self):
@@ -70,7 +69,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)['mode'],'off')
         result = subprocess.run(command + ['quote'], input=json.dumps(dict(version=1,packet=PACKET,profile=PROFILE,now=101)), capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertTrue(json.loads(result.stdout)['simulation_only'])
+        self.assertNotIn('simulation_only', json.loads(result.stdout))
         for payload in ('x'*70000, '{"version":1,"version":1}'):
             result = subprocess.run(command + ['quote'], input=payload,capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0)
@@ -146,9 +145,12 @@ class SlotFreeRoutingTests(unittest.TestCase):
         self.assertEqual(result['pending'], result['pending_attempts'][0])
         self.assertEqual(self.ledger.reconcile(scope='nobody'), {'state': 'manual_recovery_required'})
 
-    def test_simulation_runner_leaves_no_slot_and_runs_stay_simulation_only(self):
-        self.assertTrue(self.controller.status()['simulation_only'])
-        self.assertFalse(self.controller.status()['live_dispatch'])
+    def test_unenabled_status_reports_no_dispatch_and_plain_reason(self):
+        status = self.controller.status()
+        self.assertFalse(status['live_dispatch'])
+        self.assertFalse(status['enabled'])
+        self.assertEqual(status['reason'], 'live_adapter_unavailable')
+        self.assertNotIn('live_blocker', status)
 
 
 if __name__ == '__main__': unittest.main()
