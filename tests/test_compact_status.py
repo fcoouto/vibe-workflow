@@ -237,7 +237,7 @@ class CompactCliTests(unittest.TestCase):
         self.assertEqual(native.title, '\uFFFB▱▱▱▱▱ [W1] P · Completed task')
 
     def test_native_flag_uses_selected_scope_without_mutating_state(self):
-        from tests.test_runtime import DelegationDispatcherTests
+        from tests.test_delegation_dispatcher import DelegationDispatcherTests
         fixture = DelegationDispatcherTests(methodName='runTest')
         self.addCleanup(fixture.doCleanups)
         fixture.setUp()
