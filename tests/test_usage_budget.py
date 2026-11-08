@@ -736,7 +736,8 @@ class ParallelLedgerTests(unittest.TestCase):
         self.assertEqual(budget.Ledger.open_accounts(state), ['acct'])  # one place: the attempt, not run plus hold
         self.assertEqual(self.ledger.held(state), {'win:sub/5h': 12})  # the dollar amount moved to the run
         self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
-        self.assertEqual((state['holds']['a']['state'], state['holds']['a']['amount']), ('admitted', 0))
+        # The run owns the attempt now; its window claim stays held until the run closes.
+        self.assertEqual((state['holds']['a']['state'], state['holds']['a']['amount']), ('converted', 0))
         with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
             self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'))
 

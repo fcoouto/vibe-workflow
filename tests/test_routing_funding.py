@@ -393,17 +393,18 @@ class ConversionTests(Funded):
         self.ledger.convert_hold('m', 'org', 'packet', M, 1, NOW, native('m'))
         state = self.ledger.snapshot()
         self.assertEqual(state['holds']['m']['state'], 'converted')
-        self.assertEqual(budget.Ledger.held(state), {'win:s/5h': 12})
+        a = {'org:org': 1_200_000}  # setUp's hold `a` stays open throughout
+        self.assertEqual(budget.Ledger.held(state), dict(a, **{'win:s/5h': 12}))
         self.ledger.dispatch('m', 'count', 1, NOW)
         for outcome in budget.HOLD_OUTCOMES:
             with self.subTest(outcome), self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
                 self.ledger.close_attempt('m', outcome)  # the run owns the attempt now
-        self.assertEqual(budget.Ledger.held(self.ledger.snapshot()), {'win:s/5h': 12})
+        self.assertEqual(budget.Ledger.held(self.ledger.snapshot()), dict(a, **{'win:s/5h': 12}))
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct-A', 'acct-M'])
         self.ledger.complete('m', 'count', 1)
         self.ledger.close_run('m')
         state = self.ledger.snapshot()
-        self.assertEqual(budget.Ledger.held(state), {})  # released together with the run
+        self.assertEqual(budget.Ledger.held(state), a)  # the window claim is released together with the run
         self.assertEqual(budget.Ledger.open_accounts(state), ['acct-A'])
 
     def test_dispatched_hold_cannot_convert(self):
@@ -843,11 +844,11 @@ class CapacityTests(Funded):
         native_key = run['native']
         native_entry = dict(data['native'][native_key], latest_at=budget.MAX_INTEGER)
         data['organizations'][organization]['revision'] = budget.MAX_INTEGER
-        data['admissions'] = [padded(dict(attempt_id=unique(i, 'a')), budget.MAX_ADMISSION_BYTES)
+        data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
-        data['holds'] = {unique(i, 'h'): padded(dict(closed=False), budget.MAX_HOLD_BYTES)
+        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES)
                          for i in range(budget.MAX_HOLDS)}
-        data['seen_attempts'] = [unique(i, 's') for i in range(budget.MAX_SEEN)]
+        data['seen_attempts'] = [unique(i, long('s')) for i in range(budget.MAX_SEEN)]
         data['runs'] = {unique(i, run_id): copy.deepcopy(run) for i in range(budget.MAX_RUNS)}
         data['native'] = {unique(i, native_key): dict(native_entry) for i in range(budget.MAX_RUNS)}
         data['finished_native'] = []
