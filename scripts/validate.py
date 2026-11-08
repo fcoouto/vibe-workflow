@@ -54,44 +54,50 @@ def validate_receiver_patch(root, name, provenance):
         raise ValueError(f"Bundled {name} patch inventory differs from its provenance")
 
 
-def validate_startup_hook(root, manifest, client, root_variable):
-    hook_file = local_file(root, manifest["hooks"])
-    hooks = read_json(hook_file)["hooks"]
-    if set(hooks) != {"SessionStart"} or len(hooks["SessionStart"]) != 1:
-        raise ValueError("Require one startup hook group per client")
-    group = hooks["SessionStart"][0]
-    if group.get("matcher") != "^(startup|resume|clear|compact|fork)$" or len(group["hooks"]) != 1:
-        raise ValueError("Register each supported startup source once")
-    handler = group["hooks"][0]
-    command = f'python3 -I -B "${{{root_variable}}}/scripts/workflow.py" {client} SessionStart'
-    if handler != {"type": "command", "command": command, "timeout": 5}:
-        raise ValueError("Use the bounded, silent native startup command")
+STARTUP_MATCHER = "^(startup|resume|clear|compact|fork)$"
+CODEX_EVENTS = {
+    "SessionStart": (STARTUP_MATCHER, 5),
+    "PreToolUse": ("^apply_patch$", 5),
+    "PostToolUse": ("*", 5),
+    "Stop": (None, 5),
+    "Interrupt": (None, 1),
+}
+# Claude has no Interrupt hook; a failed tool still invalidates evidence like a completed one.
+CLAUDE_EVENTS = {
+    "SessionStart": (STARTUP_MATCHER, 5),
+    "PreToolUse": ("Edit|Write|NotebookEdit", 5),
+    "PostToolUse": ("*", 5),
+    "PostToolUseFailure": ("*", 5),
+    "Stop": (None, 5),
+}
+
+
+def validate_hook_events(root, manifest, client, root_variable, events):
+    """Each supported event is registered exactly once with its matcher and bounded command."""
+    hooks = read_json(local_file(root, manifest["hooks"]))["hooks"]
+    if set(hooks) != set(events):
+        raise ValueError(f"Require the supported {client} hook events exactly once")
+    for event, (matcher, timeout) in events.items():
+        groups = hooks[event]
+        if not isinstance(groups, list) or len(groups) != 1:
+            raise ValueError(f"Register one {client} hook group per event")
+        group = groups[0]
+        expected_group = {"hooks"} if matcher is None else {"matcher", "hooks"}
+        if not isinstance(group, dict) or set(group) != expected_group or group.get("matcher") != matcher:
+            raise ValueError(f"Use the required {client} event matcher")
+        command = f'python3 -I -B "${{{root_variable}}}/scripts/workflow.py" {client} {event}'
+        if group["hooks"] != [{"type": "command", "command": command, "timeout": timeout}]:
+            raise ValueError(f"Use the bounded {client} runtime command")
     local_file(root, "./clients/" + client + ".md")
     local_file(root, "./runtime/adapters/" + client.replace("-", "_") + ".py")
 
 
 def validate_codex_hooks(root, manifest):
-    hooks = read_json(local_file(root, manifest["hooks"]))["hooks"]
-    events = {
-        "SessionStart": ("^(startup|resume|clear|compact|fork)$", 5),
-        "PreToolUse": ("^apply_patch$", 5),
-        "PostToolUse": ("*", 5),
-        "Stop": (None, 5),
-        "Interrupt": (None, 1),
-    }
-    if set(hooks) != set(events):
-        raise ValueError("Require the supported Codex hook events exactly once")
-    for event, (matcher, timeout) in events.items():
-        groups = hooks[event]
-        if not isinstance(groups, list) or len(groups) != 1:
-            raise ValueError("Register one Codex hook group per event")
-        group = groups[0]
-        expected_group = {"hooks"} if matcher is None else {"matcher", "hooks"}
-        if not isinstance(group, dict) or set(group) != expected_group or group.get("matcher") != matcher:
-            raise ValueError("Use the required Codex event matcher")
-        command = f'python3 -I -B "${{PLUGIN_ROOT}}/scripts/workflow.py" codex {event}'
-        if group["hooks"] != [{"type": "command", "command": command, "timeout": timeout}]:
-            raise ValueError("Use the bounded Codex runtime command")
+    validate_hook_events(root, manifest, "codex", "PLUGIN_ROOT", CODEX_EVENTS)
+
+
+def validate_claude_hooks(root, manifest):
+    validate_hook_events(root, manifest, "claude-code", "CLAUDE_PLUGIN_ROOT", CLAUDE_EVENTS)
 
 
 def validate(root=ROOT):
@@ -120,7 +126,7 @@ def validate(root=ROOT):
     if read_json(local_file(root, "./clients/instruction-map.json")) != build_manifest(root):
         raise ValueError("Prepared instruction map is stale; run scripts/read_instructions.py --prepare during authoring")
     validate_codex_hooks(root, manifest)
-    validate_startup_hook(root, claude, "claude-code", "CLAUDE_PLUGIN_ROOT")
+    validate_claude_hooks(root, claude)
     receiver = read_json(local_file(root, "./assets/habblaud/receiver.json"))
     local_file(root, "./assets/habblaud/LICENSE")
     upgrade = receiver.get("upgrade")

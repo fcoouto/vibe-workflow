@@ -2261,7 +2261,8 @@ def _condition(value, task, previous):
 def update_task(scope, request):
     _fields(request, ("client", "session_id", "task_id", "scope_ref", "expected_revision", "state", "reason", "reference"),
             ("conditions", "resolutions", "resolution_ref", "milestones", "user_attention"))
-    _identity(request)
+    _identity(request, allow_claude=request.get("client") == "claude-code")
+    _require_claude_scope(scope, request["client"])
     _integer(request["expected_revision"], "expected_revision", 1)
     for field in ("reason", "reference"):
         _text(request[field], field)
@@ -2377,7 +2378,7 @@ def retained_patch_guard(event, *, deadline=None):
         return None
     from runtime import local_ownership, evidence
     try:
-        owner = local_ownership.acquire(event.cwd, deadline=deadline)
+        owner = local_ownership.acquire(event.cwd, deadline=deadline, client=event.client)
     except (StartupError, OSError, ValueError, TypeError, KeyError):
         return None
     if not os.path.lexists(owner.database):

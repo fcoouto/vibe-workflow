@@ -7,6 +7,9 @@ from typing import Literal
 
 EventKind = Literal["PreToolUse", "PostToolUse", "Stop", "Interrupt"]
 Action = Literal["pass", "deny", "context", "continue"]
+# The only guarded writes per client; shell commands and other tools stay outside the guard.
+GUARDED_TOOLS = {"codex": frozenset({"apply_patch"}),
+                 "claude-code": frozenset({"Edit", "Write", "NotebookEdit"})}
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,7 @@ def evaluate(event, snapshot):
                 revoke()
                 task["turn_id"] = event.turn_id
                 task["turn_uncertain"] = False
-        if event.tool_name == "apply_patch":
+        if guarded_mutation(event):
             if task and patch_blocked(task):
                 result = HookResult(event.kind, "deny", "Patching requires a WORKING editable bound task without applicable blockers")
     if event.kind in {"PreToolUse", "PostToolUse"}:
@@ -123,4 +126,4 @@ def evaluate(event, snapshot):
 
 
 def guarded_mutation(event):
-    return event.kind == "PreToolUse" and event.client == "codex" and event.tool_name == "apply_patch"
+    return event.kind == "PreToolUse" and event.tool_name in GUARDED_TOOLS.get(event.client, ())

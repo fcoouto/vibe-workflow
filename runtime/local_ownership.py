@@ -15,6 +15,7 @@ class LocalOwnership:
     accepted_scope_digest: str
     accepted_identity: object
     acquisition: startup.CanonicalMembershipAcquisition
+    client: str = 'codex'
 
     @property
     def state_dir(self): return self.runtime.state_dir if self.runtime else None
@@ -23,7 +24,7 @@ class LocalOwnership:
     def database(self): return self.state_dir / 'runtime.sqlite3'
 
 
-def _acquire(cwd, *, deadline=None, settings=False):
+def _acquire(cwd, *, deadline=None, settings=False, client='codex'):
     """Reobserve canonical membership without qualification or installed-source pins."""
     budget = dict(paths=0, bytes=0, deadline=time.monotonic() + 4)
     if deadline is not None: budget['deadline'] = min(budget['deadline'], deadline)
@@ -41,7 +42,7 @@ def _acquire(cwd, *, deadline=None, settings=False):
             or repo['binding'] | selected['binding'] != observed['binding']):
         raise startup.StartupError('local_ownership_changed')
     projected = startup.canonical_scope_projection(acquired.record,
-        repository_id=repo['repository_id'], checkout_id=selected['checkout_id'], client='codex')
+        repository_id=repo['repository_id'], checkout_id=selected['checkout_id'], client=client)
     identity = startup._canonical_plain(projected)
     configured = identity['configuration']['runtime'] if identity else None
     if configured is None and not settings:
@@ -56,11 +57,11 @@ def _acquire(cwd, *, deadline=None, settings=False):
         runtime = startup.RuntimeSettings(3, location.state_dir)
     return LocalOwnership(Path(selected['root']), Path(repo['git_common_dir']), runtime,
         state._digest([3, data['project_id'], repo['repository_id'], selected['checkout_id']]),
-        state._digest(identity), startup._canonical_freeze(identity), acquired)
+        state._digest(identity), startup._canonical_freeze(identity), acquired, client)
 
 
-def acquire(cwd, *, deadline=None):
-    return _acquire(cwd, deadline=deadline)
+def acquire(cwd, *, deadline=None, client='codex'):
+    return _acquire(cwd, deadline=deadline, client=client)
 
 
 def settings_scope(cwd):
@@ -92,7 +93,8 @@ def settings_directory(owner):
 
 def targets(owner, *, deadline=None):
     """Check established private targets; database contents do not authorize recovery."""
-    if type(owner) is not LocalOwnership or acquire(owner.repository_root, deadline=deadline) != owner:
+    if (type(owner) is not LocalOwnership
+            or acquire(owner.repository_root, deadline=deadline, client=owner.client) != owner):
         raise startup.StartupError('local_ownership_changed')
     onboarding._no_links(owner.database)
     state._private(owner.state_dir, True)

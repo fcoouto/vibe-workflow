@@ -100,17 +100,40 @@ class HookManifestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate(self.package)
 
-    def test_accidental_claude_expansion_is_rejected(self):
-        self.seed_codex_contract()
+    def command(self, event):
+        return {"type": "command", "timeout": 5,
+                "command": f'python3 -I -B "${{CLAUDE_PLUGIN_ROOT}}/scripts/workflow.py" claude-code {event}'}
+
+    def test_claude_manifest_registers_exactly_its_supported_events(self):
         path, data = self.read_hooks("claude-code")
-        data["hooks"]["PostToolUse"] = [{"hooks": [{
-            "type": "command",
-            "command": 'python3 -I -B "${CLAUDE_PLUGIN_ROOT}/scripts/workflow.py" claude-code PostToolUse',
-            "timeout": 5,
-        }]}]
+        self.assertEqual(set(data["hooks"]), {"SessionStart", "PreToolUse", "PostToolUse",
+                                              "PostToolUseFailure", "Stop"})
+        self.assertEqual(data["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|NotebookEdit")
+
+    def test_unsupported_claude_event_is_rejected(self):
+        # Claude has no Interrupt hook; registering one would never fire and misstate coverage.
+        path, data = self.read_hooks("claude-code")
+        data["hooks"]["Interrupt"] = [{"hooks": [self.command("Interrupt")]}]
         self.write_hooks(path, data)
-        with self.assertRaisesRegex(ValueError, "startup"):
+        with self.assertRaisesRegex(ValueError, "claude-code hook events"):
             validate(self.package)
+
+    def test_missing_duplicate_or_misrouted_claude_handlers_are_rejected(self):
+        for mutate, message in (
+                (lambda hooks: hooks.pop("Stop"), "hook events"),
+                (lambda hooks: hooks["Stop"][0]["hooks"].append(self.command("Stop")), "runtime command"),
+                (lambda hooks: hooks["PreToolUse"][0].update(matcher="Edit"), "matcher"),
+                (lambda hooks: hooks["PostToolUse"][0]["hooks"][0].update(timeout=6), "runtime command"),
+                (lambda hooks: hooks["Stop"][0]["hooks"][0].update(command=self.command("PostToolUse")["command"]),
+                 "runtime command")):
+            with self.subTest(message=message):
+                path, data = self.read_hooks("claude-code")
+                original = json.dumps(data)
+                mutate(data["hooks"])
+                self.write_hooks(path, data)
+                with self.assertRaisesRegex(ValueError, message):
+                    validate(self.package)
+                path.write_text(original)
 
 
 if __name__ == "__main__":
