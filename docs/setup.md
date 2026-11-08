@@ -43,9 +43,18 @@ Harness improvement: native method adaptation. No observed instruction, memory, 
 
 ## Client integration
 
-- Registration: both plugins installed and enabled as `vibe-workflow@vibe-workflow-local` 0.1.32 (Codex and Claude Code, user scope).
+- Registration: both plugins installed and enabled as `vibe-workflow@vibe-workflow-local` 0.1.33 (Codex and Claude Code, user scope), refreshed from this checkout after the 0.1.33 release.
 - Startup membership: canonical startup-only `.vibe-workflow/project.json` for `codex` and `claude-code`, status `configured`, no runtime.
 - Not observed: a fresh Codex or Claude Code session receiving the startup context. Pending until observed. Codex needs a restart; hook trust may need confirmation.
+
+## Rename migration (8 November 2026)
+
+0.1.33 renamed the plugin and its state paths; nothing migrates automatically. On this machine:
+
+- Copied and verified identical, then removed the old copies: the Workstreams family register (`~/.vibe-workflow/workstreams-families.sqlite3`) and the usage directory (`~/.local/state/vibe-workflow/usage`, including its one open run). The new code loads the ledger and upgrades it on first write.
+- Not copied: `machine.json`, which records the old directory chain, and the old review storage under `~/.local/share/vibe-coding-workflow`.
+- Kept for now, pending a decision: old onboarding, update and proposal records under `~/.local/state/vibe-coding-workflow/`, including rollback journals for earlier enrollments.
+- Not changed: `/Users/fcouto/dev/git/opus/AGENTS.md` still has a `vibe-coding-workflow:` Workstreams marker and a link into an old plugin cache, so its Workstreams choice reads as not configured.
 
 ## Maintenance and undo
 
