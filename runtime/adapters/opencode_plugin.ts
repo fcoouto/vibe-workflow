@@ -137,10 +137,10 @@ class RoutingChild {
   }
 
   send(op: string, fields: Record<string, unknown>): Promise<Record<string, unknown>> {
-    const proc = this.proc ?? this.start()
     const id = `r${++this.seq}`
     const line = JSON.stringify({ v: PROTOCOL, op, id, ...fields })
     if (line.length > MAX_REQUEST) return Promise.reject(new RoutingBlocked("request_too_large"))
+    const proc = this.proc ?? this.start()
     const limit = this.timeoutMs + (this.fresh ? this.graceMs : 0)
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.fault(proc), limit)
