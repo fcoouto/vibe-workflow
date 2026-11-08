@@ -604,15 +604,19 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "28e369aa12bc5f4915dc046af2cdc200510ee19f67459003449743c30a400622",
+      "sha256": "4d667c1a04d60cb0d7a62a5fbc7011fc077f59ea457f96452df5bbbd727d1aa4",
       "ranges": [
         [
           1,
-          61
+          58
         ],
         [
-          62,
-          116
+          59,
+          179
+        ],
+        [
+          180,
+          191
         ]
       ]
     },
@@ -630,7 +634,7 @@
       ]
     },
     "skills/onboard-my-project/references/reviewed-configuration.md": {
-      "sha256": "7be1dd9485f177906e195a5c6c43c2e0dd6befa0b3e7f83d3f9f09e9978c3c35",
+      "sha256": "f3013cb02b30a3cff66e05ce4c00c114cc05a95df81298d1e3c7a137be519b7e",
       "ranges": [
         [
           1,

@@ -8,6 +8,32 @@ Task S3.3 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing
 | --- | --- | --- |
 | [OpenCode shim](../clients/opencode.md#pre-transmission-shim) and `runtime/adapters/opencode_plugin.ts` | Dependency-free V2 server plugin with no selection or funding logic; only managed sessions (attached in the instance through `routing.attach`, or whose parent chain from `session.created` events and bounded `session.get` lookups reaches an attached session) are checked; interactive sessions, including invalid IDs, roots, cycles and over-long chains, are never checked or blocked, and an undeterminable chain blocks only when a session on it was created while a session was attached; `model.request` and `subagent` spawns forwarded to `check`, other tools left to policy deny rules; `webfetch` and listed actions tightened to `deny`; credential-like environment names (one rule shared with the adapter, now including DSNs, connection strings and `DATABASE_URL`) stripped from every shell while any session is attached, because the shell hook has no session ID, with `SSH_AUTH_SOCK` a known casualty and credential-file pointers not stripped; one persistent `routing.py --serve` child with id-multiplexed JSON lines, about 500 ms per request, kill, one respawn and one retry, then throw, with about 1 s of fail-fast back-off after two failures in a row; pass only on `allow`, block on everything else including `unmanaged` for an attached session; `routing.health` ok only when settings are readable and the ledger is ready (otherwise `not_ready`), so a launcher runs `prepare`, then health, then attach; `attach` and `detach` RPC capped at 256 roots, with no caller authority until S3.4 gates them; the launcher attaches through the canonical directory; no logging, fixed-reason errors and bounded requests | Spec §8; plan Task S3.3 as amended by the coordinator's 8 November 2026 brief (managed launches only, the `unmanaged` answer for S3.4, policy-governed non-subagent tools); the S3.1 `--serve`, `check` and `status` contract in `scripts/routing.py`; independent review of PR #132 (interactive safety, RPC authority, readiness, environment names); OpenCode server plugin and RPC documentation; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08); `node --test` with a fake routing child and the real `routing.py --serve` on pinned temporary stores; isolated live check on OpenCode 2.2.6 with `claude-agent/haiku` (4 model calls) recorded in `s3-3-shim-live.json` |
 
+## Onboarding policy discovery follow-up — 8 November 2026
+
+The user authorized the onboarding improvements proposed after the entry-point
+audit. This is an authoring-procedure clarification of the existing accepted
+contracts, not a new Toolkit adoption, hook, state store or runtime gate.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit selective entry point, complete procedures, context recovery and canonical ownership | Policy index and Context/Handoff; `skills/onboard-my-project/references/procedure.md#author-the-policy-entry-point` adapts a compact starting section without copying the policy trigger table. |
+| Portable lookup of installed local targets, retained task pins, customization and recoverable updates | Project Scope and Project Onboarding's authoring/recovery rules; shared guidance uses the package name and startup/skill resolution or an existing repository-relative target. Exact machine/cache paths stay in private setup evidence. The procedure preserves project-owned sections and uses existing file configuration for idempotence, stale-pointer replacement and undo. |
+| Representative instruction paths and honest observed/unobserved outcomes | Project Onboarding's completion rules and Workflow Maintenance; `#verify-policy-discovery` separates static delivery from fresh-context routing and client startup proof without introducing a mandatory maintainer campaign. |
+| Plan and user-facing completion remain aligned with evidence | `docs/onboard-my-project-plan.md#policy-discovery-follow-up--8-november-2026` records the authorized slice; Reviewed Configuration reuses the procedure's evidence layers. Package validation and independent instruction review do not establish fresh-client execution. |
+
+## Explicit project policy entry points — 8 November 2026
+
+The user requested direct policy discovery in this repository and the existing
+Opus checkout after an audit found that their root instructions relied on indirect
+links or startup delivery. This applies the existing local loading contracts;
+it adopts no new Toolkit component and changes no hook or runtime authority.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit, selective retrieval of complete local policies before the affected action; reassessment and context recovery | `policies/00-index.md` and `policies/07-context-and-handoff.md`; this repository's `AGENTS.md` now starts at the index and preserves its canonical trigger table. |
+| Installed-package resolution, preserved project instructions, current state and task pins; block only dependent actions on unresolved instructions | `policies/01-project-scope.md` and `policies/10-project-onboarding.md#apply-compatible-changes`; Opus's local entry point links its existing installed package, retains its project rules and Workstreams choice, and requires source reconciliation when pointers conflict. |
+| Separate guidance, enforcement and observed execution; maintain authoring coverage without routine provenance loading | Existing startup and instruction-authoring contracts; repository sections route conditional client/skill procedures and keep source coverage in authoring. Package checks and instruction walkthroughs are distinct from fresh-client delivery evidence. |
+
 ## Smart Routing OpenCode adapter (S3.2) — 8 November 2026
 
 Task S3.2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the OpenCode client contract and its pure normalization module. No plugin, launcher, ledger write or client registration is part of this slice.
