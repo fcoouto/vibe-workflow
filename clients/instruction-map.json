@@ -295,15 +295,15 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "98900e9ffc3d39270adcaec65b1f2e5bb036a309e4e37009ee05d681880f4e0e",
+      "sha256": "0cd665a03a55dc93740a4d9e62d0ecbbf4819d0d7961ef0ebe03f6afe095fad2",
       "ranges": [
         [
           1,
-          141
+          148
         ],
         [
-          142,
-          247
+          149,
+          280
         ]
       ]
     },

@@ -93,6 +93,39 @@ milestone, phase and blocker handling using accepted plan progress. Do not creat
 a runtime task or runtime database, watcher or extra model turn solely for naming. This
 direct path does not acquire the runtime event-repair guarantees below.
 
+### OpenCode sessions
+
+OpenCode titles are supported only on this ordinary path; there is no
+runtime-bound OpenCode title sync until the Smart Routing S3 slice. Pass the
+`ses_` session ID, the formatted title and, once one exists, the last verified
+managed title as `baseline`:
+
+```text
+python3 -I -B <package>/scripts/opencode_title.py < title.json
+```
+
+```json
+{"session_id": "<ses_id>", "title": "<formatted title>", "baseline": "<last verified title>"}
+```
+
+The command reads and writes only the session title through `opencode api`
+and never starts a model turn. It always exits successfully and prints one
+JSON result. `{"ok": true}` means readback confirmed the title; record it as
+the new baseline.
+
+A failed rename never interrupts the chat or appears as an error to the user.
+The command tries up to three times within a few seconds, then returns
+`deferred: true` with a short `reason`. Keep the plan unchanged and deliver the
+title again at the next update. The `manual_title` and `topic_changed` reasons
+come from the [manual title rules](#manual-titles): record the pause, or adopt
+the returned `topic`. Without a baseline, the command writes only over an empty
+title, OpenCode's default `New session - <time>` or `Child session - <time>`
+title, or a title in the managed format. Any other existing title counts as a
+manual title.
+
+Only tests with a fake `opencode` executable check this command, not OpenCode
+itself.
+
 ## Record status and accepted progress
 
 For an adopted runtime-bound thread, the coordinator records a task transition when the
