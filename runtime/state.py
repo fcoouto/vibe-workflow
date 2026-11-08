@@ -1488,45 +1488,40 @@ def _sidecars(path):
                 raise StateError("Unsupported runtime journal mode")
 
 
-def _header_marker(path):
-    """File identity plus SQLite's file change counter and version-valid-for number (header offsets 24 and 92).
+class ChangeWatch:
+    """Cheap read-only change marker for one SQLite database file (Smart Routing S3.5 dispatch gates).
 
-    In rollback-journal mode (the only mode `_schema` accepts) SQLite increments the counter on every committed
-    write, and no writer can commit while a reader holds its SHARED lock."""
-    _sidecars(path)
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        info = os.fstat(descriptor)
-        header = os.pread(descriptor, 100, 0)
-    finally:
-        os.close(descriptor)
-    if len(header) != 100 or header[:16] != b"SQLite format 3\0":
-        raise StateError("Runtime database header is unreadable")
-    return "%d:%d:%s" % (info.st_dev, info.st_ino, (header[24:28] + header[92:96]).hex())
+    Holds ONE read-only SQLite connection and asks `PRAGMA data_version`, which changes whenever another
+    connection, in any process, commits to the file and never on a rollback; the file's (device, inode) from
+    `os.lstat` makes a replaced file a change too. Markers compare only within one watch. It never opens a raw
+    descriptor on the database: on POSIX, closing any descriptor of a file drops every lock this process holds
+    on it, and only SQLite's own close defers that while its other connections still hold locks. A busy database
+    (another connection holds PENDING or EXCLUSIVE) returns None after at most `BUSY_SECONDS`. Never writes."""
+    BUSY_SECONDS = 0.1
 
+    def __init__(self, path):
+        self.path = Path(path)
+        _sidecars(self.path)
+        self._db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=self.BUSY_SECONDS,
+                                   isolation_level=None)
+        try:
+            self._db.execute("pragma query_only=on")
+        except BaseException:
+            self._db.close()
+            raise
 
-def change_marker(scope, *, held=False):
-    """Cheap read-only etag of the canonical runtime database for Smart Routing's dispatch gates (S3.5).
+    def marker(self):
+        try:
+            info = os.lstat(self.path)
+            version = self._db.execute("pragma data_version").fetchone()[0]
+        except sqlite3.OperationalError as error:
+            if "locked" in str(error) or "busy" in str(error):
+                return None
+            raise StateError("Runtime state is unavailable, corrupt, locked or incompatible") from None
+        return "%d:%d:%d" % (info.st_dev, info.st_ino, version)
 
-    `held=True`: the caller's open read transaction already holds the SHARED lock, so the header is stable.
-    Otherwise take a SHARED lock briefly on a separate read-only connection; a busy database returns None
-    (treated as changed). Never writes, migrates or validates task data."""
-    path = _path(scope)
-    if held:
-        return _header_marker(path)
-    try:
-        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.1, isolation_level=None)) as db:
-            db.execute("pragma query_only=on")
-            db.execute("begin")
-            try:
-                db.execute("select count(*) from sqlite_master").fetchone()
-                return _header_marker(path)
-            finally:
-                db.execute("commit")
-    except sqlite3.OperationalError as error:
-        if "locked" in str(error) or "busy" in str(error):
-            return None
-        raise StateError("Runtime state is unavailable, corrupt, locked or incompatible") from None
+    def close(self):
+        self._db.close()
 
 
 def _schema(db, *, version=SCHEMA_VERSION):

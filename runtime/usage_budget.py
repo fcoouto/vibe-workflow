@@ -16,7 +16,8 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 9.83M, 82%.
+# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.53M, 87.8%
+# since S3.5's binding allowance (it was 9.83M, 82%).
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900

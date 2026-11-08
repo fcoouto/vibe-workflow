@@ -30,6 +30,15 @@ VIEW_FIELDS = ('etag', 'job', 'dependencies', 'ownership', 'resource')
 JOB_FIELDS = ('locator', 'role', 'revision', 'semantic_digest', 'dependencies', 'ownership', 'resource')
 
 
+class WorkflowChanged(Exception):
+    """Workflow state committed a change while a view was being read; the caller retries or refuses."""
+
+
+# The serialized size check uses a placeholder credential marker, the largest the stored binding can carry.
+_CREDENTIAL_PLACEHOLDER = '0' * 64
+MAX_WATCHES = 64
+
+
 def _hex(value):
     return type(value) is str and _HEX.fullmatch(value) is not None
 
@@ -124,6 +133,12 @@ def binding(job, credential):
     return dict(v=BINDING_VERSION, job=job, credential=credential)
 
 
+def binding_fits(job):
+    """Whether a job binding still fits MAX_BINDING_BYTES once serialized with the largest credential marker.
+    Character limits alone do not bound bytes: non-ASCII text serializes as six-byte escapes."""
+    return valid_job_binding(job) and valid_binding(binding(job, None if job is None else _CREDENTIAL_PLACEHOLDER))
+
+
 def valid_binding(value):
     """A stored binding: version, job part (or None) and credential marker (or None), within MAX_BINDING_BYTES."""
     if type(value) is not dict or set(value) != {'v', 'job', 'credential'} or value['v'] != BINDING_VERSION:
@@ -168,26 +183,41 @@ def _resolve_scope(locator):
 class D6Workflow:
     """Reads the canonical delegation state (runtime/delegation.py) for a locator; never writes it.
 
-    `view` resolves the checkout (slow) and reads one consistent snapshot; `etag` reuses that resolution and
-    reads only the database change counter and the Workstreams setting digest, so it is cheap enough to run
-    inside the ledger transaction."""
+    `view` resolves the checkout (slow), opens a fresh `state.ChangeWatch` (one read-only SQLite connection; no
+    raw descriptor, so no lock this process holds on the database is ever dropped) and reads one consistent
+    snapshot. `etag` reuses that watch: a `PRAGMA data_version` query plus the Workstreams setting digest, cheap
+    enough to run inside the ledger transaction. At most MAX_WATCHES watches are kept; closing one is SQLite's
+    own close, which keeps its descriptor open while other connections of this process hold locks."""
     def __init__(self, resolve=None):
         self._resolve = resolve or _resolve_scope
-        self._scopes = {}
+        self._watches = {}
 
     @staticmethod
     def _key(locator):
         return json.dumps(locator, sort_keys=True)
 
+    def _forget(self, key):
+        entry = self._watches.pop(key, None)
+        if entry is not None:
+            entry[1].close()
+
     def view(self, locator):
         from runtime import delegation
+        key = self._key(locator)
         scope = self._resolve(locator)
-        self._scopes[self._key(locator)] = scope
-        return delegation.routing_view(scope, locator)
+        self._forget(key)
+        while len(self._watches) >= MAX_WATCHES:
+            self._forget(next(iter(self._watches)))
+        self._watches[key] = (scope, delegation.routing_watch(scope))
+        return delegation.routing_view(scope, locator, self._watches[key][1])
 
     def etag(self, locator):
         from runtime import delegation
-        scope = self._scopes.get(self._key(locator))
-        if scope is None:
+        entry = self._watches.get(self._key(locator))
+        if entry is None:
             raise LookupError('etag requested before a view')
-        return delegation.routing_etag(scope)
+        return delegation.routing_etag(*entry)
+
+    def close(self):
+        for key in list(self._watches):
+            self._forget(key)

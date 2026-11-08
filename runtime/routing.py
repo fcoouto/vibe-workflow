@@ -778,7 +778,7 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None)
     """
     try:
         reason = _shape_error(assignment, ranking, settings, observations)
-        if reason is None and not routing_gates.valid_job_binding(workflow):
+        if reason is None and not routing_gates.binding_fits(workflow):
             reason = 'invalid_binding'
     except Exception:  # noqa: BLE001 - e.g. RecursionError on a pathological structure
         reason = 'invalid_observation'
@@ -1045,10 +1045,13 @@ def _fresh_inputs(ledger, attempt_id, workflow):
         try:
             view = workflow.view(copy.deepcopy(job['locator']))
             fresh['view'] = copy.deepcopy(view) if routing_gates.valid_view(view) else None
+            fresh['error'] = None if fresh['view'] is not None else 'gate_error'
+        except routing_gates.WorkflowChanged:
+            fresh['view'], fresh['error'] = None, 'workflow_changed'  # retried like an etag mismatch
         except Exception:  # noqa: BLE001 - an unreadable workflow fails closed; the hold stays admitted
-            fresh['view'] = None
-        if fresh['view'] is None:
-            fresh['error'] = 'gate_error'
+            fresh['view'], fresh['error'] = None, 'gate_error'
+        if fresh['error'] is None:
+            del fresh['error']
     return fresh
 
 
@@ -1207,6 +1210,10 @@ def ledger_summary(data):
     # Holds admitted before `authority_required` keep the old rules; the canary needs this count at zero.
     unstamped = sum(1 for attempt in Ledger.open_holds(data)
                     if not (Ledger.admission(data, attempt) or {}).get('authority_required'))
+    # Open holds with no workflow job (S3.5): fine for explicit delegation, never for a planned job.
+    unbound = sum(1 for attempt in Ledger.open_holds(data)
+                  if not ((Ledger.admission(data, attempt) or {}).get('binding') or {}).get('job'))
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
+                unbound_open_holds=unbound,
                 caps=dict(total=total, per_account=per_account), organizations=organizations)
