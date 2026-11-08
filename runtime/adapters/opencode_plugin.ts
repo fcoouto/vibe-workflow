@@ -1,11 +1,13 @@
 // Smart Routing pre-transmission shim for OpenCode 2.2.6 (V2 server plugin). Contract: clients/opencode.md.
 //
-// Policy-free: it holds no selection or funding logic. For managed sessions it forwards bounded request facts to one
-// persistent `scripts/routing.py --serve` child and blocks unless the answer is `allow`. Interactive sessions (not
-// attached by a managed launcher, directly or through a parent) are never checked and never blocked. Nothing is
-// logged; thrown errors carry fixed reason codes only, never payload, header, environment or prompt content.
+// Policy-free: it holds no selection or funding logic. For managed sessions it forwards bounded request facts, with
+// the attempt's dispatch authority, to one persistent `scripts/routing.py --serve` child and blocks unless the answer
+// is a verified `allow`. Interactive sessions (not attached by a managed launcher, directly or through a parent, and
+// not a session id the ledger derived) are never checked and never blocked. Nothing is logged; thrown errors carry
+// fixed reason codes only, never payload, header, environment, prompt or authority content.
 import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
+import { createHash, timingSafeEqual } from "node:crypto"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -27,6 +29,8 @@ const MAX_OVER_LIMIT = 1024  // managed descendants created beyond a limit, reco
 const FAILED_LOOKUP_MS = 5000
 const MAX_FAILED_LOOKUPS = 1024
 const MAX_DENY = 16
+const MAX_PENDING = 1024  // ledger-known sessions waiting for attach, and their recorded children; never evicted
+const MAX_PROBES = 1024  // recent unmanaged or failed probe answers; evicting, used only to avoid asking again
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
 const DENY_MESSAGE = "Blocked by Smart Routing: this managed session may not use this action."
@@ -42,10 +46,21 @@ const CREDENTIAL_ENV = new RegExp("(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWOR
   + "|(?:PASSWORD|PASSWD)$|_PWD$", "i")
 const SPAWN_MODEL = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/
 const REASON = /^[a-z][a-z0-9_]{0,63}$/
+const AUTHORITY = /^[A-Za-z0-9_-]{16,128}$/  // `dispatch` issues 43 URL-safe characters
+// Exactly the shape of `runtime.routing.derive_ids`; OpenCode's own ids are shorter, so interactive ones never match.
+const DERIVED_SESSION = /^ses_[0-9a-f]{32}$/
+// Answers to a session-only probe that mean the ledger owns the session. Anything else (`unmanaged`, or a store or
+// request error such as `ledger_absent`) leaves an unattached session interactive.
+const LEDGER_KNOWS = new Set(["allow", "authority_required", "authority_invalid", "dispatch_required", "attempt_closed",
+  "attempt_uncertain", "hold_state_unsupported", "session_mismatch", "unknown_attempt"])
+// The command validates a request before it resolves the session; for a session-only probe these facts are never used.
+const PROBE_REQUEST = { provider: "opencode", model: "session-probe", variant: null, harness: "opencode session probe",
+  kind: "primary", funding_pool: "none" }
 
 type Facts = { provider: string; model: string; variant: string | null; harness: string }
 // `count` is the root's recorded descendants; `saturated` means its own tree exceeded its own budget.
-type Attachment = { attempt: string; pool: string; deny: Set<string>; count: number; saturated: boolean }
+// `authority` is the attempt's dispatch token: kept only here and sent only to the routing child.
+type Attachment = { attempt: string; authority: string; pool: string; deny: Set<string>; count: number; saturated: boolean }
 type Descendant = { root: string; overLimit: boolean }
 type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number; failedLookupMs?: number }
 
@@ -59,6 +74,23 @@ class RoutingBlocked extends Error {
 class ChildFault extends Error {}
 
 const text = (value: unknown, pattern: RegExp) => typeof value === "string" && pattern.test(value)
+
+/** A reason code from the child, unless it is malformed or shares any 8 characters with the secret. */
+function reasonFrom(value: unknown, secret: string, fallback: string): string {
+  if (typeof value !== "string" || !REASON.test(value)) return fallback
+  for (let index = 0; index + 8 <= Math.max(value.length, 8); index++) {
+    if (secret.includes(value.slice(index, index + 8))) return fallback
+  }
+  return value
+}
+
+const digest = (value: string) => createHash("sha256").update(value).digest()
+const sameToken = (left: string, right: string) => timingSafeEqual(digest(left), digest(right))
+
+/** Whether a session id has the shape of a ledger-derived one, so the shim may ask the ledger about it. */
+export function derivedSession(value: unknown): boolean {
+  return text(value, DERIVED_SESSION)
+}
 
 /** The adapter's `credential_name` rule: camelCase is split before matching. */
 export function credentialEnvName(name: string): boolean {
@@ -242,10 +274,15 @@ export function createRoutingPlugin(config: Config = {}) {
       // Instance-local state. Roots are the sessions a managed launcher attached here. Managed descendants are sessions
       // whose creation event named a parent that was already managed; they are never evicted. The lineage cache and
       // the failed-lookup cache only speed up questions about other sessions and may forget entries.
+      // Pending sessions are derived ids the ledger knows that nobody attached here yet, and children recorded under
+      // them; they are blocked until the launcher attaches. Probes are the ledger questions about derived ids.
       const attached = new Map<string, Attachment>()
       const descendants = new Map<string, Descendant>()
+      const pending = new Map<string, string>()  // session -> the ledger-known session it was found under
       const lineage = new Map<string, string | null>()
       const failed = new Map<string, number>()
+      const probes = new Map<string, number>()  // session -> until when an unmanaged or failed answer stands
+      const probing = new Map<string, Promise<boolean>>()
       const bounded = <V>(map: Map<string, V>, limit: number, key: string, value: V) => {
         map.delete(key)
         if (map.size >= limit) map.delete(map.keys().next().value as string)
@@ -282,6 +319,47 @@ export function createRoutingPlugin(config: Config = {}) {
         }
       }
 
+      /** Record a session found under a ledger-known one, unless it is (or meanwhile became) managed by an attachment. */
+      function markPending(session: string, holder: string): Attachment | "pending" {
+        const root = rootOf(session) ?? rootOf(holder)
+        if (root !== undefined) {
+          if (root !== session) recordDescendant(session, root)
+          return attached.get(root)!
+        }
+        if (!pending.has(session) && pending.size < MAX_PENDING) pending.set(session, holder)
+        return "pending"  // past the limit it is still blocked now, and asked again next time
+      }
+
+      /** Ask the ledger, read-only, whether it owns a derived session id. Shared while in flight; errors mean no. */
+      function probe(session: string): Promise<boolean> {
+        if (pending.has(session)) return Promise.resolve(true)
+        if ((probes.get(session) ?? 0) > performance.now()) return Promise.resolve(false)
+        let running = probing.get(session)
+        if (running === undefined) {
+          running = child.call("check", { session_id: session, request: PROBE_REQUEST }).then(({ response }) => {
+            const answer = response.state === "blocked" ? response.reason : response.state
+            return typeof answer === "string" && LEDGER_KNOWS.has(answer)
+          }, () => false).then((known) => {
+            probing.delete(session)
+            if (known) markPending(session, session)  // a late answer still protects (strictly additive)
+            else bounded(probes, MAX_PROBES, session, performance.now() + failedLookupMs)
+            return known
+          })
+          probing.set(session, running)
+        }
+        return running
+      }
+
+      /** The probe's answer within one request budget; a hook never waits longer, and a timeout counts as no. */
+      async function ledgerKnows(session: string): Promise<boolean> {
+        try {
+          return await within(probe(session), child.timeoutMs + child.graceMs)
+        } catch {
+          bounded(probes, MAX_PROBES, session, performance.now() + failedLookupMs)
+          return false
+        }
+      }
+
       function forget(session: string) {
         const entry = descendants.get(session)
         if (!entry) return
@@ -308,6 +386,8 @@ export function createRoutingPlugin(config: Config = {}) {
               bounded(lineage, MAX_LINEAGE_CACHE, data.sessionID, parent)
               const root = parent === null ? undefined : rootOf(parent)
               if (root !== undefined) recordDescendant(data.sessionID, root)
+              else if (parent !== null && pending.has(parent)) markPending(data.sessionID, pending.get(parent)!)
+              else if (derivedSession(data.sessionID) && rootOf(data.sessionID) === undefined) void probe(data.sessionID)
             }
           } catch { /* live-only stream: lookups cover what it misses */ }
         })()
@@ -332,14 +412,20 @@ export function createRoutingPlugin(config: Config = {}) {
       }
 
       /**
-       * The attachment governing a session, or null when it is interactive. A session is managed when it is attached,
-       * a recorded managed descendant, or its parent chain (from events and bounded lookups) reaches one of those.
-       * A chain that cannot be determined, a cycle, a root and a chain past the limits are interactive.
+       * The attachment governing a session, "pending" for a ledger-known session nobody attached here, or null when
+       * it is interactive. A session is managed when it is attached, a recorded managed descendant, or its parent
+       * chain (from events and bounded lookups) reaches one of those. It is pending when it, or a session on that
+       * chain, is a derived id the ledger knows. A chain that cannot be determined, a cycle, a root and a chain past
+       * the limits are interactive. Only derived ids are ever asked about, so other sessions never wait for the child.
        */
-      async function managed(sessionID: unknown): Promise<Attachment | null> {
-        if (attached.size === 0 || !text(sessionID, SESSION)) return null
-        const known = rootOf(sessionID as string)
+      async function managed(sessionID: unknown): Promise<Attachment | "pending" | null> {
+        if (!text(sessionID, SESSION)) return null
+        const session = sessionID as string
+        const known = rootOf(session)
         if (known !== undefined) return attached.get(known) ?? null
+        if (pending.has(session)) return "pending"
+        if (derivedSession(session) && await ledgerKnows(session)) return markPending(session, session)
+        if (attached.size === 0 && pending.size === 0) return null
         const seen = new Set<string>()
         let current = sessionID as string
         let lookups = 0
@@ -357,8 +443,15 @@ export function createRoutingPlugin(config: Config = {}) {
           if (parent === null) return null
           const root = rootOf(parent)
           if (root !== undefined) {
-            recordDescendant(sessionID as string, root)
+            recordDescendant(session, root)
             return attached.get(root) ?? null
+          }
+          const holder = pending.get(parent)
+          if (holder !== undefined) return markPending(session, holder)
+          if (derivedSession(parent)) {
+            if (lookups >= MAX_LOOKUPS) return null
+            lookups += 1
+            if (await ledgerKnows(parent)) return markPending(session, parent)
           }
           current = parent
         }
@@ -366,18 +459,31 @@ export function createRoutingPlugin(config: Config = {}) {
 
       async function check(session: string, attachment: Attachment, facts: Facts, kind: string) {
         if (attachment.saturated || descendants.get(session)?.overLimit) throw new RoutingBlocked("descendant_limit")
+        // Strict check: the hook's own session id (a child's too) with its root's attempt and token.
         const { response } = await child.call("check", {
           attempt_id: attachment.attempt,
+          session_id: session,
+          authority: attachment.authority,
           request: { ...facts, kind, funding_pool: attachment.pool },
         })
-        if (response.state === "allow") return
+        if (response.state === "allow") {
+          if (response.authority === "verified" && response.attempt_id === attachment.attempt) return
+          throw new RoutingBlocked("authority_unverified")
+        }
         // `unmanaged` means the ledger does not know the session; for an attached session that contradicts the launcher.
         throw new RoutingBlocked(response.state === "unmanaged" ? "unexpected_unmanaged"
-          : typeof response.reason === "string" ? response.reason : String(response.state))
+          : reasonFrom(response.reason, attachment.authority, "blocked"))
+      }
+
+      /** The attachment a checked hook enforces, or null for an interactive session; pending sessions are blocked. */
+      async function enforced(sessionID: unknown): Promise<Attachment | null> {
+        const governing = await managed(sessionID)
+        if (governing === "pending") throw new RoutingBlocked("attach_required")
+        return governing
       }
 
       await ctx.session.hook("model.request", async (event: any) => {
-        const attachment = await managed(event?.sessionID)
+        const attachment = await enforced(event?.sessionID)
         if (!attachment) return
         if (!KINDS.has(event?.kind)) throw new RoutingBlocked("invalid_kind")
         const facts = routeFacts(event?.model)
@@ -388,7 +494,7 @@ export function createRoutingPlugin(config: Config = {}) {
       // Only subagent spawns are checked; built-in, MCP and Code Mode tools are governed by policy deny rules.
       await ctx.tool.hook("execute.before", async (event: any) => {
         if (event?.tool !== "subagent") return
-        const attachment = await managed(event?.sessionID)
+        const attachment = await enforced(event?.sessionID)
         if (!attachment) return
         const model = event?.input?.model
         if (model == null) throw new RoutingBlocked("subagent_model_required")
@@ -402,11 +508,13 @@ export function createRoutingPlugin(config: Config = {}) {
 
       // Tightens only; a configured deny is final and never reaches this hook.
       await ctx.permission.hook("evaluate", async (event: any) => {
-        if (attached.size === 0 || typeof event?.action !== "string") return
+        if (typeof event?.action !== "string") return
+        if (attached.size === 0 && pending.size === 0 && !derivedSession(event.sessionID)) return
         let tighten: boolean
         try {
-          const attachment = await managed(event.sessionID)
-          tighten = attachment !== null && (event.action === "webfetch" || attachment.deny.has(event.action))
+          const governing = await managed(event.sessionID)
+          tighten = governing === "pending" ? event.action === "webfetch"
+            : governing !== null && (event.action === "webfetch" || governing.deny.has(event.action))
         } catch {
           tighten = true
         }
@@ -416,10 +524,10 @@ export function createRoutingPlugin(config: Config = {}) {
         }
       })
 
-      // The hook carries no session ID, so while any managed session is attached here every shell loses credentials.
+      // The hook carries no session ID, so while any managed or pending session is known here every shell loses credentials.
       await ctx.shell.hook("create.before", (event: any) => {
         const env = event?.env
-        if (attached.size === 0 || env === null || typeof env !== "object") return
+        if ((attached.size === 0 && pending.size === 0) || env === null || typeof env !== "object") return
         for (const key of Object.keys(env)) if (credentialLikeName(key)) delete env[key]
       })
 
@@ -439,31 +547,69 @@ export function createRoutingPlugin(config: Config = {}) {
           if (reason) return { state: "not_ready", reason, version: CONTRACT_VERSION }
           return { state: "ok", child: respawned ? "respawned" : "up", version: CONTRACT_VERSION, respawn_ms: child.respawnMs }
         },
+        // Gated by the dispatch authority: attach records nothing until the child verified the token for this attempt
+        // and session; detach needs the attached root's attempt and token. Neither ever returns or echoes the token.
         attach: async (input: unknown) => {
           const body = object(input, "invalid_attach")
           const deny = body.deny_actions ?? []
-          if (!text(body.session_id, SESSION) || !text(body.attempt_id, ATTEMPT) || !text(body.funding_pool, NAME)
+          const route = spawnModel(body.model)
+          if (!text(body.session_id, SESSION) || !text(body.attempt_id, ATTEMPT) || !text(body.authority, AUTHORITY)
+              || !text(body.funding_pool, NAME) || !route
               || !Array.isArray(deny) || deny.length > MAX_DENY || !deny.every((action) => text(action, NAME))) {
             throw new RoutingBlocked("invalid_attach")
           }
           const session = body.session_id as string
-          if (!attached.has(session) && attached.size >= MAX_ATTACHED) throw new RoutingBlocked("attach_limit")
+          const attempt = body.attempt_id as string
+          const authority = body.authority as string
+          const admissible = () => {
+            const root = rootOf(session)
+            if (root !== undefined && attached.get(root)!.attempt !== attempt) throw new RoutingBlocked("attach_conflict")
+            if (!attached.has(session) && attached.size >= MAX_ATTACHED) throw new RoutingBlocked("attach_limit")
+          }
+          admissible()
+          const { response } = await child.call("check", {
+            attempt_id: attempt,
+            session_id: session,
+            authority,
+            request: { ...route, harness: harnessFor(route.provider), kind: "primary", funding_pool: body.funding_pool },
+          })
+          if (response.state !== "allow") {
+            throw new RoutingBlocked(response.state === "unmanaged" ? "attach_refused"
+              : reasonFrom(response.reason, authority, "attach_refused"))
+          }
+          if (response.authority !== "verified" || response.attempt_id !== attempt) throw new RoutingBlocked("attach_refused")
+          admissible()  // another attach may have landed while the child answered
           forget(session)  // a session attached as a root is no longer another root's descendant
           const previous = attached.get(session)
-          attached.set(session, { attempt: body.attempt_id as string, pool: body.funding_pool as string,
-            deny: new Set(deny as string[]), count: previous?.count ?? 0, saturated: previous?.saturated ?? false })
+          attached.set(session, { attempt, authority, pool: body.funding_pool as string, deny: new Set(deny as string[]),
+            count: previous?.count ?? 0, saturated: previous?.saturated ?? false })
+          // Sessions found under it while it waited for this attach become its managed descendants.
+          pending.delete(session)
+          for (const [key, holder] of [...pending]) {
+            if (holder === session) {
+              pending.delete(key)
+              recordDescendant(key, session)
+            }
+          }
           // A launcher attaches the sessions it created, which are roots; after detach its children resolve to it.
           if (!lineage.has(session)) bounded(lineage, MAX_LINEAGE_CACHE, session, null)
           return { state: "attached", session_id: session }
         },
         detach: async (input: unknown) => {
           const body = object(input, "invalid_detach")
-          if (!text(body.session_id, SESSION)) throw new RoutingBlocked("invalid_detach")
+          if (!text(body.session_id, SESSION) || !text(body.attempt_id, ATTEMPT) || !text(body.authority, AUTHORITY)) {
+            throw new RoutingBlocked("invalid_detach")
+          }
           const session = body.session_id as string
-          const was = attached.has(session)
+          const attachment = attached.get(session)
+          // One reason for every refusal, so a caller learns nothing about which part was wrong.
+          if (!attachment || attachment.attempt !== body.attempt_id || !sameToken(attachment.authority, body.authority as string)) {
+            throw new RoutingBlocked("detach_refused")
+          }
           for (const [key, entry] of descendants) if (entry.root === session) forget(key)
-          attached.delete(session)  // with it go its count and saturation
-          return { state: "detached", session_id: session, was_attached: was }
+          attached.delete(session)  // with it go its count, saturation and token
+          probes.delete(session)  // a derived id is asked about again, so a ledger-known one is pending, not interactive
+          return { state: "detached", session_id: session }
         },
       })
 
@@ -472,6 +618,9 @@ export function createRoutingPlugin(config: Config = {}) {
         child.stop()
         attached.clear()
         descendants.clear()
+        pending.clear()
+        probes.clear()
+        probing.clear()
         recorded = 0
         overRecorded = 0
         lineage.clear()

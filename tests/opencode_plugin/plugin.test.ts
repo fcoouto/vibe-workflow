@@ -567,6 +567,7 @@ test("an RPC caller without the session's token can neither attach nor detach", 
       t.fake.set({ check: [mode] })
       await assert.rejects(Promise.resolve().then(() => t.rpc("attach", attachInput())), blocked, mode)
     }
+    await new Promise((resolve) => setTimeout(resolve, 1100))  // the failing modes left the child in its back-off
     t.fake.set({ check: ["blocked"] })
     assert.equal(await managedNow(MANAGED), false)  // still interactive: no check was sent for its request
     // Missing or malformed fields never reach the child.
@@ -650,7 +651,7 @@ test("a derived session the ledger knows is managed from its creation, before an
     assert.equal(probes[0].session_id, DERIVED)
     // The launcher's attach turns it into an ordinary attached root; its recorded child follows it.
     await t.attach(DERIVED)
-    t.fake.set({})
+    t.fake.set({ known_sessions: [DERIVED] })
     await t.hooks["session.model.request"](modelRequest(DERIVED))
     await t.hooks["session.model.request"](modelRequest("ses_dkid1"))
     assert.deepEqual(t.fake.requests("check").slice(-2).map((r) => [r.session_id, r.attempt_id, r.authority]),
