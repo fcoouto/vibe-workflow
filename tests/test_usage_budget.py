@@ -675,19 +675,69 @@ class ParallelLedgerTests(unittest.TestCase):
         self.org()
         with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
             self.begin('run', M)  # a hold counts against the same caps as a run
-        self.ledger.close_attempt('a')
+        self.ledger.close_attempt('a', 'not_dispatched')
         self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
         self.begin('run', M)
         with self.assertRaisesRegex(budget.BudgetError, 'attempt_missing'):
-            self.ledger.close_attempt('nope')
+            self.ledger.close_attempt('nope', 'complete')
 
     def test_admission_records_are_bounded_and_never_prune_open_holds(self):
         for i in range(budget.MAX_ADMISSIONS + 5):
             self.ledger.admit('a%d' % i, self.decide('a%d' % i, {}))
-            self.ledger.close_attempt('a%d' % i)
+            self.ledger.close_attempt('a%d' % i, 'not_dispatched')
         state = self.ledger.snapshot()
         self.assertEqual(len(state['admissions']), budget.MAX_ADMISSIONS)
         self.assertEqual(state['admissions'][-1]['attempt_id'], 'a%d' % (budget.MAX_ADMISSIONS + 4))
+
+    # S2.6 review follow-up: hold states, reuse and hold-to-run conversion
+    def test_only_established_outcomes_release_a_hold(self):
+        self.ledger.admit('a', self.decide('a', {'p/w': 7}))
+        for bad in ('timeout', None, 'released', 3):
+            with self.subTest(bad=bad), self.assertRaisesRegex(budget.BudgetError, 'invalid_outcome'):
+                self.ledger.close_attempt('a', bad)
+        self.ledger.mark_dispatched('a')
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'not_dispatched')  # a dispatched attempt did run
+        self.ledger.close_attempt('a', 'uncertain')
+        self.assertEqual(self.ledger.snapshot()['holds']['a']['state'], 'uncertain')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {'p/w': 7})
+        self.ledger.close_attempt('a', 'complete')
+        self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'complete')  # already released
+
+    def test_hold_state_transitions_are_ordered(self):
+        self.ledger.admit('a', self.decide('a', {}))
+        with self.assertRaisesRegex(budget.BudgetError, 'close_forbidden'):
+            self.ledger.close_attempt('a', 'complete')  # never dispatched
+        self.ledger.mark_uncertain('a')
+        with self.assertRaisesRegex(budget.BudgetError, 'hold_state_forbidden'):
+            self.ledger.mark_dispatched('a')
+
+    def test_recent_attempt_ids_stay_rejected_after_their_records_are_pruned(self):
+        for i in range(budget.MAX_ADMISSIONS + 3):
+            self.ledger.admit('a%d' % i, self.decide('a%d' % i, {}))
+            self.ledger.close_attempt('a%d' % i, 'not_dispatched')
+        self.assertIsNone(self.ledger.admission(self.ledger.snapshot(), 'a0'))
+        with self.assertRaisesRegex(budget.BudgetError, 'attempt_id_in_use'):
+            self.ledger.admit('a0', self.decide('a0', {}))
+        self.assertLessEqual(len(self.ledger.snapshot()['seen_attempts']), budget.MAX_SEEN)
+
+    def test_hold_converts_to_a_run_claim_counted_once(self):
+        self.org(balance=30 * M, issued=30 * M, allowance_bp=10000)
+        self.ledger.set_caps(total=1, per_account=1)
+        self.ledger.admit('a', self.decide('a', {'org/credit': 6 * M, 'sub/5h': 12}, 'org'))
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['org'])
+        run = self.ledger.convert_hold('a', ['org/credit'], 'org', 'a', 'packet', 5 * M, 1, 101, native('a'),
+                                       next_request_bound=0)
+        self.assertEqual(run['calls']['count']['maximum'], 6 * M)
+        state = self.ledger.snapshot()
+        self.assertEqual(budget.Ledger.open_accounts(state), ['org'])  # one place: the run, not run plus hold
+        self.assertEqual(self.ledger.held(state), {'sub/5h': 12})  # the funded key moved to the run
+        self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)
+        self.assertEqual(state['holds']['a']['state'], 'admitted')
+        with self.assertRaisesRegex(budget.BudgetError, 'hold_state_forbidden|convert_forbidden'):
+            self.ledger.convert_hold('a', ['org/credit'], 'org', 'a', 'packet', 5 * M, 1, 101, native('a'))
 
 
 if __name__ == '__main__': unittest.main()
