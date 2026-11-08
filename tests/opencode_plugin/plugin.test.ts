@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import plugin, {
-  createRoutingPlugin, credentialEnvName, routeFacts, spawnModel, CONTRACT_VERSION,
+  createRoutingPlugin, credentialEnvName, derivedSession, routeFacts, spawnModel, CONTRACT_VERSION,
 } from "../../runtime/adapters/opencode_plugin.ts"
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -19,6 +19,12 @@ const OTHER = "ses_interactive1"
 const SECRET = "sk-ant-SECRET-VALUE"
 const PROMPT = "PROMPT-TEXT-never-forwarded"
 const HAIKU = { providerID: "claude-agent", id: "haiku", variant: "low" }
+// Lowercase tokens also match the reason pattern, so a child that echoes one exercises the shim's scrubbing.
+const TOKEN = "zz_token_value_" + "q".repeat(28)
+const TOKEN_B = "zz_other_token_" + "r".repeat(28)
+const TOKENS: Record<string, string> = { "att-1": TOKEN, "att-b": TOKEN_B }
+const DERIVED = "ses_" + "0123456789abcdef".repeat(2)
+const DERIVED_B = "ses_" + "fedcba9876543210".repeat(2)
 
 type Hooks = Record<string, (event: any) => Promise<void> | void>
 
@@ -26,17 +32,25 @@ function child(control: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "routing-plugin-"))
   const controlPath = join(dir, "control.json")
   const logPath = join(dir, "log.jsonl")
+  let current: Record<string, unknown> = {}
   const set = (value: Record<string, unknown>) => {
-    writeFileSync(controlPath, JSON.stringify(value))
+    current = value
+    writeFileSync(controlPath, JSON.stringify({ tokens: TOKENS, ...value }))
     rmSync(controlPath + ".counter", { force: true })
   }
   set(control)
   const records = () => existsSync(logPath)
     ? readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []
+  const hidden = new Set<string>()  // ids of the checks attach sends to verify a token
   return {
     argv: ["python3", "-I", "-B", FAKE, "--serve", "--control", controlPath, "--log", logPath],
     set,
-    requests: (op?: string) => records().filter((r) => r.request && (!op || r.request.op === op)).map((r) => r.request),
+    control: () => current,
+    hide: (ids: string[]) => { for (const id of ids) hidden.add(id) },
+    /** Requests the shim sent, without the verification checks of the harness's own attach calls. */
+    requests: (op?: string) => records().filter((r) => r.request && !hidden.has(r.request.id) && (!op || r.request.op === op))
+      .map((r) => r.request),
+    all: () => records().filter((r) => r.request).map((r) => r.request),
     spawns: () => records().filter((r) => r.spawn).length,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   }
@@ -114,10 +128,24 @@ async function start(control: Record<string, unknown> = {}, sessions = {}, confi
   const instance = createRoutingPlugin({ argv: fake.argv, timeoutMs: TIMEOUT, spawnGraceMs: GRACE, ...config })
   const cleanup = await instance.setup(ctx)
   const rpc = (method: string, input: unknown = {}) => state.handlers[method](input, { signal: new AbortController().signal })
-  const attach = (session = MANAGED, extra: Record<string, unknown> = {}) =>
-    rpc("attach", { session_id: session, attempt_id: "att-1", funding_pool: "claude-max", ...extra })
+  // The launcher's attach: the child is told to answer the verification normally, then the test's modes come back.
+  const attach = async (session = MANAGED, extra: Record<string, unknown> = {}) => {
+    const attempt = (extra.attempt_id ?? "att-1") as string
+    const saved = fake.control()
+    const before = new Set(fake.all().map((r) => r.id))
+    fake.set({ ...saved, check: ["allow"], probe: ["allow"] })
+    try {
+      return await rpc("attach", { session_id: session, attempt_id: attempt, authority: TOKENS[attempt],
+        funding_pool: "claude-max", model: "claude-agent/haiku#low", ...extra })
+    } finally {
+      fake.hide(fake.all().filter((r) => !before.has(r.id)).map((r) => r.id))
+      fake.set(saved)
+    }
+  }
+  const detach = (session = MANAGED, attempt = "att-1", authority: unknown = TOKENS[attempt]) =>
+    rpc("detach", { session_id: session, attempt_id: attempt, authority })
   const stop = () => { if (typeof cleanup === "function") cleanup(); fake.cleanup() }
-  return { fake, hooks, lookups, state, rpc, attach, stop, emit }
+  return { fake, hooks, lookups, state, rpc, attach, detach, stop, emit, ctx }
 }
 
 const modelRequest = (sessionID: string, kind = "primary", model: unknown = HAIKU) => ({
@@ -156,6 +184,8 @@ test("model requests of an attached session pass on allow and forward only bound
     })
     assert.equal(checks[0].attempt_id, "att-1")
     assert.equal(checks[0].v, 1)
+    assert.deepEqual(Object.keys(checks[0]).sort(), ["attempt_id", "authority", "id", "op", "request", "session_id", "v"])
+    assert.ok(checks.every((r) => r.session_id === MANAGED && r.authority === TOKEN))
     const line = JSON.stringify(checks)
     for (const text of [SECRET, PROMPT, "Bearer", "api.example.com"]) assert.ok(!line.includes(text))
     assert.equal(new Set(checks.map((r) => r.id)).size, 4)
@@ -214,11 +244,14 @@ test("a child session inherits its attached ancestor's attempt", async () => {
   try {
     await t.attach()
     await t.hooks["session.model.request"](modelRequest("ses_child1"))
-    const [check] = t.fake.requests("check")
-    assert.equal(check.attempt_id, "att-1")
+    await t.hooks["tool.execute.before"](spawnCall("ses_child1", "claude-agent/haiku#low"))
+    // A child sends its own session id with its root's attempt and token.
+    for (const check of t.fake.requests("check")) {
+      assert.deepEqual([check.attempt_id, check.session_id, check.authority], ["att-1", "ses_child1", TOKEN])
+    }
     t.fake.set({ check: ["blocked"] })
     await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_child1")), blocked)
-    await t.rpc("detach", { session_id: MANAGED })
+    await t.detach()
     await t.hooks["session.model.request"](modelRequest("ses_child1"))  // detaching the root releases its children
   } finally { t.stop() }
 })
@@ -269,7 +302,7 @@ test("session.created events answer lineage without lookups", async () => {
     await t.hooks["session.model.request"](modelRequest("ses_root1"))  // known root: interactive
     await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_grandkid1")), blocked)
     assert.deepEqual(t.lookups, [])
-    await t.rpc("detach", { session_id: MANAGED })
+    await t.detach()
     await t.attach("ses_other9")
     await t.hooks["session.model.request"](modelRequest("ses_grandkid1"))  // its root was detached
     assert.deepEqual(t.lookups, [])
@@ -382,7 +415,7 @@ test("detaching the root releases its recorded descendants", async () => {
     await t.attach()
     await t.emit(created("ses_mkid1", MANAGED))
     await t.emit(created("ses_mgrand1", "ses_mkid1"))
-    await t.rpc("detach", { session_id: MANAGED })
+    await t.detach()
     await t.attach("ses_other9")
     t.state.failLookup = true
     await assertUntouched(t, "ses_mgrand1")
@@ -422,7 +455,7 @@ test("one root's descendants never limit another root, and detaching clears its 
     await t.hooks["tool.execute.before"](spawnCall(B, "claude-agent/haiku#low"))
     await t.emit(created("ses_bkid2", B))
     for (const session of [B, "ses_bkid1", "ses_bkid2"]) await t.hooks["session.model.request"](modelRequest(session))
-    await t.rpc("detach", { session_id: MANAGED })
+    await t.detach()
     t.state.failLookup = true
     await assertUntouched(t, "ses_akid5")
     t.state.failLookup = false
@@ -495,20 +528,316 @@ test("the attach limit counts attached roots, not their children", async () => {
     for (let index = 1; index < 256; index++) await t.attach(`ses_root${index}`)
     await t.attach("ses_root5")  // re-attaching an attached root is allowed at the limit
     await assert.rejects(Promise.resolve().then(() => t.attach("ses_root999")), blocked)
-    await t.rpc("detach", { session_id: "ses_root1" })
+    await t.detach("ses_root1")
     await t.attach("ses_root999")
   } finally { t.stop() }
 })
 
-test("current behavior: any RPC caller can attach or detach a session (S3.4 must gate this)", async () => {
+const refused = (reason: string | RegExp) => (error: unknown) => blocked(error)
+  && (typeof reason === "string" ? (error as Error).message === `routing: blocked (${reason})` : reason.test((error as Error).message))
+const attachInput = (extra: Record<string, unknown> = {}) => ({ session_id: MANAGED, attempt_id: "att-1", authority: TOKEN,
+  funding_pool: "claude-max", model: "claude-agent/haiku#low", ...extra })
+
+test("attach verifies the authority with a strict check through the child before recording anything", async () => {
+  const t = await start()
+  try {
+    assert.deepEqual(await t.rpc("attach", attachInput()), { state: "attached", session_id: MANAGED })
+    const [verify] = t.fake.all().filter((r) => r.op === "check")
+    assert.deepEqual(verify, { v: 1, op: "check", id: verify.id, attempt_id: "att-1", session_id: MANAGED, authority: TOKEN,
+      request: { provider: "claude-agent", model: "haiku", variant: "low", harness: "claude-agent-sdk via opencode",
+        kind: "primary", funding_pool: "claude-max" } })
+  } finally { t.stop() }
+})
+
+test("an RPC caller without the session's token can neither attach nor detach", async () => {
+  const t = await start({ check: ["blocked"] })
+  const managedNow = async (session: string) => {
+    const before = t.fake.requests("check").length
+    await t.hooks["session.model.request"](modelRequest(session)).then(() => false, () => true)
+    return t.fake.requests("check").length > before
+  }
+  try {
+    t.fake.set({})
+    // A wrong token, another attempt's token, and a token for no attempt are all refused, and nothing is recorded.
+    for (const extra of [{ authority: "x".repeat(43) }, { authority: TOKEN_B }, { attempt_id: "att-b", authority: TOKEN },
+      { attempt_id: "att-none", authority: TOKEN }]) {
+      await assert.rejects(Promise.resolve().then(() => t.rpc("attach", attachInput(extra))), refused(/authority_invalid|attach_refused/))
+    }
+    for (const mode of ["blocked", "unmanaged", "allow_unverified", "allow_other_attempt", "garbage", "exit", "no_state", "echo_authority"]) {
+      t.fake.set({ check: [mode] })
+      await assert.rejects(Promise.resolve().then(() => t.rpc("attach", attachInput())), blocked, mode)
+    }
+    t.fake.set({ check: ["blocked"] })
+    assert.equal(await managedNow(MANAGED), false)  // still interactive: no check was sent for its request
+    // Missing or malformed fields never reach the child.
+    const sent = t.fake.all().length
+    for (const bad of [null, [], "x", {}, attachInput({ authority: undefined }), attachInput({ authority: "" }),
+      attachInput({ authority: 42 }), attachInput({ authority: "has space " + TOKEN }), attachInput({ authority: "a".repeat(129) }),
+      attachInput({ model: undefined }), attachInput({ model: "haiku" }), attachInput({ model: "a/b#c#d" }),
+      attachInput({ attempt_id: undefined }), attachInput({ session_id: "nope" }), attachInput({ funding_pool: "" }),
+      attachInput({ deny_actions: ["bad action!"] }), attachInput({ deny_actions: "webfetch" }),
+      JSON.parse(`{"__proto__": {"authority": "${TOKEN}"}, "session_id": "${MANAGED}", "attempt_id": "att-1"}`)]) {
+      await assert.rejects(Promise.resolve().then(() => t.rpc("attach", bad)), refused("invalid_attach"))
+    }
+    assert.equal(t.fake.all().length, sent)
+
+    await t.attach()
+    assert.equal(await managedNow(MANAGED), true)
+    for (const bad of [null, {}, { session_id: MANAGED }, { session_id: MANAGED, attempt_id: "att-1" },
+      { session_id: MANAGED, attempt_id: "att-1", authority: 7 }, { session_id: "nope", attempt_id: "att-1", authority: TOKEN }]) {
+      await assert.rejects(Promise.resolve().then(() => t.rpc("detach", bad)), refused("invalid_detach"))
+    }
+    for (const [attempt, authority] of [["att-1", TOKEN_B], ["att-b", TOKEN_B], ["att-1", TOKEN.slice(0, -1) + "x"],
+      ["att-1", TOKEN + "x"], ["att-b", TOKEN]]) {
+      await assert.rejects(Promise.resolve().then(() => t.detach(MANAGED, attempt, authority)), refused("detach_refused"))
+    }
+    assert.equal(await managedNow(MANAGED), true)
+    assert.deepEqual(await t.detach(), { state: "detached", session_id: MANAGED })
+    assert.equal(await managedNow(MANAGED), false)
+    // Replaying the detach is refused, and so is detaching a session that was never attached.
+    await assert.rejects(Promise.resolve().then(() => t.detach()), refused("detach_refused"))
+    await assert.rejects(Promise.resolve().then(() => t.detach(OTHER)), refused("detach_refused"))
+  } finally { t.stop() }
+})
+
+test("a managed descendant cannot be detached, and an attached session cannot be taken over by another attempt", async () => {
   const t = await start({ check: ["blocked"] })
   try {
     await t.attach()
-    await assert.rejects(t.hooks["session.model.request"](modelRequest(MANAGED)), blocked)
-    await t.rpc("detach", { session_id: MANAGED })  // no caller authority is checked
-    await t.hooks["session.model.request"](modelRequest(MANAGED))
+    await t.emit(created("ses_kid1", MANAGED))
+    await assert.rejects(Promise.resolve().then(() => t.detach("ses_kid1")), refused("detach_refused"))
+    await assert.rejects(t.attach(MANAGED, { attempt_id: "att-b" }), refused("attach_conflict"))
+    await assert.rejects(t.attach("ses_kid1", { attempt_id: "att-b" }), refused("attach_conflict"))
+    await t.attach()  // the same attempt may attach again
+    const [check] = await t.hooks["session.model.request"](modelRequest("ses_kid1")).then(() => [], () => t.fake.requests("check"))
+    assert.equal(check.attempt_id, "att-1")
+    assert.equal(check.authority, TOKEN)
   } finally { t.stop() }
 })
+
+test("a replayed attach after the attempt closed is refused", async () => {
+  const t = await start()
+  try {
+    await t.attach()
+    await t.detach()
+    t.fake.set({ check: ["blocked"] })  // the ledger now refuses the attempt (closed)
+    await assert.rejects(Promise.resolve().then(() => t.rpc("attach", attachInput())), blocked)
+    await t.hooks["session.model.request"](modelRequest(MANAGED))  // nothing was recorded: interactive
+    assert.equal(t.fake.requests("check").length, 1)  // only the refused attach's verification
+  } finally { t.stop() }
+})
+
+const shellEnv = () => ({ PATH: "/bin", GITHUB_TOKEN: SECRET })
+
+test("a derived session the ledger knows is managed from its creation, before any attach", async () => {
+  const t = await start({ check: ["blocked"], known_sessions: [DERIVED] })
+  try {
+    await t.emit(created(DERIVED))
+    await t.emit(created("ses_dkid1", DERIVED))
+    for (const session of [DERIVED, "ses_dkid1"]) {
+      await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
+      await assert.rejects(t.hooks["tool.execute.before"](spawnCall(session, "claude-agent/haiku#low")), refused("attach_required"))
+      const event = { sessionID: session, action: "webfetch", resources: [], effect: "allow" } as any
+      await t.hooks["permission.evaluate"](event)
+      assert.equal(event.effect, "deny")
+    }
+    const shell = { env: shellEnv() }
+    await t.hooks["shell.create.before"](shell)
+    assert.deepEqual(Object.keys(shell.env), ["PATH"])
+    const probes = t.fake.requests("check")
+    assert.equal(probes.length, 1)  // one read-only probe, cached; the blocked requests sent no check
+    assert.deepEqual(Object.keys(probes[0]).sort(), ["id", "op", "request", "session_id", "v"])
+    assert.equal(probes[0].session_id, DERIVED)
+    // The launcher's attach turns it into an ordinary attached root; its recorded child follows it.
+    await t.attach(DERIVED)
+    t.fake.set({})
+    await t.hooks["session.model.request"](modelRequest(DERIVED))
+    await t.hooks["session.model.request"](modelRequest("ses_dkid1"))
+    assert.deepEqual(t.fake.requests("check").slice(-2).map((r) => [r.session_id, r.attempt_id, r.authority]),
+      [[DERIVED, "att-1", TOKEN], ["ses_dkid1", "att-1", TOKEN]])
+    // After detach the ledger still knows the derived id, so it is blocked again until attached.
+    await t.detach(DERIVED)
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(DERIVED)), refused("attach_required"))
+  } finally { t.stop() }
+})
+
+test("a derived session found only by a hook, or through its parent, is managed too", async () => {
+  const t = await start({ check: ["blocked"], known_sessions: [DERIVED] }, { ses_late2: { parentID: DERIVED } })
+  try {
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(DERIVED)), refused("attach_required"))  // no event seen
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_late2")), refused("attach_required"))  // via lookup
+  } finally { t.stop() }
+})
+
+test("an unknown or unanswerable derived session stays interactive, within the bound, and is asked once", async () => {
+  const ids = ["a", "b", "c", "d", "e", "f"].map((c) => "ses_" + c.repeat(32))
+  const t = await start({ check: ["blocked"] })
+  try {
+    for (const [index, mode] of ["allow", "blocked", "exit", "garbage", "wrong_version", "stall"].entries()) {
+      t.fake.set({ check: ["blocked"], probe: [mode] })
+      await t.emit(created(ids[index]))
+      const began = performance.now()
+      await assertUntouched(t, ids[index])
+      await assertUntouched(t, ids[index])
+      assert.ok(performance.now() - began < TIMEOUT + GRACE + 400, mode)
+    }
+    const probes = t.fake.requests("check")
+    for (const id of ids.slice(0, 2)) assert.equal(probes.filter((r) => r.session_id === id).length, 1, id)
+    assert.ok(probes.every((r) => !("attempt_id" in r) && !("authority" in r)))
+  } finally { t.stop() }
+})
+
+test("native session ids are never probed, so interactive use starts no child", async () => {
+  const t = await start({ check: ["exit"] }, {}, { argv: ["python3", "-I", "-B", "/nonexistent/routing.py", "--serve"] })
+  try {
+    for (const session of [OTHER, "ses_01JABCDEFGHJKMNPQRSTVWXYZ", "ses_" + "0".repeat(31), "ses_" + "A".repeat(32)]) {
+      await t.emit(created(session))
+      await assertUntouched(t, session)
+    }
+    assert.equal(t.fake.spawns(), 0)
+    assert.deepEqual(t.lookups, [])
+  } finally { t.stop() }
+})
+
+test("the token never leaves the shim except on the routing child's stdin", async () => {
+  const WRONG = "zz_wrong_token_" + "w".repeat(28)
+  const seen: string[] = []
+  const text = (value: unknown) => { try { return typeof value === "string" ? value : JSON.stringify(value) ?? String(value) } catch { return String(value) } }
+  const keep = (value: unknown) => { seen.push(text(value)) }
+  const errorText = (error: any) => [error?.message, error?.stack, error?.name, String(error), text(error),
+    text(Object.getOwnPropertyNames(error ?? {}).map((key) => error[key]))].join("\n")
+  const settle = async (promise: () => unknown) => {
+    try { keep(await promise()) } catch (error) { keep(errorText(error)) }
+  }
+  const original = { log: console.log, error: console.error, warn: console.warn, info: console.info, debug: console.debug }
+  const writes = { out: process.stdout.write, err: process.stderr.write }
+  for (const name of Object.keys(original) as (keyof typeof original)[]) console[name] = (...args: unknown[]) => keep(args)
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => { keep(chunk); return (writes.out as any).call(process.stdout, chunk, ...rest) }) as any
+  process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => { keep(chunk); return (writes.err as any).call(process.stderr, chunk, ...rest) }) as any
+  try {
+    for (const mode of ["allow", "blocked", "echo_authority", "leak_reason", "garbage", "wrong_id", "wrong_version", "no_state",
+      "exit", "unmanaged", "allow_unverified", "allow_other_attempt", "stall"]) {
+      const t = await start({ known_sessions: [DERIVED] })
+      try {
+        await settle(() => t.attach())
+        await t.emit(created("ses_kid1", MANAGED))
+        await t.emit(created(DERIVED))
+        t.fake.set({ check: [mode], probe: [mode], status: [mode], known_sessions: [DERIVED] })
+        const sessions = mode === "stall" ? [MANAGED] : [MANAGED, "ses_kid1", DERIVED, OTHER]
+        for (const session of sessions) {
+          const request = modelRequest(session)
+          await settle(() => t.hooks["session.model.request"](request))
+          keep(request)
+          const spawn = spawnCall(session, "claude-agent/haiku#low")
+          await settle(() => t.hooks["tool.execute.before"](spawn))
+          keep(spawn)
+          const permission = { sessionID: session, action: "webfetch", resources: [], effect: "allow" }
+          await settle(() => t.hooks["permission.evaluate"](permission))
+          keep(permission)
+        }
+        const shell = { env: shellEnv() }
+        await settle(() => t.hooks["shell.create.before"](shell))
+        keep(shell)
+        await settle(() => t.rpc("health"))
+        await settle(() => t.rpc("attach", attachInput({ session_id: "ses_another1" })))
+        await settle(() => t.rpc("attach", attachInput({ session_id: "ses_another2", authority: WRONG })))
+        await settle(() => t.rpc("attach", attachInput({ authority: WRONG, model: "bad" })))
+        await settle(() => t.rpc("attach", attachInput({ funding_pool: "p".repeat(5000) })))
+        await settle(() => t.detach(MANAGED, "att-1", WRONG))
+        await settle(() => t.detach(MANAGED, "att-b", TOKEN))
+        await settle(() => t.rpc("detach", { session_id: MANAGED, attempt_id: "att-1", authority: TOKEN + " " }))
+        await settle(() => t.detach())
+        keep(t.lookups)
+        keep(t.state.subscribed)
+        keep(t.state.rpc)
+      } finally { t.stop() }
+    }
+  } finally {
+    Object.assign(console, original)
+    process.stdout.write = writes.out
+    process.stderr.write = writes.err
+  }
+  assert.ok(seen.length > 100)
+  for (const [index, output] of seen.entries()) {
+    for (const secret of [TOKEN, WRONG, TOKEN.slice(0, 20), WRONG.slice(0, 20)]) assert.ok(!output.includes(secret), `output ${index}: ${output.slice(0, 200)}`)
+  }
+})
+
+/** mulberry32: a small seeded generator, so a failing sequence can be replayed from its seed. */
+function seeded(seed: number) {
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    value = (value + Math.imul(value ^ (value >>> 7), 61 | value)) ^ value
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+for (const seed of [1, 7, 42]) {
+  test(`seeded lineage fuzz ${seed}: interactive sessions are never checked or blocked; managed and ledger-known ones always are`, async () => {
+    const random = seeded(seed)
+    const pick = <T>(items: T[]) => items[Math.floor(random() * items.length)]
+    const known = ["1", "2", "3"].map((c) => "ses_" + c.repeat(32))
+    const t = await start({ check: ["blocked"], known_sessions: known })
+    const interactive: string[] = []
+    const managed = new Map<string, string>()  // session -> attached root
+    const pending: string[] = []  // ledger-known derived sessions and their recorded children, never attached here
+    let next = 0
+    try {
+      for (let step = 0; step < 160; step++) {
+        const roll = random()
+        if (roll < 0.2) {
+          const id = `ses_i${next++}`
+          const parent = interactive.length && random() < 0.6 ? pick(interactive) : random() < 0.3 ? `ses_ghost${next}` : undefined
+          await t.emit(created(id, parent))
+          interactive.push(id)
+        } else if (roll < 0.28 && new Set(managed.values()).size < 6) {
+          const root = `ses_r${next++}`
+          await t.emit(created(root))
+          await t.attach(root)
+          managed.set(root, root)
+        } else if (roll < 0.42 && managed.size) {
+          const parent = pick([...managed.keys()])
+          const id = `ses_m${next++}`
+          await t.emit(created(id, parent))
+          managed.set(id, managed.get(parent)!)
+        } else if (roll < 0.47 && managed.size) {
+          const root = managed.get(pick([...managed.keys()]))!
+          await t.detach(root)
+          for (const [session, owner] of [...managed]) if (owner === root) { managed.delete(session); interactive.push(session) }
+        } else if (roll < 0.53) {
+          const fresh = known.filter((id) => !pending.includes(id))
+          const id = fresh.length && random() < 0.5 ? fresh[0] : pending.length ? `ses_p${next++}` : fresh[0]
+          if (id === undefined) continue
+          await t.emit(created(id, id.startsWith("ses_p") ? pick(pending) : undefined))
+          pending.push(id)
+        } else if (roll < 0.58) {
+          t.state.failLookup = !t.state.failLookup
+        } else {
+          const population = pick([interactive, [...managed.keys()], pending].filter((items) => items.length))
+          if (!population) continue
+          const session = pick(population)
+          const before = t.fake.requests("check").filter((r) => r.session_id === session).length
+          const began = performance.now()
+          const outcome = await t.hooks["session.model.request"](modelRequest(session)).then(() => "pass", (error: Error) => error.message)
+          const checks = t.fake.requests("check").filter((r) => r.session_id === session)
+          if (population === interactive) {
+            assert.equal(outcome, "pass", `seed ${seed} step ${step}: interactive ${session} was blocked`)
+            await assertUntouched(t, session)
+            assert.equal(checks.length, before, `seed ${seed} step ${step}: interactive ${session} was checked`)
+            assert.ok(performance.now() - began < 250, `seed ${seed} step ${step}: interactive ${session} waited`)
+          } else if (population === pending) {
+            assert.equal(outcome, "routing: blocked (attach_required)", `seed ${seed} step ${step}: ${session}`)
+          } else {
+            assert.equal(outcome, "routing: blocked (route_mismatch)", `seed ${seed} step ${step}: ${session}`)
+            assert.deepEqual([checks.length, checks.at(-1).attempt_id, checks.at(-1).authority], [before + 1, "att-1", TOKEN])
+          }
+        }
+      }
+      assert.ok(interactive.length && managed.size + pending.length > 0, `seed ${seed} exercised too little`)
+    } finally { t.stop() }
+  })
+}
 
 test("after two failed respawns the shim backs off for about a second, then tries again", async () => {
   const t = await start({ check: ["exit"] })
@@ -583,12 +912,13 @@ test("attach validates its input and detach returns the session to interactive",
   const t = await start({ check: ["blocked"] })
   try {
     for (const bad of [{ session_id: "nope" }, { session_id: MANAGED, attempt_id: "" }, { session_id: MANAGED, attempt_id: "a".repeat(300) },
-      { session_id: MANAGED, attempt_id: "a", funding_pool: "p", deny_actions: ["bad action!"] }, null]) {
+      { session_id: MANAGED, attempt_id: "a", funding_pool: "p", deny_actions: ["bad action!"] }, null,
+      { session_id: MANAGED, attempt_id: "att-1", funding_pool: "claude-max" }]) {  // the S3.3 attempt-only form is gone
       await assert.rejects(Promise.resolve().then(() => t.rpc("attach", bad)), blocked)
     }
     assert.deepEqual(await t.attach(), { state: "attached", session_id: MANAGED })
     await assert.rejects(t.hooks["session.model.request"](modelRequest(MANAGED)), blocked)
-    assert.deepEqual(await t.rpc("detach", { session_id: MANAGED }), { state: "detached", session_id: MANAGED, was_attached: true })
+    assert.deepEqual(await t.detach(), { state: "detached", session_id: MANAGED })
     await t.hooks["session.model.request"](modelRequest(MANAGED))
   } finally { t.stop() }
 })
@@ -758,46 +1088,93 @@ function realStores(admit: boolean) {
       { input: JSON.stringify(request), encoding: "utf8", timeout: 30000 })
     assert.equal(JSON.parse(done.stdout).state, "admitted", done.stdout)
   }
+  const command = (op: string, input: Record<string, unknown>) => {
+    const done = spawnSync("python3", ["-I", "-B", join(ROOT, "scripts/routing.py"), op, "--settings", settings, "--ledger", ledger],
+      { input: JSON.stringify({ v: 1, op, ...input }), encoding: "utf8", timeout: 30000 })
+    return JSON.parse(done.stdout)
+  }
   const argv = ["python3", "-I", "-B", join(ROOT, "scripts/routing.py"), "--serve", "--settings", settings, "--ledger", ledger]
-  return { argv, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
+  return { argv, command, cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
-test("the real routing.py --serve child admits the admitted route and blocks another", async () => {
-  const stores = realStores(true)
-  const { ctx, hooks, state } = fakeCtx()
+const REAL_REQUEST = { provider: "claude-agent", model: "haiku", variant: "low", harness: "claude-agent-sdk via opencode",
+  kind: "primary", funding_pool: "sub" }
+
+async function realPlugin(stores: ReturnType<typeof realStores>) {
+  const { ctx, hooks, state, emit } = fakeCtx()
   const cleanup = await createRoutingPlugin({ argv: stores.argv, spawnGraceMs: 3000 }).setup(ctx)
   const rpc = (method: string, input: unknown = {}) => state.handlers[method](input, {})
+  return { hooks, rpc, emit, stop: () => { if (typeof cleanup === "function") cleanup(); stores.cleanup() } }
+}
+
+test("the real child: prepare, health, dispatch, attach with the token, then checks carry it", async () => {
+  const stores = realStores(true)
+  const t = await realPlugin(stores)
   try {
-    const health = await rpc("health")
+    const health = await t.rpc("health")
     assert.equal(health.state, "ok", JSON.stringify(health))
-    await rpc("attach", { session_id: MANAGED, attempt_id: "real-a1", funding_pool: "sub" })
-    await hooks["session.model.request"](modelRequest(MANAGED))
-    await hooks["tool.execute.before"](spawnCall(MANAGED, "claude-agent/haiku#low"))
-    await assert.rejects(hooks["session.model.request"](modelRequest(MANAGED, "primary", { ...HAIKU, variant: "high" })),
-      (error: Error) => blocked(error) && /route_mismatch/.test(error.message))
-    await rpc("attach", { session_id: MANAGED, attempt_id: "real-unknown", funding_pool: "sub" })
-    await assert.rejects(hooks["session.model.request"](modelRequest(MANAGED)),
-      (error: Error) => blocked(error) && /unknown_attempt/.test(error.message))
-  } finally {
-    if (typeof cleanup === "function") cleanup()
-    stores.cleanup()
-  }
+    const dispatched = stores.command("dispatch", { attempt_id: "real-a1", request: REAL_REQUEST })
+    assert.equal(dispatched.state, "dispatched", JSON.stringify(dispatched))
+    const { authority, session_id: session } = dispatched
+    // Before attach the ledger already knows the derived session: it is blocked from its creation.
+    await t.emit(created(session))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
+    // A token-less check and a wrong token are refused by the command itself.
+    const raw = (extra: Record<string, unknown>) => stores.command("check", { attempt_id: "real-a1", session_id: session, request: REAL_REQUEST, ...extra })
+    assert.deepEqual(raw({}), { v: 1, state: "blocked", reason: "authority_required" })
+    assert.deepEqual(raw({ authority: "x".repeat(43) }), { v: 1, state: "blocked", reason: "authority_invalid" })
+    assert.equal(raw({ authority }).authority, "verified")
+    const input = { session_id: session, attempt_id: "real-a1", authority, funding_pool: "sub", model: "claude-agent/haiku#low" }
+    for (const bad of [{ authority: "x".repeat(43) }, { authority: authority.slice(0, -1) + (authority.endsWith("A") ? "B" : "A") },
+      { attempt_id: "real-unknown" }, { model: "claude-agent/haiku#high" }, { funding_pool: "other" }]) {
+      await assert.rejects(Promise.resolve().then(() => t.rpc("attach", { ...input, ...bad })), blocked, JSON.stringify(Object.keys(bad)))
+    }
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
+    assert.deepEqual(await t.rpc("attach", input), { state: "attached", session_id: session })
+    await t.hooks["session.model.request"](modelRequest(session))
+    await t.hooks["tool.execute.before"](spawnCall(session, "claude-agent/haiku#low"))
+    await t.emit(created("ses_realkid1", session))
+    await t.hooks["session.model.request"](modelRequest("ses_realkid1"))  // a child session, checked under the attempt
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(session, "primary", { ...HAIKU, variant: "high" })),
+      refused("route_mismatch"))
+    // Detach needs the same attempt and token.
+    await assert.rejects(Promise.resolve().then(() => t.rpc("detach", { session_id: session, attempt_id: "real-a1", authority: "x".repeat(43) })),
+      refused("detach_refused"))
+    await t.hooks["session.model.request"](modelRequest(session))
+    assert.deepEqual(await t.rpc("detach", { session_id: session, attempt_id: "real-a1", authority }), { state: "detached", session_id: session })
+    await assert.rejects(Promise.resolve().then(() => t.rpc("detach", { session_id: session, attempt_id: "real-a1", authority })),
+      refused("detach_refused"))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
+    // A derived-looking id this ledger never issued is unmanaged, so interactive.
+    await t.hooks["session.model.request"](modelRequest("ses_" + "9".repeat(32)))
+  } finally { t.stop() }
 })
 
-test("the real child without a ledger is alive but not ready, and checks block", async () => {
-  const stores = realStores(false)
-  const { ctx, hooks, state } = fakeCtx()
-  const cleanup = await createRoutingPlugin({ argv: stores.argv, spawnGraceMs: 3000 }).setup(ctx)
-  const rpc = (method: string, input: unknown = {}) => state.handlers[method](input, {})
+test("the real child: an unsent admission cannot be attached, and a closed attempt cannot be re-attached", async () => {
+  const stores = realStores(true)
+  const t = await realPlugin(stores)
   try {
-    assert.deepEqual(await rpc("health"), { state: "not_ready", reason: "ledger_absent", version: 1 })
-    await rpc("attach", { session_id: MANAGED, attempt_id: "real-a1", funding_pool: "sub" })
-    await assert.rejects(hooks["session.model.request"](modelRequest(MANAGED)),
-      (error: Error) => blocked(error) && /ledger_absent/.test(error.message))
-  } finally {
-    if (typeof cleanup === "function") cleanup()
-    stores.cleanup()
-  }
+    const input = { session_id: MANAGED, attempt_id: "real-a1", authority: "x".repeat(43), funding_pool: "sub", model: "claude-agent/haiku#low" }
+    await assert.rejects(Promise.resolve().then(() => t.rpc("attach", input)), refused("dispatch_required"))
+    const { authority, session_id: session } = stores.command("dispatch", { attempt_id: "real-a1", request: REAL_REQUEST })
+    assert.equal(stores.command("dispatch", { attempt_id: "real-a1", request: REAL_REQUEST }).authority, undefined)
+    await t.rpc("attach", { ...input, session_id: session, authority })
+    await t.rpc("detach", { session_id: session, attempt_id: "real-a1", authority })
+    assert.equal(stores.command("record", { event: { event_id: "e1", attempt_id: "real-a1", kind: "complete" } }).state, "recorded")
+    await assert.rejects(Promise.resolve().then(() => t.rpc("attach", { ...input, session_id: session, authority })), refused("attempt_closed"))
+  } finally { t.stop() }
+})
+
+test("the real child without a ledger is alive but not ready, and attach is refused", async () => {
+  const stores = realStores(false)
+  const t = await realPlugin(stores)
+  try {
+    assert.deepEqual(await t.rpc("health"), { state: "not_ready", reason: "ledger_absent", version: 1 })
+    await assert.rejects(Promise.resolve().then(() => t.rpc("attach", { session_id: MANAGED, attempt_id: "real-a1",
+      authority: "x".repeat(43), funding_pool: "sub", model: "claude-agent/haiku#low" })), refused("ledger_absent"))
+    await t.emit(created(DERIVED))
+    await t.hooks["session.model.request"](modelRequest(DERIVED))  // no ledger: an unattached session is interactive
+  } finally { t.stop() }
 })
 
 test("TS extraction agrees with the Python adapter on the parity cases", { skip: !process.env.OPENCODE_PLUGIN_PARITY }, () => {
@@ -805,4 +1182,5 @@ test("TS extraction agrees with the Python adapter on the parity cases", { skip:
   for (const item of cases.env) assert.equal(credentialEnvName(item.name), item.credential, item.name)
   for (const item of cases.models) assert.deepEqual(routeFacts(item.model), item.facts, JSON.stringify(item.model))
   for (const item of cases.spawns) assert.deepEqual(spawnModel(item.model), item.requested, item.model)
+  for (const item of cases.sessions) assert.equal(derivedSession(item.id), item.derived, item.id)
 })

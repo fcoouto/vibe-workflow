@@ -6,6 +6,12 @@ The control file maps an op to a list of modes consumed in order across processe
 allow, unmanaged, blocked, stall, exit, garbage, wrong_id, wrong_version, no_state, leak_reason, shuffle, and for
 `status` also ledger_absent and settings_unavailable (a live child that is not ready).
 `admitted` ({provider, model, variant}) makes an `allow` check answer route_mismatch for any other route.
+`tokens` maps an attempt id to its dispatch authority: an `allow` check with an attempt id answers
+authority_required without a token, authority_invalid with another one, and otherwise adds `authority: "verified"`,
+like the S3.4 command. Further check modes: allow_unverified (allow without `authority`), allow_other_attempt (allow
+for another attempt) and echo_authority (a blocked answer whose reason and fields repeat the token sent).
+A session-only check (no attempt id) is the shim's ledger probe; its modes come from the `probe` key and it answers
+authority_required for a session listed in `known_sessions`, otherwise unmanaged.
 Every spawn and request is appended to the log file so tests can count spawns and calls.
 """
 import json
@@ -49,7 +55,8 @@ def write(response):
 
 def answer(request):
     op = request.get("op")
-    mode, control = next_mode(op)
+    probe = op == "check" and "session_id" in request and "attempt_id" not in request
+    mode, control = next_mode("probe" if probe else op)
     rid = request.get("id")
     state = {"check": "allow", "status": "ok"}.get(op, "blocked")
     if mode == "stall":
@@ -82,6 +89,24 @@ def answer(request):
         del response["state"]
     elif mode == "shuffle":
         time.sleep(random.random() * 0.05)
+    elif mode == "echo_authority":
+        sent = str(request.get("authority"))
+        response.update(state="blocked", reason=sent, detail=sent)
+    if probe and response["state"] == "allow":
+        known = request["session_id"] in control.get("known_sessions", [])
+        response.update(state="blocked", reason="authority_required") if known else response.update(state="unmanaged")
+        write(response)
+        return
+    if op == "check" and response["state"] == "allow" and mode in ("allow", "shuffle"):
+        token = control.get("tokens", {}).get(request.get("attempt_id"))
+        if "authority" not in request:
+            response.update(state="blocked", reason="authority_required")
+        elif token is None or request["authority"] != token:
+            response.update(state="blocked", reason="authority_invalid")
+        else:
+            response.update(authority="verified", attempt_id=request["attempt_id"])
+    elif op == "check" and mode == "allow_other_attempt":
+        response.update(authority="verified", attempt_id="someone-else")
     admitted = control.get("admitted")
     if op == "check" and response["state"] == "allow" and admitted:
         facts = request.get("request", {})
