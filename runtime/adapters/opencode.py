@@ -37,8 +37,12 @@ CALL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 HEADER = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 # Mirrored in runtime/adapters/opencode_plugin.ts; tests/test_opencode_plugin.py checks that they agree.
-CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|COOKIE|PRIVATE"
-                            r"|DSN|CONNECTION_STRING|DATABASE_URL)(?:_|$)", re.IGNORECASE)
+# Matched against the name with camelCase split (`githubToken` -> `github_Token`); `*PASSWORD` also as a suffix.
+CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWORD|PASSWD|PASS|PASSPHRASE|CREDENTIALS?|AUTH"
+                            r"|COOKIE|PRIVATE|JWT|PAT|DSN|CONNECTION_STRING|MYSQL_PWD"
+                            r"|(?:DATABASE|DB|REDIS|MONGO|MONGODB|POSTGRES|POSTGRESQL|PG|MYSQL|AMQP|RABBITMQ)_UR[LI])(?:_|$)"
+                            r"|(?:PASSWORD|PASSWD)$", re.IGNORECASE)
+CAMEL_CASE = re.compile(r"([a-z0-9])([A-Z])")
 ORIGIN = re.compile(r"(https?)://(?:[^/?#@\s]*@)?([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(?::(\d{1,5}))?(?:[/?#]|$)")
 SPAWN_MODEL = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)"
                          r"(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?")
@@ -259,6 +263,11 @@ def _names(value, pattern, case=None):
     return names[:limit], len(value) - len(valid) + max(0, len(names) - limit)
 
 
+def credential_name(name):
+    """Whether an environment variable name looks like a credential (shared rule with the OpenCode shim)."""
+    return CREDENTIAL_ENV.search(CAMEL_CASE.sub(r"\1_\2", name)) is not None
+
+
 def _unknown(source, name):
     return {"schema": SCHEMA, "client": CLIENT, "kind": "unknown", "source": source,
             "name" if source == "hook" else "type": name if isinstance(name, str) and NAME.fullmatch(name) else None}
@@ -318,7 +327,7 @@ def normalize_hook(hook, payload, families=None):
     else:  # shell.create.before carries no session ID (capability matrix).
         names, dropped = _names(data.get("env"), ENV_NAME)
         result.update(env_names=names, env_names_dropped=dropped,
-                      credential_env_names=[name for name in names if CREDENTIAL_ENV.search(name)],
+                      credential_env_names=[name for name in names if credential_name(name)],
                       command_markers=_markers(data.get("command")))
     return result
 
