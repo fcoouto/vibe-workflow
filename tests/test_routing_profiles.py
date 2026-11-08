@@ -168,6 +168,27 @@ class ProfileTests(unittest.TestCase):
         self.assertNotIn('profile_ids', profile)
         self.assertEqual(profile['semantic_digest'], routing.ensure_profile(job())['semantic_digest'])
 
+    def test_unreadable_requirement_floor_makes_the_profile_unavailable(self):
+        for bad in (dict(risk_band='Critical'), 'high', dict(review_policy=3)):
+            with self.assertRaises(routing.ProfileUnavailable):
+                routing.ensure_profile(job(requirement_floors=bad))
+
+    def test_reused_profile_with_a_digest_must_name_its_scope(self):
+        first = routing.ensure_profile(job())
+        unbound = job(profile=dict(complete_profile(), semantic_digest=first['semantic_digest']))
+        profile = routing.ensure_profile(unbound)
+        self.assertIn('profile_unbound', profile['reasons'])
+        self.assertEqual(profile['provenance']['risk_band'], 'floor')
+
+    def test_malformed_tools_and_uncertainty_are_dropped(self):
+        profile = routing.ensure_profile(job(tools=None, profile=complete_profile(tools='edit', uncertainty='sure')))
+        self.assertEqual(profile['tools'], [])
+        self.assertEqual(profile['uncertainty'], 'low')
+        self.assertEqual(profile['provenance']['tools'], 'floor')
+        both = routing.ensure_profile(job(tools=['edit'], profile=complete_profile(tools=['shell'])))
+        self.assertEqual(both['tools'], ['edit', 'shell'])
+        self.assertEqual(both['provenance']['tools'], 'metadata')
+
     def test_input_is_not_mutated(self):
         value = job()
         before = copy.deepcopy(value)

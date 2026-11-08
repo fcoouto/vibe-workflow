@@ -14,6 +14,7 @@ Input shapes (all plain JSON):
 """
 import hashlib
 import json
+import re
 import time
 
 from runtime import routing
@@ -23,6 +24,7 @@ BLOCKED = dict(blocked=True, reason='no_strategy')
 # Rows for these roles select models that see task text outside the worker, so data terms apply.
 CONTROL_ROLES = ('profiler', 'ranker')
 MAX_ROWS = 4096
+_TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z')
 
 
 def _now():
@@ -66,6 +68,7 @@ def _catalog(items):
                  'Invalid catalog harnesses')
         limit = item.get('context_limit')
         _require(limit is None or type(limit) is int and limit >= 0, 'Invalid catalog context limit')
+        _require(model not in live, 'Duplicate catalog model')
         live[model] = dict(efforts=efforts, harnesses=harnesses, context_limit=limit)
     return live
 
@@ -78,6 +81,7 @@ def _sources(guidance, benchmarks):
             identity = _text(item.get('id'), kind + ' id', 128)
             _require(identity not in refs, 'Duplicate evidence id')
             checked = _text(item.get('checked_at'), kind + ' check time', 40)
+            _require(_TIME.fullmatch(checked), 'Invalid ' + kind + ' check time')
             sources.append(dict(id=identity, kind=kind, sha256=_sha(item.get('sha256'), kind + ' digest'),
                                 checked_at=checked))
             refs[identity] = item if kind == 'benchmark' else None
@@ -98,8 +102,9 @@ def _control_allowed(terms):
     return (terms.get('zero_retention') is True and terms.get('no_training') is True) or terms.get('user_opt_in') is True
 
 
-def _qualified(strategy, row, refs):
-    """A strategy qualifies only through cited evidence: a guidance entry or a benchmark for the same model."""
+def _qualified(strategy, family, refs):
+    """A strategy qualifies only through cited evidence: a guidance entry, or a benchmark for the same model,
+    harness and task family."""
     cited = strategy['evidence_refs']
     if not cited:
         return False
@@ -108,6 +113,7 @@ def _qualified(strategy, row, refs):
             return False
         benchmark = refs[ref]
         if benchmark is not None and (benchmark.get('model') != strategy['model'] or
+                                      benchmark.get('task_family') not in (None, family) or
                                       benchmark.get('harness') not in (None, strategy['harness'])):
             return False
     return True
@@ -130,6 +136,7 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
             target = rows.setdefault(routing.row_key(role, family, row['complexity_band'], row['risk_band']), [])
             for item in _list(row.get('strategies'), 'row strategies'):
                 _require(isinstance(item, dict), 'Invalid strategy')
+                _require(item.get('effort') is None or isinstance(item.get('effort'), str), 'Invalid strategy effort')
                 strategy = dict(model=_text(item.get('model'), 'strategy model', 128), effort=item.get('effort'),
                                 harness=_text(item.get('harness'), 'strategy harness', 64),
                                 evidence_refs=list(item.get('evidence_refs') or []))
@@ -143,7 +150,7 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
                     reason = 'effort_unsupported'
                 elif model['harnesses'] is not None and strategy['harness'] not in model['harnesses']:
                     reason = 'harness_unsupported'
-                elif not _qualified(strategy, row, refs):
+                elif not _qualified(strategy, family, refs):
                     reason = 'evidence_missing'
                 elif role in CONTROL_ROLES and not _control_allowed(policy.get(strategy['model'])):
                     reason = 'control_plane_terms'
@@ -180,4 +187,4 @@ def refresh_table(previous, load, *, now=None):
 def lookup(table, profile):
     """Strategies for a profile (exact row, then stricter or conservative fallback), or ``BLOCKED``."""
     strategies, _ = routing.resolve_row(table, profile)
-    return strategies if strategies else BLOCKED
+    return strategies if strategies else dict(BLOCKED)

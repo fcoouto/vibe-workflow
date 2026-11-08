@@ -77,9 +77,10 @@ def _floors(job):
     """Requirement floors: explicit job floors plus those implied by write scope. Never lowered."""
     floors = {}
     explicit = job.get('requirement_floors') or {}
-    for field in _ORDERS:
-        if explicit.get(field) in _ORDERS[field]:
-            floors[field] = explicit[field]
+    if not isinstance(explicit, dict) or set(explicit) - set(_ORDERS) or \
+            any(explicit[field] not in _ORDERS[field] for field in explicit):
+        raise ProfileUnavailable('profile_unavailable: unreadable requirement floors')
+    floors.update(explicit)
     if any(mode == 'write' for _, _, mode in _claims(job)):
         for field, band in WRITE_FLOORS.items():
             floors[field] = _higher(field, floors.get(field), band)
@@ -93,7 +94,8 @@ def _higher(field, left, right):
 
 
 def _tools(job):
-    return sorted({item for item in (job.get('tools') or []) if _name(item)})
+    tools = job.get('tools')
+    return sorted({item for item in tools if _name(item)}) if isinstance(tools, list) else []
 
 
 def semantic_digest(job):
@@ -123,6 +125,9 @@ def _usable_supplied(job, digest, reasons):
         reasons.append('profile_invalid')
         return {}
     # Individually invalid fields are dropped later and take floors; they do not discard valid siblings.
+    if supplied.get('semantic_digest') is not None and supplied.get('scope_ref') is None:
+        reasons.append('profile_unbound')
+        return {}
     if supplied.get('scope_ref') not in (None, job.get('scope_ref')):
         reasons.append('profile_scope_mismatch')
         return {}
@@ -177,8 +182,9 @@ def ensure_profile(job, *, jev=None):
         raised = _higher(field, values[field], floor)
         if raised != values[field]:
             values[field], provenance[field] = raised, 'floor'
-    tools = sorted(set(_tools(job)) | set(supplied.get('tools') or []))
-    tools_source = 'metadata' if _tools(job) else 'coordinator'
+    supplied_tools = supplied.get('tools') if _valid('tools', supplied.get('tools')) else []
+    tools = sorted(set(_tools(job)) | set(supplied_tools))
+    tools_source = 'metadata' if _tools(job) else 'coordinator' if supplied_tools else 'floor'
     measured = job.get('context_tokens_measured')
     if type(measured) is int and 0 <= measured <= MAX_TOKENS:
         context, context_source = dict(tokens=measured, kind='measured'), 'metadata'
@@ -186,7 +192,7 @@ def ensure_profile(job, *, jev=None):
         context, context_source = dict(tokens=supplied['context_tokens'], kind='estimated'), 'coordinator'
     else:
         context, context_source = dict(tokens=_estimate_tokens(job), kind='estimated'), 'floor'
-    uncertainty = 'high' if gaps else 'medium' if enriched else supplied.get('uncertainty') or 'low'
+    uncertainty = 'high' if gaps else 'medium' if enriched else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
     return dict(contract_version=CONTRACT_VERSION, job_id=job.get('id'), role=job['role'], scope_ref=job['scope_ref'],
                 task_family=values['task_family'], complexity_band=values['complexity_band'],
                 risk_band=values['risk_band'], review_policy=values['review_policy'], context=context,
@@ -202,8 +208,8 @@ CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'al
 def resolve_row(table, profile):
     """Pick the table row for a profile: exact, then the nearest stricter band, then the strongest row.
 
-    Returns ``(strategies, reason)``; an empty list means no qualified strategy exists for the role.
-    Bands only rise: a weaker row is never used.
+    Returns ``(strategies, reason)``; an empty list means no qualified row at or above the profile's bands
+    exists for the role. Bands only rise: a weaker row is never used, even as the conservative fallback.
     """
     rows = table.get('rows') or {}
     role, family = profile['role'], profile['task_family']
@@ -214,11 +220,14 @@ def resolve_row(table, profile):
     stricter, strongest = [], []
     for name, strategies in rows.items():
         parts = name.split('|')
-        if len(parts) != 4 or parts[0] != role or not strategies:
+        if len(parts) != 4 or parts[0] != role or not strategies or \
+                parts[2] not in COMPLEXITY_BANDS or parts[3] not in RISK_BANDS:
             continue
         ci, ri = COMPLEXITY_BANDS.index(parts[2]), RISK_BANDS.index(parts[3])
+        if ci < c or ri < r:
+            continue  # A cheaper row below the task's floors is never eligible.
         strongest.append((ci + ri, name, strategies))
-        if parts[1] == family and ci >= c and ri >= r:
+        if parts[1] == family:
             stricter.append((ci + ri, ci, ri, name, strategies))
     if stricter:
         return min(stricter, key=lambda item: item[:4])[4], 'ranking_stricter_band'

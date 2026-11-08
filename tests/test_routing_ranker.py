@@ -57,6 +57,19 @@ class RankTests(unittest.TestCase):
         self.assertIn('ranking_conservative', unknown_family['reason_codes'])
         self.assertEqual(unknown_family['strategy_ids'], ['s4'])
 
+    def test_conservative_fallback_never_uses_a_weaker_row(self):
+        weak = table({('worker', 'implementation', 'low', 'low'): [strategy('w1', 'm-a')]})
+        result = routing.rank(profile(complexity_band='critical', risk_band='critical'), weak, {})
+        self.assertEqual(result['strategy_ids'], [])
+        self.assertIn('no_strategy', result['reason_codes'])
+        one_band = routing.rank(profile(complexity_band='low', risk_band='critical'), weak, {})
+        self.assertEqual(one_band['strategy_ids'], [])
+
+    def test_malformed_table_keys_are_ignored(self):
+        broken = dict(TABLE, rows=dict(TABLE['rows'], **{'worker|x|bogus|low': [strategy('bad', 'm-q')], 'junk': []}))
+        self.assertEqual(routing.rank(profile(), broken, {})['strategy_ids'], ['s1', 's2'])
+        self.assertEqual(routing.rank(profile(complexity_band='critical', risk_band='critical'), broken, {})['strategy_ids'], ['s4'])
+
     def test_role_without_rows_is_blocked(self):
         result = routing.rank(profile(role='review'), TABLE, {})
         self.assertEqual(result['strategy_ids'], [])

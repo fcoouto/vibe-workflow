@@ -70,6 +70,27 @@ class CompileTests(unittest.TestCase):
         table = evidence.compile_table(guidance, catalog, benchmarks, terms)
         self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'])
 
+    def test_benchmark_for_another_task_family_does_not_qualify(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        benchmarks[0]['task_family'] = 'research'
+        guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
+        table = evidence.compile_table(guidance, catalog, benchmarks, terms)
+        self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'])
+
+    def test_duplicate_catalog_models_and_bad_check_times_are_rejected(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        with self.assertRaises(ValueError):
+            evidence.compile_table(guidance, catalog + [catalog[0]], benchmarks, terms)
+        guidance[0]['checked_at'] = 'yesterday'
+        with self.assertRaises(ValueError):
+            evidence.compile_table(guidance, catalog, benchmarks, terms)
+
+    def test_blocked_result_is_not_shared_state(self):
+        table = evidence.compile_table(*inputs())
+        result = evidence.lookup(table, dict(role='review', task_family='x', complexity_band='low', risk_band='low'))
+        result['reason'] = 'tampered'
+        self.assertEqual(evidence.BLOCKED['reason'], 'no_strategy')
+
     def test_removed_catalog_model_disappears_on_recompile(self):
         guidance, catalog, benchmarks, terms = inputs()
         catalog = [item for item in catalog if item['model'] != 'alpha-small']
