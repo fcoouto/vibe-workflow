@@ -94,6 +94,13 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
 Return: `ok`, current `revision`, immutable `plan` reference and `plan_digest`, plus
 limitations. Plan acceptance starts no native worker and spends no worker attempt.
 
+Each job may carry an optional `profile` the coordinator fills: `task_family`,
+`complexity_band`, `risk_band` (`low|medium|high|critical`), `context_tokens`, `tools`,
+`review_policy` (`none|self|independent|strict`) and `uncertainty`. Code validates it;
+unknown fields are rejected. Missing or invalid fields take conservative floors, and no
+supplied value can lower a floor from write scope or job requirements. This task profile
+is separate from guidance `profile_ids`, which only reference cached recommendations.
+
 ## Prepare worker
 
 Choose a planned worker job and stable `dispatch_id`. Fill the exact brief using

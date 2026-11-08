@@ -49,6 +49,13 @@ inspection. After a lost delivery record, human continuation requires a differen
 observed turn on the same child and a fresh exact stopped-writer proof.
 
 
+## Task profiles
+
+When writing each planned job, fill its optional `profile` fields from the
+[plan request](delegation-requests.md#plan). A complete profile needs no further
+classification. Balances, progress and retries never change it; a changed role,
+scope, tools or objective does, so update the profile then.
+
 ## Immutable native names
 
 For family `W42`, use the top-level `workstream_context_id:"WS42.01"` for a worker
