@@ -397,6 +397,8 @@ def _invalid(pool):
         limit, used = window['limit'], window['used']
         if not (_number(limit) and limit > 0) or not (used is None or (_number(used) and used >= 0)):
             return True
+        if not (_number(window.get('protected', 0)) and window.get('protected', 0) >= 0):
+            return True
     return False
 
 
@@ -478,9 +480,12 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         key = ORG + funding if funding else _window_key(route['pool'], window_id)
         # The collector's own limit is a stricter minimum only; for dollars the organization total decides.
         room = window['limit'] - window['used'] - window.get('protected', 0) - held.get(key, 0)
-        vector[key] = vector.get(key, 0) + reserve
         if funding:
-            room = min(room, org_room - (vector[key] - reserve))
+            # Windows of one dollar pool measure the same spend: the organization is charged the largest once.
+            room = min(room, org_room)
+            vector[key] = max(vector.get(key, 0), reserve)
+        else:
+            vector[key] = reserve
         if reserve > room:
             return None, ['insufficient_headroom']
         constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
@@ -603,11 +608,18 @@ def _dominant(excluded):
         return 'concurrency_cap'
     if excluded and set(excluded) == {'no_funded_organization'}:
         return 'no_funded_organization'  # the user enabled no organization for these routes; not an error
+    if 'credential_unavailable' in excluded:
+        return 'credential_unavailable'  # actionable: the key binding is not ready
     return 'no_feasible_route'
 
 
 def _text(value):
     return type(value) is str and 0 < len(value) <= MAX_ID and value.isprintable()
+
+
+def _part(value):
+    """A pool or window id: `/` separates them in `win:<pool>/<window>` keys, so it cannot appear in either."""
+    return _text(value) and '/' not in value
 
 
 def _amount(value):
@@ -651,7 +663,7 @@ def _valid_route(route):
 
 
 def _valid_window(window):
-    return (type(window) is dict and _text(window.get('id'))
+    return (type(window) is dict and _part(window.get('id'))
             and all(_optional(window.get(key), _finite) for key in ('limit', 'used', 'length', 'reset_at'))
             and _finite(window.get('protected', 0)) and _optional(window.get('organization'), _text)
             and _optional(window.get('organization_revision'), _amount))
@@ -677,7 +689,7 @@ def _valid_observations(observations):
     routes, pools = observations.get('routes'), observations.get('pools')
     return (type(routes) is list and len(routes) <= MAX_ROUTES and all(_valid_route(r) for r in routes)
             and type(pools) is dict and len(pools) <= MAX_POOLS
-            and all(_text(key) and _valid_pool(pool) for key, pool in pools.items()))
+            and all(_part(key) and _valid_pool(pool) for key, pool in pools.items()))
 
 
 def _valid_ranking(ranking):

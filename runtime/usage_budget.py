@@ -8,15 +8,21 @@ import stat
 import uuid
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
-# Sized so every table at its bound with 256-character identifiers still fits (tests/test_routing_funding.py
-# CapacityTests): S1 runs and their native entries take about 3.7M, the S2.6 tables about 1.6M.
-MAX_RECORD = 6_000_000
+# Sized from the computed worst case (tests/test_routing_funding.py CapacityTests): every table at its bound,
+# every entry at its size bound, 256-character identifiers. S1 runs and native entries take about 5.0M, the
+# S2.6 admissions, holds and seen ids about 1.9M: about 6.9M in all, leaving more than 10% margin.
+MAX_RECORD = 8_000_000
 FRESH_SECONDS = 900
 STATE_VERSION = 3
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
-MAX_SEEN = 2000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
+MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
+# Per-entry bounds (compact JSON characters) so the worst case provably fits MAX_RECORD; see CapacityTests.
+# A larger admission is refused with `record_too_large` and writes nothing.
+MAX_ADMISSION_BYTES = 4096
+MAX_HOLD_BYTES = 2048
+MAX_CLAIMS = 9  # one `org:` claim plus at most eight window claims per hold
 # Organizations are optional and user-defined; none exists until the user enables one. `personal` is the
 # built-in id for the user's own account; named organizations (a team or workspace) sit beside it. Enabling is
 # `enable_organization` (the `configure` path), never a side effect of routing. An organization carries no key:
@@ -174,6 +180,7 @@ class Ledger:
         data.setdefault('admissions', [])
         data.setdefault('seen_attempts', [])
         for hold in data['holds'].values():
+            hold.setdefault('state', 'admitted')
             if 'windows' not in hold:
                 vector = hold.pop('vector', {})
                 hold.update(organization=None, amount=0, cycle=None, windows={WIN + k: v for k, v in vector.items()})
@@ -550,8 +557,9 @@ class Ledger:
             admission = self._live_admit(data, organization, amount, now, live_gate)
             run = self._open_run(data, attempt_id, organization, hold['task'], digest, amount, revision, now, native,
                                  provision, consent, admission, account=hold['account'])
-            if not hold['windows']:
-                hold.update(closed=True, state='converted')
+            # Window claims stay held (state `converted`) until the run closes; the run now owns the attempt, so
+            # close_attempt refuses it and `_close_run` releases it.
+            hold.update(state='converted', closed=not hold['windows'])
             return run
 
     def top_up(self, run_id, added, revision, now, *, live_gate=None):
@@ -617,7 +625,7 @@ class Ledger:
                 call.update(cost=actual, state='completed')  # Charges actual; unused padding is released.
                 call.pop('provision', None)
                 if phase == 'generation':
-                    run['closed'] = True
+                    self._close_run(data, run_id)
         require(not overrun, 'cost_exceeds_bound')
 
     def uncertain(self, run_id, phase, *, incomplete=None):
@@ -634,7 +642,7 @@ class Ledger:
             require(not any(c['state'] in ('dispatching', 'unresolved') for c in run['calls'].values()), 'request_may_be_running')
             for call in run['calls'].values():
                 if call['state'] == 'reserved': call.update(cost=0, state='rejected-before-send')
-            run['closed'] = True
+            self._close_run(data, run_id)
 
     @staticmethod
     def held(data):
@@ -686,6 +694,7 @@ class Ledger:
             require(type(record) is dict and record.get('attempt_id') == attempt_id and type(vector) is dict,
                     'invalid_admission')
             task = name(record['task'])
+            require(len(vector) <= MAX_CLAIMS, 'record_too_large')
             for key, amount in vector.items():
                 require(type(key) is str and key[:4] in (ORG, WIN) and 4 < len(key) <= MAX_KEY and key.isprintable(),
                         'invalid_admission')
@@ -699,16 +708,36 @@ class Ledger:
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
             self._check_caps(data, account)
+            hold = dict(account=account, task=task, organization=organization, amount=amount, cycle=cycle,
+                        windows={k: v for k, v in vector.items() if k.startswith(WIN)}, closed=False, state='admitted')
+            for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
+                try:
+                    size = len(json.dumps(entry, allow_nan=False, separators=(',', ':')))
+                except (TypeError, ValueError, RecursionError) as error:
+                    raise BudgetError('invalid_admission') from error
+                require(size <= limit, 'record_too_large')
             self._prune(data)
             require(len(data['holds']) < MAX_HOLDS, 'ledger_capacity_reached')
-            data['holds'][attempt_id] = dict(account=account, task=task, organization=organization, amount=amount,
-                                             cycle=cycle, windows={k: v for k, v in vector.items() if k.startswith(WIN)},
-                                             closed=False, state='admitted')
+            data['holds'][attempt_id] = hold
             data['admissions'].append(record)
             data['seen_attempts'].append(attempt_id)
             del data['seen_attempts'][:-MAX_SEEN]
-            del data['admissions'][:-MAX_ADMISSIONS]
+            self._trim_admissions(data)
             return dict(record)
+
+    @staticmethod
+    def _trim_admissions(data):
+        """Keep MAX_ADMISSIONS records, dropping the oldest records of closed attempts first.
+
+        Open attempts are bounded by MAX_HOLDS <= MAX_ADMISSIONS, so a full table never blocks an admission."""
+        records = data['admissions']
+        excess = len(records) - MAX_ADMISSIONS
+        if excess <= 0:
+            return
+        open_ids = set(Ledger.open_holds(data))
+        order = sorted(range(len(records)), key=lambda i: (records[i]['attempt_id'] in open_ids, i))
+        drop = set(order[:excess])
+        data['admissions'] = [record for i, record in enumerate(records) if i not in drop]
 
     @staticmethod
     def _prune(data):
@@ -753,6 +782,14 @@ class Ledger:
             else:
                 hold.update(closed=True, state='released')
 
+    @staticmethod
+    def _close_run(data, run_id):
+        """Close a run and release the window claims of the hold it was converted from."""
+        data['runs'][run_id]['closed'] = True
+        hold = data['holds'].get(run_id)
+        if hold is not None and hold['state'] == 'converted' and not hold['closed']:
+            hold.update(closed=True, state='released')
+
     def release_native(self, account, task, evidence, now):
         with self.transaction() as data:
             key = json.dumps([name(account), name(task)])
@@ -769,7 +806,7 @@ class Ledger:
             run = data['runs'][run_id]; call = run['calls'][phase]
             require(call['state'] == 'dispatching', 'rejection_forbidden')
             call.update(cost=0, state='rejected-before-send')
-            run['closed'] = True
+            self._close_run(data, run_id)
 
     @staticmethod
     def _consent(data, pin):
