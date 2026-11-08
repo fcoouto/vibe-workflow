@@ -34,6 +34,10 @@ class WorkflowChanged(Exception):
     """Workflow state committed a change while a view was being read; the caller retries or refuses."""
 
 
+class ProjectMismatch(Exception):
+    """The locator resolved to a checkout other than the pinned project (`project_mismatch`)."""
+
+
 # The serialized size check uses a placeholder credential marker, the largest the stored binding can carry.
 _CREDENTIAL_PLACEHOLDER = '0' * 64
 MAX_WATCHES = 64
@@ -187,9 +191,17 @@ class D6Workflow:
     raw descriptor, so no lock this process holds on the database is ever dropped) and reads one consistent
     snapshot. `etag` reuses that watch: a `PRAGMA data_version` query plus the Workstreams setting digest, cheap
     enough to run inside the ledger transaction. At most MAX_WATCHES watches are kept; closing one is SQLite's
-    own close, which keeps its descriptor open while other connections of this process hold locks."""
-    def __init__(self, resolve=None):
+    own close, which keeps its descriptor open while other connections of this process hold locks.
+
+    `project` (the command's `--project`) pins the checkout: after resolving a locator, its checkout root
+    (realpath) must equal the realpath of `project`, at `prepare` and again at every `dispatch`, else
+    `ProjectMismatch` before any workflow read. Comparing the resolved root, not the request's `cwd`, refuses a
+    nested separately enrolled checkout under the pinned root and a `cwd` symlink swapped after the request.
+    Paths compare byte-for-byte: on a case-insensitive filesystem a differently cased spelling of the same root
+    is refused too (fails closed)."""
+    def __init__(self, resolve=None, project=None):
         self._resolve = resolve or _resolve_scope
+        self.project = None if project is None else Path(project).resolve()
         self._watches = {}
 
     @staticmethod
@@ -206,6 +218,8 @@ class D6Workflow:
         key = self._key(locator)
         scope = self._resolve(locator)
         self._forget(key)
+        if self.project is not None and Path(scope.repository_root).resolve() != self.project:
+            raise ProjectMismatch('locator resolves outside the pinned project')
         while len(self._watches) >= MAX_WATCHES:
             self._forget(next(iter(self._watches)))
         self._watches[key] = (scope, delegation.routing_watch(scope))

@@ -1048,6 +1048,8 @@ def _fresh_inputs(ledger, attempt_id, workflow):
             fresh['error'] = None if fresh['view'] is not None else 'gate_error'
         except routing_gates.WorkflowChanged:
             fresh['view'], fresh['error'] = None, 'workflow_changed'  # retried like an etag mismatch
+        except routing_gates.ProjectMismatch:
+            fresh['view'], fresh['error'] = None, 'project_mismatch'
         except Exception:  # noqa: BLE001 - an unreadable workflow fails closed; the hold stays admitted
             fresh['view'], fresh['error'] = None, 'gate_error'
         if fresh['error'] is None:
@@ -1103,7 +1105,9 @@ def dispatch(ledger, attempt_id, facts, settings, now, *, gates=(), workflow=Non
     etag is compared. A changed etag aborts that round without writing and the whole round is retried, at
     most ``routing_gates.ROUNDS`` times, then refused with ``workflow_changed``. The token is generated before
     the transaction and returned only in this ``dispatched`` result; repeated or racing callers get
-    ``already_dispatched`` without one. No host or network call happens here or inside the transaction."""
+    ``already_dispatched`` without one. No host or network call happens here or inside the transaction.
+    Not excluded: a workflow commit between the in-transaction etag read and the ledger commit (the two stores
+    commit separately)."""
     if not _text(attempt_id):
         return _blocked('invalid_request')
     token = secrets.token_urlsafe(AUTHORITY_BYTES)

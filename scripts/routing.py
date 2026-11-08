@@ -137,8 +137,8 @@ class Service:
     reader). Only code constructs it; no request, configuration or test switch can replace it."""
     def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False,
                  workflow=None, project=None):
-        self.workflow = workflow if workflow is not None else routing_gates.D6Workflow()
         self.project = None if project is None else Path(project).resolve()
+        self.workflow = workflow if workflow is not None else routing_gates.D6Workflow(project=self.project)
         self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
@@ -325,13 +325,15 @@ class Service:
             return None
         locator = body['workflow']
         require(routing_gates.valid_locator(locator), 'invalid_request')
-        if self.project is not None:
+        if self.project is not None:  # early refusal; the reader checks the checkout it actually resolves
             cwd = Path(locator['cwd']).resolve()
             require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
         try:
             view = self.workflow.view(dict(locator))
         except routing_gates.WorkflowChanged:
             raise Blocked('workflow_changed') from None
+        except routing_gates.ProjectMismatch:
+            raise Blocked('project_mismatch') from None
         except Exception:  # noqa: BLE001 - an unreadable workflow never admits
             raise Blocked('workflow_unavailable') from None
         require(routing_gates.valid_view(view), 'workflow_unavailable')
