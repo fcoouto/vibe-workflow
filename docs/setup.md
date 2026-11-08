@@ -38,14 +38,16 @@ Harness improvement: native method adaptation. No observed instruction, memory, 
 ## Checks run
 
 - `python3 -B scripts/validate.py`: passed (package only; client execution not checked).
-- `python3 -B -m unittest discover -s tests`: baseline run started before setup edits; it had not finished when this record was written, so no result is recorded yet
+- Full suite (`python3 -B -m unittest discover -s tests`): not run. The setup changes are documentation only (`README.md`, `AGENTS.md`, `CLAUDE.md`, this file), and `AGENTS.md` asks for the full suite only when runtime, hook or policy behavior changes. Instead, the 19 test modules that read those files or the onboarding/runtime code ran in parallel, one process per module, and all exited 0, together with `scripts/validate.py` (2026-11-08). No pre-existing failure is known; the full-suite baseline is unrecorded.
 - Source-size screening (brief, partial): 62 of 363 tracked Python files exceed the 350-line reference; largest are `runtime/evidence.py`, `runtime/changes.py`, `runtime/delegation.py`. Structural impact is unknown and not a blocker. Use `review-my-project` for a detailed assessment.
 
 ## Client integration
 
 - Registration: both plugins installed and enabled as `vibe-workflow@vibe-workflow-local` 0.1.32 (Codex and Claude Code, user scope).
 - Startup membership: canonical startup-only `.vibe-workflow/project.json` for `codex` and `claude-code`, status `configured`, no runtime.
-- Not observed: a fresh Codex or Claude Code session receiving the startup context. Pending until observed. Codex needs a restart; hook trust may need confirmation.
+- Claude Code, observed: a disposable `claude --init-only` run executed the installed plugin's `SessionStart` hook once and returned the enrollment context.
+- Codex, observed: hook trust was confirmed by the user; a disposable `codex exec` session ran the `SessionStart` hooks without a trust warning, and the session record contains the injected "Vibe Coding Workflow applies to this enrolled checkout" context.
+- Not observed: the model acting on that context. The Codex run stopped at a usage-limit error before any model reply. Codex Desktop and a conversational Claude Code session were not observed either. These remain pending.
 
 ## Maintenance and undo
 

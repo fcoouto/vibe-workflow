@@ -68,4 +68,23 @@ For Claude Code local testing, launch `claude --plugin-dir .` from this checkout
 
 For an explicitly selected existing project, use [onboard-my-project](skills/onboard-my-project/SKILL.md) to prepare a private plan, apply authorized configuration, activate qualified managed behavior, or undo owned changes. Configuration completes independently of runtime creation and native qualification. Canonical operations use the verified coordinator entry; the JSON CLI is for retained schema-1 requests. See [application and recovery](skills/onboard-my-project/references/apply-and-recovery.md). Package validation and actual client execution remain separate.
 
+## Development
+
+Requires Git and Python 3.11+. There is no package manager, linter or CI.
+
+Install the plugin for both clients from this checkout:
+
+```text
+codex plugin marketplace add .
+codex plugin add vibe-workflow@vibe-workflow-local
+claude plugin marketplace add .
+claude plugin install vibe-workflow@vibe-workflow-local
+```
+
+Restart Codex afterwards. Refresh an installed copy after changes (`codex plugin remove` then `add`; `claude plugin update`).
+
+Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and `python3 -B -m unittest discover -s tests` (full suite; takes many minutes). Neither establishes live client behavior.
+
+Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
+
 [Development guide](AGENTS.md)
