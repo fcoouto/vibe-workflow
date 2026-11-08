@@ -8,12 +8,14 @@ I5 each open attempt takes exactly one concurrency place.
 I6 a closed hold contributes 0; an uncertain hold contributes its full amount.
 I7 the record stays under MAX_RECORD at maximum table sizes.
 """
+from contextlib import closing
 import copy
 import json
 import math
 import multiprocessing
 import os
 import random
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -138,14 +140,14 @@ class SharedOrganizationTests(Funded):
             with self.subTest(kind):
                 pools = dict(p=dict(billing_class=kind, windows=[window()]))
                 result = self.admit('a-' + kind, [route('r', 'p', kind, 'acct', {'credit': M})], pools)
-                self.assertEqual(result['status'], 'pending')
-                self.assertIn('funding_unverified', result['reason_codes'])
+                self.assertEqual((result['status'], result['reason_code']), ('pending', 'no_funded_organization'))
         self.assertEqual(self.ledger.snapshot()['holds'], {})
 
     def test_b1_unknown_organization_is_excluded(self):
         pools = dict(p=funded_pool('ghost'))
         result = self.admit('a', [route('r', 'p', 'api_grant', 'acct', {'credit': M})], pools)
-        self.assertIn('funding_unverified', result['reason_codes'])
+        self.assertEqual(result['reason_code'], 'no_funded_organization')
+        self.assertEqual(self.ledger.snapshot()['organizations'], {})  # routing never creates one
 
     def test_blocked_organization_cannot_hide_behind_an_unlabelled_pool(self):
         self.fund()
@@ -169,8 +171,8 @@ class SharedOrganizationTests(Funded):
         self.fund(balance=10 * M)
         pools = dict(g=dict(billing_class='api_grant', windows=[window('a', organization='org'),
                                                                 window('b', organization='org')]))
-        result = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4 * M, 'b': 4 * M})], pools)
-        self.assertEqual(result['status'], 'pending')  # 2 x 4.8M > 9.8M
+        result = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 4_500_000})], pools)
+        self.assertEqual(result['status'], 'pending')  # 2 x 5.4M > 9.8M, though each window alone fits
         ok = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'a': 3 * M, 'b': 3 * M})], pools)
         self.assertEqual(ok['reserved'], {'org:org': 7_200_000})
 
@@ -218,11 +220,95 @@ class SharedOrganizationTests(Funded):
 
     def test_gateway_needs_its_own_organization(self):
         self.fund('grant-org', balance=10 * M)
-        self.fund('gw-org', balance=1 * M)
+        self.fund('gw-org', balance=2 * M)
         gw = route('gw', 'gw', 'gateway', 'gw', {'credit': M})
         pools = dict(gw=funded_pool('gw-org', kind='gateway'))
         self.assertEqual(self.admit('a', [gw], pools)['reserved'], {'org:gw-org': 1_200_000})
         self.assertEqual(self.ledger.headroom('grant-org'), 9_800_000)  # a gateway never draws on the grant
+
+
+class OptionalOrganizationTests(Funded):
+    """Organizations are user-defined and optional; `personal` is the built-in id the user may enable."""
+    CHOICE = dict(provider='p', model='m', effort='high', harness='s', funding='subscription')
+
+    def enable(self, organization=budget.PERSONAL, balance=10 * M):
+        revision = self.ledger.enable_organization(organization, policy(), 0)
+        self.ledger.observe(organization, balance, NOW, issued=balance)
+        return revision
+
+    def routes(self, organization=budget.PERSONAL, state='ready', account='personal-acct'):
+        api = route('api', 'api', 'api_grant', account, {'credit': M})
+        api['credential']['state'] = state
+        return [api, route('s', 's', 'included_subscription', 'sub-acct', {'5h': 1})], \
+            dict(api=funded_pool(organization), s=sub_pool())
+
+    def test_no_organization_leaves_subscription_and_worker_choices_working(self):
+        routes, pools = self.routes()
+        only_api = self.admit('a', routes[:1], pools)
+        self.assertEqual((only_api['status'], only_api['reason_code']), ('pending', 'no_funded_organization'))
+        both = self.admit('b', routes, pools)
+        self.assertEqual((both['status'], both['class'], both['route']), ('admitted', 'subscription', 's'))
+        cfg = settings(smart_routing=False, worker_choices=dict(implementer=[self.CHOICE]))
+        chosen = routing.admit(assignment('c'), ranking(), cfg, observations(routes, pools), ledger=self.ledger)
+        self.assertEqual((chosen['status'], chosen['mode']), ('admitted', 'worker_choice'))
+        self.assertEqual(self.ledger.snapshot()['organizations'], {})
+
+    def test_routing_on_with_api_usage_never_creates_an_organization(self):
+        routes, pools = self.routes()
+        for i, cfg in enumerate((settings(), routing_settings.resolve(dict(smart_routing=True)))):
+            routing.admit(assignment('a%d' % i), ranking('s-api'), dict(cfg, revision=1), observations(routes, pools),
+                          ledger=self.ledger)
+        self.assertEqual(self.ledger.snapshot()['organizations'], {})
+
+    def test_enabled_personal_with_a_ready_key_funds_its_route(self):
+        self.enable()
+        routes, pools = self.routes()
+        result = self.admit('a', routes[:1], pools)
+        self.assertEqual((result['status'], result['reserved']), ('admitted', {'org:personal': 1_200_000}))
+        self.assertNotIn('sk-', json.dumps(self.ledger.snapshot()))
+
+    def test_enabled_personal_with_a_key_not_ready_is_unavailable_with_a_reason(self):
+        self.enable()
+        for state in ('pending', 'locked', 'revoked'):
+            routes, pools = self.routes(state=state)
+            result = self.admit('a-' + state, routes[:1], pools)
+            self.assertEqual(result['status'], 'pending')
+            self.assertIn('credential_unavailable', result['reason_codes'])
+
+    def test_a_named_organization_is_independent_of_personal(self):
+        self.enable(balance=10 * M)
+        self.enable('team', balance=10 * M)
+        self.ledger.set_caps(40, 1)
+        mine, my_pools = self.routes()
+        team, team_pools = self.routes('team', account='team-acct')
+        team[0].update(route='team-api', strategy_id='s-team', pool='team')
+        pools = dict(my_pools, team=team_pools['api'])
+        self.assertEqual(self.admit('a', mine[:1], pools)['status'], 'admitted')
+        self.assertEqual(self.admit('b', mine[:1], pools)['reason_code'], 'concurrency_cap')  # personal account full
+        self.assertEqual(self.admit('c', team[:1], pools)['reserved'], {'org:team': 1_200_000})
+        self.assertEqual((self.ledger.headroom(budget.PERSONAL), self.ledger.headroom('team')),
+                         (9_800_000 - 1_200_000, 9_800_000 - 1_200_000))
+        data = self.ledger.snapshot()
+        self.assertEqual((data['holds']['a']['organization'], data['holds']['c']['organization']), ('personal', 'team'))
+
+    def test_disabling_keeps_in_flight_holds_counted_and_excludes_new_work(self):
+        self.enable()
+        routes, pools = self.routes()
+        pools['api']['grant'] = dict(remaining=5 * M, expected_spend=0, expires_at=NOW + 3600)
+        self.admit('a', routes[:1], pools)
+        self.ledger.mark_dispatched('a')
+        self.ledger.disable_organization(budget.PERSONAL)
+        data = self.ledger.snapshot()
+        self.assertIn('a', budget.Ledger.open_holds(data))
+        self.assertEqual(reserved(data, budget.PERSONAL), 1_200_000)
+        self.assertEqual(self.ledger.credit_headroom(budget.PERSONAL), 9_800_000 - 1_200_000)
+        result = self.admit('b', routes, pools)
+        self.assertEqual((result['route'], result['pressure']['e']), ('s', None))  # no API route, no expiry pressure
+        with self.assertRaisesRegex(budget.BudgetError, 'organization_disabled'):
+            self.begin('run', M, organization=budget.PERSONAL)
+        self.ledger.close_attempt('a', 'complete')
+        self.ledger.enable_organization(budget.PERSONAL, policy(), 1)
+        self.assertEqual(self.admit('c', routes[:1], pools)['status'], 'admitted')
 
 
 class ConversionTests(Funded):
@@ -396,11 +482,14 @@ class Property:
         identity = budget.initialize(self.path)
         self.ledger = budget.Ledger(self.path, identity)
         self.ledger.set_caps(*CAPS)
-        self.ledger.configure('o1', policy(allowance_bp=9800, ceiling='custom', amount=40 * M, task_limit=15 * M,
-                                           pilot_limit=50 * M), 0)
-        self.ledger.configure('o2', policy(allowance_bp=10000), 0)
-        self.ledger.observe('o1', 30 * M, self.clock, issued=30 * M)
-        self.ledger.observe('o2', 20 * M, self.clock, issued=20 * M)
+        # One sequence in four has no organization at all: funded routes are simply unavailable.
+        self.orgs = () if seed % 4 == 0 else ORGS
+        if self.orgs:
+            self.ledger.enable_organization('o1', policy(allowance_bp=9800, ceiling='custom', amount=40 * M,
+                                                         task_limit=15 * M, pilot_limit=50 * M), 0)
+            self.ledger.enable_organization('o2', policy(allowance_bp=10000), 0)
+            self.ledger.observe('o1', 30 * M, self.clock, issued=30 * M)
+            self.ledger.observe('o2', 20 * M, self.clock, issued=20 * M)
         self.pools = dict(sub=dict(windows=[dict(id='5h', limit=1000, used=0, length=18000, reset_at=None, rolling=True,
                                                  fresh=True)]),
                           g1=funded_pool('o1'), g1b=funded_pool('o1', kind='api_prepaid'),
@@ -417,7 +506,8 @@ class Property:
     def check(self, step):
         data = self.ledger.snapshot()
         where = 'seed %d step %s' % (self.seed, step)
-        for name in ORGS:
+        self.test.assertEqual(sorted(data['organizations']), sorted(self.orgs), 'routing created an organization')
+        for name in self.orgs:
             org = data['organizations'][name]
             pol = org['policy']
             r = reserved(data, name)
@@ -447,7 +537,7 @@ class Property:
 
     def step(self, index):
         op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'convert', 'convert',
-                              'dispatched', 'uncertain', 'close', 'run_dispatch', 'complete', 'observe'))
+                              'dispatched', 'uncertain', 'close', 'run_dispatch', 'complete', 'observe', 'toggle'))
         self.clock += 1
         before = self.ledger.snapshot()
         try:
@@ -473,6 +563,8 @@ class Property:
         self.test.assertIn(result['status'], ('admitted', 'pending'))
         if result['status'] == 'pending':
             self.test.assertEqual(self.ledger.snapshot(), before)
+        if not self.orgs:
+            self.test.assertTrue(result['status'] == 'pending' or result['class'] == 'subscription')
 
     def op_begin(self, before):
         task = self.rng.choice(('t1', 't2', 't3'))
@@ -532,9 +624,21 @@ class Property:
             run = self.rng.choice(runs)
             self.ledger.complete(run, 'count', self.rng.randrange(0, before['runs'][run]['calls']['count']['maximum'] + 1))
 
+    def op_toggle(self, before):
+        """The user disables or re-enables an organization; open claims stay counted either way."""
+        if self.orgs:
+            name = self.rng.choice(self.orgs)
+            org = before['organizations'][name]
+            if org.get('disabled'):
+                self.ledger.enable_organization(name, org['policy'], org['revision'])
+            else:
+                self.ledger.disable_organization(name)
+
     def op_observe(self, before):
         """External spend lowers B, but a well-behaved provider never reports below what is reserved."""
-        name = self.rng.choice(ORGS)
+        if not self.orgs:
+            return
+        name = self.rng.choice(self.orgs)
         org = before['organizations'][name]
         floor = protected(org) + reserved(before, name)
         if org['balance'] > floor:
@@ -549,7 +653,7 @@ class PropertyTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_invariants_hold_after_every_step_of_random_sequences(self):
-        admitted = converted = 0
+        admitted = converted = funded = 0
         for seed in range(ITERATIONS):
             run = Property(self, seed)
             try:
@@ -557,10 +661,12 @@ class PropertyTests(unittest.TestCase):
                     run.step(index)
                 state = run.ledger.snapshot()
                 admitted += len(state['admissions'])
+                funded += sum(1 for record in state['admissions'] if record['class'] == 'api')
                 converted += sum(1 for attempt in state['runs'] if attempt in state['holds'])
             finally:
                 run.close()
         self.assertGreater(admitted, ITERATIONS)  # the sequences exercise admission, not only refusals
+        self.assertGreater(funded, ITERATIONS // 4)
         self.assertGreater(converted, ITERATIONS // 10)
 
 
@@ -641,6 +747,10 @@ class CapacityTests(Funded):
         data['native'] = {unique(i, native_key): dict(data['native'][native_key]) for i in range(budget.MAX_RUNS)}
         raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
         self.assertLessEqual(len(raw), budget.MAX_RECORD)
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute('UPDATE ledger SET body=?', (raw,)); db.commit()
+        self.ledger.set_caps(5, 2)  # a full ledger still reads and commits
+        self.assertEqual(len(self.ledger.snapshot()['holds']), budget.MAX_HOLDS)
 
 
 if __name__ == '__main__':

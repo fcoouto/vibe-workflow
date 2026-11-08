@@ -7,13 +7,27 @@ import sqlite3
 import stat
 import uuid
 
-MAX_INTEGER = 2**53 - 1
-MAX_RECORD = 2_000_000
+MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
+# Sized so every table at its bound with 256-character identifiers still fits (tests/test_routing_funding.py
+# CapacityTests): S1 runs and their native entries take about 3.7M, the S2.6 tables about 1.6M.
+MAX_RECORD = 6_000_000
 FRESH_SECONDS = 900
 STATE_VERSION = 3
-MAX_ADMISSIONS = 500
-MAX_HOLDS = 1000
-MAX_SEEN = 5000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
+MAX_RUNS = 1000
+MAX_ADMISSIONS = 256
+MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
+MAX_SEEN = 2000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
+# Organizations are optional and user-defined; none exists until the user enables one. `personal` is the
+# built-in id for the user's own account; named organizations (a team or workspace) sit beside it. Enabling is
+# `enable_organization` (the `configure` path), never a side effect of routing. An organization carries no key:
+# credential bindings are opaque references checked per route, so an organization can be enabled before its
+# key is ready.
+PERSONAL = 'personal'
+# Every claim has a typed funding key: `org:<organization>` in micro-USD (one shared total per organization,
+# whatever pool, key or gateway reaches it) or `win:<pool>/<window>` in a subscription window's own units.
+ORG = 'org:'
+WIN = 'win:'
+MAX_KEY = len(WIN) + 2 * 256 + 1
 HOLD_OUTCOMES = ('not_dispatched', 'complete', 'uncertain')
 BASIS_POINTS = 10000
 DEFAULT_ALLOWANCE_BP = 9800
@@ -143,7 +157,9 @@ class Ledger:
         1 -> 2 drops the global slot and the 20% floor: open runs keep their exposure through their own
         calls, and the old floor seeds the issued allowance (a floor was one fifth of the first balance).
         2 -> 3 adds the multi-pool `holds` and the bounded `admissions` records; both start empty, so
-        every in-flight run claim is preserved untouched.
+        every in-flight run claim is preserved untouched. Version 3 never shipped with its first hold shape, so
+        written v3 ledgers are repaired in place: missing tables are added and a `vector` hold becomes a
+        window-only hold (it named no organization, so it carries no dollar amount).
         """
         if data['version'] == 1:
             data.pop('slot', None)
@@ -153,10 +169,14 @@ class Ledger:
                     org['issued'] = floor * 5 if floor is not None else None
             data['version'] = 2
         if data['version'] == 2:
-            data.setdefault('holds', {})
-            data.setdefault('admissions', [])
-            data.setdefault('seen_attempts', [])
             data['version'] = STATE_VERSION
+        data.setdefault('holds', {})
+        data.setdefault('admissions', [])
+        data.setdefault('seen_attempts', [])
+        for hold in data['holds'].values():
+            if 'windows' not in hold:
+                vector = hold.pop('vector', {})
+                hold.update(organization=None, amount=0, cycle=None, windows={WIN + k: v for k, v in vector.items()})
 
     def snapshot(self):
         with self.transaction(False) as data:
@@ -165,6 +185,19 @@ class Ledger:
     def configure(self, organization, policy, expected_revision):
         with self.transaction() as data:
             return self._configure(data, organization, policy, expected_revision)
+
+    def enable_organization(self, organization, policy, expected_revision):
+        """Explicit user action: create or re-enable an organization (for example `PERSONAL`) with its policy."""
+        with self.transaction() as data:
+            revision = self._configure(data, organization, policy, expected_revision)
+            data['organizations'][organization]['disabled'] = False
+            return revision
+
+    def disable_organization(self, organization):
+        """Stop new admissions, conversions, top-ups and sends; every open claim stays counted until settled."""
+        with self.transaction() as data:
+            require(name(organization) in data['organizations'], 'organization_unconfigured')
+            data['organizations'][organization]['disabled'] = True
 
     @staticmethod
     def _configure(data, organization, policy, expected_revision):
@@ -254,9 +287,13 @@ class Ledger:
 
     @classmethod
     def _total(cls, data, organization, task=None, cycle=None):
-        return sum(cls._cost(call) for run in data['runs'].values()
+        """R: every run call plus every open hold on this organization (uncertain holds included)."""
+        runs = sum(cls._cost(call) for run in data['runs'].values()
                    if run['organization'] == organization and (task is None or run['task'] == task)
                    for call in run['calls'].values() if cycle is None or call['cycle'] == cycle)
+        return runs + sum(hold['amount'] for hold in data['holds'].values()
+                          if not hold['closed'] and hold['organization'] == organization
+                          and (task is None or hold['task'] == task) and (cycle is None or hold['cycle'] == cycle))
 
     @staticmethod
     def _protected(org):
@@ -311,7 +348,9 @@ class Ledger:
     def _admission_checks(cls, data, organization, revision, now):
         """Every admission condition except the final headroom comparison; shared by `_admit` and `admit`."""
         integer(revision); integer(now)
+        require(organization in data['organizations'], 'organization_unconfigured')
         org = data['organizations'][organization]; policy = org['policy']
+        require(not org.get('disabled', False), 'organization_disabled')
         require(not org['blocked'], 'manual_recovery_required')
         require(org['revision'] == revision, 'policy_revision_changed')
         require(org['observed_at'] is not None and 0 <= now - org['observed_at'] <= FRESH_SECONDS,
@@ -328,9 +367,8 @@ class Ledger:
     def org_headroom(cls, data, organization, task, revision, now):
         """Headroom for an organization-funded pool, after the same gates `begin` applies.
 
-        Raises BudgetError for an unconfigured, blocked, stale, expired or revision-mismatched organization.
+        Raises BudgetError for an unconfigured, disabled, blocked, stale, expired or revision-mismatched organization.
         """
-        require(organization in data['organizations'], 'organization_unconfigured')
         cls._admission_checks(data, organization, revision, now)
         return cls._headroom(data, organization, task, now)
 
@@ -385,20 +423,26 @@ class Ledger:
             data['caps'] = dict(total=total, per_account=per_account)
 
     @staticmethod
-    def open_accounts(data):
-        """The account of every open attempt: open runs (by organization) and open multi-pool holds.
+    def open_attempts(data):
+        """One concurrency place per open attempt id, with its provider account.
 
-        A hold converted into a run (same attempt id) is counted once, as the run."""
-        runs = data['runs']
-        return ([run['organization'] for run in runs.values() if not run['closed']]
-                + [hold['account'] for attempt, hold in data.get('holds', {}).items()
-                   if not hold['closed'] and not (attempt in runs and not runs[attempt]['closed'])])
+        A run converted from a hold keeps the hold's account and id, so the attempt is counted once whether its
+        hold, its run or both are open. A run begun directly counts under its organization."""
+        attempts = {attempt: hold['account'] for attempt, hold in data['holds'].items() if not hold['closed']}
+        for attempt, run in data['runs'].items():
+            if not run['closed']:
+                attempts[attempt] = run.get('account', run['organization'])
+        return attempts
 
     @classmethod
-    def _check_caps(cls, data, organization):
+    def open_accounts(cls, data):
+        return list(cls.open_attempts(data).values())
+
+    @classmethod
+    def _check_caps(cls, data, account):
         total, per_account = cls._caps(data)
         accounts = cls.open_accounts(data)
-        require(len(accounts) < total and accounts.count(organization) < per_account, 'concurrency_cap')
+        require(len(accounts) < total and accounts.count(account) < per_account, 'concurrency_cap')
 
     @staticmethod
     def _active_call(run):
@@ -438,20 +482,28 @@ class Ledger:
                                provision, transfer_from, consent, live_gate)
 
     def _begin(self, data, organization, task, run_id, digest, maximum, revision, now, native, provision,
-               transfer_from, consent, live_gate, check_caps=True):
+               transfer_from, consent, live_gate):
         if run_id in data['runs']:
             run = data['runs'][run_id]
             require(live_gate is None and 'live_admission' not in run, 'live_run_id_already_used')
             require((run['organization'], run['task'], run['digest']) == (organization, task, digest), 'run_identity_changed')
             return run
-        require(len(data['runs']) < 1000, 'ledger_capacity_reached')
-        if check_caps:
-            self._check_caps(data, organization)
+        require(run_id not in data['holds'], 'attempt_id_in_use')  # an admitted attempt becomes a run only by conversion
+        require(len(data['runs']) < MAX_RUNS, 'ledger_capacity_reached')
+        self._check_caps(data, organization)
         moved = 0
         if transfer_from is not None:
             moved = self._transfer(data, organization, transfer_from, maximum)
         admission = self._live_admit(data, organization, maximum, now, live_gate)
         self._admit(data, organization, task, maximum, revision, now)
+        run = self._open_run(data, run_id, organization, task, digest, maximum, revision, now, native, provision,
+                             consent, admission)
+        if moved:
+            run['transferred_from'] = dict(run=transfer_from[0], amount=moved)
+        return run
+
+    def _open_run(self, data, run_id, organization, task, digest, maximum, revision, now, native, provision,
+                  consent, admission, account=None):
         require(native.get('task') == task, 'native_task_mismatch')
         key = self._native(data, native, now)
         data['native'][key]['latest_at'] = now
@@ -459,38 +511,46 @@ class Ledger:
             self._consent(data, consent)
         run = dict(consent=consent, organization=organization, task=task, digest=digest, revision=revision,
                    native=key, closed=False, calls={})
+        if account is not None:
+            run['account'] = account
         if admission is not None:
             run['live_admission'] = admission
-        if moved:
-            run['transferred_from'] = dict(run=transfer_from[0], amount=moved)
         data['runs'][run_id] = run
         run['calls']['count'] = self._call(data, run, maximum, digest)
         if provision:
             run['calls']['count']['provision'] = provision
         return run
 
-    def convert_hold(self, attempt_id, keys, organization, task, digest, estimate, revision, now, native, *,
+    def convert_hold(self, attempt_id, organization, digest, estimate, revision, now, native, *,
                      next_request_bound=None, margin_bp=None, provision=0, consent=None, live_gate=None):
-        """Move an admission's organization-funded keys from its hold into a run claim in ONE transaction.
+        """Turn an admitted hold's dollar amount into the attempt's run claim in ONE transaction.
 
-        S3 must use this (not a separate `begin`) when it dispatches a funded attempt: the named `keys` leave
-        the hold as the run takes the claim, and the attempt keeps one concurrency place, so neither headroom
-        nor caps are counted twice. Other keys stay held under the same attempt.
+        S3 must use this (not `begin`) to dispatch a funded attempt. The organization, task and provider account
+        come from the hold; another `organization` raises `hold_organization_mismatch`. The run's own bound
+        (`estimate` padded as in `begin`) must fit the hold, else `hold_exceeded`: a larger need goes through
+        an explicit `top_up` and its headroom check. The whole hold amount moves 1:1 into the run's envelope,
+        so R and the attempt's single concurrency place are unchanged; window claims stay on the hold. Any
+        refusal leaves the ledger unchanged.
         """
-        for value in (organization, task, digest): name(value)
+        for value in (attempt_id, organization, digest): name(value)
         maximum = self._reserve(estimate, next_request_bound, margin_bp)
         require(integer(provision) <= maximum, 'provision_exceeded')
-        require(type(keys) is list and keys and all(type(key) is str for key in keys), 'invalid_keys')
         with self.transaction() as data:
             hold = data['holds'].get(attempt_id)
-            require(hold is not None and not hold['closed'] and hold['state'] == 'admitted'
-                    and attempt_id not in data['runs'] and all(key in hold['vector'] for key in keys),
-                    'convert_forbidden')
-            run = self._begin(data, organization, task, attempt_id, digest, maximum, revision, now, native,
-                              provision, None, consent, live_gate, check_caps=False)
-            for key in keys:
-                del hold['vector'][key]
-            if not hold['vector']:
+            require(hold is not None and not hold['closed'] and hold['state'] == 'admitted' and hold['amount'] > 0
+                    and attempt_id not in data['runs'], 'convert_forbidden')
+            require(organization == hold['organization'], 'hold_organization_mismatch')
+            require(maximum <= hold['amount'], 'hold_exceeded')
+            require(len(data['runs']) < MAX_RUNS, 'ledger_capacity_reached')
+            org = data['organizations'][organization]
+            require(hold['cycle'] == org['policy']['cycle'], 'hold_cycle_changed')
+            self._admission_checks(data, organization, revision, now)
+            amount = hold['amount']
+            hold['amount'] = 0  # leaves R here and re-enters it as the run's call below: R is unchanged
+            admission = self._live_admit(data, organization, amount, now, live_gate)
+            run = self._open_run(data, attempt_id, organization, hold['task'], digest, amount, revision, now, native,
+                                 provision, consent, admission, account=hold['account'])
+            if not hold['windows']:
                 hold.update(closed=True, state='converted')
             return run
 
@@ -578,13 +638,21 @@ class Ledger:
 
     @staticmethod
     def held(data):
-        """Outstanding multi-pool claims per `pool/window` key; closed holds are released."""
+        """Outstanding hold claims per typed key; closed holds contribute nothing, uncertain ones everything."""
         held = {}
-        for hold in data.get('holds', {}).values():
+        for hold in data['holds'].values():
             if not hold['closed']:
-                for key, amount in hold['vector'].items():
+                claims = dict(hold['windows'])
+                if hold['amount']:
+                    claims[ORG + hold['organization']] = hold['amount']
+                for key, amount in claims.items():
                     held[key] = held.get(key, 0) + amount
         return held
+
+    @staticmethod
+    def open_holds(data):
+        """Every hold still carrying exposure (admitted, dispatched or uncertain), for recovery to enumerate."""
+        return {attempt: hold for attempt, hold in data['holds'].items() if not hold['closed']}
 
     @staticmethod
     def admission(data, attempt_id):
@@ -597,9 +665,12 @@ class Ledger:
         """Reserve and record one admission in a single short transaction.
 
         `decide(data)` is pure and runs against the locked state. It returns either a block
-        (any dict without `record`) or `{record, vector, account}`. A block, an error or a duplicate attempt
-        writes nothing: a duplicate returns its existing record without another hold. Otherwise the whole
-        `pool/window` vector is held and the admission record is appended atomically.
+        (any dict without `record`) or `{record, vector, account, now?, revision?}`. `vector` maps typed keys
+        to integer amounts: at most one `org:<organization>` key (micro-USD) and any `win:<pool>/<window>`
+        keys. A dollar claim is re-admitted here through `_admit` (every gate plus headroom, with R including
+        all holds) using `now` and the organization `revision`, and the ledger caps are rechecked, so a
+        faulty decision can never overdraw. A block, an error or a duplicate attempt writes nothing: a
+        duplicate returns its existing record without another hold.
         """
         name(attempt_id)
         with self.transaction() as data:
@@ -612,13 +683,27 @@ class Ledger:
             if 'record' not in outcome:
                 return outcome
             record, vector, account = outcome['record'], outcome['vector'], name(outcome['account'])
-            require(record['attempt_id'] == attempt_id, 'invalid_admission')
+            require(type(record) is dict and record.get('attempt_id') == attempt_id and type(vector) is dict,
+                    'invalid_admission')
+            task = name(record['task'])
             for key, amount in vector.items():
-                name(key); integer(amount)
+                require(type(key) is str and key[:4] in (ORG, WIN) and 4 < len(key) <= MAX_KEY and key.isprintable(),
+                        'invalid_admission')
+                integer(amount)
+            dollars = [key for key in vector if key.startswith(ORG)]
+            require(len(dollars) <= 1, 'invalid_admission')
+            organization, amount, cycle = None, 0, None
+            if dollars:
+                organization, amount = name(dollars[0][len(ORG):]), vector[dollars[0]]
+                require(organization in data['organizations'], 'organization_unconfigured')
+                self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
+                cycle = data['organizations'][organization]['policy']['cycle']
+            self._check_caps(data, account)
             self._prune(data)
             require(len(data['holds']) < MAX_HOLDS, 'ledger_capacity_reached')
-            data['holds'][attempt_id] = dict(account=account, task=record['task'], vector=dict(vector), closed=False,
-                                             state='admitted')
+            data['holds'][attempt_id] = dict(account=account, task=task, organization=organization, amount=amount,
+                                             cycle=cycle, windows={k: v for k, v in vector.items() if k.startswith(WIN)},
+                                             closed=False, state='admitted')
             data['admissions'].append(record)
             data['seen_attempts'].append(attempt_id)
             del data['seen_attempts'][:-MAX_SEEN]
@@ -627,7 +712,7 @@ class Ledger:
 
     @staticmethod
     def _prune(data):
-        """Drop the oldest released holds once the table is full; open holds are never dropped."""
+        """Drop the oldest released holds once the table is full; open (incl. uncertain) holds are never dropped."""
         if len(data['holds']) >= MAX_HOLDS:
             for key in [k for k, hold in data['holds'].items() if hold['closed']][:MAX_HOLDS // 2]:
                 del data['holds'][key]

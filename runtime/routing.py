@@ -11,8 +11,10 @@ here grants single-use dispatch authority; that is a later layer.
 import hashlib
 import json
 
-from runtime import routing_allocator as allocator
-from runtime.usage_budget import BudgetError, Ledger
+import math
+
+from runtime import routing_allocator as allocator, routing_settings
+from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
 CONTRACT_VERSION = 1
 ROLES = ('worker', 'review', 'coordinator', 'check')
@@ -321,30 +323,41 @@ def rank(profile, table, constraints):
 # Billing class -> funding class (A12). purchased_usage and ineligible routes never become candidates.
 FUNDING_OF = dict(included_subscription='subscription', api_grant='api', api_prepaid='api', gateway='api')
 DIRECT_API = ('api_grant', 'api_prepaid')
+FUNDED = DIRECT_API + ('gateway',)  # dollar routes: funded only by an S1 organization in the ledger
 ROUTE_IDENTITY = ('provider', 'model', 'effort', 'harness')
 SECONDS_PER_HOUR = 3600
 DEFAULT_MINIMUM_HORIZON = 900
+# Snapshot bounds checked before any arithmetic. Identifiers share the ledger's name limit; numbers are finite
+# and within MAX_INTEGER (the ledger's micro-unit bound); demands and request bounds are integers.
+MAX_ID = 256
+MAX_ROUTES = 64
+MAX_POOLS = 64
+MAX_WINDOWS = 8
+MAX_STRATEGIES = 256
+MAX_REASONS = 16
 
 
 def _pending(reason, reasons=()):
     return dict(status='pending', reason_code=reason, reason_codes=list(dict.fromkeys([reason, *reasons])))
 
 
-def _key(pool, window):
-    return '%s/%s' % (pool, window)
+def _window_key(pool, window):
+    return '%s%s/%s' % (WIN, pool, window)
 
 
-def _headroom(data, window, pool, held, task, now):
-    """Usable units in one window after caps, outstanding holds and (for a funded pool) the organization.
+def _funding(data, pool):
+    """(organization, revision) funding a dollar pool, or None when no enabled organization funds it.
 
-    A funded window goes through the ledger's own admission gates (`Ledger.org_headroom`: blocked, stale
-    balance, cycle boundary, policy revision), so this path cannot drift from `begin`.
-    """
-    if window.get('organization') is not None:
-        base = Ledger.org_headroom(data, window['organization'], task, window['organization_revision'], int(now))
-    else:
-        base = window['limit'] - window['used'] - window.get('protected', 0)
-    return base - held.get(_key(pool, window['id']), 0)
+    Every window must name the same organization and revision, and the user must have enabled that organization
+    in the ledger: collector numbers alone never fund dollars, and routing never creates an organization."""
+    named = {(window.get('organization'), window.get('organization_revision')) for window in pool['windows']}
+    if len(named) != 1:
+        return None
+    organization, revision = named.pop()
+    org = data['organizations'].get(organization)
+    if org is None or org.get('disabled', False) or type(revision) is not int:
+        return None
+    return organization, revision
 
 
 def _is_bool(value):
@@ -374,8 +387,6 @@ def _incomplete(route, pool):
         return True
     for window in pool['windows']:
         if 'id' not in window or 'limit' not in window or 'used' not in window or not _is_bool(window.get('fresh')):
-            return True
-        if window.get('organization') is not None and type(window.get('organization_revision')) is not int:
             return True
     return False
 
@@ -439,10 +450,20 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         reasons.append('concurrency_cap')
     if reasons:
         return None, reasons
+    funding = revision = None
+    if route['billing_class'] in FUNDED:
+        funding = _funding(data, pool)
+        if funding is None:
+            return None, ['no_funded_organization']
+        funding, revision = funding
+        try:  # the same gates `begin` applies: blocked, stale balance, cycle boundary, policy revision
+            org_room = Ledger.org_headroom(data, funding, assignment['task'], revision, now)
+        except BudgetError:
+            return None, ['funding_unverified']
     windows = {window['id']: window for window in pool['windows']}
     vector, constraints = {}, []
-    bounds = route.get('next_request_bound', {})
-    for window_id, estimate in route.get('demand', {}).items():
+    bounds = route.get('next_request_bound') or {}
+    for window_id, estimate in route['demand'].items():
         window = windows.get(window_id)
         if window is None:
             return None, ['pool_unknown']
@@ -452,16 +473,20 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
             return None, ['stale_observation']
         try:
             reserve = Ledger._reserve(estimate, bounds.get(window_id), settings['margin_bp'])
-            room = _headroom(data, window, route['pool'], held, assignment['task'], now)
-        except (BudgetError, KeyError, TypeError, ValueError):
-            return None, ['funding_unverified']
+        except BudgetError:
+            return None, ['invalid_observation']
+        key = ORG + funding if funding else _window_key(route['pool'], window_id)
+        # The collector's own limit is a stricter minimum only; for dollars the organization total decides.
+        room = window['limit'] - window['used'] - window.get('protected', 0) - held.get(key, 0)
+        vector[key] = vector.get(key, 0) + reserve
+        if funding:
+            room = min(room, org_room - (vector[key] - reserve))
         if reserve > room:
             return None, ['insufficient_headroom']
-        vector[_key(route['pool'], window_id)] = reserve
         constraints.append(dict(pool=route['pool'], window=window_id, headroom=room, cost=estimate,
                                 resets_at=window.get('reset_at')))
     return dict(route=route['route'], pool=route['pool'], constraints=constraints, vector=vector, cls=cls,
-                spec=route, windows=pool['windows']), []
+                spec=route, windows=pool['windows'], revision=revision), []
 
 
 def _utilization(candidates, held, settings, now):
@@ -472,10 +497,10 @@ def _utilization(candidates, held, settings, now):
         for window in item['windows']:
             limit = window['limit']
             windows.append(dict(id=window['id'], used=None if window.get('used') is None else window['used'] / limit,
-                                reserved=held.get(_key(item['pool'], window['id']), 0) / limit,
+                                reserved=held.get(_window_key(item['pool'], window['id']), 0) / limit,
                                 length=window.get('length'), reset_at=window.get('reset_at'),
                                 fresh=window.get('fresh', True), rolling=window.get('rolling', False)))
-            reserve_new[window['id']] = item['vector'].get(_key(item['pool'], window['id']), 0) / limit
+            reserve_new[window['id']] = item['vector'].get(_window_key(item['pool'], window['id']), 0) / limit
         value, why = allocator.projected_utilization(windows, reserve_new, now, settings['min_elapsed_fraction'])
         reasons += why
         best = value if best is None or (value is not None and value < best) else best
@@ -569,19 +594,121 @@ def _decide(data, assignment, ranking, settings, observations):
                   snapshot_id=observations.get('snapshot_id'),
                   reason_codes=list(dict.fromkeys(reasons)),
                   ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
-    return dict(record=record, vector=item['vector'], account=spec['account'])
+    return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])
 
 
 def _dominant(excluded):
     """The reason a pending assignment reports: a concurrency place first, then the commonest exclusion."""
     if 'concurrency_cap' in excluded:
         return 'concurrency_cap'
+    if excluded and set(excluded) == {'no_funded_organization'}:
+        return 'no_funded_organization'  # the user enabled no organization for these routes; not an error
     return 'no_feasible_route'
 
 
+def _text(value):
+    return type(value) is str and 0 < len(value) <= MAX_ID and value.isprintable()
+
+
+def _amount(value):
+    return type(value) is int and 0 <= value <= MAX_INTEGER
+
+
+def _finite(value):
+    return type(value) in (int, float) and math.isfinite(value) and abs(value) <= MAX_INTEGER
+
+
+def _optional(value, check):
+    return value is None or check(value)
+
+
+def _amounts(value, allow_none=False):
+    return type(value) is dict and len(value) <= MAX_WINDOWS and all(
+        _text(key) and (_amount(item) or (allow_none and item is None)) for key, item in value.items())
+
+
 def _valid_assignment(assignment):
-    return (isinstance(assignment, dict) and all(isinstance(assignment.get(key), str) and assignment[key]
-                                                 for key in ('attempt_id', 'task', 'role', 'complexity_band', 'scope')))
+    if not isinstance(assignment, dict) or not all(_text(assignment.get(key)) for key in
+                                                   ('attempt_id', 'task', 'role', 'complexity_band', 'scope')):
+        return False
+    choice = assignment.get('choice')
+    return choice is None or (type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding')))
+
+
+def _valid_route(route):
+    if type(route) is not dict:
+        return False
+    for key in ('route', 'pool', 'account', 'strategy_id', 'billing_class', *ROUTE_IDENTITY):
+        if key in route and not _text(route[key]):
+            return False
+    if 'demand' in route and not _amounts(route['demand']):
+        return False
+    if route.get('next_request_bound') is not None and not _amounts(route['next_request_bound'], allow_none=True):
+        return False
+    credential = route.get('credential')
+    return credential is None or (type(credential) is dict and all(
+        _optional(credential.get(key), _text) for key in ('ref', 'scope', 'state')))
+
+
+def _valid_window(window):
+    return (type(window) is dict and _text(window.get('id'))
+            and all(_optional(window.get(key), _finite) for key in ('limit', 'used', 'length', 'reset_at'))
+            and _finite(window.get('protected', 0)) and _optional(window.get('organization'), _text)
+            and _optional(window.get('organization_revision'), _amount))
+
+
+def _valid_pool(pool):
+    if type(pool) is not dict or not _optional(pool.get('billing_class'), _text):
+        return False
+    windows = pool.get('windows')
+    if type(windows) is not list or not 0 < len(windows) <= MAX_WINDOWS or not all(_valid_window(w) for w in windows):
+        return False
+    grant = pool.get('grant')
+    return grant is None or (type(grant) is dict and _finite(grant.get('remaining'))
+                             and _finite(grant.get('expires_at')) and _finite(grant.get('expected_spend', 0)))
+
+
+def _valid_observations(observations):
+    if type(observations) is not dict or not _amount(observations.get('now')):
+        return False
+    if not (_optional(observations.get('snapshot_id'), _text) and _optional(observations.get('epoch_at'), _finite)
+            and _optional(observations.get('minimum_horizon'), lambda v: _finite(v) and v > 0)):
+        return False
+    routes, pools = observations.get('routes'), observations.get('pools')
+    return (type(routes) is list and len(routes) <= MAX_ROUTES and all(_valid_route(r) for r in routes)
+            and type(pools) is dict and len(pools) <= MAX_POOLS
+            and all(_text(key) and _valid_pool(pool) for key, pool in pools.items()))
+
+
+def _valid_ranking(ranking):
+    if type(ranking) is not dict:
+        return False
+    ids, codes = ranking.get('strategy_ids', []), ranking.get('reason_codes', [])
+    return (type(ids) is list and len(ids) <= MAX_STRATEGIES and all(_text(item) for item in ids)
+            and type(codes) is list and len(codes) <= MAX_REASONS and all(_text(item) for item in codes)
+            and all(_optional(ranking.get(key), lambda v: _text(v) or _amount(v))
+                    for key in ('table_version', 'profile_digest')))
+
+
+def _valid_settings(settings):
+    if type(settings) is not dict or not _amount(settings.get('revision', 0)):
+        return False
+    try:
+        routing_settings.resolve({key: value for key, value in settings.items() if key != 'revision'})
+    except ValueError:
+        return False
+    return set(routing_settings.DEFAULTS) <= set(settings)
+
+
+def _shape_error(assignment, ranking, settings, observations):
+    """The first malformed input, checked whole before any arithmetic or ledger access."""
+    for reason, valid, value in (('invalid_assignment', _valid_assignment, assignment),
+                                 ('invalid_ranking', _valid_ranking, ranking),
+                                 ('invalid_settings', _valid_settings, settings),
+                                 ('invalid_observation', _valid_observations, observations)):
+        if not valid(value):
+            return reason
+    return None
 
 
 def admit(assignment, ranking, settings, observations, *, ledger):
@@ -596,12 +723,19 @@ def admit(assignment, ranking, settings, observations, *, ledger):
     never default: per route ``capable``, ``permitted`` (bool), ``demand`` (dict), ``route``, ``pool``,
     ``account``; subscription routes ``binding_enforceable``; direct API and gateway routes
     ``funding_verified`` and a ``credential`` ``{ref, scope, state}`` (None means unavailable; gateways also
-    ``integration_enabled``); per pool window ``id``, ``limit``, ``used`` (None is unknown) and ``fresh``;
-    a funded window also ``organization`` and ``organization_revision``. A missing or non-boolean key
-    excludes that route with ``observation_incomplete`` (unusable numbers: ``invalid_observation``).
+    ``integration_enabled``); per pool window ``id``, ``limit``, ``used`` (None is unknown) and ``fresh``.
+    A missing or non-boolean key excludes that route with ``observation_incomplete`` (unusable numbers:
+    ``invalid_observation``).
 
-    Funded windows go through the ledger's own admission gates (blocked, stale balance, cycle boundary,
-    revision), reported as ``funding_unverified``. The concurrency caps are the stricter of ``settings.caps``
+    Every claim is keyed by what funds it: a direct API or gateway route needs every pool window to name one
+    ``organization`` (with ``organization_revision``) the user has enabled in the ledger (``personal`` or a
+    named one; a gateway uses its own), else (none, unknown or disabled) it is excluded with ``no_funded_organization`` while
+    subscription and worker-choice routes proceed. Its reservation is an ``org:<organization>`` claim
+    against the ledger's one total R for that organization, whichever pool, key or gateway reaches it; a
+    subscription window is a ``win:<pool>/<window>`` claim in its own units. A funded route the ledger's
+    gates refuse (blocked, stale balance, cycle boundary, revision) is excluded with
+    ``funding_unverified``; the collector's ``limit``/``used``/``protected`` can only make a dollar claim
+    stricter. The concurrency caps are the stricter of ``settings.caps``
     and the ledger-stored caps. Unknown utilization (no usable subscription window) deliberately counts as
     u = 1.0 with ``utilization_unknown``: it pushes toward API, which stays gated by enablement, headroom
     and funding. Returns the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt)
@@ -609,13 +743,25 @@ def admit(assignment, ranking, settings, observations, *, ledger):
     no record and leave the ledger unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while
     it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority; S3 issues phase
     authority inside the hold, calls ``mark_dispatched``/``mark_uncertain``/``close_attempt``, and uses
-    ``Ledger.convert_hold`` so a funded attempt is never counted as both a hold and a run.
+    ``Ledger.convert_hold`` to turn a dollar hold into the attempt's run claim without changing R.
+
+    The whole input shape is validated first (types, finite numbers within ``MAX_INTEGER``, integer
+    demands and bounds, identifiers within the ledger's 256-character name limit, table sizes); a malformed
+    input returns ``pending`` with ``invalid_assignment``, ``invalid_ranking``, ``invalid_settings`` or
+    ``invalid_observation``. Any other failure inside the decision becomes ``pending`` with
+    ``admission_error``: ``admit`` never raises on its inputs.
     """
-    if not _valid_assignment(assignment):
-        return _pending('invalid_assignment')
+    try:
+        reason = _shape_error(assignment, ranking, settings, observations)
+    except Exception:  # noqa: BLE001 - e.g. RecursionError on a pathological structure
+        reason = 'invalid_observation'
+    if reason is not None:
+        return _pending(reason)
     try:
         outcome = ledger.admit(assignment['attempt_id'],
                                lambda data: _decide(data, assignment, ranking, settings, observations))
     except BudgetError as error:
         return _pending(str(error))
+    except Exception:  # noqa: BLE001 - the transaction rolled back; nothing was reserved or recorded
+        return _pending('admission_error')
     return outcome if outcome.get('status') == 'pending' else dict(outcome, status='admitted')

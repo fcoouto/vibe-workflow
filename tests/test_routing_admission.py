@@ -414,12 +414,12 @@ class OrganizationGateTests(Base):
         self.ledger.configure('org', ORG_POLICY, 0)
         self.ledger.observe('org', 10 * M, NOW, issued=10 * M)
 
-    def run_case(self, label, revision=1, organization='org'):
+    def run_case(self, label, revision=1, organization='org', reason='funding_unverified'):
         pool = api_pool(grant=False)
         pool['windows'][0].update(organization=organization, organization_revision=revision)
         routes = [sub_route('sub'), api_route('api', demand={'credit': 1 * M})]
         pools = dict(sub=sub_pool(), api=pool)
-        self.assertEqual(self.admit(label + 'x', ['s-api'], routes, pools)['reason_codes'][1:], ['funding_unverified'])
+        self.assertIn(reason, self.admit(label + 'x', ['s-api'], routes, pools)['reason_codes'])
         both = self.admit(label, ['s-sub', 's-api'], routes, pools)
         self.assertEqual((both['status'], both['route']), ('admitted', 'sub'))
         self.assertEqual(len(self.ledger.snapshot()['holds']), 1)
@@ -449,7 +449,7 @@ class OrganizationGateTests(Base):
         self.run_case('revision', revision=99)
 
     def test_unconfigured_organization_is_excluded_not_raised(self):
-        self.run_case('ghost', organization='ghost')
+        self.run_case('ghost', organization='ghost', reason='no_funded_organization')  # never auto-created
 
 
 class RequiredObservationTests(Base):
