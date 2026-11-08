@@ -64,4 +64,4 @@ class WorkstreamsFamilyTests(unittest.TestCase):
                 capture_output=True, text=True, check=True)
             results.append(json.loads(result.stdout)['family'])
         self.assertEqual(results, ['W1', 'W2'])
-        self.assertTrue((home / '.vibe-coding-workflow' / 'workstreams-families.sqlite3').is_file())
+        self.assertTrue((home / '.vibe-workflow' / 'workstreams-families.sqlite3').is_file())

@@ -123,8 +123,8 @@ class ReviewStorageTests(unittest.TestCase):
         from runtime import state
 
         fresh = self.base / "fresh-machine-root"
-        locator = fresh / ".config" / "vibe-coding-workflow" / "machine.json"
-        required_parent_syncs = (self.base, fresh, fresh / ".config")
+        locator = fresh / ".vibe-workflow" / "machine.json"
+        required_parent_syncs = (self.base, fresh, fresh / ".vibe-workflow")
         required_before_initialize = set((*required_parent_syncs, locator.parent))
         seen = []
         before_initialize = []
@@ -160,7 +160,7 @@ class ReviewStorageTests(unittest.TestCase):
         from runtime import state
 
         fresh = self.base / "fsync-failure-machine-root"
-        locator = fresh / ".config" / "vibe-coding-workflow" / "machine.json"
+        locator = fresh / ".vibe-workflow" / "machine.json"
         base_info = self.base.stat()
         real_fsync = os.fsync
         real_initialize = state._initialize
@@ -195,7 +195,7 @@ class ReviewStorageTests(unittest.TestCase):
                 home_name = "home-" + "-".join(part.lstrip(".") for part in client_path.parts)
                 home = self.base / home_name
                 home.mkdir(mode=0o700)
-                locator = home / ".config" / "vibe-coding-workflow" / "machine.json"
+                locator = home / ".vibe-workflow" / "machine.json"
                 selected = home / client_path / "review-data"
                 before = self.tree_snapshot(home)
                 with patch.object(api, "_machine_config_path", return_value=locator), \
@@ -209,8 +209,8 @@ class ReviewStorageTests(unittest.TestCase):
 
         home = self.base / "home-valid-sibling"
         home.mkdir(mode=0o700)
-        locator = home / ".config" / "vibe-coding-workflow" / "machine.json"
-        sibling = home / ".local" / "share" / "vibe-coding-workflow"
+        locator = home / ".vibe-workflow" / "machine.json"
+        sibling = home / ".local" / "share" / "vibe-workflow"
         with patch.object(api, "_machine_config_path", return_value=locator), \
              patch.object(Path, "home", return_value=home):
             valid = api.prepare_storage(sibling)
@@ -221,7 +221,7 @@ class ReviewStorageTests(unittest.TestCase):
         api = self.load_api()
         home = self.base / "cyclic-target-home"
         home.mkdir(mode=0o700)
-        locator = home / ".config" / "vibe-coding-workflow" / "machine.json"
+        locator = home / ".vibe-workflow" / "machine.json"
         target = self.repo / "cycle-a"
         target.symlink_to("cycle-b")
         (self.repo / "cycle-b").symlink_to("cycle-a")
@@ -428,7 +428,7 @@ class ReviewStorageTests(unittest.TestCase):
         api = self.load_api()
         home = self.base / "fresh-process-home"
         home.mkdir(mode=0o700)
-        locator = home / ".config" / "vibe-coding-workflow" / "machine.json"
+        locator = home / ".vibe-workflow" / "machine.json"
         environment = os.environ.copy()
         environment["HOME"] = str(home)
         script = "from runtime import review_storage; import json,sys; print(json.dumps(review_storage.resolve_owner(sys.argv[1]), sort_keys=True))"
@@ -499,7 +499,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
     def test_enrolled_accounting_without_original_machine_configuration_is_protected(self):
         project_storage = self.fixture.scope.runtime.state_dir
         repo = self.fixture.fixture.repo
-        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        project_record = repo / ".vibe-workflow" / "project.json"
         missing = self.base / "missing-machine" / "machine.json"
         before = (ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes())
         with patch.object(self.api, "_machine_config_path", return_value=missing):
@@ -522,7 +522,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         subprocess.check_call(["git", "-C", str(repo), "worktree", "add", "--detach", str(linked)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        project_record = repo / ".vibe-workflow" / "project.json"
         before = (ReviewStorageTests.tree_snapshot(project_storage), project_record.read_bytes(),
             ReviewStorageTests.tree_snapshot(self.locator.parent))
 
@@ -547,7 +547,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         observed, error = onboarding._checkout_observation(str(linked), {"paths": 0, "bytes": 0})
         self.assertIsNone(error)
-        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        project_record = repo / ".vibe-workflow" / "project.json"
         value = json.loads(project_record.read_text())
         original = value["repositories"][0]["checkouts"][0]
         selected = dict(checkout_id="registered-linked", root=observed["root"], git_dir=observed["git_dir"],
@@ -571,7 +571,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
     def test_suspended_activation_keeps_project_accounting_without_writes(self):
         project_storage = self.fixture.scope.runtime.state_dir
         repo = self.fixture.fixture.repo
-        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        project_record = repo / ".vibe-workflow" / "project.json"
         original = self.api.resolve_owner(str(repo))
         self.assert_project_accounting(original)
         value = json.loads(project_record.read_text())
@@ -598,7 +598,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         selected_file = subset / "item.txt"
         selected_file.write_text("fixture target\n")
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = repo / ".vibe-coding-workflow" / "project.json"
+        project_record = repo / ".vibe-workflow" / "project.json"
         before_marker = (ReviewStorageTests.tree_snapshot(project_storage),
             ReviewStorageTests.tree_snapshot(self.locator.parent), project_record.read_bytes(),
             ReviewStorageTests.tree_snapshot(repo))
@@ -618,7 +618,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
             ReviewStorageTests.tree_snapshot(self.locator.parent), project_record.read_bytes(),
             ReviewStorageTests.tree_snapshot(repo)), before_marker)
 
-        marker = subset / ".vibe-coding-workflow"
+        marker = subset / ".vibe-workflow"
         marker.mkdir()
         (marker / "project.json").write_text("{malformed authority\n")
         before_lookup = (ReviewStorageTests.tree_snapshot(project_storage),
@@ -638,7 +638,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         self.assertTrue(self.api.prepare_storage(temporary_storage).get("ok"))
         before = (ReviewStorageTests.tree_snapshot(temporary_storage),
             ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
-            (self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json").read_bytes())
+            (self.fixture.fixture.repo / ".vibe-workflow" / "project.json").read_bytes())
 
         owner = self.api.resolve_owner(str(self.fixture.fixture.repo))
 
@@ -646,11 +646,11 @@ class EnrolledReviewStorageTests(unittest.TestCase):
             history_reason="authenticated_retained_history")
         self.assertEqual((ReviewStorageTests.tree_snapshot(temporary_storage),
             ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
-            (self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json").read_bytes()), before)
+            (self.fixture.fixture.repo / ".vibe-workflow" / "project.json").read_bytes()), before)
 
     def test_encountered_but_excluded_authority_is_protected_without_fallback(self):
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
+        project_record = self.fixture.fixture.repo / ".vibe-workflow" / "project.json"
         value = json.loads(project_record.read_text())
         value["membership"]["exclude"] = ["."]
         project_record.write_text(json.dumps(value))
@@ -696,7 +696,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
 
     def test_missing_runtime_configuration_is_protected(self):
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
+        project_record = self.fixture.fixture.repo / ".vibe-workflow" / "project.json"
         value = json.loads(project_record.read_text())
         value["repositories"][0]["checkouts"][0]["clients"][0]["configuration"]["runtime"] = None
         project_record.write_text(json.dumps(value))
@@ -712,7 +712,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
 
     def test_missing_selected_project_database_is_protected_without_recreation(self):
         database = self.fixture.scope.runtime.state_dir / "runtime.sqlite3"
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
+        project_record = self.fixture.fixture.repo / ".vibe-workflow" / "project.json"
         project_before = project_record.read_bytes()
         database.unlink()
         after_delete = (ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
@@ -762,7 +762,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         self.assertEqual(other_baseline["content"]["project_id"], other.scope.project_id)
         self.assertNotEqual(other_baseline["content"]["project_id"], self.fixture.scope.project_id)
 
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
+        project_record = self.fixture.fixture.repo / ".vibe-workflow" / "project.json"
         before = (ReviewStorageTests.tree_snapshot(self.fixture.scope.runtime.state_dir),
             ReviewStorageTests.tree_snapshot(other.scope.runtime.state_dir), project_record.read_bytes())
         with patch.object(state, "_source_baseline", return_value=other_baseline):
@@ -815,7 +815,7 @@ class EnrolledReviewStorageTests(unittest.TestCase):
         self.assertTrue(result.get("ok"), result)
         self.fixture.fixture.checked()
         project_storage = self.fixture.scope.runtime.state_dir
-        project_record = self.fixture.fixture.repo / ".vibe-coding-workflow" / "project.json"
+        project_record = self.fixture.fixture.repo / ".vibe-workflow" / "project.json"
         self.assertTrue(project_storage.is_dir(), project_storage)
         self.assertTrue(project_record.is_file(), project_record)
         before_temporary_storage = ReviewStorageTests.tree_snapshot(temporary_storage)

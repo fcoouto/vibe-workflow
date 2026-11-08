@@ -28,7 +28,7 @@ _ERRORS = (OSError, state.StartupError, sqlite3.Error, ValueError, TypeError, Ke
 
 
 def _machine_config_path():
-    return Path.home() / '.config' / 'vibe-coding-workflow' / 'machine.json'
+    return Path.home() / '.vibe-workflow' / 'machine.json'
 
 
 def _require(value, reason='Temporary review storage remains protected'):

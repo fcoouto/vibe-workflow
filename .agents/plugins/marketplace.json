@@ -1,11 +1,11 @@
 {
-  "name": "vibe-coding-workflow-local",
+  "name": "vibe-workflow-local",
   "interface": {
-    "displayName": "vibe-coding-workflow-local"
+    "displayName": "vibe-workflow-local"
   },
   "plugins": [
     {
-      "name": "vibe-coding-workflow",
+      "name": "vibe-workflow",
       "source": {
         "source": "local",
         "path": "./"

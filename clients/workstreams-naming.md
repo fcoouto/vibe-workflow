@@ -35,7 +35,7 @@ python3 -I -B <package>/scripts/workstreams_family.py --client codex --parent <n
 
 Use the actual client identifier and stable native parent identity, never a title
 or checkout path. The helper returns `{"ok": true, "family": "W1"}`. It serializes
-allocation in `~/.vibe-coding-workflow/workstreams-families.sqlite3`, shared across
+allocation in `~/.vibe-workflow/workstreams-families.sqlite3`, shared across
 all projects, linked checkouts and package copies for this OS user. The same
 client/parent returns the same code; distinct parents receive different codes.
 Keep this register when a family completes, is cancelled or is archived. Never

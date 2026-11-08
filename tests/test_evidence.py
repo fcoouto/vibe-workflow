@@ -1081,7 +1081,7 @@ class D4RecoveryFixture:
             record['shared_policy'] = [dict(path=str(dependency), sha256=hashlib.sha256(dependency.read_bytes()).hexdigest())]
             record['repositories'][0]['checkouts'][0]['clients'][0]['configuration']['shared_dependencies'] = [str(dependency)]
         apply(d4, request)
-        authority = d4.repo / '.vibe-coding-workflow/project.json'
+        authority = d4.repo / '.vibe-workflow/project.json'
         published = json.loads(authority.read_text())
         self.assertEqual(published, record)
         repository = published['repositories'][0];checkout = repository['checkouts'][0]
@@ -1526,7 +1526,7 @@ class LinkedVerificationTests(D4RecoveryFixture, unittest.TestCase):
         }
         for number in range(2):
             f = EvidenceTests(methodName='runTest'); f.setUp(); self.addCleanup(f.doCleanups)
-            f.git('add', '--', 'AGENTS.md', '.vibe-coding-workflow')
+            f.git('add', '--', 'AGENTS.md', '.vibe-workflow')
             f.git('commit', '-qm', 'fixture accepted enrollment')
             if d4_recovery and number == 0:
                 self.current_record(f)

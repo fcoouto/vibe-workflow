@@ -71,9 +71,10 @@ resource or recovery operations. No optional feature revision is required for
 ordinary delegation. A lost response requires inspection of the same identity
 and history, not blind resend.
 
-Workers implement, run relevant checks and self-review. Use required independent
-review, then coordinator assessment and integration. Release dependencies only
-after their accepted outputs are available in the dependent checkout. Resume ready
+For child review requests, parallel reviewer dispatch, fixes and acceptance, use
+[child-requested reviews](../policies/03-agent-delegation.md#child-requested-reviews).
+Workers still implement, run relevant checks and self-review. Release dependencies
+only after their accepted outputs are available in the dependent checkout. Resume ready
 work on completion/dependency events with bounded rechecks. Reuse check evidence
 only while its candidate, scope and environment remain valid; rerun affected proof
 after changes.

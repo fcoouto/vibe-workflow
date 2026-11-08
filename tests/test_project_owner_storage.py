@@ -48,7 +48,7 @@ class ProjectOwnerStorageTests(unittest.TestCase):
             "member_checkouts": [str(self.first), str(self.second)],
             "membership": {"include": ["first", "second"], "exclude": [],
                            "future_join": False, "authorization": "fixture:scope"},
-            "authority": {"path": str(self.project / ".vibe-coding-workflow" / "project.json"),
+            "authority": {"path": str(self.project / ".vibe-workflow" / "project.json"),
                           "sha256": "absent", "reference": "fixture:plan-a"},
             "project_files": [],
         }
@@ -62,7 +62,7 @@ class ProjectOwnerStorageTests(unittest.TestCase):
             "member_checkouts": [str(root)],
             "membership": {"include": ["."], "exclude": list(exclude),
                            "future_join": False, "authorization": "fixture:standalone"},
-            "authority": {"path": str(root / ".vibe-coding-workflow" / "project.json"),
+            "authority": {"path": str(root / ".vibe-workflow" / "project.json"),
                           "sha256": "absent", "reference": "fixture:standalone"},
             "project_files": [],
         }
@@ -353,7 +353,7 @@ class ProjectOwnerStorageTests(unittest.TestCase):
         expanded["member_checkouts"].append(str(expanded_member))
         crossing_root = copy.deepcopy(self.scope)
         crossing_root["project_root"] = str(self.container)
-        crossing_root["authority"]["path"] = str(self.container / ".vibe-coding-workflow" / "project.json")
+        crossing_root["authority"]["path"] = str(self.container / ".vibe-workflow" / "project.json")
         crossing_root["member_checkouts"] = [str(self.first), str(self.second)]
         crossing_root["membership"]["include"] = ["umbrella/first", "umbrella/second"]
 
@@ -408,7 +408,7 @@ class ProjectOwnerStorageTests(unittest.TestCase):
             "member_checkouts": [str(enrolled_repo), str(ordinary_repo)],
             "membership": {"include": ["repo", "ordinary-member"], "exclude": [],
                            "future_join": False, "authorization": "fixture:mixed"},
-            "authority": {"path": str(root / ".vibe-coding-workflow" / "project.json"),
+            "authority": {"path": str(root / ".vibe-workflow" / "project.json"),
                           "sha256": "absent", "reference": "fixture:mixed-scope"},
             "project_files": [],
         }

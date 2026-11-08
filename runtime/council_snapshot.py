@@ -18,7 +18,8 @@ GAPS = ['Only explicitly approved files are included; omitted content is not rev
         'Structural exclusions do not establish semantic secret review.',
         'Nested repositories are excluded; no project tools or Git configuration are copied.']
 DENIED_DIRECTORIES = {'.git', '.hg', '.svn', '.ssh', '.aws', '.azure', '.gcloud', '.config',
-    '.local', '.cache', '.npm', '.codex', '.claude', '.cursor', '.opencode', '.vibe-coding-workflow'}
+    '.local', '.cache', '.npm', '.codex', '.claude', '.cursor', '.opencode',
+    '.vibe-workflow', '.vibe-coding-workflow'}
 DENIED_FILES = {'.netrc', '.npmrc', '.pypirc', '.gitconfig', '.git-credentials', 'auth.json',
     'credentials.json', 'credentials', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', MARKER}
 

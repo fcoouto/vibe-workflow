@@ -65,7 +65,7 @@ def canonical_scope(legacy, *, client="codex", repository_id=None, checkout_id=N
                            runtime=dict(schema_version=3, state_dir=str(runtime.state_dir))), shared_policy=[])
     scope_digest = hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
     return AcceptedScope(legacy.project_id, repository_id, checkout_id, primary,
-        primary / ".vibe-coding-workflow/project.json", _canonical_freeze({}), 1, root, primary, private, common,
+        primary / ".vibe-workflow/project.json", _canonical_freeze({}), 1, root, primary, private, common,
         _canonical_freeze(bindings), client, policy, digest, runtime, _canonical_freeze(identity), scope_digest,
         _canonical_freeze(dict(kind="trusted-coordinator", reference="fixture:synthetic", sha256="b"*64)))
 

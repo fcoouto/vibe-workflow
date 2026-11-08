@@ -116,10 +116,10 @@ class SnapshotTests(CouncilCase):
     def test_credentials_git_runtime_and_nested_repositories_are_excluded(self):
         names = ['safe.txt', '.env', '.env.example', 'cert.pem', 'id_rsa', '.netrc', '.npmrc',
                  '.aws/config', 'auth.json', 'credentials.json', '.git/config',
-                 '.vibe-coding-workflow/project.json', '.codex/history.jsonl',
+                 '.vibe-workflow/project.json', '.codex/history.jsonl',
                  'nested/.git/HEAD', 'nested/source.txt']
         for name in names:
-            if name != '.vibe-coding-workflow/project.json': self.write(name)
+            if name != '.vibe-workflow/project.json': self.write(name)
         result = self.api.capture(self.repo, self.destination, self.approved(names))
         self.assertEqual(set(result['files']), {'safe.txt'})
         self.assertEqual({row['path'] for row in result['exclusions']}, set(names) - {'safe.txt'})

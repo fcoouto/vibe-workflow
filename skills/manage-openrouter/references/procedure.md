@@ -12,7 +12,7 @@ invocation and activation are distinct requests.
 Resolve the explicitly selected checkout using its current working directory.
 The supported scope is an already enrolled Codex POSIX Git checkout with an
 accepted private runtime database. Enrollment lives in
-`.vibe-coding-workflow/project.json`; settings live outside Git in that runtime's
+`.vibe-workflow/project.json`; settings live outside Git in that runtime's
 private state directory. A repository clone, sibling worktree, parent directory or
 account connection does not inherit consent. Canonical Project-wide activation
 and other client adapters are not implemented.

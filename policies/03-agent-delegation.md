@@ -42,6 +42,39 @@ Use host completion/attention events or bounded waits. For managed progress, pre
 
 ## Review, integration and recovery
 
+### Child-requested reviews
+
+The implementation child requests required independent review through its existing
+[handoff](07-context-and-handoff.md#handoff-and-resumption), identifying the exact
+candidate, changed paths, acceptance criteria, checks/results and remaining
+uncertainty. Treat this as a reviewable checkpoint, not accepted completion.
+
+The coordinator selects the review scope from the original requirements and
+dispatches separate read-only reviewers as its own children. Give reviewers the
+requirements and actual candidate, not only the implementer's explanation. Start
+ready independent reviews in parallel when their candidates remain fixed and
+ownership, available capacity and remaining task allowances permit. Unrelated
+unfinished children need not delay them. Preserve the wave and dependency gates
+below. Reviewers and repair
+continuations use the original shared task budgets, including concurrency,
+deadline, attempts and review rounds; a review request creates no new allowance.
+
+Collect original reviewer reports directly in the coordinator. Return findings to
+the original implementation child for fixes and affected checks, using the same
+child for follow-ups. Reconcile writers before review and readers before repairs;
+uncertain ownership remains reserved. The coordinator verifies reviewer provenance,
+findings, dispositions and current evidence under the acceptance checks below.
+Acceptance need not repeat every independent reviewer's investigation. Changes
+require affected rechecks under [Code Review](06-code-review.md); preserve finding
+history and remaining budgets. Final integration still checks combined behavior
+and cross-task interfaces.
+
+Use existing handoff, review evidence and continuation formats. Ordinary native
+review needs no managed task state. When managed controls are selected, use the
+existing client review admission, collection and assessment procedures.
+
+### Review and acceptance checks
+
 - Before review, fix the target base/candidate or working-tree snapshot, including staged, unstaged and relevant untracked changes. Reviewers inspect the diff and relevant callers, contracts and tests. They remain read-only; checks with shared mutable resources must be isolated or serialized. Review does not authorize fixes, commits or publishing.
 - Review each wave's task changes before starting the next wave. Resolve blocking findings and verify affected checks before releasing dependent work; final integration review does not replace these reviews. Keep one coordinator progress entry per completed wave.
 - Required independent review cannot be replaced by the implementer's self-review. Choose review scope and specialists by risk and evidence; apply [Security Review](04-security-review.md) when its trigger applies. Set review scope, requested rounds and stop conditions before dispatch. Internal fixes do not restart the round count. Further rounds need new risk, an evidence gap or a user request.

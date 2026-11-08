@@ -138,7 +138,7 @@ class TitleIntegrationTests(unittest.TestCase):
         self.assertFalse(title_sync._path(self.scope, 'codex', 'session').exists())
 
     def test_corrupt_family_register_preserves_bytes_and_uses_control_error_boundary(self):
-        store = self.home / '.vibe-coding-workflow' / 'workstreams-families.sqlite3'
+        store = self.home / '.vibe-workflow' / 'workstreams-families.sqlite3'
         store.parent.mkdir(mode=0o700)
         store.write_bytes(b'corrupt family register')
         before = self.native.title

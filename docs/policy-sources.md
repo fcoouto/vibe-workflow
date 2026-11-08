@@ -387,6 +387,27 @@ The [unified skill](../skills/workstreams/SKILL.md) routes naming, feature contr
 
 The [port boundary](workstreams-main-port.md) separates source validation from exact-package native observation. No old authority, pin, claim, attempt or budget is rewritten. No source test or earlier package observation establishes live compatibility for this candidate.
 
+### Workstreams hybrid review handoffs · 5 November 2026
+
+The user approved child-requested reviews, coordinator-spawned parallel reviewers,
+child-owned fixes and coordinator acceptance. This is a local delegation extension
+to the reviewed Toolkit orchestration and review requirements above; it does not
+change their authority or authorize a new execution route.
+
+| Approved requirement | Local contract and proof |
+| --- | --- |
+| Child review requests and coordinator-spawned parallel reviewers | [Agent Delegation](../policies/03-agent-delegation.md#child-requested-reviews), reached directly by the Workstreams entry point and linked from managed execution; instruction-path cases for a ready child and concurrent independent outcomes |
+| Original child owns fixes; coordinator accepts and checks integration | Same shared procedure and existing Code Review requirements; repair/ownership and combined-outcome cases |
+| Independent evidence, current candidates and original shared budgets | Existing review admission, collection, assessment and continuation contracts remain authoritative; existing native review, shared admission and same-child repair tests |
+| Ordinary review without managed state or optional feature activation | Ordinary skill route loads policy directly; managed evidence loads only when selected; features-off instruction case |
+
+The [validation record](workstreams-main-port.md#hybrid-review-handoffs--5-november-2026)
+separates instruction application and package checks from live managed execution.
+No evidence schema, budget counter, control or runtime requirement is added.
+Its later installed-update record covers the user-authorized local 0.1.30 update
+and ordinary native hybrid-review pilot, preserving original reports and shared
+allowances. That observation does not extend managed-control qualification.
+
 ## Fresh canonical composition · 1 November 2026
 
 The accepted LD-C1 ruling composes canonical Project authority schema 2 with a fresh SQLite runtime schema 3 while preserving old M/E packages, readers and pins at their original paths. D4 birth owns creation and baseline receipts; task start rejects an absent canonical database. Proof, manifest and transaction versions remain independent. The source contract is under composition, so software behavior and native qualification remain conditional until core validation and actual client observation are reported. Existing M task vocabulary, open-DONE reopening, Workstreams defaults/preferences and public controls remain in scope. Runtime-enabled legacy enrollment does not provide current task authority; runtime-free legacy startup remains orientation-only; supported M historical inspection remains read-only and E lowercase schema-3 history stays with its original E reader.
@@ -394,3 +415,29 @@ The accepted LD-C1 ruling composes canonical Project authority schema 2 with a f
 ## Branch/main contract reconciliation · 2 November 2026
 
 The approved merge preserves the branch's Council, OpenRouter, observability, project-aware inspection, private storage and screening controls alongside main's Workstreams, canonical Project/birth/coordinator operations and uppercase task states. Historical port exclusions above describe their original deliveries, not this composed package. Ordinary evidence requests load only their operation guide; advanced artifact, linked verification and lifecycle requirements remain in the conditional evidence reference. No old authority, original reader, evidence, receipt, state value or pin is converted by this merge. Package validation and observed native execution remain separate.
+
+## Memory system · 8 November 2026
+
+The user directed a project-local two-tier memory system on 8 November 2026.
+`~/ai-memory-vault/INSTRUCTIONS.md` owns the narrow save test, the topic-file
+frontmatter template and the 150-line index growth policy with read-back before
+delete; `MEMORY.md` is the always-read index; individual topic files are
+lazy-loaded; entries migrated out of the index move to the project's long-term
+store at `docs/memory/`, created on first migration. The Memory section added to
+the root `AGENTS.md` is the wiring itself: OpenCode reads it every session.
+
+Basis: the official [OpenCode rules documentation](https://opencode.ai/docs/rules),
+checked 8 November 2026 — project `AGENTS.md` auto-loads into every session's
+context, OpenCode does not automatically parse file references inside
+`AGENTS.md`, and no native memory loader exists, so the vault required explicit
+read-at-start instructions rather than relying on its folder name. The
+injected `AGENTS.md` in that session's own context confirmed the observed
+behavior. No equivalent client-native memory existed to reuse, and the repo's
+`hooks/` and plugin files are tool guards, not memory loaders. Authored to the
+Instruction authoring standard: entry with purpose and loading triggers in
+`AGENTS.md`, complete rules once in the vault, every user-saved requirement
+preserved.
+
+This records authoring provenance only. The wiring adds no new Toolkit
+requirement, runtime component, permission policy, client adapter or
+dependency; routine loading reads no provenance.

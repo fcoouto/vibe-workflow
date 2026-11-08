@@ -404,7 +404,7 @@ class CanonicalScopeTests(unittest.TestCase):
     def test_canonical_read_authority_requires_its_immediate_parent(self):
         from runtime.startup import StartupError
         record, args, _ = self.fixture()
-        del args["authority"]["target"]["parents"]["/repo/.vibe-coding-workflow"]
+        del args["authority"]["target"]["parents"]["/repo/.vibe-workflow"]
         with self.assertRaises(StartupError): self.resolve(record, args)
 
     def test_canonical_dependency_parent_must_match_known_directory_identity(self):
@@ -730,7 +730,7 @@ class StartupTests(unittest.TestCase):
     def test_package_validator_rejects_shadowing_root_manifest(self):
         package = self.base / "package"
         shutil.copytree(PACKAGE, package, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        (package / "plugin.json").write_text('{"name":"vibe-coding-workflow"}')
+        (package / "plugin.json").write_text('{"name":"vibe-workflow"}')
         with self.assertRaisesRegex(ValueError, "root manifest hides hooks"):
             validate(package)
 
@@ -1299,11 +1299,11 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
         self.event=startup.StartupEvent('codex','machine-family-session',self.fixture.repo,'startup')
         home=patch.dict(os.environ,HOME=str(self.fixture.base))
         home.start();self.addCleanup(home.stop)
-        self.family=self.fixture.base/'.vibe-coding-workflow/workstreams-families.sqlite3'
+        self.family=self.fixture.base/'.vibe-workflow/workstreams-families.sqlite3'
 
     def reserve(self,home=None):
         from scripts.workstreams_family import reserve
-        path=(home or Path.home())/'.vibe-coding-workflow/workstreams-families.sqlite3'
+        path=(home or Path.home())/'.vibe-workflow/workstreams-families.sqlite3'
         self.assertEqual(reserve(path,'codex','fixture:machine-parent'),'W1')
         return path
 
@@ -1454,10 +1454,10 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
         from runtime import startup
         legacy=StartupTests('runTest');self.addCleanup(legacy.doCleanups);legacy.setUp()
         local=legacy.enroll()
-        directory=legacy.base/PROJECT_FILE.parent
         actual_resolve=startup.resolve_project
         with patch.dict(os.environ,HOME=str(legacy.base)):
             family=self.reserve()
+            directory=family.parent
             event=startup.StartupEvent('codex','legacy-machine-race',legacy.repo,'startup')
             for change in ('unknown-entry','directory-symlink','new-record'):
                 with self.subTest(change=change):

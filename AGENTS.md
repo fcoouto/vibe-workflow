@@ -18,3 +18,9 @@
 - Preserve every requirement when shortening or reorganizing instructions. Maintain [source-to-contract coverage](docs/policy-sources.md) for authoring and updates; keep provenance out of routine loading paths.
 - Check affected instruction paths with representative tasks: required procedures load, every applicable requirement is satisfied, and unrelated material stays unloaded. Word counts and package validation alone do not prove behavior.
 - Write human-facing guidance in plain language: explain purpose, next action, and what completion means.
+
+## Memory
+
+- Durable lessons live in the plain-file vault `~/ai-memory-vault/`. No client auto-loads that folder; this section is the wiring. At session start, before project work, read `~/ai-memory-vault/MEMORY.md` (the index) and open a linked topic file only when relevant to the task.
+- `~/ai-memory-vault/INSTRUCTIONS.md` owns the save test, topic-file template and growth policy. Read it before saving, updating, migrating or pruning: err toward not saving, and delete a migrated index entry only after its long-term store note read-back succeeds.
+- Keep temporary handoffs in the task record, never the vault. Entries migrated out of the index go to `docs/memory/`, created on first migration.

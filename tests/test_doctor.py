@@ -43,7 +43,7 @@ class DoctorTests(unittest.TestCase):
                 enabled=True, trustStatus="trusted", isManaged=False, displayOrder=0,
                 handlerType="command", command=f'python3 -I -B "{PACKAGE}/scripts/workflow.py" codex {title}',
                 matcher=matcher, timeoutSec=1 if event == "interrupt" else 5,
-                **{"async": False, "additionalContextLimit": None, "pluginId": "vibe-coding-workflow"}))
+                **{"async": False, "additionalContextLimit": None, "pluginId": "vibe-workflow"}))
 
     @contextmanager
     def state_api(self, failure=False):

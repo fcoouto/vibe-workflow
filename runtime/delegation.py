@@ -866,7 +866,8 @@ def _worker_claims(scope, claims, git_directory):
             path = Path(claim['path'])
             _require(not path.name.endswith('.lock') and path.name not in
                      {'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'} and
-                     '.vibe-coding-workflow' not in path.parts, 'Lockfiles and tracking remain coordinator-owned')
+                     '.vibe-workflow' not in path.parts and '.vibe-coding-workflow' not in path.parts,
+                     'Lockfiles and tracking remain coordinator-owned')
 
 
 def _worker_scope(scope, claims, files=()):

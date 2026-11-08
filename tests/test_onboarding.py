@@ -76,7 +76,7 @@ class OnboardingTests(unittest.TestCase):
             self.directory = directory
             self.source = directory / "catalog.md"
             self.record["toolkit"]["files"][0]["local_path"] = str(self.source)
-        authority = root / ".vibe-coding-workflow/project.json"
+        authority = root / ".vibe-workflow/project.json"
         return copy.deepcopy(self.record) | {"project_scope": {
             "kind": kind, "project_root": str(root),
             "member_checkouts": [str(p) for p in (members or [self.repo])],
@@ -118,7 +118,7 @@ class OnboardingTests(unittest.TestCase):
             membership=dict(include=["."], exclude=[], future_join=True,
                             authorization=dict(reference="fixture:standing-authority", sha256="a" * 64)),
             shared_policy=[], repositories=repositories)
-        location = root / ".vibe-coding-workflow/project.json"
+        location = root / ".vibe-workflow/project.json"
         location.parent.mkdir(exist_ok=True)
         location.write_text(json.dumps(record))
         return location, record
@@ -237,11 +237,11 @@ class OnboardingTests(unittest.TestCase):
         with self.assertRaises(StartupError):
             self.module().inspect_project(moved, self.directory, self.project_record())
         self.assertFalse((self.directory / "plan.json").exists())
-        self.assertEqual(json.loads((moved / ".vibe-coding-workflow/project.json").read_text()), accepted)
+        self.assertEqual(json.loads((moved / ".vibe-workflow/project.json").read_text()), accepted)
 
     def test_canonical_reuse_overlapping_member_authority_blocks(self):
         self.canonical_authority(self.base, [self.repo], "umbrella")
-        child = self.repo / ".vibe-coding-workflow/project.json"
+        child = self.repo / ".vibe-workflow/project.json"
         child.parent.mkdir()
         child.write_text(json.dumps(dict(schema_version=1, project_id="different-owner", clients=["codex"],
             repository_root=str(self.repo), git_common_dir=str(self.repo / ".git"),
@@ -378,7 +378,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(resumed["assessments"], plan["assessments"])
         self.assertEqual(resumed["revision"], 2)
         self.assertEqual(self.git("status", "--porcelain=v1", "-z"), before)
-        self.assertFalse((self.repo / ".vibe-coding-workflow").exists())
+        self.assertFalse((self.repo / ".vibe-workflow").exists())
         self.assertFalse((self.repo / ".codex").exists())
 
     def test_project_private_plan_cannot_be_created_inside_project_or_selected_worktree(self):
@@ -410,7 +410,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual({r["project_id"] for r in owners}, {plan["identity"]["project_id"]})
         self.module().inspect_project(self.base, self.directory, record)
         self.assertEqual(self.plan()["assessments"], plan["assessments"])
-        self.assertFalse((self.base / ".vibe-coding-workflow").exists())
+        self.assertFalse((self.base / ".vibe-workflow").exists())
 
     def test_project_linked_worktree_keeps_action_root_and_resolves_primary_from_git(self):
         linked = self.base / "linked"
@@ -475,7 +475,7 @@ class OnboardingTests(unittest.TestCase):
         changed["project_scope"]["membership"]["future_join"] = True
         with self.assertRaisesRegex(StartupError, "scope"):
             self.module().inspect_project(self.repo, self.directory, changed)
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         authority.write_text('{"schema_version":1}')
         with self.assertRaisesRegex(StartupError, "authority|binding"):
@@ -494,7 +494,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertNotEqual(report["current_input_digest"], before["current_input_digest"])
 
     def test_project_legacy_identity_reuse_requires_exact_authority_binding(self):
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         module = self.module()
         legacy = {"schema_version": 1, "project_id": "accepted-fixture", "clients": ["codex"],
@@ -509,7 +509,7 @@ class OnboardingTests(unittest.TestCase):
                             for a in self.plan()["assessments"]["repositories"]))
 
     def test_project_copied_or_member_authority_is_a_conflict_not_id_transfer(self):
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         authority.write_text(json.dumps({"schema_version": 1, "project_id": "copied-id",
             "repository_root": str(self.base / "original"), "git_common_dir": str(self.base / "original/.git"),
@@ -548,7 +548,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(report["status"], "blocked")
 
     def test_project_invalid_authority_json_and_worktree_metadata_are_explicit_gaps(self):
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         authority.write_text('{"project_id": "first", "project_id": "second"}')
         record = self.project_record()
@@ -646,7 +646,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertTrue(any(b["scope"] == "source:catalog.md" for b in report["blockers"]))
 
     def test_project_copied_selected_authority_conflict_remains_on_reinspection(self):
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         authority.write_text(json.dumps({"schema_version": 1, "project_id": "copied-id",
             "repository_root": str(self.base / "original"), "git_common_dir": str(self.base / "original/.git"),
@@ -1035,7 +1035,7 @@ class OnboardingTests(unittest.TestCase):
         request["reconcile"] = {"input_digest": "0" * 64, "reason": "wrong fixture observation"}
         with self.assertRaisesRegex(StartupError, "inputs changed"):
             self.module().record_plan(self.directory, request)
-        authority = self.repo / ".vibe-coding-workflow/project.json"
+        authority = self.repo / ".vibe-workflow/project.json"
         authority.parent.mkdir()
         authority.write_text("{}")
         request.pop("reconcile")
@@ -1209,7 +1209,7 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(plan["identity"]["repository_root"], str(self.repo))
         self.assertEqual(len(plan["requirements"]), 13)
         self.assertEqual(self.git("status", "--porcelain=v1", "-z"), before)
-        self.assertFalse((self.repo / ".vibe-coding-workflow").exists())
+        self.assertFalse((self.repo / ".vibe-workflow").exists())
         self.assertEqual((self.directory / "plan.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(plan["sources"]["observed"]["catalog.md"]["sha256"],
                          self.record["toolkit"]["files"][0]["sha256"])
