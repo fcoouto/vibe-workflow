@@ -1,6 +1,8 @@
 """Best-effort OpenCode session titles for ordinary native work; never a model turn."""
 import json
 import re
+import shutil
+import subprocess
 import time
 
 from runtime.title_sync import MAX_TITLE_BODY, METER_PREFIX, _parsed
@@ -11,6 +13,7 @@ CALL_TIMEOUT = 2.0
 DEADLINE = 5.0  # No new call starts after this many seconds.
 OPERATIONS = frozenset({'session.get', 'session.update'})
 SESSION = re.compile(r'ses_[A-Za-z0-9]{1,128}')
+RETRIED = frozenset({'failed', 'timeout'})  # Other failures cannot change on retry.
 DEFAULT_TITLE = re.compile(r'(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z')
 
 
@@ -26,8 +29,8 @@ class OpenCodeTitles:
     def __init__(self, *, timeout=CALL_TIMEOUT, deadline=None, clock=time.monotonic):
         self.timeout, self.deadline, self.clock = timeout, deadline, clock
 
+    # Context manager to match the NativeTitles transport accepted by title_sync.operate.
     def __enter__(self):
-        import shutil
         self.executable = shutil.which('opencode')
         if self.executable is None:
             raise TitleTransportError('unavailable')
@@ -37,7 +40,6 @@ class OpenCodeTitles:
         pass
 
     def call(self, operation, session, body=None):
-        import subprocess
         if operation not in OPERATIONS:
             raise ValueError('Unsupported OpenCode title operation')
         _session(session)
@@ -49,6 +51,8 @@ class OpenCodeTitles:
         argv = [self.executable, 'api', operation, '--param', f'sessionID={session}']
         if body is not None:
             argv += ['-d', json.dumps(body)]
+        # On timeout only the direct child is killed: `opencode` is one executable, and a
+        # process-group kill could also stop the background server OpenCode may start.
         try:
             completed = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
                                        timeout=timeout, check=False)
@@ -57,7 +61,7 @@ class OpenCodeTitles:
         except OSError:
             raise TitleTransportError('unavailable') from None
         if completed.returncode != 0:
-            raise TitleTransportError('not_found' if b'HTTP 404' in completed.stderr else 'failed')
+            raise TitleTransportError('not_found' if _missing(completed) else 'failed')
         return completed.stdout
 
     def read(self, session):
@@ -75,6 +79,15 @@ class OpenCodeTitles:
     def write(self, session, title):
         _title(title)
         self.call('session.update', session, {'title': title})
+
+
+def _missing(completed):
+    """Prefer the error tag in the response; fall back to the CLI's HTTP status line."""
+    try:
+        tag = json.loads(completed.stdout).get('_tag')
+    except (ValueError, AttributeError):
+        tag = None
+    return tag == 'SessionNotFoundError' or (tag is None and b'HTTP 404' in completed.stderr)
 
 
 def _session(session):
@@ -103,12 +116,21 @@ def _blocked(current, baseline):
     return dict(ok=False, deferred=True, reason='manual_title')
 
 
+def _done(desired, adopt, replaced):
+    result = dict(ok=True, deferred=False, reason=None, baseline=desired)
+    if adopt:
+        bounded = replaced is not None and len(replaced) <= MAX_TITLE_BODY
+        result['previous'] = replaced if bounded else None
+    return result
+
+
 def deliver(session, desired, baseline=None, *, adopt=False, transport=None, attempts=ATTEMPTS, backoff=BACKOFF,
             timeout=CALL_TIMEOUT, deadline=DEADLINE, sleep=time.sleep, clock=time.monotonic):
     """Write one managed title; never raise or print. A deferral leaves the next update to retry.
 
     `adopt=True` is the one-time initial adoption: it may replace the title first
-    observed by this call. The caller keeps the returned baseline afterwards.
+    observed by this call and reports it as `previous` (None if nothing was replaced
+    or it exceeds the title bound). The caller keeps the returned baseline afterwards.
     """
     try:
         _session(session)
@@ -133,7 +155,7 @@ def deliver(session, desired, baseline=None, *, adopt=False, transport=None, att
                 with (transport or (lambda: OpenCodeTitles(timeout=timeout, deadline=end, clock=clock)))() as native:
                     current = native.read(session)
                     if current == desired:
-                        return dict(ok=True, deferred=False, reason=None, baseline=desired)
+                        return _done(desired, adopt, None)
                     if adopt and adopted is None:
                         adopted = current
                     if not adopt or current != adopted:
@@ -144,9 +166,11 @@ def deliver(session, desired, baseline=None, *, adopt=False, transport=None, att
                     if native.read(session) != desired:
                         # A concurrent edit may own the title now; never write over it.
                         return dict(ok=False, deferred=True, reason='readback')
-                    return dict(ok=True, deferred=False, reason=None, baseline=desired)
+                    return _done(desired, adopt, current)
             except TitleTransportError as error:
                 reason = error.reason
+                if reason not in RETRIED:
+                    break
     except Exception:
         reason = 'failed'
     return dict(ok=False, deferred=True, reason=reason)
