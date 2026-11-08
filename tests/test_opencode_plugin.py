@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
+from runtime import routing
 from runtime.adapters import opencode
 from runtime.adapters.opencode import AdapterError
 
@@ -62,7 +63,14 @@ def parity_cases():
         requested = result and result["spawn"]["requested_model"]
         spawn_cases.append({"model": model, "requested": requested and {
             "provider": requested["provider_id"], "model": requested["model_alias"], "variant": requested["variant"]}})
-    return {"env": env, "models": model_cases, "spawns": spawn_cases}
+    # The shim probes only ids shaped like `routing.derive_ids` output; OpenCode's own ids must not match.
+    derived = [routing.derive_ids(attempt, identity, nonce)["session_id"]
+               for attempt, identity, nonce in [("a1", "ledger-1", None), ("a1", "ledger-1", "0" * 32), ("x" * 256, "l", "f" * 32)]]
+    sessions = [{"id": session, "derived": True} for session in derived]
+    sessions += [{"id": session, "derived": False} for session in [
+        "ses_live1", "ses_01JABCDEFGHJKMNPQRSTVWXYZ", "ses_" + "0" * 31, "ses_" + "0" * 33, "ses_" + "A" * 32,
+        "msg_" + "0" * 32, derived[0].upper()]]
+    return {"env": env, "models": model_cases, "spawns": spawn_cases, "sessions": sessions}
 
 
 class OpenCodePluginTests(unittest.TestCase):
@@ -73,6 +81,8 @@ class OpenCodePluginTests(unittest.TestCase):
         self.assertTrue(any(item["requested"] for item in cases["spawns"]))
         self.assertTrue(any(item["requested"] is None for item in cases["spawns"]))
         self.assertTrue(any(item["credential"] for item in cases["env"]))
+        self.assertTrue(any(item["derived"] for item in cases["sessions"]))
+        self.assertTrue(all(opencode.SESSION.fullmatch(item["id"]) for item in cases["sessions"] if item["derived"]))
 
     def test_node_suite(self):
         node = shutil.which("node")
