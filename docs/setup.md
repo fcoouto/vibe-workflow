@@ -51,7 +51,7 @@ Harness improvement: native method adaptation. No observed instruction, memory, 
 
 0.1.33 renamed the plugin and its state paths; nothing migrates automatically. On this machine:
 
-- Copied and verified identical, then removed the old copies: the Workstreams family register (`~/.vibe-workflow/workstreams-families.sqlite3`) and the usage directory (`~/.local/state/vibe-workflow/usage`, including its one open run). The new code loads the ledger and upgrades it on first write.
+- Copied and verified identical, then removed the old copies: the Workstreams family register (`~/.vibe-workflow/workstreams-families.sqlite3`) and the usage directory (`~/.local/state/vibe-workflow/usage`, including its one open run). The new code loads the ledger and upgrades it on first write. Routing is off for both enrolled checkouts, because per-checkout activation is keyed to the enrollment path and content that changed; activate it again to reuse the approved setup.
 - Not copied: `machine.json`, which records the old directory chain, and the old review storage under `~/.local/share/vibe-coding-workflow`.
 - Kept for now, pending a decision: old onboarding, update and proposal records under `~/.local/state/vibe-coding-workflow/`, including rollback journals for earlier enrollments.
 - Not changed: `/Users/fcouto/dev/git/opus/AGENTS.md` still has a `vibe-coding-workflow:` Workstreams marker and a link into an old plugin cache, so its Workstreams choice reads as not configured.
