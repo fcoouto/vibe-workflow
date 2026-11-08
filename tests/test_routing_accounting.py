@@ -4,6 +4,7 @@ Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-se
 """
 from contextlib import closing
 import json
+from pathlib import Path
 import random
 import socket
 import sqlite3
@@ -16,6 +17,7 @@ from runtime import routing, routing_gates, usage_budget as budget
 from scripts import routing as command
 from tests.test_routing_command import API, M, POLICY, SECRET, api_observations, facts, now, observations, prepare
 from tests.test_routing_dispatch import DispatchBase, dispatch, record
+from tests.test_routing_gates import FakeWorkflow, entry
 
 DAY = 86400
 TOKENS = dict(input=10, output=5, reasoning=1, cache_read=2, cache_write=0)
@@ -43,25 +45,28 @@ def settle(root, **extra):
     return request
 
 
-def where(root):
-    return dict(client='codex', cwd='/checkout', session_id='session-1', task_id=root)
+def where(root, session='session-1'):
+    """A root task's locator; roots are keyed by all four fields (review S4)."""
+    return dict(client='codex', cwd='/checkout', session_id=session, task_id=root)
 
 
-class Reader:
-    """A trusted acceptance reader standing in for the canonical delegation state; requests never supply one."""
-    def __init__(self, accepted=()):
+def bound(root, session='session-1'):
+    return dict(where(root, session), job_id='job-x')
+
+
+class Reader(FakeWorkflow):
+    """Canonical workflow stand-in: one ready job binds every attempt, and acceptances come from here only."""
+    def __init__(self, path, accepted=()):
+        super().__init__(path)
+        self.write({'job-x': entry()})
         self.accepted = list(accepted)
         self.calls = []
 
     def acceptances(self, locator):
         self.calls.append(dict(locator))
+        if self.accepted is None:
+            raise RuntimeError('canonical state unreadable')
         return list(self.accepted)
-
-    def view(self, locator):
-        raise AssertionError('settlement never reads a job view')
-
-    def etag(self, locator):
-        raise AssertionError('settlement never reads an etag')
 
 
 class Accounting(DispatchBase):
@@ -71,7 +76,7 @@ class Accounting(DispatchBase):
 
     def setUp(self):
         super().setUp()
-        self.reader = Reader()
+        self.reader = Reader(Path(self.temp.name) / 'workflow.json')
         self.service.close()
         self.service = command.Service(self.settings, self.ledger, workflow=self.reader)
         self.call(dict(v=1, op='set', expected_revision=0,
@@ -82,20 +87,20 @@ class Accounting(DispatchBase):
             ledger.enable_organization('personal', self.POLICY, 0)
             ledger.observe('personal', self.BALANCE, now(), issued=self.BALANCE)
 
-    def admit(self, attempt, demand=5 * M, task=None):
+    def admit(self, attempt, demand=5 * M, root=None, session='session-1'):
         obs = api_observations()
         obs['routes'][-1].update(demand={'credit': demand}, account='acct-' + attempt)
         obs['pools']['api']['windows'][0]['limit'] = 10**12
         request = prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
-        if task is not None:
-            request['assignment']['task'] = task
+        if root is not None:
+            request.update(workflow=bound(root, session))
         return self.call(request)
 
-    def admit_sub(self, attempt, task=None, at=None):
+    def admit_sub(self, attempt, root=None, at=None):
         request = prepare(attempt, observations=observations(at=at, account='acct-' + attempt),
                           constraints=dict(allowed_strategy_ids=['s-sub']))
-        if task is not None:
-            request['assignment']['task'] = task
+        if root is not None:
+            request.update(workflow=bound(root))
         response = self.call(request)
         self.assertEqual(response['state'], 'admitted', response)
         return response
@@ -105,8 +110,8 @@ class Accounting(DispatchBase):
         self.assertEqual(response['state'], 'dispatched', response)
         return response
 
-    def funded(self, attempt, demand=5 * M, task=None):
-        response = self.admit(attempt, demand, task)
+    def funded(self, attempt, demand=5 * M, root=None, session='session-1'):
+        response = self.admit(attempt, demand, root, session)
         self.assertEqual(response['state'], 'admitted', response)
         self.send(attempt)
 
@@ -146,6 +151,11 @@ class EventTests(Accounting):
             with self.subTest(event=conflicting['event']):
                 self.assertEqual(self.call(conflicting), dict(v=1, state='blocked', reason='event_conflict'))
         self.assertEqual((self.snapshot(), self.events()), (before, events))
+
+    def test_a_retry_with_a_new_client_timestamp_is_a_duplicate(self):
+        self.funded('a1')
+        first = self.call(complete('a1', 'c1', usage=usage(M), at=100))
+        self.assertEqual(self.call(complete('a1', 'c1', usage=usage(M), at=200)), dict(first, duplicate=True))
 
     def test_a_refused_event_is_not_remembered(self):
         self.assertEqual(self.admit('a1')['state'], 'admitted')
@@ -297,13 +307,129 @@ class SettlementTests(Accounting):
         self.assertEqual(body['usage']['units'], {'win:sub/5h': 3})
         self.assertEqual(body['usage']['tokens'], TOKENS)
 
-    def test_a_receipt_already_charged_under_the_root_is_charged_once(self):
-        self.funded('p1', task='root')
-        self.funded('c1', task='root')
-        self.call(complete('p1', 'e1', usage=usage(M, 2 * M, receipts=['r1', 'r2'])))
-        second = self.call(complete('c1', 'e2', usage=usage(2 * M, M, receipts=['r2', 'r3'])))
-        self.assertEqual(second['settlement']['charged'], M)
+    def observed(self, event_id, attempt, receipt, cost=4 * M, **extra):
+        event = dict(event_id=event_id, attempt_id=attempt, kind='observed', stage='coordinator', funding='api',
+                     usage=usage(cost, receipts=[receipt]))
+        event.update(extra)
+        return self.call(dict(v=1, op='record', event=event))
+
+    def test_an_observed_receipt_never_reduces_a_charge(self):
+        """Review B1 probe (a): report-only usage seen first must not cancel the measured dollar charge."""
+        self.funded('a1', root='root')
+        self.assertEqual(self.observed('o1', 'coord', 'r1', root_attempt_id='a1')['state'], 'recorded')
+        result = self.call(complete('a1', 'c1', usage=usage(4 * M, receipts=['r1'])))
+        self.assertEqual((result['settlement']['charged'], result['settlement']['released']), (4 * M, 2 * M))
         self.assertEqual(self.settled(), 4 * M)
+
+    def test_sibling_attempts_reporting_the_same_receipt_are_each_charged(self):
+        """Review B1 probe (b): per-session message ids repeat across siblings; each attempt pays its own cost."""
+        self.funded('s1', root='root')
+        self.funded('s2', root='root')
+        for attempt, event_id in (('s1', 'e1'), ('s2', 'e2')):
+            result = self.call(complete(attempt, event_id, usage=usage(4 * M, receipts=['msg-1'])))
+            self.assertEqual(result['settlement']['charged'], 4 * M)
+        self.assertEqual(self.settled(), 8 * M)
+
+    def test_one_attempt_repeating_a_receipt_is_charged_once(self):
+        self.funded('a1', root='root')
+        result = self.call(complete('a1', 'c1', usage=usage(2 * M, 2 * M, M, receipts=['r1', 'r1', 'r2'])))
+        self.assertEqual(result['settlement']['charged'], 3 * M)
+        self.assertEqual(self.settled(), 3 * M)
+
+    def test_observed_usage_must_join_a_known_attempt(self):
+        """Review S4: `observed` cannot be aimed at an arbitrary root."""
+        self.funded('a1', root='root')
+        self.assertEqual(self.observed('o1', 'coord', 'r1'), dict(v=1, state='blocked', reason='unknown_attempt'))
+        self.assertEqual(self.observed('o2', 'coord', 'r1', root_attempt_id='nope'),
+                         dict(v=1, state='blocked', reason='unknown_attempt'))
+        self.assertEqual(self.observed('o3', 'a1', 'r1')['state'], 'recorded')  # an attempt with a hold
+        self.assertEqual(self.call(dict(v=1, op='record', event=dict(
+            event_id='o4', attempt_id='coord', kind='observed', stage='coordinator', usage=usage(1),
+            root_task_id='root'))), dict(v=1, state='blocked', reason='invalid_request'))
+
+
+class OverrunTests(Accounting):
+    """Review S1: an overrun means the pre-send guard failed; it is counted in full and blocks the organization,
+    exactly as S1's run path (`complete` above the bound) does."""
+    BALANCE = 8 * M
+
+    def test_an_overrun_counts_the_charge_and_blocks_only_its_organization(self):
+        with self.open_ledger() as ledger:
+            ledger.enable_organization('other', self.POLICY, 0)
+            ledger.observe('other', 100 * M, now(), issued=100 * M)
+        self.funded('a1')
+        result = self.call(complete('a1', 'c1', usage=usage(10 * M)))
+        self.assertEqual((result['outcome'], result['settlement']['overrun']), ('overrun', 4 * M))
+        data = self.snapshot()
+        self.assertTrue(data['organizations']['personal']['blocked'])
+        self.assertEqual(budget.Ledger._credit_raw(data, 'personal'), -2 * M)
+        self.assertEqual(self.admit('a2')['state'], 'pending')
+        self.assertFalse(data['organizations']['other']['blocked'])
+        obs = api_observations(organization='other')
+        obs['routes'][-1]['account'] = 'acct-o'
+        other = self.call(prepare('o1', observations=obs, constraints=dict(allowed_strategy_ids=['s-api'])))
+        self.assertEqual(other['state'], 'admitted', other)
+
+
+class ResolveCostUnknownTests(Accounting):
+    """Review S2: an operator settles a `cost_unknown` hold at max(supplied cost, admitted estimate)."""
+    def resolve(self, attempt, cost, event_id='r1'):
+        return self.call(dict(v=1, op='resolve_cost_unknown', attempt_id=attempt, cost_usd_micros=cost,
+                              event_id=event_id))
+
+    def test_resolving_frees_the_slot_and_settles_exactly(self):
+        with self.open_ledger() as ledger:
+            ledger.set_caps(2, 2)
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=2, per_account=2))))
+        self.funded('a1')
+        self.funded('a2')
+        self.call(complete('a1', 'c1'))
+        self.assertEqual(self.hold('a1')['state'], 'cost_unknown')
+        self.assertEqual(self.admit('a3')['state'], 'pending')  # the unknown cost keeps its concurrency place
+        before = self.credit()
+        result = self.resolve('a1', 2 * M)
+        self.assertEqual((result['state'], result['duplicate'], result['outcome']), ('recorded', False, 'complete'))
+        self.assertEqual({k: result['settlement'][k] for k in ('charged', 'released', 'cost_source')},
+                         dict(charged=5 * M, released=M, cost_source='operator'))  # never below the estimate
+        self.assertEqual(self.credit(), before + M)
+        self.assertEqual(self.resolve('a1', 2 * M), dict(result, duplicate=True))
+        self.assertEqual(self.resolve('a1', 3 * M), dict(v=1, state='blocked', reason='event_conflict'))
+        self.assertEqual(self.settled(), 5 * M)
+        self.assertEqual(self.admit('a3')['state'], 'admitted')
+        high = self.resolve('a2', 7 * M, 'r2')  # a2 is still dispatched, not cost_unknown
+        self.assertEqual(high, dict(v=1, state='blocked', reason='hold_state_forbidden'))
+
+    def test_only_a_cost_unknown_hold_is_resolved(self):
+        self.funded('a1')
+        self.assertEqual(self.resolve('a1', M), dict(v=1, state='blocked', reason='hold_state_forbidden'))
+        self.assertEqual(self.resolve('nope', M), dict(v=1, state='blocked', reason='unknown_attempt'))
+        for bad in (-1, 1.5, True, None, budget.MAX_INTEGER + 1, '5'):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.resolve('a1', bad), dict(v=1, state='blocked', reason='invalid_request'))
+
+
+class VersionTests(Accounting):
+    """Review S3: settled charges need version 4, so older code fails closed instead of dropping them."""
+    def test_a_v3_ledger_migrates_to_v4_keeping_every_claim(self):
+        self.funded('a1')
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data['version'] = 3
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+        before = self.snapshot()
+        self.assertEqual(before['version'], 4)  # migrated on read
+        self.call(complete('a1', 'c1', usage=usage(M)))
+        with closing(sqlite3.connect(self.ledger)) as db:
+            stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+        self.assertEqual(stored['version'], 4)
+        self.assertEqual(stored['admissions'], before['admissions'])
+        self.assertEqual(budget.STATE_VERSION, 4)
+
+    def test_older_code_refuses_a_v4_ledger(self):
+        self.funded('a1')
+        with mock.patch.object(budget, 'STATE_VERSION', 3), self.assertRaisesRegex(budget.BudgetError,
+                                                                                  'ledger_identity_changed'):
+            self.snapshot()
 
 
 class RootSettlementTests(Accounting):
@@ -311,8 +437,8 @@ class RootSettlementTests(Accounting):
         return self.call(settle(root, workflow=where(root), **extra))
 
     def test_one_accepted_at_100_and_one_rejected_at_90_cost_190_per_acceptance(self):
-        self.funded('a', task='root')
-        self.funded('b', task='root')
+        self.funded('a', root='root')
+        self.funded('b', root='root')
         self.call(complete('a', 'ea', usage=usage(100)))
         self.call(complete('b', 'eb', usage=usage(90)))
         self.reader.accepted = ['job-a']
@@ -322,17 +448,44 @@ class RootSettlementTests(Accounting):
         self.assertEqual(result['ratio']['usd_micros'], 190)
         self.assertEqual(self.reader.calls, [where('root')])
 
+    def test_the_ratio_carries_its_exact_fraction(self):
+        for attempt, cost in (('a', 100), ('b', 91)):
+            self.funded(attempt, root='root')
+            self.call(complete(attempt, 'e' + attempt, usage=usage(cost)))
+        self.reader.accepted = ['job-a', 'job-b', 'job-c']
+        result = self.settle()
+        self.assertEqual((result['ratio']['usd_micros'], result['ratio_num']['usd_micros'], result['ratio_den']),
+                         (64, 191, 3))
+
+    def test_roots_with_the_same_task_id_in_other_sessions_never_mix(self):
+        self.funded('mine', root='root')
+        self.funded('theirs', root='root', session='session-2')
+        self.call(complete('mine', 'e1', usage=usage(10)))
+        self.call(complete('theirs', 'e2', usage=usage(70)))
+        self.assertEqual(self.settle()['cost_to_date']['usd_micros'], 10)
+        other = self.call(settle('root', workflow=where('root', 'session-2')))
+        self.assertEqual(other['cost_to_date']['usd_micros'], 70)
+
+    def test_an_open_holds_root_survives_losing_its_admission_record(self):
+        self.funded('a', root='root')
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data['admissions'] = []
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+        self.assertEqual(self.settle()['unresolved']['attempts'], 1)
+
     def test_zero_acceptances_has_no_finite_ratio(self):
-        self.funded('a', task='root')
+        self.funded('a', root='root')
         self.call(complete('a', 'ea', usage=usage(190)))
         result = self.settle()
         self.assertEqual((result['accepted'], result['ratio'], result['cost_to_date']['usd_micros']), (0, None, 190))
-        unread = self.call(settle('root'))  # no canonical reader locator: acceptance unknown, never assumed
+        self.reader.accepted = None  # unreadable canonical state: acceptance unknown, never assumed
+        unread = self.settle()
         self.assertEqual((unread['acceptance'], unread['accepted'], unread['ratio']), ('unavailable', None, None))
         self.assertEqual(unread['cost_to_date']['usd_micros'], 190)
 
     def test_self_reported_acceptance_never_counts(self):
-        self.funded('a', task='root')
+        self.funded('a', root='root')
         self.assertEqual(self.call(complete('a', 'ea', usage=usage(100), accepted=True)),
                          dict(v=1, state='blocked', reason='invalid_request'))
         self.call(complete('a', 'ea', usage=usage(100), stage='review'))
@@ -342,16 +495,16 @@ class RootSettlementTests(Accounting):
         self.assertEqual((result['accepted'], result['ratio']), (0, None))
 
     def test_duplicate_child_receipts_count_once_and_every_attempt_counts(self):
-        self.funded('parent', task='root')
-        self.funded('child', task='root')
-        self.funded('failed', task='root')
-        self.assertEqual(self.admit('never', task='root')['state'], 'admitted')
+        self.funded('parent', root='root')
+        self.funded('child', root='root')
+        self.funded('failed', root='root')
+        self.assertEqual(self.admit('never', root='root')['state'], 'admitted')
         self.call(record('never', 'not_dispatched'))
         self.call(complete('child', 'e1', usage=usage(30, receipts=['child-1'])))
         self.call(complete('parent', 'e2', usage=usage(30, 50, receipts=['child-1', 'parent-1'])))
         self.call(complete('failed', 'e3', usage=usage(20), stage='worker'))
         self.call(dict(v=1, op='record', event=dict(event_id='o1', attempt_id='coordinator-1', kind='observed',
-                                                   root_task_id='root', stage='coordinator', funding='api',
+                                                   root_attempt_id='parent', stage='coordinator', funding='api',
                                                    usage=usage(5, receipts=['parent-1']))))
         result = self.settle()
         self.assertEqual(result['cost_to_date']['usd_micros'], 100)
@@ -360,9 +513,9 @@ class RootSettlementTests(Accounting):
         self.assertEqual(result['by_stage']['coordinator']['usd_micros'], 0)
 
     def test_reviewer_rescue_is_incremental_rework(self):
-        self.funded('w', task='root')
-        self.funded('r', task='root')
-        self.funded('x', task='root')
+        self.funded('w', root='root')
+        self.funded('r', root='root')
+        self.funded('x', root='root')
         self.call(complete('w', 'e1', usage=usage(40), stage='worker'))
         self.call(complete('r', 'e2', usage=usage(10), stage='review'))
         self.call(complete('x', 'e3', usage=usage(25), stage='rescue'))
@@ -374,9 +527,9 @@ class RootSettlementTests(Accounting):
         self.assertEqual(result['executor_quality'], 'not_scored')
 
     def test_unresolved_exposure_is_reported_separately(self):
-        self.funded('done', task='root')
-        self.funded('lost', task='root')
-        self.funded('open', task='root')
+        self.funded('done', root='root')
+        self.funded('lost', root='root')
+        self.funded('open', root='root')
         self.call(complete('done', 'e1', usage=usage(70)))
         self.call(record('lost', 'uncertain'))
         self.call(complete('open', 'e2'))  # unknown cost
@@ -386,7 +539,7 @@ class RootSettlementTests(Accounting):
                                                     unknown_cost_attempts=1))
 
     def test_settle_is_read_only_and_needs_a_matching_locator(self):
-        self.funded('a', task='root')
+        self.funded('a', root='root')
         self.call(complete('a', 'e1', usage=usage(10)))
         with closing(sqlite3.connect(self.ledger)) as db:
             before = db.execute('SELECT body FROM ledger').fetchone()[0]
@@ -430,14 +583,14 @@ class RetentionTests(Accounting):
 
     def build(self, start):
         with self.at(start):
-            self.admit_sub('closed', task='root', at=start)
+            self.admit_sub('closed', root='root', at=start)
             self.call(record('closed', 'dispatched'))
             self.call(complete('closed', 'c1', usage=usage(1, units={'win:sub/5h': 2})))
-            self.admit_sub('lost', task='root', at=start)
+            self.admit_sub('lost', root='root', at=start)
             self.call(record('lost', 'dispatched'))
             self.call(record('lost', 'uncertain'))
-            self.admit_sub('waiting', task='other', at=start)
-            self.admit_sub('finished', task='done', at=start)
+            self.admit_sub('waiting', root='other', at=start)
+            self.admit_sub('finished', root='done', at=start)
             self.call(record('finished', 'dispatched'))
             self.call(complete('finished', 'c2'))
 
@@ -470,9 +623,9 @@ class RetentionTests(Accounting):
         with self.open_ledger() as ledger:  # nothing deleted yet: reads alone must hide expired evidence
             self.assertIsNotNone(ledger.lookup_event('c1', start + 13 * DAY))
             self.assertIsNone(ledger.lookup_event('c1', start + 15 * DAY))
-            self.assertEqual(ledger.root_summary('root', start + 61 * DAY)['attempts'], 2)  # an open hold keeps it
-            self.assertIsNone(ledger.root_summary('done', start + 61 * DAY))
-            self.assertIsNotNone(ledger.root_summary('done', start + 59 * DAY))
+            self.assertEqual(ledger.root_summary(budget.root_key(where('root')), start + 61 * DAY)['attempts'], 2)  # an open hold keeps it
+            self.assertIsNone(ledger.root_summary(budget.root_key(where('done')), start + 61 * DAY))
+            self.assertIsNotNone(ledger.root_summary(budget.root_key(where('done')), start + 59 * DAY))
         with self.at(start + 61 * DAY):
             self.assertEqual(self.call(complete('closed', 'c1', usage=usage(1, units={'win:sub/5h': 2}))),
                              dict(v=1, state='blocked', reason='attempt_closed'))  # never applied again
@@ -540,12 +693,12 @@ class RetentionTests(Accounting):
         self.assertEqual([body['attempt_id'] for _, body in self.events() if body['attempt_id'] == 'closed'], [])
 
     def test_observability_off_exports_nothing_and_keeps_local_accounting(self):
-        self.funded('a1', task='root')
+        self.funded('a1', root='root')
         denied = mock.Mock(side_effect=AssertionError('no export or network call is allowed'))
         with mock.patch.object(socket, 'socket', denied), mock.patch.object(socket, 'create_connection', denied), \
                 mock.patch.object(urllib.request, 'urlopen', denied), mock.patch.object(subprocess, 'Popen', denied):
             self.assertEqual(self.call(complete('a1', 'c1', usage=usage(2 * M)))['state'], 'recorded')
-            self.assertEqual(self.call(settle('root'))['cost_to_date']['usd_micros'], 2 * M)
+            self.assertEqual(self.call(settle('root', workflow=where('root')))['cost_to_date']['usd_micros'], 2 * M)
             with self.open_ledger() as ledger:
                 ledger.expire_evidence(now() + 30 * DAY)
         self.assertEqual(self.settled(), 2 * M)
@@ -568,34 +721,34 @@ class BoundsTests(Accounting):
             self.assertIsNotNone(ledger.lookup_event('needed-2', now()))
 
     def test_an_open_hold_keeps_at_most_three_idempotency_records(self):
-        self.funded('open', task='root')
+        self.funded('open', root='root')
         for i in range(5):
             self.call(complete('open', 'u%d' % i))  # repeated unknown costs: the first takes effect
             self.call(dict(v=1, op='record', event=dict(event_id='o%d' % i, attempt_id='open', kind='observed',
-                                                       root_task_id='root', stage='worker', usage=usage(1))))
+                                                       stage='worker', usage=usage(1))))
         with closing(sqlite3.connect(self.ledger)) as db:
             effects = db.execute("SELECT count(*) FROM events WHERE attempt_id='open' AND effect=1").fetchone()[0]
         self.assertEqual(effects, 1)
         self.assertEqual(self.call(complete('open', 'u9'))['duplicate'], True)
 
     def test_a_long_running_root_keeps_its_aggregate(self):
-        self.funded('early', task='root')
-        self.funded('late', task='root')
+        self.funded('early', root='root')
+        self.funded('late', root='root')
         self.call(complete('early', 'e1', usage=usage(10)))
         with self.open_ledger() as ledger:
             ledger.record_event(dict(event_id='e2', attempt_id='late', kind='complete',
                                      usage=usage(20)), 'd' * 64, now() + 90 * DAY)
-            summary = ledger.root_summary('root', now() + 90 * DAY)
+            summary = ledger.root_summary(budget.root_key(where('root')), now() + 90 * DAY)
         self.assertEqual(summary['stages']['worker']['usd_micros'], 30)  # aged, but an open hold kept it
 
     def test_root_aggregates_are_bounded_per_row_and_in_count(self):
-        self.funded('a', task='r' * 128)
+        self.funded('a', root='r' * 128)
         receipts = ['%0128d' % i for i in range(budget.MAX_USAGE_RECEIPTS)]
         for start in range(0, len(receipts), routing.MAX_USAGE_REQUESTS):
             chunk = receipts[start:start + routing.MAX_USAGE_REQUESTS]
             units = {'win:%s/%d-%d' % ('p' * 200, start, i): 1 for i in range(routing.MAX_USAGE_UNITS)}
             self.call(dict(v=1, op='record', event=dict(
-                event_id='o%d' % start, attempt_id='coord', kind='observed', root_task_id='r' * 128,
+                event_id='o%d' % start, attempt_id='coord', kind='observed', root_attempt_id='a',
                 stage='coordinator', usage=dict(usage(*[1] * len(chunk), receipts=chunk, units=units)))))
         with closing(sqlite3.connect(self.ledger)) as db:
             sizes = [len(row[0]) for row in db.execute('SELECT body FROM roots')]
