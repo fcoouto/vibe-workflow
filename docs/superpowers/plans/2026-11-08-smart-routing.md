@@ -262,7 +262,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 - [ ] Remove `require(data['slot'] is None, 'request_in_flight')` and the slot-owned dispatch, completion and recovery paths; implement the enumeration.
 - [ ] Remove the serial-execution rule from the skill references; keep the entry point within 150 words.
 - [ ] Run `python3 -B -m unittest tests.test_usage_routing tests.test_usage_budget` and `python3 -B scripts/validate.py`; expected PASS.
-- [ ] Removing `simulation_only` must not remove a gate. Live API funding stays blocked until API Usage is explicitly enabled, a secure key binding is ready, qualification is recorded and admission evidence is present, and until P0.3/P0.4 pass for the route. Add a regression test that no provider request is transmitted, and no credential is resolved, when any one of these is missing.
+- [x] Removing `simulation_only` must not remove a gate. Live API funding stays blocked until API Usage is explicitly enabled, a secure key binding is ready, qualification is recorded and admission evidence is present, and until P0.3/P0.4 pass for the route. Regression coverage: `tests/test_openai_api.py` (`live_admission_required`, `credential_unavailable`) and `tests/test_usage_live.py` (`test_off_and_json_evidence_never_resolve_a_credential`) check that no provider request is transmitted without admission evidence or a valid key binding, and that OFF never resolves a credential. Extend them if a gate combination is found uncovered.
 
 ### Task S2.1: Routing settings
 
