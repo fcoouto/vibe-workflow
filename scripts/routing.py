@@ -2,30 +2,11 @@
 """The single local Smart Routing command every client calls (spec 10.3, A1). No network, model or secret access.
 
 Usage:
-  routing.py <op> [--settings PATH] [--ledger PATH]   one JSON request on stdin, one JSON response on stdout
-  routing.py --serve [--settings PATH] [--ledger PATH] one request per stdin line, one response per stdout line
+  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH]    one JSON request on stdin, one response out
+  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] one request per stdin line, one response per line
 
-Every request is a JSON object ``{"v": 1, "op": <op>, "id"?: <string|integer>, ...}``; one-shot mode takes the op
-from argv (an ``op`` field, if present, must match). Every response is ``{"v": 1, "state": ..., "id"?: ...}``,
-either a result or ``{"v": 1, "state": "blocked", "reason": <fixed code>}``. A valid ``id`` is echoed. Blocked is an
-outcome: the exit code is 0 for every handled request and 2 only for a usage error. Requests over ``MAX_INPUT``
-bytes, malformed JSON (including duplicate keys and NaN), unknown fields and internal failures are blocked; no
-traceback, input text or secret is ever written. Consumers must ignore unknown response fields: later slices add
-fields (S3.4 adds ``authority`` to ``check`` results) without changing ``v``.
-
-Ops (fields beyond v/op/id):
-  prepare  {assignment: {attempt_id, task, role, scope, choice?}, job, observations, table?, constraints?}
-           ensure_profile(job) -> rank (skipped when Smart Routing is OFF; an empty ranking falls through to
-           worker choices) -> admit through the ledger (created if absent; never an organization or key).
-           -> {state: admitted, duplicate, admission, ranking, profile} | {state: pending, reason, reasons}
-  check    {attempt_id, request: {provider, model, variant, harness, kind, funding_pool, bound?}, now?}
-           Read-only. -> {state: allow, attempt_id, route, pool, settings_revision, remaining}
-  record   {event: {event_id, attempt_id, kind}}  kind: dispatched | uncertain | not_dispatched | complete
-           -> {state: recorded, event_id, duplicate}
-  status   {} -> {state: ok, settings, settings_revision, ledger}   local files only (RF5)
-  set      {expected_revision, change} -> {state: updated, revision, settings, invalidated_attempts}
-           {organization: {id, enabled: true, policy, expected_revision} | {id, enabled: false}}
-           -> {state: updated, organization}
+The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
+the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
 """
 from contextlib import closing
 import json
@@ -42,15 +23,24 @@ from runtime.usage_budget import BudgetError  # noqa: E402
 
 VERSION = 1
 MAX_INPUT = 1 << 20
+MAX_TABLE = 8 << 20
 MAX_ID = 128
 USAGE = 2
+# Test-only: when this environment variable is "1", a caller may supply `now` to `check`, an observations `now`
+# off the command's clock to `prepare`, and a `table` to `prepare`. Production never sets it.
+TEST_SWITCH = 'VIBE_ROUTING_TEST_INPUTS'
+# SQLite busy waits in seconds. Reads (`check`, `status`) answer `ledger_busy` quickly; writes wait a little
+# longer, but under `--serve` (the hook path) still well inside the shim's 500 ms timeout.
+READ_WAIT = 0.2
+WRITE_WAIT_SERVING = 0.3
+WRITE_WAIT = 5
 FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
               check=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization'}))
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
-ADMISSION_FIELDS = ('attempt_id', 'task', 'route', 'pool', 'class', 'billing_class', 'mode', 'settings_revision', 'at',
-                    'reserved', 'reason_codes', 'route_identity')
+ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
+                    'settings_revision', 'at', 'reserved', 'reason_codes', 'route_identity')
 PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_band', 'review_policy', 'uncertainty')
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
@@ -103,9 +93,9 @@ def _valid_id(value):
 def _facts(value):
     require(type(value) is dict and set(routing.REQUEST_FIELDS) <= set(value) <= {*routing.REQUEST_FIELDS, 'bound'},
             'invalid_request')
-    require(all(_text(value[key]) for key in ('provider', 'model', 'harness', 'funding_pool'))
-            and (value['variant'] is None or _text(value['variant'])) and value['kind'] in routing.REQUEST_KINDS,
-            'invalid_request')
+    require(all(_text(value[key]) for key in ('provider', 'model', 'harness', 'funding_pool', 'kind'))
+            and (value['variant'] is None or _text(value['variant'])), 'invalid_request')
+    require(value['kind'] in routing.REQUEST_KINDS, 'unsupported_kind')
     bound = value.get('bound')
     require(bound is None or (type(bound) is dict and len(bound) <= usage_budget.MAX_CLAIMS and all(
         type(key) is str and 0 < len(key) <= usage_budget.MAX_KEY and key.isprintable() and _amount(amount)
@@ -117,18 +107,31 @@ def _public(record):
     return {key: record[key] for key in ADMISSION_FIELDS if key in record}
 
 
+def _busy(error):
+    return isinstance(error, sqlite3.OperationalError) and ('locked' in str(error) or 'busy' in str(error))
+
+
+def _resolved(path):
+    # Private-path checks compare against the resolved path, so resolve symlinked parents (e.g. /var -> /private/var).
+    return Path(path).absolute().parent.resolve() / Path(path).name
+
+
 class Service:
-    """Handles requests against one settings file and one ledger; the ledger connection is reused while serving."""
-    def __init__(self, settings_path, ledger_path):
-        # Private-path checks compare against the resolved path, so resolve symlinked parents (e.g. /var -> /private/var).
-        self.settings_path, self.ledger_path = (Path(path).absolute().parent.resolve() / Path(path).name
-                                                for path in (settings_path, ledger_path))
+    """Handles requests against one settings file, one strategy table and one ledger (reused while serving)."""
+    def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False):
+        self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
+        self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
+        self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
         self._open = None
 
     def close(self):
         if self._open is not None:
             self._open.close()
             self._open = None
+
+    @staticmethod
+    def clock():
+        return int(time.time())
 
     def handle(self, raw, op=None):
         request_id = None
@@ -151,9 +154,9 @@ class Service:
         except BudgetError as error:
             self.close()
             result = dict(state='blocked', reason=str(error))
-        except sqlite3.Error:
+        except sqlite3.Error as error:
             self.close()
-            result = dict(state='blocked', reason='ledger_unavailable')
+            result = dict(state='blocked', reason='ledger_busy' if _busy(error) else 'ledger_unavailable')
         except Exception:  # noqa: BLE001 - fail closed with a fixed reason; never echo input or a traceback
             self.close()
             result = dict(state='blocked', reason='internal_error')
@@ -166,34 +169,56 @@ class Service:
     def _settings(self):
         try:
             current, values = routing_settings._load(self.settings_path)
-            return routing_settings.resolve(values), current
+            return dict(routing_settings.resolve(values), revision=current)
         except SettingsError:
             raise Blocked('settings_unavailable') from None
 
-    def _ledger(self, create):
-        if self._open is not None:
-            return self._open
-        path = self.ledger_path
-        if not os.path.lexists(path):
-            if not create:
-                return None
-            try:
-                usage_budget.initialize(path)
-            except BudgetError as error:
-                if str(error) != 'ledger_exists':
-                    raise
-        self._open = usage_budget.Ledger(path, self._identity(path))
+    def _table(self):
+        """The compiled strategy table from local state, or ({}, reason): a missing or bad table never blocks."""
+        try:
+            usage_budget.private(self.table_path.parent, True)
+            info = usage_budget.private(self.table_path)
+        except FileNotFoundError:
+            return {}, None
+        except BudgetError:
+            return {}, 'table_unavailable'
+        if info.st_size > MAX_TABLE:
+            return {}, 'table_unavailable'
+        try:
+            value = json.loads(self.table_path.read_bytes(), parse_constant=_constant)
+        except (ValueError, RecursionError, Blocked, OSError):
+            return {}, 'table_unavailable'
+        if type(value) is not dict or type(value.get('rows')) is not dict:
+            return {}, 'table_unavailable'
+        return value, None
+
+    def _ledger(self, create, write=False):
+        wait = self.write_wait if write else READ_WAIT
+        if self._open is None:
+            path = self.ledger_path
+            if not os.path.lexists(path):
+                if not create:
+                    return None
+                try:
+                    usage_budget.initialize(path)
+                except BudgetError as error:
+                    if str(error) != 'ledger_exists':
+                        raise
+            self._open = usage_budget.Ledger(path, self._identity(path, wait), timeout=wait)
+        self._open.busy_timeout(wait)
         return self._open
 
     @staticmethod
-    def _identity(path):
-        """Read the ledger identity; a concurrent `initialize` may not have written its table yet."""
-        for _ in range(200):
+    def _identity(path, wait):
+        """Read the ledger identity; a concurrent `initialize` may not have written its table yet. Busy is raised."""
+        for _ in range(100):
             usage_budget.private(path)
             try:
-                with closing(sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True, timeout=5)) as db:
+                with closing(sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True, timeout=wait)) as db:
                     row = db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as error:
+                if _busy(error):
+                    raise
                 row = None
             if row is not None:
                 require(len(row[0]) <= usage_budget.MAX_RECORD, 'invalid_ledger')
@@ -202,29 +227,56 @@ class Service:
         raise Blocked('ledger_unavailable')
 
     # -- ops ---------------------------------------------------------------------------------------------------
-    def _prepare(self, body):
-        assignment, job = body['assignment'], body['job']
-        require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS
-                and assignment.get('role') in routing_settings.ROLES, 'invalid_request')
-        settings, revision = self._settings()
+    def _observations(self, value):
+        """The command's clock decides: a snapshot off it by more than MAX_CLOCK_DRIFT is stale, and the admission
+        is stamped with the command's time. Malformed snapshots pass through to admit's own shape check."""
+        if self.test_inputs or type(value) is not dict or type(value.get('now')) is not int:
+            return value
+        now = self.clock()
+        require(abs(value['now'] - now) <= routing.MAX_CLOCK_DRIFT, 'observation_stale')
+        return dict(value, now=now)
+
+    def _rank(self, profile, body):
+        constraints = body.get('constraints', {})
+        require(type(constraints) is dict, 'invalid_request')
         try:
-            profile = routing.ensure_profile(job)
+            fallback = routing.rank(profile, {}, constraints)
+        except ValueError:
+            raise Blocked('invalid_constraints') from None
+        if 'table' in body:
+            require(self.test_inputs, 'invalid_request')  # a caller-supplied table could steer ranking
+            table, problem = body['table'], None
+        else:
+            table, problem = self._table()
+        try:
+            ranking = routing.rank(profile, table, constraints) if problem is None else fallback
+        except Exception:  # noqa: BLE001 - an unusable table falls back, it never blocks (RF8)
+            ranking, problem = fallback, 'table_unavailable'
+        if problem:
+            ranking = dict(ranking, reason_codes=ranking['reason_codes'] + [problem])
+        return ranking
+
+    def _prepare(self, body):
+        assignment = body['assignment']
+        require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS, 'invalid_request')
+        settings = self._settings()
+        try:
+            profile = routing.ensure_profile(body['job'])
         except Exception:  # noqa: BLE001 - ProfileUnavailable or an unreadable job
             raise Blocked('profile_unavailable') from None
-        table, constraints = body.get('table', {}), body.get('constraints', {})
-        require(type(table) is dict and type(constraints) is dict, 'invalid_request')
+        try:
+            role = routing_settings.assignment_role(profile['role'], assignment.get('role'))
+        except SettingsError as error:
+            raise Blocked(str(error)) from None
         if settings['smart_routing']:
-            try:
-                ranking = routing.rank(profile, table, constraints)
-            except ValueError:
-                raise Blocked('invalid_constraints') from None
-            except Exception:  # noqa: BLE001 - a malformed caller-supplied table
-                raise Blocked('invalid_table') from None
+            ranking = self._rank(profile, body)
         else:
+            require('table' not in body or self.test_inputs, 'invalid_request')
             ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                            profile_digest=profile['semantic_digest'])
-        result = routing.admit(dict(assignment, complexity_band=profile['complexity_band']), ranking,
-                               dict(settings, revision=revision), body['observations'], ledger=self._ledger(True))
+        observations = self._observations(body['observations'])
+        result = routing.admit(dict(assignment, role=role, complexity_band=profile['complexity_band']), ranking,
+                               settings, observations, ledger=self._ledger(True, write=True))
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'])
@@ -236,27 +288,31 @@ class Service:
     def _check(self, body):
         attempt, facts = body['attempt_id'], _facts(body['request'])
         require(_text(attempt), 'invalid_request')
-        now = body.get('now', int(time.time()))
-        require(_amount(now), 'invalid_request')
-        _, revision = self._settings()
+        now = self.clock()
+        if self.test_inputs and 'now' in body:
+            now = body['now']
+            require(_amount(now), 'invalid_request')
+        settings = self._settings()
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        return routing.check_request(ledger.snapshot(), attempt, facts, revision, now)
+        return routing.check_request(ledger.snapshot(), attempt, facts, settings, now)
 
     def _record(self, body):
         event = body['event']
         require(type(event) is dict and set(event) == {'event_id', 'attempt_id', 'kind'}
                 and all(_text(event[key]) for key in event), 'invalid_request')
-        ledger = self._ledger(False)
+        ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
         result = routing.record_event(ledger, event['attempt_id'], event['kind'])
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _status(self, body):
         try:
-            settings, revision = self._settings()
+            settings = self._settings()
         except Blocked:
-            settings, revision = None, None
+            settings = None
+        revision = settings.pop('revision') if settings is not None else None
+        stored = usage_budget.DEFAULT_CAPS
         if self._open is None and not os.path.lexists(self.ledger_path):
             ledger = dict(state='absent')
         else:
@@ -264,13 +320,16 @@ class Service:
                 data = self._ledger(False).snapshot()
                 stale = len(routing.unsent_admissions(data, revision)) if revision is not None else None
                 ledger = dict(state='ready', stale_admissions=stale, **routing.ledger_summary(data))
+                stored = ledger['caps']
             except (Blocked, BudgetError, sqlite3.Error) as error:
                 self.close()
-                reason = error.reason if isinstance(error, Blocked) else \
-                    str(error) if isinstance(error, BudgetError) else 'ledger_unavailable'
+                reason = error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError) \
+                    else 'ledger_busy' if _busy(error) else 'ledger_unavailable'
                 ledger = dict(state='unavailable', reason=reason)
+        # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
+        effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, ledger=ledger)
+                    settings_revision=revision, effective_caps=effective, ledger=ledger)
 
     def _set(self, body):
         if 'organization' in body:
@@ -293,13 +352,13 @@ class Service:
         if value['enabled']:
             require(set(value) == {'id', 'enabled', 'policy', 'expected_revision'}, 'invalid_request')
             try:
-                revision = self._ledger(True).enable_organization(value['id'], value['policy'],
-                                                                  value['expected_revision'])
+                revision = self._ledger(True, write=True).enable_organization(value['id'], value['policy'],
+                                                                              value['expected_revision'])
             except (TypeError, KeyError, AttributeError):
                 raise Blocked('invalid_request') from None
             return dict(state='updated', organization=dict(id=value['id'], enabled=True, revision=revision))
         require(set(value) == {'id', 'enabled'}, 'invalid_request')
-        ledger = self._ledger(False)
+        ledger = self._ledger(False, write=True)
         require(ledger is not None, 'organization_unconfigured')
         ledger.disable_organization(value['id'])
         return dict(state='updated', organization=dict(id=value['id'], enabled=False))
@@ -325,10 +384,7 @@ def serve(service, stdin, stdout):
                 line = stdin.readline(MAX_INPUT + 1)
             _write(stdout, dict(v=VERSION, state='blocked', reason='request_too_large'))
             continue
-        try:
-            _write(stdout, service.handle(line.rstrip(b'\r\n')))
-        except BrokenPipeError:
-            return 0
+        _write(stdout, service.handle(line.rstrip(b'\r\n')))
 
 
 def default_settings():
@@ -347,7 +403,8 @@ def _arguments(argv):
         item = items.pop(0)
         if item == '--serve' and not serving:
             serving = True
-        elif item in ('--settings', '--ledger') and item not in paths and items and not items[0].startswith('-'):
+        elif item in ('--settings', '--ledger', '--table') and item not in paths and items \
+                and not items[0].startswith('-'):
             paths[item] = items.pop(0)
         elif not item.startswith('-') and op is None:
             op = item
@@ -358,22 +415,37 @@ def _arguments(argv):
     return op, serving, paths
 
 
+def _silence(stdout):
+    """The reader went away: send any further output (including the interpreter's final flush) to /dev/null."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stdout.fileno())
+        os.close(devnull)
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
 def main(argv=None, stdin=None, stdout=None):
     stdin = stdin or sys.stdin.buffer
     stdout = stdout or sys.stdout.buffer
     parsed = _arguments(sys.argv[1:] if argv is None else argv)
-    if parsed is None:
-        _write(stdout, dict(v=VERSION, state='blocked', reason='usage_error'))
-        return USAGE
-    op, serving, paths = parsed
-    service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger())
     try:
-        if serving:
-            return serve(service, stdin, stdout)
-        _write(stdout, service.handle(stdin.read(MAX_INPUT + 1), op=op))
-        return 0
-    finally:
-        service.close()
+        if parsed is None:
+            _write(stdout, dict(v=VERSION, state='blocked', reason='usage_error'))
+            return USAGE
+        op, serving, paths = parsed
+        service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger(),
+                          paths.get('--table'), test_inputs=os.environ.get(TEST_SWITCH) == '1', serving=serving)
+        try:
+            if serving:
+                return serve(service, stdin, stdout)
+            _write(stdout, service.handle(stdin.read(MAX_INPUT + 1), op=op))
+            return 0
+        finally:
+            service.close()
+    except BrokenPipeError:
+        _silence(stdout)
+        return 0 if parsed is not None else USAGE
 
 
 if __name__ == '__main__':

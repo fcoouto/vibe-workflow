@@ -132,6 +132,11 @@ class Base(unittest.TestCase):
                                '--ledger', str(self.ledger)], input=raw, capture_output=True, timeout=60)
         return done
 
+    def release(self, attempt):
+        """Free the attempt's concurrency place (default cap: two open attempts per account)."""
+        event = dict(event_id='nd-' + attempt, attempt_id=attempt, kind='not_dispatched')
+        self.assertEqual(self.call(dict(v=1, op='record', event=event))['state'], 'recorded')
+
     def snapshot(self):
         with self.open_ledger() as ledger:
             return ledger.snapshot()
@@ -279,7 +284,7 @@ class PrepareTests(Base):
         admission = response['admission']
         self.assertEqual((admission['attempt_id'], admission['route'], admission['class'], admission['mode'],
                           admission['settings_revision']), ('a1', 'sub', 'subscription', 'ranked', 0))
-        self.assertEqual(response['ranking']['strategy_ids'], ['s-sub'])
+        self.assertEqual(response['ranking']['strategy_ids'], ['s-sub', 's-api'])
         self.assertEqual(self.snapshot()['organizations'], {})
 
     def test_no_recommendation_falls_back_to_worker_choices(self):
@@ -292,6 +297,7 @@ class PrepareTests(Base):
                 self.assertEqual(response['state'], 'admitted')
                 self.assertEqual(response['admission']['mode'], 'worker_choice')
                 self.assertIn('no_recommendation', response['ranking']['reason_codes'])
+                self.release('rf8-' + label)
 
     def test_pending_and_profile_failures_report_fixed_reasons(self):
         self.store_table(None)
@@ -620,6 +626,7 @@ class RoleTests(Base):
                 request = prepare('r-' + role, job=job(role=role))
                 del request['assignment']['role']
                 self.assertEqual(self.call(request)['admission']['bucket'][0], 'reviewer')
+                self.release('r-' + role)
         request = prepare('w')
         del request['assignment']['role']
         self.assertEqual(self.call(request)['admission']['bucket'][0], 'implementer')
