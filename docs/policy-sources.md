@@ -1,5 +1,18 @@
 # Policy source map
 
+## Onboarding policy discovery follow-up — 8 November 2026
+
+The user authorized the onboarding improvements proposed after the entry-point
+audit. This is an authoring-procedure clarification of the existing accepted
+contracts, not a new Toolkit adoption, hook, state store or runtime gate.
+
+| Requirement | Owner and application |
+| --- | --- |
+| Explicit selective entry point, complete procedures, context recovery and canonical ownership | Policy index and Context/Handoff; `skills/onboard-my-project/references/procedure.md#author-the-policy-entry-point` adapts a compact starting section without copying the policy trigger table. |
+| Portable lookup of installed local targets, retained task pins, customization and recoverable updates | Project Scope and Project Onboarding's authoring/recovery rules; shared guidance uses the package name and startup/skill resolution or an existing repository-relative target. Exact machine/cache paths stay in private setup evidence. The procedure preserves project-owned sections and uses existing file configuration for idempotence, stale-pointer replacement and undo. |
+| Representative instruction paths and honest observed/unobserved outcomes | Project Onboarding's completion rules and Workflow Maintenance; `#verify-policy-discovery` separates static delivery from fresh-context routing and client startup proof without introducing a mandatory maintainer campaign. |
+| Plan and user-facing completion remain aligned with evidence | `docs/onboard-my-project-plan.md#policy-discovery-follow-up--8-november-2026` records the authorized slice; Reviewed Configuration reuses the procedure's evidence layers. Package validation and independent instruction review do not establish fresh-client execution. |
+
 ## Explicit project policy entry points — 8 November 2026
 
 The user requested direct policy discovery in this repository and the existing
