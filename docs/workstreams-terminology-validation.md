@@ -128,14 +128,45 @@ two required documentation findings were to update this historical verification
 record and disclose the changed meaning of existing Enabled choices in the release
 notes. Version 0.1.34 notes now explicitly disclose that authorization change.
 
+Main then advanced to `971e4e5`; merge commit `e429727` retained its independently
+reviewed OpenCode routing shim and cross-client plugin-upgrade procedure. The
+source-map additions were combined again, without dropping the terminology rules.
+The full release-candidate check below includes those latest main changes.
+
 The previously suspected OpenRouter-worker module passed all 49 tests in a
 separate verbose diagnostic run. That run did not establish the cause of the old
 two error markers, so no speculative test or production fix was applied. A new
 focused regression covers all three new labels through the ordinary OpenCode
 delivery path and preserves a user's topic-only edit.
 
-The release candidate's full discovery run remains pending. It is not yet
-merge-ready. Final readiness requires a passing current full-suite result and a
-recheck of the reviewed candidate against `main`. No stored-title conversion or
-managed OpenCode session-creation adapter is part of this release; fresh-client
-loading and visible rendering remain separate from package checks.
+### Packaging blocker — 9 November 2026
+
+The release-candidate full discovery run (`python3 -B -m unittest discover -s tests
+-v -f`) stopped after 392 tests in 2348.495 seconds. Setup qualification failed in
+`CooperativeQualificationTests.test_guarded_worker_check_and_review_complete_only_the_qualification`
+with `Onboarding file size limit exceeded`. The candidate's tracked-file manifest
+remained unchanged throughout the run.
+
+The cause is the existing aggregate 8 MiB package-scan limit, not an individual
+oversized file: the checkout contains 8,423,320 bytes across 505 files including
+its Git worktree link. A direct reproduction exhausted the remaining aggregate
+allowance while reading `tests/test_workstreams_efficiency.py`. Archived baseline
+`971e4e5` and newer main `7fa32d1` also fail that scan; original baseline `563d64b`
+passes at 7,986,292 bytes.
+
+Opus independently traced this to the actual distribution boundary. Both
+marketplaces use the checkout root as the plugin source, and advanced Codex setup
+qualification fingerprints the installed package with Codex-compatible membership.
+The existing local 0.1.33 install also contains development state and exceeds the
+scan limits. Changing only the fixture would hide a production failure; raising
+limits or excluding files from the fingerprint would not preserve this contract.
+
+Opus's approval of the terminology, title behavior and 0.1.34 release disclosures
+stands, but merge/release remains blocked by the full-suite gate. A separately
+authorized packaging change must define a lean shipped package, retain every
+required runtime/local-instruction dependency, preserve upgrade/recovery behavior,
+and verify actual installed fingerprint compatibility. No such restructuring,
+merge, release or local installation update was performed in this task. No
+stored-title conversion or managed OpenCode session-creation adapter is part of
+the terminology change; fresh-client loading and visible rendering remain separate
+from package checks.
