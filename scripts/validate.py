@@ -69,6 +69,7 @@ CLAUDE_EVENTS = {
     "PostToolUse": ("*", 5),
     "PostToolUseFailure": ("*", 5),
     "Stop": (None, 5),
+    "UserPromptSubmit": (None, 5),
 }
 
 

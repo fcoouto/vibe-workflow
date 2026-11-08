@@ -250,6 +250,10 @@ revisions, unavailable clients and timeouts leave repair for the next event.
 There is no idle watcher, polling loop or automatic retry model turn. Presentation
 failures preserve task outcomes, guard decisions and continuation limits.
 
+### Claude Code delivery
+
+Claude Code has no title call. A title is observed from a hook's `session_title` and delivered through `hookSpecificOutput.sessionTitle`, which applies only on `SessionStart` (`startup`, `resume`, `fork`) and `UserPromptSubmit`. Tool and `Stop` events can neither observe nor deliver, and control commands stage the desired title without an observation. A delivered title stays pending until a later observation equals it, so one lost response is repeated, not treated as a manual edit. Claude stores a managed title without its leading `U+FFFB`; the transport delivers it without that character and restores it when reading. Adoption assumes no custom title when none is observed, so an existing custom name is preserved as a manual title. A generated title is invisible to the hook, and only parent titles are supported; subagents have none. Unobserved presentation, including rendering, stays unqualified.
+
 Private sidecar files in the existing runtime state directory contain title
 presentation and delivery metadata only. Task state and accepted milestones remain
 in the authoritative task record. Historical task pins and closed evidence are

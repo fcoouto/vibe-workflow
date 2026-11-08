@@ -1,6 +1,6 @@
 # D8: Claude Code adapter parity
 
-Plan · 8 November 2026 · **Independently reviewed; slice S1 implemented as package behavior, native Claude execution not yet observed.** Goal: give the Claude Code adapter every Codex adapter capability, except an item the independent Reviewer judged unnecessary or the platform cannot support. Startup parity already exists ([Claude validation](claude-validation.md)).
+Plan · 8 November 2026 · **Independently reviewed. Slices S1, S3, S5 and S6 implemented as package behavior; S0 and the title delivery observed on Claude Code 2.1.311; hook execution of the packaged handlers not yet observed.** Goal: give the Claude Code adapter every Codex adapter capability, except an item the independent Reviewer judged unnecessary or the platform cannot support. Startup parity already exists ([Claude validation](claude-validation.md)).
 
 Rules: reuse shared runtime owners; port only the adapter seam. Codex-only mechanisms are not copied. An unsupported capability stays unsupported and is documented. Package tests and native execution are reported separately. Platform facts come from the [Claude hooks reference](https://code.claude.com/docs/en/hooks), [sessions](https://code.claude.com/docs/en/sessions) and [sub-agents](https://code.claude.com/docs/en/sub-agents) pages.
 
@@ -46,14 +46,14 @@ Missed by the first matrix: **M1** `PostToolUseFailure` invalidation (N, in S1);
 
 ## Slice order
 
-- **S0 (native probe, no code).** Observe on a disposable project: `prompt_id` stability across Stop continuations and subagents; an explicit `stop_hook_active:false` on first stop; subagent `session_id` versus parent; `deny` under `bypassPermissions`; `PostToolUse` payload sizes; the `onFailure` field on older versions. Needs a live Claude session and spends the user's usage, so it waits for explicit approval.
+- **S0 (native probe, no code). Observed once** on Claude Code 2.1.311 with `haiku`, a disposable project and project-only settings (about $0.006): `prompt_id` was identical across main-session, subagent and Stop-continuation events, including the extra `UserPromptSubmit` the continuation produced; subagent tool hooks carry the parent's `session_id` plus their own `agent_id`; the first `Stop` has an explicit `stop_hook_active:false` and the continuation `true`; a hook `deny` blocked a write under `bypassPermissions`; a failed Bash command fired `PostToolUseFailure` with `error` and no `tool_response`. One run is not a distribution; payload sizes and the `onFailure` field on older versions were not probed.
 - **S1: adapter, manifest, validator** (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`), M1 and M2. *Package behavior implemented.*
 - **N4 qualification, then S1/S2 activation.** Qualification must exist before a managed Claude scope can be active outside test fixtures.
-- **S3 task and evidence controls, then S4.**
-- **S5 doctor.**
+- **S3 task controls** (`start`, `update`, `status`, `title`) *implemented*; **S4 evidence** pending: Claude records still reject evidence, delegation and retirement.
+- **S5 doctor** *implemented*: version, installed and enabled state, hook locks; hook trust and execution cannot be observed, so a healthy result exits 2.
 - **N1/N2 with `SubagentStart`/`SubagentStop`**, then M3.
 - **N7, then M5.**
-- **S6 parent title.**
+- **S6 parent title** *implemented*. Native finding: Claude delivers and returns a hook-set title but strips the leading `U+FFFB`, so the transport delivers without it and canonicalizes observations; an exact-equality acknowledgment would have paused every title as a manual rename.
 - **D1** with every slice.
 
 ## Delivery rules
