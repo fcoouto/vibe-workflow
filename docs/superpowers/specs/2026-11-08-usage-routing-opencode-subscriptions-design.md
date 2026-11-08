@@ -280,6 +280,8 @@ Subscription and API routes must have independently bound credentials. Do not sw
 
 ### 6.4 API Usage enablement and secure keys
 
+**Organizations are the user's choice.** The user defines the organizations and API keys they want to use, and is never required to define one. A built-in **Personal** workspace is available to enable for API funding on the user's own account; named organizations (for example a team workspace) may be added, each with its own opaque secure-key binding. An organization is enabled explicitly. Routing, onboarding and updates never create, enable or fill in an organization or key. With none enabled there are simply no API-funded routes and subscription routes work unchanged. Organization identity is independent of its key: an enabled organization whose key is not yet ready is unavailable with a reason, not an error. Disabling an organization removes its routes and expiry pressure but keeps its in-flight claims and holds.
+
 API Usage starts excluded from routing until the user has explicitly enabled it for the provider/organization and workflow scope and connected an API key through secure setup. Connection and activation can be one user action; merely discovering a stored key or a subscription login does not enable API Usage.
 
 ```text
