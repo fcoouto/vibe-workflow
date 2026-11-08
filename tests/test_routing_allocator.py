@@ -60,6 +60,25 @@ class UtilizationTests(unittest.TestCase):
         self.assertAlmostEqual(u, 0.8)
         self.assertIn('stale_observation', reasons)
 
+    def test_invalid_observations_are_unknown_not_numbers(self):
+        nan, inf = float('nan'), float('inf')
+        for bad in (dict(used=nan), dict(used=-0.1), dict(used=inf), dict(reserved=nan), dict(reserved=-1),
+                    dict(length=nan), dict(length=0), dict(reset_at=nan)):
+            with self.subTest(bad):
+                u, reasons = a.projected_utilization([dict(window(0.3, 100, 50), **bad)], 0, 1000, 0.1)
+                self.assertIsNone(u)
+                self.assertEqual(reasons, ['invalid_observation'])
+
+    def test_invalid_arguments_are_refused(self):
+        for reserve in (float('nan'), float('inf'), -0.1, 'x', dict(w=float('nan')), dict(w=-1)):
+            with self.subTest(reserve), self.assertRaises(ValueError):
+                a.projected_utilization([window(0.3, 100, 50)], reserve, 1000, 0.1)
+        for fraction in (float('nan'), -0.1, 1.5, None):
+            with self.subTest(fraction), self.assertRaises(ValueError):
+                a.projected_utilization([window(0.3, 100, 50)], 0, 1000, fraction)
+        with self.assertRaises(ValueError):
+            a.projected_utilization([window(0.3, 100, 50)], 0, float('nan'), 0.1)
+
     def test_rolling_window_without_reset_omits_pace(self):
         u, reasons = a.projected_utilization([dict(id='r', used=0.4, reserved=0, length=100, reset_at=None)],
                                              0.1, 1000, 0.10)
@@ -82,6 +101,21 @@ class ShareTests(unittest.TestCase):
     def test_unknown_utilization_is_refused(self):
         with self.assertRaises(ValueError):
             a.api_share(None, 0)
+
+    def test_api_share_refuses_bad_numbers(self):
+        nan = float('nan')
+        for args, kwargs in (((0.5, nan), {}), ((0.5, -0.1), {}), ((0.5, 1.5), {}), ((nan, 0), {}),
+                             ((float('inf'), 0), {}), ((0.5, 0), dict(L=0.8, H=0.8)),
+                             ((0.5, 0), dict(L=0.9, H=0.8)), ((0.5, 0), dict(L=-0.1, H=0.8)),
+                             ((0.5, 0), dict(L=0.1, H=1.2)), ((0.5, 0), dict(L=nan, H=0.8)),
+                             ((0.5, None), {})):
+            with self.subTest(args, **kwargs), self.assertRaises(ValueError):
+                a.api_share(*args, **kwargs)
+
+    def test_expiry_pressure_refuses_bad_horizon(self):
+        for horizon in (0, -72, float('nan'), None, float('inf'), True):
+            with self.subTest(horizon), self.assertRaises(ValueError):
+                a.expiry_pressure(50, 0, 24, horizon)
 
     def test_expiry_pressure(self):
         self.assertAlmostEqual(a.expiry_pressure(50, 0, 24, 72), 2 / 3)
@@ -111,6 +145,15 @@ class ClassTests(unittest.TestCase):
         for n in range(1, 21):
             api = sum(r['class'] == 'api' for r in records[:n])
             self.assertLessEqual(abs(api - 0.25 * n), 1)
+
+    def test_non_api_ties_are_deterministic(self):
+        shares = dict(zeta=0.5, alpha=0.5)
+        for order in (shares, dict(reversed(list(shares.items())))):
+            self.assertEqual(a.choose_class(order, [], BUCKET, 0, ['zeta', 'alpha']), 'zeta')
+
+    def test_feasible_may_be_a_generator(self):
+        shares = dict(api=0.5, subscription=0.5)
+        self.assertEqual(a.choose_class(shares, [], BUCKET, 0, (c for c in ('subscription',))), 'subscription')
 
     def test_api_wins_ties(self):
         self.assertEqual(a.choose_class(dict(api=0.5, subscription=0.5), [], BUCKET, 0, ('api', 'subscription')),
@@ -231,6 +274,36 @@ class RouteTests(unittest.TestCase):
         rolling = candidate('rolling', 'r', 100, None)
         dated = candidate('dated', 'd', 1, 10)
         self.assertEqual(a.choose_route([rolling, dated], 0, 1), 'dated')
+
+    def test_exhausted_constraint_without_reset_is_vetoed(self):
+        self.assertIsNone(a.choose_route([candidate('r', 'p', 0, None)], 0, 1))
+        self.assertEqual(a.choose_route([candidate('r', 'p', 0, None), candidate('ok', 'q', 5, 10)], 0, 1), 'ok')
+
+    def test_infeasible_best_candidate_does_not_hide_lower_ranked_in_pool(self):
+        broken = candidate('best', 'shared', 0, 10)
+        fallback = candidate('second', 'shared', 5, 10)
+        self.assertEqual(a.choose_route([broken, fallback], 0, 1), 'second')
+        self.assertEqual(a.choose_route([broken, fallback, candidate('x', 'x', 1, 10)], 0, 1), 'second')
+
+    def test_rolling_unscored_best_does_not_hide_scored_lower_ranked_in_pool(self):
+        rolling = candidate('rolling', 'shared', 100, None)
+        dated = candidate('dated', 'shared', 5, 10)
+        self.assertEqual(a.choose_route([rolling, dated], 0, 1), 'rolling')  # first eligible per pool wins
+        self.assertEqual(a.choose_route([candidate('dead', 'shared', 0, None), dated], 0, 1), 'dated')
+
+    def test_bad_numbers_are_refused_by_choose_route(self):
+        good = [candidate('r', 'p', 5, 10)]
+        for horizon in (0, -1, float('nan'), float('inf'), None, True):
+            with self.subTest(horizon), self.assertRaises(ValueError):
+                a.choose_route(good, 0, horizon)
+        with self.assertRaises(ValueError):
+            a.choose_route(good, float('nan'), 1)
+        self.assertEqual(a.choose_route([candidate('r', 'p', 5, 0)], 0, 1), 'r')  # reset == now stays finite
+        for bad in (candidate('r', 'p', float('nan'), 10), candidate('r', 'p', -1, 10),
+                    candidate('r', 'p', 5, 10, cost=float('inf')), candidate('r', 'p', 5, 10, cost=-1),
+                    candidate('r', 'p', 5, float('nan'))):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                a.choose_route([bad], 0, 1)
 
     def test_no_candidates(self):
         self.assertIsNone(a.choose_route([], 0, 1))

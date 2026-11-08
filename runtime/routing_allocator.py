@@ -17,6 +17,14 @@ def _number(value):
     return type(value) in (int, float) and value == value and abs(value) != float('inf')
 
 
+def _non_negative(value):
+    return _number(value) and value >= 0
+
+
+def _fixed(reason):
+    raise ValueError(reason)
+
+
 def _route_windows(windows):
     return windows if isinstance(windows, dict) else {None: windows}
 
@@ -30,11 +38,15 @@ def _reserve_for(reserve_new, window):
 def _projected_window(window, reserve_new, now, min_elapsed_fraction, reasons):
     """Project one window to its reset as a fraction of its limit, or None when unknown."""
     used, length, reset_at = window.get('used'), window.get('length'), window.get('reset_at')
-    if (window.get('fresh', True) is not True or not _number(used) or not _number(length) or length <= 0
-            or (reset_at is not None and (not _number(reset_at) or reset_at <= now))):
+    reserved = window.get('reserved', 0)
+    if used is not None and not (_non_negative(used) and _non_negative(reserved) and _number(length)
+                                 and length > 0 and (reset_at is None or _number(reset_at))):
+        reasons.append('invalid_observation')
+        return None
+    if window.get('fresh', True) is not True or used is None or (reset_at is not None and reset_at <= now):
         reasons.append('stale_observation')
         return None
-    total = used + window.get('reserved', 0) + _reserve_for(reserve_new, window)
+    total = used + reserved + _reserve_for(reserve_new, window)
     if reset_at is None or window.get('rolling'):
         reasons.append('pace_unavailable')
         return total
@@ -52,9 +64,14 @@ def projected_utilization(windows, reserve_new, now, min_elapsed_fraction):
 
     `windows` is one route's window list or a dict of route id to window list. Each window is
     {id, used, reserved, length, reset_at, fresh?, rolling?} with used and reserved as fractions of the
-    limit. `reserve_new` is a fraction for every window or a dict keyed by window id. A route with any
+    limit; a malformed window is unknown with reason invalid_observation. `reserve_new` is a fraction for every window or a dict keyed by window id. A route with any
     stale or unknown window is skipped; with no usable route the result is None, never zero.
     """
+    if not _number(now) or not (_number(min_elapsed_fraction) and 0 <= min_elapsed_fraction <= 1):
+        _fixed('invalid_input')
+    for amount in (reserve_new.values() if isinstance(reserve_new, dict) else [reserve_new]):
+        if not _non_negative(amount):
+            _fixed('invalid_input')
     reasons, best = [], None
     for route_windows in _route_windows(windows).values():
         if not route_windows:
@@ -70,6 +87,8 @@ def projected_utilization(windows, reserve_new, now, min_elapsed_fraction):
 
 def expiry_pressure(remaining, expected_spend, hours_to_expiry, T_hours):
     """E = clamp(1 - t/T) * clamp(stranded/r); zero without a spendable, unexpired grant."""
+    if not (_number(T_hours) and T_hours > 0):
+        _fixed('invalid_horizon')
     if not (_number(remaining) and remaining > 0 and _number(hours_to_expiry) and hours_to_expiry > 0):
         return 0.0
     stranded = max(0, remaining - max(0, expected_spend or 0))
@@ -80,8 +99,12 @@ def api_share(u, e, L=0.65, H=0.85):
     """API_share = 1 - (1 - S)(1 - E) with S = clamp((u - L)/(H - L)); u must be known."""
     if not _number(u):
         raise ValueError('utilization_unknown')
+    if not (_number(L) and _number(H) and 0 <= L < H <= 1):
+        _fixed('invalid_thresholds')
+    if not (_number(e) and 0 <= e <= 1):
+        _fixed('invalid_expiry_pressure')
     s = clamp((u - L) / (H - L))
-    return float(1 - (1 - s) * (1 - clamp(e)))
+    return float(1 - (1 - s) * (1 - e))
 
 
 def choose_class(shares, admissions, bucket, epoch, feasible):
@@ -91,24 +114,26 @@ def choose_class(shares, admissions, bucket, epoch, feasible):
     count. deficit_c = sum(recorded share_c) + current share_c - count(admitted to c). Only feasible classes
     with a positive current share compete; ties favor 'api'. Nothing is recorded here.
     """
-    eligible = [c for c in shares if c in set(feasible) and shares[c] > 0]
+    allowed = set(feasible)
+    eligible = [c for c in shares if c in allowed and shares[c] > 0]
     if not eligible:
         return None
     rows = [r for r in admissions if r['bucket'] == bucket and r['at'] >= epoch]
     deficit = {c: round(sum(r['shares'].get(c, 0) for r in rows) + shares[c]
                         - sum(r['class'] == c for r in rows), 9) for c in eligible}
-    return max(eligible, key=lambda c: (deficit[c], c == 'api'))
+    return max(eligible, key=lambda c: (deficit[c], c == 'api', c))
 
 
 def _binding(constraints, now, minimum_horizon):
     """Return (fundable_work, horizon, reset time) over positive-demand constraints."""
     best = None
     for item in constraints:
-        cost = item['cost']
-        if cost <= 0:
+        cost, headroom, resets_at = item['cost'], item['headroom'], item.get('resets_at')
+        if not (_non_negative(cost) and _non_negative(headroom) and (resets_at is None or _number(resets_at))):
+            _fixed('invalid_candidate')
+        if cost == 0:
             continue
-        work = Fraction(item['headroom']) / Fraction(cost)
-        resets_at = item.get('resets_at')
+        work = Fraction(headroom) / Fraction(cost)
         key = (work, float('inf') if resets_at is None else resets_at, (item['pool'], item.get('window', '')))
         if best is None or key < best:
             best = key
@@ -124,23 +149,26 @@ def choose_route(candidates, now, minimum_horizon):
     """Admit the feasible candidate with the highest pressure = fundable_work / max(horizon, minimum).
 
     `candidates` are in evidence-rank order: {route, pool, constraints: [{pool, window, headroom, cost,
-    resets_at}]}. Only the best-ranked candidate of each execution pool takes part, so aliases and variants
-    sharing a pool add no weight. Zero-cost constraints are skipped; with no finite pressure the ranking
-    order decides. Ties go to the earliest binding reset, then the pool id. Returns None when nothing can
-    be funded.
+    resets_at}]}. Each execution pool contributes its best-ranked currently feasible candidate, so aliases
+    and variants sharing a pool add no weight and an exhausted best candidate does not hide the next one.
+    An exhausted constraint vetoes a candidate, with or without a reset time. Zero-cost constraints are
+    skipped; with no finite pressure the ranking order decides. Ties go to the earliest binding reset, then
+    the pool id. Returns None when nothing can be funded; bad numbers raise ValueError.
     """
+    if not (_number(now) and _number(minimum_horizon) and minimum_horizon > 0):
+        _fixed('invalid_input')
     seen, scored, unscored = set(), [], []
     for rank, candidate in enumerate(candidates):
         if candidate['pool'] in seen:
             continue
-        seen.add(candidate['pool'])
         found = _binding(candidate['constraints'], now, minimum_horizon)
+        if found is not None and found[0] <= 0:
+            continue  # an exhausted window vetoes the candidate; a lower-ranked one in the pool may still serve
+        seen.add(candidate['pool'])
         if found is None or found[1] is None:
             unscored.append((rank, candidate['pool'], candidate['route']))
             continue
         work, horizon, resets_at = found
-        if work <= 0:
-            continue  # an exhausted window vetoes the candidate
         scored.append((-(work / Fraction(horizon)), resets_at, candidate['pool'], candidate['route']))
     if scored:
         return min(scored)[3]
