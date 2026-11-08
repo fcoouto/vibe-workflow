@@ -31,7 +31,7 @@ The repository has no CI or branch protection, so the merge permission relies on
 
 ## Component assessment
 
-Reused user-level installs, no project change: Superpowers, Ponytail, RTK, Context7, Claude memory (Caveman verified in Claude Code only). Not applicable: ESLint/Biome (no JS/TS), browser tools and Chrome DevTools MCP (no UI), Vercel skills, Next.js, PostgreSQL, shadcn, Sentry, Anthropic artifact skills, Obsidian tooling (existing `~/ai-memory-vault` is separate; `AGENTS.md` points to it), project Git hooks (excluded by the Toolkit), `gh-fix-ci` (no GitHub Actions; revisit if CI is added). Security and code review use the local policies in `policies/04-security-review.md` and `policies/06-code-review.md`. Graphify: no graph exists; generating one is a separate choice and is pending.
+Reused user-level installs, no project change: Superpowers, Ponytail, RTK, Context7, Claude memory (Caveman verified in Claude Code only). Not applicable: ESLint/Biome (no JS/TS), browser tools and Chrome DevTools MCP (no UI), Vercel skills, Next.js, PostgreSQL, shadcn, Sentry, Anthropic artifact skills, Obsidian tooling (existing `~/ai-memory-vault` is separate; `AGENTS.md` points to it), project Git hooks (excluded by the Toolkit), `gh-fix-ci` (no GitHub Actions; revisit if CI is added). Security and code review use the local policies in `policies/04-security-review.md` and `policies/06-code-review.md`. Graphify: reused global CLI 0.9.104 with a project `.graphifyignore`; `graphify-out/` is ignored in Git. Code-only deterministic graph (see Graphify below).
 
 Harness improvement: native method adaptation. No observed instruction, memory, context-routing or tool-use failure justifies a trial, so no working instruction was changed. To reapply, follow the Toolkit's harness-improvement procedure when a concrete failure appears, using a disposable copy and unchanged acceptance checks.
 
@@ -40,6 +40,13 @@ Harness improvement: native method adaptation. No observed instruction, memory, 
 - `python3 -B scripts/validate.py`: passed (package only; client execution not checked).
 - Full suite (`python3 -B -m unittest discover -s tests`): not run. The setup changes are documentation only (`README.md`, `AGENTS.md`, `CLAUDE.md`, this file), and `AGENTS.md` asks for the full suite only when runtime, hook or policy behavior changes. Instead, the 19 test modules that read those files or the onboarding/runtime code ran in parallel, one process per module, and all exited 0, together with `scripts/validate.py` (2026-11-08). No pre-existing failure is known; the full-suite baseline is unrecorded.
 - Source-size screening (brief, partial): 62 of 363 tracked Python files exceed the 350-line reference; largest are `runtime/evidence.py`, `runtime/changes.py`, `runtime/delegation.py`. Structural impact is unknown and not a blocker. Use `review-my-project` for a detailed assessment.
+
+## Graphify
+
+- Scope: code only, no model call, no clustering. Command: `GRAPHIFY_NO_AUTO_REFRESH=1 graphify extract . --code-only --no-cluster`. It reads 257 code files (docs are not extracted) and wrote 6,041 nodes and 25,028 edges in about 6 seconds on 2026-11-08.
+- Evidence: `graphify explain` and `graphify query` returned real nodes (for example `runtime/usage_budget.py` `Ledger`).
+- Limits: the graph does not cover the Markdown policies or documents, and `scripts/usage_codex_host.js` and two assets yielded no symbols. It is local and regenerated, not committed, and is stale after code changes; rerun the command to refresh. No Git hook or semantic extraction is configured.
+- Not checked: skill discovery of `$graphify` in Codex and Claude Code.
 
 ## Client integration
 
