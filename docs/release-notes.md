@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.1.33
+
+- A Workstreams thread is `DONE` only after every PR it opened or took over is observed merged on the remote; until then it shows `WAITING`. Threads whose scope excludes publication need no extra step, and other editable threads record an explicit no-PR decision. Runtime verification still enforces required publications only.
+- Add **Review my Project** to review selected repositories against their own project rules. It runs only local checks it can confirm are safe, returns findings in chat, and applies no fixes or installs without separate approval.
+- Ask about Graphify and the memory vault during project onboarding, defaulting to yes.
+- Add the Smart Routing usage ledger with allowance policy, padded claims and caps, and remove its simulation and shadow modes.
+- Keep machine and enrollment state under `.vibe-workflow`, and add the Claude Code local marketplace manifest.
+- Package validation does not establish client execution or live API qualification.
+
+
 ## 0.1.32
 
 - Present the existing credit and routing management skill as **Manage API Usage**, preserving its command and reference paths.
