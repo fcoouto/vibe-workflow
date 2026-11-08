@@ -36,9 +36,27 @@ def job(**extra):
     return value
 
 
+M = 1_000_000
+POLICY = dict(cycle='c', start=0, end=2 * 10**10, expiry=2 * 10**10, stop_at=10**10, ceiling='none', amount=None,
+              grant_amount=0, pilot_limit=None, task_limit=None)
+
+
 def table():
-    strategy = dict(strategy_id='s-sub', model='m', effort='high', harness='h', evidence_refs=['g1'])
-    return dict(version='t1', rows={'worker|code|medium|medium': [strategy]})
+    sub = dict(strategy_id='s-sub', model='m', effort='high', harness='h', evidence_refs=['g1'])
+    api = dict(strategy_id='s-api', model='m', effort='high', harness='api', evidence_refs=['g1'])
+    return dict(schema=1, version='t1', rows={'worker|code|medium|medium': [sub, api]})
+
+
+def api_observations(at=None, organization='personal'):
+    value = observations(at)
+    value['routes'].append(dict(route='api', strategy_id='s-api', provider='anthropic', model='m', effort='high',
+                                harness='api', account='anthropic:org', billing_class='api_grant', pool='api',
+                                credential=dict(ref=KEY_REF, scope=SCOPE, state='ready'), funding_verified=True,
+                                demand={'credit': 5 * M}, capable=True, permitted=True))
+    value['pools']['api'] = dict(billing_class='api_grant', windows=[dict(
+        id='credit', limit=30 * M, used=0, length=None, reset_at=None, fresh=True, organization=organization,
+        organization_revision=1)])
+    return value
 
 
 def observations(at=None, **route):
@@ -53,7 +71,7 @@ def observations(at=None, **route):
 def prepare(attempt, **extra):
     request = dict(v=1, op='prepare', assignment=dict(attempt_id=attempt, task='task-' + attempt, role='implementer',
                                                       scope=SCOPE),
-                   job=job(), table=table(), observations=observations())
+                   job=job(), observations=observations())
     request.update(extra)
     return request
 
@@ -76,7 +94,29 @@ class Base(unittest.TestCase):
         root = Path(self.temp.name)
         self.settings = root / 'routing' / 'settings.json'
         self.ledger = root / 'usage' / 'organizations.sqlite3'
+        self.store_table(table())
         self.service = command.Service(self.settings, self.ledger)
+
+    def store_table(self, value):
+        """The compiled strategy table lives next to the settings, private like them."""
+        self.settings.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = self.settings.parent / 'strategy-table.json'
+        if value is None:
+            path.unlink(missing_ok=True)
+            return
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+
+    def open_ledger(self):
+        identity = json.loads(__import__('sqlite3').connect(self.ledger).execute(
+            'SELECT body FROM ledger WHERE id=1').fetchone()[0])['identity']
+        return budget.Ledger(self.ledger, identity)
+
+    def fund(self, organization='personal'):
+        """The user's explicit enablement plus a fresh balance observation (the collector's job)."""
+        with self.open_ledger() as ledger:
+            ledger.enable_organization(organization, POLICY, 0)
+            ledger.observe(organization, 1000 * M, now(), issued=1000 * M)
 
     def tearDown(self):
         self.service.close()
@@ -93,9 +133,7 @@ class Base(unittest.TestCase):
         return done
 
     def snapshot(self):
-        identity = json.loads(__import__('sqlite3').connect(self.ledger).execute(
-            'SELECT body FROM ledger WHERE id=1').fetchone()[0])['identity']
-        with budget.Ledger(self.ledger, identity) as ledger:
+        with self.open_ledger() as ledger:
             return ledger.snapshot()
 
 
@@ -114,6 +152,8 @@ class MalformedInputTests(Base):
                  (json.dumps(dict(v=1, op='launch')).encode(), 'unknown_op'),
                  (json.dumps(dict(v=1, op='status', extra=1)).encode(), 'invalid_request'),
                  (json.dumps(dict(v=1, op='check', attempt_id=7, request=facts())).encode(), 'invalid_request'),
+                 (json.dumps(prepare('t', table=table())).encode(), 'invalid_request'),
+                 (json.dumps(check('a', request=facts(kind='tool'))).encode(), 'unsupported_kind'),
                  (b'{"v": 1, "op": "status", "pad": "' + b'x' * command.MAX_INPUT + b'"}', 'request_too_large')]
         for raw, reason in cases:
             with self.subTest(reason=reason, raw=raw[:40]):
@@ -244,17 +284,18 @@ class PrepareTests(Base):
 
     def test_no_recommendation_falls_back_to_worker_choices(self):
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[CHOICE]))))
-        for label, extra in (('empty', dict(table=dict(version='t0', rows={}))), ('absent', {})):
+        for label, stored in (('empty', dict(schema=1, version='t0', rows={})), ('absent', None),
+                              ('unreadable', 'not a table')):
             with self.subTest(label):
-                request = prepare('rf8-' + label, **extra)
-                request.pop('table', None) if label == 'absent' else None
-                response = self.call(request)
+                self.store_table(stored)
+                response = self.call(prepare('rf8-' + label))
                 self.assertEqual(response['state'], 'admitted')
                 self.assertEqual(response['admission']['mode'], 'worker_choice')
                 self.assertIn('no_recommendation', response['ranking']['reason_codes'])
 
     def test_pending_and_profile_failures_report_fixed_reasons(self):
-        none = self.call(prepare('a-none', table=dict(version='t0', rows={})))
+        self.store_table(None)
+        none = self.call(prepare('a-none'))
         self.assertEqual((none['state'], none['reason']), ('pending', 'worker_choice_unavailable'))
         bad = self.call(prepare('a-bad', job=job(role='oracle')))
         self.assertEqual(bad, dict(v=1, state='blocked', reason='profile_unavailable'))
@@ -302,8 +343,7 @@ class CheckTests(Base):
                  (check('a1', request=facts(variant='low')), 'route_mismatch'),
                  (check('a1', request=facts(harness='x')), 'route_mismatch'),
                  (check('a1', request=facts(funding_pool='api')), 'route_mismatch'),
-                 (check('a1', request=facts(kind='teleport')), 'invalid_request'),
-                 (check('a1', now=now() + command.routing.ADMISSION_TTL + 60), 'admission_expired'),
+                 (check('a1', request=facts(kind='teleport')), 'unsupported_kind'),
                  (check('a1', request=facts(bound={'win:sub/5h': 13})), 'envelope_exhausted'),
                  (check('a1', request=facts(bound={'win:other/5h': 1})), 'envelope_exhausted')]
         for request, reason in cases:
@@ -453,6 +493,193 @@ class RaceAndLatencyTests(Base):
         print('\nrouting check latency:', json.dumps(report), file=sys.stderr)
         self.assertLess(statistics.median(served), 500)
 
+
+
+class ClockTests(Base):
+    """The command stamps and judges admissions with its own clock; callers cannot stretch an admission."""
+    def test_prepare_refuses_observations_off_the_command_clock(self):
+        for label, at in (('future', now() + 10**9), ('milliseconds', now() * 1000), ('old', now() - 10**6)):
+            with self.subTest(label):
+                self.assertEqual(self.call(prepare(label, observations=observations(at))),
+                                 dict(v=1, state='blocked', reason='observation_stale'))
+
+    def test_admission_time_is_the_command_clock(self):
+        before = now()
+        response = self.call(prepare('a1', observations=observations(now() - 30)))
+        self.assertGreaterEqual(response['admission']['at'], before)
+
+    def test_check_ignores_a_caller_clock_in_production(self):
+        self.call(prepare('a1'))
+        for at in (0, now() + 10**7):
+            self.assertEqual(self.call(check('a1', now=at))['state'], 'allow')
+
+    def test_switch_honours_caller_clocks_and_the_ttl_boundary(self):
+        service = command.Service(self.settings, self.ledger, test_inputs=True)
+        try:
+            at = now()
+            request = prepare('a1', observations=observations(at), table=table())
+            self.assertEqual(service.handle(json.dumps(request).encode())['admission']['at'], at)
+            ttl = command.routing.ADMISSION_TTL
+            for offset, expected in ((ttl, 'allow'), (ttl + 1, 'admission_expired'), (-1, 'clock_invalid')):
+                with self.subTest(offset=offset):
+                    response = service.handle(json.dumps(check('a1', now=at + offset)).encode())
+                    self.assertEqual(response.get('reason', response['state']), expected)
+        finally:
+            service.close()
+
+    def test_cli_switch_is_an_environment_variable(self):
+        self.call(prepare('a1'))
+        late = check('a1', now=now() + 10**7)
+        self.assertEqual(json.loads(self.run_cli(['check'], late).stdout)['state'], 'allow')
+        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'check', '--settings', str(self.settings),
+                               '--ledger', str(self.ledger)], input=json.dumps(late).encode(), capture_output=True,
+                              timeout=60, env=dict(os.environ, **{command.TEST_SWITCH: '1'}))
+        self.assertEqual(json.loads(done.stdout)['reason'], 'admission_expired')
+
+
+API = dict(harness='api', funding_pool='api')
+
+
+class FundingCheckTests(Base):
+    """Every check on a dollar-funded hold re-reads the organization and API Usage; subscriptions do not."""
+    def setUp(self):
+        super().setUp()
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(api_usage_enabled=True)))
+        budget.initialize(self.ledger)
+        self.fund()
+
+    def admit(self, attempt, strategy='s-api', service=None):
+        request = prepare(attempt, observations=api_observations(),
+                          constraints=dict(allowed_strategy_ids=[strategy]))
+        response = (service or self.service).handle(json.dumps(request).encode())
+        self.assertEqual(response['state'], 'admitted', response)
+        return response
+
+    def dispatch(self, attempt):
+        self.call(dict(v=1, op='record', event=dict(event_id='d-' + attempt, attempt_id=attempt, kind='dispatched')))
+
+    def test_a_funded_api_hold_allows(self):
+        self.assertEqual(self.admit('api1')['admission']['class'], 'api')
+        response = self.call(check('api1', request=facts(**API)))
+        self.assertEqual((response['state'], response['remaining']), ('allow', {'org:personal': 6 * M}))
+
+    def test_disabling_the_organization_blocks_unsent_and_dispatched_api_work(self):
+        self.admit('api1')
+        self.admit('api2')
+        self.dispatch('api2')
+        self.admit('sub1', 's-sub')
+        self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=False)))
+        for attempt in ('api1', 'api2'):
+            self.assertEqual(self.call(check(attempt, request=facts(**API))),
+                             dict(v=1, state='blocked', reason='organization_unavailable'))
+        self.assertEqual(self.call(check('sub1'))['state'], 'allow')  # subscription holds are unaffected
+
+    def test_api_usage_off_blocks_dispatched_api_holds_but_not_subscription_ones(self):
+        self.admit('api1')
+        self.admit('sub1', 's-sub')
+        self.dispatch('api1')
+        self.dispatch('sub1')
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(api_usage_enabled=False)))
+        self.assertEqual(self.call(check('api1', request=facts(**API))),
+                         dict(v=1, state='blocked', reason='api_usage_disabled'))
+        self.assertEqual(self.call(check('sub1'))['state'], 'allow')
+
+    def test_smart_routing_off_keeps_a_funded_dispatched_api_worker(self):
+        self.admit('api1')
+        self.dispatch('api1')
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(smart_routing=False)))
+        self.assertEqual(self.call(check('api1', request=facts(**API)))['state'], 'allow')
+
+    def test_blocked_stale_short_or_expired_funding_blocks_dispatched_api_work(self):
+        service = command.Service(self.settings, self.ledger, test_inputs=True)
+        self.addCleanup(service.close)
+        self.admit('api1', service=service)
+        self.dispatch('api1')
+
+        def at(moment):
+            return service.handle(json.dumps(check('api1', request=facts(**API), now=moment)).encode())
+        self.assertEqual(at(now() + budget.FRESH_SECONDS + 60)['reason'], 'funding_unverified')  # stale balance
+        with self.open_ledger() as ledger:
+            ledger.observe('personal', 1 * M, now() + 1)  # the balance no longer covers what is held
+        self.assertEqual(at(now() + 2)['reason'], 'funding_unverified')
+        with self.open_ledger() as ledger:
+            ledger.observe('personal', 1 * M, POLICY['stop_at'] + 5)
+        self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'funding_unverified')  # past the cycle boundary
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            data['organizations']['personal']['blocked'] = True
+        self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'organization_unavailable')
+
+
+class RoleTests(Base):
+    def test_profile_roles_map_to_worker_choice_roles_once(self):
+        from runtime import routing_settings
+        self.assertEqual(routing_settings.PROFILE_ROLES, dict(worker='implementer', review='reviewer', check='reviewer'))
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(reviewer=[CHOICE]))))
+        for role in ('review', 'check'):
+            with self.subTest(role):
+                request = prepare('r-' + role, job=job(role=role))
+                del request['assignment']['role']
+                self.assertEqual(self.call(request)['admission']['bucket'][0], 'reviewer')
+        request = prepare('w')
+        del request['assignment']['role']
+        self.assertEqual(self.call(request)['admission']['bucket'][0], 'implementer')
+
+    def test_explicit_roles_coordinator_and_mismatch(self):
+        repair = prepare('rep')
+        repair['assignment']['role'] = 'repair'
+        self.assertEqual(self.call(repair)['admission']['bucket'][0], 'repair')
+        mismatch = prepare('mis')
+        mismatch['assignment']['role'] = 'reviewer'
+        self.assertEqual(self.call(mismatch), dict(v=1, state='blocked', reason='role_mismatch'))
+        coordinator = prepare('coord', job=job(role='coordinator'))
+        del coordinator['assignment']['role']
+        self.assertEqual(self.call(coordinator), dict(v=1, state='blocked', reason='coordinator_not_routed'))
+
+
+class RobustnessTests(Base):
+    def test_uncertain_hold_needs_reconciliation_not_a_bare_complete(self):
+        self.call(prepare('a1'))
+        for kind in ('dispatched', 'uncertain'):
+            self.call(dict(v=1, op='record', event=dict(event_id=kind, attempt_id='a1', kind=kind)))
+        self.assertEqual(self.call(dict(v=1, op='record', event=dict(event_id='c', attempt_id='a1', kind='complete'))),
+                         dict(v=1, state='blocked', reason='reconciliation_required'))
+        self.assertEqual(self.snapshot()['holds']['a1']['state'], 'uncertain')
+
+    def test_a_locked_ledger_answers_ledger_busy_quickly(self):
+        import sqlite3
+        self.call(prepare('a1'))
+        fresh = command.Service(self.settings, self.ledger)
+        self.addCleanup(fresh.close)
+        lock = sqlite3.connect(self.ledger, isolation_level=None)
+        lock.execute('BEGIN EXCLUSIVE')
+        try:
+            for service in (self.service, fresh):
+                start = time.perf_counter()
+                checked = service.handle(json.dumps(check('a1')).encode())
+                status = service.handle(json.dumps(dict(v=1, op='status')).encode())
+                elapsed = time.perf_counter() - start
+                self.assertEqual(checked, dict(v=1, state='blocked', reason='ledger_busy'))
+                self.assertEqual(status['ledger'], dict(state='unavailable', reason='ledger_busy'))
+                self.assertLess(elapsed, 1.0)
+        finally:
+            lock.execute('ROLLBACK')
+            lock.close()
+        self.assertEqual(self.call(check('a1'))['state'], 'allow')
+
+    def test_closed_stdout_exits_quietly(self):
+        child = subprocess.Popen([sys.executable, '-B', str(SCRIPT), 'status', '--settings', str(self.settings),
+                                  '--ledger', str(self.ledger)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        child.stdout.close()
+        child.stdout = None
+        _, err = child.communicate(json.dumps(dict(v=1, op='status')).encode(), timeout=60)
+        self.assertEqual((child.returncode, err), (0, b''))
+
+    def test_status_reports_effective_caps(self):
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(caps=dict(total=3, per_account=1))))
+        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=3, per_account=1))
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=10, per_account=1))))
+        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=4, per_account=1))
 
 if __name__ == '__main__':
     unittest.main()
