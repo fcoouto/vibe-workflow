@@ -660,6 +660,28 @@ class CanonicalWorkflowTests(unittest.TestCase):
             writer.execute('ROLLBACK')
             writer.close()
 
+    def test_the_pin_is_checked_again_at_dispatch(self):
+        from types import SimpleNamespace
+        root = Path(self.scope.repository_root).resolve()
+        self.reader = routing_gates.D6Workflow(resolve=lambda where: self.scope, project=root)
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, workflow=self.reader, project=root)
+        self.assertEqual(self.admit('r-a', 'a')['state'], 'admitted')
+        nested = SimpleNamespace(repository_root=root / 'vendor' / 'other')
+        self.reader._resolve = lambda where: nested  # the cwd now resolves to a nested checkout
+        self.assertRefused('r-a', 'project_mismatch')
+        self.reader._resolve = lambda where: self.scope
+        self.assertEqual(self.call(dispatch('r-a'))['state'], 'dispatched')
+
+    def test_a_nested_checkout_is_refused_at_prepare(self):
+        from types import SimpleNamespace
+        root = Path(self.scope.repository_root).resolve()
+        reader = routing_gates.D6Workflow(resolve=lambda where: SimpleNamespace(repository_root=root / 'vendor'),
+                                          project=root)
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, workflow=reader, project=root)
+        self.assertEqual(self.admit('r-a', 'a'), dict(v=1, state='blocked', reason='project_mismatch'))
+
     def test_routing_job_is_the_exact_canonical_semantic_job(self):
         from runtime import delegation
         unbound = delegation.routing_job(self.scope, self.where('a'))
@@ -783,6 +805,64 @@ class ChangeWatchTests(unittest.TestCase):
         finally:
             holder.execute('ROLLBACK')
             holder.close()
+
+
+class ProjectPinReaderTests(unittest.TestCase):
+    """Round-2 review: the pin compares the checkout the reader actually resolves, not the request's cwd."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve() / 'project'
+        (self.root / 'vendor' / 'other').mkdir(parents=True)
+        (self.root / 'sub').mkdir()
+        self.outside = Path(temp.name).resolve() / 'elsewhere'
+        self.outside.mkdir()
+
+    def reader(self, checkout, project):
+        from types import SimpleNamespace
+        return routing_gates.D6Workflow(resolve=lambda where: SimpleNamespace(repository_root=checkout),
+                                        project=project)
+
+    def assertMismatch(self, checkout, project):
+        with mock.patch('runtime.delegation.routing_view') as view, \
+                self.assertRaises(routing_gates.ProjectMismatch):
+            self.reader(checkout, project).view(locator(cwd=str(self.root / 'sub')))
+        view.assert_not_called()  # refused before any workflow read
+
+    def assertAccepted(self, checkout, project):
+        with mock.patch('runtime.delegation.routing_view', return_value='viewed'), \
+                mock.patch('runtime.delegation.routing_watch'):
+            self.assertEqual(self.reader(checkout, project).view(locator(cwd=str(self.root))), 'viewed')
+
+    def test_a_nested_separately_enrolled_checkout_is_refused(self):
+        self.assertMismatch(self.root / 'vendor' / 'other', self.root)
+        self.assertMismatch(self.outside, self.root)
+
+    def test_the_resolved_checkout_matches_through_symlinks_and_trailing_slashes(self):
+        link = self.outside / 'link-to-project'
+        link.symlink_to(self.root)
+        self.assertAccepted(self.root, link)
+        self.assertAccepted(link, self.root)
+        self.assertAccepted(self.root, Path(str(self.root) + '/'))
+        swapped = self.outside / 'swap'
+        swapped.symlink_to(self.root / 'vendor' / 'other')
+        self.assertMismatch(swapped, self.root)
+
+    def test_a_relative_project_pin_is_resolved_once(self):
+        cwd = os.getcwd()
+        os.chdir(self.root.parent)
+        try:
+            reader = routing_gates.D6Workflow(project='project')
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(reader.project, self.root)
+
+    def test_the_service_passes_its_pin_to_the_default_reader(self):
+        temp = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__('shutil').rmtree, temp)
+        service = command.Service(temp / 's' / 'settings.json', temp / 'l' / 'ledger.sqlite3', project=self.root)
+        self.addCleanup(service.close)
+        self.assertEqual(service.workflow.project, self.root)
 
 
 class ReviewFollowUpTests(GateBase):
