@@ -1,0 +1,18 @@
+{
+  "grouping": {
+    "message": "Review alpha and beta under Code quality. I explicitly approve detailed source-structure and agent-context suitability analysis of candidates in shortlist.json, excluding generated/ and vendor/ under each repository. Refresh shortlist freshness, but structurally inspect only these four paths: alpha/src/orders/application/component_1.py, alpha/src/reporting/component_1.py, beta/src/cache/component_1.py, beta/src/transport/http/component_1.py. Keep analysis within three minutes and return the report in chat. Analysis only; no fixes, installations, enrollment or detailed report persistence.",
+    "samples": [
+      "alpha/src/orders/application/component_1.py",
+      "alpha/src/reporting/component_1.py",
+      "beta/src/cache/component_1.py",
+      "beta/src/transport/http/component_1.py"
+    ]
+  },
+  "selection": {
+    "messages": [
+      "Review this temporary umbrella project. The repository list is in repositories.json.",
+      "Choose repositories 2 and 1.",
+      "Full Scan for those selected repositories only. Inspect at most four source files total, two per repository, within the original three-minute probe budget. Return the report in chat. No fixes, installations or persistence. A prior shortlist.json is available."
+    ]
+  }
+}
