@@ -36,8 +36,9 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}")
 CALL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 HEADER = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
-CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|COOKIE|PRIVATE)(?:_|$)",
-                            re.IGNORECASE)
+# Mirrored in runtime/adapters/opencode_plugin.ts; tests/test_opencode_plugin.py checks that they agree.
+CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|COOKIE|PRIVATE"
+                            r"|DSN|CONNECTION_STRING|DATABASE_URL)(?:_|$)", re.IGNORECASE)
 ORIGIN = re.compile(r"(https?)://(?:[^/?#@\s]*@)?([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(?::(\d{1,5}))?(?:[/?#]|$)")
 SPAWN_MODEL = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)"
                          r"(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?")

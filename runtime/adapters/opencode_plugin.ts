@@ -13,11 +13,14 @@ export const CONTRACT_VERSION = 1
 const PROTOCOL = 1
 const DEFAULT_TIMEOUT_MS = 500
 const DEFAULT_SPAWN_GRACE_MS = 1000  // added to the first request after a spawn: interpreter and import start-up
-const LOOKUP_TIMEOUT_MS = 500
+const LOOKUP_TIMEOUT_MS = 300
+const BACKOFF_MS = 1000  // after two failed respawns in a row, fail fast for this long before starting a child again
 const MAX_REQUEST = 4096
 const MAX_RESPONSE = 65536
-const MAX_ATTACHED = 256
-const MAX_LINEAGE = 8
+const MAX_ATTACHED = 256  // attached roots; children found through them are not counted
+const MAX_LOOKUPS = 8  // session.get calls per lineage question
+const MAX_CHAIN = 64  // sessions walked per lineage question
+const MAX_LINEAGE_CACHE = 4096
 const MAX_DENY = 16
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
@@ -28,12 +31,13 @@ const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/
 const ATTEMPT = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
-const CREDENTIAL_ENV = /(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|COOKIE|PRIVATE)(?:_|$)/i
+const CREDENTIAL_ENV = /(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH|COOKIE|PRIVATE|DSN|CONNECTION_STRING|DATABASE_URL)(?:_|$)/i
 const SPAWN_MODEL = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/
 const REASON = /^[a-z][a-z0-9_]{0,63}$/
 
 type Facts = { provider: string; model: string; variant: string | null; harness: string }
-type Attachment = { attempt: string; pool: string; deny: Set<string>; root: string }
+type Attachment = { attempt: string; pool: string; deny: Set<string> }
+type Lineage = { parent: string | null; whileAttached: boolean }
 type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number }
 
 class RoutingBlocked extends Error {
@@ -49,6 +53,12 @@ const text = (value: unknown, pattern: RegExp) => typeof value === "string" && p
 
 export function credentialEnvName(name: string): boolean {
   return ENV_NAME.test(name) && CREDENTIAL_ENV.test(name)
+}
+
+/** Shell-only rule for names outside ENV_NAME: split camelCase and punctuation, then apply the same rule. */
+export function credentialLikeName(name: string): boolean {
+  if (ENV_NAME.test(name)) return CREDENTIAL_ENV.test(name)
+  return CREDENTIAL_ENV.test(name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").replace(/[^A-Za-z0-9]+/g, "_"))
 }
 
 export function harnessFor(provider: string): string {
@@ -80,6 +90,8 @@ class RoutingChild {
   spawned = 0
   respawnMs: number | null = null
   seq = 0
+  failures = 0
+  retryAt = 0
   buffer = ""
   pending = new Map<string, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>()
 
@@ -154,12 +166,14 @@ class RoutingChild {
 
   /** Send once; on a child fault respawn once and retry, then fail closed. Never waits beyond two bounded tries. */
   async call(op: string, fields: Record<string, unknown>) {
+    if (this.failures >= 2 && performance.now() < this.retryAt) throw new RoutingBlocked("routing_unavailable")
     let respawned = false
     for (let attempt = 0; ; attempt++) {
       const replacing = this.proc === null && this.spawned > 0
       const began = performance.now()
       try {
         const response = await this.send(op, fields)
+        this.failures = 0
         if (replacing) {
           respawned = true
           this.respawnMs = Math.round((performance.now() - began) * 100) / 100
@@ -169,7 +183,11 @@ class RoutingChild {
         return { response, respawned }
       } catch (error) {
         if (!(error instanceof ChildFault)) throw error
-        if (attempt >= 1) throw new RoutingBlocked("routing_unavailable")
+        if (attempt >= 1) {
+          this.failures += 1
+          if (this.failures >= 2) this.retryAt = performance.now() + BACKOFF_MS
+          throw new RoutingBlocked("routing_unavailable")
+        }
       }
     }
   }
@@ -190,9 +208,9 @@ function defaultArgv(options: Record<string, unknown>): string[] {
   return argv
 }
 
-const timeout = <T>(promise: Promise<T>, ms: number) => new Promise<T>((resolve, reject) => {
-  const timer = setTimeout(() => reject(new RoutingBlocked("lineage_unavailable")), ms)
-  promise.then((value) => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); reject(new RoutingBlocked("lineage_unavailable")) })
+const within = <T>(promise: Promise<T>, ms: number) => new Promise<T>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error("timeout")), ms)
+  promise.then((value) => { clearTimeout(timer); resolve(value) }, (error) => { clearTimeout(timer); reject(error) })
 })
 
 const object = (value: unknown, reason: string) => {
@@ -212,29 +230,77 @@ export function createRoutingPlugin(config: Config = {}) {
       const child = new RoutingChild(config.argv ?? defaultArgv(options),
         config.timeoutMs ?? (configured > 0 && configured <= 5000 ? configured : DEFAULT_TIMEOUT_MS),
         config.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS)
-      // Instance-local: sessions a managed launcher attached here, plus children found through their parents.
+      // Instance-local: sessions a managed launcher attached here (roots), and the parent of each session seen.
       const attached = new Map<string, Attachment>()
+      const lineage = new Map<string, Lineage>()
+      const remember = (session: string, entry: Lineage) => {
+        lineage.delete(session)
+        if (lineage.size >= MAX_LINEAGE_CACHE) lineage.delete(lineage.keys().next().value as string)
+        lineage.set(session, entry)
+      }
 
-      async function managed(sessionID: unknown): Promise<Attachment | null> {
-        if (attached.size === 0) return null
-        if (!text(sessionID, SESSION)) throw new RoutingBlocked("invalid_session")
-        const direct = attached.get(sessionID as string)
-        if (direct) return direct
-        let current = sessionID as string
-        for (let depth = 0; depth < MAX_LINEAGE; depth++) {
-          if (typeof ctx?.session?.get !== "function") throw new RoutingBlocked("lineage_unavailable")
-          const info: any = await timeout(Promise.resolve().then(() => ctx.session.get({ sessionID: current })), LOOKUP_TIMEOUT_MS)
+      // Lineage from the live event stream, so session.get is needed only for sessions created before this instance
+      // subscribed or whose event was missed. Sessions created while any session is attached are flagged.
+      const events = new AbortController()
+      if (typeof ctx?.event?.subscribe === "function") {
+        void (async () => {
+          try {
+            for await (const event of ctx.event.subscribe({ types: ["session.created"], signal: events.signal })) {
+              const data = (event as any)?.data
+              if ((event as any)?.type !== "session.created" || !text(data?.sessionID, SESSION)) continue
+              if (data.parentID != null && !text(data.parentID, SESSION)) continue
+              remember(data.sessionID, { parent: data.parentID ?? null, whileAttached: attached.size > 0 })
+            }
+          } catch { /* live-only stream: lookups cover what it misses */ }
+        })()
+      }
+
+      /** The session's parent: a session ID, null for a root, or undefined when it cannot be determined. */
+      async function lookup(session: string): Promise<string | null | undefined> {
+        if (typeof ctx?.session?.get !== "function") return undefined
+        try {
+          const info: any = await within(Promise.resolve().then(() => ctx.session.get({ sessionID: session })), LOOKUP_TIMEOUT_MS)
           const parent = info?.parentID ?? info?.data?.parentID
           if (parent == null) return null
-          if (!text(parent, SESSION)) throw new RoutingBlocked("lineage_invalid")
-          const found = attached.get(parent)
-          if (found) {
-            if (attached.size < MAX_ATTACHED) attached.set(sessionID as string, found)
-            return found
-          }
-          current = parent
+          return text(parent, SESSION) ? parent : undefined
+        } catch {
+          return undefined
         }
-        throw new RoutingBlocked("lineage_too_deep")
+      }
+
+      /**
+       * The attachment governing a session, or null when it is interactive. A session is managed only when its parent
+       * chain reaches an attached session. When the chain cannot be determined it blocks only on positive evidence: a
+       * session on the walked chain was created while a session was attached. Invalid IDs, roots, cycles and chains
+       * longer than the limits are interactive.
+       */
+      async function managed(sessionID: unknown): Promise<Attachment | null> {
+        if (attached.size === 0 || !text(sessionID, SESSION)) return null
+        const seen = new Set<string>()
+        let current = sessionID as string
+        let lookups = 0
+        let evidence = false
+        for (;;) {
+          const root = attached.get(current)
+          if (root) return root
+          if (seen.has(current) || seen.size >= MAX_CHAIN) return null
+          seen.add(current)
+          let entry = lineage.get(current)
+          if (!entry) {
+            if (lookups >= MAX_LOOKUPS) return null
+            lookups += 1
+            const parent = await lookup(current)
+            if (parent === undefined) {
+              if (evidence) throw new RoutingBlocked("lineage_unavailable")
+              return null
+            }
+            entry = { parent, whileAttached: false }
+            remember(current, entry)
+          }
+          if (entry.whileAttached) evidence = true
+          if (entry.parent === null) return null
+          current = entry.parent
+        }
       }
 
       async function check(attachment: Attachment, facts: Facts, kind: string) {
@@ -272,17 +338,24 @@ export function createRoutingPlugin(config: Config = {}) {
       // Tightens only; a configured deny is final and never reaches this hook.
       await ctx.permission.hook("evaluate", async (event: any) => {
         if (attached.size === 0 || typeof event?.action !== "string") return
-        let attachment: Attachment | null
-        try { attachment = await managed(event.sessionID) } catch { attachment = null; event.effect = "deny" }
-        if (attachment && (event.action === "webfetch" || attachment.deny.has(event.action))) event.effect = "deny"
-        if (event.effect === "deny") event.message = DENY_MESSAGE
+        let tighten: boolean
+        try {
+          const attachment = await managed(event.sessionID)
+          tighten = attachment !== null && (event.action === "webfetch" || attachment.deny.has(event.action))
+        } catch {
+          tighten = true
+        }
+        if (tighten && event.effect !== "deny") {
+          event.effect = "deny"
+          event.message = DENY_MESSAGE
+        }
       })
 
       // The hook carries no session ID, so while any managed session is attached here every shell loses credentials.
       await ctx.shell.hook("create.before", (event: any) => {
         const env = event?.env
         if (attached.size === 0 || env === null || typeof env !== "object") return
-        for (const key of Object.keys(env)) if (!ENV_NAME.test(key) || CREDENTIAL_ENV.test(key)) delete env[key]
+        for (const key of Object.keys(env)) if (credentialLikeName(key)) delete env[key]
       })
 
       let definition: unknown = RPC
@@ -294,6 +367,11 @@ export function createRoutingPlugin(config: Config = {}) {
         health: async () => {
           const { response, respawned } = await child.call("status", {})
           if (response.state !== "ok") throw new RoutingBlocked("routing_unhealthy")
+          // Ready means a check can be answered: readable settings and an existing ledger (prepare creates it).
+          const ledger = (response.ledger as Record<string, unknown> | null)?.state
+          const reason = response.settings_state !== "ok" ? "settings_unavailable"
+            : ledger === "ready" ? null : ledger === "absent" ? "ledger_absent" : "ledger_unavailable"
+          if (reason) return { state: "not_ready", reason, version: CONTRACT_VERSION }
           return { state: "ok", child: respawned ? "respawned" : "up", version: CONTRACT_VERSION, respawn_ms: child.respawnMs }
         },
         attach: async (input: unknown) => {
@@ -305,9 +383,10 @@ export function createRoutingPlugin(config: Config = {}) {
           }
           const session = body.session_id as string
           if (!attached.has(session) && attached.size >= MAX_ATTACHED) throw new RoutingBlocked("attach_limit")
-          for (const [key, value] of attached) if (value.root === session) attached.delete(key)
           attached.set(session, { attempt: body.attempt_id as string, pool: body.funding_pool as string,
-            deny: new Set(deny as string[]), root: session })
+            deny: new Set(deny as string[]) })
+          // A launcher attaches the sessions it created, which are roots; after detach its children resolve to it.
+          if (!lineage.has(session)) remember(session, { parent: null, whileAttached: false })
           return { state: "attached", session_id: session }
         },
         detach: async (input: unknown) => {
@@ -315,14 +394,16 @@ export function createRoutingPlugin(config: Config = {}) {
           if (!text(body.session_id, SESSION)) throw new RoutingBlocked("invalid_detach")
           const session = body.session_id as string
           const was = attached.has(session)
-          for (const [key, value] of attached) if (key === session || value.root === session) attached.delete(key)
+          attached.delete(session)  // children found through it become interactive again
           return { state: "detached", session_id: session, was_attached: was }
         },
       })
 
       return () => {
+        events.abort()
         child.stop()
         attached.clear()
+        lineage.clear()
       }
     },
   }
