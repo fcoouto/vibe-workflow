@@ -80,9 +80,9 @@ Amendments A1–A14 are defined in the spec; the IDs below are used throughout t
 | A9 | Within class, admit the highest-pressure feasible strategy; no deficit state. Changes case 7. | §7.3, §13 cases 7–8 |
 | A10 | Concurrency caps: onboarding limit, else 4 total and 2 per provider account. | §7.4 |
 | A11 | Allocator replay and a bounded enforced canary before cutover; budgeted quality re-execution. | §10.4, §13 |
-| A14 | No shadow or simulation mode: a route is active or it is not. API Usage and live funding are explicit enabled/disabled states with their P0 gates, not a third mode. | §3, §10.4 |
 | A12 | Billing class per route. **Claude and OpenAI use the same model:** each offers subscription routes (subscription login through a harness the vendor bills as included usage, such as Codex or Claude Code, directly or via OpenCode) and API Usage routes (secure key, `api_grant`, plus `api_prepaid` only under `no-limit`). Extra or purchased usage is excluded for both. | §1, §6.1, §12 |
 | A13 | OFF-mode `worker_choices`: ordered per-role list; first feasible entry admitted. | §3 |
+| A14 | No shadow or simulation mode: a route is active or it is not. API Usage and live funding are explicit enabled/disabled states with their P0 gates, not a third mode. | §3, §10.4, §12, §13 |
 
 ## 4. Slices, placement and P0 gates
 
@@ -262,7 +262,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 - [ ] Remove `require(data['slot'] is None, 'request_in_flight')` and the slot-owned dispatch, completion and recovery paths; implement the enumeration.
 - [ ] Remove the serial-execution rule from the skill references; keep the entry point within 150 words.
 - [ ] Run `python3 -B -m unittest tests.test_usage_routing tests.test_usage_budget` and `python3 -B scripts/validate.py`; expected PASS.
-- [ ] Live API funding stays disabled until P0.3/P0.4 pass for the route.
+- [ ] Removing `simulation_only` must not remove a gate. Live API funding stays blocked until API Usage is explicitly enabled, a secure key binding is ready, qualification is recorded and admission evidence is present, and until P0.3/P0.4 pass for the route. Add a regression test that no provider request is transmitted, and no credential is resolved, when any one of these is missing.
 
 ### Task S2.1: Routing settings
 
@@ -352,7 +352,8 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 **Files:** create `docs/smart-routing-validation.md`.
 
-- [ ] Write the cutover criteria before any canary starts: minimum canary sample, the disagreement rate against the deterministic baseline (measured by S2.8 replay) that triggers quality re-execution, zero funding violations in allocator replay, and latency budgets for warm and cold preparation.
+- [ ] Write the cutover criteria before any canary starts: minimum canary sample, the disagreement rate that triggers quality re-execution, zero funding violations in allocator replay, latency budgets for warm and cold preparation, and the canary bounds (below). A disagreement is a recorded historical assignment whose accepted model/effort or funding class differs from the strategy the new ranker and allocator choose for it; S2.8 replays those recorded assignments to produce the rate.
+- [ ] Define the canary bounds in the same document: one named project allowlist, a spend cap per funding pool, a maximum duration, concurrency caps (A10), an abort condition (any funding violation, unresolved launch or recovery error) and the Smart Routing OFF kill switch (spec §3), which stops new automatic admissions without a model call.
 - [ ] There is no shadow or simulation mode and no decision-only hook at the current selectors. Current selectors keep dispatching until C.3 replaces them.
 
 ### Task S2.8: Allocator replay
@@ -415,7 +416,7 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 ### Task S3.7: Canary
 
-- [ ] Enable enforced routing for one explicitly chosen project on OpenCode; record admissions, blocks, latency and settlement against the S2.7 criteria. Other projects and clients continue on current selectors.
+- [ ] Enable enforced routing for one explicitly chosen project on OpenCode within the S2.7 canary bounds; record admissions, blocks, latency and settlement against the S2.7 criteria, and abort on any bound or abort condition. Other projects and clients continue on current selectors.
 
 ### Task C.1: Confirm the cutover criteria
 

@@ -460,7 +460,7 @@ One logical ledger authority owns financial decisions across worktrees. The Open
 ### 10.4 Breaking cutover
 
 1. Select the reconciled source baseline and map every current admission/selection writer.
-2. Replay recorded arrivals against isolated ledgers as ordinary tests, then canary enforced routing on one explicitly chosen project. Proceed only when the cutover criteria, recorded before the canary starts, pass (section 13); otherwise the current selectors remain.
+2. Replay recorded arrivals against isolated ledgers as ordinary tests, then canary enforced routing on one explicitly chosen project within recorded bounds: a project allowlist, a spend cap per funding pool, a maximum duration, the concurrency caps, an abort condition and the Smart Routing OFF kill switch. Proceed only when the cutover criteria, recorded before the canary starts, pass (section 13); otherwise the current selectors remain.
 3. Stop legacy new admissions, finish or authoritatively reconcile outstanding work, and retain historical costs/minimal unresolved ownership evidence.
 4. Install the built-in routing service and new schema with Smart Routing ON by default, honoring an explicit new Smart Routing OFF choice and the existing Workstreams preference. Configure readiness separately. API Usage remains excluded until explicit enablement/key setup; do not translate legacy Manual/Smart Balance state into new API spending authority implicitly.
 5. Remove superseded runtime selectors, aliases, schemas, wrappers and obsolete tests when the new path qualifies. No compatibility layer or simultaneous old/new writer is retained.
@@ -597,7 +597,7 @@ Self-reviewed on 2026-11-08 using installed Superpowers `writing-plans` 7.0.2: s
 | Default-on could cause inference during setup/status or imply approval of optional features. | Section 3 and F01/F02/F08/F10/F15/F17 separate local controls from actual inference and feature activation. |
 | Existing phase handoff lacked concrete feature regression ownership and executable checkpoints. | The accompanying implementation handoff adds a writing-plans header, review focus, file/interface boundaries and phase-owned checks. |
 
-### v1.5 amendments (2026-11-08)
+### v1.5 amendments (2026-11-08; A14 added later the same day)
 
 Amendments A1–A14 from the [v1.7 implementation plan](../plans/2026-11-08-smart-routing.md), accepted by the user, with A12 applied identically to every provider:
 
@@ -616,7 +616,7 @@ Amendments A1–A14 from the [v1.7 implementation plan](../plans/2026-11-08-smar
 | A11 | Replay and canary before cutover; two-part evaluation. | 10.4, 13 |
 | A12 | Billing classification per route; Claude and OpenAI offer the same subscription and API route kinds under one model. | 1, 6.1, 12, 13 case 23 |
 | A13 | OFF-mode `worker_choices` settings shape. | 3, 13 case 25 |
-| A14 | No shadow or simulation mode: a route is active or it is not. | 3, 10.4 |
+| A14 | No shadow or simulation mode: a route is active or it is not; the canary is bounded. | 3, 10.4, 12, 13 |
 
 This is an author revision, not an independent review.
 
