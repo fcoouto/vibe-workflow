@@ -32,7 +32,9 @@ def parity_cases():
     env = [{"name": name, "credential": name in shell["credential_env_names"]} for name in env_names]
 
     excerpt = json.loads((PROBES / "p0-hook-event-excerpt.json").read_text())
+    live = [hook["payload"] for hook in json.loads((PROBES / "s3-3-shim-live.json").read_text())["hooks"]]
     models = [hook["model"] for hook in excerpt["hooks"] if hook.get("hook") == "model.request"]
+    models += [payload["model"] for payload in live if "model" in payload]
     models += [{"providerID": "openrouter", "id": "glm-5"}, {"providerID": "openrouter", "id": "x/y"},
                {"providerID": "claude-agent", "id": "haiku", "variant": None}, {"providerID": "", "id": "a"},
                {"providerID": "p", "id": "m" * 200}, {"id": "haiku"}]
@@ -45,6 +47,7 @@ def parity_cases():
         model_cases.append({"model": model, "facts": facts})
 
     spawns = [hook["input_model"] for hook in excerpt["hooks"] if hook.get("input_model")]
+    spawns += [payload["input"]["model"] for payload in live if payload.get("tool") == "subagent"]
     spawns += ["claude-agent/haiku", "openrouter/z-ai/glm-5", "haiku", "a/b#c#d", "claude-agent/haiku#", "x" * 300 + "/m"]
     spawn_cases = []
     for model in spawns:

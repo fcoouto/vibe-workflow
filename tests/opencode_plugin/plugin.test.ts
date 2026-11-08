@@ -353,6 +353,24 @@ test("the shim writes nothing to the console and bounds its requests", async () 
   assert.deepEqual(seen, [])
 })
 
+test("the live-recorded hook payloads drive the shim for an attached session", async () => {
+  const live = JSON.parse(readFileSync(join(HERE, "../fixtures/smart-routing/probes/s3-3-shim-live.json"), "utf8"))
+  const real = (value: unknown): any => JSON.parse(JSON.stringify(value).replace(/<(ses|msg|toolu)#(\d+)>/g, "$1_live$2"))
+  const payload = (hook: string, tool?: string) => real(live.hooks.find((h: any) => h.hook === hook && (!tool || h.payload.tool === tool)).payload)
+  const t = await start()
+  try {
+    await t.attach("ses_live1")
+    await t.hooks["session.model.request"](payload("model.request"))
+    await t.hooks["tool.execute.before"](payload("tool.execute.before", "subagent"))
+    await t.hooks["tool.execute.before"](payload("tool.execute.before", "webfetch"))
+    assert.deepEqual(t.fake.requests("check").map((r) => [r.request.kind, r.request.provider, r.request.model, r.request.variant]),
+      [["title", "claude-agent", "haiku", "low"], ["subagent", "claude-agent", "haiku", "low"]])
+    const permission = payload("permission.evaluate")
+    await t.hooks["permission.evaluate"](permission)
+    assert.equal(permission.effect, "deny")
+  } finally { t.stop() }
+})
+
 test("helper extraction matches the documented adapter shapes", () => {
   assert.deepEqual(routeFacts(HAIKU), { provider: "claude-agent", model: "haiku", variant: "low", harness: "claude-agent-sdk via opencode" })
   assert.deepEqual(routeFacts({ providerID: "openrouter", id: "x/y" }), null)
