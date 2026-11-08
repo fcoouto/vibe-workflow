@@ -145,6 +145,9 @@ def _binding(constraints, now, minimum_horizon):
     return work, max(resets_at - now, minimum_horizon), resets_at
 
 
+binding_constraint = _binding  # public name for callers that need the binding pressure terms
+
+
 def choose_route(candidates, now, minimum_horizon):
     """Admit the feasible candidate with the highest pressure = fundable_work / max(horizon, minimum).
 

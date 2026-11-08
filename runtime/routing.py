@@ -335,12 +335,58 @@ def _key(pool, window):
 
 
 def _headroom(data, window, pool, held, task, now):
-    """Usable units in one window after caps, outstanding holds and (for a funded pool) the organization."""
+    """Usable units in one window after caps, outstanding holds and (for a funded pool) the organization.
+
+    A funded window goes through the ledger's own admission gates (`Ledger.org_headroom`: blocked, stale
+    balance, cycle boundary, policy revision), so this path cannot drift from `begin`.
+    """
     if window.get('organization') is not None:
-        base = Ledger._headroom(data, window['organization'], task, int(now))
+        base = Ledger.org_headroom(data, window['organization'], task, window['organization_revision'], int(now))
     else:
         base = window['limit'] - window['used'] - window.get('protected', 0)
     return base - held.get(_key(pool, window['id']), 0)
+
+
+def _is_bool(value):
+    return type(value) is bool
+
+
+def _number(value):
+    return type(value) in (int, float) and value == value and abs(value) != float('inf')
+
+
+def _incomplete(route, pool):
+    """Missing or non-boolean health keys make a route unknown, and unknown is never healthy."""
+    cls = route.get('billing_class')
+    keys = ['capable', 'permitted'] + (['binding_enforceable'] if cls == 'included_subscription' else [])
+    if cls == 'gateway':
+        keys.append('integration_enabled')
+    if cls in DIRECT_API or cls == 'gateway':
+        keys.append('funding_verified')
+    if not all(_is_bool(route.get(key)) for key in keys):
+        return True
+    if not isinstance(route.get('demand'), dict) or not all(
+            isinstance(route.get(key), str) and route[key] for key in ('route', 'pool', 'account')):
+        return True
+    credential = route.get('credential')
+    if (cls in DIRECT_API or cls == 'gateway') and credential is not None and \
+            (not isinstance(credential, dict) or not isinstance(credential.get('state'), str)):
+        return True
+    for window in pool['windows']:
+        if 'id' not in window or 'limit' not in window or 'used' not in window or not _is_bool(window.get('fresh')):
+            return True
+        if window.get('organization') is not None and type(window.get('organization_revision')) is not int:
+            return True
+    return False
+
+
+def _invalid(pool):
+    """Present-but-unusable numbers: a zero or non-numeric limit, negative or non-numeric use."""
+    for window in pool['windows']:
+        limit, used = window['limit'], window['used']
+        if not (_number(limit) and limit > 0) or not (used is None or (_number(used) and used >= 0)):
+            return True
+    return False
 
 
 def _credential_reasons(route, scope, settings):
@@ -353,7 +399,7 @@ def _credential_reasons(route, scope, settings):
         reasons.append('integration_disabled')
     if cls in DIRECT_API or cls == 'gateway':
         credential = route.get('credential')
-        if not isinstance(credential, dict) or credential.get('state') != 'ready':
+        if credential is None or credential.get('state') != 'ready':
             reasons.append('credential_unavailable')
         elif credential.get('scope') != scope:
             reasons.append('credential_scope_mismatch')
@@ -364,22 +410,32 @@ def _credential_reasons(route, scope, settings):
     return reasons
 
 
+def _caps(data, settings):
+    """(total, per_account): the stricter of the settings caps and the ledger-stored caps."""
+    stored_total, stored_account = Ledger._caps(data)
+    return min(settings['caps']['total'], stored_total), min(settings['caps']['per_account'], stored_account)
+
+
 def _candidate(data, route, observations, assignment, settings, held, accounts, now):
     """Return (candidate or None, reasons) for one route; eligibility, billing class, then feasibility."""
-    cls = FUNDING_OF.get(route.get('billing_class'))
+    cls = FUNDING_OF.get(route.get('billing_class')) if isinstance(route, dict) else None
     if cls is None:
         return None, ['billing_class_excluded']
-    reasons = _credential_reasons(route, assignment['scope'], settings)
-    pool = observations.get('pools', {}).get(route['pool'])
+    pool = observations.get('pools', {}).get(route.get('pool'))
     if pool is None:
-        reasons.append('pool_unknown')
-    elif pool.get('billing_class', route['billing_class']) != route['billing_class']:
+        return None, ['pool_unknown']
+    if _incomplete(route, pool):
+        return None, ['observation_incomplete']
+    if _invalid(pool):
+        return None, ['invalid_observation']
+    reasons = _credential_reasons(route, assignment['scope'], settings)
+    if pool.get('billing_class', route['billing_class']) != route['billing_class']:
         reasons.append('pool_funding_mismatch')  # a direct grant never funds a gateway, nor the reverse
     if route.get('capable', True) is not True:
         reasons.append('capability_missing')
     if route.get('permitted', True) is not True:
         reasons.append('not_permitted')
-    if accounts.count(route['account']) >= settings['caps']['per_account']:
+    if accounts.count(route['account']) >= _caps(data, settings)[1]:
         reasons.append('concurrency_cap')
     if reasons:
         return None, reasons
@@ -397,7 +453,7 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         try:
             reserve = Ledger._reserve(estimate, bounds.get(window_id), settings['margin_bp'])
             room = _headroom(data, window, route['pool'], held, assignment['task'], now)
-        except BudgetError:
+        except (BudgetError, KeyError, TypeError, ValueError):
             return None, ['funding_unverified']
         if reserve > room:
             return None, ['insufficient_headroom']
@@ -442,7 +498,7 @@ def _expiry(candidates, observations, settings, now):
 
 
 def _snapshot(item, now, horizon):
-    found = allocator._binding(item['constraints'], now, horizon)
+    found = allocator.binding_constraint(item['constraints'], now, horizon)
     pressure = None if found is None or found[1] is None else float(found[0] / found[1])
     return dict(pressure=pressure, constraints=[dict(c) for c in item['constraints']])
 
@@ -455,7 +511,7 @@ def _choice_matches(entry, item):
 def _decide(data, assignment, ranking, settings, observations):
     now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
     accounts, held = Ledger.open_accounts(data), Ledger.held(data)
-    if len(accounts) >= settings['caps']['total']:
+    if len(accounts) >= _caps(data, settings)[0]:
         return _pending('concurrency_cap')
     candidates, excluded = [], []
     for route in observations['routes']:
@@ -510,6 +566,7 @@ def _decide(data, assignment, ranking, settings, observations):
                   billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
                   pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
                   settings_revision=settings.get('revision', 0), at=now, mode=mode,
+                  snapshot_id=observations.get('snapshot_id'),
                   reason_codes=list(dict.fromkeys(reasons)),
                   ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
     return dict(record=record, vector=item['vector'], account=spec['account'])
@@ -532,11 +589,27 @@ def admit(assignment, ranking, settings, observations, *, ledger):
 
     ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
     result of ``rank`` (empty ``strategy_ids`` falls back to worker choices, never blocks); ``settings`` a
-    resolved ``routing_settings`` dict plus ``revision``; ``observations`` the cached, already-collected
-    ``{now, routes, pools, epoch_at?, minimum_horizon?}``. Returns the admission record with
-    ``status='admitted'`` (``duplicate=True`` for a repeated attempt) or ``status='pending'`` with a
-    ``reason_code``. Pending and duplicate decisions consume nothing and create no record. This is not
-    dispatch authority.
+    resolved ``routing_settings`` dict plus ``revision``.
+
+    ``observations`` is the collector's cached snapshot ``{now, routes, pools, snapshot_id?, epoch_at?,
+    minimum_horizon?}``; ``snapshot_id`` is stamped into the record for audit. Health keys are REQUIRED and
+    never default: per route ``capable``, ``permitted`` (bool), ``demand`` (dict), ``route``, ``pool``,
+    ``account``; subscription routes ``binding_enforceable``; direct API and gateway routes
+    ``funding_verified`` and a ``credential`` ``{ref, scope, state}`` (None means unavailable; gateways also
+    ``integration_enabled``); per pool window ``id``, ``limit``, ``used`` (None is unknown) and ``fresh``;
+    a funded window also ``organization`` and ``organization_revision``. A missing or non-boolean key
+    excludes that route with ``observation_incomplete`` (unusable numbers: ``invalid_observation``).
+
+    Funded windows go through the ledger's own admission gates (blocked, stale balance, cycle boundary,
+    revision), reported as ``funding_unverified``. The concurrency caps are the stricter of ``settings.caps``
+    and the ledger-stored caps. Unknown utilization (no usable subscription window) deliberately counts as
+    u = 1.0 with ``utilization_unknown``: it pushes toward API, which stays gated by enablement, headroom
+    and funding. Returns the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt)
+    or ``status='pending'`` with a ``reason_code``. Pending and duplicate decisions consume nothing, create
+    no record and leave the ledger unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while
+    it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority; S3 issues phase
+    authority inside the hold, calls ``mark_dispatched``/``mark_uncertain``/``close_attempt``, and uses
+    ``Ledger.convert_hold`` so a funded attempt is never counted as both a hold and a run.
     """
     if not _valid_assignment(assignment):
         return _pending('invalid_assignment')

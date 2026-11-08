@@ -315,5 +315,12 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(options, snapshot)
 
 
+class PublicBindingTests(unittest.TestCase):
+    def test_binding_constraint_is_the_public_name(self):
+        self.assertIs(a.binding_constraint, a._binding)
+        found = a.binding_constraint([dict(pool='p', window='w', headroom=10, cost=2, resets_at=1100)], 1000, 900)
+        self.assertEqual(found[0], 5)
+
+
 if __name__ == '__main__':
     unittest.main()

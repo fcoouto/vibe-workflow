@@ -13,6 +13,8 @@ FRESH_SECONDS = 900
 STATE_VERSION = 3
 MAX_ADMISSIONS = 500
 MAX_HOLDS = 1000
+MAX_SEEN = 5000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
+HOLD_OUTCOMES = ('not_dispatched', 'complete', 'uncertain')
 BASIS_POINTS = 10000
 DEFAULT_ALLOWANCE_BP = 9800
 DEFAULT_MARGIN_BP = 2000
@@ -65,7 +67,7 @@ def initialize(path):
     os.close(fd)
     identity = uuid.uuid4().hex
     state = dict(version=STATE_VERSION, identity=identity, organizations={}, runs={}, native={}, finished_native=[],
-                 holds={}, admissions=[])
+                 holds={}, admissions=[], seen_attempts=[])
     with closing(sqlite3.connect(path)) as db:
         db.execute('CREATE TABLE ledger (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
         db.execute('INSERT INTO ledger VALUES (1, ?)', (json.dumps(state),))
@@ -119,12 +121,13 @@ class Ledger:
             row = self.db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
             require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
+            original = json.loads(row[0]) if write else None
             require(data['version'] in (1, 2, STATE_VERSION) and data['identity'] == self.identity,
                     'ledger_identity_changed')
             self._migrate(data)
             yield data
             self._check()
-            if write:
+            if write and data != original:
                 raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
                 require(len(raw) <= MAX_RECORD, 'ledger_capacity_reached')
                 self.db.execute('UPDATE ledger SET body=? WHERE id=1', (raw,))
@@ -152,6 +155,7 @@ class Ledger:
         if data['version'] == 2:
             data.setdefault('holds', {})
             data.setdefault('admissions', [])
+            data.setdefault('seen_attempts', [])
             data['version'] = STATE_VERSION
 
     def snapshot(self):
@@ -304,15 +308,31 @@ class Ledger:
             return self._credit(data, organization, now)
 
     @classmethod
-    def _admit(cls, data, organization, task, maximum, revision, now):
-        integer(maximum); integer(revision); integer(now)
+    def _admission_checks(cls, data, organization, revision, now):
+        """Every admission condition except the final headroom comparison; shared by `_admit` and `admit`."""
+        integer(revision); integer(now)
         org = data['organizations'][organization]; policy = org['policy']
         require(not org['blocked'], 'manual_recovery_required')
         require(org['revision'] == revision, 'policy_revision_changed')
         require(org['observed_at'] is not None and 0 <= now - org['observed_at'] <= FRESH_SECONDS,
                 'balance_stale_or_missing')
         require(policy['start'] <= now < policy['stop_at'], 'expiry_or_cycle_boundary')
+
+    @classmethod
+    def _admit(cls, data, organization, task, maximum, revision, now):
+        integer(maximum)
+        cls._admission_checks(data, organization, revision, now)
         require(maximum <= cls._headroom(data, organization, task, now), 'insufficient_headroom')
+
+    @classmethod
+    def org_headroom(cls, data, organization, task, revision, now):
+        """Headroom for an organization-funded pool, after the same gates `begin` applies.
+
+        Raises BudgetError for an unconfigured, blocked, stale, expired or revision-mismatched organization.
+        """
+        require(organization in data['organizations'], 'organization_unconfigured')
+        cls._admission_checks(data, organization, revision, now)
+        return cls._headroom(data, organization, task, now)
 
     @classmethod
     def _live_admit(cls, data, organization, added, now, gate, run=None):
@@ -366,9 +386,13 @@ class Ledger:
 
     @staticmethod
     def open_accounts(data):
-        """The account of every open attempt: open runs (by organization) and open multi-pool holds."""
-        return ([run['organization'] for run in data['runs'].values() if not run['closed']]
-                + [hold['account'] for hold in data.get('holds', {}).values() if not hold['closed']])
+        """The account of every open attempt: open runs (by organization) and open multi-pool holds.
+
+        A hold converted into a run (same attempt id) is counted once, as the run."""
+        runs = data['runs']
+        return ([run['organization'] for run in runs.values() if not run['closed']]
+                + [hold['account'] for attempt, hold in data.get('holds', {}).items()
+                   if not hold['closed'] and not (attempt in runs and not runs[attempt]['closed'])])
 
     @classmethod
     def _check_caps(cls, data, organization):
@@ -410,33 +434,64 @@ class Ledger:
         maximum = self._reserve(estimate, next_request_bound, margin_bp)
         require(integer(provision) <= maximum, 'provision_exceeded')
         with self.transaction() as data:
-            if run_id in data['runs']:
-                run = data['runs'][run_id]
-                require(live_gate is None and 'live_admission' not in run, 'live_run_id_already_used')
-                require((run['organization'], run['task'], run['digest']) == (organization, task, digest), 'run_identity_changed')
-                return run
-            require(len(data['runs']) < 1000, 'ledger_capacity_reached')
+            return self._begin(data, organization, task, run_id, digest, maximum, revision, now, native,
+                               provision, transfer_from, consent, live_gate)
+
+    def _begin(self, data, organization, task, run_id, digest, maximum, revision, now, native, provision,
+               transfer_from, consent, live_gate, check_caps=True):
+        if run_id in data['runs']:
+            run = data['runs'][run_id]
+            require(live_gate is None and 'live_admission' not in run, 'live_run_id_already_used')
+            require((run['organization'], run['task'], run['digest']) == (organization, task, digest), 'run_identity_changed')
+            return run
+        require(len(data['runs']) < 1000, 'ledger_capacity_reached')
+        if check_caps:
             self._check_caps(data, organization)
-            moved = 0
-            if transfer_from is not None:
-                moved = self._transfer(data, organization, transfer_from, maximum)
-            admission = self._live_admit(data, organization, maximum, now, live_gate)
-            self._admit(data, organization, task, maximum, revision, now)
-            require(native.get('task') == task, 'native_task_mismatch')
-            key = self._native(data, native, now)
-            data['native'][key]['latest_at'] = now
-            if consent is not None:
-                self._consent(data, consent)
-            run = dict(consent=consent, organization=organization, task=task, digest=digest, revision=revision,
-                       native=key, closed=False, calls={})
-            if admission is not None:
-                run['live_admission'] = admission
-            if moved:
-                run['transferred_from'] = dict(run=transfer_from[0], amount=moved)
-            data['runs'][run_id] = run
-            run['calls']['count'] = self._call(data, run, maximum, digest)
-            if provision:
-                run['calls']['count']['provision'] = provision
+        moved = 0
+        if transfer_from is not None:
+            moved = self._transfer(data, organization, transfer_from, maximum)
+        admission = self._live_admit(data, organization, maximum, now, live_gate)
+        self._admit(data, organization, task, maximum, revision, now)
+        require(native.get('task') == task, 'native_task_mismatch')
+        key = self._native(data, native, now)
+        data['native'][key]['latest_at'] = now
+        if consent is not None:
+            self._consent(data, consent)
+        run = dict(consent=consent, organization=organization, task=task, digest=digest, revision=revision,
+                   native=key, closed=False, calls={})
+        if admission is not None:
+            run['live_admission'] = admission
+        if moved:
+            run['transferred_from'] = dict(run=transfer_from[0], amount=moved)
+        data['runs'][run_id] = run
+        run['calls']['count'] = self._call(data, run, maximum, digest)
+        if provision:
+            run['calls']['count']['provision'] = provision
+        return run
+
+    def convert_hold(self, attempt_id, keys, organization, task, digest, estimate, revision, now, native, *,
+                     next_request_bound=None, margin_bp=None, provision=0, consent=None, live_gate=None):
+        """Move an admission's organization-funded keys from its hold into a run claim in ONE transaction.
+
+        S3 must use this (not a separate `begin`) when it dispatches a funded attempt: the named `keys` leave
+        the hold as the run takes the claim, and the attempt keeps one concurrency place, so neither headroom
+        nor caps are counted twice. Other keys stay held under the same attempt.
+        """
+        for value in (organization, task, digest): name(value)
+        maximum = self._reserve(estimate, next_request_bound, margin_bp)
+        require(integer(provision) <= maximum, 'provision_exceeded')
+        require(type(keys) is list and keys and all(type(key) is str for key in keys), 'invalid_keys')
+        with self.transaction() as data:
+            hold = data['holds'].get(attempt_id)
+            require(hold is not None and not hold['closed'] and hold['state'] == 'admitted'
+                    and attempt_id not in data['runs'] and all(key in hold['vector'] for key in keys),
+                    'convert_forbidden')
+            run = self._begin(data, organization, task, attempt_id, digest, maximum, revision, now, native,
+                              provision, None, consent, live_gate, check_caps=False)
+            for key in keys:
+                del hold['vector'][key]
+            if not hold['vector']:
+                hold.update(closed=True, state='converted')
             return run
 
     def top_up(self, run_id, added, revision, now, *, live_gate=None):
@@ -551,7 +606,8 @@ class Ledger:
             known = self.admission(data, attempt_id)
             if known is not None:
                 return dict(known, duplicate=True)
-            require(attempt_id not in data['holds'] and attempt_id not in data['runs'], 'attempt_id_in_use')
+            require(attempt_id not in data['holds'] and attempt_id not in data['runs']
+                    and attempt_id not in data['seen_attempts'], 'attempt_id_in_use')
             outcome = decide(data)
             if 'record' not in outcome:
                 return outcome
@@ -561,8 +617,11 @@ class Ledger:
                 name(key); integer(amount)
             self._prune(data)
             require(len(data['holds']) < MAX_HOLDS, 'ledger_capacity_reached')
-            data['holds'][attempt_id] = dict(account=account, task=record['task'], vector=dict(vector), closed=False)
+            data['holds'][attempt_id] = dict(account=account, task=record['task'], vector=dict(vector), closed=False,
+                                             state='admitted')
             data['admissions'].append(record)
+            data['seen_attempts'].append(attempt_id)
+            del data['seen_attempts'][:-MAX_SEEN]
             del data['admissions'][:-MAX_ADMISSIONS]
             return dict(record)
 
@@ -573,12 +632,41 @@ class Ledger:
             for key in [k for k, hold in data['holds'].items() if hold['closed']][:MAX_HOLDS // 2]:
                 del data['holds'][key]
 
-    def close_attempt(self, attempt_id):
-        """Release an admission's holds so its capacity and concurrency place are free again."""
+    def _hold(self, data, attempt_id, states):
+        hold = data['holds'].get(attempt_id)
+        require(hold is not None, 'attempt_missing')
+        require(not hold['closed'] and hold['state'] in states, 'hold_state_forbidden')
+        return hold
+
+    def mark_dispatched(self, attempt_id):
+        """The send may have begun: from here the hold is released only by completion or reconciliation."""
+        with self.transaction() as data:
+            self._hold(data, attempt_id, ('admitted',))['state'] = 'dispatched'
+
+    def mark_uncertain(self, attempt_id):
+        """Delivery cannot be established; the hold keeps its exposure and its concurrency place."""
+        with self.transaction() as data:
+            self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
+
+    def close_attempt(self, attempt_id, outcome):
+        """Release a hold only on an established outcome: `not_dispatched` or `complete`.
+
+        `uncertain` records that the outcome is unknown and keeps the hold; a timeout never frees capacity.
+        `not_dispatched` is valid only before dispatch; `complete` after dispatch or once an uncertain
+        attempt is reconciled.
+        """
+        require(outcome in HOLD_OUTCOMES, 'invalid_outcome')
         with self.transaction() as data:
             hold = data['holds'].get(attempt_id)
             require(hold is not None, 'attempt_missing')
-            hold['closed'] = True
+            require(not hold['closed'], 'close_forbidden')
+            allowed = dict(not_dispatched=('admitted',), complete=('dispatched', 'uncertain'),
+                           uncertain=('admitted', 'dispatched', 'uncertain'))[outcome]
+            require(hold['state'] in allowed, 'close_forbidden')
+            if outcome == 'uncertain':
+                hold['state'] = 'uncertain'
+            else:
+                hold.update(closed=True, state='released')
 
     def release_native(self, account, task, evidence, now):
         with self.transaction() as data:

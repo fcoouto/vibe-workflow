@@ -148,6 +148,7 @@ class EligibilityTests(Base):
                 path = Path(folder) / 'private' / 'l.sqlite3'
                 identity = budget.initialize(path)
                 with budget.Ledger(path, identity) as ledger:
+                    ledger.set_caps(40, 40)
                     routes = [sub_route('sub', provider), api_route('api', provider)]
                     pools = dict(sub=sub_pool(used=740), api=api_pool())
                     run = []
@@ -264,7 +265,7 @@ class AllocationTests(Base):
         self.assertEqual(len(self.ledger.snapshot()['admissions']), 1)
 
     def test_unknown_utilization_is_conservative_not_healthy(self):
-        extra = [dict(id='wk', limit=1000, used=None, length=604800, reset_at=NOW + 1000)]
+        extra = [dict(id='wk', limit=1000, used=None, length=604800, reset_at=NOW + 1000, fresh=True)]
         routes = [sub_route('sub'), api_route('api')]
         result = self.admit('a', ['s-sub', 's-api'], routes, dict(sub=sub_pool(extra=extra), api=api_pool()))
         self.assertIn('utilization_unknown', result['reason_codes'])
