@@ -171,12 +171,12 @@ class SharedOrganizationTests(Funded):
         """Windows of one dollar pool measure the same spend: the organization is charged the largest, not the sum."""
         self.fund(balance=10 * M)
         pools = dict(g=dict(billing_class='api_grant', windows=[window('a', organization='org'),
-                                                                window('b', organization='org', limit=5 * M)]))
+                                                                window('b', organization='org', limit=6 * M)]))
         ok = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 3 * M})], pools)
         self.assertEqual(ok['reserved'], {'org:org': 5_400_000})
         self.assertEqual(self.ledger.headroom('org'), 9_800_000 - 5_400_000)
         strict = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'a': M, 'b': 4 * M})], pools)
-        self.assertEqual(strict['status'], 'pending')  # window b alone: 4.8M > 5M - 5.4M already held
+        self.assertEqual(strict['status'], 'pending')  # window b: 4.8M > 6M - 5.4M already held
 
     def test_collector_numbers_only_add_a_stricter_minimum(self):
         self.fund(balance=10 * M)
@@ -914,10 +914,10 @@ class SoftLimitTests(Funded):
         with closing(sqlite3.connect(self.path)) as db:
             data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
             org = data['organizations']['org']
-            size = len(json.dumps(org, separators=(',', ':'))) + 300
-            body = len(json.dumps(data, separators=(',', ':')))
-            for i in range((budget.SOFT_RECORD - body) // size + 2):
-                data['organizations'][long('filler%d' % i)] = copy.deepcopy(org)
+            filler = len(json.dumps({long('filler'): org}, separators=(',', ':')))
+            count = (budget.SOFT_RECORD - len(json.dumps(data, separators=(',', ':')))) // filler
+            for i in range(count + 50):  # a little past the soft limit
+                data['organizations'][unique(i, long('filler'))] = copy.deepcopy(org)
             raw = json.dumps(data, separators=(',', ':'))
             db.execute('UPDATE ledger SET body=?', (raw,)); db.commit()
         self.assertGreater(len(raw), budget.SOFT_RECORD)
