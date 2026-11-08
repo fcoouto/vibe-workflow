@@ -1,0 +1,400 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "sessions": [
+    {
+      "id": "<ses_2>",
+      "parentID": null,
+      "agent": null,
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "tokens": {
+        "input": 4,
+        "output": 148,
+        "reasoning": 0,
+        "cache": {
+          "read": 26034,
+          "write": 26325
+        }
+      },
+      "cost": 0,
+      "title": "probe D"
+    },
+    {
+      "id": "<ses_3>",
+      "parentID": "<ses_2>",
+      "agent": "nester",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "tokens": {
+        "input": 4,
+        "output": 195,
+        "reasoning": 166,
+        "cache": {
+          "read": 51288,
+          "write": 933
+        }
+      },
+      "cost": 0,
+      "title": "Launch nester probe"
+    },
+    {
+      "id": "<ses_4>",
+      "parentID": null,
+      "agent": null,
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "tokens": {
+        "input": 8,
+        "output": 240,
+        "reasoning": 0,
+        "cache": {
+          "read": 52164,
+          "write": 1725
+        }
+      },
+      "cost": 0,
+      "title": "Reply with exact text"
+    },
+    {
+      "id": "<ses_5>",
+      "parentID": null,
+      "agent": null,
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "tokens": {
+        "input": 26,
+        "output": 271,
+        "reasoning": 262,
+        "cache": {
+          "read": 188258,
+          "write": 21594
+        }
+      },
+      "cost": 0,
+      "title": "probe A"
+    },
+    {
+      "id": "<ses_1>",
+      "parentID": "<ses_5>",
+      "agent": "general",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "tokens": {
+        "input": 2,
+        "output": 4,
+        "reasoning": 0,
+        "cache": {
+          "read": 4124,
+          "write": 20420
+        }
+      },
+      "cost": 0,
+      "title": "Reply OK"
+    },
+    {
+      "id": "<ses_6>",
+      "parentID": null,
+      "agent": null,
+      "model": null,
+      "tokens": {
+        "input": 0,
+        "output": 0,
+        "reasoning": 0,
+        "cache": {
+          "read": 0,
+          "write": 0
+        }
+      },
+      "cost": 0,
+      "title": "race 2"
+    }
+  ],
+  "aux_session_C": {
+    "messages": [
+      {
+        "id": "<msg_27>",
+        "time": {
+          "created": 1794170387685
+        },
+        "type": "idle",
+        "outcome": "succeeded"
+      },
+      {
+        "type": "compaction",
+        "id": "<msg_28>",
+        "time": {
+          "created": 1794170384838
+        },
+        "status": "completed",
+        "reason": "manual",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        },
+        "summary": "## Objective\n- Not yet stated. The conversation so far is two trivial exchanges: the user asked for the reply \"OK\", and the assistant replied \"OK\".\n\n## Requirements\n- (none)\n\n## Decisions\n- (none)\n\n## Work State\n### Completed\n- Replied \"OK\" to the user's request to reply with exactly \"OK\".\n\n### Active\n- (none)\n\n### Blocked\n- (none)\n\n## Next Move\n1. Wait for the user's next request.\n\n## Relevant Files\n(none)\n\n## Important Context\n- Working directory: /tmp/p0hooks/proj (git repo, branch master). Git status at session start showed only untracked `.opencode/`. No code changes have been made.",
+        "cost": 0,
+        "tokens": {
+          "input": 4,
+          "output": 227,
+          "reasoning": 0,
+          "cache": {
+            "read": 25614,
+            "write": 1176
+          }
+        }
+      },
+      {
+        "id": "<msg_29>",
+        "time": {
+          "created": 1794170366332
+        },
+        "type": "idle",
+        "outcome": "succeeded"
+      },
+      {
+        "id": "<msg_30>",
+        "time": {
+          "created": 1794170364822,
+          "streamed": 1794170366322,
+          "completed": 1794170366331
+        },
+        "type": "assistant",
+        "agent": "build",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "OK",
+            "native": {
+              "sessionID": "<uuid_12>",
+              "messageID": "<uuid_13>"
+            }
+          }
+        ],
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "native": {
+          "rateLimit": {
+            "status": "allowed",
+            "resetsAt": 1794178200,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": false,
+            "unifiedWindows": {
+              "five_hour": {
+                "utilization": 0.17,
+                "resetsAt": 1794178200,
+                "status": "allowed"
+              },
+              "seven_day": {
+                "utilization": 0.04,
+                "resetsAt": 1794477600,
+                "status": "allowed"
+              }
+            }
+          }
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 2,
+          "output": 4,
+          "reasoning": 0,
+          "cache": {
+            "read": 25945,
+            "write": 0
+          }
+        }
+      },
+      {
+        "id": "<msg_31>",
+        "time": {
+          "created": 1794170364814
+        },
+        "text": "Reply with exactly: OK",
+        "type": "user"
+      }
+    ],
+    "session_tokens": {
+      "input": 8,
+      "output": 240,
+      "reasoning": 0,
+      "cache": {
+        "read": 52164,
+        "write": 1725
+      }
+    },
+    "sum_of_message_tokens": {
+      "input": 6,
+      "output": 231
+    },
+    "note": "title request (kind=title) has no message record; its tokens appear only in the session aggregate (session minus message sum)"
+  },
+  "nested_session_D": {
+    "messages": [
+      {
+        "id": "<msg_32>",
+        "time": {
+          "created": 1794170447818
+        },
+        "type": "idle",
+        "outcome": "succeeded"
+      },
+      {
+        "id": "<msg_33>",
+        "time": {
+          "created": 1794170447173,
+          "streamed": 1794170447800,
+          "completed": 1794170447809
+        },
+        "type": "assistant",
+        "agent": "build",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Blocked",
+            "native": {
+              "sessionID": "<uuid_14>",
+              "messageID": "<uuid_15>"
+            }
+          }
+        ],
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "cost": 0,
+        "tokens": {
+          "input": 2,
+          "output": 6,
+          "reasoning": 0,
+          "cache": {
+            "read": 26034,
+            "write": 291
+          }
+        }
+      },
+      {
+        "id": "<msg_34>",
+        "time": {
+          "created": 1794170441581,
+          "streamed": 1794170443119,
+          "completed": 1794170447167
+        },
+        "type": "assistant",
+        "agent": "build",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        },
+        "content": [
+          {
+            "type": "tool",
+            "id": "<toolu_3>",
+            "name": "subagent",
+            "executed": false,
+            "native": {
+              "sessionID": "<uuid_14>",
+              "messageID": "<uuid_16>"
+            },
+            "state": {
+              "status": "completed",
+              "input": {
+                "agent": "nester",
+                "description": "Launch nester probe",
+                "prompt": "Use the subagent tool exactly once to launch the general agent with the task Reply OK. Then reply with one word."
+              },
+              "content": [
+                {
+                  "type": "text",
+                  "text": "<subagent sessionID=\"<ses_3>\" state=\"completed\">\nThe subagent call failed with `routing: nested spawn blocked by probe`, so the general agent never ran. I didn't retry, since you asked for exactly one launch. I'm not replying \"OK\" because nothing came back from the subagent.\n</subagent>"
+                }
+              ],
+              "metadata": {
+                "sessionID": "<ses_3>",
+                "status": "completed",
+                "truncated": false
+              }
+            },
+            "time": {
+              "created": 1794170443105,
+              "ran": 1794170443107,
+              "completed": 1794170447158
+            }
+          }
+        ],
+        "finish": "tool-calls",
+        "rawFinish": "tool_use",
+        "native": {
+          "rateLimit": {
+            "status": "allowed",
+            "resetsAt": 1794178200,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": false,
+            "unifiedWindows": {
+              "five_hour": {
+                "utilization": 0.17,
+                "resetsAt": 1794178200,
+                "status": "allowed"
+              },
+              "seven_day": {
+                "utilization": 0.04,
+                "resetsAt": 1794477600,
+                "status": "allowed"
+              }
+            }
+          }
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 2,
+          "output": 142,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 26034
+          }
+        }
+      },
+      {
+        "id": "<msg_35>",
+        "time": {
+          "created": 1794170441577
+        },
+        "text": "Use the subagent tool exactly once to launch the nester agent with this task: \"Use the subagent tool exactly once to launch the general agent with the task Reply OK. Then reply with one word.\" Then reply with one word.",
+        "type": "user"
+      }
+    ]
+  }
+}

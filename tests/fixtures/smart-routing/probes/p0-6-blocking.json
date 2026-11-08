@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "observations": [
+    {
+      "case": "context hook throws",
+      "transmitted": false,
+      "evidence": "no model.request hook, no assistant message, session tokens unchanged; idle outcome=failed with the thrown message"
+    },
+    {
+      "case": "context hook hangs 70s",
+      "transmitted": false,
+      "evidence": "no host timeout within 60s; session.interrupt -> outcome=interrupted; after hook returned nothing was sent"
+    },
+    {
+      "case": "plugin setup throws (load failure)",
+      "transmitted": true,
+      "evidence": "server logs 'failed to load plugin' + 'deactivating'; next prompt answered normally (FAIL-OPEN)"
+    },
+    {
+      "case": "tool.execute.before throws for shell",
+      "transmitted": "model yes, tool no",
+      "evidence": "tool part executed=false, status=error; marker file not created; model continued"
+    },
+    {
+      "case": "nested subagent spawn from a subagent session, tool.execute.before throws",
+      "transmitted": "no grandchild",
+      "evidence": "no grandchild session created; child continued"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "round": 2,
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "transmitted_model_requests": 10,
+  "blocked_before_transmission": 1,
+  "breakdown": [
+    {
+      "probe": "direct MCP tool blocked by hook",
+      "requests": 2
+    },
+    {
+      "probe": "Code Mode nested MCP + fetch",
+      "requests": 2
+    },
+    {
+      "probe": "tool.use policy deny (MCP direct, nested, fetch)",
+      "requests": 2
+    },
+    {
+      "probe": "subagent child shell env",
+      "requests": 4
+    },
+    {
+      "probe": "shim child killed, respawn disabled, model.request",
+      "requests": 0,
+      "blocked": 1
+    }
+  ],
+  "cross_check": "11 model.request hook observations = 10 transmitted + 1 blocked by the shim",
+  "round1": {
+    "transmitted": 16,
+    "blocked": 2
+  }
+}

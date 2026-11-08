@@ -1,0 +1,598 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "description": "Session A messages: requested model/variant echoed on assistant messages; native rateLimit telemetry; no provider-resolved model id",
+  "messages": [
+    {
+      "id": "<msg_1>",
+      "time": {
+        "created": 1794170307362
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_2>",
+      "time": {
+        "created": 1794170306814,
+        "streamed": 1794170307353,
+        "completed": 1794170307361
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "OK",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_2>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 4,
+        "reasoning": 0,
+        "cache": {
+          "read": 26499,
+          "write": 303
+        }
+      }
+    },
+    {
+      "id": "<msg_3>",
+      "time": {
+        "created": 1794170303785,
+        "streamed": 1794170305467,
+        "completed": 1794170306808
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I'm checking the subagent request: the user explicitly named the model claude-agent/haiku#low, which is the exception to the rule against setting a model, and that name follows the provider/model#variant format. Since the user supplied it, I'll go ahead and make the call.\n\n",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_3>"
+          },
+          "time": {
+            "created": 1794170304413,
+            "completed": 1794170305458
+          }
+        },
+        {
+          "type": "tool",
+          "id": "<toolu_1>",
+          "name": "subagent",
+          "executed": false,
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_4>"
+          },
+          "state": {
+            "status": "completed",
+            "input": {
+              "agent": "general",
+              "description": "Reply OK",
+              "prompt": "Reply with exactly OK.",
+              "model": "claude-agent/haiku#low"
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "<subagent sessionID=\"<ses_1>\" state=\"completed\">\nOK\n</subagent>"
+              }
+            ],
+            "metadata": {
+              "sessionID": "<ses_1>",
+              "status": "completed",
+              "truncated": false
+            }
+          },
+          "time": {
+            "created": 1794170305464,
+            "ran": 1794170305466,
+            "completed": 1794170306799
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 145,
+        "reasoning": 80,
+        "cache": {
+          "read": 26390,
+          "write": 109
+        }
+      }
+    },
+    {
+      "id": "<msg_4>",
+      "time": {
+        "created": 1794170303780
+      },
+      "text": "Use the subagent tool exactly once to launch the general agent with the task: Reply with exactly OK. Use model claude-agent/haiku#low for it if the tool accepts a model. Then reply with one word.",
+      "type": "user"
+    },
+    {
+      "id": "<msg_5>",
+      "time": {
+        "created": 1794170257130
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_6>",
+      "time": {
+        "created": 1794170256403,
+        "streamed": 1794170257119,
+        "completed": 1794170257128
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "The command failed: the shell tool returned \"routing: blocked by probe,\" so `probe_marker.txt` was not created.",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_5>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 40,
+        "reasoning": 0,
+        "cache": {
+          "read": 26257,
+          "write": 133
+        }
+      }
+    },
+    {
+      "id": "<msg_7>",
+      "time": {
+        "created": 1794170255579,
+        "streamed": 1794170256389,
+        "completed": 1794170256397
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "tool",
+          "id": "<toolu_2>",
+          "name": "shell",
+          "executed": false,
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_6>"
+          },
+          "state": {
+            "status": "error",
+            "input": {
+              "command": "touch probe_marker.txt"
+            },
+            "error": {
+              "type": "unknown",
+              "message": "routing: blocked by probe"
+            }
+          },
+          "time": {
+            "created": 1794170256377,
+            "ran": 1794170256378,
+            "completed": 1794170256381
+          }
+        }
+      ],
+      "finish": "tool-calls",
+      "rawFinish": "tool_use",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 63,
+        "reasoning": 0,
+        "cache": {
+          "read": 26019,
+          "write": 238
+        }
+      }
+    },
+    {
+      "id": "<msg_8>",
+      "time": {
+        "created": 1794170255575
+      },
+      "text": "Use the shell tool to run exactly this command: touch probe_marker.txt . Do not use any other tool. After the tool result, reply with one word.",
+      "type": "user"
+    },
+    {
+      "id": "<msg_9>",
+      "time": {
+        "created": 1794170223189
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_10>",
+      "time": {
+        "created": 1794170221046,
+        "streamed": 1794170223178,
+        "completed": 1794170223187
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "I'm weighing whether to answer with just the last \"Reply with exactly\" instruction, which is OK7, or with the whole sequence of OK5, OK6, and OK7.\n\nI'm going with OK7, since that's the most recent \"Reply with exactly\" instruction.\n\n",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_7>"
+          },
+          "time": {
+            "created": 1794170221655,
+            "completed": 1794170223166
+          }
+        },
+        {
+          "type": "text",
+          "text": "OK7",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_8>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "native": {
+        "rateLimit": {
+          "status": "allowed",
+          "resetsAt": 1794178200,
+          "rateLimitType": "five_hour",
+          "overageStatus": "rejected",
+          "overageDisabledReason": "org_level_disabled",
+          "isUsingOverage": false,
+          "unifiedWindows": {
+            "five_hour": {
+              "utilization": 0.16,
+              "resetsAt": 1794178200,
+              "status": "allowed"
+            },
+            "seven_day": {
+              "utilization": 0.04,
+              "resetsAt": 1794477600,
+              "status": "allowed"
+            }
+          }
+        }
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 182,
+        "cache": {
+          "read": 25979,
+          "write": 40
+        }
+      }
+    },
+    {
+      "id": "<msg_11>",
+      "time": {
+        "created": 1794170221042
+      },
+      "text": "Reply with exactly: OK7",
+      "type": "user"
+    },
+    {
+      "id": "<msg_12>",
+      "time": {
+        "created": 1794170189327
+      },
+      "type": "idle",
+      "outcome": "interrupted"
+    },
+    {
+      "id": "<msg_13>",
+      "time": {
+        "created": 1794170129284
+      },
+      "text": "Reply with exactly: OK6",
+      "type": "user"
+    },
+    {
+      "id": "<msg_14>",
+      "time": {
+        "created": 1794170105143
+      },
+      "type": "idle",
+      "outcome": "failed",
+      "error": {
+        "type": "unknown",
+        "message": "routing: blocked by probe"
+      }
+    },
+    {
+      "id": "<msg_15>",
+      "time": {
+        "created": 1794170105134
+      },
+      "text": "Reply with exactly: OK5",
+      "type": "user"
+    },
+    {
+      "id": "<msg_16>",
+      "time": {
+        "created": 1794170038801
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_17>",
+      "time": {
+        "created": 1794170038043,
+        "streamed": 1794170038791,
+        "completed": 1794170038799
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "OK3",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_9>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "native": {
+        "rateLimit": {
+          "status": "allowed",
+          "resetsAt": 1794178200,
+          "rateLimitType": "five_hour",
+          "overageStatus": "rejected",
+          "overageDisabledReason": "org_level_disabled",
+          "isUsingOverage": false,
+          "unifiedWindows": {
+            "five_hour": {
+              "utilization": 0.15,
+              "resetsAt": 1794178200,
+              "status": "allowed"
+            },
+            "seven_day": {
+              "utilization": 0.04,
+              "resetsAt": 1794477600,
+              "status": "allowed"
+            }
+          }
+        }
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 25961,
+          "write": 18
+        }
+      }
+    },
+    {
+      "id": "<msg_18>",
+      "time": {
+        "created": 1794170038009
+      },
+      "text": "Reply with exactly: OK3",
+      "type": "user"
+    },
+    {
+      "id": "<msg_19>",
+      "time": {
+        "created": 1794170037979
+      },
+      "type": "model-switched",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "previous": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      }
+    },
+    {
+      "id": "<msg_20>",
+      "time": {
+        "created": 1794170011324
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_21>",
+      "time": {
+        "created": 1794170010642,
+        "streamed": 1794170011312,
+        "completed": 1794170011322
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "OK2",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_10>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "cost": 0,
+      "tokens": {
+        "input": 4,
+        "output": 5,
+        "reasoning": 0,
+        "cache": {
+          "read": 25614,
+          "write": 347
+        }
+      }
+    },
+    {
+      "id": "<msg_22>",
+      "time": {
+        "created": 1794170010606
+      },
+      "text": "Reply with exactly: OK2",
+      "type": "user"
+    },
+    {
+      "id": "<msg_23>",
+      "time": {
+        "created": 1794170000636
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_24>",
+      "time": {
+        "created": 1794169976720
+      },
+      "type": "idle",
+      "outcome": "succeeded"
+    },
+    {
+      "id": "<msg_25>",
+      "time": {
+        "created": 1794169975353,
+        "streamed": 1794169976709,
+        "completed": 1794169976719
+      },
+      "type": "assistant",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "OK",
+          "native": {
+            "sessionID": "<uuid_1>",
+            "messageID": "<uuid_11>"
+          }
+        }
+      ],
+      "finish": "stop",
+      "rawFinish": "end_turn",
+      "native": {
+        "rateLimit": {
+          "status": "allowed",
+          "resetsAt": 1794178200,
+          "rateLimitType": "five_hour",
+          "overageStatus": "rejected",
+          "overageDisabledReason": "org_level_disabled",
+          "isUsingOverage": false,
+          "unifiedWindows": {
+            "five_hour": {
+              "utilization": 0.14,
+              "resetsAt": 1794178200,
+              "status": "allowed"
+            },
+            "seven_day": {
+              "utilization": 0.04,
+              "resetsAt": 1794477600,
+              "status": "allowed"
+            }
+          }
+        }
+      },
+      "cost": 0,
+      "tokens": {
+        "input": 2,
+        "output": 4,
+        "reasoning": 0,
+        "cache": {
+          "read": 5539,
+          "write": 20406
+        }
+      }
+    },
+    {
+      "id": "<msg_26>",
+      "time": {
+        "created": 1794169975316
+      },
+      "text": "Reply with exactly: OK",
+      "type": "user"
+    }
+  ]
+}
