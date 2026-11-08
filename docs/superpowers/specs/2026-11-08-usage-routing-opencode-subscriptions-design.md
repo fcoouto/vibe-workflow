@@ -224,7 +224,7 @@ Represent execution as `provider + account/organization + credential binding + e
 
 API Usage becomes the grant/key discovery, credit settings and funding-observation capability of this pipeline. A provider API grant cannot be spent through OpenRouter or OpenCode Console merely because they expose the same model; each has its own billing route. Existing OpenRouter routes retain their separately configured funding and endpoint restrictions under the common allocator.
 
-Keys identify access to an organization/project, not an exclusive grant. Deduplicate pools across all keys, projects, sessions and worktrees that share the actual allowance. Match subscription telemetry to the intended account before using it for automatic allocation.
+Keys identify access to an organization/project, not an exclusive grant. Every key in the linked organization shares one grant, including a key stored in OpenCode Console or OpenRouter. Grants exist only for Claude Max, Ultra and Team and ChatGPT Pro and Business; after the grant runs out both vendors move silently to purchased credit, auto-reload or invoicing, so the router enforces the allowance cap itself. Annual ChatGPT Business grants are issued yearly and expire at the annual cycle end. Deduplicate pools across all keys, projects, sessions and worktrees that share the actual allowance. Match subscription telemetry to the intended account before using it for automatic allocation.
 
 **Billing classification.** Before telemetry or allocation, classify each route (`provider + account + credential + harness/endpoint`) as `included_subscription`, `purchased_usage`, `api_grant`, `api_prepaid`, `gateway` or `ineligible`, from current vendor terms and observed billing (P0.0). Rate-limit telemetry never reclassifies a route, and `purchased_usage` never counts as subscription headroom or enters automatic routing.
 
@@ -232,12 +232,12 @@ Keys identify access to an organization/project, not an exclusive grant. Dedupli
 
 | Route kind | Credential | Funding pool |
 |---|---|---|
-| Subscription | The provider's subscription login, through a harness the vendor bills as included usage (for example Codex for OpenAI and Claude Code for Anthropic), launched directly or as a harness managed by OpenCode | Subscription headroom across that account's windows |
+| Subscription | The provider's subscription login, through a harness the vendor bills as included usage (for example Codex or Sign in with ChatGPT for OpenAI, and Claude Code or OpenCode's Claude Agent provider for Anthropic) | Subscription headroom across that account's windows |
 | API | API Usage's scoped enablement and secure key binding | The subscription-linked API allowance (`api_grant`), plus other verified credits only under `no-limit` |
 
 The allocator considers both kinds for each provider and chooses between them with section 7.2's preference. API Usage OFF removes only the API routes; a provider's subscription routes stay available. Billing class belongs to the route (credential plus harness), not to the provider, and P0.0 discovers it the same way for both providers. A route the vendor bills as extra or purchased usage is `purchased_usage` for either provider and is excluded from automatic routing.
 
-**Reference Claude subscription route.** OpenCode running Claude through the Claude Code harness on the user's Claude subscription is the user's working setup (observed 2026-11-08; the user reports subscription usage, not API calls). It is a subscription route under this model, routed just like Codex. The harness distinction exists only because Anthropic announced in April 2026 that Claude subscriptions do not cover third-party tools calling its models directly. That excludes OpenCode calling Anthropic directly with a subscription login, not this route.
+**Reference Claude subscription route.** OpenCode running Claude through its Claude Agent provider on the user's Claude plan is the user's working setup (observed 2026-11-08; no API key, cost 0). That provider launches the installed Claude binary through the Claude Agent SDK, so the harness is the Agent SDK, not interactive Claude Code. It is a subscription route under this model, routed like Codex. Its standing is disputed: Anthropic's support text says plan-signed Agent SDK usage draws from subscription limits, while its Agent SDK overview says third-party developers may not offer claude.ai login or rate limits unless previously approved, and an April 2026 announcement said subscriptions no longer cover third-party tools. Treat the route as tolerated, not guaranteed, keep its concurrency caps conservative, and see the [capability matrix](../../smart-routing-capability-matrix.md).
 
 ### 6.2 Credit controls
 
