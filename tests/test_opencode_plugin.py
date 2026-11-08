@@ -27,7 +27,8 @@ def parity_cases():
     """Expected values computed by the Python adapter for the plugin's TS extraction."""
     env_names = ["PATH", "HOME", "GITHUB_TOKEN", "OPENAI_API_KEY", "APIKEY", "SSH_AUTH_SOCK", "DB_PASSWORD",
                  "KEYBOARD", "TOKENIZER_PATH", "MONKEY", "AWS_SECRET_ACCESS_KEY", "GH_AUTH", "COOKIE_JAR",
-                 "PRIVATE_KEY_PATH", "SESSION_KEY", "my_passwd", "Credentials", "OPENCODE_TERMINAL", "LANG"]
+                 "PRIVATE_KEY_PATH", "SESSION_KEY", "my_passwd", "Credentials", "OPENCODE_TERMINAL", "LANG",
+                 "DATABASE_URL", "SENTRY_DSN", "PG_CONNECTION_STRING", "DATABASE_HOST", "AWS_PROFILE", "KUBECONFIG"]
     shell = opencode.normalize_hook("shell.create.before", {"env": dict.fromkeys(env_names, "x")})
     env = [{"name": name, "credential": name in shell["credential_env_names"]} for name in env_names]
 

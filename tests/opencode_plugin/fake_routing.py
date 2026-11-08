@@ -3,7 +3,8 @@
 Usage: fake_routing.py --serve --control PATH --log PATH
 
 The control file maps an op to a list of modes consumed in order across processes (the last one repeats):
-allow, unmanaged, blocked, stall, exit, garbage, wrong_id, wrong_version, no_state, leak_reason, shuffle.
+allow, unmanaged, blocked, stall, exit, garbage, wrong_id, wrong_version, no_state, leak_reason, shuffle, and for
+`status` also ledger_absent and settings_unavailable (a live child that is not ready).
 `admitted` ({provider, model, variant}) makes an `allow` check answer route_mismatch for any other route.
 Every spawn and request is appended to the log file so tests can count spawns and calls.
 """
@@ -61,7 +62,13 @@ def answer(request):
             sys.stdout.flush()
         return
     response = {"v": 1, "state": state, "id": rid, "extra_field": "ignored"}
-    if mode == "unmanaged":
+    if op == "status":
+        response.update(settings_state="ok", ledger={"state": "ready"})
+    if mode == "ledger_absent":
+        response["ledger"] = {"state": "absent"}
+    elif mode == "settings_unavailable":
+        response["settings_state"] = "unavailable"
+    elif mode == "unmanaged":
         response["state"] = "unmanaged"
     elif mode == "blocked":
         response.update(state="blocked", reason="route_mismatch")

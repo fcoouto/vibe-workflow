@@ -237,6 +237,11 @@ class ToolAndPolicyHooks(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
         self.assertNotIn("touch", json.dumps(result))
 
+    def test_connection_string_names_are_credentials(self):
+        env = dict.fromkeys(["DATABASE_URL", "SENTRY_DSN", "PG_CONNECTION_STRING", "DATABASE_HOST", "AWS_PROFILE"], "x")
+        result = opencode.normalize_hook("shell.create.before", {"env": env})
+        self.assertEqual(result["credential_env_names"], ["DATABASE_URL", "PG_CONNECTION_STRING", "SENTRY_DSN"])
+
     def test_unknown_hook_is_typed(self):
         result = opencode.normalize_hook("session.prompt", {"sessionID": "ses_hook1", "prompt": SECRET})
         self.assertEqual(result, {"schema": 1, "client": "opencode", "kind": "unknown", "source": "hook",
