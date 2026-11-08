@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import time
 
+from runtime.adapters.opencode import SESSION
 from runtime.title_sync import MAX_TITLE_BODY, METER_PREFIX, _parsed
 
 ATTEMPTS = 3
@@ -12,7 +13,6 @@ BACKOFF = (0.2, 0.6)  # Pause in seconds before the second and third attempts.
 CALL_TIMEOUT = 2.0
 DEADLINE = 5.0  # No new call starts after this many seconds.
 OPERATIONS = frozenset({'session.get', 'session.update'})
-SESSION = re.compile(r'ses_[A-Za-z0-9]{1,128}')
 RETRIED = frozenset({'failed', 'timeout'})  # Other failures cannot change on retry.
 DEFAULT_TITLE = re.compile(r'(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z')
 

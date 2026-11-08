@@ -1,0 +1,428 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "note": "Excerpt of the same probe runs' sanitized hook observations and live /api/event stream. Hook entries are the probe plugin's summaries: 'keys' lists the payload's top-level keys and the other fields record selected values; baseURL, header and env values were never recorded. Events are verbatim sanitized SSE records; durable events carry durable.{aggregateID,seq,version}, volatile ones none. Reshaping from the source observations: the probe's timing and instance fields (t, inst, spawn_ms, shim) were removed, and in the shell.create.before entry the opencode_env map was reduced to its key names (env_keys_recorded) and the has_probe_secret flag removed.",
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "session": "<ses#1>",
+      "keys": [
+        "agent",
+        "baseURL",
+        "headers",
+        "kind",
+        "model",
+        "sessionID"
+      ]
+    },
+    {
+      "hook": "model.request",
+      "kind": "title",
+      "agent": "title",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "low"
+      },
+      "session": "<ses#3>",
+      "keys": [
+        "agent",
+        "baseURL",
+        "headers",
+        "kind",
+        "model",
+        "sessionID"
+      ]
+    },
+    {
+      "hook": "model.request",
+      "kind": "compaction",
+      "agent": "build",
+      "model": {
+        "id": "haiku",
+        "providerID": "claude-agent",
+        "variant": "default"
+      },
+      "session": "<ses#3>",
+      "keys": [
+        "agent",
+        "baseURL",
+        "headers",
+        "kind",
+        "model",
+        "sessionID"
+      ]
+    },
+    {
+      "hook": "tool.execute.before",
+      "agent": "build",
+      "tool": "shell",
+      "session": "<ses#1>",
+      "message": "<msg#8>",
+      "keys": [
+        "agent",
+        "id",
+        "input",
+        "messageID",
+        "sessionID",
+        "tool"
+      ],
+      "action_taken": "throw"
+    },
+    {
+      "hook": "tool.execute.before",
+      "agent": "build",
+      "tool": "subagent",
+      "session": "<ses#1>",
+      "message": "<msg#2>",
+      "input_keys": [
+        "agent",
+        "description",
+        "model",
+        "prompt"
+      ],
+      "input_model": "claude-agent/haiku#low",
+      "input_agent": "general",
+      "keys": [
+        "agent",
+        "id",
+        "input",
+        "messageID",
+        "sessionID",
+        "tool"
+      ]
+    },
+    {
+      "hook": "tool.execute.before",
+      "tool": "subagent",
+      "session": "<ses#2>",
+      "has_parent": true,
+      "input_agent": "general",
+      "action_taken": "throw-nested"
+    },
+    {
+      "hook": "tool.execute.before",
+      "tool": "mkd_touch_marker",
+      "input_keys": [
+        "name"
+      ],
+      "input_name": "a1",
+      "session": "<ses#1>",
+      "message": "<msg#1>",
+      "agent": "build",
+      "action_taken": "throw"
+    },
+    {
+      "hook": "tool.execute.before",
+      "tool": "execute",
+      "input_keys": [
+        "code"
+      ],
+      "code_len": 262,
+      "session": "<ses#1>",
+      "message": "<msg#2>",
+      "agent": "build"
+    },
+    {
+      "hook": "permission.evaluate",
+      "agent": "build",
+      "action": "subagent",
+      "effect": "allow",
+      "session": "<ses#1>",
+      "resources": [
+        "general"
+      ],
+      "keys": [
+        "action",
+        "agent",
+        "effect",
+        "metadata",
+        "resources",
+        "sessionID",
+        "source"
+      ]
+    },
+    {
+      "hook": "permission.evaluate",
+      "action": "webfetch",
+      "resources": [
+        "http://127.0.0.1:47392/codemode"
+      ],
+      "effect": "allow",
+      "source_type": "tool",
+      "session": "<ses#1>",
+      "agent": "build"
+    },
+    {
+      "hook": "shell.create.before",
+      "command": "echo SID=$OPENCODE_SESSION_ID; env | grep -o \"^OPENCODE[A-Z_]*\" | tr \"\\n\" \" \"; echo; echo SECRET=${PROBE_SECRET:-absent}",
+      "keys": [
+        "command",
+        "cwd",
+        "env",
+        "shell",
+        "timeout"
+      ],
+      "env_key_count": 48,
+      "env_keys_recorded": [
+        "OPENCODE_TERMINAL"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "<evt_1>",
+      "created": 1794169963861,
+      "type": "session.created",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "sessionID": "<ses_5>",
+        "slug": "gentle-moon",
+        "version": "2.2.6",
+        "projectID": "global",
+        "location": {
+          "directory": "/tmp/p0hooks/proj"
+        },
+        "subpath": "",
+        "title": "probe A",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_85>",
+      "created": 1794170305472,
+      "type": "session.created",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "sessionID": "<ses_1>",
+        "slug": "glowing-otter",
+        "version": "2.2.6",
+        "projectID": "global",
+        "parentID": "<ses_5>",
+        "location": {
+          "directory": "/tmp/p0hooks/proj"
+        },
+        "subpath": "",
+        "title": "Reply OK",
+        "agent": "general",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "low"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_1>",
+        "seq": 0,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_3>",
+      "created": 1794169975309,
+      "type": "session.inbox.enqueued",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "inboxID": "<msg_26>",
+        "sessionID": "<ses_5>",
+        "item": {
+          "type": "user",
+          "payload": {
+            "text": "Reply with exactly: OK"
+          },
+          "delivery": "steer"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 1,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_7>",
+      "created": 1794169975398,
+      "type": "session.step.started",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "sessionID": "<ses_5>",
+        "agent": "build",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        },
+        "assistantMessageID": "<msg_25>",
+        "started": 1794169975353
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 5,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_11>",
+      "created": 1794169976719,
+      "type": "session.step.ended",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "sessionID": "<ses_5>",
+        "assistantMessageID": "<msg_25>",
+        "finish": "stop",
+        "rawFinish": "end_turn",
+        "native": {
+          "rateLimit": {
+            "status": "allowed",
+            "resetsAt": 1794178200,
+            "rateLimitType": "five_hour",
+            "overageStatus": "rejected",
+            "overageDisabledReason": "org_level_disabled",
+            "isUsingOverage": false,
+            "unifiedWindows": {
+              "five_hour": {
+                "utilization": 0.14,
+                "resetsAt": 1794178200,
+                "status": "allowed"
+              },
+              "seven_day": {
+                "utilization": 0.04,
+                "resetsAt": 1794477600,
+                "status": "allowed"
+              }
+            }
+          }
+        },
+        "tokens": {
+          "input": 2,
+          "output": 4,
+          "reasoning": 0,
+          "cache": {
+            "read": 5539,
+            "write": 20406
+          }
+        },
+        "cost": 0,
+        "files": []
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 9,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_12>",
+      "created": 1794169976720,
+      "type": "session.usage.updated",
+      "data": {
+        "sessionID": "<ses_5>",
+        "cost": 0,
+        "tokens": {
+          "input": 2,
+          "output": 4,
+          "reasoning": 0,
+          "cache": {
+            "read": 5539,
+            "write": 20406
+          }
+        }
+      }
+    },
+    {
+      "id": "<evt_26>",
+      "created": 1794170037979,
+      "type": "session.model.selected",
+      "data": {
+        "sessionID": "<ses_5>",
+        "model": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "low"
+        },
+        "previous": {
+          "id": "haiku",
+          "providerID": "claude-agent",
+          "variant": "default"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 22,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_40>",
+      "created": 1794170105143,
+      "type": "session.execution.failed",
+      "data": {
+        "sessionID": "<ses_5>",
+        "error": {
+          "type": "unknown",
+          "message": "routing: blocked by probe"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 35,
+        "version": 1
+      }
+    },
+    {
+      "id": "<evt_63>",
+      "created": 1794170256378,
+      "type": "session.tool.called",
+      "location": {
+        "directory": "/tmp/p0hooks/proj"
+      },
+      "data": {
+        "sessionID": "<ses_5>",
+        "assistantMessageID": "<msg_7>",
+        "id": "<toolu_2>",
+        "input": {
+          "command": "touch probe_marker.txt"
+        },
+        "executed": false,
+        "native": {
+          "sessionID": "<uuid_1>",
+          "messageID": "<uuid_6>"
+        }
+      },
+      "durable": {
+        "aggregateID": "<ses_5>",
+        "seq": 57,
+        "version": 1
+      }
+    }
+  ]
+}
