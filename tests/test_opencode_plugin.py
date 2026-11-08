@@ -31,7 +31,9 @@ def parity_cases():
                  "DATABASE_URL", "SENTRY_DSN", "PG_CONNECTION_STRING", "DATABASE_HOST", "AWS_PROFILE", "KUBECONFIG",
                  "PASS", "DB_PASS", "PASSPHRASE", "SECRETS", "JWT", "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "PAT",
                  "REDIS_URL", "MONGODB_URI", "githubToken", "dbPassword", "apiKey", "EDITOR", "TERM", "PWD", "OLDPWD",
-                 "npm_config_cache", "GIT_AUTHOR_NAME", "TOKENIZERS_PARALLELISM", "AUTHOR", "PASSENGER", "NODE_PATH"]
+                 "npm_config_cache", "GIT_AUTHOR_NAME", "TOKENIZERS_PARALLELISM", "AUTHOR", "PASSENGER", "NODE_PATH",
+                 "GITHUB_OAUTH", "AWS_CREDS", "DB_PWD", "AWS_ACCESSKEY", "MY_SECRETKEY", "accessKey",
+                 "OAUTHLIB_INSECURE_TRANSPORT", "HTTP_PROXY", "PIP_INDEX_URL"]
     shell = opencode.normalize_hook("shell.create.before", {"env": dict.fromkeys(env_names, "x")})
     env = [{"name": name, "credential": name in shell["credential_env_names"]} for name in env_names]
 

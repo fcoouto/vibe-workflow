@@ -45,7 +45,8 @@ function child(control: Record<string, unknown> = {}) {
 function fakeCtx(sessions: Record<string, { parentID?: string }> = {}, options: Record<string, unknown> = {}) {
   const hooks: Hooks = {}
   const lookups: string[] = []
-  const state: { rpc?: any, handlers?: any, failLookup?: boolean, hangLookup?: boolean, subscribed?: string[] } = {}
+  const state: { rpc?: any, handlers?: any, failLookup?: boolean, hangLookup?: boolean, errorLookup?: unknown,
+    subscribed?: string[] } = {}
   const listeners: ((event: unknown) => void)[] = []
   // A live-only event stream like ctx.event.subscribe: an async iterable that ends when the signal aborts.
   const subscribe = ({ types, signal }: { types?: string[], signal?: AbortSignal } = {}) => {
@@ -84,6 +85,7 @@ function fakeCtx(sessions: Record<string, { parentID?: string }> = {}, options: 
         lookups.push(sessionID)
         if (state.hangLookup) await new Promise(() => {})
         if (state.failLookup) throw new Error("lookup failed")
+        if (state.errorLookup !== undefined) return state.errorLookup  // an error object instead of a throw
         if (!(sessionID in sessions)) throw new Error("not found")
         return { id: sessionID, ...sessions[sessionID] }
       },
@@ -387,24 +389,82 @@ test("detaching the root releases its recorded descendants", async () => {
   } finally { t.stop() }
 })
 
-test("a full managed-descendant set blocks only managed sessions", async () => {
+test("a root over its own descendant limit blocks only its own tree", async () => {
   const t = await start({})
   try {
     await t.attach()
-    for (let index = 0; index < 1024; index++) await t.emit(created(`ses_many${index}`, MANAGED))
+    for (let index = 0; index < 256; index++) await t.emit(created(`ses_many${index}`, MANAGED))
     await t.emit(created("ses_iroot1"))
     await t.emit(created("ses_ikid1", "ses_iroot1"))
     await assert.rejects(t.hooks["tool.execute.before"](spawnCall(MANAGED, "claude-agent/haiku#low")),
       (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
-    await t.hooks["session.model.request"](modelRequest(MANAGED))  // the full set alone does not stop the root
-    await t.emit(created("ses_many1024", MANAGED))  // one more managed descendant despite the limit
-    for (const session of [MANAGED, "ses_many3", "ses_many1024"]) {
+    await t.hooks["session.model.request"](modelRequest(MANAGED))  // reaching the limit alone does not stop the root
+    await t.emit(created("ses_many256", MANAGED))  // one more managed descendant despite the limit
+    for (const session of [MANAGED, "ses_many3", "ses_many256"]) {
       await assert.rejects(t.hooks["session.model.request"](modelRequest(session)),
         (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
     }
     t.state.failLookup = true
     await assertUntouched(t, "ses_ikid1")
     await assertUntouched(t, "ses_iroot1")
+  } finally { t.stop() }
+})
+
+test("one root's descendants never limit another root, and detaching clears its state", async () => {
+  const B = "ses_rootb1"
+  const t = await start({})
+  try {
+    await t.attach()
+    await t.attach(B, { attempt_id: "att-b" })
+    await t.emit(created("ses_bkid1", B))
+    for (let index = 0; index < 1023; index++) await t.emit(created(`ses_akid${index}`, MANAGED))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(MANAGED)), blocked)  // A is over its own limit
+    await t.hooks["tool.execute.before"](spawnCall(B, "claude-agent/haiku#low"))
+    await t.emit(created("ses_bkid2", B))
+    for (const session of [B, "ses_bkid1", "ses_bkid2"]) await t.hooks["session.model.request"](modelRequest(session))
+    await t.rpc("detach", { session_id: MANAGED })
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_akid5")
+    t.state.failLookup = false
+    await t.attach()
+    await t.hooks["session.model.request"](modelRequest(MANAGED))
+    await t.hooks["tool.execute.before"](spawnCall(MANAGED, "claude-agent/haiku#low"))
+    await t.hooks["session.model.request"](modelRequest("ses_bkid2"))
+  } finally { t.stop() }
+})
+
+test("the instance-wide ceiling blocks only the new descendants of the root creating them", async () => {
+  const t = await start({})
+  try {
+    for (let root = 0; root < 16; root++) {
+      await t.attach(`ses_full${root}`)
+      for (let index = 0; index < 256; index++) await t.emit(created(`ses_full${root}x${index}`, `ses_full${root}`))
+    }
+    await t.attach("ses_rootc1")
+    await assert.rejects(t.hooks["tool.execute.before"](spawnCall("ses_rootc1", "claude-agent/haiku#low")),
+      (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
+    await t.emit(created("ses_ckid1", "ses_rootc1"))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_ckid1")),
+      (error: Error) => blocked(error) && /descendant_limit/.test(error.message))
+    await t.hooks["session.model.request"](modelRequest("ses_rootc1"))
+    await t.hooks["session.model.request"](modelRequest("ses_full3x7"))
+    await t.emit(created("ses_iroot1"))
+    await assertUntouched(t, "ses_iroot1")
+  } finally { t.stop() }
+})
+
+test("a lookup that returns an error object is a failed lookup, not a root", async () => {
+  const t = await start({ check: ["blocked"] }, { ses_missed1: { parentID: MANAGED } }, { failedLookupMs: 100 })
+  try {
+    await t.attach()
+    t.state.errorLookup = { name: "NotFoundError", data: { message: "not found" } }
+    await assertUntouched(t, "ses_missed1")  // undeterminable for now: interactive
+    t.state.errorLookup = { id: "ses_someoneelse1" }  // an answer about another session is not an answer
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await assertUntouched(t, "ses_missed1")
+    t.state.errorLookup = undefined  // lookups are honest again
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_missed1")), blocked)
   } finally { t.stop() }
 })
 
@@ -661,10 +721,11 @@ test("helper extraction matches the documented adapter shapes", () => {
   for (const name of ["GITHUB_TOKEN", "OPENAI_API_KEY", "APIKEY", "SSH_AUTH_SOCK", "DB_PASSWORD", "DATABASE_URL", "SENTRY_DSN",
     "PG_CONNECTION_STRING", "PASS", "DB_PASS", "PASSPHRASE", "SSH_PASSPHRASE", "SECRETS", "APP_SECRETS", "JWT", "JWT_SIGNING",
     "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "PAT", "REDIS_URL", "MONGODB_URI", "MONGO_URL", "POSTGRES_URL", "githubToken",
-    "dbPassword", "apiKey"]) assert.ok(credentialEnvName(name), name)
+    "dbPassword", "apiKey", "GITHUB_OAUTH", "OAUTH", "AWS_CREDS", "DB_PWD", "AWS_ACCESSKEY", "MY_SECRETKEY", "accessKey",
+    "SECRETKEY"]) assert.ok(credentialEnvName(name), name)
   for (const name of ["PATH", "HOME", "KEYBOARD", "TOKENIZER_PATH", "MONKEY", "AWS_PROFILE", "KUBECONFIG", "DATABASE_HOST",
     "LANG", "EDITOR", "TERM", "PWD", "npm_config_cache", "GIT_AUTHOR_NAME", "GIT_DIR", "TOKENIZERS_PARALLELISM", "AUTHOR",
-    "PASSENGER", "NODE_PATH", "REDIS_HOST", "OLDPWD"]) {
+    "PASSENGER", "NODE_PATH", "REDIS_HOST", "OLDPWD", "OAUTHLIB_INSECURE_TRANSPORT", "HTTP_PROXY", "PIP_INDEX_URL"]) {
     assert.ok(!credentialEnvName(name), name)
   }
 })

@@ -244,9 +244,10 @@ class ToolAndPolicyHooks(unittest.TestCase):
 
     def test_password_token_and_url_names_are_credentials_and_common_names_are_not(self):
         credentials = ["PASS", "PASSPHRASE", "SECRETS", "JWT", "PGPASSWORD", "MYSQL_PWD", "GITHUB_PAT", "REDIS_URL",
-                       "MONGODB_URI", "githubToken", "dbPassword"]
+                       "MONGODB_URI", "githubToken", "dbPassword", "GITHUB_OAUTH", "AWS_CREDS", "DB_PWD",
+                       "AWS_ACCESSKEY", "MY_SECRETKEY"]
         ordinary = ["PATH", "HOME", "LANG", "EDITOR", "TERM", "PWD", "npm_config_cache", "GIT_AUTHOR_NAME",
-                    "TOKENIZERS_PARALLELISM", "AUTHOR"]
+                    "TOKENIZERS_PARALLELISM", "AUTHOR", "OLDPWD", "HTTP_PROXY", "PIP_INDEX_URL"]
         result = opencode.normalize_hook("shell.create.before", {"env": dict.fromkeys(credentials + ordinary, "x")})
         self.assertEqual(result["credential_env_names"], sorted(credentials))
 
