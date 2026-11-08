@@ -23,7 +23,7 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900
-STATE_VERSION = 3
+STATE_VERSION = 4  # 4: S3.6a settled charges; older code must refuse a ledger that carries them
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
@@ -167,6 +167,14 @@ def _digest16(value):
     return hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
+def root_key(locator=None, task=None):
+    """The accounting key of a root task: a digest of the bound job's full (client, cwd, session, task) locator,
+    or, for an attempt with no workflow job, of its task id alone (settled without a workflow locator)."""
+    parts = ['bound', locator['client'], locator['cwd'], locator['session_id'], locator['task_id']] \
+        if locator is not None else ['unbound', task]
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=True).encode()).hexdigest()
+
+
 def task_key(organization, task):
     """The `settled_tasks` key of one organization's task: a digest, so the table stays small."""
     return hashlib.sha256(json.dumps([organization, task]).encode()).hexdigest()
@@ -223,7 +231,7 @@ class Ledger:
             require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
             original = json.loads(row[0]) if write else None
-            require(data['version'] in (1, 2, STATE_VERSION) and data['identity'] == self.identity,
+            require(data['version'] in (1, 2, 3, STATE_VERSION) and data['identity'] == self.identity,
                     'ledger_identity_changed')
             self._migrate(data)
             yield data
@@ -247,6 +255,10 @@ class Ledger:
         every in-flight run claim is preserved untouched. Version 3 never shipped with its first hold shape, so
         written v3 ledgers are repaired in place: missing tables are added and a `vector` hold becomes a
         window-only hold (it named no organization, so it carries no dollar amount).
+        3 -> 4 (S3.6a) changes no claim, hold or admission: it marks the ledger as one whose R may include settled
+        charges (`organizations.*.settled`, `settled_tasks`), so code that would ignore them refuses it
+        (`ledger_identity_changed`) instead of resetting caps and credit. The event and root tables are created
+        idempotently on the first accounting write.
         """
         if data['version'] == 1:
             data.pop('slot', None)
@@ -256,7 +268,9 @@ class Ledger:
                     org['issued'] = floor * 5 if floor is not None else None
             data['version'] = 2
         if data['version'] == 2:
-            data['version'] = STATE_VERSION
+            data['version'] = 3
+        if data['version'] == 3:
+            data['version'] = 4
         data.setdefault('holds', {})
         data.setdefault('admissions', [])
         data.setdefault('seen_attempts', [])
@@ -811,6 +825,8 @@ class Ledger:
                 record['authority_required'] = True  # one-way rule this admission keeps for its life
             hold = dict(account=account, task=task, organization=organization, amount=amount, cycle=cycle,
                         windows={k: v for k, v in vector.items() if k.startswith(WIN)}, closed=False, state='admitted')
+            # S3.6a: the accounting root and stage are fixed at admission, so pruning the record never moves them.
+            hold.update(zip(('root', 'stage'), self._record_root(record, task)))
             for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
                 try:
                     size = len(json.dumps(entry, allow_nan=False, separators=(',', ':')))
@@ -995,16 +1011,22 @@ class Ledger:
             self.db.executemany('DELETE FROM events WHERE rowid=?', drop)
 
     @staticmethod
-    def _root_of(data, attempt_id, hold):
-        """(root task id, stage from the admitted role) of a ledger attempt: the bound workflow job's root task,
-        else the hold's task."""
-        record = Ledger.admission(data, attempt_id) or {}
+    def _record_root(record, task):
+        """(root key, stage from the admitted role) of an admission: the bound workflow job's full root locator,
+        else its task id."""
         binding = record.get('binding') if isinstance(record.get('binding'), dict) else {}
         job = binding.get('job') if isinstance(binding.get('job'), dict) else None
-        root = job['locator']['task_id'] if job else hold['task']
+        locator = job.get('locator') if job else None
         bucket = record.get('bucket')
         role = bucket[0] if isinstance(bucket, list) and bucket else None
-        return root, ROLE_STAGES.get(role, 'worker')
+        return root_key(locator) if isinstance(locator, dict) else root_key(task=task), ROLE_STAGES.get(role, 'worker')
+
+    @staticmethod
+    def _root_of(data, attempt_id, hold):
+        """(root key, stage) of a ledger attempt, as stored on its hold at admission (older holds: derived)."""
+        if 'root' in hold:
+            return hold['root'], hold.get('stage', 'worker')
+        return Ledger._record_root(Ledger.admission(data, attempt_id) or {}, hold['task'])
 
     def _apply_event(self, data, event, now):
         """(outcome, effect, stored body). Hold transitions keep the S3.1/S3.4 rules; `complete` settles."""
@@ -1012,9 +1034,14 @@ class Ledger:
         usage = event.get('usage')
         hold = data['holds'].get(attempt)
         if kind == 'observed':
-            root, stage, funding = event['root_task_id'], event['stage'], event.get('funding')
-            if hold is not None:
-                require(self._root_of(data, attempt, hold)[0] == root, 'root_mismatch')
+            # Report-only usage joins the root of a known ledger attempt: its own hold or `root_attempt_id`'s.
+            stage, funding = event['stage'], event.get('funding')
+            anchor = data['holds'].get(event.get('root_attempt_id', attempt))
+            require(anchor is not None and (hold is None or 'root_attempt_id' not in event
+                                            or self._root_of(data, attempt, hold)[0] ==
+                                            self._root_of(data, event['root_attempt_id'], anchor)[0]),
+                    'unknown_attempt' if anchor is None else 'root_mismatch')
+            root = self._root_of(data, event.get('root_attempt_id', attempt), anchor)[0]
         else:
             require(hold is not None, 'unknown_attempt')
             require(not hold['closed'], 'attempt_closed')
@@ -1025,28 +1052,25 @@ class Ledger:
         if kind == 'observed':
             outcome = dict(state='recorded', duplicate=False, outcome='observed')
         else:
-            # The settlement counts receipts against the same set the aggregate then records.
-            outcome = self._transition(data, attempt, hold, kind, usage, list(aggregate['receipts']))
+            outcome = self._transition(data, attempt, hold, kind, event)
         attempts = aggregate['attempts']
         key = _digest16(attempt)
         if key in attempts or len(attempts) < MAX_ROOT_ATTEMPTS:
             attempts[key] = stage
         else:
             aggregate['attempts_overflow'] += 1
-        summary = None
-        if outcome['duplicate']:  # an effect that already happened leaves the aggregate as it was
-            if usage is not None:
-                summary = self._summarize(usage, list(aggregate['receipts']))
-        elif usage is not None and outcome.get('outcome') != 'cost_unknown':
-            summary = self._summarize(usage, aggregate['receipts'])
+        summary = None if usage is None else self._summarize(usage, [])
+        settled = outcome.get('outcome') in ('complete', 'overrun')
+        if not outcome['duplicate'] and (settled or kind == 'observed'):
+            # The REPORT counts each receipt once per root; money never does (a dollar hold is charged in full).
+            report = self._summarize(usage, aggregate['receipts']) if usage is not None else None
             usd = 0
             if outcome.get('settlement', {}).get('kind') == 'usd_micros':
-                usd = outcome['settlement']['charged']
-            elif kind == 'observed' and funding == 'api' and summary['cost'] is not None:
-                usd = summary['cost']
-            self._aggregate(aggregate, stage, summary, usd, usage['source'] == 'estimate')
-        elif usage is not None:  # an unknown cost is counted once, when the hold settles
-            summary = self._summarize(usage, list(aggregate['receipts']))
+                repeated = summary['cost'] - report['cost'] if report is not None else 0
+                usd = max(0, outcome['settlement']['charged'] - repeated)
+            elif kind == 'observed' and funding == 'api' and report['cost'] is not None:
+                usd = report['cost']
+            self._aggregate(aggregate, stage, report, usd, usage is not None and usage['source'] == 'estimate')
         if not outcome['duplicate']:
             self._save_root(data, root, aggregate, now)
         body = dict(attempt_id=attempt, kind=kind, stage=stage, root=root, recorded_at=now, outcome=dict(outcome))
@@ -1061,7 +1085,7 @@ class Ledger:
         # dispatched, uncertain or cost_unknown, and the closing one); `observed` events are diagnostics.
         return outcome, kind != 'observed' and not outcome['duplicate'], body
 
-    def _transition(self, data, attempt, hold, kind, usage, seen):
+    def _transition(self, data, attempt, hold, kind, event):
         state = hold['state']
         if kind == 'dispatched':
             if state in ('dispatched', 'uncertain'):
@@ -1077,19 +1101,25 @@ class Ledger:
         elif kind == 'not_dispatched':
             require(state == 'admitted', 'hold_state_forbidden')  # S3.4: no proof of non-launch after dispatch
             hold.update(closed=True, state='released')
+        elif kind == 'resolve_cost_unknown':
+            # Operator recovery (review S2): only a `cost_unknown` hold, never below the admitted estimate.
+            require(state == 'cost_unknown', 'hold_state_forbidden')
+            cost = event['cost_usd_micros']
+            return self._settle_cost(data, attempt, hold, cost, max(cost, self._admitted_estimate(
+                data, attempt, hold['amount'])), 'operator')
         else:
             require(state != 'uncertain', 'reconciliation_required')
             require(state in ('dispatched', 'cost_unknown'), 'hold_state_forbidden')
-            return self._settle(data, attempt, hold, usage, seen)
+            return self._settle(data, attempt, hold, event.get('usage'))
         return dict(state='recorded', duplicate=False)
 
-    def _settle(self, data, attempt, hold, usage, seen):
+    def _settle(self, data, attempt, hold, usage):
         """Completion settlement. A window-only hold releases its claims (headroom comes from telemetry). A dollar
-        hold charges the cost, reduces its remaining reservation by the same amount and releases the unused rest
-        exactly once; an unknown cost keeps the whole exposure (`cost_unknown`) until a cost is known.
-        `seen` is a copy of the receipts the root already counted."""
+        hold charges its full measured cost (receipts repeated within this one report count once; receipts seen
+        elsewhere under the root never reduce it), reduces its remaining reservation by the same amount and
+        releases the unused rest exactly once; an unknown cost keeps the whole exposure (`cost_unknown`)."""
         amount = hold['amount']
-        summary = self._summarize(usage, seen) if usage is not None else None
+        summary = self._summarize(usage, []) if usage is not None else None
         if not amount:
             released = dict(hold['windows'])
             hold.update(closed=True, state='released')
@@ -1111,7 +1141,16 @@ class Ledger:
             # An estimate is not a measurement: never charge below the admitted estimate, so at most the padding
             # (reservation minus admitted estimate) is released. Without a readable estimate nothing is released.
             charge = max(cost, self._admitted_estimate(data, attempt, amount))
+        return self._settle_cost(data, attempt, hold, cost, charge, source)
+
+    def _settle_cost(self, data, attempt, hold, cost, charge, source):
+        """Charge `charge` against a dollar hold and close it. Above the reservation it is an overrun: the pre-send
+        guard failed or was bypassed, so the whole charge counts and the organization is blocked
+        (`manual_recovery_required`), exactly as S1's run path does; nothing is topped up."""
+        amount = hold['amount']
         overrun, released = max(0, charge - amount), max(0, amount - charge)
+        if overrun:
+            data['organizations'][hold['organization']]['blocked'] = True
         settlement = dict(reserved=amount, charged=charge, released=released, overrun=overrun, cost=cost,
                           cost_source=source)
         hold.update(amount=0, closed=True, state='released', settlement=settlement)
@@ -1173,6 +1212,8 @@ class Ledger:
 
     @staticmethod
     def _aggregate(aggregate, stage, summary, usd, estimated):
+        if summary is None:  # a settlement with no usage report (operator resolution): dollars only
+            summary = dict(tokens=dict.fromkeys(TOKEN_FIELDS, 0), units={}, receipts=aggregate['receipts'])
         entry = aggregate['stages'].setdefault(stage, dict(usd_micros=0, usd_micros_estimated=0,
                                                            tokens=dict.fromkeys(TOKEN_FIELDS, 0)))
         entry['usd_micros'] = min(MAX_INTEGER, entry['usd_micros'] + usd)

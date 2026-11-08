@@ -42,7 +42,8 @@ FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constra
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
               dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
-              settle=({'root_task_id'}, {'workflow'}))
+              settle=({'root_task_id'}, {'workflow'}),
+              resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, set()))
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -400,9 +401,19 @@ class Service:
         result = routing.record_event(ledger, event, self.clock())
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
+    def _resolve_cost_unknown(self, body):
+        """Operator recovery for a `cost_unknown` dollar hold (S3.6a): settle at max(cost, admitted estimate)."""
+        event = routing.resolve_event(body)
+        require(event is not None, 'invalid_request')
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        result = routing.record_event(ledger, event, self.clock())
+        return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
     def _settle(self, body):
-        """Read-only root-task settlement (S3.6a). Acceptance comes only from the trusted workflow reader for the
-        named root locator; without one it is `unavailable` and no ratio is given."""
+        """Read-only root-task settlement (S3.6a). With `workflow` it covers the attempts bound to that full root
+        locator and acceptance comes only from the trusted workflow reader; without it, the attempts with no
+        workflow job whose task id is `root_task_id`, with acceptance `unavailable` and no ratio."""
         root, locator = body['root_task_id'], body.get('workflow')
         require(_text(root) and len(root) <= routing.MAX_ROOT_ID, 'invalid_request')
         accepted = None
@@ -413,7 +424,8 @@ class Service:
                 require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        report = ledger.root_report(root, self.clock())
+        key = usage_budget.root_key(locator) if locator is not None else usage_budget.root_key(task=root)
+        report = ledger.root_report(key, self.clock())
         if locator is not None:
             try:
                 found = self.workflow.acceptances(dict(locator))

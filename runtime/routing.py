@@ -816,15 +816,16 @@ MAX_CLOCK_DRIFT = 60
 REQUEST_KINDS = ('primary', 'subagent', 'title', 'compaction', 'generate')
 REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_pool')
 # Lifecycle events: each S3.1 kind is a ledger hold transition; S3.6a adds usage, settlement and `observed` (usage
-# with no transition, e.g. the coordinator's own requests, reported under its root task and never charged).
+# with no transition, e.g. the coordinator's own requests, reported under a known attempt's root and never charged).
 RECORD_KINDS = ('dispatched', 'uncertain', 'not_dispatched', 'complete')
 EVENT_KINDS = RECORD_KINDS + ('observed',)
 EVENT_REQUIRED = ('event_id', 'attempt_id', 'kind')
-EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_task_id', 'funding')
+EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_attempt_id', 'funding')
 MAX_USAGE_REQUESTS = 32
 MAX_USAGE_UNITS = 8  # distinct window keys in one report; one hold claims at most eight windows
 MAX_RECEIPT = 128
 MAX_ROOT_ID = routing_gates.LOCATOR_LIMITS['task_id']
+RESOLVE_KIND = 'resolve_cost_unknown'  # operator recovery; never a client lifecycle event
 USAGE_REQUEST_FIELDS = ('kind', 'model', 'variant', 'tokens', 'cost_usd_micros', 'units', 'receipt')
 
 
@@ -1210,8 +1211,9 @@ def event_error(event):
     """The fixed reason a lifecycle event is refused before any ledger access, or None.
 
     Bounded ids, labels and integers only (no prompt, body or secret can pass): `event_id` (128), `attempt_id`,
-    `kind`; optional `stage`, `request_kind`, `at` (the client's time, informational), `usage` (on `complete` and
-    `observed`), and on `observed` the required `root_task_id` and `stage` plus an optional `funding`."""
+    `kind`; optional `stage`, `request_kind`, `at` (the client's time, informational and outside the digest),
+    `usage` (on `complete` and `observed`), and on `observed` the required `stage` and `usage` plus optional
+    `funding` and `root_attempt_id` (a ledger attempt whose root the usage joins, when `attempt_id` has no hold)."""
     if type(event) is not dict or not set(EVENT_REQUIRED) <= set(event) <= {*EVENT_REQUIRED, *EVENT_OPTIONAL}:
         return 'invalid_request'
     if not _bounded_id(event['event_id'], usage_budget.MAX_EVENT_ID) or not _text(event['attempt_id']) \
@@ -1227,16 +1229,27 @@ def event_error(event):
     if 'usage' in event and (kind not in ('complete', 'observed') or _usage_error(event['usage'])):
         return 'invalid_request'
     observed = kind == 'observed'
-    if observed != ('root_task_id' in event) or ('funding' in event and not observed):
+    if not observed and ('funding' in event or 'root_attempt_id' in event):
         return 'invalid_request'
-    if observed and not (_bounded_id(event['root_task_id'], MAX_ROOT_ID) and 'stage' in event and 'usage' in event
-                         and event.get('funding', 'api') in ('api', 'subscription')):
+    if observed and not ('stage' in event and 'usage' in event and event.get('funding', 'api') in ('api', 'subscription')
+                         and _optional(event.get('root_attempt_id'), _text)):
         return 'invalid_request'
     return None
 
 
+def resolve_event(value):
+    """The operator's `resolve_cost_unknown` request as a ledger event, or None when malformed."""
+    if type(value) is not dict or set(value) != {'event_id', 'attempt_id', 'cost_usd_micros'} or \
+            not _bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID) or not _text(value['attempt_id']) or \
+            not _amount(value['cost_usd_micros']):
+        return None
+    return dict(value, kind=RESOLVE_KIND)
+
+
 def event_digest(event):
-    return hashlib.sha256(json.dumps(event, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    """Canonical SHA-256 of an event without the client's `at`, so a retry with a new timestamp is a duplicate."""
+    payload = {key: value for key, value in event.items() if key != 'at'}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
 def record_event(ledger, event, now):
@@ -1290,16 +1303,18 @@ def settle_root(report, root_task_id, accepted):
     unresolved = dict(attempts=len(holds), usd_micros_held=sum(hold['amount'] for hold in holds),
                       units_held=held_units,
                       unknown_cost_attempts=sum(hold['state'] == 'cost_unknown' for hold in holds))
-    ratio = None
-    if accepted:
+    ratio = numerator = None
+    if accepted:  # rounded up per unit, plus the exact fraction so totals reconcile
         ratio = dict(usd_micros=_ceil_ratio(usd, accepted),
                      tokens={field: _ceil_ratio(value, accepted) for field, value in tokens.items()},
                      units={key: _ceil_ratio(value, accepted) for key, value in units.items()})
+        numerator = dict(usd_micros=usd, tokens=dict(tokens), units=dict(units))
     rescue = stages.get('rescue') or dict(usd_micros=0, usd_micros_estimated=0, tokens=_zero_tokens(), attempts=0)
     return dict(state='settled', root_task_id=root_task_id, attempts=(summary or {}).get('attempts', 0),
                 cost_to_date=cost, by_stage=stages, rework=rescue, executor_quality='not_scored',
                 unresolved=unresolved, acceptance='unavailable' if accepted is None else 'canonical',
-                accepted=accepted, ratio=ratio, units_dropped=(summary or {}).get('units_dropped', 0))
+                accepted=accepted, ratio=ratio, ratio_num=numerator, ratio_den=accepted if ratio else None,
+                units_dropped=(summary or {}).get('units_dropped', 0))
 
 
 def unsent_admissions(data, settings_revision):

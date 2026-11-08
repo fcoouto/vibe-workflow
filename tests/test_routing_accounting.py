@@ -403,6 +403,8 @@ class ResolveCostUnknownTests(Accounting):
         self.funded('a1')
         self.assertEqual(self.resolve('a1', M), dict(v=1, state='blocked', reason='hold_state_forbidden'))
         self.assertEqual(self.resolve('nope', M), dict(v=1, state='blocked', reason='unknown_attempt'))
+        spoofed = record('a1', 'resolve_cost_unknown', 'x1', cost_usd_micros=0)  # never a client lifecycle event
+        self.assertEqual(self.call(spoofed), dict(v=1, state='blocked', reason='invalid_request'))
         for bad in (-1, 1.5, True, None, budget.MAX_INTEGER + 1, '5'):
             with self.subTest(bad=bad):
                 self.assertEqual(self.resolve('a1', bad), dict(v=1, state='blocked', reason='invalid_request'))
