@@ -2,8 +2,8 @@
 """The single local Smart Routing command every client calls (spec 10.3, A1). No network, model or secret access.
 
 Usage:
-  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH]    one JSON request on stdin, one response out
-  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] one request per stdin line, one response per line
+  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs]   one request on stdin
+  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs] one request per line
 
 The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
 the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
@@ -26,9 +26,10 @@ MAX_INPUT = 1 << 20
 MAX_TABLE = 8 << 20
 MAX_ID = 128
 USAGE = 2
-# Test-only: when this environment variable is "1", a caller may supply `now` to `check`, an observations `now`
-# off the command's clock to `prepare`, and a `table` to `prepare`. Production never sets it.
-TEST_SWITCH = 'VIBE_ROUTING_TEST_INPUTS'
+# Test-only: the `--test-inputs` flag lets a caller supply `now` to `check`, an observations `now` off the
+# command's clock to `prepare`, and a `table` to `prepare`. Only the command line enables it, and only with both
+# stores pinned explicitly away from the production defaults.
+TEST_FLAG = '--test-inputs'
 # SQLite busy waits in seconds. Reads (`check`, `status`) answer `ledger_busy` quickly; writes wait a little
 # longer, but under `--serve` (the hook path) still well inside the shim's 500 ms timeout.
 READ_WAIT = 0.2
@@ -101,6 +102,14 @@ def _facts(value):
         type(key) is str and 0 < len(key) <= usage_budget.MAX_KEY and key.isprintable() and _amount(amount)
         for key, amount in bound.items())), 'invalid_request')
     return value
+
+
+def _table_shape(value):
+    """A stored table must be a bounded version plus rows of strategy lists, each with a usable strategy id."""
+    version, rows = value.get('version'), value.get('rows')
+    return (type(rows) is dict and (version is None or _text(version) or _amount(version))
+            and all(type(strategies) is list and all(type(item) is dict and _text(item.get('strategy_id'))
+                                                     for item in strategies) for strategies in rows.values()))
 
 
 def _public(record):
@@ -188,7 +197,7 @@ class Service:
             value = json.loads(self.table_path.read_bytes(), parse_constant=_constant)
         except (ValueError, RecursionError, Blocked, OSError):
             return {}, 'table_unavailable'
-        if type(value) is not dict or type(value.get('rows')) is not dict:
+        if type(value) is not dict or not _table_shape(value):
             return {}, 'table_unavailable'
         return value, None
 
@@ -251,6 +260,8 @@ class Service:
         try:
             ranking = routing.rank(profile, table, constraints) if problem is None else fallback
         except Exception:  # noqa: BLE001 - an unusable table falls back, it never blocks (RF8)
+            ranking, problem = fallback, 'table_unavailable'
+        if not routing._valid_ranking(ranking):  # the same shape admit() requires; a bad one falls back
             ranking, problem = fallback, 'table_unavailable'
         if problem:
             ranking = dict(ranking, reason_codes=ranking['reason_codes'] + [problem])
@@ -329,7 +340,7 @@ class Service:
         # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
         effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, effective_caps=effective, ledger=ledger)
+                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs)
 
     def _set(self, body):
         if 'organization' in body:
@@ -397,12 +408,14 @@ def default_ledger():
 
 
 def _arguments(argv):
-    op, serving, paths = None, False, {}
+    op, serving, test_inputs, paths = None, False, False, {}
     items = list(argv)
     while items:
         item = items.pop(0)
         if item == '--serve' and not serving:
             serving = True
+        elif item == TEST_FLAG and not test_inputs:
+            test_inputs = True
         elif item in ('--settings', '--ledger', '--table') and item not in paths and items \
                 and not items[0].startswith('-'):
             paths[item] = items.pop(0)
@@ -412,7 +425,11 @@ def _arguments(argv):
             return None
     if serving == (op is not None):
         return None
-    return op, serving, paths
+    if test_inputs and not ({'--settings', '--ledger'} <= set(paths) and
+                            _resolved(paths['--settings']) != _resolved(default_settings()) and
+                            _resolved(paths['--ledger']) != _resolved(default_ledger())):
+        return None
+    return op, serving, test_inputs, paths
 
 
 def _silence(stdout):
@@ -433,9 +450,9 @@ def main(argv=None, stdin=None, stdout=None):
         if parsed is None:
             _write(stdout, dict(v=VERSION, state='blocked', reason='usage_error'))
             return USAGE
-        op, serving, paths = parsed
+        op, serving, test_inputs, paths = parsed
         service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger(),
-                          paths.get('--table'), test_inputs=os.environ.get(TEST_SWITCH) == '1', serving=serving)
+                          paths.get('--table'), test_inputs=test_inputs, serving=serving)
         try:
             if serving:
                 return serve(service, stdin, stdout)
