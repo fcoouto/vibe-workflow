@@ -1,0 +1,73 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true
+  },
+  "runtime": {
+    "host_node": "v26.13.0",
+    "host_bun": "not installed",
+    "python": "3.15.2",
+    "machine": "darwin, 16 cpu, load average ~8-9 during run"
+  },
+  "plugin_setup_bench": {
+    "spawn_print1": {
+      "n": 40,
+      "median_ms": 15.15,
+      "p95_ms": 15.92,
+      "min_ms": 14.24,
+      "max_ms": 16.25
+    },
+    "spawn_json_stdin_roundtrip": {
+      "n": 40,
+      "median_ms": 19.88,
+      "p95_ms": 20.62,
+      "min_ms": 18.59,
+      "max_ms": 21.08
+    },
+    "persistent_stdio_child": {
+      "n": 200,
+      "median_ms": 0.02,
+      "p95_ms": 0.06,
+      "min_ms": 0.01,
+      "max_ms": 0.11,
+      "answered": 201
+    },
+    "earlier_run": {
+      "spawn_print1": {
+        "median_ms": 14.39,
+        "p95_ms": 15.17
+      },
+      "spawn_json_stdin_roundtrip": {
+        "median_ms": 18.89,
+        "p95_ms": 19.68
+      }
+    }
+  },
+  "in_live_hook_spawn_print1": {
+    "n": 13,
+    "median_ms": 14.98,
+    "p95_ms": 23.08
+  },
+  "host_node_spawnSync": {
+    "print1": {
+      "median_ms": 14.8,
+      "p95_ms": 15.1
+    },
+    "import_json_sqlite3_stdin_roundtrip": {
+      "median_ms": 20.9,
+      "p95_ms": 21.5
+    },
+    "python3_-I_-S_print1": {
+      "median_ms": 12.7,
+      "p95_ms": 13.3
+    }
+  },
+  "notes": "spawn-per-call measured inside the OpenCode plugin runtime (Bun 1.4.4 embedded in opencode 2.2.6); persistent_stdio is one long-lived python3 child answering newline-delimited JSON; n=40 spawns, n=200 persistent round trips. Real scripts/routing.py with SQLite work will cost more.",
+  "plugin_runtime": {
+    "bun": "1.4.4",
+    "node_compat": "26.3.0",
+    "host_binary": "opencode 2.2.6"
+  }
+}

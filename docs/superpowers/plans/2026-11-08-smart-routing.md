@@ -374,6 +374,38 @@ Read the owning spec section and amendment before each task. Do not invent provi
 - [ ] Write failing tests: malformed input is blocked; `status` and `set` make zero model, network or secret-store calls (RF5); `set smart_routing=false` invalidates unsent automatic admissions under the old revision.
 - [ ] Run, implement, re-run; expected PASS.
 
+**Contract (v1).** `scripts/routing.py <op>` reads one request on stdin. `scripts/routing.py --serve` reads one request per line and writes one response per line, for the OpenCode shim's persistent child. Both accept `--settings`, `--ledger` and `--table` paths. A request is `{"v":1,"op":…,"id"?,…}`; a valid `id` is echoed back. A response is `{"v":1,"state":…}`: either a result or `{"state":"blocked","reason":<fixed code>}`. Blocked is an outcome, so the exit code is 0; only a usage error exits 2. Malformed, oversized (1 MiB) or unknown input is blocked with no traceback, input text or secret in the output. Consumers ignore unknown response fields: S3.4 adds `authority` to `check` results without changing `v`.
+
+| op | Request | Result |
+|---|---|---|
+| `prepare` | `assignment{attempt_id, task, scope, role?, choice?}`, `job`, `observations`, `constraints?` | `admitted{duplicate, admission, ranking, profile}` or `pending{reason, reasons}` |
+| `check` | `attempt_id`, `request{provider, model, variant, harness, kind, funding_pool, bound?}` | `allow{attempt_id, route, pool, settings_revision, remaining}`; reads only |
+| `record` | `event{event_id, attempt_id, kind: dispatched / uncertain / not_dispatched / complete}` | `recorded{event_id, duplicate}` |
+| `status` | — | `ok{settings, settings_revision, effective_caps, ledger}`; local files only |
+| `set` | `expected_revision` + `change`, or `organization{id, enabled, policy?, expected_revision?}` | `updated{revision, settings, invalidated_attempts}` or `updated{organization}` |
+
+Rules the command applies:
+
+- **Roles.** `prepare` maps the job's profile role to a worker-choice role with `routing_settings.PROFILE_ROLES`. An explicit `researcher` or `repair` role is accepted; any other explicit role must match the mapping (`role_mismatch`). A coordinator is never routed (`coordinator_not_routed`).
+- **Strategy table.** `prepare` ranks from the compiled table stored next to the settings (`strategy-table.json`, or `--table`). A missing, unreadable or malformed table falls back to worker choices or the explicit choice with `table_unavailable`; it never blocks. A table or ranking with a non-string strategy id or an unbounded version counts as malformed.
+- **Clock.** The command uses its own clock. `prepare` refuses a snapshot whose `now` differs from it by more than 60 s (`observation_stale`) and stamps the admission with its own time.
+- **Unsent admissions.** An unsent (`admitted`) attempt passes `check` only under the same settings revision and at an age of 0–900 s; exactly 900 s still passes. Otherwise it is blocked with `settings_revision_changed`, `admission_expired` or `clock_invalid`.
+- **Dispatched attempts.** A dispatched attempt skips the revision and age checks, so turning Smart Routing OFF does not stop started subscription work.
+- **Dollar-funded holds.** On every `check`, dispatched or not, a dollar-funded hold re-checks the following, blocking with `api_usage_disabled`, `organization_unavailable` or `funding_unverified`:
+  - API Usage is still enabled (direct API routes);
+  - its organization is enabled and not blocked;
+  - the policy revision, balance freshness and cycle are still valid;
+  - the reconciled credit still covers what is held.
+
+  S3.1 records no consumption, so a dispatched hold's own spend is counted twice: once in the reservation and once in the lower observed balance. A long funded job therefore stops once its observed spend exceeds the unspent part of its reservation; S3.6 records consumption and removes the double count. While any organization hold is open, the collector must refresh the balance at least every 900 s (ideally about every 5 minutes) and must never timestamp an observation ahead of the command's clock. A policy edit (new organization revision) blocks all in-flight funded work.
+- **Envelope.** S3.1 records no consumption, so the remaining envelope is the full reservation. A request `bound` larger than it is blocked with `envelope_exhausted`; an absent or empty bound passes while any amount is reserved.
+- **Request kinds.** `check` covers model requests and subagent spawns (`primary`, `subagent`, `title`, `compaction`, `generate`). Tool, MCP and webfetch calls are governed by S3.3's policy deny rules; any other kind is blocked with `unsupported_kind`.
+- **Smart Routing OFF.** `set smart_routing=false`, like any settings change, persists a new revision, and unsent admissions from the old revision fail `check`. Nothing is released until a `not_dispatched` record establishes non-dispatch, because `check` is not single-use in S3.1.
+- **Recording outcomes.** A bare `complete` on an uncertain attempt is refused with `reconciliation_required` until S3.6 adds evidence-based reconciliation.
+- **Busy ledger.** `check` and `status` wait at most 200 ms for a busy ledger and then answer `ledger_busy`. Writes wait at most 300 ms under `--serve` and 5 s in one-shot mode.
+- **Caps.** Effective caps are the stricter of the settings and ledger caps, so `set` can only lower them. Raising them is an explicit ledger action (`Ledger.set_caps`).
+- **Test switch.** The `--test-inputs` command-line flag lets tests supply `now` to `check`, an off-clock snapshot and a `table` to `prepare`. No request, configuration, table or environment variable can enable it. It is a usage error unless both `--settings` and `--ledger` are given and differ from the production defaults, and `status` reports `test_inputs`.
+
 ### Task S3.2: OpenCode adapter and client contract
 
 **Files:** create `runtime/adapters/opencode.py`, `clients/opencode.md`, `tests/test_opencode_adapter.py`; modify `clients/index.md`, `clients/instruction-map.json` and the support targets in `docs/onboard-my-project-plan.md#client-scope-and-adapter-organization`.
@@ -385,15 +417,20 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 **Files:** create `runtime/adapters/opencode_plugin.ts`; extend `tests/test_opencode_adapter.py`.
 
-- [ ] The shim forwards each worker spawn, nested spawn, model switch and provider request to `scripts/routing.py check`, blocking unless it returns an admission. A missing or failing command blocks (fail closed). The shim contains no selection or funding logic.
-- [ ] Qualify P0.6 live: built-in, nested and alternate launch paths are blocked before transmission. Record any unblockable path as unsupported in the capability matrix.
+- [ ] Use the hooks recorded in the [capability matrix](../../smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08): `model.request` for every model request, `tool.execute.before` for subagent, MCP and nested tool calls, `permission.evaluate` for `webfetch`, and `shell.create.before` to strip credentials from the command environment. Each forwards to `scripts/routing.py check` and blocks unless it returns an admission. A missing, failing or slow command blocks (fail closed). The shim contains no selection or funding logic.
+- [ ] Run one persistent child over stdio per plugin instance with a timeout of about 500 ms on every check; kill and respawn on a stall, and throw if the respawn fails.
+- [ ] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
+- [ ] Worker profiles are enforced only when policy rules deny `shell`, MCP tools, Code Mode `execute` and `webfetch` (or allow a narrow list). Profiles that keep full shell access run advisory-only, with no funding guarantee. Install the plugin globally; it enforces nothing outside the bounded canary project until C.4.
+- [ ] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.
+- [ ] Re-qualify P0.6 on the finished shim: model requests, subagent and nested spawns, tool and MCP calls, and `webfetch` are blocked before transmission, and a failed plugin load makes the health check fail. Record any unblockable path as unsupported in the capability matrix.
 
 ### Task S3.4: Single-use dispatch authority
 
 **Files:** modify `runtime/usage_budget.py`, `runtime/routing.py`; create `tests/test_routing_dispatch.py`.
 
 - [ ] Write failing tests: 15 callers racing for one attempt produce at most one authority; distinct affordable attempts run concurrently; a lost acknowledgment leaves the claim `unknown` and is not retried without proven host deduplication or proof of non-launch.
-- [ ] Run, implement, re-run; expected PASS. Qualify P0.7 live.
+- [ ] Derive the session and message IDs from the attempt ID. The server deduplicates them (observed), but the `prompt` hook can run more than once for one message, so key the ledger on the message ID and recover an unknown attempt by reading the message by ID.
+- [ ] Run, implement, re-run; expected PASS. Re-qualify P0.7 on the finished path.
 
 ### Task S3.5: Fresh gates at dispatch (RF3)
 
@@ -413,7 +450,8 @@ Read the owning spec section and amendment before each task. Do not invent provi
   - Ambiguous timeouts keep their exposure.
   - Expired diagnostic evidence cannot influence a decision, while active caps, unknown claims and ownership survive retention (spec §11 defaults).
   - Observability OFF exports nothing and loses no local accounting.
-- [ ] Run, implement, re-run; expected PASS. Qualify P0.8 live.
+- [ ] Account from message and session token totals, not from usage events (not durable). Title requests create no message, so their tokens are the session total minus the sum of its messages. Detect event gaps with `durable.seq` and re-read session and message state to resync.
+- [ ] Run, implement, re-run; expected PASS. Re-qualify P0.8 on the finished path.
 
 ### Task S3.7: Canary
 

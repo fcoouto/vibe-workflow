@@ -107,7 +107,8 @@ def initialize(path):
 
 class Ledger:
     """Identity-bound accounting. Only the trusted coordinator can supply a live gate."""
-    def __init__(self, path, identity):
+    def __init__(self, path, identity, *, timeout=5):
+        """`timeout` is the SQLite busy wait in seconds; `busy_timeout` changes it on an open ledger."""
         self.path = Path(path).absolute()
         self.path = self.path.parent.resolve() / self.path.name
         self.identity = name(identity)
@@ -117,7 +118,7 @@ class Ledger:
         except FileNotFoundError as error:
             raise BudgetError('manual_recovery_required') from error
         self.file_identity = (info.st_dev, info.st_ino)
-        self.db = sqlite3.connect(f'{self.path.as_uri()}?mode=rw', uri=True, timeout=5,
+        self.db = sqlite3.connect(f'{self.path.as_uri()}?mode=rw', uri=True, timeout=timeout,
                                   isolation_level=None)
         try:
             self.db.execute('PRAGMA synchronous=FULL')
@@ -128,6 +129,9 @@ class Ledger:
 
     def close(self):
         self.db.close()
+
+    def busy_timeout(self, seconds):
+        self.db.execute('PRAGMA busy_timeout=%d' % int(seconds * 1000))
 
     def __enter__(self):
         return self
@@ -775,12 +779,13 @@ class Ledger:
         with self.transaction() as data:
             self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
 
-    def close_attempt(self, attempt_id, outcome):
+    def close_attempt(self, attempt_id, outcome, *, reconciled=True):
         """Release a hold only on an established outcome: `not_dispatched` or `complete`.
 
         `uncertain` records that the outcome is unknown and keeps the hold; a timeout never frees capacity.
         `not_dispatched` is valid only before dispatch; `complete` after dispatch or once an uncertain
-        attempt is reconciled.
+        attempt is reconciled. A caller without reconciliation evidence passes `reconciled=False`, and
+        `complete` on an uncertain hold is then refused with `reconciliation_required`.
         """
         require(outcome in HOLD_OUTCOMES, 'invalid_outcome')
         with self.transaction() as data:
@@ -790,6 +795,7 @@ class Ledger:
             allowed = dict(not_dispatched=('admitted',), complete=('dispatched', 'uncertain'),
                            uncertain=('admitted', 'dispatched', 'uncertain'))[outcome]
             require(hold['state'] in allowed, 'close_forbidden')
+            require(reconciled or outcome != 'complete' or hold['state'] != 'uncertain', 'reconciliation_required')
             if outcome == 'uncertain':
                 hold['state'] = 'uncertain'
             else:

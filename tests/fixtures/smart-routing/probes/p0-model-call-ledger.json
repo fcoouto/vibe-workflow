@@ -1,0 +1,19 @@
+{
+  "_meta": {"opencode": "2.2.6", "probe_date": "2026-11-08", "provider": "claude-agent/haiku", "sanitized": true},
+  "transmitted_model_requests": 16,
+  "blocked_before_transmission": 2,
+  "breakdown": [
+    {"probe": "baseline prompt", "requests": 1},
+    {"probe": "5 concurrent prompts, same message id", "requests": 1},
+    {"probe": "variant switch to #low (+ lost-ack timing attempt)", "requests": 1},
+    {"probe": "context hook throws", "requests": 0, "blocked": 1},
+    {"probe": "context hook hangs, then interrupt", "requests": 0, "blocked": 1},
+    {"probe": "plugin setup throws (fail-open)", "requests": 1},
+    {"probe": "shell tool blocked in tool.execute.before", "requests": 2},
+    {"probe": "subagent spawn with per-call model", "requests": 3},
+    {"probe": "title + primary + manual compaction", "requests": 3},
+    {"probe": "nested subagent spawn blocked", "requests": 4}
+  ],
+  "cross_check": "15 model.request hook observations + 1 unhooked request while the plugin was deactivated = 16",
+  "non_inference": "connecting claude-agent in the isolated config started claude to list models (no prompt)"
+}
