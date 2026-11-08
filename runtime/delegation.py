@@ -3190,6 +3190,7 @@ def validate_dependencies(scope, task, plan, job, records, *, cooperative=False)
         _require(all(revision>checked[parent] for parent in jobs[identity]['dependencies']),
             'Prior dependent acceptance predates reopened prerequisite work')
         checked[identity]=revision
+    return checked
 
 
 def validate_record(value, read):
@@ -3213,3 +3214,129 @@ CONTINUATION_LIMITATIONS = ['Send admission is cooperative and one-use; native d
 CONTINUATION_TRANSIENT = {'responseStreamConnectionFailed', 'httpConnectionFailed', 'responseStreamDisconnected', 'serverOverloaded', 'responseTooManyFailedAttempts', 'internalServerError'}
 
 CONTINUATION_LIMIT_FAILURES = {'rateLimitExceeded', 'usageLimitExceeded'}
+
+
+# ---------------------------------------------------------------------------------------------------
+# Smart Routing dispatch gates (S3.5): read-only view of a planned job, its canonical semantic job and a cheap
+# change marker. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3
+# ---------------------------------------------------------------------------------------------------
+ROUTING_PAUSED = {'BLOCKED', 'WAITING', 'PAUSED', 'CANCELLED'}
+WORKSTREAM_REQUEST_FIELDS = {'workstream_revision', 'continuation_limits', 'workstream_context_id'}
+
+
+def routing_watch(scope):
+    """A `state.ChangeWatch` over the runtime database; the caller closes it. Opens no raw descriptor."""
+    return state.ChangeWatch(state._path(scope))
+
+
+def routing_etag(scope, watch):
+    """Cheap etag over everything `routing_view` reads that can change: the runtime database (through `watch`)
+    and the Workstreams setting file. None when the database is busy. Comparable only within one watch."""
+    from runtime import workstreams
+    marker = watch.marker()
+    return None if marker is None else marker + '/' + workstreams.setting_marker(scope)
+
+
+def _routing_target(scope, db, locator):
+    """(task, plan, job, records, bound assignment or None) for a locator, or None when any part is missing."""
+    identity = (state._scope_id(scope), locator['client'], locator['session_id'], locator['task_id'])
+    if db.execute('select 1 from tasks where scope_id=? and client=? and session_id=? and task_id=?',
+                  identity).fetchone() is None:
+        return None
+    task = state._task(db, *identity)
+    if 'delegation' not in task:
+        return None
+    plan = _task_plan(scope, task)
+    job = next((j for j in plan['jobs'] if j['id'] == locator['job_id']), None)
+    if job is None:
+        return None
+    records = _ledger(scope, db, task=task)
+    bound = None
+    if 'attempt_id' in locator:
+        owner = dict(scope_id=identity[0], **{key: task[key] for key in ('client', 'session_id', 'task_id')})
+        bound = next((r for r in records if r['id'] == locator['attempt_id']), None)
+        if bound is None or bound['data']['job_id'] != job['id'] or \
+                any(bound['owner'][key] != value for key, value in owner.items()):
+            return None
+    return task, plan, job, records, bound
+
+
+def _routing_semantic(task, job, bound):
+    brief = bound['body']['request'].get('brief', {}) if bound is not None else {}
+    return dict(id=job['id'], role=job['role'], scope_ref=task['scope_ref'], claims=job['claims'],
+                objective=brief.get('objective'), context=brief.get('context'))
+
+
+def routing_job(scope, locator):
+    """The exact canonical job a Smart Routing `prepare` must profile for `locator`, or None (read-only).
+
+    Role, scope reference and planned claims, plus the bound assignment's objective and context when
+    `attempt_id` names one. Its `routing.semantic_digest` is the one `routing_view` reports. The coordinator may
+    add a supplied `profile`, which is not part of the digest."""
+    with state._database(scope) as db:
+        _require(db is not None, 'Runtime task state is missing')
+        target = _routing_target(scope, db, locator)
+    return None if target is None else _routing_semantic(target[0], target[2], target[4])
+
+
+def routing_view(scope, locator, watch):
+    """Read-only Smart Routing view of one planned job: readiness, ownership and resource authority (S3.5).
+
+    `locator` names the root task (`client`, `session_id`, `task_id`), `job_id` and optionally an existing
+    assignment `attempt_id` that already reserves the job's claims. Reuses the admission checks of this module
+    (`validate_dependencies`, `_resources_available`) without reserving, settling or writing anything. The
+    database part is read in one read transaction. Its etag is `routing_etag(scope, watch)` taken before and
+    after that transaction: equal values mean no commit landed between them, so the view matches that etag;
+    otherwise `routing_gates.WorkflowChanged` is raised. Returns digests and flags only, never briefs or
+    source; a missing task, plan, job or assignment is `job: None`."""
+    from runtime import routing_gates, workstreams
+    before = routing_etag(scope, watch)
+    if before is None:
+        raise routing_gates.WorkflowChanged('runtime database busy')
+    feature = workstreams._feature(scope, 'resource_admission')
+    with state._database(scope) as db:
+        _require(db is not None, 'Runtime task state is missing')
+        target = _routing_target(scope, db, locator)
+        view = None if target is None else _routing_job_view(scope, db, target, feature)
+    if routing_etag(scope, watch) != before:
+        raise routing_gates.WorkflowChanged('workflow state changed during the view')
+    view = view or dict(job=None, dependencies=None, ownership=None, resource=None)
+    return dict(view, etag=before)
+
+
+def _routing_job_view(scope, db, target, feature):
+    task, plan, job, records, bound = target
+    try:
+        state._assert_open(task)
+        is_open = task['state'] not in ROUTING_PAUSED and plan['limits']['deadline'] > _now() and not any(
+            c['kind'] in {'blocker', 'decision'} and c['status'] == 'pending' for c in task['conditions'])
+    except state.StateError:
+        is_open = False
+    revision = evidence._digest(dict(plan=task['delegation']['plan']['digest'], job=job, assignment=None if bound is None
+                                     else [bound['id'], bound['data']['request_digest'], bound['data']['revision']]))
+    # The same cooperative choice delegation's own admission makes: ordinary requests carry no Workstreams fields.
+    cooperative = bound is None or not WORKSTREAM_REQUEST_FIELDS & bound['body']['request'].keys()
+    try:
+        checked = validate_dependencies(scope, task, plan, job, records, cooperative=cooperative)
+        dependencies = dict(accepted=True, digest=evidence._digest(sorted(checked.items())), count=len(checked))
+    except state.StateError:
+        dependencies = dict(accepted=False, digest=None, count=0)
+    claims = bound['data']['claims'] if bound is not None else _claims(job['claims'])
+    try:
+        _resources_available(scope, db, claims, [r for r in records if bound is None or r['id'] != bound['id']],
+                             cooperative_task=task if cooperative else None)
+        conflict = False
+    except state.StateError:
+        conflict = True
+    resource = None
+    if bound is not None or feature['enabled']:
+        assignment = None if bound is None else dict(id=bound['id'], status=bound['data']['status'],
+            claims=evidence._digest(bound['data']['claims']), resource_units=bound['data']['resource_units'],
+            host_capacity=bound['data']['host_capacity'])
+        marker = dict(assignment=assignment, feature=feature if feature['enabled'] else None)
+        resource = dict(marker=evidence._digest(marker),
+                        current=bound is None or bound['data']['status'] not in TERMINAL_ASSIGNMENTS)
+    return dict(job=dict(role=job['role'], open=is_open, revision=revision,
+                         semantic_digest=routing.semantic_digest(_routing_semantic(task, job, bound))),
+                dependencies=dependencies, ownership=dict(digest=evidence._digest(claims), conflict=conflict),
+                resource=resource)

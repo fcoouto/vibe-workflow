@@ -1,5 +1,7 @@
 """Independent checkout preferences and legacy send gates over the existing D6 authority."""
 
+import hashlib
+
 from runtime import delegation as d6, evidence, state
 from runtime.startup import json_object
 
@@ -33,6 +35,13 @@ def _load(scope):
             if db is not None and state._checkout_row(db, scope) is not None:
                 value['enabled'] = True
     return value
+
+
+def setting_marker(scope):
+    """Digest of the saved preference file's bytes (or `absent`); read-only change detection for S3.5."""
+    path = _path(scope)
+    raw = d6._read_bytes(path) if path.parent.exists() else None
+    return 'absent' if raw is None else hashlib.sha256(raw).hexdigest()
 
 
 def _load_bound(path, binding):
