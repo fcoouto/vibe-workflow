@@ -674,6 +674,42 @@
         ]
       ]
     },
+    "skills/review-my-project/SKILL.md": {
+      "sha256": "9612243164d3bd741fd6bfd571543a260d8c11a51d74319f392baf1ae86ebc63",
+      "ranges": [
+        [
+          1,
+          12
+        ]
+      ]
+    },
+    "skills/review-my-project/references/procedure.md": {
+      "sha256": "bdda960054041a8db0e5d66232fe0543b566f3baef65d9b5cc5c851e3221c539",
+      "ranges": [
+        [
+          1,
+          44
+        ]
+      ]
+    },
+    "skills/review-my-project/references/retention.md": {
+      "sha256": "bb1b8d39ac26dbe01ab6e5313374b6c8e348577b0b4d9148e2f22db7fb33dc4a",
+      "ranges": [
+        [
+          1,
+          33
+        ]
+      ]
+    },
+    "skills/review-my-project/references/source-structure.md": {
+      "sha256": "d636c0efb74e596b00bbdff64f17853a04ea260ffdfa399be57514f730bd1b13",
+      "ranges": [
+        [
+          1,
+          11
+        ]
+      ]
+    },
     "skills/workstreams/SKILL.md": {
       "sha256": "499de72af2c27a6a7295f661c53ebd2a044502daf481e55fbc6223ada95d61cd",
       "ranges": [

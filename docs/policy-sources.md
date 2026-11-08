@@ -1,5 +1,15 @@
 # Policy source map
 
+## Review my Project (D10) — 8 November 2026
+
+The review instructions from the [D10 plan](d10-project-review-plan.md) were ported to current `main` with their instruction-delivery tests and fixtures. The report and retention runtime candidates were not merged. Validation evidence is in the [D10 validation record](d10-validation.md).
+
+| Local contract | Requirements carried locally | Basis |
+| --- | --- | --- |
+| `skills/review-my-project/SKILL.md` and `references/procedure.md` | Repositories before areas, native selection/fallback, preserved selection, unenrolled/temporary scope, bounded Full Scan, project rules, safe command inspection, canonical check reuse, complete selected security/dependency coverage, honest actionable findings, separate installation and fix authority | Approved D10 plan; Toolkit Prompt 13 and existing local policies 01/04/05/06; user-approved standalone chat-first outcome |
+| `references/source-structure.md` | Explicit analysis approval, fresh shortlist, per-repository partial coverage and sample-only priorities, supported refactoring recommendations, separate implementation approval, no measured workflow-savings claim | Approved 28 October source-structure extension preserved from the saved D10 draft |
+| `references/retention.md` | Existing canonical evidence owners; original ages/allowances, enrolled accounting, protected overlaps/unknowns, seven-day detail/four-month compact/100 MiB Project rules, no new store, chat-only detailed reporting until the complete existing retention path is available | Canonical membership/retention plan and inspected D5/private ownership interfaces; no runtime qualification claimed |
+
 ## Reusable native evaluation — Phase 3, 5 November 2026
 
 The user authorized reusable evaluation packaging after Phase 2 integration.
