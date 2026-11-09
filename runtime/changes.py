@@ -6015,7 +6015,7 @@ def _scoped_qualification(journal, observation, record, *, published=False):
         d3._object(facts,("authority","observation","client","installed"))
         d3._require(facts["client"] == key[2], "Qualification selected another client")
         partial = False
-        if key[2] == 'codex':
+        if key[2] in ('codex', 'claude-code'):
             facts['installed'] = dict(policy_digest=policy_digest(task_state.PACKAGE), runtime_digest=task_state.runtime_fingerprint(),
                 clients=[key[2]] if (task_state.PACKAGE/'clients'/(key[2]+'.md')).is_file() else [], package_root=str(task_state.PACKAGE))
             from runtime.setup_observation import read_qualification
