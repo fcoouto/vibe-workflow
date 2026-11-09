@@ -2,9 +2,14 @@
 
 **Outcome: stopped in stage 3 on a blocker.** Stages 0–2 matched the contract. Stage 3 (P0.8 accounting) could not account a managed attempt in which the managed session ran a `subagent: true` command (see [Blocker](#blocker)). The rest of stage 3, two stage-2 checks that run after completion, and stage 4 did **not run**. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
-- Harness: [`tests/qualification/opencode_live.py`](../tests/qualification/opencode_live.py) acted as the managed launcher. [`opencode_inspect.py`](../tests/qualification/opencode_inspect.py) re-read the stopped run without any model call. Pure parts are tested in `tests/test_qualification_harness.py`.
-- Evidence: [`qual-results.json`](../tests/fixtures/smart-routing/probes/qual-results.json) (run 3, plus the re-read) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json). Both are sanitized: ids are placeholders, and no paths, names, tokens or passwords are included.
+- Harness: [`tests/qualification/opencode_live.py`](../tests/qualification/opencode_live.py) acted as the managed launcher. [`opencode_inspect.py`](../tests/qualification/opencode_inspect.py) re-read the stopped run without any model call. Pure parts are tested in `tests/test_qualification_harness.py`. The harness was hardened after an independent review; see [Harness changes after review](#harness-changes-after-review-no-live-run). This report's results come from the earlier version.
+- Evidence:
+  - [`qual-results.json`](../tests/fixtures/smart-routing/probes/qual-results.json): run 3, plus the re-read. Its `_meta.provenance` lists the one field edited after the run and the hand-written parts.
+  - [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json): generated from the durable call ledger.
+
+  Both are sanitized: ids are placeholders, and no paths, names, tokens or passwords are included.
 - Model calls: **5 of the 14 authorized**, all `claude-agent/haiku#low`. Four requests were blocked before sending (0 tokens).
+- **What the count means:** OpenCode `model.request` hook invocations that passed the shim and the guard. These are not upstream API calls: the claude-agent SDK may retry or split a turn, which would make more upstream calls than counted.
 
 ## Setup
 
@@ -14,11 +19,26 @@
 - **Plugins.** Three, in this order, from the project's own `opencode.json`. Nothing was installed globally.
   1. `qual-pre`: a recorder.
   2. The routing shim, with `python`, `settings` and `ledger` pinned to a temporary routing store.
-  3. `qual-post`: a recorder that also guards before sending. It blocks any model other than `claude-agent/haiku`, any title except the one allowed, any session on hold, and anything beyond the budget.
+  3. `qual-post`: a recorder that also guards before sending. In run 3 it blocked any model other than `claude-agent/haiku`, any title except the one allowed, any session on hold, and anything beyond the budget. That version did **not** check the variant, and the counter would have failed open if `qual-post` had not loaded or its log write had failed. Both are fixed now (see below).
 
   `qual-post` only sees what the shim let through, so its count is the transmitted count. The pre/post pairs show the hooks ran in this configured order.
-- **Cleanup.** The server and routing child were stopped and the temporary directory was removed. No process was left.
+- **Cleanup.** The harness of run 3 stopped its server; it did not verify cleanup itself. Afterwards the operator removed the temporary directory by hand and checked a process listing (no server or routing child left). The current harness does and verifies this itself.
 - **Not separately controlled.** OpenCode's own catalog and update traffic. The harness sets the V1-era `OPENCODE_DISABLE_AUTOUPDATE` and `OPENCODE_DISABLE_MODELS_FETCH` variables, and whether 2.2.6 honors them was not verified. The server also watched `~/.claude/skills`, read-only.
+
+## Isolation under HOME
+
+The server kept the real `HOME` so that `claude-agent` could use the Claude login. These paths outside the isolated directory may therefore be read or written. They were not inspected in run 3.
+
+- **`~/.claude/projects/<encoded working directory>/`** (written): the claude CLI and Agent SDK store session transcripts per working directory. These would include the tiny prompts and replies; the directory names encode the isolated or canary path.
+- **`~/.claude.json`** (written): CLI state, such as per-project entries and counters.
+- **macOS keychain item of the Claude login** (written): refreshed when the OAuth token is renewed.
+- **Under `~/.claude`** (read): `settings.json`, `CLAUDE.md`, `skills/` (the OpenCode server watched `~/.claude/skills`), agents and commands. They may also be written: other CLI state such as `todos/`, `shell-snapshots/` and telemetry.
+- **`~/.opencode`** (possibly written): OpenCode's own per-user directory, if this installation uses it.
+
+The current harness snapshots names and mtimes in two places:
+
+- **Compared:** the user's real OpenCode config, data, state and cache directories, before and after a run. Any change fails the run. The running desktop app's own `opencode.db` files and logs are reported as churn, not hidden.
+- **Report-only:** `~/.claude` (two levels), `~/.claude.json` and `~/.opencode`. Only counts are recorded.
 
 ## Results
 
@@ -78,7 +98,7 @@ RPC round trips from the launcher:
 
 ## Blocker
 
-**A managed attempt that runs a `subagent: true` command cannot be accounted.**
+**A managed attempt that runs a `subagent: true` command cannot be accounted.** Fixed on `main` by #146, but not yet re-observed live. That change links children through `parentID`, adds the `lineage` input and normalizes `synthetic` messages, and the harness's stage 3 now passes `children` and `lineage`.
 
 The command creates the child session directly through the server, with `parentID` set to the managed session. No subagent tool call appears in the parent's messages. [`opencode_accounting`](../runtime/opencode_accounting.py) finds children only through subagent tool parts, so it behaves as follows:
 
@@ -108,6 +128,23 @@ Possible fixes, for the user to choose:
 
   The first two harness runs stopped on the paging behaviour, after one stage-1 call each.
 
+## Harness changes after review (no live run)
+
+An independent review found one blocking safety gap and several should-fix items. All were changed and unit-tested without a server or any model call.
+
+| Finding | Change |
+|---|---|
+| B1: the counter failed open if `qual-post` was missing or its log write failed | The recorders throw on any failed log write, which blocks the hook. Before anything may be sent, stage 0 requires two things. First, all three plugins must be present. Second, a two-probe proof of order must pass: a guard probe on `haiku#high` that `qual-pre` sees and `qual-post` then refuses with `guard_variant`, and a pending probe on an admitted, undispatched derived session that `qual-pre` sees and the shim refuses with `attach_required` before `qual-post`. The API's plugin list is used for presence only, because its order is not documented. |
+| SF1: in-memory budget | A durable call ledger, append-only and flock-protected, outside every run directory, with the file `0600` in a `0700` directory. It has caps per purpose (`qualification` 14, `pilot` 24), writes each call ahead before sending and settles it with what was transmitted; an unsettled reservation counts in full. It was created once, seeded with the 5 spent calls. `qual-call-ledger.json` is exported from it. |
+| SF2: variant | The guard refuses any variant other than `low` on every session, and any spawn other than `claude-agent/haiku#low`. |
+| SF3: what is counted | Stated here, in the ledger and in every output's `_meta`. |
+| SF4: isolation | The harness refuses an isolated directory inside a git worktree or under `~/Library/Application Support`, and refuses unless `opencode --version` is 2.2.6. It snapshots and compares the user's directories as described [above](#isolation-under-home). |
+| SF5: cleanup | Every exception is caught and recorded. SIGTERM and SIGINT stop the run, and further signals are ignored during cleanup. The harness kills and re-checks every process in the server's group or naming the run's paths, removes the isolated directory unless `--keep`, removes the canary project config, and records whether all of it was verified. |
+| SF6, SF7 | Fixture provenance recorded; cleanup claim corrected. |
+| Nits | `--model` removed; the `--keep` message names what the directory holds; the inspection script refuses anything but a stopped, kept run with the three sessions it reads. |
+
+The harness also gained a canary mode for the bounded pilot. Its pre-registration is in [the validation file](smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary).
+
 ## Open questions
 
 - Whether OpenCode 2.2.6 makes catalog or update requests at start-up despite the environment flags.
@@ -117,7 +154,7 @@ Possible fixes, for the user to choose:
 
 ## What remains
 
-1. Decide and fix the [blocker](#blocker). Then re-run stages 3 and 4 and the two post-completion checks of stage 2: `--through 4` repeats stages 1–2, about 4 calls, and the remaining authorization is 9.
+1. Re-run stages 0–4 with the hardened harness now that #146 is on `main`. That takes about 4 calls; 9 remain of the qualification authorization in the durable ledger.
 2. Run a canary on a real project (S3.7) with `workflow`-bound preparation (`unbound_open_holds: 0`) and `--project`.
 3. Install the plugin globally (decision 3 in the matrix), which this run deliberately did not do.
 4. Run the Codex, OpenAI and ChatGPT live checks (matrix "Live checks still open"); none was made here.

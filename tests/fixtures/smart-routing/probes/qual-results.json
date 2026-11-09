@@ -5,9 +5,15 @@
   "provider": "claude-agent/haiku#low",
   "sanitized": true,
   "harness": "tests/qualification/opencode_live.py (run 3 of 3; runs 1 and 2 stopped in stage 1 on a harness paging bug)",
-  "setup": "Isolated `opencode serve` on a random localhost port with its own XDG config, data, state and cache directories under a new 0700 temporary directory and a minimal environment (HOME kept so the claude-agent provider uses the local Claude login; a dummy QUAL_PROBE_TOKEN variable for the shell check). claude-agent connected through its external `claude-login` method (method reference only). Project-local config loaded three plugins in order: qual-pre (recorder), runtime/adapters/opencode_plugin.ts with python/settings/ledger options pinned to the temporary routing store, qual-post (recorder and last guard before sending). The temporary directory was removed after the run.",
+  "setup": "Isolated `opencode serve` on a random localhost port with its own XDG config, data, state and cache directories under a new 0700 temporary directory and a minimal environment (HOME kept so the claude-agent provider uses the local Claude login; a dummy QUAL_PROBE_TOKEN variable for the shell check). claude-agent connected through its external `claude-login` method (method reference only). Project-local config loaded three plugins in order: qual-pre (recorder), runtime/adapters/opencode_plugin.ts with python/settings/ledger options pinned to the temporary routing store, qual-post (recorder and last guard before sending). After the run the operator removed the temporary directory and checked by hand (a process listing) that no server or routing child was left; that harness version did not verify cleanup itself.",
   "sanitizer": "Ids are placeholders numbered per prefix in order of appearance (<ses#n>, <msg#n>); paths, the user name, the server password and the dispatch token are removed (the harness refuses to write output that still contains any of them). Hook records keep only phase, hook, kind, model, variant, tool, effect, probe presence, the recorder's decision and the session placeholder; no headers, environment values or prompt text were ever logged.",
-  "stop": "Stage 3 exposed a blocker (accounting of a managed attempt with a command-spawned subagent child); the rest of stage 3, the closed-attempt and killed-child checks of stage 2, and stage 4 did not run."
+  "stop": "Stage 3 exposed a blocker (accounting of a managed attempt with a command-spawned subagent child); the rest of stage 3, the closed-attempt and killed-child checks of stage 2, and stage 4 did not run.",
+  "provenance": {
+   "run": "Standard output of tests/qualification/opencode_live.py, run 3, at commit b7cc1dc, sanitized by the harness's Redactor (its leak check passed). One field was edited afterwards: run.stages['0'].plugin_list was {http, ids: [every plugin id the server listed, sorted]}; it was replaced by {http, total, load_order_relevant} keeping only qual-pre, vibe-workflow.routing and qual-post. No other field of `run` was edited. The raw file was not kept, so this cannot be regenerated; later runs write their fixture directly (`generated_by` in their _meta, no post-processing). The kept ids are in alphabetical order (the harness sorted them), so `load_order_relevant` says nothing about load order; the order was shown only by the recorders' pre/post records.",
+   "inspection": "Hand-written summary from the first version of this fixture, kept under its original keys because tests/test_opencode_accounting.py and test_opencode_adapter.py read them. Values are transcribed and renamed from `inspection_verbatim`, except three derived entries: `linked_by_subagent_tool_part: false` (from `subagent_tool_parts_in_root: 0`), `child_session_unaccounted_flagged: false` (the reason is absent from `root_only.unknown`) and `usage_from_messages_with_child` (the refusal text of run 3's stage-3 blocker in `run.blockers`).",
+   "_meta": "Hand-written.",
+   "inspection_verbatim": "Verbatim standard output (transcribed) of the read-only inspection script as of commit aa51f66 (before #146; its accounting call then had no `lineage`), run once on the kept run-3 directory with nothing permitted."
+  }
  },
  "run": {
   "blockers": [
@@ -694,7 +700,6 @@
   }
  },
  "inspection": {
-  "_meta": "Read-only re-read of the run-3 isolated server after the stop: the same directories, budget 0 (the post guard blocks every request); the transmitted count stayed 3. Shapes and counts only.",
   "p07_duplicate_prompt_message_types": [
    "user",
    "assistant",
@@ -768,5 +773,163 @@
    "child_session_unaccounted_flagged": false
   },
   "consistency_report_with_child": "accepted (it counts problems instead of raising)"
+ },
+ "inspection_verbatim": {
+  "p07_types": [
+   [
+    "user",
+    null,
+    null
+   ],
+   [
+    "assistant",
+    null,
+    null
+   ],
+   [
+    "idle",
+    null,
+    "succeeded"
+   ],
+   [
+    "idle",
+    null,
+    "succeeded"
+   ]
+  ],
+  "p07_ids_equal_derived_user": [
+   "user"
+  ],
+  "rpc_refusal": {
+   "http": 500,
+   "body": {
+    "_tag": "RpcInternalError",
+    "type": "rpc.internal",
+    "message": "RPC call failed"
+   }
+  },
+  "managed_types": [
+   [
+    "user",
+    null
+   ],
+   [
+    "assistant",
+    null
+   ],
+   [
+    "idle",
+    "succeeded"
+   ],
+   [
+    "synthetic",
+    null
+   ],
+   [
+    "idle",
+    "failed"
+   ],
+   [
+    "user",
+    null
+   ],
+   [
+    "idle",
+    "failed"
+   ],
+   [
+    "user",
+    null
+   ],
+   [
+    "idle",
+    "failed"
+   ]
+  ],
+  "managed_normalized_kinds": [
+   [
+    "message",
+    "user"
+   ],
+   [
+    "message",
+    "assistant"
+   ],
+   [
+    "message",
+    "idle"
+   ],
+   [
+    "unknown",
+    "synthetic"
+   ],
+   [
+    "message",
+    "idle"
+   ],
+   [
+    "message",
+    "user"
+   ],
+   [
+    "message",
+    "idle"
+   ],
+   [
+    "message",
+    "user"
+   ],
+   [
+    "message",
+    "idle"
+   ]
+  ],
+  "session_total": {
+   "input": 4,
+   "output": 12,
+   "reasoning": 0,
+   "cache_read": 0,
+   "cache_write": 5592
+  },
+  "child": {
+   "parent_is_managed": true,
+   "tokens": {
+    "input": 0,
+    "output": 0,
+    "reasoning": 0,
+    "cache_read": 0,
+    "cache_write": 0
+   },
+   "types": [
+    "user",
+    "idle"
+   ]
+  },
+  "subagent_tool_parts_in_root": 0,
+  "root_only": {
+   "requests": [
+    {
+     "kind": "primary",
+     "tokens": {
+      "input": 2,
+      "output": 4,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 4425
+     },
+     "cost": null
+    }
+   ],
+   "unknown": [
+    "title_unknown",
+    "unknown_record"
+   ],
+   "title": {
+    "state": "unknown",
+    "tokens": null,
+    "reason": "unknown_record"
+   }
+  },
+  "consistency_with_child": "accepted"
  }
 }
