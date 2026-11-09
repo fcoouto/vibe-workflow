@@ -2,8 +2,11 @@
 """The single local Smart Routing command every client calls (spec 10.3, A1). No network, model or secret access.
 
 Usage:
-  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs]   one request on stdin
-  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--test-inputs] one request per line
+  routing.py <op> [--settings PATH] [--ledger PATH] [--table PATH] [--project PATH] [--test-inputs]
+  routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--project PATH] [--test-inputs]
+
+`<op>` reads one request on stdin; `--serve` reads one request per line. `--project` pins the checkout a
+`prepare` workflow locator may name (S3.5).
 
 The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
 the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
@@ -17,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import routing, routing_settings, usage_budget  # noqa: E402
+from runtime import routing, routing_gates, routing_settings, usage_budget  # noqa: E402
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -35,9 +38,20 @@ TEST_FLAG = '--test-inputs'
 READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
-FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints'}),
-              check=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
-              set=(set(), {'expected_revision', 'change', 'organization'}))
+FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints', 'workflow'}),
+              check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
+              dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
+              set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
+              settle=({'root_task_id'}, {'workflow'}),
+              resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, {'receipts', 'source'}),
+              resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()),
+              reconcile_uncertain=({'attempt_id', 'evidence', 'event_id'}, set()),
+              resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}))
+# Operator ops are one-shot commands only: the OpenCode shim's persistent `--serve` child never exposes them, so a
+# plugin or worker that can reach it cannot settle, release or unblock anything (`operator_op_not_served`).
+OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block')
+# Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
+EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
 ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
@@ -45,7 +59,7 @@ ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'b
 PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_band', 'review_policy', 'uncertainty')
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
-                 'admission_error')
+                 'invalid_binding', 'admission_error')
 
 
 class Blocked(Exception):
@@ -126,14 +140,24 @@ def _resolved(path):
 
 
 class Service:
-    """Handles requests against one settings file, one strategy table and one ledger (reused while serving)."""
-    def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False):
+    """Handles requests against one settings file, one strategy table and one ledger (reused while serving).
+
+    `workflow` is the trusted reader of canonical workflow state for S3.5's gates (default: the delegation state
+    reader). Only code constructs it; no request, configuration or test switch can replace it."""
+    def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False,
+                 workflow=None, project=None):
+        self.project = None if project is None else Path(project).resolve()
+        self.workflow = workflow if workflow is not None else routing_gates.D6Workflow(project=self.project)
         self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
+        self.serving = serving
         self._open = None
+        self._expired_at = None
 
     def close(self):
+        if callable(getattr(self.workflow, 'close', None)):
+            self.workflow.close()
         if self._open is not None:
             self._open.close()
             self._open = None
@@ -154,6 +178,7 @@ class Service:
             require(op is None or value.get('op', op) == op, 'invalid_request')
             name = value.get('op', op)
             require(type(name) is str and name in FIELDS, 'unknown_op')
+            require(not (self.serving and name in OPERATOR_OPS), 'operator_op_not_served')
             body = {key: item for key, item in value.items() if key not in ('v', 'op', 'id')}
             required, optional = FIELDS[name]
             require(required <= set(body) <= required | optional, 'invalid_request')
@@ -216,6 +241,18 @@ class Service:
             self._open = usage_budget.Ledger(path, self._identity(path, wait), timeout=wait)
         self._open.busy_timeout(wait)
         return self._open
+
+    def _expire(self, ledger):
+        """Opportunistic retention cleanup (spec 11) before a write. Reads filter expired evidence themselves, so a
+        busy or failed cleanup never blocks the request and is retried later."""
+        moment = self.clock()
+        if self._expired_at is not None and 0 <= moment - self._expired_at < EXPIRE_INTERVAL:
+            return
+        self._expired_at = moment
+        try:
+            ledger.expire_evidence(moment)
+        except (BudgetError, sqlite3.Error):
+            pass
 
     @staticmethod
     def _identity(path, wait):
@@ -286,36 +323,143 @@ class Service:
             ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                            profile_digest=profile['semantic_digest'])
         observations = self._observations(body['observations'])
+        bound = self._workflow_binding(body, profile)
+        if bound is not None and bound[0] != 'bound':
+            return dict(state=bound[0], reason=bound[1], reasons=[bound[1]]) if bound[0] == 'pending' \
+                else dict(state='blocked', reason=bound[1])
+        ledger = self._ledger(True, write=True)
+        self._expire(ledger)
         result = routing.admit(dict(assignment, role=role, complexity_band=profile['complexity_band']), ranking,
-                               settings, observations, ledger=self._ledger(True, write=True))
+                               settings, observations, ledger=ledger, workflow=None if bound is None else bound[1])
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'])
+        stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
+                    workflow_bound=stored.get('job') is not None,
                     ranking=dict(strategy_ids=ranking['strategy_ids'], reason_codes=ranking['reason_codes'],
                                  table_version=ranking.get('table_version')),
                     profile={key: profile[key] for key in PROFILE_FIELDS})
 
-    def _check(self, body):
-        attempt, facts = body['attempt_id'], _facts(body['request'])
-        require(_text(attempt), 'invalid_request')
-        now = self.clock()
+    def _workflow_binding(self, body, profile):
+        """S3.5: read the canonical job the request names (before any ledger write) and bind to it.
+
+        No `workflow` locator means ordinary explicit delegation with no workflow job: None (`job: null`).
+        Otherwise ('bound', job binding), or (state, reason) when the job cannot be bound now."""
+        if 'workflow' not in body:
+            return None
+        locator = body['workflow']
+        require(routing_gates.valid_locator(locator), 'invalid_request')
+        if self.project is not None:  # early refusal; the reader checks the checkout it actually resolves
+            cwd = Path(locator['cwd']).resolve()
+            require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
+        try:
+            view = self.workflow.view(dict(locator))
+        except routing_gates.WorkflowChanged:
+            raise Blocked('workflow_changed') from None
+        except routing_gates.ProjectMismatch:
+            raise Blocked('project_mismatch') from None
+        except Exception:  # noqa: BLE001 - an unreadable workflow never admits
+            raise Blocked('workflow_unavailable') from None
+        require(routing_gates.valid_view(view), 'workflow_unavailable')
+        problem = routing_gates.readiness(view, profile['semantic_digest'])
+        if problem is not None:
+            return problem
+        job = routing_gates.job_binding(locator, view)
+        require(routing_gates.binding_fits(job), 'binding_too_large')
+        return 'bound', job
+
+    def _now(self, body):
+        """The command's clock; only the `--test-inputs` flag lets a request supply `now`."""
         if self.test_inputs and 'now' in body:
-            now = body['now']
-            require(_amount(now), 'invalid_request')
+            require(_amount(body['now']), 'invalid_request')
+            return body['now']
+        return self.clock()
+
+    def _check(self, body):
+        facts = _facts(body['request'])
+        require(('attempt_id' in body or 'session_id' in body)
+                and all(_text(body[key]) for key in ('attempt_id', 'session_id') if key in body), 'invalid_request')
+        authority = body.get('authority')
+        require(authority is None or (type(authority) is str and 0 < len(authority) <= routing.MAX_AUTHORITY
+                                      and authority.isascii() and authority.isprintable()), 'invalid_request')
+        now = self._now(body)
         settings = self._settings()
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        return routing.check_request(ledger.snapshot(), attempt, facts, settings, now)
+        return routing.check(ledger.snapshot(), facts, settings, now, attempt_id=body.get('attempt_id'),
+                             session_id=body.get('session_id'), authority=authority)
+
+    def _dispatch(self, body):
+        attempt, facts = body['attempt_id'], _facts(body['request'])
+        require(_text(attempt), 'invalid_request')
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        self._expire(ledger)
+        # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
+        return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body), workflow=self.workflow)
 
     def _record(self, body):
         event = body['event']
-        require(type(event) is dict and set(event) == {'event_id', 'attempt_id', 'kind'}
-                and all(_text(event[key]) for key in event), 'invalid_request')
+        reason = routing.event_error(event)
+        require(reason is None, reason)
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        result = routing.record_event(ledger, event['attempt_id'], event['kind'])
+        self._expire(ledger)
+        result = routing.record_event(ledger, event, self.clock())
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
+    def _resolve_cost_unknown(self, body):
+        """Operator recovery for a `cost_unknown` dollar hold (S3.6a): the full reservation unless receipt-backed."""
+        return self._operator(routing.resolve_event(body))
+
+    def _resolve_overrun(self, body):
+        """Operator decision on an unconfirmed overrun excess (S3.6a): confirm charges it, dismiss drops it."""
+        return self._operator(routing.overrun_event(body))
+
+    def _reconcile_uncertain(self, body):
+        """Operator reconciliation of an uncertain dollar hold (S3.6b-2): receipts or the full reservation."""
+        return self._operator(*routing.reconcile_event(body))
+
+    def _resolve_block(self, body):
+        """Operator recovery of an over-bound S1 call or a legacy block (S3.6b-2); other reasons stay."""
+        return self._operator(*routing.block_event(body), apply=routing.resolve_block)
+
+    def _operator(self, event, reason='invalid_request', apply=None):
+        require(event is not None, reason)
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        result = (apply or routing.record_event)(ledger, event, self.clock())
+        return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
+    def _settle(self, body):
+        """Read-only root-task settlement (S3.6a). With `workflow` it covers the attempts bound to that full root
+        locator and acceptance comes only from the trusted workflow reader; without it, the attempts with no
+        workflow job whose task id is `root_task_id`, with acceptance `unavailable` and no ratio."""
+        root, locator = body['root_task_id'], body.get('workflow')
+        require(_text(root) and len(root) <= routing.MAX_ROOT_ID, 'invalid_request')
+        # A pinned service settles only roots it can check against its project, i.e. with a workflow locator.
+        require(locator is not None or self.project is None, 'project_required')
+        accepted = None
+        if locator is not None:
+            require(routing_gates.valid_root_locator(locator) and locator['task_id'] == root, 'invalid_request')
+            if self.project is not None:
+                cwd = Path(locator['cwd']).resolve()
+                require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
+        ledger = self._ledger(False)
+        require(ledger is not None, 'ledger_absent')
+        key = usage_budget.root_key(locator) if locator is not None else usage_budget.root_key(task=root)
+        report = ledger.root_report(key, self.clock())
+        if locator is not None:
+            try:
+                found = self.workflow.acceptances(dict(locator))
+            except routing_gates.ProjectMismatch:
+                raise Blocked('project_mismatch') from None
+            except Exception:  # noqa: BLE001 - unreadable canonical state: acceptance stays unknown
+                found = None
+            if type(found) is list and all(_text(item) for item in found):
+                accepted = len(set(found))
+        return routing.settle_root(report, root, accepted)
 
     def _status(self, body):
         try:
@@ -340,21 +484,52 @@ class Service:
         # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
         effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs)
+                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs,
+                    project_pinned=self.project is not None)
 
     def _set(self, body):
         if 'organization' in body:
             require(set(body) == {'organization'}, 'invalid_request')
             return self._organization(body['organization'])
+        if 'authority_required' in body:
+            value = body['authority_required']
+            require(set(body) == {'authority_required'} and type(value) is bool, 'invalid_request')
+            require(value, 'authority_required_one_way')
+            self._ledger(True, write=True).require_authority()
+            return dict(state='updated', authority_required=True)
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
+        # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
+        # so a change and a dispatch are totally ordered and `invalidated_attempts` is exact. A ledger that is absent,
+        # busy, corrupt or unsafe must not stop a change (turning API Usage or Smart Routing off is a money stop):
+        # the settings are still written (the revision check applies) and the list is null with `ledger_state`.
+        # That stays safe because `dispatch` re-reads the settings inside its transaction and `check` compares revisions.
+        stage = {}
+        try:
+            ledger = self._ledger(False, write=True)
+            if ledger is not None:
+                with ledger.transaction() as data:
+                    stage['entered'] = True
+                    return self._update_settings(body, data, stage)
+            problem = 'absent'
+        except Exception as error:  # noqa: BLE001 - every ledger failure falls back; settings refusals re-raise
+            if stage.get('entered') and 'updated' not in stage:
+                raise  # the settings change itself was refused or failed: nothing was written
+            self.close()
+            problem = (error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError)
+                       else 'ledger_busy' if _busy(error) else 'ledger_unavailable')
+            if 'updated' in stage:  # written under the lock, then the ledger failed: report it as unordered
+                return dict(stage['updated'], invalidated_attempts=None, ledger_state=problem)
+        return dict(self._update_settings(body, None, stage), invalidated_attempts=None, ledger_state=problem)
+
+    def _update_settings(self, body, data, stage):
         try:
             updated = routing_settings.update(self.settings_path, body['change'], body['expected_revision'])
         except SettingsError as error:
             raise Blocked(str(error)) from None
         revision = updated.pop('revision')
-        ledger = self._ledger(False)
-        stale = routing.unsent_admissions(ledger.snapshot(), revision) if ledger is not None else []
-        return dict(state='updated', revision=revision, settings=updated, invalidated_attempts=stale)
+        stage['updated'] = dict(state='updated', revision=revision, settings=updated)
+        stale = routing.unsent_admissions(data, revision) if data is not None else None
+        return dict(stage['updated'], invalidated_attempts=stale)
 
     def _organization(self, value):
         """Explicit user action through the ledger's own enable/disable paths; routing never calls this itself."""
@@ -416,7 +591,7 @@ def _arguments(argv):
             serving = True
         elif item == TEST_FLAG and not test_inputs:
             test_inputs = True
-        elif item in ('--settings', '--ledger', '--table') and item not in paths and items \
+        elif item in ('--settings', '--ledger', '--table', '--project') and item not in paths and items \
                 and not items[0].startswith('-'):
             paths[item] = items.pop(0)
         elif not item.startswith('-') and op is None:
@@ -452,7 +627,8 @@ def main(argv=None, stdin=None, stdout=None):
             return USAGE
         op, serving, test_inputs, paths = parsed
         service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger(),
-                          paths.get('--table'), test_inputs=test_inputs, serving=serving)
+                          paths.get('--table'), test_inputs=test_inputs, serving=serving,
+                          project=paths.get('--project'))
         try:
             if serving:
                 return serve(service, stdin, stdout)

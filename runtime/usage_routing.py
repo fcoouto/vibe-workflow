@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from runtime import startup, usage_admission, usage_credentials, external_delegation
-from runtime.usage_budget import BudgetError, FRESH_SECONDS, fields, integer, name, require
+from runtime.usage_budget import BudgetError, FRESH_SECONDS, Ledger, fields, integer, name, require
 
 PACKAGE = Path(__file__).resolve().parents[1]
 MAX_INPUT = 65536
@@ -192,7 +192,8 @@ class Controller:
                 usage_credentials.validate_binding(binding)
                 org = data['organizations'][binding['organization']]
                 policy = org['policy']
-                require(config['org_revision'] == org['revision'] and not org['blocked'],
+                require(config['org_revision'] == org['revision']
+                        and not Ledger.block_reasons(data, binding['organization']),
                         'policy_revision_changed')
                 self.ledger._configure(data, binding['organization'], policy, org['revision'])
                 require(policy['start'] <= self.clock() < policy['stop_at']

@@ -1,0 +1,82 @@
+{
+  "_meta": {
+    "opencode": "2.2.6",
+    "probe_date": "2026-11-08",
+    "provider": "claude-agent/haiku",
+    "sanitized": true,
+    "setup": "Isolated `opencode serve` (separate XDG config, data, state and cache directories, minimal environment). The claude-agent integration was connected through its external `claude-login` method, which stores only the method reference and no token. Plugins in order: a scratch recorder, then runtime/adapters/opencode_plugin.ts with its python option set to a missing interpreter, so the routing child could never start (child down).",
+    "sanitizer": "Payloads are the recorder's sanitized copies of the raw hook events, with every top-level key kept. IDs are placeholders (<ses#n>, <msg#n>, <toolu#n>), numbers are <number>, other strings are <string> except agent, kind, tool, action, effect, type, model id, provider, variant and a subagent's provider/model#variant. Header and environment maps are reduced to their name count; their names and values were not recorded. Each session's IDs are numbered from 1 within that session's capture."
+  },
+  "hooks": [
+    {
+      "hook": "model.request",
+      "payload": {"agent": "title", "baseURL": "<string>", "headers": {"<name count>": 8}, "kind": "title",
+                  "model": {"id": "haiku", "providerID": "claude-agent", "variant": "low"}, "sessionID": "<ses#1>"}
+    },
+    {
+      "hook": "model.request",
+      "payload": {"agent": "build", "baseURL": "<string>", "headers": {"<name count>": 8}, "kind": "primary",
+                  "model": {"id": "haiku", "providerID": "claude-agent", "variant": "low"}, "sessionID": "<ses#1>"}
+    },
+    {
+      "hook": "tool.execute.before",
+      "payload": {"agent": "build", "id": "<toolu#1>",
+                  "input": {"agent": "general", "description": "<string>", "model": "claude-agent/haiku#low", "prompt": "<string>"},
+                  "messageID": "<msg#1>", "sessionID": "<ses#1>", "tool": "subagent"}
+    },
+    {
+      "hook": "tool.execute.before",
+      "payload": {"agent": "build", "id": "<toolu#1>", "input": {"format": "<string>", "url": "<string>"},
+                  "messageID": "<msg#1>", "sessionID": "<ses#1>", "tool": "webfetch"}
+    },
+    {
+      "hook": "permission.evaluate",
+      "payload": {"action": "webfetch", "agent": "build", "effect": "allow", "metadata": {"format": "<string>", "url": "<string>"},
+                  "resources": ["<string>"], "sessionID": "<ses#1>", "source": {"id": "<toolu#1>", "messageID": "<msg#1>", "type": "tool"}}
+    },
+    {
+      "hook": "shell.create.before",
+      "payload": {"command": "<string>", "cwd": "<string>", "env": {"<name count>": 14}, "shell": "<string>", "timeout": "<number>"}
+    }
+  ],
+  "session_get_child_keys": ["cost", "id", "location", "model", "outcome", "parentID", "projectID", "time", "tokens"],
+  "observations": [
+    {
+      "case": "routing.health with the child down",
+      "result": "HTTP 500 rpc.internal 'RPC call failed'; a launcher treats any non-ok answer as refuse"
+    },
+    {
+      "case": "attach through a symlinked spelling of the project directory instead of its canonical path",
+      "result": "a second plugin instance was set up; the session's own instance never saw the attach and its shell kept the dummy credential. Attach and health must use the session's canonical directory"
+    },
+    {
+      "case": "shell.create.before through session.shell while a session was attached in the canonical instance",
+      "result": "a dummy S33_PROBE_TOKEN in the server environment read 'absent' in the shell; after detach it was present again. No model call"
+    },
+    {
+      "case": "subagent spawn after attach, child down",
+      "result": "tool part status=error 'routing: blocked (routing_unavailable)'; no child session was created",
+      "repeated": 2
+    },
+    {
+      "case": "follow-up model.request of an attached session, child down",
+      "result": "idle outcome=failed 'routing: blocked (routing_unavailable)'; no assistant message, no tokens",
+      "repeated": 4
+    },
+    {
+      "case": "model.request of a child session created with parentID of an attached session",
+      "result": "blocked through ctx.session.get parentID lineage; idle outcome=failed, no assistant message, no tokens"
+    },
+    {
+      "case": "webfetch in a session attached during permission.evaluate",
+      "result": "tool part error type=permission.rejected with the shim's deny message; in the second run a local listener on the target URL recorded 0 hits",
+      "repeated": 2
+    }
+  ],
+  "model_calls": {
+    "sent": 4,
+    "sent_detail": "Each was the first primary request of a session that was not yet attached (interactive), so the shim let it through; the session was attached afterwards at its subagent spawn or webfetch permission.",
+    "blocked_by_shim_before_sending": 7,
+    "title_requests_blocked_by_recorder": 4
+  }
+}

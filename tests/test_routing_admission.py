@@ -554,8 +554,10 @@ class UncertainHoldTests(Base):
         self.ledger.close_attempt('a', 'uncertain')
         self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'pending')
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['anthropic:org'])
-        self.ledger.close_attempt('a', 'complete')
-        self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'admitted')
+        # S3.6a: a dollar hold never closes without settlement; an uncertain one waits for S3.6b reconciliation.
+        with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
+            self.ledger.close_attempt('a', 'complete')
+        self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'pending')
 
 
 if __name__ == '__main__':

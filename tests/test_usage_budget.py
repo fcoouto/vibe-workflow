@@ -455,7 +455,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.org()
         state = self.ledger.snapshot()
         self.assertNotIn('slot', state)
-        self.assertEqual(state['version'], 3)
+        self.assertEqual(state['version'], budget.STATE_VERSION)
         self.begin('first', 5 * M); self.begin('second', 5 * M)
         self.assertEqual(self.ledger.credit_headroom('org'), 18 * M)
 
@@ -495,7 +495,7 @@ class ParallelLedgerTests(unittest.TestCase):
                 org['floor'] = 160; del org['issued']
             db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
         migrated = self.ledger.snapshot()
-        self.assertEqual(migrated['version'], 3)
+        self.assertEqual(migrated['version'], budget.STATE_VERSION)  # 4 since S3.6a
         self.assertNotIn('slot', migrated)
         self.assertNotIn('floor', migrated['organizations']['org'])
         self.assertEqual(migrated['organizations']['org']['issued'], 800)
@@ -503,7 +503,7 @@ class ParallelLedgerTests(unittest.TestCase):
         self.ledger.observe('org', 790, 110)  # A write persists the migration.
         with closing(sqlite3.connect(self.path)) as db:
             stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
-        self.assertEqual(stored['version'], 3)
+        self.assertEqual(stored['version'], budget.STATE_VERSION)
         self.assertNotIn('slot', stored)
 
     # S1.3 padded reservations
@@ -645,12 +645,12 @@ class ParallelLedgerTests(unittest.TestCase):
         self.begin('open', 5 * M)
         self.raw(lambda data: (data.update(version=2), data.pop('holds'), data.pop('admissions')))
         migrated = self.ledger.snapshot()
-        self.assertEqual((migrated['version'], migrated['holds'], migrated['admissions']), (3, {}, []))
+        self.assertEqual((migrated['version'], migrated['holds'], migrated['admissions']), (budget.STATE_VERSION, {}, []))
         self.assertEqual(migrated['runs']['open']['calls']['count']['maximum'], 5 * M)
         self.assertEqual(self.ledger.credit_headroom('org'), 23 * M)  # 30 - 2% protected - 5 held
         self.ledger.admit('new', self.decide('new', {'win:pool/w': 5}))  # A write persists the migration.
         with closing(sqlite3.connect(self.path)) as db:
-            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 3)
+            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], budget.STATE_VERSION)
 
     def test_admit_writes_hold_and_record_together_and_duplicates_return_the_record(self):
         first = self.ledger.admit('a', self.decide('a', {'win:p/w': 7}))
@@ -730,6 +730,9 @@ class ParallelLedgerTests(unittest.TestCase):
                                                  account='acct', now=101, revision=1))
         self.assertEqual(self.ledger.credit_headroom('org'), 24 * M)  # the hold is part of R before conversion
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct'])
+        # S3.4: only a hold dispatched with an issued authority converts.
+        self.ledger.dispatch_hold('a', '0' * 64, dict(session_id='ses_a', message_id='msg_a'),
+                                  lambda data, moment: None, 101)
         run = self.ledger.convert_hold('a', 'org', 'packet', 5 * M, 1, 101, native('a'), next_request_bound=0)
         self.assertEqual((run['calls']['count']['maximum'], run['account']), (6 * M, 'acct'))
         state = self.ledger.snapshot()

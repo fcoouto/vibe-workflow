@@ -152,7 +152,7 @@ class SharedOrganizationTests(Funded):
     def test_blocked_organization_cannot_hide_behind_an_unlabelled_pool(self):
         self.fund()
         with self.ledger.transaction() as data:
-            data['organizations']['org']['blocked'] = True
+            data['organizations']['org']['legacy_block'] = True  # derived block (S3.6a)
         pools = dict(labelled=funded_pool('org'), bare=dict(billing_class='api_grant', windows=[window()]))
         for pool in ('labelled', 'bare'):
             result = self.admit('a-' + pool, [route('r', pool, 'api_grant', 'acct', {'credit': M})], pools)
@@ -216,9 +216,11 @@ class SharedOrganizationTests(Funded):
         self.ledger.close_attempt('a', 'uncertain')
         self.assertEqual(self.ledger.credit_headroom('org'), 3_800_000)
         self.assertIn('a', budget.Ledger.open_holds(self.ledger.snapshot()))
-        self.ledger.close_attempt('a', 'complete')
-        self.assertEqual(self.ledger.credit_headroom('org'), 9_800_000)
-        self.assertEqual(budget.Ledger.open_holds(self.ledger.snapshot()), {})
+        # S3.6a: a dollar hold never closes without settlement; an uncertain one keeps everything until S3.6b.
+        with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
+            self.ledger.close_attempt('a', 'complete')
+        self.assertEqual(self.ledger.credit_headroom('org'), 3_800_000)
+        self.assertIn('a', budget.Ledger.open_holds(self.ledger.snapshot()))
 
     def test_gateway_needs_its_own_organization(self):
         self.fund('grant-org', balance=10 * M)
@@ -308,7 +310,11 @@ class OptionalOrganizationTests(Funded):
         self.assertEqual((result['route'], result['pressure']['e']), ('s', None))  # no API route, no expiry pressure
         with self.assertRaisesRegex(budget.BudgetError, 'organization_disabled'):
             self.begin('run', M, organization=budget.PERSONAL)
-        self.ledger.close_attempt('a', 'complete')
+        # S3.6a: a dispatched dollar hold closes only through settlement (here a measured zero cost).
+        usage = dict(source='provider_receipt', requests=[dict(kind='primary', model='m', cost_usd_micros=0, tokens=dict(
+            input=0, output=0, reasoning=0, cache_read=0, cache_write=0))])
+        self.assertEqual(routing.record_event(self.ledger, dict(event_id='c', attempt_id='a', kind='complete',
+                                                                usage=usage), NOW)['outcome'], 'complete')
         self.ledger.enable_organization(budget.PERSONAL, policy(), 1)
         self.assertEqual(self.admit('c', routes[:1], pools)['status'], 'admitted')
 
@@ -353,6 +359,12 @@ class ObservationNitTests(Funded):
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'credential_unavailable'))
 
 
+def authorize(ledger, attempt, now=None):
+    """Dispatch a hold with an issued authority (S3.4); `convert_hold` accepts only such holds."""
+    ids = dict(session_id='ses_' + attempt, message_id='msg_' + attempt)
+    return ledger.dispatch_hold(attempt, '0' * 64, ids, lambda data, moment: None, NOW if now is None else now)
+
+
 class ConversionTests(Funded):
     def setUp(self):
         super().setUp()
@@ -361,6 +373,7 @@ class ConversionTests(Funded):
         pools = dict(g=funded_pool('org'), s=sub_pool())
         routes = [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})]
         self.assertEqual(self.admit('a', routes, pools)['reserved'], {'org:org': 1_200_000})
+        authorize(self.ledger, 'a')
 
     def convert(self, estimate, organization='org', **options):
         return self.ledger.convert_hold('a', organization, 'packet', estimate, 1, NOW, native('a'), **options)
@@ -403,6 +416,7 @@ class ConversionTests(Funded):
         self.assertEqual(mixed['status'], 'admitted')
         with self.ledger.transaction() as data:  # one attempt holding both a dollar and a window claim
             data['holds']['m']['windows'] = {'win:s/5h': 12}
+        authorize(self.ledger, 'm')
         self.ledger.convert_hold('m', 'org', 'packet', M, 1, NOW, native('m'))
         state = self.ledger.snapshot()
         self.assertEqual(state['holds']['m']['state'], 'converted')
@@ -420,10 +434,19 @@ class ConversionTests(Funded):
         self.assertEqual(budget.Ledger.held(state), a)  # the window claim is released together with the run
         self.assertEqual(budget.Ledger.open_accounts(state), ['acct-A'])
 
-    def test_dispatched_hold_cannot_convert(self):
-        self.ledger.mark_dispatched('a')
-        with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
-            self.convert(M)
+    def test_only_a_hold_dispatched_with_an_authority_converts(self):
+        """S3.4 inverts the S2 rule: the dispatched hold converts; admitted, bare-dispatched and uncertain ones do not."""
+        issued = self.ledger.snapshot()['holds']['a'].pop('dispatch')
+        for label, change in (('admitted', dict(state='admitted')), ('bare dispatch', dict(state='dispatched')),
+                              ('uncertain', dict(state='uncertain', dispatch=issued))):
+            with self.subTest(label):
+                with self.ledger.transaction() as data:
+                    data['holds']['a'].pop('dispatch', None)
+                    data['holds']['a'].update(change)
+                before = self.ledger.snapshot()
+                with self.assertRaisesRegex(budget.BudgetError, 'convert_forbidden'):
+                    self.convert(M)
+                self.assertEqual(self.ledger.snapshot(), before)
 
     def test_per_account_cap_counts_provider_accounts_across_runs_and_holds(self):
         self.ledger.set_caps(40, 1)
@@ -601,7 +624,7 @@ class Property:
             self.test.assertLessEqual(accounts.count(account), CAPS[1], 'I5 ' + where)
 
     def step(self, index):
-        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'convert', 'convert',
+        op = self.rng.choice(('admit', 'admit', 'admit', 'begin', 'begin', 'top_up', 'authorize', 'authorize', 'convert', 'convert',
                               'dispatched', 'uncertain', 'close', 'run_dispatch', 'complete', 'observe', 'toggle'))
         self.clock += 1
         before = self.ledger.snapshot()
@@ -644,8 +667,18 @@ class Property:
         if runs:
             self.ledger.top_up(self.rng.choice(runs), self.amount(), 1, self.clock)
 
+    def op_authorize(self, before):
+        funded = sorted(i for i, h in before['holds'].items() if not h['closed'] and h['state'] == 'admitted'
+                        and h['amount'])
+        attempt = self.rng.choice(funded) if funded else self.pick_hold(before, ('admitted',))
+        if attempt:
+            authorize(self.ledger, attempt, self.clock)
+
     def op_convert(self, before):
         holds = sorted(i for i, h in before['holds'].items() if not h['closed'] and h['amount'])
+        authorized = [i for i in holds if 'dispatch' in before['holds'][i] and before['holds'][i]['state'] == 'dispatched']
+        if authorized and self.rng.random() < 0.8:  # S3.4: only these convert; the rest exercise the refusal
+            holds = authorized
         if not holds:
             return
         attempt = self.rng.choice(holds)
@@ -854,10 +887,20 @@ class CapacityTests(Funded):
         for call in run['calls'].values():
             call.update(maximum=budget.MAX_INTEGER, cost=budget.MAX_INTEGER, provision=budget.MAX_INTEGER,
                         incomplete=incomplete)
+        # An over-bound marker (S3.6a) on at most one call per run: a count call that is over-bound never gets a
+        # generation call, and a generation call follows only a completed count. `cost` stays at its bound too.
+        run['calls']['count']['over_bound'] = budget.MAX_INTEGER
         data['organizations'][organization]['revision'] = budget.MAX_INTEGER
+        # S3.6 settlement: per-cycle settled charges, per-task charges and the settlement each closed hold carries.
+        data['organizations'][organization]['settled'] = dict(total=budget.MAX_INTEGER, cycles={
+            unique(i, long('cycle')): budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_CYCLES)})
+        data['settled_tasks'] = {'%064x' % i: budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_TASKS)}
+        data['organizations'][organization]['legacy_block'] = True  # the only stored block source (v4)
         data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
-        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES)
+        # An admitted hold at its bound plus the fixed fields dispatch, uncertainty and proof add later (S3.4).
+        data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES + budget.DISPATCH_HOLD_BYTES
+                                                     + budget.SETTLEMENT_HOLD_BYTES)
                          for i in range(budget.MAX_HOLDS)}
         data['seen_attempts'] = [unique(i, long('s')) for i in range(budget.MAX_SEEN)]
         runs, native = {}, {}
@@ -943,6 +986,7 @@ class SoftLimitTests(Funded):
         self.ledger.close_attempt('h1', 'not_dispatched')
         self.ledger.close_attempt('h2', 'uncertain')
         self.ledger.mark_uncertain('h3')
+        authorize(self.ledger, 'h4')
         self.ledger.convert_hold('h4', 'org', 'packet', M, 1, NOW, native('h4'))
         self.ledger.dispatch('h4', 'count', 1, NOW)
         self.ledger.complete('h4', 'count', M)

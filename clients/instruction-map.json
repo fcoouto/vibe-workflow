@@ -194,11 +194,23 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "7c2c6df0f8ce78adf048fd0fbd7e52b2f770efc5c28ca1052bc6848753d97383",
+      "sha256": "b3d3a3ac033226b872f11d18ca0f1987c9191d4fadcf3e16687c7efcd3c34c89",
       "ranges": [
         [
           1,
-          34
+          43
+        ],
+        [
+          44,
+          82
+        ],
+        [
+          83,
+          128
+        ],
+        [
+          129,
+          174
         ]
       ]
     },
@@ -401,7 +413,7 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "9d40a4b3e82a9c8454fe6f7e186e87f38bd5987d5cb55b8cb0e09fdb1d0da775",
+      "sha256": "c6087eeadb580c6c13156cedc3cbe3f3238964da8d58bee07705f831187f1ef0",
       "ranges": [
         [
           1,
