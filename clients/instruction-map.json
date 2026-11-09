@@ -64,14 +64,14 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "5ea3a7c0c68f87e6b4d9a158e877fb1c990d5901c1063a98975ea8f9501b1f25",
+      "sha256": "c44b9ad19d094ef46ce819191331af1eff40738d4d3282f40dd1a99e8b280020",
       "ranges": [
         [
           1,
-          48
+          44
         ],
         [
-          49,
+          45,
           63
         ]
       ]
@@ -194,7 +194,7 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "2cce718c27b85d662308cc6bbe46bcf978c3c0dd972fe2854c2800338af02c9d",
+      "sha256": "b3e7acf87334698e39d5b6d15d810ff0bd2c2d899f7a70f05b8bdc26677aa05a",
       "ranges": [
         [
           1,
@@ -363,7 +363,7 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "f71791d7a126c86f4be1ebcf7b54f22cd733409d6c3cbb7af86b0b664c56594f",
+      "sha256": "7f226cf0ad6eac5b63aedef46c463852407a178e5413b443b9f60969bbc76811",
       "ranges": [
         [
           1,
@@ -381,23 +381,23 @@
       ]
     },
     "policies/02-task-planning.md": {
-      "sha256": "efa0054af075658d385821d9444f9c7f5ba99a099a4c4e6ecc75fa6207c8c96c",
+      "sha256": "3f20ddca3879198d72b6b406d952e227fffbb4bd9f9fbfdce3110d5cb5ab8d98",
       "ranges": [
         [
           1,
-          37
+          38
         ]
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "44fe39d26e7eaca104265564640a2fbd79c9994be57b0aa702473033728992e7",
+      "sha256": "c157eb760b684fe103993a3b5332c35edd0441138cbe9206bdefdbd76735550a",
       "ranges": [
         [
           1,
-          55
+          54
         ],
         [
-          56,
+          55,
           119
         ]
       ]
@@ -434,7 +434,7 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "c6087eeadb580c6c13156cedc3cbe3f3238964da8d58bee07705f831187f1ef0",
+      "sha256": "a5aff702df5bb3bf6c185029d141f01cb1496e4fa85c09bd50cc5406db4ade6f",
       "ranges": [
         [
           1,
@@ -443,7 +443,7 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "5c8456cd801a6a8d925e4b5e93286746b323e83992d9073987f105bd2462a55b",
+      "sha256": "0e40359b0252a0bb0510699bc356e2660143223b9f8775ea2645f10b77b457b4",
       "ranges": [
         [
           1,
@@ -452,7 +452,7 @@
       ]
     },
     "policies/09-workflow-maintenance.md": {
-      "sha256": "a6211377110094bbf38a9a702b43be34d5f9d431afbfbd90db6b96f71c1ddef0",
+      "sha256": "44199d3d5310195ed3e78d8472c5611d628237f6bb259d513e567fef8227fe46",
       "ranges": [
         [
           1,
