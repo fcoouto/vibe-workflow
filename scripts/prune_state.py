@@ -64,6 +64,10 @@ original_path:  mv -n <run dir>/quarantined/NAME <root>/NAME
 With status "moved-unverified" (the root name changed at the last moment), move spare_path back
 instead and keep quarantined_path for review. If a run stops and the manifest state is still
 "planned", its planned list names every intended marker; move those found in quarantined/ back.
+If a run was killed in the middle of a move, one marker may be left with two names (the root name
+plus a link in quarantined/, or plus quarantined/.NAME.original). Production rejects a marker with a
+link count above 1: after the root name is back, remove the extra quarantined name so the root file
+has link count 1 (check with: stat -f %l NAME on macOS, stat -c %h NAME on Linux).
 Deleted lock files need no undo: production recreates empty lock files when it needs them."""
 
 class Refusal(Exception):

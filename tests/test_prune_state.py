@@ -556,6 +556,29 @@ class PruneStateTest(unittest.TestCase):
                 os.rename(self.run_dir / "quarantined" / name, self.fx.root / name)
         self.assertEqual(self.fx.snapshot(), before)
 
+    def test_a_kill_between_link_and_rename_is_recoverable_with_the_documented_steps(self):
+        self.fx.build()
+        before = self.fx.snapshot()
+        real_rename = os.rename
+
+        def rename(src, dst, **kwargs):
+            if isinstance(dst, str) and dst.startswith(".") and dst.endswith(".original"):
+                raise OSError(5, "simulated kill after the hard link")
+            return real_rename(src, dst, **kwargs)
+
+        with mock.patch("os.rename", rename), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(OSError):
+                prune_state.main(["--root", str(self.fx.root), "--run-dir", str(self.run_dir), "--yes", "--markers"])
+        quarantined = self.run_dir / "quarantined"
+        extra = os.listdir(quarantined)
+        self.assertEqual(len(extra), 1)
+        name = extra[0]
+        self.assertEqual(os.lstat(self.fx.root / name).st_nlink, 2)  # Production would refuse this file.
+        self.assertIn("link count", prune_state.EPILOG)
+        os.unlink(quarantined / name)  # The documented step: drop the extra quarantined name.
+        self.assertEqual(os.lstat(self.fx.root / name).st_nlink, 1)
+        self.assertEqual(self.fx.snapshot(), before)
+
     def test_failed_manifest_write_removes_its_temporary_file(self):
         self.fx.file(h(1) + ".lock")
         os.mkdir(self.run_dir, 0o700)
