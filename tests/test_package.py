@@ -166,6 +166,11 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             package.release_layout(staging, self.name)
 
+    def test_release_checks_the_parent_before_building(self):
+        with patch.object(package, "tracked_changes", return_value=False), self.assertRaises(ValueError):
+            package.build(PACKAGE, self.output, release=True, commit_onto="no-such-release-parent")
+        self.assertFalse(self.output.exists())
+
     def test_release_refuses_uncommitted_changes(self):
         with patch.object(package, "tracked_changes", return_value=True), self.assertRaises(ValueError):
             package.build(PACKAGE, self.output, release=True)

@@ -11,7 +11,7 @@ Codex installs releases from the `codex/marketplace-release` branch (see the [RE
    ```
 
    The build refuses tracked changes, copies the committed tree of `HEAD` (not the working tree), validates the plugin and writes it to `~/.cache/vibe-workflow/release-package`. `release_commit` in the JSON report is the new commit; no branch moves.
-3. Inspect it: `git show --stat <release_commit>` and `git ls-tree --name-only <release_commit>`. The root lists `.agents`, `.claude-plugin`, `LICENSE` and `plugins`, and the version in `plugins/vibe-workflow/.codex-plugin/plugin.json` is newer than the one on the branch.
+3. Inspect it: `git show --stat <release_commit>` and `git ls-tree --name-only <release_commit>`. The root lists `.agents`, `.claude-plugin`, `LICENSE` and `plugins`, and the version in `plugins/vibe-workflow/.codex-plugin/plugin.json` is newer than the one on the branch, and the author is your configured Git identity.
 4. Publish: `git push origin <release_commit>:refs/heads/codex/marketplace-release`. This is a fast-forward; never force-push the branch.
 5. Check an install in a disposable `CODEX_HOME`: `codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref codex/marketplace-release`, then `codex plugin add vibe-workflow@vibe-workflow-local`. The installed copy has no `.git` or `tests/`.
 

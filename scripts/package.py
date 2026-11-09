@@ -32,8 +32,22 @@ def manifest(root):
     return read_json(root / ".codex-plugin/plugin.json")
 
 
-def git(root, *args, env=None):
+# Inherited repository variables (for example from a Git hook) would override -C.
+GIT_ENVIRONMENT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")
+
+
+def git(root, *args, index=None):
+    env = {key: value for key, value in os.environ.items() if key not in GIT_ENVIRONMENT}
+    if index is not None:
+        env["GIT_INDEX_FILE"] = str(index)
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env).stdout
+
+
+def resolve_commit(root, ref):
+    try:
+        return git(root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").decode().strip()
+    except subprocess.CalledProcessError:
+        raise ValueError(f"Unknown release parent: {ref}") from None
 
 
 def tracked_changes(root):
@@ -141,10 +155,16 @@ def build(root, output, release=False, commit_onto=None):
     from scripts.validate import validate
 
     root = root.resolve(strict=True)
-    name = manifest(root)["name"]
     head = git(root, "rev-parse", "HEAD").decode().strip()
-    if release and tracked_changes(root):
-        raise ValueError("A release needs a clean checkout; commit or stash tracked changes")
+    if release:
+        if tracked_changes(root):
+            raise ValueError("A release needs a clean checkout; commit or stash tracked changes")
+        details = json.loads(git(root, "show", f"{head}:.codex-plugin/plugin.json"))
+        if commit_onto:
+            resolve_commit(root, commit_onto)
+    else:
+        details = manifest(root)
+    name = details["name"]
     output = Path(output).expanduser().absolute()
     check_output(root, output, name)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +209,7 @@ def build(root, output, release=False, commit_onto=None):
                 handle.write(str(output))
             # Still under the lock, so another build cannot swap the output first.
             committed = (release_commit(root, output, commit_onto,
-                                        f"release {manifest(root)['version']} from {head[:12]}")
+                                        f"release {details['version']} from {head[:12]}")
                          if commit_onto else None)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
@@ -199,7 +219,7 @@ def build(root, output, release=False, commit_onto=None):
     untracked = [item for item in git(root, "ls-files", "-z", "--others", "--exclude-standard")
                  .decode("utf-8").split("\0") if item]
     plugin = output / "plugins" / name if release else output
-    return {"package": name, "version": manifest(root)["version"], "output": str(output),
+    return {"package": name, "version": details["version"], "output": str(output),
             "plugin_root": str(plugin), "release": release,
             "files": len(files), "bytes": sum((plugin / relative).stat().st_size for relative in files),
             "commit": head, "tracked_changes": tracked_changes(root),
@@ -210,19 +230,14 @@ def build(root, output, release=False, commit_onto=None):
 
 def release_commit(repository, tree, parent, message):
     """Write tree as one commit on parent in repository; no ref, index or working tree changes."""
-    base = {key: value for key, value in os.environ.items()
-            if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")}
-    try:
-        parent = git(repository, "rev-parse", "--verify", "--quiet", f"{parent}^{{commit}}", env=base).decode().strip()
-    except subprocess.CalledProcessError:
-        raise ValueError(f"Unknown release parent: {parent}") from None
+    parent = resolve_commit(repository, parent)
     with tempfile.TemporaryDirectory(prefix="vibe-release-index-") as temporary:
-        env = dict(base, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+        index = Path(temporary) / "index"
         # Force: tracked files may match the package's own ignore patterns.
-        git(repository, f"--work-tree={tree}", "add", "--all", "--force", ".", env=env)
-        written = git(repository, "write-tree", env=env).decode().strip()
+        git(repository, f"--work-tree={tree}", "add", "--all", "--force", ".", index=index)
+        written = git(repository, "write-tree", index=index).decode().strip()
     try:
-        return git(repository, "commit-tree", written, "-p", parent, "-m", message, env=base).decode().strip()
+        return git(repository, "commit-tree", written, "-p", parent, "-m", message).decode().strip()
     except subprocess.CalledProcessError as error:
         raise ValueError(f"Could not write the release commit: {error.stderr.decode(errors='replace').strip()}") from None
 
