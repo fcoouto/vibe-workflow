@@ -128,8 +128,11 @@ So a client of the server without the token, such as an interactive agent or a w
   - Normalized messages carry no session ID, so a message belongs to the session state that lists it. The same message under two sessions is refused.
 - **Child sessions.** A parent's token total excludes its subagent sessions (the probes show this), so the attempt's spend includes them only when the caller passes them as `children`.
   - A child is found from a subagent call's `child_session_id` in any included session, at any depth.
-  - A spawned session that is not included, or tool calls the adapter dropped (`tool_calls_dropped`), make every cost unknown (`child_session_unaccounted`, `tool_calls_dropped`).
-  - An included session that no included message spawned is refused.
+  - These make every cost unknown:
+    - a spawned session that is not included (`child_session_unaccounted`);
+    - a subagent call with no child session, for example one that errored, was aborted or is still starting (also `child_session_unaccounted`), because it may have spent before losing its link;
+    - tool calls the adapter dropped (`tool_calls_dropped`).
+  - Every included session must be reachable from the root through these links. An unreachable session (including an island of sessions spawning each other), a cycle, or a link back to the root is refused. A child that two sessions reference counts once.
   - Each child's tokens, title remainder and unknowns count like the root's.
 - **Finished messages.** A message is finished when it has a completion time or a finish reason, or when an idle message was created after it. The recorded compaction message has neither of its own, and the idle message after it is the only sign that it ended. An unfinished message is still counted with its current tokens, but its session's title is unknown and every cost becomes `null` (`message_in_progress`).
 - **Title tokens by subtraction.** A title request creates no message, so its tokens are the session total minus the sum of its messages, per token class (`title_tokens`).
@@ -155,7 +158,7 @@ So a client of the server without the token, such as an interactive agent or a w
   - With `tracker`, it also re-baselines every included session (`mark_resynced`).
 - **Rate limits.** `rate_limit_observation(record)` passes Claude Agent `native.rateLimit` through as an observation with explicit units: 0–1 fractions, resets in epoch seconds, and the observation time (completion, else creation) in epoch milliseconds. Windows the adapter could not read, such as a percentage, are listed as unknown. A utilization above 1, or a reset that looks like milliseconds, is refused. Window headroom comes from this telemetry, never from token arithmetic.
 - **`normalize_session(session)`** reads a `session.get` record into `{session_id, parent_session_id, tokens, cost}`. It validates the totals with the adapter's message normalizer, because the adapter has no session normalizer.
-- **`consistency_report(session_state)`** returns bounded diagnostics: message counts by type, duplicates, conflicts, unknown records, missing tokens or models, unfinished messages, spawned, included and unaccounted child sessions, dropped tool calls, and whether the title remainder is known. It counts problems instead of raising, and carries IDs, counts and field names only.
+- **`consistency_report(session_state)`** returns bounded diagnostics: message counts by type, duplicates, conflicts, unknown records, missing tokens or models, unfinished messages, spawned, included and unaccounted child sessions, subagent calls without a child session, dropped tool calls, and whether the title remainder is known. It counts problems instead of raising, and carries IDs, counts and field names only.
 
 **Wiring (not yet connected).**
 1. The launcher waits until the attempt's sessions are idle: the root's run has ended and no subagent is still running.
