@@ -563,7 +563,7 @@ def _cross_check(lineage, answer, root, children):
     listed = {} if lineage is None else _lineage(lineage)
     merged = [{"session_id": session, "parent_session_id": parent} for session, parent in sorted(listed.items())]
     if answer is None:
-        return {"lineage": merged, "unknown": ["shim_lineage_not_checked"], "unlisted": 0}
+        return {"lineage": merged, "unknown": ["shim_lineage_not_checked"], "not_included": 0}
     recorded, vouched = _shim(answer, root)
     for session, parent in recorded.items():
         if parent is not None and session in listed and listed[session] != parent:
@@ -573,20 +573,22 @@ def _cross_check(lineage, answer, root, children):
                     key=lambda entry: entry["session_id"])
     if len(merged) > MAX_LINEAGE:
         _fail("too many sessions")
-    unlisted = len(set(recorded) - set(listed) - set(children))
-    unknown = (["child_session_unaccounted"] if unlisted else []) + ([] if vouched else ["shim_lineage_incomplete"])
-    return {"lineage": merged, "unknown": unknown, "unlisted": unlisted}
+    # Every recorded session must be accounted, whatever the listing says about it: a null shim parent cannot
+    # contradict a listed one, so only inclusion proves its spend was counted.
+    missing = len(set(recorded) - set(children))
+    unknown = (["child_session_unaccounted"] if missing else []) + ([] if vouched else ["shim_lineage_incomplete"])
+    return {"lineage": merged, "unknown": unknown, "not_included": missing}
 
 
 @_guard
 def cross_check_lineage(lineage, shim_descendants, root, children=None):
     """Cross-check the launcher's `lineage` (`[{session_id, parent_session_id}]` or None) against the plugin's own
     `routing.descendants` answer for `root` (or None when the launcher has none), with `children` the included
-    descendant session ids. Returns `{lineage, unknown, unlisted}`:
+    descendant session ids. Returns `{lineage, unknown, not_included}`:
 
     - `lineage`: the launcher's entries plus every shim entry with a known parent it lacks, sorted by session id;
-    - `unknown`: `child_session_unaccounted` when the shim recorded a descendant that is neither listed nor included
-      (`unlisted` counts them), `shim_lineage_incomplete` when the shim could not vouch for its set (`complete: false`
+    - `unknown`: `child_session_unaccounted` when the shim recorded a descendant that is not included in `children`,
+      whether or not the launcher lists it (`not_included` counts them), `shim_lineage_incomplete` when the shim could not vouch for its set (`complete: false`
       or `truncated`), and `shim_lineage_not_checked` when no answer was supplied.
 
     A shim parent that contradicts the listing, the root among the descendants, a self-parent or a session with two

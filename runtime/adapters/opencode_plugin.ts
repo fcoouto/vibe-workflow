@@ -35,6 +35,7 @@ const MAX_CLOSED = 1024  // sessions of finished attempts; evicting, an evicted 
 const MAX_PROBES = 1024  // recent unmanaged or failed answers; evicting, used only to avoid asking again
 const MAX_PROBING = 8  // ledger questions in flight, for creation events and for hooks each; beyond it, no answer for now
 const MAX_RETIRED = 4096  // managed descendants of detached roots; evicting, an evicted one is asked about no more
+const MAX_CREATED = 4096  // derived-shape sessions whose creation event was seen; evicting (see `routing.descendants`)
 const MAX_DESCENDANTS_RESPONSE = 512  // entries in one `routing.descendants` answer; beyond it the answer says truncated
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
@@ -329,6 +330,9 @@ export function createRoutingPlugin(config: Config = {}) {
       let recorded = 0  // regular descendants across roots
       let overRecorded = 0
       let streaming = false  // the creation-event stream is subscribed and has not ended or failed
+      // Derived-shape sessions (the only attachable ones) whose creation event was already seen, so a repeated event
+      // never vouches for a root again after a detach and re-attach.
+      const createdSeen = new Map<string, true>()
 
       /** The root a session is managed under when that is already known, without lookups. */
       const rootOf = (session: string): string | undefined => {
@@ -451,8 +455,11 @@ export function createRoutingPlugin(config: Config = {}) {
               if (data.parentID != null && !text(data.parentID, SESSION)) continue
               const parent: string | null = data.parentID ?? null
               bounded(lineage, MAX_LINEAGE_CACHE, data.sessionID, parent)
-              const own = attached.get(data.sessionID)
-              if (own) own.watched = true
+              if (derivedSession(data.sessionID) && !createdSeen.has(data.sessionID)) {
+                bounded(createdSeen, MAX_CREATED, data.sessionID, true)
+                const own = attached.get(data.sessionID)
+                if (own) own.watched = true
+              }
               // A parent recorded under a root that was detached and attached again counts under that root.
               const former = parent === null ? undefined : retired.get(parent)?.root
               const root = parent === null ? undefined : rootOf(parent) ?? (former !== undefined ? rootOf(former) : undefined)
@@ -465,16 +472,19 @@ export function createRoutingPlugin(config: Config = {}) {
         })()
       }
 
-      /** The session's parent: a session ID, null for a root, or undefined when it cannot be determined. */
-      /** An undetermined chain may belong to any attached root's tree, so none of them can vouch for its descendants. */
-      const undetermined = (): null => {
-        for (const attachment of attached.values()) attachment.lookupFailed = true
+      /**
+       * An undetermined chain may belong to any attached root's tree, so none of them can vouch for its descendants.
+       * Only spend paths (`model.request` and subagent spawns) mark them; other hooks only answer interactive.
+       */
+      const undetermined = (spend: boolean): null => {
+        if (spend) for (const attachment of attached.values()) attachment.lookupFailed = true
         return null
       }
 
-      async function lookup(session: string): Promise<string | null | undefined> {
+      /** The session's parent: a session ID, null for a root, or undefined when it cannot be determined. */
+      async function lookup(session: string, spend: boolean): Promise<string | null | undefined> {
         if ((failed.get(session) ?? 0) > performance.now()) {
-          undetermined()
+          undetermined(spend)
           return undefined
         }
         if (typeof ctx?.session?.get === "function") {
@@ -489,7 +499,7 @@ export function createRoutingPlugin(config: Config = {}) {
           } catch { /* fall through: undetermined */ }
         }
         bounded(failed, MAX_FAILED_LOOKUPS, session, performance.now() + failedLookupMs)
-        undetermined()
+        undetermined(spend)
         return undefined
       }
 
@@ -524,7 +534,7 @@ export function createRoutingPlugin(config: Config = {}) {
        * a cycle, a root and a chain past the limits are interactive. Only derived ids are ever asked about, each at
        * most once per answer window, so other sessions never wait for the child.
        */
-      async function managed(sessionID: unknown): Promise<Attachment | "pending" | "closed" | null> {
+      async function managed(sessionID: unknown, spend = false): Promise<Attachment | "pending" | "closed" | null> {
         if (!text(sessionID, SESSION)) return null
         const session = sessionID as string
         const known = rootOf(session)
@@ -545,14 +555,14 @@ export function createRoutingPlugin(config: Config = {}) {
         let lookups = 0
         for (;;) {
           if (seen.has(current)) return null
-          if (seen.size >= MAX_CHAIN) return undetermined()
+          if (seen.size >= MAX_CHAIN) return undetermined(spend)
           seen.add(current)
           let parent = lineage.get(current)
           if (parent === undefined) {
             if (!mayLookUp) return null
-            if (lookups >= MAX_LOOKUPS) return undetermined()
+            if (lookups >= MAX_LOOKUPS) return undetermined(spend)
             lookups += 1
-            parent = await lookup(current)
+            parent = await lookup(current, spend)
             if (parent === undefined) return null
             bounded(lineage, MAX_LINEAGE_CACHE, current, parent)
           }
@@ -569,7 +579,7 @@ export function createRoutingPlugin(config: Config = {}) {
           const above = await underRetired(parent, session)
           if (above !== undefined) return above
           if (derivedSession(parent)) {
-            if (lookups >= MAX_LOOKUPS) return attached.size > 0 ? undetermined() : null
+            if (lookups >= MAX_LOOKUPS) return undetermined(spend && attached.size > 0)
             lookups += 1
             const answer = await ledgerAnswer(parent)
             if (answer === "known") return markPending(session, parent)
@@ -599,7 +609,7 @@ export function createRoutingPlugin(config: Config = {}) {
 
       /** The attachment a checked hook enforces, or null for an interactive session; pending and closed ones block. */
       async function enforced(sessionID: unknown): Promise<Attachment | null> {
-        const governing = await managed(sessionID)
+        const governing = await managed(sessionID, true)
         if (governing === "pending") throw new RoutingBlocked("attach_required")
         if (governing === "closed") throw new RoutingBlocked("attempt_closed")
         return governing
@@ -791,6 +801,7 @@ export function createRoutingPlugin(config: Config = {}) {
         pending.clear()
         closed.clear()
         retired.clear()
+        createdSeen.clear()
         probes.clear()
         probing.clear()
         recorded = 0
