@@ -5165,7 +5165,7 @@ def _capture(scope, plan, *, pinned=None):
         if value['status'] == 'read':
             value['mode'] = stat.S_IMODE((scope.repository_root / name).lstat().st_mode)
         snapshot['fingerprints'][name] = value
-    _require(sum(v.get('bytes', 0) for v in snapshot['fingerprints'].values()) <= 8 * 1024 * 1024,
+    _require(sum(v.get('bytes', 0) for v in snapshot['fingerprints'].values()) <= 8 * 1024 * 1024,  # Own check-run bound; never MAX_TOTAL.
              'Candidate total byte limit exceeded')
     base = _git(scope.repository_root, 'rev-parse', '--verify', '--end-of-options', plan['base'] + '^{commit}').decode().strip()
     comparison_base = base

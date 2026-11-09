@@ -36,7 +36,10 @@ def excluded(name):
 
 
 def _git(root, *args, deadline):
-    """Run read-only Git in root only: no inherited selectors, configured commands, locks or discovery above root."""
+    """Run read-only Git in root only: no inherited selectors, configured commands, locks or discovery above root.
+
+    Output is capped at MAX_LISTING and bounded in time by deadline; it is not charged to a caller's entry budget.
+    """
     unavailable = PackageManifestError("Package membership is unavailable")
     if deadline - time.monotonic() <= 0:
         raise PackageManifestError("Package membership deadline exceeded")
