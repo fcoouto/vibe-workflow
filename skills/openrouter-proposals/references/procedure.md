@@ -141,8 +141,9 @@ Call `begin` with the stable task ID, full profile, selected `model`, canonical 
 
 Only a newly returned attempt token permits this coordinator to make the proposal call. `begin` requires `--cwd` and rechecks saved enablement, selected route and configured store under a short guard through durable admission. Each admitted attempt records the scope and settings revision. Disable blocks new admissions; an issued token may finish its one call and be recorded afterward. A duplicate task ID never permits a second call. If the helper reports disabled/busy consent, a pending local attempt, stale discovery, invalid controls or storage capacity, use the native path. Do not create a different task ID or store directory to evade the original attempt limit.
 
-For scoped packets, include `external` from the shared packet procedure in `begin`.
-Immediately before the connector call, call `dispatch` with the identical request
+Every `begin` includes `external` from the shared packet procedure; without it
+admission fails with `external_binding_required`. Immediately before the connector
+call, call `dispatch` with the identical request
 plus `attempt_token`. It rechecks source, current enablement/revision and native
 review readiness, returns the constructed `packet` and pins one dispatch. Send
 only that returned text and route. Changed source needs fresh preparation within
@@ -169,7 +170,7 @@ Call `record` with the original attempt token and the appropriate disposition:
 | `transport_failure` | A known service/transport failure prevented a usable proposal |
 | `unresolved` | The local call ended or was interrupted, but outcome, upstream execution or cost remains unknown |
 
-For scoped packets, accepted/repaired records also require `reviewer` matching the independently observed reviewer named at admission.
+Accepted/repaired records also require `reviewer` matching the independently observed reviewer named at admission. Only attempts admitted before binding became mandatory may settle without one; they cannot send again.
 
 Accepted/repaired records require `native_review_ref` and `native_checks` containing references and successful results. References identify actual native work or existing task evidence; do not use the external model's self-report. For example:
 
@@ -177,6 +178,7 @@ Accepted/repaired records require `native_review_ref` and `native_checks` contai
 {
   "attempt_token": "<original attempt token>",
   "disposition": "repaired",
+  "reviewer": "<reviewer named at admission>",
   "native_review_ref": "<actual native review reference>",
   "native_checks": [{"ref": "<actual passing check reference>", "success": true}],
   "observations": {

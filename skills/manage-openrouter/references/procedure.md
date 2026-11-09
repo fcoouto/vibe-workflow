@@ -124,8 +124,8 @@ retains settings, cache, task history and pending results for inspection and
 settlement; it does not erase data or revoke the OpenRouter key.
 
 Both public helpers enforce saved consent and the configured scope and paths.
-Legacy proposal `begin` admits exactly one bounded call under a short shared guard;
-scoped `external` proposals require the final `dispatch` check before their call.
+Every new proposal `begin` needs the `external` binding and admits exactly one
+bounded call under a short shared guard; the final `dispatch` check runs before the call.
 That check revalidates permission, revision and source and consumes the same token;
 its issued token may settle after disable. Worker preparation is not launch:
 the runner checks consent again at process creation, including the prepared

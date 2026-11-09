@@ -531,7 +531,7 @@
       ]
     },
     "skills/manage-openrouter/references/procedure.md": {
-      "sha256": "8eba14e6159b018b433cb4241c6f2e0929bd00824abbbcce9121520c16113187",
+      "sha256": "13f5b842f20fad4dcb0843d75c3119f37db67fca67b5b6c874e116992a5245ce",
       "ranges": [
         [
           1,
@@ -685,7 +685,7 @@
       ]
     },
     "skills/openrouter-proposals/references/procedure.md": {
-      "sha256": "71eaebf8aedbb0dac173f897f80bb1570a03cfbd71fe6491f6b5cfff43790f29",
+      "sha256": "90b0622c7f915fd729e4b4ddd959fe129d232a75fae00ab831fac2d30ff1776e",
       "ranges": [
         [
           1,
@@ -693,11 +693,11 @@
         ],
         [
           91,
-          153
+          154
         ],
         [
-          154,
-          204
+          155,
+          206
         ]
       ]
     },
@@ -711,15 +711,15 @@
       ]
     },
     "skills/openrouter-workers/references/procedure.md": {
-      "sha256": "04759f5300fad96ed15faff36bd90a063f2339264d909f91fdc82631c0f2f110",
+      "sha256": "1c591ea88ba01fa83f258d0bd837228723794a817dcdeb0d73ad03995bd79fb6",
       "ranges": [
         [
           1,
-          123
+          122
         ],
         [
-          124,
-          195
+          123,
+          198
         ]
       ]
     },
