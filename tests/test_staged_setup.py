@@ -80,7 +80,20 @@ class StagedAssessmentTests(unittest.TestCase):
 
 
 class OwnedSetupCommandTests(unittest.TestCase):
-    def command_fixture(self, code):
+    # Children here finish or are stopped by the observer long before this; tight budgets made
+    # loaded runs flaky. test_owned_command_deadline_stops_silent_child proves enforcement.
+    BUDGET = 60
+
+    def setUp(self):
+        # Command-owner markers live under LOCK_ROOT; never use the real home or another test's value.
+        locks=tempfile.TemporaryDirectory(prefix='owned-setup-locks-');self.addCleanup(locks.cleanup)
+        lock_root=patch.object(changes,'LOCK_ROOT',Path(locks.name).resolve()/'locks')
+        lock_root.start();self.addCleanup(lock_root.stop)
+
+    def allocation(self, operation, seconds=BUDGET):
+        return startup._canonical_freeze(dict(operations=[operation],limits=dict(deadline=time.time()+seconds)))
+
+    def command_fixture(self, code, timeout=BUDGET):
         fixture=unenrolled.UnenrolledCheckoutTests('runTest');fixture.setUp();self.addCleanup(fixture.doCleanups)
         private=tempfile.TemporaryDirectory(prefix='owned-setup-lifecycle-');self.addCleanup(private.cleanup)
         directory=Path(private.name).resolve();directory.chmod(0o700)
@@ -93,7 +106,7 @@ class OwnedSetupCommandTests(unittest.TestCase):
         action=dict(id='observe',owner=owner,recovery='file-preimages',resources=['checkout'],preconditions=[],effects=[effect],
             execution=dict(argv=[sys.executable,'-I','-B','-c',code],cwd=str(root),
                 cwd_target=changes.d3._physical_target(root,root,None,dict(paths=0,bytes=0),directory=True),
-                timeout_seconds=3,qualification=proof,idempotency=proof))
+                timeout_seconds=timeout,qualification=proof,idempotency=proof))
         journal=dict(transaction_id='lifecycle-fixture',manifest=dict(actions=[action]),receipts={},
             plan=dict(assessments=dict(project=None,repositories=[dict(owner=owner,decisions=[],coverage=[])])),
             qualification_scope=dict(attempts=[dict(task=None,command_action='observe')]))
@@ -107,10 +120,10 @@ class OwnedSetupCommandTests(unittest.TestCase):
                     ("sys.stdin.read();" if metadata else "print('header',flush=True);")+
                     "sys.stdout.write('x'*131072);sys.stdout.flush();Path('effect.txt').write_text('completed')")
                 directory,action,journal,descriptor=self.command_fixture(code);seen=[]
+                allocation=self.allocation('observe-setup-metadata' if metadata else 'observe-cli-basic')
                 class Observer:
                     def setup_command_allocation(self,action,journal):
-                        return startup._canonical_freeze(dict(operations=['observe-setup-metadata' if metadata else 'observe-cli-basic'],
-                            limits=dict(deadline=time.time()+10)))
+                        return allocation
                     def observe_setup_command(self,process,path,journal,action,attempt):
                         seen.append(process)
                         if not metadata:
@@ -126,9 +139,10 @@ class OwnedSetupCommandTests(unittest.TestCase):
 
     def test_observation_error_becomes_pending_after_child_cleanup_and_receipt_save(self):
         directory,action,journal,descriptor=self.command_fixture('import time;time.sleep(30)');seen=[]
+        allocation=self.allocation('observe-cli-basic')
         class Observer:
             def setup_command_allocation(self,action,journal):
-                return startup._canonical_freeze(dict(operations=['observe-cli-basic'],limits=dict(deadline=time.time()+10)))
+                return allocation
             def observe_setup_command(self,process,path,journal,action,attempt):
                 seen.append(process)
                 raise doctor.ObservationError('fixture-sensitive-native-error')
@@ -139,6 +153,27 @@ class OwnedSetupCommandTests(unittest.TestCase):
         self.assertFalse(receipt['command']['stopped'])
         self.assertEqual(json.loads((directory/'transaction.json').read_bytes())['receipts']['observe']['returncode'],receipt['returncode'])
         self.assertIsNotNone(changes._command_owner(action['owner']['git_dir']))
+
+    def test_owned_command_deadline_stops_silent_child(self):
+        # Either bound (command timeout or allocation deadline) stops a child that never finishes.
+        for bound in ('timeout','allocation'):
+            with self.subTest(bound=bound):
+                directory,action,journal,descriptor=self.command_fixture('import time;time.sleep(30)',
+                    timeout=1 if bound=='timeout' else self.BUDGET);seen=[]
+                allocation=self.allocation('observe-cli-basic',1 if bound=='allocation' else self.BUDGET)
+                class Observer:
+                    def setup_command_allocation(self,action,journal):
+                        return allocation
+                    def observe_setup_command(self,process,path,journal,action,attempt):
+                        seen.append(process)
+                started=time.monotonic()
+                with self.assertRaisesRegex(changes.Pending,'Owned setup command observation is unavailable'):
+                    changes._scoped_apply_action(directory,journal,action,dict(kind='command',decision_ids=[]),None,descriptor,observer_owner=Observer())
+                self.assertLess(time.monotonic()-started,self.BUDGET/2)
+                receipt=journal['receipts']['observe']
+                self.assertEqual(len(seen),1);self.assertIsNotNone(seen[0].process.poll())
+                self.assertNotEqual(receipt['returncode'],0);self.assertFalse(receipt['command']['stopped'])
+                self.assertEqual(json.loads((directory/'transaction.json').read_bytes())['receipts']['observe']['returncode'],receipt['returncode'])
 
     def test_bootstrap_selector_and_verified_plan_cannot_replace_actual_command_claim(self):
         birth=CanonicalBirthFixture('runTest');self.addCleanup(birth.doCleanups)
@@ -169,14 +204,14 @@ class OwnedSetupCommandTests(unittest.TestCase):
         argv=[sys.executable,'-I','-B','-c','import json,time;print(json.dumps({"type":"thread.started","thread_id":"fixture-thread"}),flush=True);time.sleep(30)']
         action=dict(id='observe',owner=owner,recovery='file-preimages',resources=['checkout'],preconditions=[],effects=[effect],
             execution=dict(argv=argv,cwd=str(root),cwd_target=changes.d3._physical_target(root,root,None,dict(paths=0,bytes=0),directory=True),
-                timeout_seconds=2,qualification=proof,idempotency=proof))
+                timeout_seconds=self.BUDGET,qualification=proof,idempotency=proof))
         journal=dict(transaction_id='command-fixture',manifest=dict(actions=[action]),receipts={},
             plan=dict(assessments=dict(project=None,repositories=[dict(owner=owner,decisions=[],coverage=[])])),
             qualification_scope=dict(attempts=[dict(task=None,command_action='observe')]))
-        seen=[]
+        seen=[];allocation=self.allocation('observe-cli-basic')
         class Observer:
             def setup_command_allocation(self,action,journal):
-                return startup._canonical_freeze(dict(operations=['observe-cli-basic'],limits=dict(deadline=time.time()+10)))
+                return allocation
             def observe_setup_command(self,process,path,journal,action,attempt):
                 seen.append(process)
                 self_header=json.loads(process.read(process.deadline).decode())

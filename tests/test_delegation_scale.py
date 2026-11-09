@@ -70,11 +70,16 @@ class DelegationScaleTests(unittest.TestCase):
         self.assertEqual(len(delegation._stored_claims(claims,
             maximum=delegation.MAX_VERIFICATION_CLAIMS)), 4300)
 
-    def test_fifty_one_completed_admissions_reconcile_and_preserve_pins(self):
-        count = 51
+    def test_chained_completed_admissions_reconcile_preserve_pins_and_exhaust_task_budget(self):
+        # The count has no production boundary (history bounds are 4096); five chained jobs prove
+        # reconciliation, pins and exact counters. Resource units keep one unit of headroom and
+        # 'spare' never runs, so only the task-wide attempt budget can reject the final admissions.
+        count = 5
+        last, previous = 'job' + str(count - 1), 'job' + str(count - 2)
         plan = self.plan(count, chain=True)
-        plan['limits'].update(max_attempts=count + 2, max_resource_units=count + 2)
-        plan['jobs'].append(dict(id='scale-review',role='review',claims=[self.fixture.path_claim(mode='read')],dependencies=['job50'],max_attempts=1))
+        plan['limits'].update(max_attempts=count + 2, max_resource_units=count + 3)
+        plan['jobs'].append(dict(id='scale-review',role='review',claims=[self.fixture.path_claim(mode='read')],dependencies=[last],max_attempts=1))
+        plan['jobs'].append(dict(id='spare', role='worker', claims=[self.fixture.path_claim()], dependencies=[], max_attempts=2))
         self.fixture.plan(plan)
         pins = state.task_status(self.scope, 'codex', self.fixture.identity['session_id'])['task']['pins']
         for i in range(count):
@@ -84,11 +89,11 @@ class DelegationScaleTests(unittest.TestCase):
             self.fixture.observe_worker(prepared)
             proof = self.fixture.worker_reconciliation_request(prepared, outcome='failed' if i == count - 1 else 'completed')
             delegation.reconcile_assignment(self.scope, proof)
-        retry = self.fixture.prepare_request(dispatch_id='scale-retry', job_id='job50',
+        retry = self.fixture.prepare_request(dispatch_id='scale-retry', job_id=last,
             retry_of=prepared['attempt_id'], diagnostic=dict(prior_attempt_id=prepared['attempt_id'],
                 cause='Independent verification found incomplete output', evidence=['fixture:retry-check'],
                 change='Complete the original final context'))
-        retry['brief']['dependencies'] = ['job49']
+        retry['brief']['dependencies'] = [previous]
         prepared = delegation.prepare_assignment(self.scope, retry)
         self.fixture.observe_worker(prepared)
         delegation.reconcile_assignment(self.scope, self.fixture.worker_reconciliation_request(prepared))
@@ -114,7 +119,15 @@ class DelegationScaleTests(unittest.TestCase):
         self.assertTrue(all(r['data']['status'] == 'settled' for r in rows))
         self.assertEqual(sum(r['data']['result']['outcome'] == 'completed' for r in rows), count + 1)
         self.assertEqual(task['delegation']['resource_units_consumed'], count + 2)
-        extra = self.fixture.prepare_request(dispatch_id='over-budget', job_id='job50')
-        extra['brief']['dependencies'] = ['job49']
-        with self.assertRaisesRegex(state.StateError, 'budget is exhausted'):
+        exhausted = '^Original finite delegation budget is exhausted$'
+        extra = self.fixture.prepare_request(dispatch_id='over-budget', job_id=last)
+        extra['brief']['dependencies'] = [previous]
+        with self.assertRaisesRegex(state.StateError, exhausted):
             delegation.prepare_assignment(self.scope, extra)
+        spare = self.fixture.prepare_request(dispatch_id='over-budget-spare', job_id='spare')
+        spare['brief']['dependencies'] = []
+        self.assertEqual(spare['resource_units'], 1)
+        with self.assertRaisesRegex(state.StateError, exhausted):
+            delegation.prepare_assignment(self.scope, spare)
+        self.assertEqual(state.task_status(self.scope, 'codex', self.fixture.identity['session_id'])['task']['delegation'],
+            task['delegation'])
