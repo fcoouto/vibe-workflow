@@ -14,7 +14,9 @@ from runtime import opencode_accounting as accounting
 from runtime import routing
 from runtime.adapters import opencode
 from runtime.opencode_accounting import AccountingError
+from tests import test_routing_accounting as ledger_tests
 
+M = ledger_tests.M
 ROOT = Path(__file__).resolve().parents[1]
 PROBES = ROOT / "tests" / "fixtures" / "smart-routing" / "probes"
 MODULE = ROOT / "runtime" / "opencode_accounting.py"
@@ -138,8 +140,23 @@ class TitleBySubtraction(unittest.TestCase):
 
     def test_in_progress_assistant_message_is_unknown(self):
         running = [dict(message, completed_ms=None, finish=None) if message["type"] == "assistant" else message
-                   for message in C_MESSAGES]
+                   for message in C_MESSAGES if message["type"] != "idle"]
         self.assertEqual(accounting.title_tokens(C_TOTAL, running)["reason"], "message_in_progress")
+
+    def test_a_later_idle_message_marks_earlier_messages_terminal(self):
+        # The recorded compaction message has no completion time or finish; the idle message after it ends it.
+        self.assertEqual(accounting.title_tokens(C_TOTAL, C_MESSAGES)["reason"], None)
+        stopped = [dict(m, completed_ms=None, finish=None) if m["type"] == "assistant" else m for m in C_MESSAGES]
+        self.assertEqual(accounting.title_tokens(C_TOTAL, stopped)["reason"], None)
+
+    def test_compaction_without_a_later_idle_message_is_in_progress(self):
+        running = [m for m in C_MESSAGES if m["type"] != "idle"]
+        self.assertEqual(accounting.title_tokens(C_TOTAL, running)["reason"], "message_in_progress")
+        for funding in ("subscription", "api"):
+            result = account(running, funding=funding, session_cost=0.5)
+            self.assertIn("message_in_progress", result["unknown"])
+            self.assertEqual(result["title"]["state"], "unknown")
+            self.assertTrue(all(r["cost_usd_micros"] is None for r in result["usage"]["requests"]))
 
     def test_randomized_subtraction_identity(self):
         rng = random.Random(3606)
@@ -150,6 +167,7 @@ class TitleBySubtraction(unittest.TestCase):
                 messages.append(synthetic(f"msg_r{index}", values, kind=rng.choice(("assistant", "compaction"))))
                 for field in FIELDS:
                     total[field] += values[field]
+            messages.append(idle("msg_zidle", 1794170000200))
             title = {field: rng.randint(0, 10 ** 5) for field in FIELDS}
             session = {field: total[field] + title[field] for field in FIELDS}
             self.assertEqual(accounting.title_tokens(session, messages), {"tokens": title, "reason": None})
@@ -158,6 +176,18 @@ class TitleBySubtraction(unittest.TestCase):
             self.assertEqual(result["totals"]["counted"], session)
             if messages or any(title.values()):
                 self.assertIsNone(routing._usage_error(result["usage"]))
+
+
+def idle(message_id, created_ms):
+    return {"schema": 1, "client": "opencode", "kind": "message", "type": "idle", "message_id": message_id,
+            "created_ms": created_ms, "completed_ms": None, "agent": None, "requested": None, "route_identity": None,
+            "previous": None, "finish": None, "raw_finish": None, "outcome": "succeeded", "error_type": None,
+            "tokens": None, "cost": None, "rate_limit": None, "tool_calls": [], "tool_calls_dropped": 0}
+
+
+def spawn_call(child):
+    return {"tool": "subagent", "tool_class": "subagent", "tool_call_id": "toolu_x", "executed": False,
+            "status": "completed", "child_session_id": child, "spawn": None}
 
 
 def synthetic(message_id, values, kind="assistant", alias="haiku", variant="default", cost=None, **extra):
@@ -234,11 +264,10 @@ class UsageFromMessages(unittest.TestCase):
         changed = dict(C_MESSAGES[3], tokens=tokens(9, 9, 9, 9, 9))
         self.assertEqual(assert_fixed_error(self, account, C_MESSAGES + [changed]), "conflicting duplicate message")
 
-    def test_message_from_another_session_is_refused(self):
-        foreign = dict(C_MESSAGES[3], session_id="ses_other")
-        self.assertEqual(assert_fixed_error(self, account, C_MESSAGES[:3] + [foreign]), "message from another session")
-        bound = [dict(message, session_id=C_ID) for message in C_MESSAGES]
-        self.assertEqual(account(bound)["totals"], account()["totals"])
+    def test_a_message_listed_under_two_sessions_is_refused(self):
+        child = {"session_id": "ses_fixture3", "messages": [C_MESSAGES[3]], "tokens": C_MESSAGES[3]["tokens"]}
+        spawning = C_MESSAGES[:3] + [dict(C_MESSAGES[3], tool_calls=[spawn_call("ses_fixture3")])]
+        self.assertEqual(assert_fixed_error(self, account, spawning, children=[child]), "message in two sessions")
 
     def test_events_and_unknown_records_are_not_messages(self):
         usage_updated = next(e for e in EVENTS if e.get("type") == "session.usage.updated")
@@ -277,6 +306,17 @@ class UsageFromMessages(unittest.TestCase):
              "cost_usd_micros": None}])
         self.assertIsNone(routing._usage_error(result["usage"]))
 
+    def test_more_routes_than_one_report_holds_give_an_unknown_cost_report(self):
+        messages = [synthetic(f"msg_v{index:02d}", tokens(1, 1, 0, 0, 0), variant=f"v{index}", cost=0.01)
+                    for index in range(40)]
+        for funding in ("subscription", "api"):
+            result = accounting.usage_from_messages(messages, None, session_id="ses_g", funding=funding)
+            self.assertEqual(result["usage"]["requests"], [{"kind": "primary", "model": "unknown",
+                                                            "tokens": tokens(40, 40, 0, 0, 0), "cost_usd_micros": None}])
+            self.assertIn("too_many_routes", result["unknown"])
+            self.assertIsNone(result["totals"]["usd_micros"])
+            self.assertIsNone(routing._usage_error(result["usage"]))
+
     def test_constants_agree_with_the_s36a_record_contract(self):
         self.assertEqual(accounting.TOKEN_FIELDS, routing.usage_budget.TOKEN_FIELDS)
         self.assertEqual(accounting.MAX_USAGE_REQUESTS, routing.MAX_USAGE_REQUESTS)
@@ -293,6 +333,8 @@ class Cost(unittest.TestCase):
         self.assertIsNone(result["totals"]["usd_micros"])
         self.assertEqual(result["reported_cost"], {"usd_micros": 500000, "messages": 2, "basis": "provider_estimate"})
         self.assertEqual(result["funding"], "subscription")
+        self.assertEqual(result["usage"]["source"], "host_message_totals")
+        self.assertIsNone(result["totals"]["usd_basis"])
 
     def test_recorded_zero_cost_is_not_billing_evidence_for_subscriptions(self):
         result = account()
@@ -308,8 +350,34 @@ class Cost(unittest.TestCase):
         self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [12300, 1])
         self.assertEqual([r["tokens"] for r in result["usage"]["requests"]], [tokens(1, 2, 0, 0, 0), tokens(3, 4, 0, 0, 0)])
         self.assertEqual(result["totals"]["usd_micros"], 12301)
+        self.assertEqual(result["totals"]["usd_basis"], "estimate")
         self.assertEqual(result["totals"]["counted"], tokens(4, 6, 0, 0, 0))
-        self.assertEqual(result["usage"]["source"], "host_message_totals")
+        self.assertEqual(result["usage"]["source"], "estimate")
+
+    def test_api_zero_cost_with_tokens_is_unknown(self):
+        messages = [synthetic("msg_c1", tokens(50000, 20000, 0, 0, 0), cost=0.0)]
+        result = accounting.usage_from_messages(messages, tokens(50000, 20000, 0, 0, 0), session_id="ses_c",
+                                                funding="api", session_cost=0.0)
+        self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [None])
+        self.assertIsNone(result["totals"]["usd_micros"])
+        self.assertIn("cost_unknown", result["unknown"])
+
+    def test_api_zero_title_cost_delta_with_title_tokens_is_unknown(self):
+        messages = [synthetic("msg_c1", tokens(1, 1, 0, 0, 0), cost=0.01)]
+        result = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api",
+                                                session_cost=0.01)
+        self.assertTrue(all(r["cost_usd_micros"] is None for r in result["usage"]["requests"]))
+        self.assertIn("cost_unknown", result["unknown"])
+        missing = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api")
+        self.assertIn("cost_unknown", missing["unknown"])
+
+    def test_api_zero_token_zero_cost_message_stays_zero(self):
+        messages = [synthetic("msg_c1", tokens(0, 0, 0, 0, 0), cost=0.0), synthetic("msg_c2", tokens(1, 1, 0, 0, 0),
+                                                                                    cost=0.01)]
+        result = accounting.usage_from_messages(messages, tokens(1, 1, 0, 0, 0), session_id="ses_c", funding="api",
+                                                session_cost=0.01)
+        self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [0, 10000])
+        self.assertEqual(result["totals"]["usd_micros"], 10000)
 
     def test_api_cost_never_invented_from_tokens(self):
         messages = [synthetic("msg_c1", tokens(1000, 2000, 0, 0, 0), cost=None)]
@@ -495,6 +563,10 @@ class RateLimits(unittest.TestCase):
             hostile["rate_limit"]["windows"]["five_hour"]["utilization_fraction"] = bad
             assert_fixed_error(self, accounting.rate_limit_observation, hostile)
 
+    def test_zero_completion_time_is_kept(self):
+        message = dict(next(m for m in C_MESSAGES if m["message_id"] == "msg_fixture30"), completed_ms=0)
+        self.assertEqual(accounting.rate_limit_observation(message)["observed_ms"], 0)
+
     def test_millisecond_looking_reset_is_rejected(self):
         message = copy.deepcopy(next(m for m in C_MESSAGES if m["message_id"] == "msg_fixture30"))
         message["rate_limit"]["windows"]["seven_day"]["resets_at_s"] = 1794477600000
@@ -505,19 +577,19 @@ class Consistency(unittest.TestCase):
     def test_report_on_recorded_session(self):
         self.assertEqual(accounting.consistency_report(state()), {
             "session_id": C_ID, "messages": 5, "by_type": {"assistant": 1, "compaction": 1, "idle": 2, "user": 1},
-            "countable": 2, "duplicates": 0, "conflicting_duplicates": 0, "foreign_session": 0, "missing_tokens": 0,
+            "countable": 2, "duplicates": 0, "conflicting_duplicates": 0, "missing_tokens": 0,
             "in_progress": 0, "unknown_records": 0, "missing_model": 0, "complete": True, "title": "known",
-            "title_reason": None, "negative_classes": [], "rate_limit_messages": 1})
+            "title_reason": None, "negative_classes": [], "rate_limit_messages": 1, "children_referenced": 0,
+            "children_included": 0, "children_unaccounted": 0, "tool_calls_dropped": 0})
+        self.assertEqual(accounting.consistency_report(state(D_MESSAGES, D_TOTAL, D_ID))["children_unaccounted"], 1)
 
     def test_report_counts_problems_without_raising_or_echoing(self):
         messages = (C_MESSAGES + [C_MESSAGES[0], dict(C_MESSAGES[3], tokens=tokens(1, 1, 1, 1, 1)),
-                                  dict(C_MESSAGES[2], message_id="msg_foreign", session_id="ses_other"),
                                   {"schema": 1, "client": "opencode", "kind": "unknown", "source": "message",
                                    "type": None, "message_id": "msg_odd"}])
         report = accounting.consistency_report(state(messages, total=dict(C_TOTAL, output=1), complete=False))
-        self.assertEqual((report["duplicates"], report["conflicting_duplicates"], report["foreign_session"],
-                          report["unknown_records"], report["complete"], report["title"]),
-                         (1, 1, 1, 1, False, "unknown"))
+        self.assertEqual((report["duplicates"], report["conflicting_duplicates"], report["unknown_records"],
+                          report["complete"], report["title"]), (1, 1, 1, False, "unknown"))
         self.assertNotIn("Reply", json.dumps(report))
 
     def test_report_on_negative_remainder(self):
@@ -557,7 +629,10 @@ class Hostile(unittest.TestCase):
         self.check(C_MESSAGES[:3] + [dict(C_MESSAGES[3], message_id=MARKER)])
         self.check(C_MESSAGES[:3] + [dict(C_MESSAGES[3], requested={"provider_id": "x", "model_alias": "haïku",
                                                                     "variant": None})])
-        self.check(C_MESSAGES[:3] + [dict(C_MESSAGES[3], session_id="ses_é" + MARKER)])
+        self.check(C_MESSAGES[:3] + [dict(C_MESSAGES[3], tool_calls=[spawn_call("ses_é" + MARKER)])])
+        self.check(C_MESSAGES[:3] + [dict(C_MESSAGES[3], tool_calls_dropped=True)])
+        assert_fixed_error(self, account, children=[MARKER])
+        assert_fixed_error(self, account, children=[{"session_id": C_ID, "messages": []}])
         self.check("not a list " + MARKER)
         self.check([MARKER])
         assert_fixed_error(self, accounting.usage_from_messages, C_MESSAGES, C_TOTAL, session_id=MARKER)
@@ -647,3 +722,107 @@ class Purity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Session `ses_fixture3` (agent "nester", child of session D): only its session total is recorded, so the test
+# supplies one synthetic message carrying that total.
+CHILD_ID = "ses_fixture3"
+CHILD_TOTAL = total_of(SESSIONS[CHILD_ID]["tokens"])
+CHILD = {"session_id": CHILD_ID, "tokens": CHILD_TOTAL,
+         "messages": [synthetic("msg_child1", CHILD_TOTAL), idle("msg_child2", 1794170500000)]}
+
+
+class ChildSessions(unittest.TestCase):
+    def test_recorded_child_is_referenced_by_its_parent_spawn(self):
+        self.assertEqual([call["child_session_id"] for m in D_MESSAGES for call in m.get("tool_calls", [])], [CHILD_ID])
+
+    def test_an_unaccounted_child_leaves_the_attempt_cost_unknown(self):
+        result = account(D_MESSAGES, D_TOTAL, D_ID)
+        self.assertIn("child_session_unaccounted", result["unknown"])
+        self.assertEqual(result["title"]["state"], "zero")  # the child's tokens are not in the parent total
+        priced = [dict(m, cost=0.01) if m["type"] == "assistant" else m for m in D_MESSAGES]
+        api = account(priced, D_TOTAL, D_ID, funding="api", session_cost=0.02)
+        self.assertIn("cost_unknown", api["unknown"])
+        self.assertIsNone(api["totals"]["usd_micros"])
+
+    def test_included_child_is_summed_into_the_attempt(self):
+        result = account(D_MESSAGES, D_TOTAL, D_ID, children=[CHILD])
+        self.assertNotIn("child_session_unaccounted", result["unknown"])
+        self.assertEqual(result["totals"]["counted"], {f: D_TOTAL[f] + CHILD_TOTAL[f] for f in FIELDS})
+        self.assertIn("msg_child1", [r.get("receipt") for r in result["usage"]["requests"]])
+        self.assertEqual([s["session_id"] for s in result["sessions"]], [D_ID, CHILD_ID])
+        self.assertIsNone(routing._usage_error(result["usage"]))
+
+    def test_child_unknowns_propagate(self):
+        running = dict(CHILD, messages=[dict(CHILD["messages"][0], completed_ms=None, finish=None)])
+        result = account(D_MESSAGES, D_TOTAL, D_ID, children=[running], funding="api")
+        self.assertIn("message_in_progress", result["unknown"])
+        self.assertIn("cost_unknown", result["unknown"])
+
+    def test_grandchildren_must_be_included_too(self):
+        spawning = dict(CHILD, messages=[dict(CHILD["messages"][0], tool_calls=[spawn_call("ses_grand")]),
+                                         CHILD["messages"][1]])
+        result = account(D_MESSAGES, D_TOTAL, D_ID, children=[spawning])
+        self.assertIn("child_session_unaccounted", result["unknown"])
+
+    def test_dropped_tool_calls_hide_children(self):
+        hidden = [dict(m, tool_calls_dropped=3) if m["message_id"] == "msg_fixture34" else m for m in D_MESSAGES]
+        self.assertIn("tool_calls_dropped", account(hidden, D_TOTAL, D_ID, children=[CHILD])["unknown"])
+
+    def test_a_session_no_included_message_spawned_is_refused(self):
+        self.assertEqual(assert_fixed_error(self, account, children=[CHILD]), "session not in the attempt")
+
+    def test_resync_with_children_equals_from_scratch(self):
+        result = accounting.reconcile_with_state(None, state(D_MESSAGES, D_TOTAL, D_ID, children=[CHILD]))
+        self.assertEqual(result["accounting"], account(D_MESSAGES, D_TOTAL, D_ID, children=[CHILD]))
+
+
+class NormalizeSession(unittest.TestCase):
+    def test_recorded_sessions(self):
+        self.assertEqual(accounting.normalize_session(SESSIONS[C_ID]),
+                         {"session_id": C_ID, "parent_session_id": None, "tokens": C_TOTAL, "cost": 0})
+        self.assertEqual(accounting.normalize_session(SESSIONS[CHILD_ID])["parent_session_id"], D_ID)
+
+    def test_hostile_sessions(self):
+        for bad in (MARKER, dict(SESSIONS[C_ID], id=MARKER), dict(SESSIONS[C_ID], tokens={"input": True}),
+                    dict(SESSIONS[C_ID], cost=math.nan), dict(SESSIONS[C_ID], parentID=MARKER)):
+            assert_fixed_error(self, accounting.normalize_session, bad)
+
+
+class LedgerSettlement(ledger_tests.Accounting):
+    """The report through the merged S3.6a `record complete` path, on an API-funded dollar hold ($5 padded to $6)."""
+
+    def settle_with(self, attempt, result):
+        self.funded(attempt)
+        return self.call(ledger_tests.complete(attempt, "c-" + attempt, usage=result["usage"]))
+
+    def api(self, messages, total, cost):
+        return accounting.usage_from_messages(messages, total, session_id="ses_l", funding="api", session_cost=cost)
+
+    def assert_cost_unknown(self, response, attempt):
+        self.assertEqual(response["outcome"], "cost_unknown", response)
+        hold = self.hold(attempt)
+        self.assertEqual((hold["closed"], hold["state"], hold["amount"]), (False, "cost_unknown", 6 * M))
+
+    def test_zero_reported_cost_with_tokens_does_not_release_the_hold(self):
+        messages = [synthetic("msg_l1", tokens(50000, 20000, 0, 0, 0), cost=0.0)]
+        response = self.settle_with("z1", self.api(messages, tokens(50000, 20000, 0, 0, 0), 0.0))
+        self.assert_cost_unknown(response, "z1")
+
+    def test_zero_title_cost_delta_does_not_release_the_hold(self):
+        messages = [synthetic("msg_l1", tokens(10, 10, 0, 0, 0), cost=0.01)]
+        response = self.settle_with("t1", self.api(messages, tokens(30, 20, 0, 0, 0), 0.01))
+        self.assert_cost_unknown(response, "t1")
+
+    def test_mixed_present_and_absent_costs_do_not_release_the_hold(self):
+        messages = [synthetic("msg_l1", tokens(10, 10, 0, 0, 0), cost=0.01),
+                    synthetic("msg_l2", tokens(10, 10, 0, 0, 0), cost=None)]
+        response = self.settle_with("x1", self.api(messages, tokens(20, 20, 0, 0, 0), 0.02))
+        self.assert_cost_unknown(response, "x1")
+
+    def test_reported_costs_settle_as_an_estimate_floored_at_the_admitted_estimate(self):
+        messages = [synthetic("msg_l1", tokens(10, 10, 0, 0, 0), cost=0.0123)]
+        response = self.settle_with("e1", self.api(messages, tokens(12, 15, 0, 0, 0), 0.0124))
+        settlement = response["settlement"]
+        self.assertEqual((settlement["cost_source"], settlement["charged"], settlement["released"]),
+                         ("estimate", 5 * M, M))
