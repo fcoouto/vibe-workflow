@@ -108,7 +108,20 @@ class Accounting(DispatchBase):
     def send(self, attempt, sub=False):
         response = self.call(dispatch(attempt, request=facts() if sub else facts(**API)))
         self.assertEqual(response['state'], 'dispatched', response)
+        self.tokens = getattr(self, 'tokens', {})
+        self.tokens[attempt] = response['authority']
         return response
+
+    def observe_usage(self, event_id, attempt, anchor=None, token=None, **extra):
+        """Report-only usage; it needs an open anchor hold (its own or `root_attempt_id`) and that hold's
+        dispatch authority (round-2 review S-A)."""
+        event = dict(event_id=event_id, attempt_id=attempt, kind='observed', stage='coordinator', funding='api',
+                     usage=usage(1))
+        if anchor is not None:
+            event['root_attempt_id'] = anchor
+        event['authority'] = token if token is not None else self.tokens[anchor or attempt]
+        event.update(extra)
+        return self.call(dict(v=1, op='record', event=event))
 
     def funded(self, attempt, demand=5 * M, root=None, session='session-1'):
         response = self.admit(attempt, demand, root, session)
@@ -244,16 +257,17 @@ class SettlementTests(Accounting):
         self.assertEqual(self.hold('a1')['settlement'], settlement)
         self.assertEqual(self.settled(), 2_000_001)
 
-    def test_an_overrun_is_counted_never_dropped_and_never_topped_up(self):
+    def test_an_overrun_charges_the_reservation_and_holds_the_excess_unconfirmed(self):
         self.funded('a1')
         result = self.call(complete('a1', 'c1', usage=usage(10 * M)))
         self.assertEqual(result['outcome'], 'overrun')
-        self.assertEqual({k: result['settlement'][k] for k in ('reserved', 'charged', 'released', 'overrun')},
-                         dict(reserved=6 * M, charged=10 * M, released=0, overrun=4 * M))
+        self.assertEqual({k: result['settlement'][k] for k in ('reserved', 'charged', 'released', 'overrun',
+                                                               'overrun_state')},
+                         dict(reserved=6 * M, charged=6 * M, released=0, overrun=4 * M, overrun_state='unconfirmed'))
         hold = self.hold('a1')
         self.assertEqual((hold['closed'], hold['amount'], hold['state']), (True, 0, 'released'))
-        self.assertEqual(self.settled(), 10 * M)
-        self.assertEqual(self.credit(), self.BALANCE - 10 * M)
+        self.assertEqual(self.settled(), 6 * M)  # the excess never enters R or the settled totals
+        self.assertEqual(self.credit(), 0)  # but headroom reads zero until an operator resolves it
 
     def test_an_estimate_is_labelled_and_never_releases_more_than_the_padding(self):
         self.funded('m1')
@@ -307,16 +321,13 @@ class SettlementTests(Accounting):
         self.assertEqual(body['usage']['units'], {'win:sub/5h': 3})
         self.assertEqual(body['usage']['tokens'], TOKENS)
 
-    def observed(self, event_id, attempt, receipt, cost=4 * M, **extra):
-        event = dict(event_id=event_id, attempt_id=attempt, kind='observed', stage='coordinator', funding='api',
-                     usage=usage(cost, receipts=[receipt]))
-        event.update(extra)
-        return self.call(dict(v=1, op='record', event=event))
+    def observed(self, event_id, attempt, receipt, cost=4 * M, anchor=None, **extra):
+        return self.observe_usage(event_id, attempt, anchor, usage=usage(cost, receipts=[receipt]), **extra)
 
     def test_an_observed_receipt_never_reduces_a_charge(self):
         """Review B1 probe (a): report-only usage seen first must not cancel the measured dollar charge."""
         self.funded('a1', root='root')
-        self.assertEqual(self.observed('o1', 'coord', 'r1', root_attempt_id='a1')['state'], 'recorded')
+        self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1')['state'], 'recorded')
         result = self.call(complete('a1', 'c1', usage=usage(4 * M, receipts=['r1'])))
         self.assertEqual((result['settlement']['charged'], result['settlement']['released']), (4 * M, 2 * M))
         self.assertEqual(self.settled(), 4 * M)
@@ -329,6 +340,13 @@ class SettlementTests(Accounting):
             result = self.call(complete(attempt, event_id, usage=usage(4 * M, receipts=['msg-1'])))
             self.assertEqual(result['settlement']['charged'], 4 * M)
         self.assertEqual(self.settled(), 8 * M)
+        report = self.call(settle('root', workflow=where('root')))
+        self.assertEqual(report['cost_to_date']['usd_micros'], 8 * M)  # round 2 S-A: report dedup is per attempt
+
+    def test_a_receipt_repeated_with_different_costs_is_charged_at_the_higher(self):
+        self.funded('a1', root='root')
+        result = self.call(complete('a1', 'c1', usage=usage(M, 3 * M, receipts=['r1', 'r1'])))
+        self.assertEqual(result['settlement']['charged'], 3 * M)
 
     def test_one_attempt_repeating_a_receipt_is_charged_once(self):
         self.funded('a1', root='root')
@@ -336,46 +354,178 @@ class SettlementTests(Accounting):
         self.assertEqual(result['settlement']['charged'], 3 * M)
         self.assertEqual(self.settled(), 3 * M)
 
-    def test_observed_usage_must_join_a_known_attempt(self):
-        """Review S4: `observed` cannot be aimed at an arbitrary root."""
+    def test_observed_usage_must_join_an_open_hold_with_its_authority(self):
+        """Review S4 and round-2 S-A: `observed` joins only an open hold whose dispatch authority it carries."""
         self.funded('a1', root='root')
-        self.assertEqual(self.observed('o1', 'coord', 'r1'), dict(v=1, state='blocked', reason='unknown_attempt'))
-        self.assertEqual(self.observed('o2', 'coord', 'r1', root_attempt_id='nope'),
-                         dict(v=1, state='blocked', reason='unknown_attempt'))
-        self.assertEqual(self.observed('o3', 'a1', 'r1')['state'], 'recorded')  # an attempt with a hold
-        self.assertEqual(self.call(dict(v=1, op='record', event=dict(
-            event_id='o4', attempt_id='coord', kind='observed', stage='coordinator', usage=usage(1),
-            root_task_id='root'))), dict(v=1, state='blocked', reason='invalid_request'))
+        self.funded('victim', root='root', session='session-2')
+        self.call(complete('victim', 'v1', usage=usage(4 * M, receipts=['r1'])))  # closed now
+        cases = [(self.observed('o1', 'coord', 'r1', anchor='nope', token='x' * 43), 'unknown_attempt'),
+                 (self.observed('o2', 'coord', 'r1', anchor='victim', cost=999 * M), 'attempt_closed'),
+                 (self.observed('o3', 'coord', 'r1', anchor='a1', token='x' * 43), 'authority_invalid'),
+                 (self.observed('o4', 'coord', 'r1', anchor='a1', token=self.tokens['victim']), 'authority_invalid')]
+        for result, reason in cases:
+            self.assertEqual(result, dict(v=1, state='blocked', reason=reason))
+        self.assertEqual(self.observed('o5', 'a1', 'r1')['state'], 'recorded')  # its own open hold and token
+        self.assertEqual(self.observed('o6', 'coord', 'r1', anchor='a1')['state'], 'recorded')
+        tokenless = dict(event_id='o7', attempt_id='coord', kind='observed', stage='coordinator', usage=usage(1),
+                         root_attempt_id='a1')
+        self.assertEqual(self.call(dict(v=1, op='record', event=tokenless)),
+                         dict(v=1, state='blocked', reason='invalid_request'))
+        victim = self.call(settle('root', workflow=where('root', 'session-2')))
+        self.assertEqual(victim['cost_to_date']['usd_micros'], 4 * M)
+        stored = json.dumps(self.events())
+        self.assertNotIn(self.tokens['a1'], stored)  # the token is never stored
 
 
 class OverrunTests(Accounting):
-    """Review S1: an overrun means the pre-send guard failed; it is counted in full and blocks the organization,
-    exactly as S1's run path (`complete` above the bound) does."""
+    """Round-2 S-B: an overrun charges the reservation (certain), keeps the excess `unconfirmed` outside every
+    total, reads the organization's headroom as zero and blocks it until an operator confirms or dismisses."""
     BALANCE = 8 * M
 
-    def test_an_overrun_counts_the_charge_and_blocks_only_its_organization(self):
+    def setUp(self):
+        super().setUp()
         with self.open_ledger() as ledger:
             ledger.enable_organization('other', self.POLICY, 0)
             ledger.observe('other', 100 * M, now(), issued=100 * M)
+
+    def resolve(self, attempt, decision, event_id='r1'):
+        return self.call(dict(v=1, op='resolve_overrun', attempt_id=attempt, decision=decision, event_id=event_id))
+
+    def other_admits(self, attempt):
+        obs = api_observations(organization='other')
+        obs['routes'][-1]['account'] = 'acct-' + attempt
+        return self.call(prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api'])))
+
+    def test_an_inflated_report_cannot_inflate_the_books(self):
         self.funded('a1')
-        result = self.call(complete('a1', 'c1', usage=usage(10 * M)))
-        self.assertEqual((result['outcome'], result['settlement']['overrun']), ('overrun', 4 * M))
+        result = self.call(complete('a1', 'c1', usage=usage(budget.MAX_INTEGER)))
+        self.assertEqual((result['outcome'], result['settlement']['charged'], result['settlement']['overrun']),
+                         ('overrun', 6 * M, budget.MAX_INTEGER - 6 * M))
         data = self.snapshot()
+        self.assertEqual(data['organizations']['personal']['settled']['total'], 6 * M)
+        self.assertEqual(budget.Ledger._total(data, 'personal'), 6 * M)
+        self.assertEqual(budget.Ledger._credit_raw(data, 'personal'), 2 * M)
+        self.assertEqual(budget.Ledger._headroom(data, 'personal'), 0)
         self.assertTrue(data['organizations']['personal']['blocked'])
-        self.assertEqual(budget.Ledger._credit_raw(data, 'personal'), -2 * M)
         self.assertEqual(self.admit('a2')['state'], 'pending')
         self.assertFalse(data['organizations']['other']['blocked'])
-        obs = api_observations(organization='other')
-        obs['routes'][-1]['account'] = 'acct-o'
-        other = self.call(prepare('o1', observations=obs, constraints=dict(allowed_strategy_ids=['s-api'])))
-        self.assertEqual(other['state'], 'admitted', other)
+        self.assertEqual(self.other_admits('o1')['state'], 'admitted')
+
+    def test_dismissing_drops_the_excess_and_unblocks(self):
+        self.funded('a1')
+        self.call(complete('a1', 'c1', usage=usage(budget.MAX_INTEGER)))
+        result = self.resolve('a1', 'dismiss')
+        self.assertEqual((result['state'], result['outcome']), ('recorded', 'overrun_dismissed'))
+        data = self.snapshot()
+        self.assertFalse(data['organizations']['personal']['blocked'])
+        self.assertEqual(budget.Ledger._total(data, 'personal'), 6 * M)
+        self.assertEqual(self.credit(), 2 * M)
+        self.assertEqual(self.resolve('a1', 'dismiss'), dict(result, duplicate=True))
+        self.assertEqual(self.resolve('a1', 'confirm', 'r2'),
+                         dict(v=1, state='blocked', reason='overrun_not_pending'))
+
+    def test_confirming_charges_the_excess(self):
+        self.funded('a1')
+        self.call(complete('a1', 'c1', usage=usage(7 * M)))
+        result = self.resolve('a1', 'confirm')
+        self.assertEqual((result['outcome'], result['settlement']['charged']), ('overrun_confirmed', 7 * M))
+        data = self.snapshot()
+        self.assertEqual(data['organizations']['personal']['settled']['total'], 7 * M)
+        self.assertFalse(data['organizations']['personal']['blocked'])
+        self.assertEqual(self.credit(), M)
+        s = self.hold('a1')['settlement']
+        self.assertEqual(s['charged'] - s['overrun'] + s['released'], s['reserved'])
+
+    def test_the_organization_stays_blocked_while_another_overrun_is_pending(self):
+        self.funded('a1', demand=M)
+        self.funded('a2', demand=M)
+        self.call(complete('a1', 'c1', usage=usage(2 * M)))
+        self.call(complete('a2', 'c2', usage=usage(2 * M)))
+        self.resolve('a1', 'dismiss')
+        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+        self.resolve('a2', 'dismiss', 'r2')
+        self.assertFalse(self.snapshot()['organizations']['personal']['blocked'])
+
+    def test_a_block_the_overrun_did_not_set_is_never_cleared(self):
+        self.funded('a1')
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            data['organizations']['personal']['blocked'] = True  # an S1 run overrun, for example
+        self.call(complete('a1', 'c1', usage=usage(7 * M)))
+        self.resolve('a1', 'dismiss')
+        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+
+    def test_only_a_pending_overrun_is_resolved_and_only_by_the_operator_op(self):
+        self.funded('a1')
+        self.assertEqual(self.resolve('a1', 'dismiss'), dict(v=1, state='blocked', reason='overrun_not_pending'))
+        self.assertEqual(self.resolve('nope', 'dismiss'), dict(v=1, state='blocked', reason='unknown_attempt'))
+        self.assertEqual(self.resolve('a1', 'maybe'), dict(v=1, state='blocked', reason='invalid_request'))
+        spoofed = record('a1', 'resolve_overrun', 'x1', decision='dismiss')
+        self.assertEqual(self.call(spoofed), dict(v=1, state='blocked', reason='invalid_request'))
+
+    def test_concurrent_operators_apply_one_resolution(self):
+        self.funded('a1')
+        self.call(complete('a1', 'c1', usage=usage(7 * M)))
+        self.service.close()
+        requests = [dict(v=1, op='resolve_overrun', attempt_id='a1', decision=('confirm', 'dismiss')[i % 2],
+                         event_id='r%d' % i) for i in range(8)]
+        results = self.collect([self.spawn('resolve_overrun', request) for request in requests])
+        effects = [r for r in results if r['state'] == 'recorded']
+        self.assertEqual(len(effects), 1, results)
+        self.assertTrue(all(r == dict(v=1, state='blocked', reason='overrun_not_pending') for r in results
+                            if r not in effects))
+        total = self.snapshot()['organizations']['personal']['settled']['total']
+        self.assertEqual(total, 7 * M if effects[0]['outcome'] == 'overrun_confirmed' else 6 * M)
 
 
 class ResolveCostUnknownTests(Accounting):
-    """Review S2: an operator settles a `cost_unknown` hold at max(supplied cost, admitted estimate)."""
-    def resolve(self, attempt, cost, event_id='r1'):
+    """Review S2 and round-2 S-C: an operator settles a `cost_unknown` hold at the full reservation, releasing
+    padding only for a receipt-backed cost."""
+    def resolve(self, attempt, cost, event_id='r1', **extra):
         return self.call(dict(v=1, op='resolve_cost_unknown', attempt_id=attempt, cost_usd_micros=cost,
-                              event_id=event_id))
+                              event_id=event_id, **extra))
+
+    def unknown(self, attempt):
+        self.funded(attempt)
+        self.call(complete(attempt, 'c-' + attempt))
+        self.assertEqual(self.hold(attempt)['state'], 'cost_unknown')
+
+    def test_without_receipts_the_full_reservation_is_charged(self):
+        self.unknown('a1')
+        result = self.resolve('a1', 0)
+        self.assertEqual({k: result['settlement'][k] for k in ('charged', 'released', 'cost', 'cost_source')},
+                         dict(charged=6 * M, released=0, cost=0, cost_source='operator'))
+        self.assertEqual(self.settled(), 6 * M)
+
+    def test_a_receipt_backed_cost_releases_the_padding(self):
+        self.unknown('a1')
+        result = self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt')
+        self.assertEqual((result['settlement']['charged'], result['settlement']['released']), (2 * M, 4 * M))
+        self.assertEqual(self.settled(), 2 * M)
+
+    def test_a_resolved_cost_above_the_reservation_is_an_overrun(self):
+        self.unknown('a1')
+        result = self.resolve('a1', 9 * M)
+        self.assertEqual((result['outcome'], result['settlement']['charged'], result['settlement']['overrun']),
+                         ('overrun', 6 * M, 3 * M))
+        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+
+    def test_resolution_and_a_late_complete_never_double_charge(self):
+        self.unknown('a1')
+        self.resolve('a1', 0)
+        self.assertEqual(self.call(complete('a1', 'late', usage=usage(M))),
+                         dict(v=1, state='blocked', reason='attempt_closed'))
+        self.unknown('a2')
+        self.call(complete('a2', 'known', usage=usage(M)))
+        self.assertEqual(self.resolve('a2', 0, 'r2'), dict(v=1, state='blocked', reason='hold_state_forbidden'))
+        self.assertEqual(self.settled(), 7 * M)
+
+    def test_receipts_need_the_provider_receipt_source_and_bounds(self):
+        self.unknown('a1')
+        for extra in (dict(receipts=['r']), dict(source='provider_receipt'), dict(receipts=[], source='provider_receipt'),
+                      dict(receipts=['r'], source='estimate'), dict(receipts=['x' * 129], source='provider_receipt'),
+                      dict(receipts=['r'] * 33, source='provider_receipt')):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.resolve('a1', M, **extra), dict(v=1, state='blocked', reason='invalid_request'))
 
     def test_resolving_frees_the_slot_and_settles_exactly(self):
         with self.open_ledger() as ledger:
@@ -387,14 +537,15 @@ class ResolveCostUnknownTests(Accounting):
         self.assertEqual(self.hold('a1')['state'], 'cost_unknown')
         self.assertEqual(self.admit('a3')['state'], 'pending')  # the unknown cost keeps its concurrency place
         before = self.credit()
-        result = self.resolve('a1', 2 * M)
+        result = self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt')
         self.assertEqual((result['state'], result['duplicate'], result['outcome']), ('recorded', False, 'complete'))
         self.assertEqual({k: result['settlement'][k] for k in ('charged', 'released', 'cost_source')},
-                         dict(charged=5 * M, released=M, cost_source='operator'))  # never below the estimate
-        self.assertEqual(self.credit(), before + M)
-        self.assertEqual(self.resolve('a1', 2 * M), dict(result, duplicate=True))
+                         dict(charged=2 * M, released=4 * M, cost_source='operator'))
+        self.assertEqual(self.credit(), before + 4 * M)
+        self.assertEqual(self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt'),
+                         dict(result, duplicate=True))
         self.assertEqual(self.resolve('a1', 3 * M), dict(v=1, state='blocked', reason='event_conflict'))
-        self.assertEqual(self.settled(), 5 * M)
+        self.assertEqual(self.settled(), 2 * M)
         self.assertEqual(self.admit('a3')['state'], 'admitted')
         high = self.resolve('a2', 7 * M, 'r2')  # a2 is still dispatched, not cost_unknown
         self.assertEqual(high, dict(v=1, state='blocked', reason='hold_state_forbidden'))
@@ -410,7 +561,27 @@ class ResolveCostUnknownTests(Accounting):
                 self.assertEqual(self.resolve('a1', bad), dict(v=1, state='blocked', reason='invalid_request'))
 
 
+class ProjectPinTests(Accounting):
+    def test_a_pinned_service_refuses_settle_without_a_workflow(self):
+        pinned = command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout')
+        self.addCleanup(pinned.close)
+        self.assertEqual(pinned.handle(json.dumps(settle('root')).encode()),
+                         dict(v=1, state='blocked', reason='project_required'))
+
+
 class VersionTests(Accounting):
+    def test_migration_backfills_the_root_of_holds_admitted_before_v4(self):
+        self.funded('a1', root='root')
+        expected = self.hold('a1')['root']
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data['version'] = 3
+            for field in ('root', 'stage'):
+                del data['holds']['a1'][field]
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+        hold = self.hold('a1')
+        self.assertEqual((hold['root'], hold['stage']), (expected, 'worker'))
+
     """Review S3: settled charges need version 4, so older code fails closed instead of dropping them."""
     def test_a_v3_ledger_migrates_to_v4_keeping_every_claim(self):
         self.funded('a1')
@@ -502,17 +673,20 @@ class RootSettlementTests(Accounting):
         self.funded('failed', root='root')
         self.assertEqual(self.admit('never', root='root')['state'], 'admitted')
         self.call(record('never', 'not_dispatched'))
+        # The child's own receipt, observed while it runs and again in its completion, is reported once.
+        self.assertEqual(self.observe_usage('o0', 'child', usage=usage(30, receipts=['child-1']))['state'], 'recorded')
+        self.assertEqual(self.observe_usage('o1', 'coordinator-1', 'parent',
+                                            usage=usage(5, receipts=['parent-1']))['state'], 'recorded')
         self.call(complete('child', 'e1', usage=usage(30, receipts=['child-1'])))
         self.call(complete('parent', 'e2', usage=usage(30, 50, receipts=['child-1', 'parent-1'])))
         self.call(complete('failed', 'e3', usage=usage(20), stage='worker'))
-        self.call(dict(v=1, op='record', event=dict(event_id='o1', attempt_id='coordinator-1', kind='observed',
-                                                   root_attempt_id='parent', stage='coordinator', funding='api',
-                                                   usage=usage(5, receipts=['parent-1']))))
         result = self.settle()
-        self.assertEqual(result['cost_to_date']['usd_micros'], 100)
+        # child 30 (once), parent 80 (its own receipts; another attempt's id never removes them), failed 20,
+        # coordinator 5: report dedup is per attempt (round-2 S-A).
+        self.assertEqual(result['cost_to_date']['usd_micros'], 135)
         self.assertEqual(result['attempts'], 5)
-        self.assertEqual(result['cost_to_date']['tokens']['input'], 30)  # three distinct receipts or requests
-        self.assertEqual(result['by_stage']['coordinator']['usd_micros'], 0)
+        self.assertEqual(result['cost_to_date']['tokens']['input'], 50)
+        self.assertEqual(result['by_stage']['coordinator']['usd_micros'], 5)
 
     def test_reviewer_rescue_is_incremental_rework(self):
         self.funded('w', root='root')
@@ -726,8 +900,7 @@ class BoundsTests(Accounting):
         self.funded('open', root='root')
         for i in range(5):
             self.call(complete('open', 'u%d' % i))  # repeated unknown costs: the first takes effect
-            self.call(dict(v=1, op='record', event=dict(event_id='o%d' % i, attempt_id='open', kind='observed',
-                                                       stage='worker', usage=usage(1))))
+            self.assertEqual(self.observe_usage('o%d' % i, 'open')['state'], 'recorded')
         with closing(sqlite3.connect(self.ledger)) as db:
             effects = db.execute("SELECT count(*) FROM events WHERE attempt_id='open' AND effect=1").fetchone()[0]
         self.assertEqual(effects, 1)
@@ -749,9 +922,8 @@ class BoundsTests(Accounting):
         for start in range(0, len(receipts), routing.MAX_USAGE_REQUESTS):
             chunk = receipts[start:start + routing.MAX_USAGE_REQUESTS]
             units = {'win:%s/%d-%d' % ('p' * 200, start, i): 1 for i in range(routing.MAX_USAGE_UNITS)}
-            self.call(dict(v=1, op='record', event=dict(
-                event_id='o%d' % start, attempt_id='coord', kind='observed', root_attempt_id='a',
-                stage='coordinator', usage=dict(usage(*[1] * len(chunk), receipts=chunk, units=units)))))
+            self.assertEqual(self.observe_usage('o%d' % start, 'coord', 'a', usage=dict(
+                usage(*[1] * len(chunk), receipts=chunk, units=units)))['state'], 'recorded')
         with closing(sqlite3.connect(self.ledger)) as db:
             sizes = [len(row[0]) for row in db.execute('SELECT body FROM roots')]
         self.assertTrue(sizes and max(sizes) <= budget.MAX_ROOT_BYTES, sizes)
@@ -812,7 +984,8 @@ class PropertyTests(Accounting):
             for attempt, hold in data['holds'].items():
                 if hold['closed'] and 'settlement' in hold:
                     s = hold['settlement']
-                    self.assertEqual(s['charged'] - s['overrun'] + s['released'] + hold['amount'], s['reserved'])
+                    confirmed = s['overrun'] if s.get('overrun_state') == 'confirmed' else 0
+                    self.assertEqual(s['charged'] - confirmed + s['released'] + hold['amount'], s['reserved'])
         outcomes = {r.get('outcome') for r in applied.values()}
         self.assertLessEqual({'complete', 'cost_unknown'}, outcomes)  # the sequence really settled dollar holds
         self.assertTrue(any(key in remembered for key in (e['event']['event_id'] for e in events[:-1])))
