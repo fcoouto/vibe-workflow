@@ -25,7 +25,7 @@ OVERSIZED_PYTHON = {
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
     "runtime/routing.py": 1506,
-    "runtime/setup_observation.py": 1526,
+    "runtime/setup_observation.py": 1496,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
     "runtime/usage_budget.py": 1616,

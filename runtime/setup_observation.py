@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 from runtime import package_manifest
 from runtime import onboarding as d3, startup
+from runtime.setup_canary import _public_canary_patch  # re-exported for existing callers
 
 
 BEHAVIOR_CASES = ('startup-context', 'pre-tool-enforcement', 'post-tool-handling',
@@ -152,19 +153,21 @@ def plugin_content_hash(root, budget):
     return _package_scan(root,budget)[0]
 
 
-def _package_scan(root, budget, *, runtime_sources=None):
+def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bundle-v1', exclude=None):
     root = Path(root)
     sources = list(runtime_sources) if runtime_sources is not None else None
     selected = set(sources) if sources is not None else set()
     runtime = hashlib.sha256() if sources is not None else None
     consumed, members = 0, package_manifest.export_members(root, deadline=budget.get('deadline'))
     pending = [root]
-    digest = hashlib.sha256(b'codex-plugin-bundle-v1')
+    digest = hashlib.sha256(label)
     while pending:
         startup._entry_budget_check(budget)
         path = pending.pop()
         if path != root and package_manifest.scan_skips(root, path, members):
             continue
+        if exclude is not None and path.parent == root and path.name in exclude:
+            continue  # top-level entries the client never loads
         budget['paths'] += 1
         relative = os.fsencode(str(path.relative_to(root))) if path != root else b''
         digest.update(len(relative).to_bytes(8, 'little')); digest.update(relative)
@@ -251,6 +254,10 @@ def _configuration_files(config, cwd):
 def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runtime_sources=None):
     """Compare captured local inputs; never query native processes or reconstruct precedence."""
     budget = budget if budget is not None else _budget()
+    if 'claude_config' in config:
+        from runtime import setup_claude
+        return setup_claude.current_configuration(config, cwd, budget, bundle_budget=bundle_budget,
+                                                  runtime_sources=runtime_sources)
     observed = []
     for item in _configuration_files(config, cwd):
         raw = _read(Path(item['path']), budget, absent=True)
@@ -373,6 +380,10 @@ def _collect_content(observed, accepted_identity, transaction_id, verified_asses
     from runtime.doctor import inspect_hooks
     from runtime.state import _accepted_identity, _runtime_sources, PACKAGE
     identity = _accepted_identity(accepted_identity)
+    if identity['client'] == 'claude-code':
+        from runtime import setup_claude
+        return setup_claude.collect_content(observed, identity, transaction_id, verified_assessment,
+                                            predecessor=predecessor)
     d3._require(identity['client'] == 'codex', 'Only the Codex local setup source is supported')
     binding = observed['binding']
     d3._object(binding, ('accepted_scope_digest','attempt_ref','transaction_id'))
@@ -517,7 +528,7 @@ def receipt_shape(content):
             startup._canonical_ref(content['predecessor'])
             d3._require('#setup:' in content['predecessor']['reference'],'Setup predecessor must name a full retained setup receipt')
         source = content['source']
-        d3._object(source, ('binding','observations','bootstrap','pending_reason'), ('capture_reference','command_origins','command_origin','source_capture','native_safety','native_origin','native_capture','managed','native_source_contract'))
+        d3._object(source, ('binding','observations','bootstrap','pending_reason'), ('capture_reference','command_origins','command_origin','source_capture','native_safety','native_origin','native_capture','managed','native_source_contract','claude_observation'))
         if 'native_source_contract' in source:
             d3._require(source.get('native_origin') is not None or source.get('native_capture') is not None or content['predecessor'] is not None,
                 'Limited native source lost its original lifecycle provenance')
@@ -549,7 +560,10 @@ def receipt_shape(content):
                 'Verified behavior lost its genuine frontend observation')
     else:
         d3._require('predecessor' not in content and 'source' not in content, 'Original setup history cannot be rewritten')
-    d3._require(content['identity']['client'] == 'codex' and content['native']['surface'] == 'codex-cli', 'Unsupported original setup scope')
+    surface = {'codex': 'codex-cli', 'claude-code': 'claude-code-cli'}.get(content['identity']['client'])
+    d3._require(content['native']['surface'] == surface, 'Unsupported original setup scope')
+    from runtime import setup_claude
+    setup_claude.check_receipt(content)
     startup._canonical_text(content['transaction_id'], 128)
     startup._canonical_hash(content['configuration']['digest']); startup._canonical_hook(content['configuration']['hook_owner'])
 
@@ -710,6 +724,8 @@ def setup_capture_projection(decision, *, process):
 
 def collect_retained_setup(reference, identity, new_transaction, assessment, *, witness=None, readiness=None):
     """Publish an exact successor, preserving the actual native capture transaction."""
+    d3._require(startup._canonical_plain(identity).get('client') != 'claude-code',
+        'Claude successor setup sources need a managed behavior source, which is not available yet')
     native_origin = '#native-observation:' in reference['reference']
     readiness_facts = None
     if readiness is not None:
@@ -826,56 +842,6 @@ def _monotonic_coverage(previous, successor):
         d3._require(retained is not None and retained['status']=='verified'
             and all(reference in retained['evidence'] for reference in original['evidence']),
             'Successor lost the original independently verified native bootstrap evidence')
-
-
-def _public_canary_patch(descriptor, repository_root, *, readback=None):
-    """The qualification probe supports one unambiguous public-file update hunk."""
-    d3._object(descriptor,('canary','patch','before_sha256'))
-    canary=startup._canonical_path(descriptor['canary']);root=startup._canonical_path(str(repository_root))
-    startup._canonical_hash(descriptor['before_sha256'])
-    patch=descriptor['patch']
-    d3._require(isinstance(patch,str) and 0<len(patch.encode('utf-8'))<=65536
-        and not any(ord(character)<32 and character not in '\n\t' or 127<=ord(character)<=159 for character in patch),
-        'Public canary patch contains unsupported bytes')
-    lines=patch.removesuffix('\n').split('\n')
-    d3._require(len(lines)>=6 and lines[0]=='*** Begin Patch' and lines[-1]=='*** End Patch'
-        and lines[1].startswith('*** Update File: ') and lines[2]=='@@',
-        'Public canary patch requires one Update File hunk')
-    relative=lines[1][len('*** Update File: '):]
-    # Codex trims the update header before interpreting its path.
-    d3._require(relative and relative == relative.rstrip() and not Path(relative).is_absolute() and '\\' not in relative
-        and all(part not in ('','.','..') for part in relative.split('/')) and root/relative==canary,
-        'Public canary patch selected another file')
-    hunk=lines[3:-1]
-    d3._require(all(line and line[0] in ' +-' for line in hunk)
-        and any(line.startswith('-') for line in hunk) and any(line.startswith('+') for line in hunk),
-        'Public canary patch requires a nonempty single-file change')
-    original=[line[1:] for line in hunk if line[0] in ' -']
-    changed=[line[1:] for line in hunk if line[0] in ' +']
-    d3._require(original!=changed and any(line[1:] for line in hunk if line[0] in '+-'),
-        'Public canary patch does not change original content')
-    if readback is not None:
-        d3._require(isinstance(readback,str) and len(readback.encode('utf-8'))<=65536,'Public canary readback exceeds its bound')
-        parts=re.split(r'(\r\n|\r|\n)',readback)
-        current='\n'+'\n'.join(parts[::2]).removesuffix('\n')+'\n';needle='\n'+'\n'.join(original)+'\n'
-        occurrence=current.find(needle)
-        d3._require(occurrence>=0 and current.find(needle,occurrence+1)==-1,
-            'Public canary patch does not match its original readback')
-        # Codex preserves existing endings and uses the first ending for changed lines.
-        ending=parts[1] if len(parts)>1 else '\n'
-        cursor=2*current.count('\n',0,occurrence)
-        updated=parts[:cursor]
-        for line in hunk:
-            if line[0]=='+':
-                updated.extend((line[1:],ending))
-            else:
-                if line[0]==' ':
-                    context_ending=parts[cursor+1] if cursor+1<len(parts) else ending
-                    updated.extend((parts[cursor],context_ending))
-                cursor+=2
-        updated.extend(parts[cursor:])
-        result=''.join(updated)
-        return result if result.endswith(('\r','\n')) else result+ending
 
 
 def _authorization_shape(value):
@@ -1423,7 +1389,7 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
             if checkout['root'] == root and key[2] == client]
         if len(matches) != 1:return None
         key, entry = matches[0]; activation = entry['activation']; binding = activation['qualification_binding']
-        if client != 'codex' or binding is None:return None
+        if client not in ('codex', 'claude-code') or binding is None:return None
         path, separator, name = binding['receipt']['reference'].partition('#setup:')
         if not separator:return None
         pointer = startup._canonical_path(path)
@@ -1463,12 +1429,16 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
         final = changes._scoped_entries(journal['manifest']['enrollment']['record']).get(key)
         d3._require(final is not None and final[2]['activation'] == activation, 'Setup receipt was replayed into another activation')
         config = content['configuration']
-        home = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))).resolve()
-        d3._require(str(home) == config['codex_home'] and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
+        origin = (os.environ.get('CODEX_HOME', str(Path.home()/'.codex')) if client == 'codex'
+            else os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude')
+        d3._require(str(Path(origin).resolve()) == config['codex_home' if client == 'codex' else 'claude_config']
+            and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
         # Native bundle bytes have their own 8 MiB cap; time and path limits stay shared.
         scan = _budget(budget.get('deadline'))
         current = current_configuration(config, Path(cwd or root), budget, bundle_budget=scan)
-        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner']),
+        # A non-Codex current observation also names its surface and version; startup compares the surface.
+        named = {} if client == 'codex' else dict(surface=content['native']['surface'], version=content['native']['version'])
+        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner'], **named),
             receipt=binding['receipt'], binding=binding, provenance=dict(kind='trusted-coordinator', **binding['receipt']))
         if content['version'] == 2:
             verified, complete = _coverage(content)
