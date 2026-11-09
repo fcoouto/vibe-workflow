@@ -86,36 +86,88 @@ class MembershipTests(unittest.TestCase):
         with patch.dict(os.environ, {"GIT_DIR": str(other / ".git"), "GIT_INDEX_FILE": str(other / "index")}):
             self.assertIn("a.txt", package_manifest.export_members(self.repo))
 
-    def test_git_failures_fail_closed(self):
+    def fake_git(self, body):
+        """Put a stand-in git first on PATH; it answers rev-parse with the repository root."""
+        bin_directory = self.base / "fake-bin"
+        bin_directory.mkdir(exist_ok=True)
+        script = bin_directory / "git"
+        script.write_text(f'#!/bin/sh\ncase "$*" in *rev-parse*) printf "%s\\n" "{self.repo}"; exit 0;; esac\n{body}\n',
+                          encoding="utf-8")
+        script.chmod(0o755)
+        return patch.dict(os.environ, {"PATH": f"{bin_directory}{os.pathsep}{os.environ['PATH']}"})
+
+    def assert_unavailable(self, root=None, message="Package membership is unavailable", **kwargs):
+        with self.assertRaises(package_manifest.PackageManifestError) as raised:
+            package_manifest.export_members(root or self.repo, **kwargs)
+        self.assertEqual(str(raised.exception), message)
+
+    def test_unreadable_repository_fails_closed(self):
         broken = self.base / "broken"
         broken.mkdir()
         (broken / ".git").write_text("gitdir: /nonexistent/vibe-manifest\n", encoding="utf-8")
-        cases = (
-            ("unreadable repository", broken, None, None),
-            ("missing git", self.repo, OSError("no git"), None),
-            ("timeout", self.repo, subprocess.TimeoutExpired("git", 1), None),
-            ("failed listing", self.repo, None, subprocess.CompletedProcess([], 128, b"", b"fatal")),
-            ("undecodable listing", self.repo, None, subprocess.CompletedProcess([], 0, b"\xff\0", b"")),
-        )
-        for label, root, error, result in cases:
-            with self.subTest(label):
-                run = patch.object(package_manifest.subprocess, "run", side_effect=error, return_value=result)
-                with (run if error or result else patch.dict(os.environ)):
-                    with self.assertRaises(package_manifest.PackageManifestError) as raised:
-                        package_manifest.export_members(root)
-                    self.assertEqual(str(raised.exception), "Package membership is unavailable")
+        self.assert_unavailable(broken)
         self.assertTrue(issubclass(package_manifest.PackageManifestError, ValueError))
 
+    def test_git_failures_fail_closed(self):
+        with self.subTest("missing git"), patch.dict(os.environ, {"PATH": str(self.base / "no-such-bin")}):
+            self.assert_unavailable()
+        for label, body in (("failed listing", "exit 128"), ("undecodable listing", r"printf 'a\377\000'"),
+                            ("oversized listing", "head -c 300000 /dev/zero | tr '\\0' a")):
+            with self.subTest(label), self.fake_git(body), patch.object(package_manifest, "MAX_LISTING", 200000):
+                self.assert_unavailable()
+        with self.subTest("timeout"), self.fake_git("sleep 5"):
+            started = time.monotonic()
+            self.assert_unavailable(deadline=time.monotonic() + 0.5)
+            self.assertLess(time.monotonic() - started, 3)
+
     def test_deadline_bounds_the_git_call(self):
-        with patch.object(package_manifest.subprocess, "run") as run, \
-                self.assertRaises(package_manifest.PackageManifestError) as raised:
-            package_manifest.export_members(self.repo, deadline=time.monotonic() - 1)
-        run.assert_not_called()
-        self.assertEqual(str(raised.exception), "Package membership deadline exceeded")
-        real = subprocess.run
-        with patch.object(package_manifest.subprocess, "run", side_effect=real) as run:
-            package_manifest.export_members(self.repo, deadline=time.monotonic() + 5)
-        self.assertLessEqual(run.call_args.kwargs["timeout"], 5)
+        with patch.object(package_manifest.subprocess, "Popen") as popen:
+            self.assert_unavailable(message="Package membership deadline exceeded", deadline=time.monotonic() - 1)
+        popen.assert_not_called()
+
+    def test_an_invalid_git_entry_never_lists_an_enclosing_repository(self):
+        # An installed copy below another repository, for example a dotfiles home.
+        installed = self.repo / "installed"
+        (installed / ".git").mkdir(parents=True)
+        (installed / "plugin.txt").write_text("installed", encoding="utf-8")
+        self.assert_unavailable(installed)
+
+    def test_a_different_top_level_fails_closed(self):
+        nested = self.repo / "nested"
+        nested.mkdir()
+        (nested / ".git").write_text("", encoding="utf-8")
+        with self.fake_git("exit 0"):
+            # The stand-in reports self.repo as the top level of nested.
+            self.assert_unavailable(nested)
+
+    def test_unusual_tracked_names(self):
+        names = ("with space.txt", "new\nline.txt", "tab\tname.txt", 'quote".txt', "-leading.txt",
+                 "caf\u00e9.txt", "deep/\u00fcber/x.txt")
+        for name in names:
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text(name, encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", "--all"], check=True)
+        members = package_manifest.export_members(self.repo)
+        self.assertTrue(set(names) <= members)
+        self.assertEqual(members, with_parents(package.tracked_files(self.repo)))
+
+    def test_tracked_symlinks_are_members_that_packaging_refuses(self):
+        (self.repo / "link").symlink_to("a.txt")
+        subprocess.run(["git", "-C", str(self.repo), "add", "link"], check=True)
+        self.assertIn("link", package_manifest.export_members(self.repo))
+        with self.assertRaisesRegex(ValueError, "symlinks"):
+            package.tracked_files(self.repo)
+
+    def test_git_runs_no_configured_commands_or_inherited_selectors(self):
+        marker = self.base / "marker"
+        trace = self.base / "trace"
+        subprocess.run(["git", "-C", str(self.repo), "config", "core.fsmonitor", f"touch {marker}-repo"], check=True)
+        inherited = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                     "GIT_CONFIG_VALUE_0": f"touch {marker}-env", "GIT_TRACE": str(trace),
+                     "GIT_NAMESPACE": "other", "GIT_COMMON_DIR": str(self.base / "elsewhere")}
+        with patch.dict(os.environ, inherited):
+            self.assertIn("a.txt", package_manifest.export_members(self.repo))
+        self.assertEqual(sorted(path.name for path in self.base.iterdir()), ["repo"])
 
 
 if __name__ == "__main__":
