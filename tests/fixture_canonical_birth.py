@@ -537,20 +537,3 @@ def fixture_artifact(scope, identity, value, *, db=None):
         task=state._task(db,state._scope_id(scope),identity['client'],identity['session_id'],identity['task_id'])
         owner=evidence._artifact_owner(scope,task)
     return evidence._artifact(scope,value,owner=owner,db=db)
-
-
-class CommonGitTopologyTests(unittest.TestCase):
-    """Dedicated setup gate, run before consumers of the linked common-Git topology."""
-    def test_sequential_update_adds_linked_member_to_same_authority(self):
-        owner=CanonicalBirthFixture('runTest')
-        self.addCleanup(owner.doCleanups)
-        fixture,acquired,_=owner.accepted_common_git_members()
-        members=[startup._entry_scope(value) for value in fixture.member_acquisitions.values()]
-        self.assertEqual(len(members),2)
-        self.assertNotEqual(members[0].repository_root,members[1].repository_root)
-        self.assertEqual(len({member.repository_id for member in members}),1)
-        self.assertEqual(len({member.git_common_dir for member in members}),1)
-        self.assertEqual(len({member.runtime.state_dir for member in members}),1)
-        self.assertTrue((fixture.initial_birth_plan/'transaction.json').is_file())
-        self.assertTrue((fixture.directory/'transaction.json').is_file())
-        self.assertNotEqual(fixture.initial_birth_plan,fixture.directory)

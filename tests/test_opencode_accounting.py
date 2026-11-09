@@ -14,7 +14,7 @@ from runtime import opencode_accounting as accounting
 from runtime import routing
 from runtime.adapters import opencode
 from runtime.opencode_accounting import AccountingError
-from tests import test_routing_accounting as ledger_tests
+from tests import fixture_routing_accounting as ledger_tests
 
 M = ledger_tests.M
 ROOT = Path(__file__).resolve().parents[1]

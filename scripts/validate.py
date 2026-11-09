@@ -11,6 +11,28 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+# Long files cost agents context to read. Files that were already over the limit
+# when this check was added keep their size at that time as a ceiling until they are
+# split. Lower an entry when a file shrinks and remove it once the file is under the
+# limit; do not add entries or raise them. tests/test_opencode_accounting.py is
+# temporary: split it once the PR that edits it has landed.
+MAX_PYTHON_LINES = 1000
+SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
+OVERSIZED_PYTHON = {
+    "runtime/adapters/codex.py": 1579,
+    "runtime/changes.py": 6074,
+    "runtime/delegation.py": 3369,
+    "runtime/evidence.py": 8505,
+    "runtime/onboarding.py": 2620,
+    "runtime/review_storage.py": 1297,
+    "runtime/routing.py": 1506,
+    "runtime/setup_observation.py": 1526,
+    "runtime/startup.py": 1515,
+    "runtime/state.py": 2613,
+    "runtime/usage_budget.py": 1616,
+    "tests/test_opencode_accounting.py": 1191,
+}
+
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
@@ -172,6 +194,15 @@ def validate(root=ROOT):
         if count > 150:
             raise ValueError(f"{path.parent.name} has {count} words; limit is 150")
         counts[path.parent.name] = count
+
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root)
+        if any(part.startswith(".") or part in SKIPPED_DIRECTORIES for part in relative.parts):
+            continue
+        lines = len(path.read_text(encoding="utf-8").splitlines())
+        limit = OVERSIZED_PYTHON.get(relative.as_posix(), MAX_PYTHON_LINES)
+        if lines > limit:
+            raise ValueError(f"{relative} has {lines} lines; limit is {limit}")
 
     market = read_json(root / ".agents/plugins/marketplace.json")
     entries = [item for item in market["plugins"] if item["name"] == manifest["name"]]

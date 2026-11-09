@@ -4,7 +4,7 @@ import unittest
 
 from unittest.mock import patch
 from runtime import delegation, evidence, state
-from tests import test_delegation
+from tests import test_delegation, test_delegation_review
 
 
 class DelegationScaleTests(unittest.TestCase):
@@ -92,7 +92,7 @@ class DelegationScaleTests(unittest.TestCase):
         prepared = delegation.prepare_assignment(self.scope, retry)
         self.fixture.observe_worker(prepared)
         delegation.reconcile_assignment(self.scope, self.fixture.worker_reconciliation_request(prepared))
-        review=test_delegation.Stage4NativeReviewTests
+        review=test_delegation_review.Stage4NativeReviewTests
         packet=review.review_request(self.fixture,job_id='scale-review',dispatch_id='scale-review')
         reviewed=evidence.prepare_review(self.scope,packet)
         observed=review.observed(self.fixture,reviewed)
