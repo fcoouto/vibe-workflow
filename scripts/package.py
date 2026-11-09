@@ -55,12 +55,17 @@ def tracked_changes(root):
     return bool(git(root, "status", "--porcelain", "--untracked-files=no"))
 
 
+def excluded(name):
+    # Entries ending in "/" are directories; others name one file, as in the release pathspecs.
+    return any(name.startswith(item) if item.endswith("/") else name == item for item in EXCLUDED)
+
+
 def tracked_files(root):
     # Unmerged files appear once per conflict stage.
     names = dict.fromkeys(name for name in git(root, "ls-files", "-z").decode("utf-8").split("\0") if name)
     files = []
     for name in names:
-        if name.startswith(EXCLUDED):
+        if excluded(name):
             continue
         path = root / name
         if path.is_symlink() or not path.resolve().is_relative_to(root):
