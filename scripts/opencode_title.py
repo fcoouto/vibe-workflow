@@ -24,11 +24,8 @@ def main():
                 if len(args) != 2 or args[0] != '--proof' or 'session_id' in request:
                     raise ValueError
                 proof, session = args[1], os.environ.get('OPENCODE_SESSION_ID')
-            if proof is not None and not session:
-                result = dict(ok=False, deferred=False, reason='session_unknown')
-            else:
-                result = deliver(session, request.get('title'), request.get('baseline'),
-                                 adopt=request.get('adopt', False), proof=proof)
+            result = deliver(session, request.get('title'), request.get('baseline'),
+                             adopt=request.get('adopt', False), proof=proof)
         except Exception:
             result = dict(ok=False, deferred=False, reason='invalid_request')
     except BaseException:

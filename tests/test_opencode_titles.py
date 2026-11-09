@@ -28,7 +28,8 @@ operation = args[1] if len(args) > 1 else ''
 params = dict(a.split('=', 1) for i, a in enumerate(args) if i and args[i - 1] == '--param')
 session = params.get('sessionID', '')
 if operation == 'GET':
-    session = args[2].split('/')[3] if len(args) > 2 and args[2].count('/') == 4 else ''
+    path = args[2].split('?')[0] if len(args) > 2 else ''
+    session = path.split('/')[3] if path.count('/') == 4 else ''
 if step == 'down':
     json.dump(state, open(state_path, 'w'))
     sys.stderr.write('Unable to connect to the server\n'); sys.exit(1)
@@ -348,7 +349,7 @@ class OpenCodeTitleTests(unittest.TestCase):
         fake = FakeOpenCode(self, messages=[shell_call(command)])
         self.assertEqual(self.deliver(proof=PROOF), dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
         self.assertEqual(fake.title, DESIRED)
-        self.assertEqual(fake.calls[0], ['api', 'GET', f'/api/session/{SESSION}/message'])
+        self.assertEqual(fake.calls[0], ['api', 'GET', f'/api/session/{SESSION}/message?limit=10'])
         self.assertEqual([call[1] for call in fake.calls[1:]], ['session.get', 'session.update', 'session.get'])
 
     def test_session_without_the_running_proof_is_never_written(self):
@@ -357,6 +358,9 @@ class OpenCodeTitleTests(unittest.TestCase):
                          [shell_call(f'opencode_title.py --proof {PROOF}', status='completed')],
                          [shell_call(f'opencode_title.py --proof {PROOF}x')],
                          [dict(shell_call(f'opencode_title.py --proof {PROOF}'), type='user')],
+                         [{'id': 'msg_1', 'type': 'assistant', 'content': [  # only the shell tool counts
+                             dict(shell_call(f'x --proof {PROOF}')['content'][0], name='task')]}],
+                         [shell_call(f"x --proof '{PROOF}\"")],  # unmatched quotes
                          [{'id': 'msg_1', 'type': 'assistant', 'content': [{'type': 'text', 'text': PROOF}]}]):
             with self.subTest(messages=messages):
                 fake = FakeOpenCode(self, messages=messages)
@@ -364,6 +368,33 @@ class OpenCodeTitleTests(unittest.TestCase):
                                  dict(ok=False, deferred=False, reason='session_unverified'))
                 self.assertEqual(fake.title, '')
                 self.assertEqual([call[1] for call in fake.calls], ['GET'])
+
+    def test_quoted_proof_and_odd_parts_still_verify(self):
+        odd = {'id': 'msg_0', 'type': 'assistant', 'content': [
+            'not a part', None, {'type': 'tool', 'name': 'shell', 'state': 3},
+            {'type': 'tool', 'name': 'shell', 'state': {'status': 'running', 'input': 'x'}}]}
+        for command in (f"x --proof '{PROOF}' < t.json", f'x --proof "{PROOF}"'):
+            with self.subTest(command=command):
+                fake = FakeOpenCode(self, messages=['junk', odd, shell_call(command)])
+                self.assertTrue(self.deliver(proof=PROOF)['ok'])
+                self.assertEqual(fake.title, DESIRED)
+
+    def test_proof_session_unknown_to_the_server_is_final(self):
+        fake = FakeOpenCode(self, steps=['missing'], messages=[shell_call(f'x --proof {PROOF}')])
+        self.assertEqual(self.deliver(proof=PROOF), dict(ok=False, deferred=False, reason='session_unverified'))
+        self.assertEqual(len(fake.calls), 1)
+
+    def test_proof_without_a_usable_session_is_session_unknown_after_validation(self):
+        fake = FakeOpenCode(self)
+        for session in (None, '', 'not-a-session'):
+            with self.subTest(session=session):
+                self.assertEqual(self.deliver(session=session, proof=PROOF),
+                                 dict(ok=False, deferred=False, reason='session_unknown'))
+                self.assertEqual(self.deliver(session=session, proof='short'),
+                                 dict(ok=False, deferred=False, reason='invalid_request'))
+                self.assertEqual(self.deliver(session=session, desired='My title', proof=PROOF),
+                                 dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(fake.calls, [])
 
     def test_proof_lookup_failures_defer_without_writing(self):
         for steps, reason, calls in ((['down'] * 3, 'failed', 3), (['malformed'] * 3, 'malformed', 1)):
@@ -413,6 +444,9 @@ class OpenCodeTitleCommandTests(unittest.TestCase):
                                              args=('--proof', PROOF), session=session)
                 self.assertEqual(json.loads(completed.stdout),
                                  dict(ok=False, deferred=False, reason='session_unknown'))
+                bad = self.run_command(json.dumps(dict(title=DESIRED)), os.environ['PATH'],
+                                       args=('--proof', 'short'), session=session)
+                self.assertEqual(json.loads(bad.stdout), dict(ok=False, deferred=False, reason='invalid_request'))
         self.assertEqual(fake.calls, [])
 
     def test_proof_arguments_are_strict(self):

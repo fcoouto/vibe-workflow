@@ -101,9 +101,12 @@ formatted title and, once one exists, the last verified managed title as
 `baseline`.
 
 To title your own session, run the command through your shell tool with
-`--proof` and a new token that you type into the command yourself: 16 to 64
-letters, digits, `_` or `-`, such as `vibe-title-` followed by random
-characters. Use a new token for every call, and leave `session_id` out:
+`--proof` and a new token that you make up for this call: 16 to 64 letters,
+digits, `_` or `-`, such as `vibe-title-` followed by random characters. Type it
+literally, after `--proof` and a space, not through a variable or `$(…)` (one
+pair of quotes is fine; `--proof=` is not accepted). Never reuse a token, copy
+one from a brief or message, or put one in a prompt for another agent or
+`opencode run`. Leave `session_id` out:
 
 ```text
 python3 -I -B <package>/scripts/opencode_title.py --proof <new token> < title.json
@@ -113,15 +116,15 @@ python3 -I -B <package>/scripts/opencode_title.py --proof <new token> < title.js
 {"title": "<formatted title>", "baseline": "<last verified title>"}
 ```
 
-The command takes the session from `OPENCODE_SESSION_ID`. OpenCode's shell tool
-sets it to the calling session, but a value can also be inherited from whatever
-started the server and then names another chat. So before it reads or writes
-anything, the command checks that this session is running a tool call whose
-command contains `--proof <token>`. A shell or variable cannot produce the
-token, because the check looks at the command text OpenCode recorded.
-`session_unknown` means the variable is not set and `session_unverified` means
-the check failed. With either, this session cannot be titled: do not retry it,
-and report the naming limitation.
+The command takes the session from `OPENCODE_SESSION_ID`. On the OpenCode
+Desktop server the shell tool sets it to the calling session; elsewhere it may be
+missing, or inherited from whatever started the server and then name another
+chat. So before it reads or writes anything, the command checks that this
+session is running a shell call whose command, as OpenCode recorded it, contains
+`--proof <token>`. `session_unknown` means the variable is missing or not a
+session ID; `session_unverified` means the check failed or the server does not
+know that session. With either, this session cannot be titled: do not retry it,
+and report the naming limitation. Fix an `invalid_request` before trying again.
 
 For a child session, pass the ID recorded for it in your task plan, for example
 the session ID a subagent result returned, as `session_id` without `--proof`.
@@ -167,8 +170,8 @@ overwritten. Readback catches a rename that lands after the write.
 
 Tests with a fake `opencode` executable check this command. Against OpenCode
 2.2.6 (Desktop server) on 9 November 2026, only the `--proof` check was observed:
-it accepted the calling session, and refused a missing token and another
-session's ID. A title write through this command has not been observed on
+it accepted the calling session with a quoted token, and refused a missing
+token, another session's ID and a session the server did not know. A title write through this command has not been observed on
 OpenCode.
 
 ## Record status and accepted progress

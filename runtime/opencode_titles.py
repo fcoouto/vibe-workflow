@@ -16,6 +16,7 @@ OPERATIONS = frozenset({'session.get', 'session.update', 'session.messages'})
 RETRIED = frozenset({'failed', 'timeout'})  # Other failures cannot change on retry.
 DEFAULT_TITLE = re.compile(r'(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z')
 PROOF = re.compile(r'[A-Za-z0-9_-]{16,64}')
+PROOF_PAGE = 10  # Newest messages read by the --proof check; the calling command is in the newest one.
 
 
 class TitleTransportError(OSError):
@@ -50,7 +51,7 @@ class OpenCodeTitles:
         if timeout <= 0:
             raise TitleTransportError('timeout')
         if operation == 'session.messages':  # 2.2.6 exposes no operation ID for this route.
-            argv = [self.executable, 'api', 'GET', f'/api/session/{session}/message']
+            argv = [self.executable, 'api', 'GET', f'/api/session/{session}/message?limit={PROOF_PAGE}']
         else:
             argv = [self.executable, 'api', operation, '--param', f'sessionID={session}']
         if body is not None:
@@ -85,26 +86,36 @@ class OpenCodeTitles:
         self.call('session.update', session, {'title': title})
 
     def verify(self, session, proof):
-        """Require a running tool call in `session` whose command carries `--proof <proof>`.
+        """Require a running shell call in `session` whose command carries `--proof <proof>`.
 
         Binds an `OPENCODE_SESSION_ID` value to the session executing this command: an
         inherited value names another session, which is not running it. Reads the newest
-        message page only; the calling command is still running, so it is on that page.
+        messages only; the calling command is still running, so it is among them. The
+        token may be wrapped in one pair of matching quotes.
         """
-        marker = re.compile(r'(?<![A-Za-z0-9_-])--proof\s+' + re.escape(proof) + r'(?![A-Za-z0-9_-])')
+        marker = re.compile(r'(?<![A-Za-z0-9_-])--proof\s+([\'"]?)' + re.escape(proof) + r'\1(?![A-Za-z0-9_-])')
         try:
-            messages = json.loads(self.call('session.messages', session))['data']
-            for message in messages:
-                if message.get('type') != 'assistant':
-                    continue
-                for part in message.get('content') or ():
-                    state = part.get('state') if part.get('type') == 'tool' else None
-                    command = (state.get('input') or {}).get('command') if isinstance(state, dict) else None
-                    if state and state.get('status') == 'running' and isinstance(command, str) \
-                            and marker.search(command):
-                        return
-        except (ValueError, KeyError, TypeError, AttributeError):
+            output = self.call('session.messages', session)
+        except TitleTransportError as error:
+            # A session this server does not know cannot be the one running this command.
+            raise TitleTransportError('session_unverified' if error.reason == 'not_found' else error.reason) from None
+        try:
+            messages = json.loads(output)['data']
+            if not isinstance(messages, list):
+                raise TypeError
+        except (ValueError, KeyError, TypeError):
             raise TitleTransportError('malformed') from None
+        for message in messages:
+            if not isinstance(message, dict) or message.get('type') != 'assistant':
+                continue
+            for part in message.get('content') if isinstance(message.get('content'), list) else ():
+                if not isinstance(part, dict) or part.get('type') != 'tool' or part.get('name') != 'shell':
+                    continue
+                state = part.get('state') if isinstance(part.get('state'), dict) else {}
+                command = state.get('input') if isinstance(state.get('input'), dict) else {}
+                command = command.get('command')
+                if state.get('status') == 'running' and isinstance(command, str) and marker.search(command):
+                    return
         raise TitleTransportError('session_unverified')
 
 
@@ -158,11 +169,11 @@ def deliver(session, desired, baseline=None, *, adopt=False, proof=None, transpo
     `adopt=True` is the one-time initial adoption: it may replace the title first
     observed by this call and reports it as `previous` (None if nothing was replaced
     or it exceeds the title bound). The caller keeps the returned baseline afterwards.
-    With `proof`, nothing is read or written until `OpenCodeTitles.verify` binds the
-    session to the running command; a failed binding is final (`session_unverified`).
+    With `proof`, `session` comes from the environment: a missing or unusable value is
+    `session_unknown`, and nothing is read or written until `OpenCodeTitles.verify` binds
+    the session to the running command; a failed binding is final (`session_unverified`).
     """
     try:
-        _session(session)
         _title(desired)
         if baseline is not None and not isinstance(baseline, str):
             raise ValueError('Invalid baseline')
@@ -170,6 +181,9 @@ def deliver(session, desired, baseline=None, *, adopt=False, proof=None, transpo
             raise ValueError('Adoption applies only before a baseline exists')
         if proof is not None and (not isinstance(proof, str) or not PROOF.fullmatch(proof)):
             raise ValueError('Invalid proof')
+        if proof is not None and not (isinstance(session, str) and SESSION.fullmatch(session)):
+            return dict(ok=False, deferred=False, reason='session_unknown')
+        _session(session)
     except ValueError:
         return dict(ok=False, deferred=False, reason='invalid_request')
     reason = 'failed'
