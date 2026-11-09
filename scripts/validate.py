@@ -27,7 +27,7 @@ OVERSIZED_PYTHON = {
     "runtime/routing.py": 1506,
     "runtime/setup_observation.py": 1496,
     "runtime/startup.py": 1515,
-    "runtime/state.py": 2613,
+    "runtime/state.py": 2611,
     "runtime/usage_budget.py": 1616,
 }
 

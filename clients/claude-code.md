@@ -21,7 +21,7 @@ The package also registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and
 - **Input bound.** Runtime events read up to 8 MiB because `Write` carries a whole file; larger input reports a diagnostic and is not guarded.
 - **Failure.** A crashed or timed-out hook lets the action proceed, as on Codex. `onFailure: "block"` is deliberately unused: the hooks are plugin-wide and would block ordinary editing in unenrolled projects.
 
-Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. Evidence and delegation follow in later slices; until then Claude task records cannot reach `DONE`, and only `task start`, `update`, `status` and `title` accept `client: "claude-code"`.
+Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. `task start`, `update`, `status`, `title` and the `evidence` controls (plan, check, reconcile-check, verify, cleanup, status) accept `client: "claude-code"`; a task can reach `DONE` only through evidence verification, which is rechecked against the actual candidate on every status read. Evidence review, native workers, linked evidence plans, delivery and retirement stay Codex-only: a plan that requires review cannot complete until Claude subagent observation exists.
 
 ## Qualification
 

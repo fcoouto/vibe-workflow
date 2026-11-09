@@ -1124,7 +1124,7 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
         ('job_id', 'role', 'claims', 'resource_units', 'revision', 'plan_digest', 'host_capacity', 'binding', 'retry_of', 'diagnostic')) and
         body['candidate'] == data['candidate'] and evidence._digest(body['request']) == data['request_digest'],
         'Assignment immutable binding differs from its ledger record')
-    state._identity(body['request'])
+    state._identity(body['request'], allow_claude=body['request'].get('client') == 'claude-code')
     _visibility(body['request'])
     pin_version = state._validate_pins(body['pins'])
     canonical_fields = ('accepted_identity',) if pin_version == 3 else ()
@@ -2056,7 +2056,7 @@ def _prepare_native(scope, request, *, role):
     """Reserve before native spawn, returning launch admission only on a new committed row."""
     evidence._request(request, ('dispatch_id', 'job_id', 'selection', 'control_observation',
         'discovery_expectation', 'guidance', 'resource_units', *(('brief',) if role == 'worker' else
-        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', 'workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility'))
+        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', 'workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility'), codex_only=True)
     request = json_object(evidence._raw(request))
     if 'visibility' in request:
         from runtime.worker_visibility import optional_declaration
