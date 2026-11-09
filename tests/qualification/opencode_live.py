@@ -888,6 +888,7 @@ def main(argv=None):
     parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
                                          "descendants,s33d (docs/smart-routing-qualification.md)")
     parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
+    parser.add_argument("--chatgpt-methods", action="store_true", help="0 calls: list the openai integration's methods")
     parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
@@ -935,10 +936,10 @@ def main(argv=None):
         ledger = CallLedger(args.call_ledger or "")
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
-        if sum(map(bool, (args.canary, args.stages, args.chatgpt))) > 1:
-            raise Refused("--canary, --stages and --chatgpt are separate runs")
-        if args.keep and args.chatgpt:
-            raise Refused("--keep is refused with --chatgpt: the dir would keep OpenCode's stored ChatGPT login")
+        if sum(map(bool, (args.canary, args.stages, args.chatgpt, args.chatgpt_methods))) > 1:
+            raise Refused("--canary, --stages, --chatgpt and --chatgpt-methods are separate runs")
+        if args.keep and (args.chatgpt or args.chatgpt_methods):
+            raise Refused("--keep is refused with --chatgpt and --chatgpt-methods: the dir would keep OpenCode's stored login")
         if args.chatgpt_model and not args.chatgpt:
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
@@ -949,7 +950,7 @@ def main(argv=None):
                 raise Refused("the chatgpt run allows only an openai model")
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
-        purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt else None
+        purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None
         project = canary.check_project(args.project) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
@@ -963,7 +964,7 @@ def main(argv=None):
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
-    run.chatgpt_timeout = args.chatgpt_timeout
+    run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     results = run.run()
     clean = run.output(results)
     text = json.dumps(clean, indent=2, sort_keys=True)

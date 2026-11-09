@@ -1,0 +1,171 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-09",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "chatgpt",
+    "opencode": "2.2.6",
+    "post_processing": "Shrunk after review of PR #180: the recorded list of all 239 integrations (ids with method ids and types) was replaced by its count, integrations_count; nothing else was changed. The live run (2026-11-09 20:10 UTC, harness 22c874c) recorded mode 'chatgpt'; the harness now records 'chatgpt-methods' and only the count.",
+    "provider": null,
+    "sanitized": true
+  },
+  "blockers": [],
+  "call_ledger": {
+    "chatgpt": {
+      "cap": 4,
+      "open_reservations": 0,
+      "remaining": 4,
+      "spent": 0
+    },
+    "pilot": {
+      "cap": 28,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 23
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    },
+    "qualification-2": {
+      "cap": 10,
+      "open_reservations": 0,
+      "remaining": 3,
+      "spent": 7
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": null,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 0,
+  "hooks": [],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {},
+    "unmatched_pre_records": 0
+  },
+  "ledger": [],
+  "mode": "chatgpt",
+  "off_route_requests": 0,
+  "stages": {
+    "chatgpt": {
+      "methods": {
+        "integrations_count": 239,
+        "openai": {
+          "connections": 0,
+          "http": 200,
+          "methods": [
+            {
+              "id": null,
+              "label": null,
+              "type": "key"
+            },
+            {
+              "id": null,
+              "label": null,
+              "type": "env"
+            },
+            {
+              "id": "chatgpt-token-sharing",
+              "label": "Sign in with ChatGPT",
+              "type": "oauth"
+            },
+            {
+              "id": "chatgpt-browser",
+              "label": "Codex browser (legacy)",
+              "type": "oauth"
+            },
+            {
+              "id": "chatgpt-headless",
+              "label": "Codex device code (legacy)",
+              "type": "oauth"
+            }
+          ],
+          "polls": [
+            {
+              "http": 404,
+              "methods": []
+            },
+            {
+              "http": 200,
+              "methods": [
+                null,
+                null,
+                "chatgpt-token-sharing",
+                "chatgpt-browser",
+                "chatgpt-headless"
+              ]
+            }
+          ]
+        }
+      },
+      "server": {
+        "location": "isolated project",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "sign_in_method_listed": true
+    }
+  },
+  "user_dirs": {
+    "codex": {
+      ".codex": {
+        "churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/openai": {
+        "churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    },
+    "home_report_only": {
+      ".claude": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "desktop_churn_count": 1,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/state/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}

@@ -34,6 +34,12 @@ class ProbeServer(FakeOpenCode):
         self.models = [dict(id="haiku", providerID="claude-agent", variants=["low", "high"])]
         self.oauth_pending_polls, self.oauth_result, self.oauth_polls, self.connected = 2, "complete", 0, False
         self.cancelled = []
+        # The openai integration's methods, and how many GETs answer 404 before its plugins have registered it.
+        self.openai_methods = [dict(id="chatgpt-browser", type="oauth", label="Codex browser (legacy)"),
+                               dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
+                               dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")]
+        self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
+        self.oauth_extra = {}  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -157,6 +163,11 @@ class ProbeServer(FakeOpenCode):
         parts = path.strip("/").split("/")
         if path == "/api/info":
             return 200, dict(version="2.2.6"), 1.0
+        if path == "/api/integration":
+            return 200, dict(data=[dict(id=i, name=i, methods=list(m), connections=[]) for i, m in (
+                ("openai", self.openai_methods), ("claude-agent", [dict(id="claude-login", type="external", label="Claude")]),
+                ("github-copilot", [dict(id="device", type="oauth", label="Login")]),
+                ("anthropic", [dict(type="key", label="API key")]))]), 1.0
         if parts[:2] == ["api", "integration"]:
             return self._integration(method, parts, body)
         if path == "/api/location/reload":
@@ -226,14 +237,18 @@ class ProbeServer(FakeOpenCode):
     def _integration(self, method, parts, body):
         integration = parts[2]
         if method == "GET" and len(parts) == 3:
-            methods = [dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")] \
-                if integration == "openai" else [dict(id="claude-login", type="external", label="Claude Code login")]
+            self.integration_gets += 1
+            if integration == "openai" and self.integration_gets <= self.integration_pending:
+                return 404, dict(type="not_found", message="Integration not found"), 1.0
+            methods = list(self.openai_methods) if integration == "openai" \
+                else [dict(id="claude-login", type="external", label="Claude Code login")]
             connections = [dict(type="credential", id="cred_1bf0000000000000000000Aa", method="oauth")] \
                 if integration == "openai" and self.connected else []
             return 200, dict(data=dict(id=integration, methods=methods, connections=connections)), 1.0
         if parts[3:5] == ["connect", "external"]:
             return 204, None, 1.0
         if parts[3:5] == ["connect", "oauth"] and method == "POST" and len(parts) == 5:
+            self.oauth_started.append(body)
             assert body == dict(methodID="chatgpt-token-sharing"), body
             return 200, dict(data=dict(attemptID="att_1bf0000000000000000000Aa", mode="auto",
                                        url="https://auth.openai.com/oauth/authorize?client_id=x&state=s&code_challenge=c",
@@ -243,8 +258,8 @@ class ProbeServer(FakeOpenCode):
             if self.oauth_polls <= self.oauth_pending_polls or self.oauth_result == "never":
                 return 200, dict(data=dict(status="pending")), 1.0
             self.connected = self.oauth_result == "complete"
-            return 200, dict(data=dict(status=self.oauth_result,
-                                       access="tok-not-real", refresh="ref-not-real", id_token="idt-not-real")), 1.0
+            return 200, dict(data=dict(dict(status=self.oauth_result, access="tok-not-real", refresh="ref-not-real",
+                                            id_token="idt-not-real"), **self.oauth_extra)), 1.0
         if parts[3:5] == ["connect", "oauth"] and method == "DELETE":
             self.cancelled.append(parts[5])
             return 204, None, 1.0
