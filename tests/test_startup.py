@@ -53,6 +53,11 @@ class StartupTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="vibe startup ")
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name).resolve()
+        # SessionStart appends a package drift warning from the machine's package-release record;
+        # hooks here must not read the real one (StartupWarningTests cover the warning itself).
+        state_home = patch.dict(os.environ, XDG_STATE_HOME=str(self.base / "state-home"))
+        state_home.start()
+        self.addCleanup(state_home.stop)
         self.repo = self.base / "project"
         self.repo.mkdir()
         self.git(self.repo, "init", "-q")
