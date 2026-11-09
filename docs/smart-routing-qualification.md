@@ -119,7 +119,7 @@ The durable ledger now reads `qualification-2` **7 of 10**, with qualification 9
 Also recorded:
 - **Root creation:** OpenCode emitted the derived root's `session.created` after `attach` (1 event), so the shim saw it while attached.
 - **Event stream:** no error.
-- **Shim latency (model requests):** median 0.61 ms, max 0.82 ms (n = 10).
+- **Shim latency (model requests):** median 0.61 ms, max 0.82 ms (n = 10, covering the whole run: setup probes, `descendants` and `s33d`).
 
 ### `s33d`
 
@@ -132,11 +132,13 @@ Also recorded:
 | Settlement and `status` | `window`, detached, clean | as expected | pass |
 
 Also recorded:
-- **Edit resources:** all three were **relative** paths (`.opencode/command/x.md`, `sub/opencode.json`, `agents/ok.txt`). This is consistent with the shim resolving them against `ctx.location.directory` (the session directory), but does not prove which base it used: the paths would also resolve the same against the server's project directory. The `agents/` write was allowed, which matches the rule that `agents/` is protected only inside a config directory.
+- **Edit resources:** all three were **relative** paths (`.opencode/command/x.md`, `sub/opencode.json`, `agents/ok.txt`); `inside_project` is `null` for each, because it is computed only for absolute paths. This is consistent with the shim resolving them against `ctx.location.directory` (the session directory), but does not prove which base it used: the paths would also resolve the same against the server's project directory. The `agents/` write was allowed, which matches the rule that `agents/` is protected only inside a config directory.
 - **Requests:** the model wrote all three files in one turn and finished in a second turn, so 2 of the 3 reserved calls were used.
-- **`` !`env` ``:** the marker was **`present`**: the command's shell ran with the dummy credential-like `QUAL_PROBE_TOKEN` visible. No `shell.create.before` record was logged, by the recorders or the shim. The command template's shell expansion does not pass that hook, so the shim's environment stripping does not apply to it. Only the marker was recorded, never the value. The command's prompt was held (`guard_hold`, 0 tokens).
+- **`` !`env` ``:** the marker was **`present`**: the command's shell ran with the dummy credential-like `QUAL_PROBE_TOKEN` visible. No `shell.create.before` record was logged, by the recorders or the shim. The command template's shell expansion does not pass that hook, so the shim's environment stripping does not apply to it. Only the marker was recorded, never the value.
+  - **Positive control.** This run denied the `shell` tool, so it has no positive control of its own. The control is the earlier [stages 0–4 re-run](#re-run-stages-04-harness-3f87159), where a shell-tool shell passed `shell.create.before`, was recorded, and had the same variable stripped by the shim.
+  - **What the evidence is.** The missing hook record for the command shell is evidence from this run combined with that control. It is not a second observation of the hook firing. The command's prompt was held (`guard_hold`, 0 tokens).
 - **Image generation:** `unobserved`; the isolated server lists no image model (0).
-- **Shim latency:** `permission.evaluate` median 0.18 ms, `tool.execute.before` median 0.16 ms (max 0.70 ms).
+- **Shim latency:** `permission.evaluate` median 0.18 ms, `tool.execute.before` median 0.16 ms (max 0.70 ms). Each is n = 4 and includes the `descendants` subagent sample (one evaluation and one tool call) besides the three `s33d` writes.
 
 ### What this run did not show
 - An image request being denied: there is no image model.
