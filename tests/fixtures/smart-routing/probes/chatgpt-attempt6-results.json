@@ -1,0 +1,491 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-10",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "chatgpt",
+    "opencode": "2.2.6",
+    "provenance": {
+      "attempt": 6,
+      "checks": "Redactor().leaks and sanitize.leaks returned nothing; a manual grep for emails, home paths, JWTs, sk- keys, org-/user-/acct-/req- ids, UUIDs, long hex, ses_/msg_ ids and the user name found nothing; the coordinator also scanned it",
+      "command": "--chatgpt --chatgpt-model openai/gpt-5.5",
+      "edits": "only this _meta.provenance record was added; every other byte is the harness's output, re-serialized with indent=2 and sorted keys as the harness writes it",
+      "harness": "adb61ff",
+      "outcome": "one primary request transmitted; OpenAI answered HTTP 400 model_not_found ('not supported when using Codex with a ChatGPT account'); recorded as request_failed_upstream because this harness predates model_not_supported_for_account",
+      "run_at": "2026-11-10 00:22 CET",
+      "source": "sanitized results written by tests/qualification/opencode_live.py --out (outside the repository)"
+    },
+    "provider": "openai/gpt-5.5#none",
+    "sanitized": true
+  },
+  "blockers": [
+    "the user's .local/share/opencode changed during the run"
+  ],
+  "call_ledger": {
+    "chatgpt": {
+      "cap": 6,
+      "open_reservations": 0,
+      "remaining": 3,
+      "spent": 3
+    },
+    "pilot": {
+      "cap": 28,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 23
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    },
+    "qualification-2": {
+      "cap": 10,
+      "open_reservations": 0,
+      "remaining": 3,
+      "spent": 7
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": null,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 5,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-5.5",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-5.5",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-5.5",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "none"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-5.5",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "none"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-5.5",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "none"
+    }
+  ],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 0.859,
+        "median_ms": 0.523,
+        "n": 2,
+        "p95_ms": 0.859
+      }
+    },
+    "unmatched_pre_records": 1
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "chatgpt"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "chatgpt"
+    },
+    {
+      "calls": 1,
+      "label": "chatgpt: one managed request",
+      "stage": "chatgpt"
+    }
+  ],
+  "mode": "chatgpt",
+  "off_route_requests": 3,
+  "stages": {
+    "chatgpt": {
+      "codex_window": "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)",
+      "failures": [
+        "request_failed_upstream",
+        "not_settled"
+      ],
+      "isolated_store": {
+        "data_dir": true,
+        "session_store": true
+      },
+      "model": {
+        "listed": true,
+        "openai_models": 18,
+        "variants": 5
+      },
+      "model_selection": {
+        "mode": "explicit",
+        "selected": "openai/gpt-5.5#none"
+      },
+      "native_rate_limit": "absent",
+      "oauth": {
+        "connections": 1,
+        "method": "chatgpt-token-sharing",
+        "mode": "auto",
+        "offered_methods": [
+          null,
+          null,
+          "chatgpt-token-sharing",
+          "chatgpt-browser",
+          "chatgpt-headless"
+        ],
+        "polls": 23,
+        "status": "complete"
+      },
+      "offered_methods": {
+        "http": 200,
+        "methods": [
+          {
+            "id": null,
+            "label": null,
+            "type": "key"
+          },
+          {
+            "id": null,
+            "label": null,
+            "type": "env"
+          },
+          {
+            "id": "chatgpt-token-sharing",
+            "label": "Sign in with ChatGPT",
+            "type": "oauth"
+          },
+          {
+            "id": "chatgpt-browser",
+            "label": "Codex browser (legacy)",
+            "type": "oauth"
+          },
+          {
+            "id": "chatgpt-headless",
+            "label": "Codex device code (legacy)",
+            "type": "oauth"
+          }
+        ],
+        "polls": [
+          {
+            "http": 404,
+            "methods": []
+          },
+          {
+            "http": 200,
+            "methods": [
+              null,
+              null,
+              "chatgpt-token-sharing",
+              "chatgpt-browser",
+              "chatgpt-headless"
+            ]
+          }
+        ]
+      },
+      "pass": false,
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "low"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "low"
+          }
+        ],
+        "guard_probe_reason": "guard_variant",
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "request": {
+        "costs": [],
+        "descendants": {
+          "complete": true,
+          "http": 200
+        },
+        "detached": true,
+        "kinds": [],
+        "sent": 1,
+        "settlement": null,
+        "title": "unknown",
+        "tokens": [],
+        "transmitted_kinds": [
+          "primary"
+        ],
+        "unknown": [
+          "message_tokens_missing",
+          "no_requests",
+          "title_unknown"
+        ]
+      },
+      "request_outcome_summary": {
+        "assistant_messages": 1,
+        "assistant_with_error": 1,
+        "assistant_with_tokens": 0,
+        "end_reason": "idle",
+        "error_type": [
+          "<other>"
+        ],
+        "finish": [
+          "error"
+        ],
+        "idle_outcome": "failed",
+        "session_status": null,
+        "transmitted_count": 1,
+        "wait_seconds": 1.5
+      },
+      "server": {
+        "location": "isolated project",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "session_facts": {
+        "assistant": [
+          {
+            "content_types": [],
+            "cost_present": false,
+            "error": {
+              "body": {
+                "codes": [
+                  "model_not_found",
+                  "invalid_request_error"
+                ],
+                "fields": {
+                  "code": "model_not_found",
+                  "message": {
+                    "codes": [],
+                    "masked": false,
+                    "sha256": "7c6138901249",
+                    "text": "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+                  },
+                  "type": "invalid_request_error"
+                },
+                "json": true,
+                "keys": [
+                  "code",
+                  "message",
+                  "type"
+                ],
+                "length": 246
+              },
+              "guard": null,
+              "keys": [
+                "message",
+                "response",
+                "status",
+                "type"
+              ],
+              "message": {
+                "codes": [],
+                "masked": false,
+                "sha256": "7c6138901249",
+                "text": "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+              },
+              "retry_after_ms": null,
+              "status": 400,
+              "type": "<code:93f845f4c4a1>"
+            },
+            "finish": "error",
+            "keys": [
+              "agent",
+              "content",
+              "error",
+              "finish",
+              "id",
+              "model",
+              "time",
+              "type"
+            ],
+            "model": {
+              "id": "gpt-5.5",
+              "providerID": "openai",
+              "variant": "none"
+            },
+            "raw_finish": null,
+            "retry": null,
+            "time_completed": true,
+            "time_streamed": false,
+            "tokens": {}
+          }
+        ],
+        "events": [],
+        "idle": [
+          {
+            "error_type": "<code:93f845f4c4a1>",
+            "guard": null,
+            "outcome": "failed"
+          }
+        ],
+        "messages_by_type": {
+          "assistant": 1,
+          "idle": 1,
+          "user": 1
+        },
+        "messages_http": 200,
+        "messages_keys": [
+          "cursor",
+          "data"
+        ],
+        "request_body_keys": [
+          "id",
+          "text"
+        ],
+        "session": {
+          "http": 200,
+          "keys": [
+            "cost",
+            "id",
+            "location",
+            "model",
+            "outcome",
+            "permissions",
+            "projectID",
+            "time",
+            "title",
+            "tokens"
+          ],
+          "outcome": "failed"
+        },
+        "user_message": true,
+        "variant": "none",
+        "variants_listed": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "wait": {
+          "ms": 1542,
+          "reason": "idle record after the prompt and the session not active"
+        }
+      },
+      "setup": {
+        "authority_required": "updated",
+        "health": "ok"
+      },
+      "status_clean": true,
+      "upstream_error": "model_not_found"
+    }
+  },
+  "user_dirs": {
+    "codex": {
+      ".codex": {
+        "churn_count": 2,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/openai": {
+        "churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    },
+    "home_report_only": {
+      ".claude": {
+        "added": 0,
+        "changed": 4,
+        "removed": 0
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "concurrent_session_churn": {
+          "db": 2,
+          "log": 1,
+          "shell": 6
+        },
+        "desktop_churn_count": 0,
+        "session_output_count": 6,
+        "unexpected": [
+          "shell/<redacted:hex><redacted:token>.out",
+          "shell/<redacted:hex><redacted:token>.out",
+          "shell/<redacted:hex><redacted:token>.out",
+          "shell/<redacted:hex><redacted:token>.out"
+        ],
+        "unexpected_count": 4
+      },
+      ".local/state/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}

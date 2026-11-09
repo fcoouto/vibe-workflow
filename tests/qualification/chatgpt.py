@@ -11,6 +11,7 @@ Codex rate limits are NOT read: the repository has no standalone reader of `acco
 fixture and a host bridge that receives limits from the Codex app), so the before/after window is unobserved here.
 """
 import base64
+import datetime
 import json
 import math
 import os
@@ -49,6 +50,7 @@ AUTO_RULE = ("openai provider only; chat (type absent or chat, text in and out w
 UNSUPPORTED_TEXT = "not supported when using Codex with a ChatGPT account"
 # Public catalog prices (models.dev, read 2026-11-10; input + output USD per million tokens): the ChatGPT listing has
 # no costs, so `auto` ranks by these; ids without an entry (the `-fast` twins) sort last.
+PUBLIC_COST_DATE = "2026-11-10"  # recorded with every auto selection; older than 30 days: a warning to refresh it
 PUBLIC_COST = {"gpt-6-luna": 0.6, "gpt-5.6-luna": 1.4, "gpt-6.1-terra": 6, "gpt-6-sol": 12, "gpt-6.1-sol": 12,
                "gpt-5.6-terra": 14, "gpt-5.6-sol": 24, "gpt-5.5": 35, "gpt-6-astra": 60}
 MAX_CANDIDATES = 3
@@ -197,9 +199,15 @@ def catalog_cost(model):
     return min(totals) if totals and min(totals) > 0 else None
 
 
+def today():
+    return datetime.date.today()
+
+
 def codex_chatgpt_allowed(model_id):
-    """OpenCode 2.2.6's own Codex-with-ChatGPT rule: `gpt-N.M` above 5.5, except the exact id `gpt-5.6`."""
-    match = re.match(r"gpt-(\d+)(?:\.(\d+))?", model_id or "")
+    """OpenCode 2.2.6's own Codex-with-ChatGPT rule (`gpt-N.M` above 5.5, never the exact id `gpt-5.6`), applied
+    only to well-formed ids: `gpt-<one-digit major>[.<one-digit minor>]` plus at most two lowercase suffixes of 2-10
+    letters (`gpt-6-luna`, `gpt-6.1-terra-fast`); anything else (`gpt-5.50`, `gpt-6x`, `gpt-10.0-a-b`) is not allowed."""
+    match = re.fullmatch(r"gpt-([1-9])(?:\.(\d))?(?:-[a-z]{2,10}){0,2}", model_id) if isinstance(model_id, str) else None
     if not match or model_id == "gpt-5.6":
         return False
     major, minor = int(match.group(1)), int(match.group(2) or 0)
@@ -244,7 +252,11 @@ def auto_select(listed, announce, note):
     candidates = sorted((m for m in openai if m["id"] not in excluded),
                         key=lambda m: (ranked_cost(m) if ranked_cost(m) is not None else math.inf, hint(m["id"]), m["id"]))
     ids = [m["id"] for m in candidates]
-    record = dict(mode=AUTO, rule=AUTO_RULE, candidates=ids, excluded=excluded,
+    stale = (today() - datetime.date.fromisoformat(PUBLIC_COST_DATE)).days > 30
+    if stale:
+        announce("chatgpt auto: the recorded public prices (%s) are older than 30 days; refresh PUBLIC_COST" % PUBLIC_COST_DATE)
+    record = dict(mode=AUTO, rule=AUTO_RULE, candidates=ids, excluded=excluded, public_cost_date=PUBLIC_COST_DATE,
+                  public_cost_stale=stale,
                   other_providers=sum(1 for m in listed if m.get("providerID") != "openai"),
                   costs={m["id"]: ranked_cost(m) for m in candidates})
     if not candidates or (ranked_cost(candidates[0]) is None and hint(ids[0]) == len(HINTS)):
@@ -524,7 +536,7 @@ def unsupported_for_account(facts):
         fields = body.get("fields") or {}
         texts = [(error.get("message") or {}).get("text") or "", ((fields.get("message") or {}).get("text") or "")]
         code = "model_not_found" in (body.get("codes") or []) or fields.get("code") == "model_not_found"
-        if code and any(UNSUPPORTED_TEXT in text for text in texts):
+        if error.get("status") == 400 and code and any(UNSUPPORTED_TEXT in text for text in texts):
             return True
     return False
 
@@ -637,6 +649,7 @@ def run(run_, announce=print, sleep=time.sleep):
     connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
     run_.chatgpt_model = candidates[0]
     select_model(run_, announce=announce)
+    check_candidates(run_, candidates)  # every candidate and its variant is listed, before anything is reserved
     remaining, needed = run_.ledger.remaining(PURPOSE), len(candidates) + 2
     if remaining < needed:  # two probe exposures (normally 0 sent) plus one request per candidate
         raise Refused("the chatgpt purpose has %d remain and %d needed (2 guard/pending probe exposures, normally 0 "
@@ -654,22 +667,38 @@ def run(run_, announce=print, sleep=time.sleep):
     attempts(run_, candidates, announce)
 
 
+def check_candidates(run, candidates):
+    """Every fallback candidate (and its variant, or a lowest variant in the known order) must be listed by the
+    ChatGPT login: refused before the first reservation and request otherwise."""
+    if candidates == [AUTO]:
+        return
+    _, models, _ = run.server.request("GET", "/api/model")
+    listed = [m for m in (run.data(models) or []) if isinstance(m, dict)]
+    for ref in candidates:
+        check_route(PURPOSE, parse_route(ref if "#" in ref else ref + "#" + lowest_variant(listed, ref)), listed)
+
+
 KEPT_KEYS = ("setup", "oauth", "offered_methods", "server")  # run-level notes; everything else belongs to an attempt
 
 
 def attempts(run, candidates, announce):
     """One request per candidate in order: each with its own reservation, session and guard route (only the active
     model is allowed); the next candidate only after `model_not_supported_for_account`, any other outcome stops."""
-    stage, done = run.results["stages"].setdefault(PURPOSE, {}), []
-    for index, ref in enumerate(candidates):
-        if index:
-            run.chatgpt_model = ref
-            select_model(run, announce=announce)  # the guard now allows only this model; the previous one is blocked
-        run.chatgpt_attempt = index
-        request(run)
-        record = {key: stage.pop(key) for key in list(stage) if key not in KEPT_KEYS}
-        done.append(dict(record, model="%s/%s#%s" % tuple(run.route)))
-        if "model_not_supported_for_account" not in record.get("failures", []):
-            break
-    stage.update({k: v for k, v in done[-1].items() if k != "model"})
-    stage["attempts"] = done
+    stage, done, finished = run.results["stages"].setdefault(PURPOSE, {}), [], False
+    try:
+        for index, ref in enumerate(candidates):
+            if index:
+                run.chatgpt_model = ref
+                select_model(run, announce=announce)  # the guard now allows only this model; the previous one is blocked
+            run.chatgpt_attempt = index
+            request(run)
+            record = {key: stage.pop(key) for key in list(stage) if key not in KEPT_KEYS}
+            done.append(dict(record, model="%s/%s#%s" % tuple(run.route)))
+            failures = record.get("failures", [])
+            if "model_not_supported_for_account" not in failures or "request_blocked_by_guard" in failures:
+                break  # anything but a clean account refusal stops, a guard block included
+        finished = True
+    finally:  # earlier attempts' records survive a later failure (that attempt's notes stay at the top level)
+        if finished and done:
+            stage.update({k: v for k, v in done[-1].items() if k != "model"})
+        stage["attempts"] = done

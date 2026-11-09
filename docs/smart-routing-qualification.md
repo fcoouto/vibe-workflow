@@ -172,11 +172,33 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
     - **Public prices** (models.dev, read 2026-11-10, input + output per million tokens): `gpt-6-luna` 0.6, `gpt-5.6-luna` 1.4, `gpt-6.1-terra` 6, `gpt-6-sol` and `gpt-6.1-sol` 12, `gpt-5.6-terra` 14, `gpt-5.6-sol` 24, `gpt-5.5` 35, `gpt-6-astra` 60. The `-fast` twins have no entry, which fits a priority tier of the same model but is not evidence.
     - **The user reports that GPT-6 Luna works on their account.**
     - **Recommended order:** `openai/gpt-6-luna`, `openai/gpt-5.6-luna`, `openai/gpt-6.1-terra`, each with its lowest listed variant. `none` is OpenCode's normal "no reasoning" effort, and the refusal was about the model, not the variant.
+  - **Attempt 7: pass** (10 November 2026, 00:40 CET, harness `942da99`, `--chatgpt-model openai/gpt-6-luna`; [results](../tests/fixtures/smart-routing/probes/chatgpt-attempt7-results.json); attempt 6's are in [`chatgpt-attempt6-results.json`](../tests/fixtures/smart-routing/probes/chatgpt-attempt6-results.json)).
+    - **Observed: the ChatGPT-via-OpenCode subscription route works end to end through the managed handshake for `gpt-6-luna`.**
+      - The sign-in went through `chatgpt-token-sharing`.
+      - One primary request on `gpt-6-luna#none` finished with `stop` after 2.5 s.
+      - Tokens were recorded: input 708, output 5, reasoning 0, cache 0. Cost was null, so there was no dollar charge, and there was no title request.
+      - The subscription hold settled as a window settlement; accounting had no unknowns.
+      - `status` was clean, `isolated_store` ok, `descendants` complete, and cleanup verified. There were no blockers or failures.
+      - Concurrent-session churn was counted, not failed: `{db: 2, log: 1, pruned: 1, shell: 1}`.
+      - The ledger stands at chatgpt **4 of 6**.
+    - **Not observed:**
+      - OpenCode's `native.rateLimit`, which was absent on this route;
+      - whether the Codex weekly window moved (no reader) or whether this route shares Codex's pool;
+      - the multi-model fallback live;
+      - any model other than `gpt-6-luna` succeeding.
+    - **The entitlement lesson in short:** OpenCode lists a hard-coded set of 18 ids; `gpt-5.5` was refused (400 `model_not_found`); `gpt-6-luna` was accepted.
   - **Changed for attempt 7:**
     - `auto` excludes versioned `gpt` ids that the Codex-with-ChatGPT rule disables (`not_codex_chatgpt`) and ranks by the recorded public prices.
     - The refusal is classified as `model_not_supported_for_account`: `model_not_found` with that text, apart from `request_failed_upstream`.
     - `--chatgpt-model A,B,C` (at most 3 openai models, each listed) tries the candidates in order within the same sign-in. It moves on only after `model_not_supported_for_account`; any other outcome (success, another error, a guard block, a timeout) stops. Each attempt has its own write-ahead reservation of 1 call, its own new session and derived ids, and the guard route switched to that model alone. The budget check requires `remaining >= candidates + 2`. The results keep each attempt under `attempts`, and the last one also at the top level.
     - The user-directory rules count OpenCode's own pruning of `shell/`, `tool-output/`, `log/` and `snapshot/` entries as `pruned` churn, and give each failing entry a reason code (`unexpected_reasons`).
+  - **Tightened after attempt 7** (fourth review):
+    - every fallback candidate and its variant must be listed before the first reservation;
+    - earlier attempts' records survive a later failure;
+    - a guard block stops the fallback;
+    - `model_not_supported_for_account` needs HTTP 400, `model_not_found` and OpenAI's text;
+    - the Codex-with-ChatGPT rule applies only to well-formed ids (`gpt-<digit>[.<digit>]` plus at most two lowercase suffixes);
+    - `auto` records the public price snapshot date and warns when it is older than 30 days.
 - **Recorded for the next run (added after attempt 3, before any further run).** After the managed request goes idle, and also when the wait fails, the results get sanitized `session_facts`:
   - **Messages:** the session's messages counted by type, and whether the user message exists.
   - **Each assistant message:**

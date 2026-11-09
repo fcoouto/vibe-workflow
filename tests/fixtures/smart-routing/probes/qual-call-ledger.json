@@ -4,7 +4,7 @@
    "qualification": 14,
    "pilot": 28,
    "qualification-2": 10,
-   "chatgpt": 4
+   "chatgpt": 6
   },
   "caps_in_code": {
    "qualification": 14,
@@ -36,9 +36,9 @@
    "open_reservations": 0
   },
   "chatgpt": {
-   "cap": 4,
-   "spent": 0,
-   "remaining": 4,
+   "cap": 6,
+   "spent": 4,
+   "remaining": 2,
    "open_reservations": 0
   }
  },
@@ -459,6 +459,113 @@
    "label": "s33d: env command (its prompt is held)",
    "reserved": 1,
    "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "chatgpt: one managed request",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "chatgpt: one managed request",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "cap",
+   "purpose": "chatgpt",
+   "cap": 6,
+   "reason": "Attempts 3 and 4 each spent 1 real request without a usable diagnosis; the run needs 3 remaining",
+   "approval": {
+    "at": "2026-11-10T00:05:00+01:00",
+    "by": "Fernando Couto (user)",
+    "scope": "ChatGPT-via-OpenCode qualification, one tiny OpenAI model"
+   }
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "chatgpt: one managed request",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "chatgpt",
+   "label": "chatgpt: one managed request",
+   "reserved": 1,
+   "sent": 1,
    "settled": true
   }
  ]

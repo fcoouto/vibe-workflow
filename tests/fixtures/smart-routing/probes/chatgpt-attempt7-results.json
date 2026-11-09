@@ -1,0 +1,643 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-10",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "chatgpt",
+    "opencode": "2.2.6",
+    "provenance": {
+      "attempt": 7,
+      "checks": "Redactor().leaks and sanitize.leaks returned nothing; a manual grep for emails, home paths, JWTs, sk- keys, org-/user-/acct-/req- ids, UUIDs, long hex, ses_/msg_ ids and the user name found nothing; the coordinator also scanned it",
+      "command": "--chatgpt --chatgpt-model openai/gpt-6-luna",
+      "edits": "only this _meta.provenance record was added; every other byte is the harness's output, re-serialized with indent=2 and sorted keys as the harness writes it",
+      "harness": "942da99",
+      "outcome": "pass: one primary request on gpt-6-luna#none, finish stop, tokens recorded, window settlement, cost null",
+      "run_at": "2026-11-10 00:40 CET",
+      "source": "sanitized results written by tests/qualification/opencode_live.py --out (outside the repository)"
+    },
+    "provider": "openai/gpt-6-luna#none",
+    "sanitized": true
+  },
+  "blockers": [],
+  "call_ledger": {
+    "chatgpt": {
+      "cap": 6,
+      "open_reservations": 0,
+      "remaining": 2,
+      "spent": 4
+    },
+    "pilot": {
+      "cap": 28,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 23
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    },
+    "qualification-2": {
+      "cap": 10,
+      "open_reservations": 0,
+      "remaining": 3,
+      "spent": 7
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": null,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 5,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-6-luna",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-6-luna",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-6-luna",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "none"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-6-luna",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "none"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "gpt-6-luna",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "none"
+    }
+  ],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 1.064,
+        "median_ms": 0.485,
+        "n": 2,
+        "p95_ms": 1.064
+      }
+    },
+    "unmatched_pre_records": 1
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "chatgpt"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "chatgpt"
+    },
+    {
+      "calls": 1,
+      "label": "chatgpt: one managed request",
+      "stage": "chatgpt"
+    }
+  ],
+  "mode": "chatgpt",
+  "off_route_requests": 3,
+  "stages": {
+    "chatgpt": {
+      "attempts": [
+        {
+          "codex_window": "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)",
+          "failures": [],
+          "isolated_store": {
+            "data_dir": true,
+            "session_store": true
+          },
+          "model": "openai/gpt-6-luna#none",
+          "model_selection": {
+            "mode": "explicit",
+            "selected": "openai/gpt-6-luna#none"
+          },
+          "native_rate_limit": "absent",
+          "pass": true,
+          "plugin_chain": {
+            "api_order_documented": false,
+            "failures": [],
+            "guard_probe": [
+              {
+                "decision": null,
+                "phase": "pre",
+                "variant": "low"
+              },
+              {
+                "decision": "guard_variant",
+                "phase": "post",
+                "variant": "low"
+              }
+            ],
+            "guard_probe_reason": "guard_variant",
+            "pending_probe": {
+              "outcome": "failed",
+              "prepare": "admitted",
+              "reason": "attach_required",
+              "records": [
+                "pre"
+              ],
+              "released": "recorded"
+            },
+            "plugins_http": 200,
+            "present": [
+              "qual-pre",
+              "vibe-workflow.routing",
+              "qual-post"
+            ],
+            "sent": 0
+          },
+          "request": {
+            "costs": [
+              null
+            ],
+            "descendants": {
+              "complete": true,
+              "http": 200
+            },
+            "detached": true,
+            "kinds": [
+              "primary"
+            ],
+            "sent": 1,
+            "settlement": "window",
+            "title": "zero",
+            "tokens": [
+              {
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 708,
+                "output": 5,
+                "reasoning": 0
+              }
+            ],
+            "transmitted_kinds": [
+              "primary"
+            ],
+            "unknown": []
+          },
+          "request_outcome_summary": {
+            "assistant_messages": 1,
+            "assistant_with_error": 0,
+            "assistant_with_tokens": 1,
+            "end_reason": "idle",
+            "error_type": [],
+            "finish": [
+              "stop"
+            ],
+            "idle_outcome": "succeeded",
+            "session_status": null,
+            "transmitted_count": 1,
+            "wait_seconds": 2.5
+          },
+          "session_facts": {
+            "assistant": [
+              {
+                "content_types": [
+                  "text"
+                ],
+                "cost_present": true,
+                "error": null,
+                "finish": "stop",
+                "keys": [
+                  "agent",
+                  "content",
+                  "cost",
+                  "finish",
+                  "id",
+                  "model",
+                  "native",
+                  "time",
+                  "tokens",
+                  "type"
+                ],
+                "model": {
+                  "id": "gpt-6-luna",
+                  "providerID": "openai",
+                  "variant": "none"
+                },
+                "raw_finish": null,
+                "retry": null,
+                "time_completed": true,
+                "time_streamed": true,
+                "tokens": {
+                  "cache.read": 0,
+                  "cache.write": 0,
+                  "input": 708,
+                  "output": 5,
+                  "reasoning": 0
+                }
+              }
+            ],
+            "events": [],
+            "idle": [
+              {
+                "error_type": null,
+                "guard": null,
+                "outcome": "succeeded"
+              }
+            ],
+            "messages_by_type": {
+              "assistant": 1,
+              "idle": 1,
+              "user": 1
+            },
+            "messages_http": 200,
+            "messages_keys": [
+              "cursor",
+              "data"
+            ],
+            "request_body_keys": [
+              "id",
+              "text"
+            ],
+            "session": {
+              "http": 200,
+              "keys": [
+                "cost",
+                "id",
+                "location",
+                "model",
+                "outcome",
+                "permissions",
+                "projectID",
+                "time",
+                "title",
+                "tokens"
+              ],
+              "outcome": "succeeded"
+            },
+            "user_message": true,
+            "variant": "none",
+            "variants_listed": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "wait": {
+              "ms": 2551,
+              "reason": "idle record after the prompt and the session not active"
+            }
+          },
+          "status_clean": true
+        }
+      ],
+      "codex_window": "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)",
+      "failures": [],
+      "isolated_store": {
+        "data_dir": true,
+        "session_store": true
+      },
+      "model_selection": {
+        "mode": "explicit",
+        "selected": "openai/gpt-6-luna#none"
+      },
+      "native_rate_limit": "absent",
+      "oauth": {
+        "connections": 1,
+        "method": "chatgpt-token-sharing",
+        "mode": "auto",
+        "offered_methods": [
+          null,
+          null,
+          "chatgpt-token-sharing",
+          "chatgpt-browser",
+          "chatgpt-headless"
+        ],
+        "polls": 68,
+        "status": "complete"
+      },
+      "offered_methods": {
+        "http": 200,
+        "methods": [
+          {
+            "id": null,
+            "label": null,
+            "type": "key"
+          },
+          {
+            "id": null,
+            "label": null,
+            "type": "env"
+          },
+          {
+            "id": "chatgpt-token-sharing",
+            "label": "Sign in with ChatGPT",
+            "type": "oauth"
+          },
+          {
+            "id": "chatgpt-browser",
+            "label": "Codex browser (legacy)",
+            "type": "oauth"
+          },
+          {
+            "id": "chatgpt-headless",
+            "label": "Codex device code (legacy)",
+            "type": "oauth"
+          }
+        ],
+        "polls": [
+          {
+            "http": 404,
+            "methods": []
+          },
+          {
+            "http": 200,
+            "methods": [
+              null,
+              null,
+              "chatgpt-token-sharing",
+              "chatgpt-browser",
+              "chatgpt-headless"
+            ]
+          }
+        ]
+      },
+      "pass": true,
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "low"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "low"
+          }
+        ],
+        "guard_probe_reason": "guard_variant",
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "request": {
+        "costs": [
+          null
+        ],
+        "descendants": {
+          "complete": true,
+          "http": 200
+        },
+        "detached": true,
+        "kinds": [
+          "primary"
+        ],
+        "sent": 1,
+        "settlement": "window",
+        "title": "zero",
+        "tokens": [
+          {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 708,
+            "output": 5,
+            "reasoning": 0
+          }
+        ],
+        "transmitted_kinds": [
+          "primary"
+        ],
+        "unknown": []
+      },
+      "request_outcome_summary": {
+        "assistant_messages": 1,
+        "assistant_with_error": 0,
+        "assistant_with_tokens": 1,
+        "end_reason": "idle",
+        "error_type": [],
+        "finish": [
+          "stop"
+        ],
+        "idle_outcome": "succeeded",
+        "session_status": null,
+        "transmitted_count": 1,
+        "wait_seconds": 2.5
+      },
+      "server": {
+        "location": "isolated project",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "session_facts": {
+        "assistant": [
+          {
+            "content_types": [
+              "text"
+            ],
+            "cost_present": true,
+            "error": null,
+            "finish": "stop",
+            "keys": [
+              "agent",
+              "content",
+              "cost",
+              "finish",
+              "id",
+              "model",
+              "native",
+              "time",
+              "tokens",
+              "type"
+            ],
+            "model": {
+              "id": "gpt-6-luna",
+              "providerID": "openai",
+              "variant": "none"
+            },
+            "raw_finish": null,
+            "retry": null,
+            "time_completed": true,
+            "time_streamed": true,
+            "tokens": {
+              "cache.read": 0,
+              "cache.write": 0,
+              "input": 708,
+              "output": 5,
+              "reasoning": 0
+            }
+          }
+        ],
+        "events": [],
+        "idle": [
+          {
+            "error_type": null,
+            "guard": null,
+            "outcome": "succeeded"
+          }
+        ],
+        "messages_by_type": {
+          "assistant": 1,
+          "idle": 1,
+          "user": 1
+        },
+        "messages_http": 200,
+        "messages_keys": [
+          "cursor",
+          "data"
+        ],
+        "request_body_keys": [
+          "id",
+          "text"
+        ],
+        "session": {
+          "http": 200,
+          "keys": [
+            "cost",
+            "id",
+            "location",
+            "model",
+            "outcome",
+            "permissions",
+            "projectID",
+            "time",
+            "title",
+            "tokens"
+          ],
+          "outcome": "succeeded"
+        },
+        "user_message": true,
+        "variant": "none",
+        "variants_listed": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "wait": {
+          "ms": 2551,
+          "reason": "idle record after the prompt and the session not active"
+        }
+      },
+      "setup": {
+        "authority_required": "updated",
+        "health": "ok"
+      },
+      "status_clean": true
+    }
+  },
+  "user_dirs": {
+    "codex": {
+      ".codex": {
+        "churn_count": 2,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/openai": {
+        "churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    },
+    "home_report_only": {
+      ".claude": {
+        "added": 3,
+        "changed": 4,
+        "removed": 1
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 1,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0,
+        "unexpected_reasons": {}
+      },
+      ".config/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0,
+        "unexpected_reasons": {}
+      },
+      ".local/share/opencode": {
+        "concurrent_session_churn": {
+          "db": 2,
+          "log": 1,
+          "pruned": 1,
+          "shell": 1
+        },
+        "desktop_churn_count": 0,
+        "session_output_count": 1,
+        "unexpected": [],
+        "unexpected_count": 0,
+        "unexpected_reasons": {}
+      },
+      ".local/state/opencode": {
+        "concurrent_session_churn": {},
+        "desktop_churn_count": 0,
+        "session_output_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0,
+        "unexpected_reasons": {}
+      }
+    }
+  }
+}
