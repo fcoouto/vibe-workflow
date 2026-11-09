@@ -9,7 +9,9 @@ user requests configuration. Routine tasks never load upstream research or setup
 Preserve coordinator model, effort, provider, authentication and subscriptions.
 Apply binding restrictions and current revocations first, then the latest explicit
 user route/model/effort/fallback choice within its actual authorization. A disabled
-route stays disabled; provider selection does not grant source permission.
+route stays disabled: a request to use it for one task does not enable it. Say it
+is off and ask whether to enable it; enabling also authorizes later autonomous use.
+Provider selection does not grant source permission.
 
 Otherwise assess the approved local profile against its exact assessed language,
 complexity, context, budgets, capacity and verification. Once that preference

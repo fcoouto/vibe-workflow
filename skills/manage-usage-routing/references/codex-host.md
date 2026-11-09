@@ -31,7 +31,9 @@ continue natively when the task permits.
    from the status `activation` (or a saved restriction) with the
    [shared packet procedure](../../../clients/external-delegation.md#construct-and-recheck-the-packet).
    The host rechecks the exact packet at both final grants. Each task is sent
-   live at most once per checkout: freezing it again replays its existing run.
+   live at most once per checkout: executing it again is refused
+   (`live_run_id_already_used` or `live_task_already_attempted`), and the ledger
+   keeps the original run's state for inspection.
 
 ## Dispatch and review
 

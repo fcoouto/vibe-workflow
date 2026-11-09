@@ -149,11 +149,11 @@
       ]
     },
     "clients/external-delegation.md": {
-      "sha256": "f91cdf69216bebfeb9d3b83b1de04152bfc511c131a06a53debb321c87787398",
+      "sha256": "742b931c1e153edc231793d5745104416b129f4664892f1fc8cc7236687046c3",
       "ranges": [
         [
           1,
-          119
+          121
         ]
       ]
     },
@@ -167,11 +167,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "8ec05d0f5090408989ec706721827d1ca65ea5e5afd513143e1556e3eeb85b9a",
+      "sha256": "cde4279b6c61b0fa4d975b5c492bee2644c5be34dc5c6d56fcf742256d488334",
       "ranges": [
         [
           1,
-          61
+          63
         ]
       ]
     },
@@ -390,7 +390,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "7a7d5925cd20d7be29f307e37d6af8f0bf0925d5bc7f5fcbf649c2adc0a8d67e",
+      "sha256": "e3f339002fa79bdddb25f5fdb19abb3b0fb768e506b98ded85bfd49c1d2e0920",
       "ranges": [
         [
           1,
@@ -553,11 +553,11 @@
       ]
     },
     "skills/manage-usage-routing/references/codex-host.md": {
-      "sha256": "f1e3e4f3f1652298130b35d9e6d7db10930eefb7417487c2f9af77e6dc570e82",
+      "sha256": "ae3c4cd49e4c54b6f839b7f398628d9fbffe6e6e42f1db167caf6b8b9c582317",
       "ranges": [
         [
           1,
-          91
+          93
         ]
       ]
     },
