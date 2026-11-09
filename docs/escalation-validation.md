@@ -79,3 +79,54 @@ because main contains a different surrounding source map.
 No installed-plugin restart or model comparison was performed.
 Detection remains the agent's responsibility; existing runtime admission limits
 do not detect semantic repair churn.
+
+## Capability ladder — 9 November 2026
+
+The user replaced the single stronger diagnosis with a ladder: when repairs
+stall, escalate to a more capable model, then again, at most five times per
+target, and only then stop and ask the user with enough context to decide.
+[Stuck-pattern escalation](../policies/03-agent-delegation.md#stuck-pattern-escalation)
+now stops each level immediately, climbs to the lightest authorized option
+stronger than every earlier level (a stronger model or higher reasoning
+effort, including routes of activated integrations), resumes repairs only after
+an accepted diagnosis, and asks the user only after the fifth escalation, when
+no stronger option remains, or when an original limit would be exceeded. The
+request carries the goal, every level's attempt, the remaining hypotheses,
+options with cost and risk, a recommendation and the exact decision. Re-scoping
+does not reset the count; budgets, ownership and coordinator settings still
+bind.
+
+### Instruction paths
+
+| Representative task | Expected path and outcome |
+| --- | --- |
+| Coordinator repair churn on one target | Stop at the current level; escalate one level to an independent worker with the full history; diagnosis before edits. |
+| Churn recurs after an accepted diagnosis | Climb one more level; no user involvement yet. |
+| The fifth escalation does not converge | Stop and send the decidable request; hold affected work, continue independent work. |
+| No stronger authorized option, or a limit would be exceeded | Stop early with the same request; never reset budgets. |
+| Splitting or renaming the failing criteria | The count continues. |
+| One new defect while earlier criteria hold | No stuck pattern; ordinary scoped fix. |
+| The next level exists only on an activated integration | Use it without asking, under worker selection and the shared external contract. |
+
+### Independent evaluation
+
+A fresh native agent (independent of the author, read-only, with no access to
+`docs/`, this record or the author's expected outcomes) applied the instructions
+to seven ladder histories using an abstract ascending capability list. All seven
+decisions matched the author's privately recorded expectations: stop and climb
+one level at a time, no user involvement before the stopping conditions, a
+decidable request at the fifth escalation, early stops for an exhausted ladder
+or budget, no reset by splitting the criteria, no escalation for a single new
+finding, and no extra approval for an activated-integration level. It found one
+gap, what happens after the user decides; step 4 now says the decision sets the
+next step and the history carries forward.
+
+### Checks and limits
+
+`python3 -B scripts/validate.py` passed with every skill entry within 150 words,
+and the authoring link check resolved every local file and anchor reference in
+the changed Markdown files. The instruction-reading modules passed in the final
+run (among them the startup, minimal-default, prepared-instruction, setup-source, project-review and package modules). An independent behavior and security review of
+the whole branch found no defect in the ladder text. This is instruction
+validation: no live repair, dispatch, installed-plugin restart or model
+comparison ran, and detection remains the agent's responsibility.
