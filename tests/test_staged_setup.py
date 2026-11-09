@@ -307,7 +307,7 @@ class StagedJournalTests(SetupSourceFixture):
                         operation='task-ready' if mutation=='operation' else 'task-start',attempt_ref=self.attempt_ref)
             with self.assertRaises(startup.StartupError):
                 setup.require_capability(scope,['full-onboarding'],task=task,operation='task-ready',attempt_ref=self.attempt_ref)
-            for state_name in ('PAUSED','CANCELLED','BLOCKED'):
+            for state_name in ('PAUSED','CANCELLED','WAITING'):
                 with self.subTest(state=state_name),self.assertRaises(startup.StartupError):
                     setup.require_capability(scope,['pre-tool-enforcement'],task=task|dict(state=state_name),
                         operation='task-start',attempt_ref=self.attempt_ref)

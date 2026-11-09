@@ -480,7 +480,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
             self.assertEqual([a['id'] for a in attempts], [record['id']])
             self.assertEqual(attempts[0]['ledger_assignment_digest'], record['data']['assignment']['digest'])
             self.assertEqual(attempts[0]['assignment_digest'], hashlib.sha256(request['assignment'].encode()).hexdigest())
-            state.update_task(scope, self.identity | dict(expected_revision=task['revision'], state='BLOCKED',
+            state.update_task(scope, self.identity | dict(expected_revision=task['revision'], state='WAITING',
                 reason='Coordinator update after durable admission', reference='user:hold'))
             with state._database(scope) as visible:
                 committed.append(deepcopy(state._task(visible, state._scope_id(scope), 'codex', 'parent')))
@@ -494,7 +494,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
         self.assertFalse(replay['launch_admitted'])
         self.assertTrue(replay['replayed'])
         self.assertEqual(replay['task'], committed[0])
-        self.assertEqual(replay['task']['state'], 'BLOCKED')
+        self.assertEqual(replay['task']['state'], 'WAITING')
         self.assertEqual(replay['attempt']['id'], committed[0]['evidence']['attempts'][0]['id'])
         self.assertEqual(replay['task']['delegation']['attempts_consumed'], 1)
         self.assertEqual(replay['task']['delegation']['resource_units_consumed'], 1)

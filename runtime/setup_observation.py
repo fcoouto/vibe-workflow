@@ -35,7 +35,7 @@ OPERATION_CAPABILITIES = {
     'native-worker': ('post-tool-handling','stop-ownership','interrupt-ownership'),
     'delegation-continue': ('post-tool-handling','stop-ownership','interrupt-ownership'),
     'native-review': ('post-tool-handling','stop-ownership','interrupt-ownership','review-readiness'),
-    'operation-coordinator': ('pre-tool-enforcement',), 'task-ready': ('full-onboarding',),
+    'operation-coordinator': ('pre-tool-enforcement',), 'task-ready': ('full-onboarding',),  # retired READY's gate; stored attempts name it
     'gate-ready': ('review-readiness','repository-gate','full-onboarding'),
     'delivery-ready': ('review-readiness','repository-gate','full-onboarding'),
     'delivery-merge': ('review-readiness','repository-gate','full-onboarding'),
@@ -1521,6 +1521,6 @@ def require_capability(scope, keys, *, task, operation, attempt_ref=None):
     d3._require(attempt is not None and all(task.get(key) == value for key,value in attempt['task'].items())
         and operation in attempt['operations'] and set(keys) <= set(attempt['capability_keys'])
         and attempt['limits']['deadline'] > time.time()
-        and task.get('state') not in ('BLOCKED','WAITING','PAUSED','CANCELLED'),
+        and task.get('state') not in ('WAITING','PAUSED','CANCELLED'),
         'Original qualification attempt is unavailable, expired or outside its scope')
     return _attempt_admission(content['identity'],authorization,attempt,content['transaction_id'],scope.qualification['reference'],operation)

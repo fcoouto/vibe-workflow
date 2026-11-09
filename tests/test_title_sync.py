@@ -12,8 +12,28 @@ class TitleSyncTests(unittest.TestCase):
         return dict(family='W1', member='P', topic='Thread naming', cells=2,
             applied=title, pending=None, paused=False, notified=False)
 
-    def test_only_user_action_shows_review_waiting_or_blocked(self):
-        for status in ('REVIEW', 'WAITING', 'BLOCKED'):
+    def test_retired_statuses_are_never_rendered(self):
+        for status in ('READY', 'BLOCKED'):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                title_sync.format_title('W1', 'P', 'Topic', status, 2, user_attention=True)
+
+    def test_titles_applied_before_the_retirement_still_parse(self):
+        for title, status in (('\uFFFB▰▰▰▱▱ BLOCKED · [W1] C · Search support', 'BLOCKED'),
+                              ('▰▰▱▱▱ [W1] C · Search support · READY', 'READY')):
+            with self.subTest(title=title):
+                self.assertEqual(title_sync._parsed(title)['status'], status)
+
+    def test_topic_edit_on_a_title_applied_with_a_retired_status_is_adopted(self):
+        applied = '\uFFFB▰▰▱▱▱ BLOCKED · [W1] P · Thread naming'
+        saved = self.saved() | dict(applied=applied)
+        current = applied.replace('Thread naming', 'Better naming')
+        new, desired = title_sync.reconcile(saved, current, self.task('WAITING') | dict(user_attention=True))
+        self.assertEqual(new['topic'], 'Better naming')
+        self.assertFalse(new['paused'])
+        self.assertEqual(desired, '\uFFFB▰▰▱▱▱ WAITING · [W1] P · Better naming')
+
+    def test_only_user_action_shows_review_or_waiting(self):
+        for status in ('REVIEW', 'WAITING'):
             with self.subTest(status=status):
                 self.assertEqual(title_sync.format_title('W1', 'P', 'Topic', status, 2),
                     '\uFFFB▰▰▱▱▱ [W1] P · Topic')

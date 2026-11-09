@@ -224,7 +224,7 @@ def _capture_point(db,operation,parameters):
     except BaseException as error:owner.fail(error);raise
     else:
         row=measured=None;owner.release(payload);owner.release(control)
-from runtime.task_statuses import ATTENTION_STATES, STATES
+from runtime.task_statuses import ATTENTION_STATES, RETIRED_STATES, STATES
 _HISTORICAL_STATES = {"planned", "active", "awaiting_user", "blocked", "verifying", "ready", "cancelled"}
 TABLE_SQL = {
     "checkouts": """CREATE TABLE checkouts(scope_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
@@ -1953,8 +1953,8 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
                    "pins", "reason", "reference", "conditions", "turn_id", "turn_uncertain", *(["accepted_identity"] if version == 3 else [])), ("resolution_ref", "evidence", "retirement", "delegation", "milestones", "delivery", *(["lifecycle","writer_stop","qualification_attempt","user_attention"] if version == 3 else [])))
     if 'qualification_attempt' in task:
         _canonical_ref(task['qualification_attempt'])
-        if task['state'] in {'READY', 'DONE'}:
-            raise StateError('Qualification task cannot acquire ordinary readiness or completion')
+        if task['state'] == 'DONE':
+            raise StateError('Qualification task cannot acquire ordinary completion')
     if "delivery" in task:
         from runtime.delivery import validate_record
         validate_record(task["delivery"])
@@ -1966,9 +1966,9 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
     for field in ("decision_ref", "reason", "reference", "resolution_ref"):
         if field in task:
             _text(task[field], "stored " + field)
-    legacy = (historical and version in (1, 2) and task['state'] in _HISTORICAL_STATES
+    legacy = (historical and (version in (1, 2) and task['state'] in _HISTORICAL_STATES or task['state'] in RETIRED_STATES)
         and isinstance(task['pins'], dict) and task['pins'].get('runtime_digest') != runtime_fingerprint())
-    if task['state'] in _HISTORICAL_STATES and not legacy:
+    if (task['state'] in _HISTORICAL_STATES or task['state'] in RETIRED_STATES) and not legacy:
         raise StateError('Historical task vocabulary requires its original pinned package; current authority requires approved D4 birth')
     if (task["task_id"] != task_id or task["client"] != client or task["session_id"] != session or
             (task["state"] not in STATES and not legacy) or task["mode"] not in {"editable", "read-only"} or
@@ -2040,8 +2040,8 @@ def _save(db, scope_id, task):
             raise StateError('Original qualification purpose is immutable')
     if 'qualification_attempt' in task:
         _canonical_ref(task['qualification_attempt'])
-        if task['state'] in {'READY', 'DONE'}:
-            raise StateError('Qualification task cannot acquire ordinary readiness or completion')
+        if task['state'] == 'DONE':
+            raise StateError('Qualification task cannot acquire ordinary completion')
     if 'milestones' in task:_milestones(task['milestones'])
     if task['state'] not in ATTENTION_STATES:
         task.pop('user_attention', None)
@@ -2268,7 +2268,9 @@ def update_task(scope, request):
     if "resolution_ref" in request:
         _text(request["resolution_ref"], "resolution_ref")
     if not isinstance(request["state"], str) or request["state"] not in STATES - {"DONE"}:
-        raise StateError("Only completion evidence verification can declare DONE")
+        retired = isinstance(request["state"], str) and request["state"] in RETIRED_STATES
+        raise StateError(f"Task status {request['state']} was retired; use {'WORKING' if request['state'] == 'READY' else 'WAITING'}"
+                         if retired else "Only completion evidence verification can declare DONE")
     user_attention = request.get('user_attention', False)
     if type(user_attention) is not bool or (user_attention and request['state'] not in ATTENTION_STATES):
         raise StateError('Title attention requires a boolean and an eligible task state')
@@ -2286,14 +2288,12 @@ def update_task(scope, request):
         if task["revision"] != request["expected_revision"]:
             raise StateError("Task revision conflict")
         old_state, state = task["state"], request["state"]
-        allowed = (old_state == state or state in {'WAITING','BLOCKED','PAUSED','CANCELLED'} or
-            (old_state,state) in {('TRIAGE','READY'),('TRIAGE','WORKING'),('TRIAGE','REVIEW'),('READY','WORKING'),
-                ('READY','REVIEW'),('WORKING','REVIEW'),('REVIEW','WORKING'),('DONE','WORKING'),('DONE','REVIEW')} or
-            (old_state in {'WAITING','BLOCKED','PAUSED'} and state in {'TRIAGE','READY','WORKING','REVIEW'} and 'resolution_ref' in request))
+        allowed = (old_state == state or state in {'WAITING','PAUSED','CANCELLED'} or
+            (old_state,state) in {('TRIAGE','WORKING'),('TRIAGE','REVIEW'),('WORKING','REVIEW'),('REVIEW','WORKING'),
+                ('DONE','WORKING'),('DONE','REVIEW')} or
+            (old_state in {'WAITING','PAUSED'} and state in {'TRIAGE','WORKING','REVIEW'} and 'resolution_ref' in request))
         if old_state == 'CANCELLED' or not allowed:
             raise StateError("Task state transition is not allowed")
-        if state == 'READY':
-            _ordinary_capability(scope, task, 'task-ready')
         task.update(state=state, reason=request["reason"], reference=request["reference"])
         if 'user_attention' in request and state in ATTENTION_STATES:
             task['user_attention'] = user_attention
@@ -2322,7 +2322,7 @@ def update_task(scope, request):
             seen.add(resolution["id"])
             conditions[resolution["id"]].update(status="resolved", resolution_ref=resolution["reference"])
         task["conditions"] = list(conditions.values())
-        if state in {'BLOCKED','WAITING','PAUSED','CANCELLED'}:
+        if state in {'WAITING','PAUSED','CANCELLED'}:
             for condition in task["conditions"]:
                 if "continuation" in condition:
                     condition["continuation"]["revoked"] = True

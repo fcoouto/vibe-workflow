@@ -168,7 +168,7 @@ class StateTests(unittest.TestCase):
         self.update(state='WORKING')
         self.update(state='REVIEW')
         self.update(state='WORKING')
-        self.update(state='BLOCKED')
+        self.update(state='WAITING')
         with self.assertRaises(self.api().StateError):
             self.update(state='WORKING')
         self.update(state='WORKING', resolution_ref="user:resolved")
@@ -297,7 +297,7 @@ class StateTests(unittest.TestCase):
         self.assertEqual(self.event(**child).action, 'pass')
         self.assertEqual(self.event('PostToolUse', **child).action, 'pass')
         self.assertIsNone(self.status(session='child')['task'])
-        self.update(state='BLOCKED')
+        self.update(state='WAITING')
         self.assertEqual(self.event(**child, tool_call_id='second').action, 'deny')
 
     def test_receipts_deduplicate_conflicts_missing_identity_and_late_events(self):
@@ -385,8 +385,8 @@ class StateTests(unittest.TestCase):
         for path in self.scope.runtime.state_dir.rglob("*"):
             if path.is_file(): self.assertNotIn(b"PRIVATE_SENTINEL", path.read_bytes())
 
-    def test_cancelled_waiting_blocked_and_decisions_suppress_stop(self):
-        for state in ('BLOCKED', 'WAITING', 'CANCELLED'):
+    def test_cancelled_waiting_and_decisions_suppress_stop(self):
+        for state in ('WAITING', 'CANCELLED'):
             with self.subTest(state=state):
                 self.arm()
                 self.update(state=state)

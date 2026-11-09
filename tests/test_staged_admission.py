@@ -49,12 +49,11 @@ class StagedAdmissionTests(TestCase):
             with self.assertRaisesRegex(state.StateError, 'staged capability denied'):
                 delegation.reserve_coordinator(self.scope, request)
 
-    def test_ready_denial_preserves_task(self):
+    def test_retired_ready_is_refused_and_preserves_task(self):
         before = state.task_status(self.scope, 'codex', 'parent')['task']
-        with self.deny():
-            with self.assertRaisesRegex(state.StateError, 'staged capability denied'):
-                state.update_task(self.scope, self.fixture.request(state='READY',
-                    reason='Accepted next step', reference='user:accepted'))
+        with self.assertRaisesRegex(state.StateError, 'retired'):
+            state.update_task(self.scope, self.fixture.request(state='READY',
+                reason='Accepted next step', reference='user:accepted'))
         self.assertEqual(state.task_status(self.scope, 'codex', 'parent')['task'], before)
 
     def test_gate_denied_before_closed_source_factory(self):
@@ -107,15 +106,16 @@ class StagedAdmissionTests(TestCase):
         task = state.task_status(self.scope, 'codex', 'parent')['task']
         self.assertEqual(task['conditions'][0]['continuation']['consumed'], 0)
 
-    def test_fully_qualified_legacy_task_keeps_ordinary_ready_behavior(self):
+    def test_fully_qualified_legacy_task_keeps_ordinary_behavior(self):
         task = state.task_status(self.scope, 'codex', 'parent')['task']
         admission = state._capability(self.scope, task, 'task-start')
         self.assertEqual(admission.mode, 'ordinary')
         self.assertIsNone(admission.limits)
         self.assertNotIn('qualification_attempt', task)
-        result = state.update_task(self.scope, self.fixture.request(state='READY',
+        state._ordinary_capability(self.scope, task, 'task-ready')
+        result = state.update_task(self.scope, self.fixture.request(state='WORKING',
             reason='Accepted ordinary next step', reference='user:accepted'))
-        self.assertEqual(result['task']['state'], 'READY')
+        self.assertEqual(result['task']['state'], 'WORKING')
 
 
 class GenuineStagedAdmissionTests(TestCase):

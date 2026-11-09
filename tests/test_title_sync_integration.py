@@ -108,8 +108,8 @@ class TitleIntegrationTests(unittest.TestCase):
     def test_child_role_survives_status_transitions_and_resume(self):
         self.task['state'] = 'TRIAGE'
         self.call('configure', topic='Title', parent_session_id='parent', member='C')
-        for status in ('READY', 'WORKING', 'REVIEW', 'WAITING', 'BLOCKED', 'PAUSED', 'DONE', 'CANCELLED'):
-            attention = status in ('REVIEW', 'WAITING', 'BLOCKED')
+        for status in ('WORKING', 'REVIEW', 'WAITING', 'PAUSED', 'DONE', 'CANCELLED'):
+            attention = status in ('REVIEW', 'WAITING')
             self.task.update(state=status, user_attention=attention, revision=self.task['revision'] + 1)
             self.call()
             label = f'{status} · ' if attention else ''
@@ -520,7 +520,7 @@ class BoundTaskTitleTests(unittest.TestCase):
         identity = {key: original[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')}
         for status, attention, cells in (('WORKING', False, '▰▱▱▱▱'), ('REVIEW', False, '▱▱▱▱▱'),
                 ('REVIEW', True, '▱▱▱▱▱'), ('WAITING', True, '▱▱▱▱▱'), ('WAITING', False, '▱▱▱▱▱'),
-                ('BLOCKED', True, '▱▱▱▱▱'), ('WORKING', False, '▰▱▱▱▱')):
+                ('WAITING', True, '▱▱▱▱▱'), ('WORKING', False, '▰▱▱▱▱')):
             with self.subTest(status=status, attention=attention):
                 task = self.fixture.status()['task']
                 self.command(['task', 'update'], identity | dict(expected_revision=task['revision'],
@@ -636,7 +636,7 @@ class CompletedTaskTitleTests(unittest.TestCase):
         fixture.plan()
         fixture.checked()
         fixture.review()
-        for status in ('WAITING', 'BLOCKED', 'PAUSED'):
+        for status in ('WAITING', 'PAUSED'):
             task = state.task_status(fixture.scope, 'codex', 'parent')['task']
             state.update_task(fixture.scope, fixture.request(state=status, reason='Waiting for user', reference='user:wait'))
             with self.subTest(status=status), self.assertRaisesRegex(ValueError, '[Rr]esol'):

@@ -83,8 +83,8 @@ class CanonicalCompositionTests(CanonicalBirthFixture):
             task = state.update_task(scope,identity | dict(expected_revision=task['revision'],state=status,
                 reason='Canonical public transition',reference='fixture:accepted') | fields)['task']
             return task
-        update('READY',milestones=[dict(id='slice',weight=1,accepted=True,reference='fixture:milestone')])
-        self.assertEqual(task['state'],'READY')
+        update('WORKING',milestones=[dict(id='slice',weight=1,accepted=True,reference='fixture:milestone')])
+        self.assertEqual(task['state'],'WORKING')
         self.assertIsNone(task['lifecycle']['safe_closed_at'])
         with self.assertRaisesRegex(state.StateError,'verification'):
             update('DONE')
