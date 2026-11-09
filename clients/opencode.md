@@ -120,19 +120,20 @@ So a client of the server without the token, such as an interactive agent or a w
 [`runtime/opencode_accounting.py`](../runtime/opencode_accounting.py) turns a re-read OpenCode attempt into the usage report the routing command's `record` takes. Like the adapter, it is pure, and it reads only the adapter's normalized messages and events. Errors are `AccountingError` with a fixed reason that never repeats the payload.
 
 - **Source of record.** Usage comes from stored message tokens and the session's token total. `session.usage.updated` is volatile and never replayed, so it is never used. Step events carry the same tokens but are not counted either.
-- **`usage_from_messages(messages, session_total, session_id=…, funding=…, complete=…, session_cost=…, children=…)`** accounts one attempt.
+- **`usage_from_messages(messages, session_total, session_id=…, funding=…, complete=…, session_cost=…, children=…, lineage=…)`** accounts one attempt.
   - Each assistant message is a `primary` request and each compaction message a `compaction` request, with the message ID as `receipt`, in creation order.
   - Above 32 requests (one report's limit) they are grouped by kind, model and variant, without receipts. Above 32 routes they are grouped by kind with model `unknown`, every cost `null` and the reason `too_many_routes`.
   - The result's `usage` is the S3.6a `{source, requests}` object, or `null` when nothing was requested. The result also has `totals`, the root's `title`, per-session `sessions`, `message_ids`, `unknown` reasons, `reported_cost` and the latest `rate_limit` observation.
   - Identical duplicate messages count once; a message ID with different content is refused.
   - Normalized messages carry no session ID, so a message belongs to the session state that lists it. The same message under two sessions is refused.
-- **Child sessions.** A parent's token total excludes its subagent sessions (the probes show this), so the attempt's spend includes them only when the caller passes them as `children`.
-  - A child is found from a subagent call's `child_session_id` in any included session, at any depth.
+- **Child sessions.** A parent's token total excludes its subagent sessions (the probes show this), so the attempt's spend includes them only when the caller passes them as `children`, each as `normalize_session` output plus its messages.
+  - A child links to its parent in two ways, at any depth: a subagent call's `child_session_id` in an included session, or the child's own `parent_session_id` (the `parentID` from `session.get`). A `subagent: true` command creates its child directly, with no subagent call in the parent, so `parentID` is its only link (live re-qualification, 9 November 2026).
   - These make every cost unknown:
     - a spawned session that is not included (`child_session_unaccounted`);
     - a subagent call with no child session, for example one that errored, was aborted or is still starting (also `child_session_unaccounted`), because it may have spent before losing its link;
     - tool calls the adapter dropped (`tool_calls_dropped`).
-  - Every included session must be reachable from the root through these links. An unreachable session (including an island of sessions spawning each other), a cycle, or a link back to the root is refused. A child that two sessions reference counts once.
+  - Every included session must be reachable from the root through these links. An unreachable session (including an island of sessions spawning or parenting each other), a cycle, a link back to the root, a `parent_session_id` outside the attempt or contradicting a subagent call's link, and a root whose parent is in the attempt are all refused. A child that two sessions reference counts once.
+  - **Lineage.** `lineage` is the launcher's list of `{session_id, parent_session_id}` for every session it knows of under the root, from session listing and lineage events. Command children count like any other descendant. Any listed session whose recorded parent chain reaches an included session, but that is not itself included, adds `child_session_unaccounted`; sessions whose chain leaves the list are ignored. A listed session with two parents, a parent that contradicts an included session's link, or a cycle is refused (`invalid lineage`); more than 1024 entries is `too many sessions`. Launchers must supply `lineage`: without it the result carries `lineage_not_checked`, which makes an API route's cost unknown (the hold ends `cost_unknown`) rather than silently complete, and is only a flag on subscription routes.
   - Each child's tokens, title remainder and unknowns count like the root's.
 - **Finished messages.** A message is finished when it has a completion time or a finish reason, or when an idle message was created after it. The recorded compaction message has neither of its own, and the idle message after it is the only sign that it ended. An unfinished message is still counted with its current tokens, but its session's title is unknown and every cost becomes `null` (`message_in_progress`).
 - **Title tokens by subtraction.** A title request creates no message, so its tokens are the session total minus the sum of its messages, per token class (`title_tokens`).
@@ -140,7 +141,7 @@ So a client of the server without the token, such as an interactive agent or a w
     - any class would go negative;
     - the message list may be incomplete (`complete: false` for a paging gap);
     - a message's tokens are missing, or a message has not finished;
-    - an unknown record, or tokens on a non-model message, appear;
+    - an unknown record, or tokens on a non-model message, appear. The adapter returns a `synthetic` message (how a command child's result reaches its parent; only its type was recorded) as `kind: "synthetic"`: it is never a request and never an unknown record, but tokens on it count as unexpected;
     - the session total lacks a class.
   - A non-zero remainder becomes one `title` request with model `unknown`.
   - Whether `generate` requests also create no message is unverified. If they do, their tokens are in this remainder too.
@@ -152,22 +153,26 @@ So a client of the server without the token, such as an interactive agent or a w
   - When any cost is unknown, every cost is `null`, so the hold stays `cost_unknown` and is never released on a zero.
   - A message with no tokens and cost 0 stays 0.
 - **Event gaps.** `track_events(events, state)` checks `durable.seq` per aggregate and returns `resync_needed` with the aggregate, the last in-order sequence number and the reason. The reasons are `gap`, `out_of_order`, `seq_conflict` (same number, another event), `reset` (0 again), `version_changed` and `joined_late` (first seen after 0). An exact duplicate is only counted, and volatile events are ignored. The input state is never changed.
-- **Resync.** After a gap, and always at attempt end, the launcher re-reads the sessions and their messages and calls `reconcile_with_state(previous, {session_id, messages, tokens, cost?, complete?, children?}, funding=…, tracker=…)`.
+- **Resync.** After a gap, and always at attempt end, the launcher re-reads the sessions and their messages and calls `reconcile_with_state(previous, {session_id, messages, tokens, cost?, complete?, children?, lineage?}, funding=…, tracker=…)`.
   - Totals are recomputed from the state, never accumulated, so repeating a resync changes nothing.
   - The result reports token deltas, added and missing messages, and `regressed` classes (a deleted or reverted message). These are reported, never charged back; acting on them belongs to S3.6b-2.
   - With `tracker`, it also re-baselines every included session (`mark_resynced`).
 - **Rate limits.** `rate_limit_observation(record)` passes Claude Agent `native.rateLimit` through as an observation with explicit units: 0–1 fractions, resets in epoch seconds, and the observation time (completion, else creation) in epoch milliseconds. Windows the adapter could not read, such as a percentage, are listed as unknown. A utilization above 1, or a reset that looks like milliseconds, is refused. Window headroom comes from this telemetry, never from token arithmetic.
 - **`normalize_session(session)`** reads a `session.get` record into `{session_id, parent_session_id, tokens, cost}`. It validates the totals with the adapter's message normalizer, because the adapter has no session normalizer.
-- **`consistency_report(session_state)`** returns bounded diagnostics: message counts by type, duplicates, conflicts, unknown records, missing tokens or models, unfinished messages, spawned, included and unaccounted child sessions, subagent calls without a child session, dropped tool calls, and whether the title remainder is known. It counts problems instead of raising, and carries IDs, counts and field names only.
+- **`consistency_report(session_state)`** returns bounded diagnostics: message counts by type, duplicates, conflicts, unknown records, missing tokens or models, unfinished messages, spawned, included and unaccounted child sessions, listed descendants that are not included (`lineage_unaccounted`, `null` without `lineage`), subagent calls without a child session, dropped tool calls, and whether the title remainder is known. It counts problems instead of raising, and carries IDs, counts and field names only.
 
 **Wiring (not yet connected).**
 1. The launcher waits until the attempt's sessions are idle: the root's run has ended and no subagent is still running.
-2. It re-reads the root session with `session.get`, then every page of its messages, then every spawned descendant session the same way.
+2. It re-reads the root session with `session.get`, then every page of its messages, then every descendant session the same way, including command children found only through `parentID`.
 3. It normalizes these with the adapter and `normalize_session`.
-4. It calls `usage_from_messages` with the hold's funding and the descendants as `children`.
+4. It calls `usage_from_messages` with the hold's funding, the descendants as `children` and every session it knows of under the root as `lineage`.
 5. It sends `result["usage"]` in `record complete {usage}`.
 
 It sets `complete: false` for any session whose paging was not exhaustive. Re-reading before the sessions are idle gives an unknown cost rather than a low one. During the attempt it feeds `/api/event` records to `track_events` and resyncs when one is flagged. This assumes one root session per attempt; a session reused across attempts would need the previous accounting as a baseline. The ledger side and the launcher belong to S3.6b-2 and later tasks.
+
+Observed in the live re-qualification (9 November 2026), for launchers:
+- A `subagent: true` command does not pass through `tool.execute.before`, so the shim's spawn checks never see it. The shim stopped the child at its first model request through the parent lineage it learned from `session.created`. The blocked child's failure still started an extra parent turn on the attempt's route, which costs the parent.
+- RPC refusals such as `attach_refused` reach the caller as HTTP 500 `rpc.internal` ("RPC call failed") with no reason code, so a launcher cannot tell a refusal from a routing-child failure and must treat both as "do not send".
 
 ## Evidence limits
 
