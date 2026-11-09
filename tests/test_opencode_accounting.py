@@ -579,6 +579,12 @@ class Hostile(unittest.TestCase):
         self.assertEqual(assert_fixed_error(self, accounting.usage_from_messages, big, None, session_id="ses_b"),
                          "total too large")
 
+    def test_costs_beyond_the_ledger_integer_bound(self):
+        for funding in ("subscription", "api"):
+            priced = [synthetic("msg_p1", tokens(1, 1, 0, 0, 0), cost=1e10)]
+            self.assertEqual(assert_fixed_error(self, accounting.usage_from_messages, priced, None, session_id="ses_p",
+                                                funding=funding), "total too large")
+
     def test_bad_events_and_tracker_state(self):
         for bad in (dict(event("ses_a", 0), durable_seq=True), dict(event("ses_a", 0), durable_seq=-1),
                     dict(event("ses_a", 0), durable_seq=10 ** 30), dict(event("ses_a", 0), durable_aggregate_id=None),
