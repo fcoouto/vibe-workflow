@@ -152,7 +152,7 @@ affected choice as inapplicable or pending, respectively.
    command and scope. The graph excludes documents and goes stale until
    regenerated. Skip the question when the project has no code.
    - Yes, set it up now. (default, recommended)
-   - Not now. Nothing changes; I'll ask again at the next onboarding update, or you can tell me not to.
+   - Not now.
 5. **Connect `<project_name>` to a long-term memory vault?**
    Explain that lasting facts stay outside the always-loaded instructions so
    those stay short. With an existing vault, add a pointer to the shared and
@@ -161,7 +161,7 @@ affected choice as inapplicable or pending, respectively.
    files at the location shown in the reviewed plan: no server, dependency or
    hook.
    - Yes, connect or set it up now. (default, recommended)
-   - Not now. Nothing changes; I'll ask again at the next onboarding update, or you can tell me not to.
+   - Not now.
 
 Apply questions 4 and 5 from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable
