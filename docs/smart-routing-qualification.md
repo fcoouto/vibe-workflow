@@ -132,12 +132,32 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
 
   A transmitted request that the upstream refused or failed is reported as `request_failed_upstream` with `upstream_error` (a known code, the body's code or type, or the error type). It is no longer reported as `not_one_primary_request`. A request our own guard or the shim blocked, for example a retry stopped by `qualification guard (guard_budget)` or `routing: blocked (<reason>)`, is reported as `request_blocked_by_guard` with `guard_block`. It is never reported as an upstream refusal; both appear when a refused request's retry was then blocked.
 
-  **Strict masking** (`tests/qualification/sanitize.py`, after the PR #182 review). The results are committed, so every recorded string in `session_facts` (and in the sign-in refusal record) is handled as follows:
-  - **Masked with a typed placeholder** (`<redacted:email>`, `:id`, `:jwt`, `:credential`, `:uuid`, `:url`, `:path`, `:ip`, `:hex`, `:token`): emails; `org-`, `user-`, `acct_`, `proj_`, `sk-`, `sess-`, `req_`, `resp_`, `chatcmpl-`, `msg_` and `thr_` ids; JWTs; `Bearer`, `Basic` and `Token` credentials; UUIDs; IPs; home paths; runs of 20 or more hex characters; and random-looking base64 runs of 24 or more characters.
+  **Strict masking** (`tests/qualification/sanitize.py`, after both PR #182 security reviews). The results are committed, so every recorded string in `session_facts` (and in the sign-in refusal record) is handled as follows:
+  - **Normalized first:** zero-width characters are dropped, and percent- or HTML-encoded `@` and `-` are decoded. Each input is cut to 8 KB before masking, and every pattern is bounded, so adversarial 1 MB inputs finish in well under a second (tested).
+  - **Masked with a typed placeholder** (`<redacted:email>`, `:id`, `:key`, `:jwt`, `:credential`, `:uuid`, `:url`, `:path`, `:ip`, `:model`, `:hex`, `:token`):
+    - emails, including non-ASCII and dotless ones (`alice@localhost`);
+    - ids after `org`, `user`, `acct`, `proj`, `sess`, `ses`, `req`, `resp`, `chatcmpl`, `msg`, `thr`, `cred`, `file`, `asst`, `run`, `batch` or `cus` in any case. After a hyphen, a body of 6 or more characters is masked whatever it looks like; after an underscore, it is masked when random-looking or one word of 8 or more characters;
+    - any `sk-`/`sk_` value, including masked fragments such as `sk-proj-****abcd`, and `ft:` model names;
+    - JWTs, and `Bearer`, `Basic` or `Token` credentials;
+    - UUIDs, IPv4 addresses and IPv6 addresses (also compressed), and home paths;
+    - runs of 20 or more hex characters, and random-looking base64 runs of 16 or more characters (camelCase names such as `assistantMessageID` are not random-looking).
   - **Key names:** recorded only from a fixed allow-list of OpenCode and OpenAI schema names; any other name is `<key>`.
-  - **Code-like values** (`code`, `type`, `error`): kept verbatim only when they are a known refusal code or a `snake_case` word (a class name such as `APIError` for error types) that masking leaves unchanged.
-  - **Messages:** keep the masked text (at most 200 characters), `masked: true` when anything was replaced, a 12-hex SHA-256 prefix of the raw text to correlate repeats, and the known codes they contain.
-  - **Fail closed:** if the finished facts still match any pattern, the whole block is replaced by `{facts_withheld: [kinds]}`. The harness's final leak check on the results file uses the same patterns and refuses to write the file.
+  - **Code values** (`code`, `type`, `error`): kept verbatim only when they are one of the known refusal or error codes, or (for error types) one of the error class names in the 2.2.6 binary. Any other value becomes `<code:` plus a 12-hex hash of its masked form, so repeats can be matched.
+  - **Message and status types:** kept only from the 2.2.6 schema sets; anything else is `<other>`.
+  - **Messages:** keep the masked text (at most 200 characters), `masked: true` when anything was replaced or cut, a 12-hex SHA-256 prefix of the **masked** text, and the known codes they contain.
+  - **Fail closed:**
+    - If the finished facts still match any pattern or a known secret, the whole block is `{facts_withheld: [kinds]}`.
+    - If reading or sanitizing fails on an unexpected shape, the block is `{facts_withheld: ["facts_error:<ExceptionType>"]}`, and the run still settles, accounts and cleans up.
+    - The final leak check on the results file uses the same patterns. When it refuses, the harness writes a skeleton instead: masked blockers, the cleanup status, the call-ledger totals and the leak kinds.
+  - **The login's identity:** after the sign-in, every identity value the server API itself returns is added to the redactor's secrets in memory, so an echo in any recorded text becomes `<secret>`. That covers claims in an attempt status that carries tokens, decoded without verification, and connection labels that look like an email, id or name. Nothing is logged, and no credential or auth file is read. The 2.2.6 attempt-status schema carries no tokens, so in practice the source is the connection label; if that label is generic, the identity is not known to the harness.
+  - **Known gaps** (best effort, not detected):
+    - personal, plan or workspace names in prose, such as "ChatGPT Plus for Alice" or a workspace called "Acme Research";
+    - phone numbers and postal addresses;
+    - encoded secrets shorter than 16 characters, and secrets split across fields;
+    - homoglyphs, such as a Cyrillic letter inside an id prefix;
+    - identifiers without a known prefix or a random shape.
+
+    **The operator must read the sanitized results before committing them.**
 - **The variant `none` is kept.** In OpenCode 2.2.6, `none` is the first value of its own `ReasoningEffort` set (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), and the ChatGPT model list carries `supported_reasoning_levels`. So `none` is a normal variant meaning "no reasoning", not a placeholder. If the recorded error points at the reasoning effort (for example `unsupported_value` with `param` `reasoning.effort`), the next run should name another listed variant explicitly.
 
 ### ChatGPT sign-in method lookup (diagnosis)

@@ -10,6 +10,7 @@ harness writes only the URL, mode and instructions to a state file and to stdout
 Codex rate limits are NOT read: the repository has no standalone reader of `account/rateLimits/read` (only a
 fixture and a host bridge that receives limits from the Codex app), so the before/after window is unobserved here.
 """
+import base64
 import json
 import math
 import os
@@ -89,6 +90,41 @@ def sign_in_error(body):
     return error, sanitize.safe_keys(body, 30)
 
 
+IDENTITY_CLAIMS = ("email", "name", "given_name", "family_name", "preferred_username", "nickname", "sub",
+                   "chatgpt_account_id", "chatgpt_user_id", "user_id", "account_id", "org_id", "organization_id")
+
+
+def _claims(token):
+    """A JWT's payload claims, decoded in memory without verification; {} for anything else."""
+    parts = token.split(".") if isinstance(token, str) else []
+    if len(parts) != 3 or not parts[1]:
+        return {}
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def identity_secrets(run, body, labels=()):
+    """The ChatGPT login's identity, as far as the server API exposes it (an attempt status that carries tokens, the
+    connection labels), added to the redactor's secrets in memory so an echo in any recorded text becomes `<secret>`.
+    Nothing is logged or stored, and no credential file is read."""
+    found = []
+    for key in ("access", "id_token", "access_token"):
+        claims = _claims((body or {}).get(key) if isinstance(body, dict) else None)
+        nested = [claims] + [v for v in claims.values() if isinstance(v, dict)]
+        for scope in nested:
+            found += [scope.get(name) for name in IDENTITY_CLAIMS]
+            found += [org.get("id") for org in scope.get("organizations") or [] if isinstance(org, dict)]
+    for label in labels:
+        if isinstance(label, str) and (sanitize.mask(label)[1] or " " in label.strip()):
+            found += [label] + [part.strip("()<>[],;") for part in label.split()]
+    for value in found:
+        if isinstance(value, str) and len(value.strip()) >= 3 and value not in run.redact.secrets:
+            run.redact.add_secret(value.strip())
+
+
 def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=time.monotonic, announce=print):
     """Start "Sign in with ChatGPT", announce the URL, and poll (bounded) until it completes."""
     http, methods, polls = wait_integration(run, INTEGRATION, METHOD_ID, sleep=sleep, clock=clock)
@@ -112,6 +148,7 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
     while True:
         polls += 1
         _, body, _ = run.server.request("GET", path)
+        identity_secrets(run, run.data(body))  # before redaction replaces the tokens: in memory only
         state = run.redact(run.data(body) or {}).get("status")  # anything credential-like is redacted and remembered
         if state != "pending":
             break
@@ -126,7 +163,9 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
         detail = error.get("message") or ", ".join("%s=%s" % item for item in sorted(error.items())) or "no reason given"
         raise Blocker("the ChatGPT sign-in ended with status %s: %s (fields: %s)" % (final, detail, ", ".join(keys)))
     _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
-    connections = len((run.data(info) or {}).get("connections") or [])
+    listed = (run.data(info) or {}).get("connections") or []
+    identity_secrets(run, None, [c.get("label") for c in listed if isinstance(c, dict)])
+    connections = len(listed)
     if not connections:
         raise Blocker("no ChatGPT connection is listed after the sign-in")
     run.server.request("POST", "/api/location/reload")
@@ -250,6 +289,9 @@ def lowest_variant(listed, ref):
 BODY_FIELDS = ERROR_FIELDS + ("param", "type")
 CODE_FIELDS = ("code", "type", "error")  # kept only as codes (sanitize.code_value)
 EVENT_TYPES = ("session.status", "session.error", "session.idle", "message.updated")
+STATUS_TYPES = ("idle", "busy", "retry")  # SessionStatus in 2.2.6
+MESSAGE_TYPES = ("user", "assistant", "idle", "synthetic", "system", "skill", "shell", "compaction", "agent-switched",
+                 "model-switched", "location-switched")  # Session.Message.Info in 2.2.6
 # Our own blocks, not upstream refusals: the qual-post guard and the routing shim name their reason in the error.
 GUARD = re.compile(r"qualification guard \((guard_[a-z_]{1,40})\)|routing: blocked \(([a-z_]{1,40})\)")
 
@@ -329,7 +371,7 @@ def event_facts(run, root):
             continue
         entry = dict(type=event["type"])
         if status:
-            entry["status"] = {k: v for k, v in (("type", sanitize.code_value(status.get("type"))),
+            entry["status"] = {k: v for k, v in (("type", status.get("type") if status.get("type") in STATUS_TYPES else "<other>"),
                                                  ("attempt", status.get("attempt") if type(status.get("attempt")) is int else None),
                                                  ("message", sanitize.message(status.get("message")))) if v is not None}
         if error:
@@ -340,7 +382,15 @@ def event_facts(run, root):
 
 def session_facts(run, root, began, body, waited, wait_ms):
     """What the server returned for the managed session: counts, kinds, allow-listed key names, codes and masked
-    short texts only. If anything identifying is still found, the whole block is withheld (fail closed)."""
+    short texts only. If anything identifying is still found, or anything fails while reading or sanitizing (an
+    unexpected shape), the whole block is withheld (fail closed) and the run continues."""
+    try:
+        return _session_facts(run, root, began, body, waited, wait_ms)
+    except Exception as error:  # noqa: BLE001 - the type name only; the run must still settle and clean up
+        return dict(facts_withheld=["facts_error:%s" % type(error).__name__])
+
+
+def _session_facts(run, root, began, body, waited, wait_ms):
     status, session, _ = run.server.request("GET", "/api/session/%s" % root)
     info = run.data(session) if status == 200 and isinstance(run.data(session), dict) else {}
     http, page, _ = run.server.request("GET", "/api/session/%s/message" % root, query={"order": "asc"})
@@ -350,7 +400,7 @@ def session_facts(run, root, began, body, waited, wait_ms):
         messages = []
     counts = {}
     for message in messages:
-        kind = sanitize.code_value(message.get("type")) or "<other>"
+        kind = message.get("type") if isinstance(message, dict) and message.get("type") in MESSAGE_TYPES else "<other>"
         counts[kind] = counts.get(kind, 0) + 1
     recent = [m for m in messages if ((m.get("time") or {}).get("created") or 0) >= began]
     facts = dict(session=dict(http=status, keys=sanitize.safe_keys(info),

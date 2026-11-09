@@ -52,7 +52,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E402
+from tests.qualification import canary, chatgpt, probe_stages, safety, sanitize  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
@@ -972,7 +972,9 @@ def main(argv=None):
     text = json.dumps(clean, indent=2, sort_keys=True)
     leaks = run.redact.leaks(text)
     if leaks:
-        print("refused to write output: %d unsanitized fragments" % len(leaks), file=sys.stderr)
+        print("refused to write output: %d unsanitized fragments; wrote a skeleton" % len(leaks), file=sys.stderr)
+        if args.out:  # blockers (masked), cleanup status, ledger totals and the leak kinds only
+            Path(args.out).write_text(json.dumps(sanitize.skeleton(clean, leaks), indent=2, sort_keys=True) + "\n")
         return 3
     if args.out:
         Path(args.out).write_text(text + "\n")

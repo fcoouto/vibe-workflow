@@ -92,7 +92,7 @@ class FuzzedFactsTests(StageHarness):
         error = facts["assistant"][0]["error"]
         self.assertTrue(error["message"]["masked"])
         self.assertEqual(len(error["message"]["sha256"]), 12)
-        self.assertIsNone(error["body"]["fields"].get("code"))  # an id-shaped code is not a code
+        self.assertRegex(error["body"]["fields"]["code"], r"^<code:[0-9a-f]{12}>$")  # an id-shaped code is not a code
         self.assertEqual(error["body"]["fields"]["message"]["masked"], True)
         self.assertIn("<key>", error["body"]["keys"])  # the email- and key-shaped names
 
