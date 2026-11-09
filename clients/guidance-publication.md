@@ -47,7 +47,9 @@ maintenance run may recompile the Smart Routing strategy table with
 session, never from a spawn path, hook or startup check. Extract prose guidance
 into structured rows first; code then drops rows naming unavailable models,
 unsupported efforts or harnesses, and rows without cited evidence. Profiling or
-ranking models also need zero-retention, no-training terms. A failed or invalid
+ranking models also need known endpoint terms. An active integration covers
+endpoints that may retain or train on task text; terms that forbid confidential
+data, or a `user_restricted` entry, still exclude the endpoint. A failed or invalid
 refresh keeps the last verified table with its original age. A refresh re-ranks
 later assignments without re-profiling them. A refresh that compiles but leaves no
 qualified rows also keeps the previous table.

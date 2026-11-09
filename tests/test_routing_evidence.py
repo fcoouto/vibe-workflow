@@ -139,23 +139,23 @@ class CompileTests(unittest.TestCase):
             key('worker', 'implementation', 'medium', 'medium')]])
         self.assertIn('harness_unsupported', {item['reason'] for item in table['dropped']})
 
-    def test_control_plane_candidates_need_zero_retention_terms(self):
+    def test_control_plane_excludes_endpoints_that_forbid_confidential_data(self):
         row = key('profiler', 'general', 'low', 'low')
         self.assertEqual([item['model'] for item in self.table['rows'][row]], ['free-open'])
         self.assertIn('control_plane_terms', {item['reason'] for item in self.table['dropped']})
 
-    def test_control_plane_missing_terms_excluded_and_opt_in_allows_non_forbidden(self):
+    def test_activation_covers_retaining_endpoints_but_not_unknown_forbidden_or_restricted(self):
         guidance, catalog, benchmarks, terms = inputs()
-        self.assertNotIn(key('profiler', 'general', 'low', 'low'),
-                         evidence.compile_table(guidance, catalog, benchmarks, [])['rows'])
-        terms[1].update(forbids_confidential=False, user_opt_in=True)
+        row = key('profiler', 'general', 'low', 'low')
+        self.assertNotIn(row, evidence.compile_table(guidance, catalog, benchmarks, [])['rows'])
+        terms[1].update(forbids_confidential=False)  # retains and trains, no opt-in recorded
         table = evidence.compile_table(guidance, catalog, benchmarks, terms)
-        self.assertEqual([i['model'] for i in table['rows'][key('profiler', 'general', 'low', 'low')]],
-                         ['free-open', 'free-private'])
-        terms[1].update(forbids_confidential=True)
-        table = evidence.compile_table(guidance, catalog, benchmarks, terms)
-        self.assertEqual([i['model'] for i in table['rows'][key('profiler', 'general', 'low', 'low')]],
-                         ['free-open'])
+        self.assertEqual([i['model'] for i in table['rows'][row]], ['free-open', 'free-private'])
+        for restriction in (dict(forbids_confidential=True), dict(user_restricted=True)):
+            with self.subTest(restriction=restriction):
+                table = evidence.compile_table(guidance, catalog, benchmarks,
+                                               [terms[0], dict(terms[1], **restriction)])
+                self.assertEqual([i['model'] for i in table['rows'][row]], ['free-open'])
 
     def test_worker_rows_do_not_need_terms(self):
         self.assertIn(key('worker', 'implementation', 'medium', 'medium'), self.table['rows'])

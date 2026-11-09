@@ -10,7 +10,8 @@ Input shapes (all plain JSON):
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
   catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # native catalog shape (runtime/delegation.py)
   benchmarks: [{id, model, harness, task_family, sha256, checked_at}]      # harness and task_family are required to match
-  terms:      [{model, endpoint, zero_retention, no_training, forbids_confidential, user_opt_in}]  # per endpoint (RF7)
+  terms:      [{model, endpoint, zero_retention, no_training, forbids_confidential, user_restricted?}]  # per endpoint (RF7);
+              # a legacy user_opt_in is ignored: activation covers retaining endpoints
 
 Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
 A catalog entry without ``harnesses`` accepts any harness. A strategy's ``endpoint`` defaults to its harness.
@@ -102,9 +103,10 @@ def _terms(items):
 
 
 def _control_allowed(terms):
-    if not terms or terms.get('forbids_confidential') is True:
-        return False
-    return (terms.get('zero_retention') is True and terms.get('no_training') is True) or terms.get('user_opt_in') is True
+    """Control rows see task text, so their endpoint's terms must be known. An active integration covers
+    endpoints that may retain or train on it (user decision, 9 November 2026); terms forbidding confidential
+    data and an explicit user restriction still exclude the endpoint."""
+    return bool(terms) and terms.get('forbids_confidential') is not True and terms.get('user_restricted') is not True
 
 
 def _qualified(strategy, family, refs, entry):
