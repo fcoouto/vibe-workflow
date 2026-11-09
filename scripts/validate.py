@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 # Long files cost agents context to read. Existing runtime modules keep their
 # current size as a ceiling until they are split; do not add entries or raise them.
 MAX_PYTHON_LINES = 1000
+SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
     "runtime/adapters/codex.py": 1579,
     "runtime/changes.py": 6074,
@@ -190,7 +191,7 @@ def validate(root=ROOT):
 
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root)
-        if any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
+        if any(part.startswith(".") or part in SKIPPED_DIRECTORIES for part in relative.parts):
             continue
         lines = len(path.read_text(encoding="utf-8").splitlines())
         limit = OVERSIZED_PYTHON.get(relative.as_posix(), MAX_PYTHON_LINES)
