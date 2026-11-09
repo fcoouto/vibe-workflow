@@ -32,6 +32,36 @@ class UsageSettingsTests(unittest.TestCase):
         self.assertEqual(result['decision'],'paused')
         self.assertFalse(self.folder.exists())
 
+    def test_manual_cannot_be_selected_for_new_configuration_or_enable(self):
+        with self.assertRaisesRegex(BudgetError, 'invalid_mode'):
+            routing.configure(self.root, dict(self.request, mode='manual'))
+        routing.configure(self.root, self.request)
+        with self.assertRaisesRegex(BudgetError, 'invalid_mode'):
+            routing.enable(self.root, dict(expected_revision=1, mode='manual'))
+
+    def test_legacy_manual_record_is_active_without_migration_or_renewed_approval(self):
+        binding = dict(organization='org', project='project',
+                       credential_ref='vcw_' + '0' * 32, storage_kind='macos_keychain')
+        routing.configure(self.root, dict(self.request, version=2, binding=binding))
+        self.assertIsNone(routing.status(self.root)['activation'])
+        routing.enable(self.root, dict(expected_revision=1))
+        with settings.controller(self.root) as control, control.ledger.transaction() as data:
+            control._config(data)['requested_mode'] = 'manual'
+        with settings.controller(self.root) as control:
+            before = control.ledger.snapshot()
+        state = routing.status(self.root)
+        self.assertEqual((state['mode'], state['requested_mode']), ('smart', 'smart'))
+        self.assertTrue(state['live_enabled'])
+        self.assertEqual(state['activation'], dict(ref='activation:openai-api:scope:r2',
+            funding_ref='funding:openai-api:org:r1', classes=['investigation'], destinations=[dict(
+                service='openai-api', mode='proposal', provider='openai', model=PROFILE['model'],
+                effort=PROFILE['reasoning'])]))
+        with settings.controller(self.root) as control:
+            self.assertEqual(control.ledger.snapshot(), before)
+        self.assertIsNone(routing.disable(self.root, dict(expected_revision=2))['activation'])
+        refreshed = routing.enable(self.root, dict(expected_revision=3))
+        self.assertEqual(refreshed['activation']['ref'], 'activation:openai-api:scope:r4')
+
     def test_keychain_binding_persists_only_metadata_without_access(self):
         binding = dict(organization='org-example', project='proj_example',
                        credential_ref='vcw_' + '0' * 32, storage_kind='macos_keychain')
@@ -67,7 +97,7 @@ class UsageSettingsTests(unittest.TestCase):
             config.update(enabled=True)
             config.pop('live_consent', None)
         self.assertFalse(routing.status(self.root)['live_enabled'])
-        for revision, mode in ((1, 'manual'), (2, 'smart')):
+        for revision, mode in ((1, 'smart'), (2, 'smart')):
             result = routing.enable(self.root, dict(expected_revision=revision, mode=mode))
             self.assertEqual(result['mode'], mode)
             self.assertTrue(result['live_enabled'])
@@ -86,11 +116,11 @@ class UsageSettingsTests(unittest.TestCase):
         self.assertEqual(configured['mode'], 'off')
         with settings.controller(self.root) as controller:
             before = controller.ledger.snapshot()['organizations']
-        manual = routing.enable(self.root, dict(expected_revision=1, mode='manual'))
-        self.assertEqual(manual['mode'], 'manual')
-        self.assertFalse(manual['live_dispatch'])
-        self.assertFalse(manual['live_enabled'])
-        self.assertTrue(manual['warnings'])
+        active = routing.enable(self.root, dict(expected_revision=1))
+        self.assertEqual(active['mode'], 'smart')
+        self.assertFalse(active['live_dispatch'])
+        self.assertFalse(active['live_enabled'])
+        self.assertTrue(active['warnings'])
         with self.assertRaisesRegex(BudgetError, 'consent_revision_changed'):
             routing.enable(self.root, dict(expected_revision=1, mode='smart'))
         with self.assertRaisesRegex(BudgetError, 'invalid_mode'):
@@ -118,7 +148,7 @@ class UsageSettingsTests(unittest.TestCase):
         request.update(expected_revision=1, expected_org_revision=1,
                        profile=dict(PROFILE, verified_at=101))
         self.assertEqual(routing.configure(self.root, request)['reason'], 'routing_budget_required')
-        for mode in ('manual', 'smart'):
+        for mode in (None, 'smart'):
             with self.subTest(mode=mode), self.assertRaisesRegex(BudgetError, 'routing_budget_required'):
                 routing.enable(self.root, dict(expected_revision=2, mode=mode))
         self.assertEqual(routing.status(self.root)['revision'], 2)
@@ -276,19 +306,18 @@ class UsageSettingsTests(unittest.TestCase):
             self.assertNotIn('scope', control.ledger.snapshot()['routing'])
         self.assertFalse((self.folder / 'checkout-scope.json').exists())
 
-    def test_explicit_mode_resolves_otherwise_equivalent_saved_modes(self):
+    def test_legacy_saved_mode_does_not_create_a_reuse_ambiguity(self):
         self.configure_source()
-        self.configure_source('manual-source', expected_org_revision=1, mode='manual')
+        self.configure_source('manual-source', expected_org_revision=1)
+        with patch.object(settings, 'scope', return_value=('manual-source', self.root)):
+            with settings.controller(self.root) as control, control.ledger.transaction() as data:
+                control._config(data)['requested_mode'] = 'manual'
         state = routing.status(self.root)
-        self.assertEqual(state['reuse_reason'], 'reuse_selection_required')
-        self.assertEqual(state['reuse_reason_by_mode'], {'manual': 'reuse_available', 'smart': 'reuse_available'})
+        self.assertEqual(state['reuse_reason'], 'reuse_available')
+        self.assertEqual(state['reuse_reason_by_mode'], {'smart': 'reuse_available'})
         pin = next(item['setup_pin'] for item in state['reusable_setups'] if item['scope'] == 'source')
-        with self.assertRaisesRegex(BudgetError, 'reuse_selection_required'):
-            routing.enable(self.root, dict(expected_revision=0, reuse_pin=pin))
-        for mode in ('manual', 'smart'):
-            with patch.object(settings, 'scope', return_value=('target-' + mode, self.root)):
-                result = routing.enable(self.root, dict(expected_revision=0, mode=mode, reuse_pin=pin))
-                self.assertEqual(result['mode'], mode)
+        result = routing.enable(self.root, dict(expected_revision=0, reuse_pin=pin))
+        self.assertEqual(result['mode'], 'smart')
 
     def test_status_explains_profile_conversion_and_connection_differences(self):
         self.configure_source()
@@ -329,6 +358,7 @@ class UsageSettingsTests(unittest.TestCase):
     def test_reuse_enables_target_without_copying_permission_qualification_or_accounting(self):
         self.configure_source()
         with patch.object(settings, 'scope', return_value=('source', self.root)):
+            source_activation = routing.enable(self.root, dict(expected_revision=1))['activation']
             with settings.controller(self.root) as control:
                 control.record_qualification(qualification())
                 with control.ledger.transaction() as state:
@@ -350,9 +380,11 @@ class UsageSettingsTests(unittest.TestCase):
         self.assertFalse(state['live_enabled'])
         with patch('runtime.usage_credentials._keychain', side_effect=AssertionError('credential access forbidden')), \
              patch('socket.socket', side_effect=AssertionError('network forbidden')):
-            result = routing.enable(self.root, self.reuse_request(mode='manual'))
+            result = routing.enable(self.root, self.reuse_request())
         self.assertTrue(result['live_enabled'])
-        self.assertEqual((result['revision'], result['mode']), (1, 'manual'))
+        self.assertEqual((result['revision'], result['mode']), (1, 'smart'))
+        self.assertEqual(result['activation']['ref'], 'activation:openai-api:scope:r1')
+        self.assertNotEqual(result['activation']['ref'], source_activation['ref'])
         with settings.controller(self.root) as control:
             after = control.ledger.snapshot()
             for key in ('identity', 'organizations', 'runs', 'native'):

@@ -66,48 +66,80 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(removed['external_permission'])
         self.assertFalse(removed['enabled'])
 
-    def test_legacy_worker_consent_is_readable_but_cannot_admit(self):
+    def test_legacy_worker_consent_is_readable_and_admits_read_only(self):
         self.legacy_worker_consent()
         before = self.snapshot()
-        with self.assertRaises(self.settings.SettingsError):
-            with self.settings.admission(self.repo, 'workers'): self.fail('legacy consent admitted')
+        with self.settings.admission(self.repo, 'workers') as admitted:
+            self.assertEqual(admitted['consent_version'], 1)
         report = self.settings.status(self.repo)
         self.assertTrue(report['enabled'])
-        self.assertTrue(report.get('enablement_renewal_required'))
-        self.assertEqual(report.get('worker_capability'), 'renewal_required')
+        self.assertFalse(report['enablement_renewal_required'])
+        self.assertEqual(report['worker_capability'], 'read_only')
         self.assertEqual(report['execution_qualification'], 'not_checked')
         with self.settings.admission(self.repo, 'proposals'):
             pass
         self.assertEqual(self.snapshot(), before)
 
-    def test_enable_requires_explicit_worker_consent(self):
+    def test_enable_records_worker_activation_without_extra_acknowledgement(self):
         report = self.configured()
-        before = self.path.read_bytes()
-        with self.assertRaises(self.settings.SettingsError):
-            self.settings.enable(self.repo, {'expected_revision': report['revision']})
-        self.assertEqual(self.path.read_bytes(), before)
+        enabled = self.settings.enable(self.repo, {'expected_revision': report['revision']})
+        self.assertTrue(enabled['enabled'])
+        self.assertEqual(enabled['consent_version'], 2)
+        self.assertEqual(enabled['worker_capability'], 'read_only')
 
-    def test_enable_explicitly_renews_legacy_consent_once(self):
+    def test_enable_preserves_enabled_legacy_consent_and_history(self):
         self.legacy_worker_consent()
         sentinel = Path(self.settings.status(self.repo)['proposal_store'])
         sentinel.write_text('existing task history')
-        try:
-            report = self.settings.enable(self.repo, dict(expected_revision=2, consent_version=2))
-        except self.settings.SettingsError as error:
-            self.fail(f'Explicit renewal must be accepted: {error}')
-        self.assertEqual(report['revision'], 3)
-        self.assertEqual(report.get('consent_version'), 2)
+        before = self.path.read_bytes()
+        report = self.settings.enable(self.repo, dict(expected_revision=2, consent_version=2))
+        self.assertEqual(report['revision'], 2)
+        self.assertEqual(report.get('consent_version'), 1)
         self.assertEqual(report.get('worker_capability'), 'read_only')
         self.assertFalse(report.get('enablement_renewal_required'))
         self.assertEqual(sentinel.read_text(), 'existing task history')
         self.assertEqual(report['opencode'], str(self.exe))
         self.assertEqual(report['auth_data'], str(self.auth))
-        self.assertEqual(self.settings.enable(self.repo, dict(expected_revision=3, consent_version=2)), report)
+        self.assertEqual(self.settings.enable(self.repo, dict(expected_revision=2)), report)
+        self.assertEqual(self.path.read_bytes(), before)
+        off = self.settings.disable(self.repo, dict(expected_revision=2))
+        enabled = self.settings.enable(self.repo, dict(expected_revision=off['revision'], consent_version=2))
+        self.assertEqual(enabled['consent_version'], 2)
         with self.assertRaises(self.settings.SettingsError):
             with self.settings.admission(self.repo, 'workers', revision=2): self.fail('stale preparation admitted')
-        with self.settings.admission(self.repo, 'workers', revision=3) as admitted:
+        with self.settings.admission(self.repo, 'workers', revision=enabled['revision']) as admitted:
             self.assertEqual(admitted['consent_version'], 2)
-        self.assertFalse(self.settings.disable(self.repo, dict(expected_revision=3))['enabled'])
+        self.assertFalse(self.settings.disable(self.repo, dict(expected_revision=enabled['revision']))['enabled'])
+
+    def test_legacy_enabled_read_only_worker_needs_no_editing_renewal(self):
+        self.legacy_worker_consent()
+        with self.settings.admission(self.repo, 'workers', revision=2) as report:
+            self.assertEqual(report['worker_capability'], 'read_only')
+            self.assertEqual(report['consent_version'], 1)
+        self.settings.disable(self.repo, dict(expected_revision=2))
+        with self.assertRaisesRegex(self.settings.SettingsError, 'openrouter_disabled'):
+            with self.settings.admission(self.repo, 'workers'): self.fail('disabled route admitted')
+        self.settings.enable(self.repo, dict(expected_revision=3))
+        with self.assertRaisesRegex(self.settings.SettingsError, 'openrouter_preparation_stale'):
+            with self.settings.admission(self.repo, 'workers', revision=2): self.fail('stale preparation admitted')
+
+    def test_status_activation_ref_follows_revision(self):
+        self.assertIsNone(self.settings.status(self.repo)['activation'])
+        self.assertIsNone(self.configured()['activation'])
+        first = self.settings.enable(self.repo, dict(expected_revision=1, consent_version=2))
+        canonical = json.loads(self.path.read_text())['binding']['scope_id']
+        self.assertEqual(first['activation'], dict(ref=f'activation:openrouter:{canonical}:r2',
+            funding_ref='openrouter-provider-limits', classes=None, destinations=None))
+        self.assertEqual(self.settings.status(self.repo)['activation'], first['activation'])
+        off = self.settings.disable(self.repo, dict(expected_revision=2))
+        self.assertIsNone(off['activation'])
+        self.assertEqual(off['revision'], 3)
+        configured = self.settings.configure(self.repo, dict(self.request, expected_revision=3))
+        self.assertIsNone(configured['activation'])
+        self.assertEqual(configured['revision'], 4)
+        enabled = self.settings.enable(self.repo, dict(expected_revision=4, consent_version=2))
+        self.assertEqual(enabled['activation']['ref'], f'activation:openrouter:{canonical}:r5')
+        self.assertNotEqual(enabled['activation'], first['activation'])
 
     def test_worker_consent_version_rejects_wrong_types_without_mutation(self):
         self.legacy_worker_consent()
@@ -221,9 +253,7 @@ class SettingsTests(unittest.TestCase):
                 self.settings.configure(self.repo, self.request)
             configured = self.settings.configure(self.repo, dict(self.request, routes=['workers']))
             self.assertFalse(configured['enabled'])
-            with self.assertRaises(self.settings.SettingsError):
-                self.settings.enable(self.repo, dict(expected_revision=1))
-            self.settings.enable(self.repo, dict(expected_revision=1, consent_version=2))
+            self.settings.enable(self.repo, dict(expected_revision=1))
             with self.settings.admission(self.repo, 'workers', revision=2) as report:
                 self.assertEqual(report['worker_capability'], 'read_only')
             with self.assertRaises(self.settings.SettingsError):
@@ -397,6 +427,36 @@ class SettingsTests(unittest.TestCase):
             input='', text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, {'stdout': result.stdout, 'stderr': result.stderr})
         self.assertTrue(json.loads(result.stdout)['enabled'])
+
+
+class LegacyWorkerSettlementTests(unittest.TestCase):
+    def test_legacy_worker_can_settle_but_cannot_start_another_send(self):
+        from tests.test_openrouter_workers import WorkerTests
+        worker = WorkerTests(methodName='runTest')
+        WorkerTests.setUpClass()
+        self.addCleanup(worker.doCleanups)
+        worker.setUp()
+        run = worker.runs / 'legacy-run'
+        run.mkdir(parents=True, mode=0o700)
+        (run / 'workspace').mkdir(mode=0o700)
+        brief = {key: value for key, value in worker.brief.items() if key != 'external'}
+        brief.update(task_id='legacy-run', management=dict(scope_id=worker.settings['scope_id'],
+                                                         revision=worker.settings['revision']))
+        worker.api.save(run / 'brief.json', brief)
+        worker.api.save(run / 'result.json', dict(state='prepared', task_id='legacy-run'))
+        marker = worker.root / 'launched'
+        exe = worker.fixture(f'from pathlib import Path\nsys.stdin.read()\nPath({str(marker)!r}).touch()\n')
+        result = worker.api.execute(run, exe, worker.root / 'auth')
+        self.assertTrue(result['local_execution_stopped'])
+        self.assertFalse(marker.exists(), 'a legacy preparation must not authorize a new send')
+        # An already-admitted legacy run may finish and settle under its historical contract.
+        worker.api.save(run / 'result.json', dict(state='awaiting_verification', task_id='legacy-run',
+                                                local_execution_stopped=True))
+        worker.api.settings.disable(worker.source, dict(expected_revision=worker.settings['revision']))
+        self.assertEqual(worker.api.verify(run, 'accepted', ['Legacy native check'])['state'], 'accepted')
+        self.assertEqual(worker.api.status(run)['state'], 'accepted')
+        with self.assertRaisesRegex(ValueError, 'already_started'):
+            worker.api.execute(run, exe, worker.root / 'auth')
 
 
 if __name__ == '__main__': unittest.main()

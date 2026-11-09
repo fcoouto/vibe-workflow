@@ -25,7 +25,7 @@ class LiveAdmissionTests(unittest.TestCase):
         self.profile = dict(PROFILE, count_maximum=7)
         self.controller.configure(dict(version=2, expected_revision=0, expected_org_revision=0,
                                        binding=self.binding, policy=POLICY, profile=self.profile,
-                                       class_name='investigation', mode='manual'))
+                                       class_name='investigation', mode='smart'))
         self.task = task(provider='openai-api')
         self.proof = admission.Admission(
             scope='scope', config_revision=2, org_revision=1,
@@ -156,20 +156,22 @@ class LiveAdmissionTests(unittest.TestCase):
                         task_digest=admission.digest(self.task), qualification_digest=admission.digest([1, record]))
         return record, proof
 
-    def enable_legacy_smart(self):
+    def enable_smart(self):
         self.controller.enable(2)
-        with self.ledger.transaction() as state:
-            self.controller._config(state).pop('live_consent')
 
-    def test_smart_host_dispatch_requires_enabled_mode_and_pinned_qualification(self):
+    def test_active_dispatch_preserves_explicitly_pinned_qualification(self):
         _, proof = self.smart_candidate()
         with self.assertRaisesRegex(budget.BudgetError, 'live_mode_unqualified'):
             self.run_candidate(proof)
-        self.enable_legacy_smart()
+        self.enable_smart()
+        with self.ledger.transaction() as state:
+            self.controller._config(state).pop('live_consent')
         with self.assertRaisesRegex(budget.BudgetError, 'live_consent_required'):
             self.run_candidate(replace(proof, qualification_digest=None))
         self.factory.assert_not_called()
         self.resolver.assert_not_called()
+        with self.ledger.transaction() as state:
+            self.controller._config(state)['live_consent'] = True
 
         counted = Connection(Response(dict(object='response.input_tokens', input_tokens=1200)))
         reply = completed()
@@ -226,7 +228,7 @@ class LiveAdmissionTests(unittest.TestCase):
 
     def test_smart_qualification_change_after_count_prevents_generation(self):
         record, proof = self.smart_candidate()
-        self.enable_legacy_smart()
+        self.enable_smart()
         counted = Connection(Response(dict(object='response.input_tokens', input_tokens=1200)))
         respond = counted.getresponse
 
@@ -244,7 +246,7 @@ class LiveAdmissionTests(unittest.TestCase):
 
     def test_smart_live_uses_verified_profile_without_quota_calibration(self):
         _, proof = self.smart_candidate(calibrated=False)
-        self.enable_legacy_smart()
+        self.enable_smart()
         with self.assertRaisesRegex(budget.BudgetError, 'provider_request_rejected'):
             self.run_candidate(proof)
         self.factory.assert_called_once()
@@ -256,7 +258,7 @@ class LiveAdmissionTests(unittest.TestCase):
         profile = dict(self.profile, input_rate=1_000_000)
         request = dict(version=2, expected_revision=2, expected_org_revision=1, binding=self.binding,
                        policy=dict(POLICY, task_limit=100_000, pilot_limit=100_000, amount=100_000),
-                       profile=profile, class_name='investigation', mode='manual')
+                       profile=profile, class_name='investigation', mode='smart')
         self.controller.configure(request)
         self.controller.enable(3)
         candidate = dict(self.task, packet=dict(self.task['packet'], input_tokens=1))
