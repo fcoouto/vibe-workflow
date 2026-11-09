@@ -47,8 +47,3 @@ Hooks supplement these instructions. Their presence or silence does not establis
 ## Memory and project preferences
 
 - Memory: the user-level vault `~/ai-memory-vault` is plain files, with no vault software or MCP server. Before project work, read its `MEMORY.md` index and open topic files only when relevant. Before saving, updating, migrating or pruning, read its `INSTRUCTIONS.md` in full and follow its narrow test and growth policy. Keep this section intact; it is the vault's load path.
-
-<!-- vibe-workflow:workstreams:start -->
-- [x] Workstreams
-Follow the [Workstreams project preference](skills/workstreams/references/procedure.md).
-<!-- vibe-workflow:workstreams:end -->
