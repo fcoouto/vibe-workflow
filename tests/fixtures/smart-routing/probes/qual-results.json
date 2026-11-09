@@ -1,0 +1,772 @@
+{
+ "_meta": {
+  "opencode": "2.2.6",
+  "probe_date": "2026-11-09",
+  "provider": "claude-agent/haiku#low",
+  "sanitized": true,
+  "harness": "tests/qualification/opencode_live.py (run 3 of 3; runs 1 and 2 stopped in stage 1 on a harness paging bug)",
+  "setup": "Isolated `opencode serve` on a random localhost port with its own XDG config, data, state and cache directories under a new 0700 temporary directory and a minimal environment (HOME kept so the claude-agent provider uses the local Claude login; a dummy QUAL_PROBE_TOKEN variable for the shell check). claude-agent connected through its external `claude-login` method (method reference only). Project-local config loaded three plugins in order: qual-pre (recorder), runtime/adapters/opencode_plugin.ts with python/settings/ledger options pinned to the temporary routing store, qual-post (recorder and last guard before sending). The temporary directory was removed after the run.",
+  "sanitizer": "Ids are placeholders numbered per prefix in order of appearance (<ses#n>, <msg#n>); paths, the user name, the server password and the dispatch token are removed (the harness refuses to write output that still contains any of them). Hook records keep only phase, hook, kind, model, variant, tool, effect, probe presence, the recorder's decision and the session placeholder; no headers, environment values or prompt text were ever logged.",
+  "stop": "Stage 3 exposed a blocker (accounting of a managed attempt with a command-spawned subagent child); the rest of stage 3, the closed-attempt and killed-child checks of stage 2, and stage 4 did not run."
+ },
+ "run": {
+  "blockers": [
+   "Blocker: usage_from_messages refused the live session: session not in the attempt"
+  ],
+  "budget": {
+   "entries": [
+    {
+     "calls": 1,
+     "label": "P0.7 (a) prompt with derived ids",
+     "stage": "1"
+    },
+    {
+     "calls": 0,
+     "label": "P0.7 (b) duplicate prompt",
+     "stage": "1"
+    },
+    {
+     "calls": 0,
+     "label": "P0.7 (e) ordering",
+     "stage": "1"
+    },
+    {
+     "calls": 1,
+     "label": "managed primary request (derived ids)",
+     "stage": "2"
+    },
+    {
+     "calls": 1,
+     "label": "title request of the managed session",
+     "stage": "3"
+    },
+    {
+     "calls": 0,
+     "label": "subagent spawn on another model",
+     "stage": "2"
+    },
+    {
+     "calls": 0,
+     "label": "prompt, session not attached",
+     "stage": "2"
+    },
+    {
+     "calls": 0,
+     "label": "prompt after a wrong-token attach",
+     "stage": "2"
+    }
+   ],
+   "limit": 6,
+   "used": 3
+  },
+  "deviations": [],
+  "hook_records": 25,
+  "hooks": [
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#1>",
+    "variant": "low"
+   },
+   {
+    "decision": "transmit",
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "post",
+    "session": "<ses#1>",
+    "variant": "low"
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": true
+   },
+   {
+    "hook": "model.request",
+    "kind": "title",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "decision": "transmit",
+    "hook": "model.request",
+    "kind": "title",
+    "model": "haiku",
+    "phase": "post",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "decision": "transmit",
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "post",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "effect": "ask",
+    "hook": "permission.evaluate",
+    "phase": "pre",
+    "session": "<ses#2>"
+   },
+   {
+    "effect": "deny",
+    "hook": "permission.evaluate",
+    "phase": "post",
+    "session": "<ses#2>"
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "pre",
+    "probe_present": true
+   },
+   {
+    "hook": "shell.create.before",
+    "phase": "post",
+    "probe_present": false
+   },
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "sonnet",
+    "phase": "pre",
+    "session": "<ses#3>",
+    "variant": "low"
+   },
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "decision": "guard_hold",
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "post",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#2>",
+    "variant": "low"
+   },
+   {
+    "hook": "model.request",
+    "kind": "primary",
+    "model": "haiku",
+    "phase": "pre",
+    "session": "<ses#2>",
+    "variant": "low"
+   }
+  ],
+  "latency": {
+   "shim_ms_by_hook": {
+    "model.request/primary": {
+     "max_ms": 0.756,
+     "median_ms": 0.64,
+     "n": 3,
+     "p95_ms": 0.756
+    },
+    "model.request/title": {
+     "max_ms": 3.134,
+     "median_ms": 3.134,
+     "n": 1,
+     "p95_ms": 3.134
+    },
+    "permission.evaluate/-": {
+     "max_ms": 0.518,
+     "median_ms": 0.518,
+     "n": 1,
+     "p95_ms": 0.518
+    },
+    "shell.create.before/-": {
+     "max_ms": 0.596,
+     "median_ms": 0.288,
+     "n": 6,
+     "p95_ms": 0.596
+    }
+   },
+   "unmatched_pre_records": 3
+  },
+  "ledger": [
+   {
+    "calls": 1,
+    "label": "P0.7 (a) prompt with derived ids",
+    "stage": "1"
+   },
+   {
+    "calls": 0,
+    "label": "P0.7 (b) duplicate prompt",
+    "stage": "1"
+   },
+   {
+    "calls": 0,
+    "label": "P0.7 (e) ordering",
+    "stage": "1"
+   },
+   {
+    "calls": 1,
+    "label": "managed primary request (derived ids)",
+    "stage": "2"
+   },
+   {
+    "calls": 1,
+    "label": "title request of the managed session",
+    "stage": "3"
+   },
+   {
+    "calls": 0,
+    "label": "subagent spawn on another model",
+    "stage": "2"
+   },
+   {
+    "calls": 0,
+    "label": "prompt, session not attached",
+    "stage": "2"
+   },
+   {
+    "calls": 0,
+    "label": "prompt after a wrong-token attach",
+    "stage": "2"
+   }
+  ],
+  "stages": {
+   "0": {
+    "calls": 0,
+    "claude_agent_connect_http": 204,
+    "event_stream": {
+     "error": null,
+     "events": 2,
+     "keys": [
+      "created",
+      "data",
+      "durable",
+      "id",
+      "location",
+      "type"
+     ],
+     "status": 200,
+     "types": [
+      "server.connected",
+      "session.created"
+     ]
+    },
+    "haiku_listed": {
+     "listed": true,
+     "low_variant": true
+    },
+    "health_after_prepare": {
+     "body": {
+      "child": "up",
+      "respawn_ms": null,
+      "state": "ok",
+      "version": 1
+     },
+     "http": 200,
+     "ms": 13.96
+    },
+    "health_before_ledger": {
+     "body": {
+      "reason": "ledger_absent",
+      "state": "not_ready",
+      "version": 1
+     },
+     "http": 200,
+     "ms": 57.29
+    },
+    "hooks_seen": [],
+    "message_list_keys": {
+     "http": 200,
+     "top": [
+      "cursor",
+      "data"
+     ]
+    },
+    "plugin_list": {
+     "http": 200,
+     "total": 95,
+     "load_order_relevant": [
+      "qual-post",
+      "qual-pre",
+      "vibe-workflow.routing"
+     ]
+    },
+    "prepare": {
+     "billing_class": "included_subscription",
+     "ms": 65.48,
+     "reason": null,
+     "route": "sub",
+     "state": "admitted"
+    },
+    "server": {
+     "port": "<random>",
+     "version": "2.2.6"
+    },
+    "session_create_keys": {
+     "data": [
+      "cost",
+      "id",
+      "location",
+      "model",
+      "permissions",
+      "projectID",
+      "time",
+      "title",
+      "tokens"
+     ],
+     "http": 200,
+     "top": [
+      "data"
+     ]
+    },
+    "set_authority_required": {
+     "answer": {
+      "authority_required": true,
+      "state": "updated",
+      "v": 1
+     },
+     "ms": 67.15
+    },
+    "status": {
+     "ms": 64.61,
+     "view": {
+      "ledger": {
+       "authority_required": true,
+       "blocked_organizations": [],
+       "cost_unknown": {
+        "ids": [],
+        "more": 0
+       },
+       "holds": {
+        "admitted": 1
+       },
+       "open_attempts": 1,
+       "overrun_backlog": false,
+       "reconcile_hint": null,
+       "state": "ready",
+       "unbound_open_holds": 1,
+       "uncertain_dollar": {
+        "ids": [],
+        "more": 0
+       },
+       "unstamped_open_holds": 0
+      },
+      "settings_state": "ok",
+      "state": "ok"
+     }
+    }
+   },
+   "1": {
+    "a_create_derived_session": {
+     "accepted_same_id": true,
+     "http": 200,
+     "ms": 3.03
+    },
+    "a_prompt": {
+     "assistant_messages": 1,
+     "http": 200,
+     "kinds": [
+      "primary"
+     ],
+     "message_types": [
+      "user",
+      "assistant",
+      "idle"
+     ],
+     "model_request_invocations": 1,
+     "ms": 2.52,
+     "outcome": "succeeded",
+     "reason": null,
+     "response_id_is_derived": true,
+     "response_keys": [
+      "delivery",
+      "id",
+      "payload",
+      "sessionID",
+      "time",
+      "type"
+     ],
+     "transmitted": 1,
+     "user_message_ids_derived": [
+      true
+     ]
+    },
+    "b_duplicate": {
+     "http": 200,
+     "messages_after": 4,
+     "messages_before": 3,
+     "model_request_invocations": 0,
+     "ms": 0.88,
+     "returned_original_id": true,
+     "same_message_ids": false,
+     "transmitted": 0
+    },
+    "c_read_back": {
+     "http": 200,
+     "ms": 1.19,
+     "same_id": true,
+     "type": "user"
+    },
+    "d_own_id_shapes": {
+     "messages": [
+      {
+       "body_length": 26,
+       "classes": [
+        "digit",
+        "lower",
+        "upper"
+       ],
+       "derived_shape": false,
+       "lower_hex_only": false,
+       "prefix": "msg"
+      }
+     ],
+     "session": {
+      "body_length": 26,
+      "classes": [
+       "digit",
+       "lower",
+       "upper"
+      ],
+      "derived_shape": false,
+      "lower_hex_only": false,
+      "prefix": "ses"
+     }
+    },
+    "e_ordering": {
+     "derived_high_hex_first": "f",
+     "derived_low_hex_first": "0",
+     "derived_positions_high_then_low": [
+      1,
+      3
+     ],
+     "http": [
+      204,
+      204,
+      204,
+      204,
+      204
+     ],
+     "inserted": [
+      "server",
+      "derived",
+      "server",
+      "derived",
+      "server"
+     ],
+     "insertion_order_kept": true,
+     "lexicographic_order": false,
+     "listed": [
+      "server",
+      "derived",
+      "server",
+      "derived",
+      "server"
+     ],
+     "model_request_invocations": 0,
+     "server_ids_time_ordered": true,
+     "transmitted": 0
+    }
+   },
+   "2": {
+    "attach": {
+     "http": 200,
+     "ms": 0.98,
+     "state": "attached"
+    },
+    "attach_wrong_token": {
+     "http": 500,
+     "ms": 1.36,
+     "reason": null
+    },
+    "attach_wrong_token_again": {
+     "http": 500,
+     "ms": 2.21,
+     "reason": null
+    },
+    "detach": {
+     "http": 200,
+     "ms": 1.0,
+     "state": "detached"
+    },
+    "detach_wrong_token": {
+     "http": 500,
+     "ms": 1.86,
+     "reason": null
+    },
+    "dispatch": {
+     "message_derived": true,
+     "ms": 88.05,
+     "reconcile_hint_authoritative": false,
+     "session_derived": true,
+     "state": "dispatched",
+     "token_length": 43
+    },
+    "dispatch_repeated": {
+     "has_authority": false,
+     "state": "already_dispatched"
+    },
+    "health": {
+     "http": 200,
+     "ms": 1.75,
+     "state": "ok"
+    },
+    "managed_request": {
+     "assistant_messages": 1,
+     "finish": [
+      "stop"
+     ],
+     "http": 200,
+     "invocations": [
+      "primary",
+      "title"
+     ],
+     "ms": 1.53,
+     "outcome": "succeeded",
+     "primary_transmitted": 1,
+     "reason": null,
+     "title_transmitted": 1
+    },
+    "prompt_after_wrong_token": {
+     "assistant_messages": 0,
+     "http": 200,
+     "kinds": [
+      "primary"
+     ],
+     "outcome": "failed",
+     "pass": true,
+     "pre_invocations": 1,
+     "reason": "attach_required",
+     "sent": 0
+    },
+    "prompt_without_attachment": {
+     "assistant_messages": 0,
+     "http": 200,
+     "kinds": [
+      "primary"
+     ],
+     "outcome": "failed",
+     "pass": true,
+     "pre_invocations": 1,
+     "reason": "attach_required",
+     "sent": 0
+    },
+    "shell_env_attached": {
+     "hooks": [
+      {
+       "phase": "pre",
+       "probe_present": true
+      },
+      {
+       "phase": "post",
+       "probe_present": false
+      }
+     ],
+     "http": 204,
+     "ms": 12.42
+    },
+    "subagent_other_model": {
+     "child_outcomes": [
+      {
+       "outcome": "failed",
+       "reason": "route_mismatch"
+      }
+     ],
+     "child_requests": [
+      {
+       "decision": null,
+       "kind": "primary",
+       "model": "sonnet",
+       "phase": "pre",
+       "variant": "low"
+      }
+     ],
+     "children": 1,
+     "http": 204,
+     "ms": 10.87,
+     "parent_requests": [
+      {
+       "decision": null,
+       "kind": "primary",
+       "phase": "pre"
+      },
+      {
+       "decision": "guard_hold",
+       "kind": "primary",
+       "phase": "post"
+      }
+     ],
+     "response_reason": null,
+     "tool_hook": [],
+     "transmitted": 0
+    },
+    "webfetch_permission": {
+     "effect_text": [
+      "deny"
+     ],
+     "hook": [
+      {
+       "effect": "ask",
+       "phase": "pre"
+      },
+      {
+       "effect": "deny",
+       "phase": "post"
+      }
+     ],
+     "http": 200,
+     "listener_hits": 0,
+     "ms": 5.18,
+     "response": [
+      "effect",
+      "id"
+     ]
+    }
+   }
+  }
+ },
+ "inspection": {
+  "_meta": "Read-only re-read of the run-3 isolated server after the stop: the same directories, budget 0 (the post guard blocks every request); the transmitted count stayed 3. Shapes and counts only.",
+  "p07_duplicate_prompt_message_types": [
+   "user",
+   "assistant",
+   "idle(succeeded)",
+   "idle(succeeded)"
+  ],
+  "p07_duplicate_prompt_note": "the second send of the same derived message id added no user or assistant message and no model request, but appended a second idle record",
+  "rpc_refusal_as_seen_by_the_caller": {
+   "http": 500,
+   "type": "rpc.internal",
+   "message": "RPC call failed"
+  },
+  "managed_root_message_types": [
+   "user",
+   "assistant",
+   "idle(succeeded)",
+   "synthetic",
+   "idle(failed)",
+   "user",
+   "idle(failed)",
+   "user",
+   "idle(failed)"
+  ],
+  "managed_root_normalized": "the synthetic record (the command child's result delivered to the parent) normalizes as kind unknown",
+  "managed_session_total_tokens": {
+   "input": 4,
+   "output": 12,
+   "reasoning": 0,
+   "cache_read": 0,
+   "cache_write": 5592
+  },
+  "command_child": {
+   "parent_is_managed_root": true,
+   "linked_by_subagent_tool_part": false,
+   "tokens": {
+    "input": 0,
+    "output": 0,
+    "reasoning": 0,
+    "cache_read": 0,
+    "cache_write": 0
+   },
+   "message_types": [
+    "user",
+    "idle"
+   ]
+  },
+  "usage_from_messages_with_child": "refused: session not in the attempt",
+  "usage_from_messages_root_only": {
+   "requests": [
+    {
+     "kind": "primary",
+     "tokens": {
+      "input": 2,
+      "output": 4,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 4425
+     },
+     "cost_usd_micros": null
+    }
+   ],
+   "unknown": [
+    "title_unknown",
+    "unknown_record"
+   ],
+   "title": {
+    "state": "unknown",
+    "tokens": null,
+    "reason": "unknown_record"
+   },
+   "child_session_unaccounted_flagged": false
+  },
+  "consistency_report_with_child": "accepted (it counts problems instead of raising)"
+ }
+}
