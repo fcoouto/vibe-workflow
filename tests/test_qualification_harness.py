@@ -355,7 +355,9 @@ class RedactionTests(unittest.TestCase):
 
     def test_leaks_reports_unsanitized_text(self):
         redact = safety.Redactor(secrets=["tok-123"], paths=["/tmp/x"], names=["alice"])
-        self.assertEqual(len(redact.leaks("tok-123 /tmp/x ses_ABCDEF123456 alice")), 4)
+        found = redact.leaks("tok-123 /tmp/x ses_ABCDEF123456 alice")
+        self.assertEqual(len(found), 5)  # the four fragments, and the session id again through the strict id pattern
+        self.assertIn("pattern:id", found)
         self.assertEqual(redact.leaks("<ses#1> <secret> <path> malice"), [])
 
 

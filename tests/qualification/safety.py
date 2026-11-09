@@ -14,6 +14,8 @@ import subprocess
 import time
 import traceback
 
+from tests.qualification import sanitize
+
 PROVIDER, MODEL, VARIANT = "claude-agent", "haiku", "low"
 ROUTE = "%s/%s#%s" % (PROVIDER, MODEL, VARIANT)
 HARNESS_NAME = "claude-agent-sdk via opencode"
@@ -566,24 +568,35 @@ SESSION_OUTPUT_STORES = ("shell", "tool-output")
 SYMLINK = "symlink:"
 
 
-def session_output(diff, before, after):
+def session_output(diff, before, after, root=None):
     """The added or changed names strictly inside a session-output store: exact first segment, no `.`, `..` or empty
-    segments, and neither side a symlink."""
+    segments, neither side a symlink, and (with `root`) now a plain file with one link or a directory, so a hard link
+    to a credential file never passes as tool output."""
     found = []
     for name in diff["added"] + diff["changed"]:
         segments = name[:-1].split("/") if name.endswith("/") else name.split("/")
         linked = any(str(side.get(name, "")).startswith(SYMLINK) for side in (before, after))
         if len(segments) >= 2 and segments[0] in SESSION_OUTPUT_STORES and not linked \
-                and all(segment not in ("", ".", "..") for segment in segments):
+                and all(segment not in ("", ".", "..") for segment in segments) and _plain(root, name):
             found.append(name)
     return found
 
 
-def classify_snapshots(before, after, stores=False):
+def _plain(root, name):
+    if root is None:
+        return True
+    try:
+        info = os.lstat(Path(root) / name)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+
+
+def classify_snapshots(before, after, stores=False, root=None):
     """`(unexpected, desktop_churn, session_output)` names between two snapshots of one OpenCode user directory;
     `stores` (the session-output rule) applies only to `SESSION_OUTPUT_DIR`."""
     diff = compare_snapshots(before, after)
-    session = session_output(diff, before, after) if stores else []
+    session = session_output(diff, before, after, root) if stores else []
     unexpected, churn = classify_changes({k: [n for n in v if n not in session] for k, v in diff.items()})
     return unexpected, churn, session
 
@@ -757,6 +770,7 @@ class Redactor:
         found += [path for path in self.paths if path in text]
         found += [match.group(0) for match in ID_TOKEN.finditer(text)]
         found += [name for name in self.names if re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(name), text)]
+        found += ["pattern:%s" % kind for kind in sanitize.leaks(text)]  # account ids, credentials, emails, ...
         return found
 
 

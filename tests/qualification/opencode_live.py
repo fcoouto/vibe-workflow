@@ -853,7 +853,8 @@ class Run:
         after = self.snapshot_user_dirs()
         changes = {}
         for name in USER_OPENCODE_DIRS:
-            unexpected, churn, session = safety.classify_snapshots(before[name], after[name], name == safety.SESSION_OUTPUT_DIR)
+            unexpected, churn, session = safety.classify_snapshots(before[name], after[name], name == safety.SESSION_OUTPUT_DIR,
+                                                                   Path.home() / name)
             changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn),
                                  session_output_count=len(session))
             if unexpected:

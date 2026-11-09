@@ -476,7 +476,7 @@ class ChatGPTMethodTests(StageHarness):
     def test_an_unknown_refusal_shape_records_only_key_names(self):
         message, signin = self.refused_sign_in("weird", dict(detail=dict(inner="x"), count=3))
         self.assertEqual(signin["error"], {})
-        self.assertEqual(signin["keys"], ["access", "count", "detail", "id_token", "refresh", "status"])
+        self.assertEqual(signin["keys"], ["<key>", "<key>", "access", "id_token", "refresh", "status"])  # allow-listed names only
 
     def test_secret_looking_refusal_fields_are_never_recorded(self):
         message, signin = self.refused_sign_in("failed", dict(
@@ -554,15 +554,17 @@ class ChatGPTRequestFactsTests(StageHarness):
         self.assertEqual(assistant["model"], dict(providerID="openai", id="gpt-test-mini", variant="low"))
         error = assistant["error"]
         self.assertEqual((error["type"], error["status"], error["retry_after_ms"]), ("APIError", 403, 1500))
-        self.assertIn("<url>", error["message"])
-        self.assertEqual(error["body"]["fields"], dict(code="subscription_sharing_user_not_eligible", type="invalid_request",
-                                                       message="plan not eligible", param="reasoning.effort"))
+        self.assertIn("<redacted:url>", error["message"]["text"])
+        fields = error["body"]["fields"]
+        self.assertEqual((fields["code"], fields["type"], fields["param"], fields["message"]["text"]),
+                         ("subscription_sharing_user_not_eligible", "invalid_request", "reasoning.effort", "plan not eligible"))
         self.assertIn("subscription_sharing_user_not_eligible", error["body"]["codes"])
-        self.assertIn("access_token", error["body"]["keys"])
+        self.assertIn("<key>", error["body"]["keys"])  # access_token: not an allow-listed name
         self.assertEqual(assistant["retry"]["attempt"], 2)
-        self.assertEqual(facts["idle"], [dict(outcome="failed", error_type="APIError")])
+        self.assertEqual(facts["idle"], [dict(outcome="failed", error_type="APIError", guard=None)])
         self.assertEqual([e["type"] for e in facts["events"]], ["session.status", "session.error", "session.status"])
-        self.assertEqual(facts["events"][0]["status"], dict(type="retry", attempt=1, message="retrying"))
+        status = facts["events"][0]["status"]
+        self.assertEqual((status["type"], status["attempt"], status["message"]["text"]), ("retry", 1, "retrying"))
         self.assertEqual(facts["request_body_keys"], ["id", "text"])
         self.assertEqual((facts["variant"], facts["variants_listed"]), ("low", ["low", "medium"]))
         self.assertEqual(facts["wait"]["reason"], "idle record after the prompt and the session not active")

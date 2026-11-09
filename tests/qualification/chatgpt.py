@@ -16,7 +16,7 @@ import os
 import re
 import time
 
-from tests.qualification import probe_stages
+from tests.qualification import probe_stages, sanitize
 from tests.qualification.safety import PROMPT_TEXT, Blocker, Refused, check_route, parse_route
 
 PURPOSE = "chatgpt"
@@ -84,9 +84,9 @@ def sign_in_error(body):
     """`(error fields, key names)` of a sign-in attempt's final status: short plain strings of `ERROR_FIELDS`, already
     redacted, never a URL; every other field contributes its name only."""
     body = body if isinstance(body, dict) else {}
-    error = {k: body[k][:ERROR_CAP] for k in ERROR_FIELDS
+    error = {k: sanitize.text(body[k], ERROR_CAP) for k in ERROR_FIELDS
              if isinstance(body.get(k), str) and body[k].strip() and "://" not in body[k] and body[k] != "<secret>"}
-    return error, sorted(str(k)[:40] for k in body)[:30]
+    return error, sanitize.safe_keys(body, 30)
 
 
 def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=time.monotonic, announce=print):
@@ -247,54 +247,58 @@ def lowest_variant(listed, ref):
 # message has finish, rawFinish, cost, tokens, error and retry {attempt, at, error}; an idle record has outcome
 # (succeeded, failed, interrupted) and error; errors are `Session.StructuredError` {type, message, status?,
 # response?: {body}, retryAfterMs?}; session status events are idle, busy or retry {attempt, message, next}.
-URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I)
 BODY_FIELDS = ERROR_FIELDS + ("param", "type")
-# Refusal codes the 2.2.6 chatgpt plugin itself recognizes, and common OpenAI error codes; matched in error bodies.
-KNOWN_CODES = ("subscription_sharing_usage_limit_exceeded", "subscription_sharing_user_not_eligible",
-               "subscription_sharing_unsupported_capability", "subscription_sharing_route_not_supported",
-               "subscription_sharing_invalid_user", "chatpass_v2_scope_not_authorized",
-               "chatpass_v2_invalid_authorization_context", "usage_limit_reached", "rate_limit_exceeded",
-               "insufficient_quota", "model_not_found", "unsupported_value", "unsupported_parameter",
-               "invalid_request_error", "context_length_exceeded")
+CODE_FIELDS = ("code", "type", "error")  # kept only as codes (sanitize.code_value)
 EVENT_TYPES = ("session.status", "session.error", "session.idle", "message.updated")
-
-
-def short(run, value, cap=ERROR_CAP):
-    """A redacted, URL-free, length-capped string, or None."""
-    return URL.sub("<url>", run.redact(value))[:cap] if isinstance(value, str) and value.strip() else None
+# Our own blocks, not upstream refusals: the qual-post guard and the routing shim name their reason in the error.
+GUARD = re.compile(r"qualification guard \((guard_[a-z_]{1,40})\)|routing: blocked \(([a-z_]{1,40})\)")
 
 
 def body_facts(run, raw):
-    """An upstream error body: whitelisted short fields of its (inner) error object, its key names, known codes."""
+    """An upstream error body: whitelisted fields of its (inner) error object (codes verbatim only when code-like,
+    texts masked), allow-listed key names, the known codes it contains, its length."""
     try:
         parsed = json.loads(raw)
     except ValueError:
         parsed = None
     inner = parsed.get("error") if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict) else parsed
     inner = run.redact(inner) if isinstance(inner, dict) else {}
-    return dict(fields={k: short(run, inner[k]) for k in BODY_FIELDS if short(run, inner.get(k))},
-                keys=sorted(str(k)[:40] for k in inner)[:30], codes=[c for c in KNOWN_CODES if c in raw],
+    fields = {}
+    for key in BODY_FIELDS:
+        value = sanitize.code_value(inner.get(key)) if key in CODE_FIELDS else None
+        if value is None and key not in CODE_FIELDS:
+            value = sanitize.message(inner.get(key)) if key in ERROR_FIELDS else sanitize.text(inner.get(key), 80)
+        if value:
+            fields[key] = value
+    return dict(fields=fields, keys=sanitize.safe_keys(inner), codes=[c for c in sanitize.KNOWN_CODES if c in raw],
                 json=isinstance(parsed, dict), length=len(raw))
 
 
 def structured_error(run, error):
+    """A `Session.StructuredError`: its type (a class name or code), status, retry delay, masked message record, the
+    guard or shim reason when the block was ours, allow-listed key names and the body's facts."""
     if not isinstance(error, dict):
         return None
     raw = (error.get("response") or {}).get("body") if isinstance(error.get("response"), dict) else None
     clean = run.redact(error)
-    return dict(type=short(run, clean.get("type"), 80), message=short(run, clean.get("message")),
+    guard = GUARD.search(error.get("message")) if isinstance(error.get("message"), str) else None
+    return dict(type=sanitize.code_value(clean.get("type"), type_name=True), message=sanitize.message(clean.get("message")),
                 status=error.get("status") if type(error.get("status")) is int else None,
                 retry_after_ms=error.get("retryAfterMs") if type(error.get("retryAfterMs")) is int else None,
-                keys=sorted(str(k)[:40] for k in error)[:20], body=body_facts(run, raw) if isinstance(raw, str) else None)
+                guard=(guard.group(1) or guard.group(2)) if guard else None, keys=sanitize.safe_keys(error),
+                body=body_facts(run, raw) if isinstance(raw, str) else None)
 
 
 def integer_tokens(tokens):
-    flat = {}
+    """Integer token counts by allow-listed key (one nesting level, as `cache.read`); other names are `<key>`."""
+    flat, name = {}, lambda key: str(key) if key in sanitize.SAFE_KEYS else "<key>"  # noqa: E731
     for key, value in (tokens or {}).items() if isinstance(tokens, dict) else ():
         if isinstance(value, dict):
-            flat.update({"%s.%s" % (key, k): v for k, v in value.items() if type(v) is int})
+            for inner, number in value.items():
+                if type(number) is int:
+                    flat["%s.%s" % (name(key), name(inner))] = flat.get("%s.%s" % (name(key), name(inner)), 0) + number
         elif type(value) is int:
-            flat[str(key)] = value
+            flat[name(key)] = flat.get(name(key), 0) + value
     return flat
 
 
@@ -302,14 +306,15 @@ def assistant_facts(run, message):
     model = message.get("model") if isinstance(message.get("model"), dict) else {}
     retry = message.get("retry") if isinstance(message.get("retry"), dict) else None
     times = message.get("time") if isinstance(message.get("time"), dict) else {}
-    return dict(finish=short(run, message.get("finish"), 40), raw_finish=short(run, message.get("rawFinish"), 80),
+    return dict(finish=sanitize.text(message.get("finish"), 40), raw_finish=sanitize.text(message.get("rawFinish"), 80),
                 error=structured_error(run, message.get("error")), time_completed=bool(times.get("completed")),
                 time_streamed=bool(times.get("streamed")), tokens=integer_tokens(message.get("tokens")),
                 cost_present=message.get("cost") is not None,
-                model={k: short(run, model.get(k), 80) for k in ("providerID", "id", "variant")},
+                model={k: sanitize.text(model.get(k), 80) for k in ("providerID", "id", "variant")},
                 retry=dict(attempt=retry.get("attempt") if type(retry.get("attempt")) is int else None,
                            error=structured_error(run, retry.get("error"))) if retry else None,
-                content_types=sorted({str(p.get("type"))[:20] for p in message.get("content") or [] if isinstance(p, dict)}))
+                content_types=sorted({sanitize.text(str(p.get("type")), 20) for p in message.get("content") or []
+                                      if isinstance(p, dict)}), keys=sanitize.safe_keys(message))
 
 
 def event_facts(run, root):
@@ -324,10 +329,9 @@ def event_facts(run, root):
             continue
         entry = dict(type=event["type"])
         if status:
-            entry["status"] = {k: v for k, v in (("type", short(run, status.get("type"), 20)),
-                                                 ("attempt", status.get("attempt"))) if v is not None and v != ""}
-            if short(run, status.get("message")):
-                entry["status"]["message"] = short(run, status.get("message"))
+            entry["status"] = {k: v for k, v in (("type", sanitize.code_value(status.get("type"))),
+                                                 ("attempt", status.get("attempt") if type(status.get("attempt")) is int else None),
+                                                 ("message", sanitize.message(status.get("message")))) if v is not None}
         if error:
             entry["error"] = structured_error(run, error)
         found.append(entry)
@@ -335,7 +339,8 @@ def event_facts(run, root):
 
 
 def session_facts(run, root, began, body, waited, wait_ms):
-    """What the server returned for the managed session (ids, kinds, shapes and short redacted errors only)."""
+    """What the server returned for the managed session: counts, kinds, allow-listed key names, codes and masked
+    short texts only. If anything identifying is still found, the whole block is withheld (fail closed)."""
     status, session, _ = run.server.request("GET", "/api/session/%s" % root)
     info = run.data(session) if status == 200 and isinstance(run.data(session), dict) else {}
     http, page, _ = run.server.request("GET", "/api/session/%s/message" % root, query={"order": "asc"})
@@ -345,37 +350,54 @@ def session_facts(run, root, began, body, waited, wait_ms):
         messages = []
     counts = {}
     for message in messages:
-        kind = str(message.get("type"))[:30]
+        kind = sanitize.code_value(message.get("type")) or "<other>"
         counts[kind] = counts.get(kind, 0) + 1
     recent = [m for m in messages if ((m.get("time") or {}).get("created") or 0) >= began]
-    return dict(session=dict(http=status, keys=sorted(str(k)[:40] for k in info)[:40],
-                             outcome=info.get("outcome") if info.get("outcome") in ("succeeded", "failed", "interrupted") else None),
-                messages_http=http, messages_keys=sorted(str(k)[:40] for k in page)[:20] if isinstance(page, dict) else None,
-                messages_by_type=counts, user_message=any(m.get("type") == "user" for m in messages),
-                assistant=[assistant_facts(run, m) for m in messages if m.get("type") == "assistant"][:5],
-                idle=[dict(outcome=short(run, m.get("outcome"), 20),
-                           error_type=(structured_error(run, m.get("error")) or {}).get("type"))
-                      for m in recent if m.get("type") == "idle"][:5],
-                events=event_facts(run, root), request_body_keys=sorted(body), variant=run.route[2],
-                variants_listed=list(getattr(run, "chatgpt_variants", None) or []),
-                wait=dict(ms=wait_ms, reason=waited))
+    facts = dict(session=dict(http=status, keys=sanitize.safe_keys(info),
+                              outcome=info.get("outcome") if info.get("outcome") in ("succeeded", "failed", "interrupted") else None),
+                 messages_http=http, messages_keys=sanitize.safe_keys(page),
+                 messages_by_type=counts, user_message=any(m.get("type") == "user" for m in messages),
+                 assistant=[assistant_facts(run, m) for m in messages if m.get("type") == "assistant"][:5],
+                 idle=[dict(outcome=m.get("outcome") if m.get("outcome") in ("succeeded", "failed", "interrupted") else None,
+                            error_type=(structured_error(run, m.get("error")) or {}).get("type"),
+                            guard=(structured_error(run, m.get("error")) or {}).get("guard"))
+                       for m in recent if m.get("type") == "idle"][:5],
+                 events=event_facts(run, root), request_body_keys=sanitize.safe_keys(body), variant=sanitize.text(run.route[2], 40),
+                 variants_listed=[sanitize.text(v, 40) for v in getattr(run, "chatgpt_variants", None) or []],
+                 wait=dict(ms=wait_ms, reason=sanitize.text(waited)))
+    leaked = sorted(set(sanitize.leaks(json.dumps(facts)) + ["secret" for _ in run.redact.leaks(json.dumps(facts))]))
+    return dict(facts_withheld=leaked) if leaked else facts
+
+
+def errors_of(facts):
+    """Every structured error recorded in the facts (assistant, retry and event errors)."""
+    return [a["error"] for a in facts.get("assistant", []) if a["error"]] + \
+        [a["retry"]["error"] for a in facts.get("assistant", []) if a["retry"] and a["retry"]["error"]] + \
+        [e["error"] for e in facts.get("events", []) if e.get("error")]
+
+
+def guard_reasons(facts, hooks):
+    """Our own blocks: `guard_*` decisions logged by qual-post in this window and guard or shim reasons in errors."""
+    found = {r["decision"] for r in hooks if str(r.get("decision", "")).startswith("guard_")}
+    found |= {e["guard"] for e in errors_of(facts) if e.get("guard")}
+    found |= {i["guard"] for i in facts.get("idle", []) if i.get("guard")}
+    return sorted(found)
 
 
 def upstream_code(facts):
-    """The most specific refusal recorded: a known code, the error body's code or type, else the error's type."""
-    errors = [a["error"] for a in facts["assistant"] if a["error"]] + \
-        [a["retry"]["error"] for a in facts["assistant"] if a["retry"] and a["retry"]["error"]] + \
-        [e["error"] for e in facts["events"] if e.get("error")]
+    """The most specific upstream refusal recorded (our own guard and shim blocks excluded): a known code, the
+    error body's code or type, else the error's type."""
+    errors = [e for e in errors_of(facts) if not e.get("guard")]
     for error in errors:
-        body = error.get("body") or {}
-        if body.get("codes"):
-            return body["codes"][0]
+        codes = (error.get("body") or {}).get("codes") or (error.get("message") or {}).get("codes")
+        if codes:
+            return codes[0]
     for error in errors:
         fields = (error.get("body") or {}).get("fields") or {}
         if fields.get("code") or fields.get("type"):
             return fields.get("code") or fields.get("type")
-    failed = [i for i in facts["idle"] if i["outcome"] == "failed"]
-    return next((e.get("type") for e in errors if e.get("type")), None) or ("idle_failed" if failed else None)
+    failed = [i for i in facts.get("idle", []) if i["outcome"] == "failed" and not i.get("guard")]
+    return next((e.get("type") for e in errors if e.get("type")), None) or ("idle_failed" if failed and errors else None)
 
 
 def request(run):
@@ -416,11 +438,16 @@ def request(run):
                     unknown=sorted(result["unknown"]), title=(result.get("title") or {}).get("state"),
                     descendants=dict(http=status, complete=(answer or {}).get("complete")), settlement=settlement,
                     detached=detached)
-    upstream = upstream_code(facts) if sent == 1 and observed["kinds"] != ["primary"] else None
+    failed = sent == 1 and observed["kinds"] != ["primary"]
+    guarded = guard_reasons(facts, run.server.hooks()[mark:]) if failed else []
+    upstream = upstream_code(facts) if failed else None
+    if guarded:  # our own guard or the shim blocked it (for example a retry): never reported as an upstream refusal
+        failures.append("request_blocked_by_guard")
+        run.note(s, "guard_block", guarded)
     if upstream:  # transmitted, then refused or failed upstream: reported apart from a missing or extra request
         failures.append("request_failed_upstream")
         run.note(s, "upstream_error", upstream)
-    for condition, reason in ((upstream or (sent == 1 and observed["kinds"] == ["primary"]), "not_one_primary_request"),
+    for condition, reason in ((upstream or guarded or not failed, "not_one_primary_request"),
                               (all(c is None for c in observed["costs"]), "cost_not_null"),
                               (settlement == "window" and detached, "not_settled"), (clean, "status_not_clean")):
         if not condition:

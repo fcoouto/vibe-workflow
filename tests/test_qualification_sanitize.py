@@ -61,13 +61,12 @@ class FuzzedFactsTests(StageHarness):
     connect = ChatGPTTests.connect
 
     def fuzzed(self, **extra):
-        error = dict(UPSTREAM, message="refused " + ALL, type="APIError " + ALL)
+        error = dict(UPSTREAM, message="refused " + ALL)  # `type` must stay a name for accounting: fuzzed directly below
         error["response"] = dict(body=json.dumps(dict(error={
             "code": "acct_9f8e7d6c5b", "type": ALL, "message": ALL, "reason": ALL, "error_description": ALL, "error": ALL,
             "param": ALL, "details": [{"deep": [ALL, {"deeper": ALL}]}], "fernando.test@example.com": ALL,
             "sk-proj-AbCdEfGh1234567890": 1})))
-        error["fernando.test@example.com"] = ALL
-        overrides = dict(finish=ALL, rawFinish=ALL, model=dict(providerID=ALL, id=ALL, variant=ALL),
+        overrides = dict(  # model ids and finish: see test_model_and_finish_are_masked (accounting validates them)
                          tokens={"input": 3, "fernando.test@example.com": 5, "cache": {"sk-proj-AbCdEfGh1234567890": 7}},
                          content=[dict(type=ALL)])
         run, ledger, server, *_ = self.connect(upstream_error=error, assistant_overrides=overrides, retry_message=ALL,
@@ -89,7 +88,28 @@ class FuzzedFactsTests(StageHarness):
         self.assertTrue(error["message"]["masked"])
         self.assertEqual(len(error["message"]["sha256"]), 12)
         self.assertIsNone(error["body"]["fields"].get("code"))  # an id-shaped code is not a code
-        self.assertIn("subscription_sharing_user_not_eligible", error["body"]["codes"])
+        self.assertEqual(error["body"]["fields"]["message"]["masked"], True)
+        self.assertIn("<key>", error["body"]["keys"])  # the email- and key-shaped names
+
+    def test_model_and_finish_are_masked(self):
+        run, *_ = self.connect()
+        facts = chatgpt.assistant_facts(run, dict(type="assistant", model=dict(providerID=ALL, id=ALL, variant=ALL),
+                                                  finish=ALL, rawFinish=ALL,
+                                                  content=[dict(type=ALL)], **{ALL: 1}))
+        text = json.dumps(facts)
+        for kind, (value, fragment) in SECRETS.items():
+            self.assertNotIn(fragment, text, kind)
+        self.assertEqual(sanitize.leaks(text), [])
+        self.assertIn("<key>", facts["keys"])
+
+    def test_error_key_names_outside_the_schema_are_masked(self):
+        run, *_ = self.connect()
+        error = dict(UPSTREAM, type="APIError " + ALL,
+                     **{"fernando.test@example.com": ALL, "sk-proj-AbCdEfGh1234567890": [ALL, {ALL: ALL}]})
+        text = json.dumps(chatgpt.structured_error(run, error))
+        for kind, (value, fragment) in SECRETS.items():
+            self.assertNotIn(fragment, text, kind)
+        self.assertIn("<key>", text)
 
     def test_a_masking_gap_withholds_the_facts(self):
         with patch.object(sanitize, "mask", lambda text: (text, False)):
@@ -105,6 +125,8 @@ class GuardBlockTests(StageHarness):
     connect = ChatGPTTests.connect
 
     def classified(self, error, retry_error):
+        for name in ("iso", "state"):  # each run gets a fresh ledger and dir
+            shutil.rmtree(self.tmp / name, ignore_errors=True)
         run, ledger, server, *_ = self.connect(upstream_error=error, upstream_retry=dict(attempt=2, at=1, error=retry_error))
         chatgpt.select_model(run)
         chatgpt.request(run)
