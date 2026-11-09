@@ -1,0 +1,604 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-09",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "qualification-2",
+    "opencode": "2.2.6",
+    "provider": "claude-agent/haiku#low",
+    "sanitized": true
+  },
+  "blockers": [],
+  "call_ledger": {
+    "chatgpt": {
+      "cap": 4,
+      "open_reservations": 0,
+      "remaining": 4,
+      "spent": 0
+    },
+    "pilot": {
+      "cap": 28,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 23
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    },
+    "qualification-2": {
+      "cap": 10,
+      "open_reservations": 0,
+      "remaining": 3,
+      "spent": 7
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": null,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 37,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "tool.execute.before",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "tool": "subagent"
+    },
+    {
+      "decision": "passed",
+      "hook": "tool.execute.before",
+      "phase": "post",
+      "session": "<ses#3>",
+      "tool": "subagent"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "pre",
+      "session": "<ses#3>"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "post",
+      "session": "<ses#3>"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#5>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#5>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "guard_hold",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#6>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#6>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "hook": "tool.execute.before",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "decision": "passed",
+      "hook": "tool.execute.before",
+      "phase": "post",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "pre",
+      "session": "<ses#7>"
+    },
+    {
+      "effect": "deny",
+      "hook": "permission.evaluate",
+      "phase": "post",
+      "session": "<ses#7>"
+    },
+    {
+      "hook": "tool.execute.before",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "decision": "passed",
+      "hook": "tool.execute.before",
+      "phase": "post",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "pre",
+      "session": "<ses#7>"
+    },
+    {
+      "effect": "deny",
+      "hook": "permission.evaluate",
+      "phase": "post",
+      "session": "<ses#7>"
+    },
+    {
+      "hook": "tool.execute.before",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "decision": "passed",
+      "hook": "tool.execute.before",
+      "phase": "post",
+      "session": "<ses#7>",
+      "tool": "write"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "pre",
+      "session": "<ses#7>"
+    },
+    {
+      "effect": "allow",
+      "hook": "permission.evaluate",
+      "phase": "post",
+      "session": "<ses#7>"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "decision": "guard_hold",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#7>",
+      "variant": "low"
+    }
+  ],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 0.822,
+        "median_ms": 0.613,
+        "n": 10,
+        "p95_ms": 0.822
+      },
+      "permission.evaluate/-": {
+        "max_ms": 0.189,
+        "median_ms": 0.182,
+        "n": 4,
+        "p95_ms": 0.189
+      },
+      "tool.execute.before/-": {
+        "max_ms": 0.702,
+        "median_ms": 0.155,
+        "n": 4,
+        "p95_ms": 0.702
+      }
+    },
+    "unmatched_pre_records": 1
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "setup"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "setup"
+    },
+    {
+      "calls": 3,
+      "label": "descendants: tool subagent",
+      "stage": "descendants"
+    },
+    {
+      "calls": 1,
+      "label": "descendants: command child",
+      "stage": "descendants"
+    },
+    {
+      "calls": 1,
+      "label": "descendants: API child",
+      "stage": "descendants"
+    },
+    {
+      "calls": 2,
+      "label": "s33d: config and ordinary edits",
+      "stage": "s33d"
+    },
+    {
+      "calls": 0,
+      "label": "s33d: env command (its prompt is held)",
+      "stage": "s33d"
+    }
+  ],
+  "mode": "qualification-2",
+  "off_route_requests": 1,
+  "stages": {
+    "descendants": {
+      "failures": [],
+      "negative": {
+        "accounting_unknown": [
+          "no_requests",
+          "shim_lineage_incomplete"
+        ],
+        "api_offline": {
+          "costs_null": true,
+          "unknown": [
+            "cost_unknown",
+            "shim_lineage_incomplete"
+          ]
+        },
+        "calls": 0,
+        "detached": true,
+        "rpc": {
+          "complete": false,
+          "http": 200,
+          "reason": "root_creation_unobserved"
+        },
+        "settlement": null
+      },
+      "pass": true,
+      "positive": {
+        "accounting_unknown": [],
+        "after_detach_refused": true,
+        "calls": 5,
+        "children": {
+          "api_child": "observed",
+          "command_child": "observed",
+          "tool_subagent": "observed"
+        },
+        "detached": true,
+        "event_stream_error": null,
+        "listing_count": 3,
+        "listing_matches": true,
+        "root_created_after_attach": true,
+        "root_creation_events": 1,
+        "rpc": {
+          "complete": true,
+          "count": 3,
+          "http": 200,
+          "reason": null,
+          "truncated": false
+        },
+        "settlement": "window"
+      },
+      "status_clean": true
+    },
+    "s33d": {
+      "calls": 2,
+      "config_edits": {
+        "files_absent": true,
+        "paths": {
+          ".opencode/command/x.md": {
+            "attempted": 1,
+            "denied": 1
+          },
+          "sub/opencode.json": {
+            "attempted": 1,
+            "denied": 1
+          }
+        },
+        "state": "observed"
+      },
+      "edit_resources": [
+        {
+          "config": true,
+          "form": "relative",
+          "inside_project": null,
+          "target": ".opencode/command/x.md"
+        },
+        {
+          "config": true,
+          "form": "relative",
+          "inside_project": null,
+          "target": "sub/opencode.json"
+        },
+        {
+          "config": false,
+          "form": "relative",
+          "inside_project": null,
+          "target": "agents/ok.txt"
+        }
+      ],
+      "env_command": {
+        "marker": "present",
+        "shell_hooks": []
+      },
+      "failures": [],
+      "image_generation": "unobserved: no claude-agent image model in the isolated server",
+      "image_models_listed": 0,
+      "ordinary_edit": {
+        "allowed": 1,
+        "attempted": 1,
+        "state": "observed",
+        "written": true
+      },
+      "pass": true,
+      "project_changes": [
+        "agents/",
+        "agents/ok.txt"
+      ]
+    },
+    "setup": {
+      "claude_agent_connect_http": 204,
+      "haiku_listed": {
+        "listed": true,
+        "low_variant": true
+      },
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "high"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "high"
+          }
+        ],
+        "guard_probe_reason": "guard_variant",
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "server": {
+        "location": "isolated project",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "setup": {
+        "authority_required": "updated",
+        "health": "ok",
+        "managed_denies": [
+          "config_edit",
+          "image_generation"
+        ]
+      }
+    }
+  },
+  "user_dirs": {
+    "codex": {
+      ".codex": {
+        "churn_count": 1,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/openai": {
+        "churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    },
+    "home_report_only": {
+      ".claude": {
+        "added": 7,
+        "changed": 1,
+        "removed": 1
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 1,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "desktop_churn_count": 1,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/state/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}
