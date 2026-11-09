@@ -35,6 +35,7 @@ const MAX_CLOSED = 1024  // sessions of finished attempts; evicting, an evicted 
 const MAX_PROBES = 1024  // recent unmanaged or failed answers; evicting, used only to avoid asking again
 const MAX_PROBING = 8  // ledger questions in flight, for creation events and for hooks each; beyond it, no answer for now
 const MAX_RETIRED = 4096  // managed descendants of detached roots; evicting, an evicted one is asked about no more
+const MAX_DESCENDANTS_RESPONSE = 512  // entries in one `routing.descendants` answer; beyond it the answer says truncated
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
 const DENY_MESSAGE = "Blocked by Smart Routing: this managed session may not use this action."
@@ -65,12 +66,16 @@ const PROBE_REQUEST = { provider: "opencode", model: "session-probe", variant: n
 type Facts = { provider: string; model: string; variant: string | null; harness: string }
 // `count` is the root's recorded descendants; `saturated` means its own tree exceeded its own budget.
 // `authority` is the attempt's dispatch token: kept only here and sent only to the routing child.
-type Attachment = { attempt: string; authority: string; pool: string; deny: Set<string>; count: number; saturated: boolean }
-type Descendant = { root: string; overLimit: boolean }
+// `watched`: the root's own creation event arrived while it was attached, so every descendant was created while the
+// shim was listening. `lookupFailed`: a lineage lookup failed while it was attached. Both feed `routing.descendants`.
+type Attachment = { attempt: string; authority: string; pool: string; deny: Set<string>; count: number; saturated: boolean;
+  watched: boolean; lookupFailed: boolean }
+// `parent` is the direct parent the shim knew when it recorded the session, or null when it did not know it.
+type Descendant = { root: string; overLimit: boolean; parent: string | null }
 // `onRefusal` is a code-only hook (never a plugin option) that sees attach's internal refusal reason; the RPC caller
 // only ever sees `attach_refused`.
 type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number; failedLookupMs?: number; pendingMs?: number;
-  onRefusal?: (reason: string) => void }
+  maxDescendantsResponse?: number; onRefusal?: (reason: string) => void }
 type Answer = "known" | "closed" | "no"
 
 class RoutingBlocked extends Error {
@@ -277,7 +282,7 @@ const object = (value: unknown, reason: string) => {
 }
 
 const METHOD = { input: { type: "object" }, output: { type: "object" } }
-const RPC = { id: "routing", methods: { health: METHOD, attach: METHOD, detach: METHOD }, events: {} }
+const RPC = { id: "routing", methods: { health: METHOD, attach: METHOD, detach: METHOD, descendants: METHOD }, events: {} }
 
 export function createRoutingPlugin(config: Config = {}) {
   return {
@@ -304,9 +309,16 @@ export function createRoutingPlugin(config: Config = {}) {
       const probes = new Map<string, number>()  // session -> until when an unmanaged or failed answer stands
       const probing = new Map<string, Promise<Answer>>()
       const asking = { event: 0, hook: 0 }  // questions in flight by who started them
-      // Managed descendants of detached roots -> that root, so a finished attempt's sessions stay blocked after detach.
-      const retired = new Map<string, string>()
+      // Managed descendants of detached roots -> that root (and their parent), so a finished attempt's sessions stay
+      // blocked after detach.
+      const retired = new Map<string, { root: string; parent: string | null }>()
       const unattached = randomBytes(32).toString("base64url")  // compared against when there is no attachment
+      /** The attachment of an attached root with this attempt and token, or undefined. The token is always compared. */
+      const authorized = (session: string, attempt: string, authority: string): Attachment | undefined => {
+        const attachment = attached.get(session)
+        const matches = sameToken(attachment?.authority ?? unattached, authority)
+        return attachment && attachment.attempt === attempt && matches ? attachment : undefined
+      }
       const bounded = <V>(map: Map<string, V>, limit: number, key: string, value: V) => {
         map.delete(key)
         if (map.size >= limit) map.delete(map.keys().next().value as string)
@@ -316,6 +328,7 @@ export function createRoutingPlugin(config: Config = {}) {
       const pendingMs = config.pendingMs ?? PENDING_MS
       let recorded = 0  // regular descendants across roots
       let overRecorded = 0
+      let streaming = false  // the creation-event stream is subscribed and has not ended or failed
 
       /** The root a session is managed under when that is already known, without lookups. */
       const rootOf = (session: string): string | undefined => {
@@ -328,8 +341,9 @@ export function createRoutingPlugin(config: Config = {}) {
       function recordDescendant(session: string, root: string) {
         const attachment = attached.get(root)
         if (descendants.has(session) || !attachment) return
+        const parent = lineage.get(session) ?? null
         if (attachment.count < MAX_DESCENDANTS_PER_ROOT && recorded < MAX_DESCENDANTS) {
-          descendants.set(session, { root, overLimit: false })
+          descendants.set(session, { root, overLimit: false, parent })
           attachment.count += 1
           recorded += 1
           return
@@ -337,7 +351,7 @@ export function createRoutingPlugin(config: Config = {}) {
         // Over the root's own budget, its whole tree is blocked. At the instance ceiling only the new session is.
         if (attachment.count >= MAX_DESCENDANTS_PER_ROOT) attachment.saturated = true
         if (overRecorded < MAX_OVER_LIMIT) {
-          descendants.set(session, { root, overLimit: true })
+          descendants.set(session, { root, overLimit: true, parent })
           overRecorded += 1
         } else {
           attachment.saturated = true  // cannot be recorded, so fail closed for this root
@@ -428,6 +442,7 @@ export function createRoutingPlugin(config: Config = {}) {
       // session; any other creation, whatever its timing, is interactive unless its chain later reaches a root.
       const events = new AbortController()
       if (typeof ctx?.event?.subscribe === "function") {
+        streaming = true
         void (async () => {
           try {
             for await (const event of ctx.event.subscribe({ types: ["session.created"], signal: events.signal })) {
@@ -436,12 +451,17 @@ export function createRoutingPlugin(config: Config = {}) {
               if (data.parentID != null && !text(data.parentID, SESSION)) continue
               const parent: string | null = data.parentID ?? null
               bounded(lineage, MAX_LINEAGE_CACHE, data.sessionID, parent)
-              const root = parent === null ? undefined : rootOf(parent)
+              const own = attached.get(data.sessionID)
+              if (own) own.watched = true
+              // A parent recorded under a root that was detached and attached again counts under that root.
+              const former = parent === null ? undefined : retired.get(parent)?.root
+              const root = parent === null ? undefined : rootOf(parent) ?? (former !== undefined ? rootOf(former) : undefined)
               if (root !== undefined) recordDescendant(data.sessionID, root)
               else if (parent !== null && holderOf(parent) !== undefined) markPending(data.sessionID, holderOf(parent)!)
               else if (derivedSession(data.sessionID) && rootOf(data.sessionID) === undefined) void probe(data.sessionID, "event")
             }
           } catch { /* live-only stream: lookups cover what it misses */ }
+          streaming = false  // ended or failed: no descendant set can be vouched for from now on
         })()
       }
 
@@ -460,6 +480,8 @@ export function createRoutingPlugin(config: Config = {}) {
           } catch { /* fall through: undetermined */ }
         }
         bounded(failed, MAX_FAILED_LOOKUPS, session, performance.now() + failedLookupMs)
+        // The session may belong to any attached root's tree, so none of them can vouch for its descendant set.
+        for (const attachment of attached.values()) attachment.lookupFailed = true
         return undefined
       }
 
@@ -470,7 +492,7 @@ export function createRoutingPlugin(config: Config = {}) {
        */
       async function underRetired(retiredSession: string, session: string)
         : Promise<Attachment | "pending" | "closed" | undefined> {
-        const former = retired.get(retiredSession)
+        const former = retired.get(retiredSession)?.root
         if (former === undefined) return undefined
         const again = rootOf(former)
         if (again !== undefined) {
@@ -689,7 +711,8 @@ export function createRoutingPlugin(config: Config = {}) {
           // Re-attaching never loosens: the denied actions only grow.
           attached.set(session, { attempt, authority, pool: body.funding_pool as string,
             deny: new Set([...(previous?.deny ?? []), ...(deny as string[])]),
-            count: previous?.count ?? 0, saturated: previous?.saturated ?? false })
+            count: previous?.count ?? 0, saturated: previous?.saturated ?? false,
+            watched: previous?.watched ?? false, lookupFailed: previous?.lookupFailed ?? false })
           // Sessions found under it while it waited for this attach become its managed descendants.
           pending.delete(session)
           closed.delete(session)
@@ -710,20 +733,43 @@ export function createRoutingPlugin(config: Config = {}) {
             throw new RoutingBlocked("invalid_detach")
           }
           const session = body.session_id as string
-          const attachment = attached.get(session)
           // One reason for every refusal, and the token is always compared, so a caller learns nothing about which
           // part was wrong or whether the session is attached here.
-          const matches = sameToken(attachment?.authority ?? unattached, body.authority as string)
-          if (!attachment || attachment.attempt !== body.attempt_id || !matches) throw new RoutingBlocked("detach_refused")
+          if (!authorized(session, body.attempt_id as string, body.authority as string)) throw new RoutingBlocked("detach_refused")
           for (const [key, entry] of descendants) {
             if (entry.root === session) {
               forget(key)
-              bounded(retired, MAX_RETIRED, key, session)
+              bounded(retired, MAX_RETIRED, key, { root: session, parent: entry.parent })
             }
           }
           attached.delete(session)  // with it go its count, saturation and token
           probes.delete(session)  // a derived id is asked about again, so a ledger-known one is pending, not interactive
           return { state: "detached", session_id: session }
+        },
+        // The recorded managed descendants of an attached root, for the launcher to cross-check its own session
+        // listing before it accounts, records and detaches. Same authority rules as detach; ids and parent links only.
+        descendants: async (input: unknown) => {
+          const body = object(input, "invalid_descendants")
+          if (!text(body.session_id, SESSION) || !text(body.attempt_id, ATTEMPT) || !text(body.authority, AUTHORITY)) {
+            throw new RoutingBlocked("invalid_descendants")
+          }
+          const root = body.session_id as string
+          const attachment = authorized(root, body.attempt_id as string, body.authority as string)
+          if (!attachment) throw new RoutingBlocked("descendants_refused")
+          const live = [...descendants].filter(([, entry]) => entry.root === root)
+          const old = [...retired].filter(([key, entry]) => entry.root === root && !descendants.has(key))
+          const all = [...live, ...old].map(([session, entry]) => ({ session_id: session, parent_session_id: entry.parent }))
+            .sort((left, right) => left.session_id < right.session_id ? -1 : left.session_id > right.session_id ? 1 : 0)
+          const limit = config.maxDescendantsResponse ?? MAX_DESCENDANTS_RESPONSE
+          const truncated = all.length > limit
+          // Why the set may be missing a descendant, first match wins; null when the shim can vouch for it.
+          const reason = !streaming ? "event_stream_unavailable"
+            : !attachment.watched ? "root_creation_unobserved"
+            : attachment.saturated ? "descendant_limit"
+            : attachment.lookupFailed ? "lineage_lookup_failed"
+            : truncated ? "response_truncated" : null
+          return { state: "ok", root, descendants: all.slice(0, limit), truncated, complete: reason === null, reason,
+            cache: { recorded: live.length, retired: old.length } }
         },
       })
 
