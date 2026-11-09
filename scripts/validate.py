@@ -27,6 +27,7 @@ OVERSIZED_PYTHON = {
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
     "runtime/usage_budget.py": 1616,
+    "tests/test_opencode_accounting.py": 1191,
 }
 
 
