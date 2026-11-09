@@ -89,7 +89,10 @@ def _cost(value):
 
 def _micros(amount):
     """USD as integer micro-units, rounded up so a reported cost is never under-charged."""
-    return int((amount * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+    micros = int((amount * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+    if micros > MAX_TOTAL:
+        _fail("total too large")
+    return micros
 
 
 def _tokens(value, reason="invalid tokens"):
@@ -330,7 +333,7 @@ def usage_from_messages(messages, session_total=None, *, session_id, funding="su
             "title": {"state": "unknown" if title is None else "known" if any(title.values()) else "zero",
                       "tokens": title, "reason": title_reason},
             "message_ids": scan["ids"], "unknown": sorted(unknown), "grouped": grouped,
-            "reported_cost": {"usd_micros": sum(map(_micros, reported)), "messages": len(reported),
+            "reported_cost": {"usd_micros": _micros(sum(reported)), "messages": len(reported),
                               "basis": "provider_estimate"} if reported else None,
             "rate_limit": None if latest is None else rate_limit_observation(latest)}
 
