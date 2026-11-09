@@ -86,7 +86,7 @@
       ]
     },
     "clients/evidence-completion.md": {
-      "sha256": "dc845baa7940cc4ec37e953362f095829e01162e3fa982f2b1fd28577bde9914",
+      "sha256": "5b3f847c4f40779229776bd18f3823e49187b36202db465f5a5850dbe3077199",
       "ranges": [
         [
           1,
@@ -236,7 +236,7 @@
       ]
     },
     "clients/repository-gate.md": {
-      "sha256": "3fdf60d76bb2e76b740b6228bf4a2e09c7631fb7d7b48942de4356f7e6757c33",
+      "sha256": "8b40ddf2778afbe5cd5581dc70dc6d046d343a4ad85216b9ece1cac798e0aefb",
       "ranges": [
         [
           1,
@@ -293,7 +293,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "5325747b23270dacaff8dc41bf068ee488171f528c9ba8094b8c7d554fb96669",
+      "sha256": "9390b002ea9af2813c6a645ecfb08b77ba5a6e303fa59924f65c957a7139ae04",
       "ranges": [
         [
           1,
@@ -301,7 +301,7 @@
         ],
         [
           151,
-          209
+          210
         ]
       ]
     },
@@ -654,7 +654,7 @@
       ]
     },
     "skills/onboard-my-project/references/qualification.md": {
-      "sha256": "5a1b99dcb7d16bf8ddb8a263f97ae111f5f3634d0b72ad3ccf346efaf1ab230f",
+      "sha256": "0521e3cfe4f2170fd4ca78462d5adf61543a760f1553d4a0f41eb0d4f7760eec",
       "ranges": [
         [
           1,
