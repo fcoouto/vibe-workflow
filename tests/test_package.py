@@ -321,10 +321,20 @@ class PackageScanTests(unittest.TestCase):
         members.assert_called_once()
         self.assertEqual(members.call_args.kwargs["deadline"], budget["deadline"])
 
+    def test_checkout_scan_runs_no_configured_git_commands(self):
+        repo = self.checkout()
+        marker = self.base / "marker"
+        subprocess.run(["git", "-C", str(repo), "config", "core.fsmonitor", f"touch {marker}-repo"], check=True)
+        inherited = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                     "GIT_CONFIG_VALUE_0": f"touch {marker}-env"}
+        with patch.dict(os.environ, inherited):
+            self.assertEqual(self.scan(repo)[0], frozen_scan(self.export(repo)))
+        self.assertEqual(sorted(path.name for path in self.base.iterdir()), ["export", "repo"])
+
     def test_membership_failure_fails_closed(self):
         from runtime import setup_observation
         repo = self.checkout()
-        with patch.object(package_manifest.subprocess, "run", side_effect=OSError("no git")), \
+        with patch.object(package_manifest.subprocess, "Popen", side_effect=OSError("no git")), \
                 patch.object(setup_observation, "_read") as read, \
                 self.assertRaises(package_manifest.PackageManifestError):
             self.scan(repo)
@@ -381,9 +391,16 @@ class ExportBudgetTests(unittest.TestCase):
         with patch.object(package_manifest, "PACKAGE_SCAN_MAX_BYTES", 101):
             self.assertEqual(validate.package_export(self.root)["warnings"], [])
         before = validate.package_export(self.root)
-        write_tree(self.root, (("tests/t.py", b"x"), ("CLAUDE.md", b"x"), ("docs/CLAUDE.md", b"x")))
+        write_tree(self.root, (("docs/CLAUDE.md", b"x"),))
         after = validate.package_export(self.root)
         self.assertEqual((after["files"], after["bytes"]), (before["files"] + 1, before["bytes"] + 1))
+        # The scan reads an export as it is, so a development-only path in it would be scanned and installed.
+        for name in ("tests/t.py", "CLAUDE.md", ".codex/config.toml", "scripts/test_sharded.py"):
+            with self.subTest(name), tempfile.TemporaryDirectory() as other:
+                export = Path(other).resolve()
+                write_tree(export, (("a", b"x"), (name, b"x")))
+                with self.assertRaisesRegex(ValueError, f"development-only paths: {name}"):
+                    validate.package_export(export)
         with patch.object(package_manifest, "export_members", return_value=frozenset({"a", "tests", "tests/t.py"})), \
                 self.assertRaisesRegex(ValueError, "development-only paths: tests/t.py"):
             validate.package_export(self.root)
