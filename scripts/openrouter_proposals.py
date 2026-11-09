@@ -187,7 +187,7 @@ def triage(state, request, now):
     return result
 
 
-def act(action, state, request, now):
+def act(action, state, request, now, *, activation_ref=None):
     current = status(state, now)
     if action == 'status':
         if request.get('include_metadata') is True:
@@ -249,8 +249,10 @@ def act(action, state, request, now):
             return dict(fallback='capacity')
         visibility = worker_visibility.optional_declaration(request.get('visibility'))
         profile(request.get('profile'))
-        for key in ('model', 'provider', 'approval_ref', 'base_ref'):
+        for key in ('model', 'provider', 'base_ref'):
             text(request.get(key), key)
+        if 'approval_ref' in request:
+            text(request['approval_ref'], 'approval_ref')
         if request.get('effort') is not None:
             text(request['effort'], 'effort')
         for key, ceiling in (('output_tokens', MAX_OUTPUT_TOKENS), ('timeout_seconds', MAX_TIMEOUT_SECONDS)):
@@ -269,6 +271,7 @@ def act(action, state, request, now):
             return dict(fallback='incompatible_route', reasons=reasons)
         token = secrets.token_urlsafe(24)
         row = {key: request.get(key) for key in ('task_id', 'profile', 'model', 'provider', 'effort', 'snapshot_digest', 'approval_ref', 'base_ref', 'output_tokens', 'timeout_seconds', 'requirements')}
+        row['approval_ref'] = request.get('approval_ref', activation_ref)
         row['discovery_evidence'] = dict(model=model, endpoint=endpoint, benchmarks=[b for b in metadata['benchmarks'] if b.get('model') == request['model']])
         if visibility is not None:
             row['visibility'] = visibility
@@ -323,14 +326,18 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
                 if 'external' in request:
                     binding = request['external']
                     external_delegation.native_review(binding)
-                    packet = external_delegation.check(Path(report['checkout']), report['external_permission'], binding,
-                        service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
-                        effort=request.get('effort'), class_name=binding['class_name'],
+                    assignment = dict(service='openrouter', mode='proposal', model=request['model'],
+                        provider=request['provider'], effort=request.get('effort'), class_name=binding['class_name'])
+                    permission = external_delegation.effective_permission(report['external_permission'],
+                        report['activation'], **assignment)
+                    packet = external_delegation.check(Path(report['checkout']), permission, binding,
+                        **assignment,
                         now=time.time() if now is None else now)
                 elif action == 'dispatch':
                     raise ValueError('external_binding_required')
                 result = _run(action, store, request, now=now,
-                    management=dict(scope_id=report['scope_id'], revision=report['revision']))
+                    management=dict(scope_id=report['scope_id'], revision=report['revision']),
+                    activation_ref=report['activation']['ref'])
                 if action == 'dispatch' and result.get('dispatched'):
                     result.update(packet=packet['text'], model=request['model'], provider=request['provider'],
                                   effort=request.get('effort'), requires_native_review=True, accepted=False)
@@ -340,7 +347,7 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
     return _run(action, store, request, now=now)
 
 
-def _run(action: str, store: Path, request: dict, *, now: float | None = None, management=None) -> dict:
+def _run(action: str, store: Path, request: dict, *, now: float | None = None, management=None, activation_ref=None) -> dict:
     """Serialize one short local operation; callers perform all external actions."""
     if not isinstance(request, dict):
         raise ValueError('request must be an object')
@@ -378,7 +385,7 @@ def _run(action: str, store: Path, request: dict, *, now: float | None = None, m
                 row = next((row for row in state['attempts'] if row['attempt_token'] == request.get('attempt_token')), None)
                 if row is not None and row.get('management') != management:
                     raise ValueError('openrouter_preparation_stale')
-            result = act(action, state, request, now)
+            result = act(action, state, request, now, activation_ref=activation_ref)
             if action == 'begin' and 'attempt_token' in result:
                 state['attempts'][-1]['management'] = management
             try:

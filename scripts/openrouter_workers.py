@@ -82,9 +82,11 @@ def scoped_packet(brief, report, now=None, workspace=None):
     external_delegation.require(Path(brief['source_root']) == checkout, 'checkout_changed')
     external_delegation.native_review(binding)
     external_delegation.require(binding['coordinator'] == brief['coordinator_chat_id'], 'coordinator_changed')
-    packet = external_delegation.check(checkout, report['external_permission'], binding,
-        service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
-        effort=brief['effort'], class_name=binding['class_name'], now=time.time() if now is None else now)
+    assignment = dict(service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
+        effort=brief['effort'], class_name=binding['class_name'])
+    permission = external_delegation.effective_permission(report['external_permission'], report['activation'], **assignment)
+    packet = external_delegation.check(checkout, permission, binding,
+        **assignment, now=time.time() if now is None else now)
     selected = {str(Path(item['path']).relative_to(brief['source_root'])): item['sha256']
                 for item in packet['snapshots']}
     external_delegation.require(brief['objective'] == packet['text'] and set(brief['files']) == set(selected),
@@ -102,11 +104,11 @@ def prepare(root, brief, now=None):
     # Older callers supplied credit observations; they no longer gate or persist.
     brief = {key: value for key, value in brief.items() if key != 'credit'}
     required = {'task_id', 'coordinator_chat_id', 'model', 'provider', 'objective', 'source_root', 'files',
-                'timeout_seconds', 'steps', 'approval_ref', 'effort'}
-    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'external'}
+                'timeout_seconds', 'steps', 'effort'}
+    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'external', 'approval_ref'}
     if not required <= set(brief) <= required | optional: raise ValueError('invalid_brief_fields')
     if len(json.dumps(brief, ensure_ascii=True, allow_nan=False).encode()) > MAX_INPUT: raise ValueError('input_limit')
-    for key in required - {'files', 'timeout_seconds', 'steps'}:
+    for key in (required - {'files', 'timeout_seconds', 'steps'}) | ({'approval_ref'} & brief.keys()):
         if not isinstance(brief[key], str) or not brief[key].strip() or len(brief[key]) > 16000:
             raise ValueError('invalid_brief_value')
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', brief['task_id']): raise ValueError('invalid_task_id')
@@ -124,7 +126,8 @@ def prepare(root, brief, now=None):
     with settings.admission(source, 'workers', root=root) as report:
         selected = scoped_packet(brief, report, now)
         if 'sizing' in brief: brief = dict(brief, validated_output_tokens=sizing(brief, report['proposal_store'], now))
-        brief = dict(brief, management=dict(scope_id=report['scope_id'], revision=report['revision']))
+        brief = dict(brief, approval_ref=brief.get('approval_ref', report['activation']['ref']),
+            management=dict(scope_id=report['scope_id'], revision=report['revision']))
     maximum = brief['sizing']['max_files'] if 'sizing' in brief else 16
     if len(files) > maximum: raise ValueError('invalid_files')
     inputs = {}

@@ -78,21 +78,68 @@ class WorkerTests(unittest.TestCase):
                           source_root=str(self.source), files=['input.txt'], timeout_seconds=5,
                           steps=3, approval_ref='user-approved', effort='low')
 
-    def scoped_brief(self):
+    def scoped_brief(self, *, saved=True):
         from runtime import external_delegation as external
         from tests.test_external_delegation import permission
         consent = permission('openrouter', 'worker', model='vendor/model', provider='provider', effort='low')
         consent['sources'] = ['input.txt']
         disabled = settings.disable(self.source, dict(expected_revision=self.settings['revision']))
         configured = settings.configure(self.source, dict(expected_revision=disabled['revision'], routes=['workers'],
-            opencode=str(self.root / 'worker'), auth_data=str(self.root / 'auth'), external_permission=consent))
+            opencode=str(self.root / 'worker'), auth_data=str(self.root / 'auth'),
+            external_permission=consent if saved else None))
         self.settings = settings.enable(self.source, dict(expected_revision=configured['revision'], consent_version=2))
+        if not saved:
+            consent = external.effective_permission(None, self.settings['activation'], service='openrouter',
+                mode='worker', model='vendor/model', provider='provider', effort='low', class_name='investigation')
         packet = external.prepare(self.source, consent,
             [dict(kind='text', text=self.brief['objective'], sources=['input.txt'])])
         brief = dict(self.brief, external=dict(packet['binding'], automatic=True, local_preferred=False,
             class_name='investigation', coordinator=self.brief['coordinator_chat_id'], reviewer='native-reviewer',
             integration_available=True))
         return brief
+
+    def test_enabled_worker_without_approval_ref_uses_checked_files(self):
+        brief = self.scoped_brief(saved=False)
+        del brief['approval_ref']
+        exe = self.fixture("sys.stdin.read()\n"
+            "print(json.dumps({'type':'text','part':{'text':'Three lines'}}))\n"
+            "print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0,'tokens':{}}}))\n")
+        run = self.api.prepare(self.runs, brief)
+        retained = json.loads((run / 'brief.json').read_text())
+        self.assertNotIn('approval_ref', brief)
+        self.assertEqual(retained['approval_ref'], self.settings['activation']['ref'])
+        self.assertEqual(retained['external'], brief['external'])
+        self.assertEqual((run / 'workspace/input.txt').read_bytes(), (self.source / 'input.txt').read_bytes())
+        self.assertEqual(self.api.execute(run, exe, self.root / 'auth')['state'], 'awaiting_verification')
+        with self.assertRaisesRegex(ValueError, 'independent_review'):
+            self.api.verify(run, 'accepted', ['Native line count'], reviewer=brief['coordinator_chat_id'],
+                            native_review_ref='review')
+        self.assertEqual(self.api.verify(run, 'accepted', ['Native line count'], reviewer='native-reviewer',
+            native_review_ref='review')['state'], 'accepted')
+        with self.assertRaisesRegex(ValueError, 'already_started'):
+            self.api.execute(run, exe, self.root / 'auth')
+
+    def test_activation_worker_checks_exact_packet_and_copied_bytes(self):
+        brief = self.scoped_brief(saved=False)
+        for change, reason in ((dict(objective='different objective'), 'packet_changed'),
+                (dict(files=['other.txt']), 'packet_changed'),
+                (dict(external=dict(brief['external'], permission_digest='forged')), 'permission_changed')):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.api.prepare(self.runs, dict(brief, **change))
+        self.assertFalse((self.runs / brief['task_id']).exists())
+        run = self.api.prepare(self.runs, brief)
+        self.assertEqual(json.loads((run / 'brief.json').read_text())['approval_ref'], brief['approval_ref'])
+        copied = run / 'workspace/input.txt'
+        copied.chmod(0o600)
+        copied.write_text('changed copy')
+        with self.assertRaisesRegex(ValueError, 'copied_source_changed'):
+            self.api.scoped_packet(brief, self.settings, workspace=run / 'workspace')
+        marker = self.root / 'launched'
+        exe = self.fixture(f'from pathlib import Path\nPath({str(marker)!r}).touch()\n')
+        result = self.api.execute(run, exe, self.root / 'auth')
+        self.assertNotEqual(result['state'], 'awaiting_verification')
+        self.assertTrue(result['local_execution_stopped'])
+        self.assertFalse(marker.exists())
 
     def test_scoped_worker_rechecks_source_and_copied_bytes_before_launch(self):
         brief = self.scoped_brief()

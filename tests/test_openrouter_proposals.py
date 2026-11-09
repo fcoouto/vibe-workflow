@@ -39,14 +39,18 @@ class ProposalTests(unittest.TestCase):
     def call(self, action, request=None, now=100):
         return self.api.run(action, self.store, request or {}, now=now, cwd=self.repo)
 
-    def scoped_request(self):
+    def scoped_request(self, *, saved=True, automatic=True):
         from runtime import external_delegation as external
         from tests.test_external_delegation import permission
         consent = permission('openrouter', model='model/v1', provider='p', effort=None)
+        consent['automatic'] = automatic
         disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
         configured = settings.configure(self.repo, dict(expected_revision=disabled['revision'], routes=['proposals'],
-            opencode=None, auth_data=None, external_permission=consent))
+            opencode=None, auth_data=None, external_permission=consent if saved else None))
         self.settings = settings.enable(self.repo, dict(expected_revision=configured['revision']))
+        if not saved:
+            consent = external.effective_permission(None, self.settings['activation'], service='openrouter',
+                mode='proposal', model='model/v1', provider='p', effort=None, class_name='investigation')
         (self.repo / 'src').mkdir()
         (self.repo / 'src/code.py').write_text('source bytes\n')
         packet = external.prepare(self.repo, consent, [dict(kind='source', path='src/code.py')])
@@ -54,6 +58,60 @@ class ProposalTests(unittest.TestCase):
         return dict(self.begin_request(), external=dict(packet['binding'], automatic=True, local_preferred=False,
             class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
             integration_available=True))
+
+    def test_enabled_proposal_without_approval_ref_dispatches_once(self):
+        request = self.scoped_request()
+        del request['approval_ref']
+        begin = self.call('begin', request)
+        row = self.call('history')['records'][0]
+        self.assertEqual(row['approval_ref'], self.settings['activation']['ref'])
+        self.assertNotIn('approval_ref', request)
+        dispatch = dict(request, attempt_token=begin['attempt_token'])
+        with self.assertRaisesRegex(ValueError, 'external_attempt_changed'):
+            self.call('dispatch', dict(dispatch, approval_ref=row['approval_ref']))
+        self.assertIn('source bytes', self.call('dispatch', dispatch)['packet'])
+        self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'already_dispatched')
+
+    def test_scoped_proposal_without_saved_permission_uses_activation(self):
+        request = self.scoped_request(saved=False)
+        begin = self.call('begin', request)
+        row = self.call('history')['records'][0]
+        self.assertIsNone(self.settings['external_permission'])
+        self.assertEqual(row['approval_ref'], request['approval_ref'])
+        result = self.call('dispatch', dict(request, attempt_token=begin['attempt_token']))
+        self.assertIn('source bytes', result['packet'])
+        with self.assertRaisesRegex(ValueError, 'independent_review'):
+            self.call('record', dict(attempt_token=begin['attempt_token'], disposition='accepted',
+                reviewer='native-coordinator', native_review_ref='review', native_checks=[dict(success=True, ref='tests')]))
+
+    def test_activation_packet_failure_never_falls_back_to_legacy_begin(self):
+        request = self.scoped_request(saved=False)
+        for binding, reason in ((dict(permission_digest='forged'), 'permission_changed'),
+                                (dict(reviewer='native-coordinator'), 'independent_review')):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.call('begin', dict(request, external=dict(request['external'], **binding)))
+        (self.repo / 'src/code.py').write_text('changed after preparation')
+        with self.assertRaisesRegex(ValueError, 'source_changed'):
+            self.call('begin', request)
+        self.assertEqual(self.call('history')['records'], [])
+
+    def test_activation_packet_does_not_survive_disable_and_reenable(self):
+        request = self.scoped_request(saved=False)
+        begin = self.call('begin', request)
+        dispatch = dict(request, attempt_token=begin['attempt_token'])
+        disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
+        self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'openrouter_disabled')
+        settings.enable(self.repo, dict(expected_revision=disabled['revision']))
+        with self.assertRaisesRegex(ValueError, 'permission_changed'):
+            self.call('dispatch', dispatch)
+
+    def test_saved_permission_automatic_false_still_denies_automatic_proposal(self):
+        request = self.scoped_request(automatic=False)
+        with self.assertRaisesRegex(ValueError, 'automatic_selection_denied'):
+            self.call('begin', request)
+        manual = dict(request, external=dict(request['external'], automatic=False))
+        begin = self.call('begin', manual)
+        self.assertTrue(self.call('dispatch', dict(manual, attempt_token=begin['attempt_token']))['dispatched'])
 
     def test_scoped_proposals_use_admitted_checkout_when_cwd_is_a_subdirectory(self):
         from runtime import external_delegation as external
