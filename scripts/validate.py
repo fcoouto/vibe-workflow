@@ -70,6 +70,8 @@ CLAUDE_EVENTS = {
     "PostToolUseFailure": ("*", 5),
     "Stop": (None, 5),
     "UserPromptSubmit": (None, 5),
+    "SubagentStart": (None, 5),
+    "SubagentStop": (None, 5),
 }
 
 

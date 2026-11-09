@@ -315,8 +315,8 @@ def main():
     runtime_kind = requested_event if adapter is not None and requested_event in adapter.RUNTIME_EVENTS else None
 
     def failure(reason):
-        if requested_event in getattr(adapter, "PROMPT_EVENTS", ()):
-            return None  # Prompt events only carry optional title presentation; never disturb a prompt.
+        if requested_event in (*getattr(adapter, "PROMPT_EVENTS", ()), *getattr(adapter, "SUBAGENT_EVENTS", ())):
+            return None  # Optional presentation and observation never disturb a prompt or a subagent.
         if runtime_kind is not None:
             return hook_events.runtime_diagnostic(runtime_kind, reason)
         return session_start.diagnostic(reason)
@@ -325,7 +325,8 @@ def main():
     try:
         if adapter is None:
             raise StartupError("Expected a supported client and event")
-        if requested_event != "SessionStart" and runtime_kind is None and requested_event not in getattr(adapter, "PROMPT_EVENTS", ()):
+        if requested_event != "SessionStart" and runtime_kind is None and requested_event not in (
+                *getattr(adapter, "PROMPT_EVENTS", ()), *getattr(adapter, "SUBAGENT_EVENTS", ())):
             raise StartupError("Unsupported client runtime event")
         limit = MAX_INPUT if requested_event == "SessionStart" else getattr(adapter, "RUNTIME_INPUT_LIMIT", MAX_INPUT)
         payload = json_object(sys.stdin.buffer.read(limit + 1), limit=limit)
@@ -365,6 +366,14 @@ def main():
                 except Exception:
                     # The optional drift warning must preserve the startup result.
                     pass
+        elif requested_event in getattr(adapter, "SUBAGENT_EVENTS", ()):
+            output = None
+            event = adapter.normalize_subagent(payload)
+            acquisition = acquire_project_entry(event, PACKAGE, deadline=deadline)
+            scope = _entry_scope(acquisition, managed=False)
+            if scope is not None and scope.runtime is not None:
+                from runtime.adapters import claude_subagents
+                claude_subagents.record(scope, payload)
         elif requested_event in getattr(adapter, "PROMPT_EVENTS", ()):
             output = None
             event = adapter.normalize_prompt(payload)
@@ -400,6 +409,14 @@ def main():
                     output["systemMessage"] = (output.get("systemMessage", "") + " " + presentation["notification"]).strip()
             if event.client == "codex" and scope is not None and event.kind == "PostToolUse":
                 output = codex.with_output_notice(payload, output)
+            if (event.client == "claude-code" and event.tool_name == "Agent" and event.kind == "PostToolUse"
+                    and scope is not None and scope.runtime is not None):
+                try:
+                    # The spawn result is the first link of the subagent chain; recording never changes the output.
+                    from runtime.adapters import claude_subagents
+                    claude_subagents.record(scope, payload)
+                except Exception:
+                    pass
     except RuntimeScopeError as error:
         from runtime.state import retained_patch_guard
         retained = retained_patch_guard(event, deadline=deadline) if runtime_kind == "PreToolUse" else None

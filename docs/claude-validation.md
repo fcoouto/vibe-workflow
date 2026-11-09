@@ -44,3 +44,14 @@ Claude Code 2.1.311, `haiku`, a Claude-born canonical disposable checkout, real 
 - That stream was collected into a retained receipt, persisted through D4's owner path and read back as an `active` qualification-only scope with only `startup-context` verified.
 
 Not observed: pre-tool, post-tool and stop behavior under an enrolled bound task, Desktop and Cowork, older Claude versions, and more than one run. The PostToolUse and Stop diagnostics in that run came from a synthetic-qualified fixture state, not from the qualified scope. Package tests use synthetic streams shaped like the recording and do not spend usage.
+
+## D8 subagent observation (9 November 2026)
+
+Claude Code 2.1.311, `haiku`, a Claude-born canonical checkout activated by a real stage-1 receipt, real `HOME` and real managed-policy paths. One run (about $0.01) spawned a subagent whose first prompt line was the assignment marker and whose final message was the review report:
+
+- The packaged `PostToolUse:Agent`, `SubagentStart` and `SubagentStop` hooks ran and exited 0; the spool recorded one agent.
+- The chain verified and `collect_review` returned the receipt (mechanism `claude-code-subagent-hook`, requested model `haiku`, observed `claude-haiku-5-5`, the spawn tool call and reviewer ids) and the report.
+- An earlier run with 64-character digests failed correctly: the model dropped one character when echoing `candidate_digest`, so the report did not match its assignment. Model echo reliability matters; use a model that copies digests exactly, and do not relax the match.
+- Setup artifact: a test that patched `MANAGED_DIRECTORIES` to empty produced a different configuration digest than the real hook subprocess. Real use is consistent because collection and reading see the same paths.
+
+Not observed: D6 ledger integration, background versus synchronous completion ordering beyond this run, Desktop and Cowork, older Claude versions.
