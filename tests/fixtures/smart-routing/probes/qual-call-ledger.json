@@ -1,0 +1,65 @@
+{
+ "_meta": {
+  "budget_authorized": 14,
+  "counting": "every model.request that passed the routing shim and the post recorder (transmitted); blocked invocations cost 0 tokens and are listed separately",
+  "model": "claude-agent/haiku#low only"
+ },
+ "calls": [
+  {
+   "run": 1,
+   "stage": "1",
+   "label": "P0.7 (a) prompt with derived ids",
+   "calls": 1,
+   "note": "harness stopped next on HTTP 400 (message paging cursor sent as an object)"
+  },
+  {
+   "run": 2,
+   "stage": "1",
+   "label": "P0.7 (a) prompt with derived ids",
+   "calls": 1,
+   "note": "harness stopped next on HTTP 400 (order and cursor sent together)"
+  },
+  {
+   "run": 3,
+   "stage": "1",
+   "label": "P0.7 (a) prompt with derived ids",
+   "calls": 1
+  },
+  {
+   "run": 3,
+   "stage": "2",
+   "label": "managed primary request (derived ids, attached)",
+   "calls": 1
+  },
+  {
+   "run": 3,
+   "stage": "3",
+   "label": "title request of the managed session",
+   "calls": 1
+  }
+ ],
+ "total": 5,
+ "blocked_before_sending_run3": [
+  {
+   "stage": "2",
+   "label": "command subagent child on claude-agent/sonnet#low",
+   "by": "routing shim (route_mismatch)"
+  },
+  {
+   "stage": "2",
+   "label": "parent follow-up turn after the child's failure",
+   "by": "post recorder hold (guard_hold)"
+  },
+  {
+   "stage": "2",
+   "label": "prompt while not attached",
+   "by": "routing shim (attach_required)"
+  },
+  {
+   "stage": "2",
+   "label": "prompt after a wrong-token attach",
+   "by": "routing shim (attach_required)"
+  }
+ ],
+ "exploration_calls": 0
+}
