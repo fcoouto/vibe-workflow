@@ -104,9 +104,11 @@ def _terms(items):
 
 def _control_allowed(terms):
     """Control rows see task text, so their endpoint's terms must be known. An active integration covers
-    endpoints that may retain or train on it (user decision, 9 November 2026); terms forbidding confidential
-    data and an explicit user restriction still exclude the endpoint."""
-    return bool(terms) and terms.get('forbids_confidential') is not True and terms.get('user_restricted') is not True
+    endpoints that may retain or train on it (user decision, 9 November 2026). Eligibility needs
+    `forbids_confidential` to be exactly False; a missing or malformed value, or a `user_restricted`
+    entry other than False, excludes the endpoint."""
+    return (bool(terms) and terms.get('forbids_confidential') is False
+            and terms.get('user_restricted', False) is False)
 
 
 def _qualified(strategy, family, refs, entry):
@@ -189,12 +191,16 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
 def refresh_table(previous, load, *, now=None):
     """Maintenance refresh: ``load()`` returns the four compile inputs.
 
-    Any failure, or a successful compile that drops every row of a non-empty previous table (for
-    example an empty catalog), keeps the last verified table with its original ``compiled_at`` and
-    marks ``refresh_failed``; with no previous table the failure is an error.
+    Any failure keeps the last verified table with its original ``compiled_at`` and marks
+    ``refresh_failed``; with no previous table the failure is an error. A successful compile that
+    drops every row of a non-empty previous table (for example an empty catalog) keeps only the
+    previous non-control rows, with a version for that content: profiler and ranker rows see task
+    text, so they come only from a compile against the current terms.
     """
+    compiled = False
     try:
         fresh = compile_table(*load(), now=now)
+        compiled = True
         failure = None
         if previous and previous.get('rows') and not fresh['rows']:
             failure = ValueError('Refresh produced no qualified rows')
@@ -204,7 +210,13 @@ def refresh_table(previous, load, *, now=None):
         return fresh
     if previous is None:
         raise ValueError('No verified strategy table to retain') from failure
-    return dict(previous, refresh_failed=True)
+    kept = dict(previous, refresh_failed=True)
+    if compiled:
+        rows = {name: value for name, value in previous['rows'].items()
+                if name.split('|', 1)[0] not in CONTROL_ROLES}
+        if rows != previous['rows']:
+            kept.update(rows=rows, version=_digest([SCHEMA, rows, previous['sources']]))
+    return kept
 
 
 def lookup(table, profile):

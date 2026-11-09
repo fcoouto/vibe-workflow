@@ -157,6 +157,20 @@ class CompileTests(unittest.TestCase):
                                                [terms[0], dict(terms[1], **restriction)])
                 self.assertEqual([i['model'] for i in table['rows'][row]], ['free-open'])
 
+    def test_control_plane_needs_known_confidentiality_terms(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        row = key('profiler', 'general', 'low', 'low')
+        bare = {k: terms[1][k] for k in ('model', 'endpoint')}
+        for entry in (bare, dict(terms[1], forbids_confidential=None), dict(terms[1], forbids_confidential='no'),
+                      dict(terms[1], forbids_confidential=False, user_restricted='yes'),
+                      dict(terms[1], forbids_confidential=False, user_restricted=None)):
+            with self.subTest(entry=entry):
+                table = evidence.compile_table(guidance, catalog, benchmarks, [terms[0], entry])
+                self.assertEqual([i['model'] for i in table['rows'][row]], ['free-open'])
+        allowed = dict(terms[1], forbids_confidential=False, user_restricted=False)
+        table = evidence.compile_table(guidance, catalog, benchmarks, [terms[0], allowed])
+        self.assertEqual([i['model'] for i in table['rows'][row]], ['free-open', 'free-private'])
+
     def test_worker_rows_do_not_need_terms(self):
         self.assertIn(key('worker', 'implementation', 'medium', 'medium'), self.table['rows'])
 
@@ -199,16 +213,29 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(fresh['compiled_at'], '2026-11-08T00:00:00Z')
         self.assertFalse(fresh.get('refresh_failed'))
 
-    def test_successful_but_empty_compile_keeps_the_previous_table(self):
+    def test_successful_but_empty_compile_keeps_only_the_previous_non_control_rows(self):
         table = evidence.compile_table(*inputs(), now='2026-11-01T00:00:00Z')
+        control = {name for name in table['rows'] if name.split('|')[0] in evidence.CONTROL_ROLES}
+        self.assertTrue(control and set(table['rows']) - control)
         guidance, catalog, benchmarks, terms = inputs()
-        kept = evidence.refresh_table(table, lambda: (guidance, [], benchmarks, []), now='2026-11-08T00:00:00Z')
-        self.assertTrue(kept['rows'])
-        self.assertTrue(kept['refresh_failed'])
-        self.assertEqual(kept['compiled_at'], '2026-11-01T00:00:00Z')
         every_row_dropped = [dict(guidance[0], rows=[])]
-        kept = evidence.refresh_table(table, lambda: (every_row_dropped, catalog, benchmarks, terms))
-        self.assertEqual(kept['version'], table['version'])
+        for load in (lambda: (guidance, [], benchmarks, []), lambda: (every_row_dropped, catalog, benchmarks, terms)):
+            kept = evidence.refresh_table(table, load, now='2026-11-08T00:00:00Z')
+            self.assertTrue(kept['refresh_failed'])
+            self.assertEqual(kept['compiled_at'], '2026-11-01T00:00:00Z')
+            self.assertEqual(kept['rows'], {k: v for k, v in table['rows'].items() if k not in control})
+            self.assertNotEqual(kept['version'], table['version'])
+
+    def test_empty_compile_never_restores_a_restricted_control_endpoint(self):
+        guidance, catalog, benchmarks, terms = inputs()
+        profiler_only = [dict(guidance[0], rows=[r for r in guidance[0]['rows'] if r['role'] == 'profiler'])]
+        table = evidence.compile_table(profiler_only, catalog, benchmarks, terms, now='2026-11-01T00:00:00Z')
+        self.assertTrue(table['rows'])
+        restricted = [dict(terms[0], user_restricted=True), terms[1]]
+        self.assertFalse(evidence.compile_table(profiler_only, catalog, benchmarks, restricted)['rows'])
+        kept = evidence.refresh_table(table, lambda: (profiler_only, catalog, benchmarks, restricted))
+        self.assertEqual(kept['rows'], {})
+        self.assertEqual(evidence.lookup(kept, dict(role='profiler')), evidence.NO_RECOMMENDATION)
 
     def test_any_exception_from_load_or_compile_keeps_the_previous_table(self):
         table = evidence.compile_table(*inputs(), now='2026-11-01T00:00:00Z')
