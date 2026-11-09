@@ -602,10 +602,11 @@ class DocumentedEvidencePlanTests(unittest.TestCase):
             return value
         return resolve(json.loads(block.group(1)))
 
-    def _request(self, *, with_check=False):
-        fixture = EvidenceTests('runTest')
-        self.addCleanup(fixture.doCleanups)
-        fixture.setUp()
+    def _request(self, *, with_check=False, fixture=None):
+        if fixture is None:
+            fixture = EvidenceTests('runTest')
+            self.addCleanup(fixture.doCleanups)
+            fixture.setUp()
         payload = self._example('evidence-plan-minimal', fixture)
         if with_check:
             payload['plan']['checks'] = [self._example('evidence-plan-read-only-check', fixture)]
@@ -633,12 +634,18 @@ class DocumentedEvidencePlanTests(unittest.TestCase):
         self.assertEqual(stored['checks'][0]['baseline']['status'], 'not-run')
 
     def test_plan_examples_reject_missing_and_unknown_fields(self):
+        # Rejections leave the task unchanged (asserted per case), so one fixture serves every case.
+        fixture, _ = self._request(with_check=True)
+        initial = fixture.request()['expected_revision']
         for target, field, value in (
                 ('envelope', 'expected_revision', None), ('plan', 'criteria', None),
                 ('envelope', 'unknown', True), ('plan', 'unknown', True), ('check', 'unknown', True)):
             with self.subTest(target=target, field=field):
-                fixture, request = self._request(with_check=True)
+                _, request = self._request(with_check=True, fixture=fixture)
                 before = request['expected_revision']
+                self.assertEqual(before, initial)
+                with self.assertRaisesRegex(state.StateError, 'Evidence plan is missing'):
+                    fixture.api._load_plan(fixture.scope, fixture.identity)
                 fields = {'envelope': request, 'plan': request['plan'], 'check': request['plan']['checks'][0]}[target]
                 if value is None:
                     del fields[field]
