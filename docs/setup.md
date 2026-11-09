@@ -11,7 +11,7 @@ Vibe Coding Toolkit `soumatheusgomes/vibe-coding-toolkit` at `21b71b68679c11184f
 | Choice | Answer | Provenance |
 | --- | --- | --- |
 | Publishing | Commit, push a task branch, open a draft PR | User, 2026-11-08 |
-| Merging into `main` | Yes, for independently reviewed `[READY]` PRs when checks pass | User, 2026-11-08 |
+| Merging into `main` | Yes, for independently reviewed `[READY]` PRs when checks pass; agents set the prefix and merge under the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) | User, 2026-11-08; kept 2026-11-09 |
 | Workstreams | Enabled, in `.vibe-workflow/settings.json` | User, 2026-11-09 |
 | `.vibe-workflow/project.json` in Git | Not committed; `.gitignore` lists `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`, and `.vibe-workflow/settings.json` is committed | User, 2026-11-09 |
 
@@ -26,7 +26,7 @@ The repository has no CI or branch protection, so the merge permission relies on
 | Client instructions | `CLAUDE.md` imports `AGENTS.md` (Codex reads `AGENTS.md` directly) |
 | Architecture | `clients/index.md`, `policies/00-index.md`, `docs/onboard-my-project-plan.md` |
 | Design and accessibility | Not applicable: no user interface |
-| Local preparation and quality | `README.md` "Development" |
+| Local preparation and quality | `README.md` "Development" (setup and install); [development guide](development.md) (where to work, checks, PRs) |
 | Setup and evidence | This file |
 
 ## Component assessment
