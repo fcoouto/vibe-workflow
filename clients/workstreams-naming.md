@@ -155,8 +155,11 @@ merge, or its actual `WORKING`/`REVIEW` state while other work remains. A PR's
 `[BLOCKED]` or `[READY]` prefix ([PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle))
 is not a thread status: a `[BLOCKED]` PR still in progress leaves the thread
 `WORKING` or `REVIEW`. A PR closed unmerged keeps the
-thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
-remote state cannot be read, report it unverified and withhold `DONE`.
+thread out of `DONE` until the user chooses another scope or `CANCELLED`. A PR
+closed as `[SUPERSEDED]` passes through its replacement instead: when the user
+decided it, that decision is the scope choice; when an agent replaced its own PR,
+the replacing PR must be merged. If the remote state cannot be read, report it
+unverified and withhold `DONE`.
 
 A thread that opened no PR needs no extra step when its recorded scope excludes
 publication, such as read-only, investigation or review work, or a child scoped
