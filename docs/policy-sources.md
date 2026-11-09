@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing live qualification on OpenCode — 9 November 2026
+
+A staged live run of the finished S3 stack on an isolated OpenCode 2.2.6 server ([report](smart-routing-qualification.md)). It changes no runtime behavior; it records observations, adds an operator harness, and stopped on a P0.8 blocker.
+
+| Contract | Source |
+| --- | --- |
+| [OpenCode client](../clients/opencode.md) (derived-shape id assumption, command subagents reaching the shim only through lineage, RPC refusals as HTTP 500 `rpc.internal`, the open child-session accounting blocker, evidence limits), the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) and the plan's P0.6–P0.8 re-qualification notes; `tests/qualification/opencode_live.py` and `opencode_inspect.py` (isolated dir required, `claude-agent/haiku#low` only, a call budget of at most 14 enforced by the harness and by a guard plugin after the shim, redacted output) | The coordinator's 9 November 2026 brief for the staged live qualification (stages 0–4, call budget, isolation and cleanup rules, stop at the first blocker); observed results in `qual-results.json` and `qual-call-ledger.json` (run 3 of 3, n=1); `tests/test_qualification_harness.py` |
+
 ## Smart Routing operator reconciliation (S3.6b-2) — 9 November 2026
 
 Task S3.6b-2 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds the operator ops that settle uncertain dollar holds and lift over-bound and legacy admission blocks. It makes no model, OpenCode, network or credential call and changes no client file. S3.6b-1 owns host token accounting and event-gap resync.

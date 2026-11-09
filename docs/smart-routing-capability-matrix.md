@@ -94,6 +94,18 @@ Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate co
 3. The plugin is installed globally from the start and does nothing outside the bounded canary project until cutover (Task C.4).
 4. Route identity is alias + requested variant + catalog family; the resolved model is unknown.
 
+## Live re-qualification (9 November 2026)
+
+A staged run on the finished stack: one isolated OpenCode 2.2.6 server, the routing shim with a real `routing.py --serve` child on temporary stores, `claude-agent/haiku#low` only, and 5 model requests in total. The [report](smart-routing-qualification.md) has the full table, and [`qual-results.json`](../tests/fixtures/smart-routing/probes/qual-results.json) has the evidence. The run stopped in stage 3 on a blocker. Observed means seen in this run (n=1); unobserved means it did not run.
+
+| Gate | Observed | Unobserved |
+|---|---|---|
+| P0.6 | Handshake: `prepare` → `routing.health` `ok` → `dispatch` → `attach` (a wrong token refused) → managed request allowed → `detach` (a wrong token refused). A session not attached, and one after a wrong-token attach, blocked with `attach_required` (0 tokens). `webfetch` evaluation denied for the attached session. Credential-like environment names stripped from shells while attached. A `subagent: true` command child on another model blocked at its first request (`route_mismatch`): command subagents never reach `tool.execute.before`, so only lineage protects them. | Real `webfetch` tool execution; tool-call subagent and nested spawns; MCP and Code Mode calls; the closed-attempt block after `record complete`; an interactive session with the routing child killed; a failed plugin load. |
+| P0.7 | The server accepts derived session and message ids and returns them. One prompt with a derived message id: exactly one model request. The same prompt again: no request, the original id returned, plus an extra `idle` record. Read back by derived id. OpenCode's own session and message ids are 26-character mixed-case bodies, never `ses_` + 32 lowercase hex. Messages list in insertion order, not by id. `dispatch` repeated: `already_dispatched` with no token. | The lost-acknowledgment drill (stage 4); racing callers on the server; server restart. |
+| P0.8 | Hook `kind` for title and primary requests. The session total exceeds the messages by the title request's tokens (one title transmitted; the remainder is consistent with it). | Usage accounting of the attempt: **blocked**. A command-spawned child is linked only by `parentID`, so `usage_from_messages` refuses it when included and does not flag it when omitted. The child's `synthetic` result message makes the title remainder unknown. Also not observed: `track_events` and `reconcile_with_state` on live data, `record complete` settlement and a clean `status`, and `generate` requests. |
+
+RPC refusals reach the caller as HTTP 500 `rpc.internal` without the shim's reason code.
+
 ## Gate status (P0)
 
 | Gate | Status | Basis |
@@ -103,9 +115,9 @@ Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate co
 | P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
 | P0.3, P0.4 API grants and key binding | unverified | Not probed. |
 | P0.5 Model/effort | **partly established** | Requested model and variant observed; resolved model unsupported. |
-| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. |
-| P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. |
-| P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. |
+| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. The finished shim was observed live for the handshake and the blocked paths [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
+| P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. Re-qualified live on 9 November 2026 for derived ids, one request per derived message id, duplicates, read-back, id shapes and ordering; the lost-acknowledgment drill did not run. |
+| P0.8 Lineage/accounting | **partly established; blocked on re-qualification** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. The 9 November 2026 live run could not account an attempt with a command-spawned child (see the [report](smart-routing-qualification.md#blocker)). |
 
 ## Live checks still open
 
