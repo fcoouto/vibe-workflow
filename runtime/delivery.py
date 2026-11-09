@@ -365,7 +365,7 @@ def operate(scope, action: str, request: dict, *, owner=None) -> dict:
     if action in {'ready', 'reopen', 'settle'}:
         return _manual_delivery(scope, action, request, owner)
     _require(action == 'plan', 'Unsupported delivery operation')
-    evidence._request(request, ('plan',), ('override', 'previous_plan', 'change_decision_ref', 'milestones'))
+    evidence._request(request, ('plan',), ('override', 'previous_plan', 'change_decision_ref', 'milestones'), codex_only=True)
     with state._database(scope, write=True) as db:
         task = evidence._task(db, scope, request)
         saved = task.get('accepted_identity', {}).get('delivery_policy')
@@ -415,7 +415,7 @@ def _manual_delivery(scope, action, request, owner):
     from runtime import evidence, repository_gate
     from runtime.adapters.github_delivery import GitHubDelivery
     from scripts.delivery_coordinator import DeliveryOperationOwner
-    evidence._request(request, ('operation_id', 'publication_id'))
+    evidence._request(request, ('operation_id', 'publication_id'), codex_only=True)
     for key in ('operation_id', 'publication_id'):
         _ref(request[key])
     _require(isinstance(owner, DeliveryOperationOwner), 'A verified delivery owner is required')
@@ -567,7 +567,7 @@ def pending(scope, *, cursor: str | None = None, limit: int = 32) -> dict:
 def _bind_worktree(scope, request, owner):
     from runtime import changes, evidence, startup
     from scripts.delivery_coordinator import DeliveryOperationOwner
-    evidence._request(request, ('operation_id',))
+    evidence._request(request, ('operation_id',), codex_only=True)
     _ref(request['operation_id'])
     _require(isinstance(owner, DeliveryOperationOwner), 'A verified native owner is required')
     owner.authorize(scope, 'bind-worktree', request)
@@ -628,7 +628,7 @@ def _reconcile(scope, request, owner):
     from runtime import evidence, startup
     from runtime.adapters.github_delivery import GitHubDelivery
     from scripts.delivery_coordinator import DeliveryOperationOwner
-    evidence._request(request, ('operation_id', 'publication_id'), ('original', 'target_revision', 'pull_request'))
+    evidence._request(request, ('operation_id', 'publication_id'), ('original', 'target_revision', 'pull_request'), codex_only=True)
     for key in ('operation_id', 'publication_id'):
         _ref(request[key])
     _require(isinstance(owner, DeliveryOperationOwner), 'A verified delivery observation owner is required')

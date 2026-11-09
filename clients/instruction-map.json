@@ -2,7 +2,7 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "2963f1fe1edb7f9b376897b41be9173faf60047e9068f5020a5f148137910fd7",
+      "sha256": "11fb2a85d2e53c286e465ea92430558042f3e24b010efd428d01b1b43ba8eaba",
       "ranges": [
         [
           1,
@@ -254,7 +254,7 @@
       ]
     },
     "clients/runtime.md": {
-      "sha256": "416ae3ccd0a33adf6d9e89e535d31513f5f3f7a5eeabcbb5a1f0754a48df5fe1",
+      "sha256": "5df1135201214cdfdca0a2e6cfb045a06d79b13a385a6f81196e2c54910174bf",
       "ranges": [
         [
           1,
