@@ -197,6 +197,6 @@ def assignment_role(profile_role, explicit=None):
 def workstreams_enabled(scope, *, load=None):
     """Read the Workstreams project preference from its authority; this module stores no copy."""
     if load is None:
-        from runtime import workstreams
-        load = workstreams._load
+        from runtime import features
+        return features.resolve(scope.repository_root)['features']['workstreams']['effective'] is True
     return load(scope)['enabled'] is True

@@ -28,7 +28,7 @@ When a bounded assignment is a useful delegation candidate, apply the [shared ex
 
 When considering an already authorized Usage Routing proposal, load its [proposal selection, verification and recovery procedure](../skills/manage-usage-routing/references/delegation.md). Load routing setup only for explicit routing management.
 
-Before optional automatic native delegation, honor the [project preference](../skills/workstreams/references/procedure.md) in applicable project instructions. Onboarding and the Workstreams skill manage this same Enabled/Disabled choice. It needs no managed runtime. Explicit delegation and required independent review remain available when disabled or not configured. Preserve explicitly selected protections.
+Before optional automatic native delegation, honor the [project preference](../skills/workstreams/references/procedure.md), read with `features status`. Onboarding and the Workstreams skill manage this same Enabled/Disabled choice. It needs no managed runtime. Explicit delegation and required independent review remain available when disabled or not configured. Preserve explicitly selected protections.
 
 For native delegation, load the [display naming rules](../clients/workstreams-naming.md) to assess parent/child eligibility, including ordinary workers and independent reviewers. Follow their implementation trigger; dispatch alone does not authorize title adoption. This route is independent of Workstreams feature preferences and does not select managed task controls.
 

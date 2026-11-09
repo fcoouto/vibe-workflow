@@ -10,7 +10,7 @@ Ordinary editing, checks, review and handoff use the [native workflow](clients/c
 
 Enable [Workstreams](skills/workstreams/SKILL.md) during project onboarding or ask
 the skill to **enable**, **disable** or show **status** for this project. Both use
-one saved Enabled/Disabled checkbox in project guidance. Enabled automatically
+one saved Enabled/Disabled choice in `.vibe-workflow/settings.json` ([feature settings](clients/features.md)). Enabled automatically
 uses suitable native child work; small tasks can stay with the coordinator. This
 choice needs no runtime database or separate activation. Resource admission and
 capacity recovery keep their separate advanced controls and prerequisites.

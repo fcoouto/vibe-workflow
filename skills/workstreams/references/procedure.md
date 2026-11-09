@@ -2,8 +2,9 @@
 
 Use this procedure for ordinary Workstreams status, enable and disable requests,
 including the onboarding question. Manage one project choice: **Enabled** or
-**Disabled**. Use native instruction reading and editing; no runtime enrollment,
-database, qualification or separate activation is required.
+**Disabled**, saved as the `workstreams` feature in the project's committed
+`.vibe-workflow/settings.json` ([feature settings](../../../clients/features.md)).
+No runtime enrollment, database, qualification or separate activation is required.
 
 ## Meaning and scope
 
@@ -25,40 +26,36 @@ advanced prerequisites do not prevent this project choice from taking effect.
 
 ## Read or change the choice
 
-1. Identify the selected checkout and read its applicable project instructions.
-   Reuse the user's explicit answer; do not ask again. Resolve the current choice
-   from the owned block below in the applicable `AGENTS.md`. Honor normal
-   instruction scope and precedence. An inherited choice applies only within its
-   instruction scope; another checkout's file is not inherited through shared Git.
-2. For status, read only. Report **Enabled**, **Disabled**, or **Not configured**
-   with the effective instruction path. Missing, malformed or conflicting blocks
-   do not enable automatic coordination or establish advanced feature status. If the
-   target or an instruction conflict is unresolved, report it and leave files alone.
-3. For enable or disable, edit only this block in the selected checkout's root
-   `AGENTS.md`; create that file if absent. Use `[x]` for Enabled and `[ ]` for
-   Disabled. Include a resolvable local link to this installed procedure, obtained
-   from the skill's location or startup pointers. Replace the placeholder below;
-   never retain an author's machine path. Do not add a second local block. A local
-   block may override an inherited default under normal instruction precedence.
-4. Follow the existing [recoverable configuration rules](../../../policies/10-project-onboarding.md#apply-compatible-changes):
-   preserve unrelated bytes and user edits, retain a private preimage and hash,
-   check safe target ownership/paths and unchanged preimage before writing, and
-   read back the exact result. Repeating the effective choice is a no-op. Do not
-   overwrite conflicting instructions or another writer's changes.
-5. Report the effective choice and exact checkout. Once saved and read back, it
-   applies to subsequent work under these instructions, including this chat. No
-   new approval or activation step is needed. Other checkouts receive it through
-   their applicable instructions or normal Git integration. Undo restores only
-   this owned block while preserving later edits.
+Run the installed package's command in the selected checkout:
 
-```markdown
-<!-- vibe-workflow:workstreams:start -->
-- [x] Workstreams
-Follow the [Workstreams project preference](<resolved-local-procedure-path>).
-<!-- vibe-workflow:workstreams:end -->
+```text
+python3 -I -B <package>/scripts/workflow.py features status workstreams --cwd <checkout>
+python3 -I -B <package>/scripts/workflow.py features enable workstreams --cwd <checkout>
+python3 -I -B <package>/scripts/workflow.py features disable workstreams --cwd <checkout>
 ```
 
-The instruction block is the current source of truth. Onboarding records may
-retain the submitted answer as provenance; they are not a second active setting.
-Enabling saves a coordination preference, not evidence of enforced isolation,
-managed resource capacity, recovery availability or observed client execution.
+1. Identify the selected checkout. Reuse the user's explicit answer; do not ask again.
+2. For status, read only. Report the feature's `effective` value as **Enabled** or
+   **Disabled** and its `desired.source`: `project` (saved), `default` (not
+   configured) or `legacy` (an unmigrated `AGENTS.md` block). `invalid_settings`
+   means unavailable: report the error and leave automatic coordination off.
+3. For enable or disable, run the command and report the effective value it
+   returns. Repeating the effective choice is a no-op. Each change keeps a private
+   backup and returns its name; `features undo --backup <backup>` restores only
+   files still holding that change's result, preserving later edits. On an error,
+   such as private files not being ignored or the file changing during the write,
+   report it and leave files alone; do not edit the settings file by hand around it.
+4. When status reports `legacy`, the project still holds the old `AGENTS.md`
+   block. Within an authorized change, run `features migrate plan` and then
+   `features migrate apply` with the same `--cwd`. It moves the choice into the
+   settings file, replaces the block with a short pointer, keeps a private backup,
+   and refuses when the block and the file disagree. `features undo` reverses it
+   the same way.
+5. Report the effective choice and exact checkout. It applies to subsequent work
+   under these instructions, including this chat. Other checkouts receive it
+   through normal Git integration of the committed file.
+
+The settings file is the source of truth. Onboarding records may retain the
+submitted answer as provenance; they are not a second active setting. Enabling
+saves a coordination preference, not evidence of enforced isolation, managed
+resource capacity, recovery availability or observed client execution.

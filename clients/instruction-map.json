@@ -51,7 +51,7 @@
       ]
     },
     "clients/delegation.md": {
-      "sha256": "c14faad642f571700df4337b5a58c9dd1d5db0e629d5b14273a72ae8510ae880",
+      "sha256": "03d8c561fe555459ecaccd5c032d2675e34d45b68b0e9dc3dddf0ab671544251",
       "ranges": [
         [
           1,
@@ -154,6 +154,15 @@
         [
           1,
           109
+        ]
+      ]
+    },
+    "clients/features.md": {
+      "sha256": "4bca6468d250c94080f05f3850ce15dfe173b0e7fad4e10faba21dc7850fee52",
+      "ranges": [
+        [
+          1,
+          47
         ]
       ]
     },
@@ -381,7 +390,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "5c5cef78997ab7d67ed2d8d433d1bb16331091d36d869043b7709e499d94f3fb",
+      "sha256": "44fe39d26e7eaca104265564640a2fbd79c9994be57b0aa702473033728992e7",
       "ranges": [
         [
           1,
@@ -624,7 +633,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "4d667c1a04d60cb0d7a62a5fbc7011fc077f59ea457f96452df5bbbd727d1aa4",
+      "sha256": "5dca319cee11d21463b90658c1fea29074d4bc59809b47086c5f934eef52727b",
       "ranges": [
         [
           1,
@@ -636,7 +645,7 @@
         ],
         [
           180,
-          191
+          192
         ]
       ]
     },
@@ -774,7 +783,7 @@
       ]
     },
     "skills/workstreams/references/advanced-controls.md": {
-      "sha256": "021abf51cb1adca7bbf77cf9490483d14063a3bed19b21c48ba844d4c635e17c",
+      "sha256": "22f12e2c526b89c433d2a67f9cf6667de40f5ac27b989cef318e31ce89bb3f44",
       "ranges": [
         [
           1,
@@ -783,11 +792,11 @@
       ]
     },
     "skills/workstreams/references/procedure.md": {
-      "sha256": "60b5065df7fc756b4a2a78cd00289a1b10c92920f0a6f79e8bacce52a1a8bccc",
+      "sha256": "a5aa8e5c824ec72b07b5995450fe2002e0128e54a0c5e1ac028109da8498abcc",
       "ranges": [
         [
           1,
-          64
+          61
         ]
       ]
     }

@@ -82,7 +82,7 @@ nor readiness. Ordinary work needs no managed runtime; preserve selected control
 Keep the policy index's trigger table authoritative. Add only useful project
 navigation: actual commands, canonical product/architecture documents, conditional
 client/skill entry points, and setup/undo. Preserve existing rules, memory load
-paths and saved preferences, including the Workstreams block. Reapplication of
+paths and saved preferences, including `.vibe-workflow/settings.json`. Reapplication of
 the same effective guidance is a no-op. For an authorized update, reconcile owned
 stale pointers through [file configuration and undo](apply-and-recovery.md#file-configuration-and-undo),
 preserving later edits and other clients/checkouts; do not append a competing router.
@@ -176,8 +176,9 @@ Not now only at the next onboarding update. Report a question that cannot apply
 
 Retain submitted choices in the setup record with their scope and provenance.
 Publication and merge choices are separate. The `[READY]` marker summarizes
-verified readiness and grants no authority. The project instruction block is the
-current Workstreams choice; the setup record retains provenance. Resource
+verified readiness and grants no authority. The current Workstreams choice is the
+`workstreams` entry in `.vibe-workflow/settings.json`; the setup record retains
+provenance. Resource
 admission and capacity recovery remain independent advanced settings. Report
 unapplied choices as pending, with the concrete blocker; do not claim completion
 or ask the user to enable the same choice again.
