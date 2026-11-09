@@ -52,7 +52,6 @@ const MAX_EXTRA = 64
 const MAX_EXTRA_TEXT = 256
 const PATH_CONTROL = /[\x00-\x1f\x7f]/
 const DRIVE = /^[a-z]:/
-const TRAILING = /[. ]+$/
 
 // Mirrors of the patterns in runtime/adapters/opencode.py; tests/test_opencode_plugin.py checks parity.
 const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
@@ -154,6 +153,13 @@ export function spawnModel(value: unknown): { provider: string; model: string; v
 
 type ParsedPath = { absolute: boolean; raw: string[]; resolved: string[] }
 
+/** Python's `rstrip(". ")`, linear in the segment length (a `[. ]+$` regex backtracks on long runs of dots). */
+function trimTrailing(segment: string): string {
+  let end = segment.length
+  while (end > 0 && (segment[end - 1] === "." || segment[end - 1] === " ")) end--
+  return segment.slice(0, end)
+}
+
 /** The adapter's `_path`: NFKC, lower case, `\` as `/`, trailing dots and spaces ignored; null when unreadable. */
 function parsePath(value: unknown, limit = MAX_PATH): ParsedPath | null {
   if (typeof value !== "string" || !value || value.length > 2 * limit || [...value].length > limit) return null
@@ -163,7 +169,7 @@ function parsePath(value: unknown, limit = MAX_PATH): ParsedPath | null {
   const raw: string[] = []
   for (const segment of text.split("/")) {
     if (segment === "" || segment === ".") continue
-    const trimmed = segment === ".." ? segment : segment.replace(TRAILING, "")
+    const trimmed = segment === ".." ? segment : trimTrailing(segment)
     if (!trimmed) return null
     raw.push(trimmed)
   }
@@ -176,7 +182,7 @@ function parsePath(value: unknown, limit = MAX_PATH): ParsedPath | null {
   return { absolute, raw, resolved }
 }
 
-const segmentNames = (segment: string) => new Set([segment, segment.split(":")[0].replace(TRAILING, "")])
+const segmentNames = (segment: string) => new Set([segment, trimTrailing(segment.split(":")[0])])
 const hasAny = (names: Set<string>, set: Set<string>) => [...names].some((name) => set.has(name))
 
 function configHit(segments: string[], absolute: boolean, extra: string[][]): boolean {

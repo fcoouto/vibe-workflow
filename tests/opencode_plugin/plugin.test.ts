@@ -1361,6 +1361,18 @@ test("S3.3d: missing or odd edit resources deny for managed sessions only", asyn
   } finally { t.stop() }
 })
 
+test("S3.3d: path matching stays linear on long runs of dots and spaces", async () => {
+  const t = await start()
+  try {
+    await t.attach()
+    const resources = Array.from({ length: 256 }, (_, index) => ". ".repeat(2000) + "x" + index)
+    const began = performance.now()
+    const event = await evaluated(t, permissionEvent(MANAGED, "patch", resources))
+    assert.equal(event.effect, "allow")
+    assert.ok(performance.now() - began < 300, `took ${performance.now() - began} ms`)
+  } finally { t.stop() }
+})
+
 test("S3.3d: an existing denial keeps its message and secrets in resources never reach the message", async () => {
   const t = await start()
   try {
