@@ -364,7 +364,8 @@ def _attempt(root, children, funding, lineage):
         unknown.add("child_session_unaccounted")
     if lineage is None:
         unknown.add("lineage_not_checked")
-    elif _lineage_check(lineage, parts, referrers):
+    elif _lineage_check(lineage, parts[0]["session_id"], {part["session_id"]: part["parent"] for part in parts[1:]},
+                        referrers):
         unknown.add("child_session_unaccounted")
     messages, titles = [], []
     for part in parts:
@@ -431,8 +432,13 @@ def _linked(parts):
     return referrers
 
 
-def _lineage(value):
-    """The launcher's `[{session_id, parent_session_id}]` as a map; a session listed with two parents is refused."""
+def _raise(kind):
+    _fail("invalid lineage")
+
+
+def _lineage(value, problem=_raise):
+    """The launcher's `[{session_id, parent_session_id}]` as a map (first parent kept); a session listed with two
+    parents is a `conflicts` problem. Malformed or oversized lineage is always refused."""
     if type(value) is not list:
         _fail("invalid lineage")
     if len(value) > MAX_LINEAGE:
@@ -444,15 +450,16 @@ def _lineage(value):
         session = _name(entry["session_id"], opencode.SESSION, "invalid lineage", nullable=False)
         parent = _name(entry["parent_session_id"], opencode.SESSION, "invalid lineage")
         if parents.setdefault(session, parent) != parent:
-            _fail("invalid lineage")
+            problem("conflicts")
     return parents
 
 
-def _missing(parents, included, root):
+def _missing(parents, included, root, problem=_raise):
     """How many listed sessions descend from an included session (so from the root) but are not included.
 
     Follows each listed session's recorded parent chain (iteratively, each session once). A chain that leaves the
-    list ends outside the attempt; a cycle, or a root whose recorded parent descends from the attempt, is refused."""
+    list ends outside the attempt. A cycle (whose chain then ends outside), or a root whose recorded parent descends
+    from the attempt, is a `loops` problem."""
     under = {}
     for start in parents:
         path, seen, current = [], set(), start
@@ -467,27 +474,29 @@ def _missing(parents, included, root):
                 found = False
                 break
             if current in seen:
-                _fail("invalid lineage")
+                problem("loops")
+                found = False
+                break
             seen.add(current)
             path.append(current)
             current = parents[current]
         under.update(dict.fromkeys(path, found))
     parent = parents.get(root)
     if parent is not None and (parent in included or under.get(parent)):
-        _fail("invalid lineage")
+        problem("loops")
     return sum(found and session not in included for session, found in under.items())
 
 
-def _lineage_check(value, parts, referrers):
-    """Unaccounted descendants listed in `lineage`, after checking it agrees with the included sessions' links."""
-    parents = _lineage(value)
-    root = parts[0]["session_id"]
-    for part in parts[1:]:
-        session = part["session_id"]
-        if session in parents and parents[session] != part["parent"] and (
-                part["parent"] is not None or parents[session] not in referrers.get(session, ())):
-            _fail("invalid lineage")
-    return _missing(parents, {part["session_id"] for part in parts}, root)
+def _lineage_check(value, root, links, referrers, problem=_raise):
+    """Unaccounted descendants listed in `lineage`, after checking it agrees with the included children's links
+    (`links`: child id -> verified parent or None; `referrers`: child id -> sessions whose tool parts spawn it).
+    `problem` raises by default; diagnostics pass a counter instead."""
+    parents = _lineage(value, problem)
+    for session, parent in links.items():
+        if session in parents and parents[session] != parent and (
+                parent is not None or parents[session] not in referrers.get(session, ())):
+            problem("conflicts")
+    return _missing(parents, set(links) | {root}, root, problem)
 
 
 def _reachable(root, links):
@@ -602,8 +611,9 @@ def normalize_session(session):
 def consistency_report(session_state):
     """Bounded diagnostics for a re-read session (`{session_id, messages, tokens?, cost?, complete?, children?,
     lineage?}`): counts of message types, duplicates, conflicts, unknown records and missing fields, spawned,
-    included and unaccounted child sessions (`lineage_unaccounted` is None without `lineage`), and whether the title
-    remainder is known. Inconsistencies are counted, not raised; ids, counts and field names only, never text."""
+    included and unaccounted child sessions, listed descendants not included and lineage `conflicts` and `loops`
+    (each None without `lineage`), and whether the title remainder is known. Inconsistencies are counted, not
+    raised; malformed input is refused. Ids, counts and field names only, never text."""
     state, children = _session_state(session_state)
     session_id, complete = _session(state["session_id"]), state.get("complete", True)
     scan = _scan(state["messages"], complete)
@@ -611,11 +621,18 @@ def consistency_report(session_state):
     if scan["conflicts"]:
         title, reason = None, reason or "inconsistent_messages"
     included = {_session(child["session_id"]) for child in children}
-    spawned = set(scan["children"])
-    for child in children:
-        spawned |= _scan(child["messages"], True)["children"]
-    lineage = state.get("lineage")
-    unlisted = None if lineage is None else _missing(_lineage(lineage), included | {session_id}, session_id)
+    spawned, referrers = set(scan["children"]), {}
+    for owner, children_of in [(session_id, scan["children"])] + [
+            (_session(child["session_id"]), _scan(child["messages"], True)["children"]) for child in children]:
+        spawned |= children_of
+        for spawn in children_of:
+            referrers.setdefault(spawn, set()).add(owner)
+    lineage, problems, unlisted = state.get("lineage"), {"conflicts": None, "loops": None}, None
+    if lineage is not None:
+        problems = {"conflicts": 0, "loops": 0}
+        links = {_session(child["session_id"]): child.get("parent_session_id") for child in children}
+        unlisted = _lineage_check(lineage, session_id, links, referrers,
+                                  lambda kind: problems.__setitem__(kind, problems[kind] + 1))
     return {"session_id": session_id, "messages": len(state["messages"]), "by_type": dict(sorted(scan["by_type"].items())),
             "countable": len(scan["countable"]), "duplicates": scan["duplicates"],
             "conflicting_duplicates": scan["conflicts"], "missing_tokens": scan["missing_tokens"],
@@ -625,7 +642,8 @@ def consistency_report(session_state):
             "title_reason": reason, "negative_classes": negative, "rate_limit_messages": len(scan["rate_limited"]),
             "children_referenced": len(spawned), "children_included": len(included),
             "children_unaccounted": len(spawned - included), "spawns_without_session": scan["unlinked"],
-            "tool_calls_dropped": scan["dropped"], "lineage_unaccounted": unlisted}
+            "tool_calls_dropped": scan["dropped"], "lineage_unaccounted": unlisted,
+            "lineage_conflicts": problems["conflicts"], "lineage_loops": problems["loops"]}
 
 
 def _previous(previous, session_id):

@@ -385,6 +385,14 @@ def _tool_part(part):
             "spawn": _spawn(tool_input) if tool == "subagent" else None}
 
 
+def _plain_synthetic(record):
+    """A synthetic record is read only without a model, a non-zero cost or tool parts (a child link would be lost);
+    anything else stays unknown."""
+    content = record.get("content") or []
+    return record.get("model") is None and record.get("cost") in (None, 0) and isinstance(content, list) and all(
+        isinstance(part, dict) and part.get("type") != "tool" for part in content)
+
+
 @_guard
 def normalize_message(message, families=None):
     """Normalize one stored session message; text, reasoning, summaries and tool output are dropped."""
@@ -392,7 +400,7 @@ def normalize_message(message, families=None):
     _check_bounds(record)
     message_type = record.get("type")
     message_id = _text(record, "id", MESSAGE, "invalid message id")
-    if message_type == "synthetic":
+    if message_type == "synthetic" and _plain_synthetic(record):
         # A `subagent: true` command child's result delivered to its parent (live re-qualification; only the type was
         # recorded). No model request; tokens are kept so accounting can flag a record that carries some.
         time = _optional_object(record, "time") or {}
