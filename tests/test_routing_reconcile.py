@@ -13,7 +13,7 @@ import sys
 import unittest
 
 from runtime import routing, usage_budget as budget
-from tests.test_routing_accounting import Accounting, complete, usage
+from tests.fixture_routing_accounting import Accounting, complete, usage
 from tests.test_routing_command import API, M, SCRIPT, SECRET, facts, now
 from tests.test_routing_dispatch import record
 
