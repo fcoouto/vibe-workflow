@@ -7,6 +7,7 @@ the payload does not carry stays None (unknown); a malformed payload raises Adap
 
 import math
 import re
+import unicodedata
 
 SCHEMA = 1
 CLIENT = "opencode"
@@ -21,6 +22,27 @@ HARNESS = {"claude-agent": "claude-agent-sdk via opencode"}
 ALWAYS_UNSUPPORTED = ("plugin_load_fail_open", "shell_command_contents", "resolved_model", "provider_retries",
                       "model_switch_before_request", "session_id_environment", "event_replay")
 WORKER_TOOLS = ("shell", "mcp", "execute", "webfetch")
+# S3.3d states a launcher reports next to the worker tools: image generation must be denied, config edits denied or
+# narrowed (the shim does both for managed sessions; its `routing.health` lists them as `managed_denies`).
+MANAGED_DENIES = ("image_generation", "config_edit")
+
+# S3.3d, mirrored in runtime/adapters/opencode_plugin.ts (tests/test_opencode_plugin.py checks parity). In the 2.2.6
+# binary the image tool asserts this action with the `provider/model#variant` it will call, and write, edit and patch
+# (move targets included) all assert `edit` with paths relative to the session directory or absolute outside the project.
+IMAGE_ACTION = "experimental_image_generate"
+EDIT_ACTIONS = ("edit", "write", "patch")
+# Config discovery reads these at every ancestor (case-insensitively) and loads agents, commands, modes and plugins
+# from the config directories: denied as any segment of any path.
+CONFIG_NAMES = frozenset({".opencode", ".claude", ".agents", "opencode.json", "opencode.jsonc"})
+# Agent, command and mode directories: denied directly under the session directory or an ancestor (the first segment
+# after any leading `..`), and anywhere in an absolute path, as is any `opencode` segment (global and system config).
+CONFIG_DIRS = frozenset({"agent", "agents", "command", "commands", "mode", "modes"})
+MAX_PATH = 4096
+MAX_RESOURCES = 256
+MAX_EXTRA = 64
+MAX_EXTRA_TEXT = 256
+PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+DRIVE = re.compile(r"[a-z]:")
 
 MAX_DEPTH = 64
 MAX_NODES = 50_000
@@ -269,6 +291,101 @@ def credential_name(name):
     return CREDENTIAL_ENV.search(CAMEL_CASE.sub(r"\1_\2", name)) is not None
 
 
+def _path(value, limit=MAX_PATH):
+    """(absolute, raw segments, lexically resolved segments) of a resource, or None when it cannot be read.
+
+    Compatibility-normalized (NFKC) and lower-cased, so lookalike and case spellings compare equal (conservative on
+    case-sensitive filesystems); `\\` is a separator; empty and `.` segments drop; trailing dots and spaces of a segment
+    are ignored, as Windows does. Raw segments keep `..`, so a symlink before it cannot hide a name.
+    """
+    if not isinstance(value, str) or not value or len(value) > limit:
+        return None
+    text = unicodedata.normalize("NFKC", value).lower().replace("\\", "/")
+    if PATH_CONTROL.search(text):
+        return None
+    absolute = text.startswith(("/", "~")) or DRIVE.match(text) is not None
+    raw = []
+    for segment in text.split("/"):
+        if segment in ("", "."):
+            continue
+        trimmed = segment if segment == ".." else segment.rstrip(". ")
+        if not trimmed:
+            return None
+        raw.append(trimmed)
+    resolved = []
+    for segment in raw:
+        if segment != "..":
+            resolved.append(segment)
+        elif resolved and resolved[-1] != "..":
+            resolved.pop()
+        elif not absolute:
+            resolved.append(segment)
+    return absolute, raw, resolved
+
+
+def _segment_names(segment):
+    """A segment and its name before any `:` (an NTFS stream or a drive letter)."""
+    return {segment, segment.split(":", 1)[0].rstrip(". ")}
+
+
+def _config_hit(segments, absolute, extra):
+    names = [_segment_names(segment) for segment in segments]
+    if any(found & CONFIG_NAMES for found in names):
+        return True
+    if any(".config" in names[i] and "opencode" in names[i + 1] for i in range(len(names) - 1)):
+        return True
+    if absolute:
+        if any(found & (CONFIG_DIRS | {"opencode"}) for found in names):
+            return True
+    else:
+        first = next((found for found, segment in zip(names, segments) if segment != ".."), set())
+        if first & CONFIG_DIRS:
+            return True
+    for pattern in extra:
+        for start in range(len(names) - len(pattern) + 1):
+            if all(part in names[start + offset] for offset, part in enumerate(pattern)):
+                return True
+    return False
+
+
+def extra_paths(value):
+    """The plugin's `protected_paths` option as segment tuples: [] when absent, None when invalid (deny every edit)."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_EXTRA:
+        return None
+    paths = []
+    for item in value:
+        parsed = _path(item, MAX_EXTRA_TEXT)
+        if parsed is None or not parsed[1] or ".." in parsed[1]:
+            return None
+        paths.append(tuple(parsed[1]))
+    return paths
+
+
+def protected_path(resource, extra=()):
+    """Whether an edit resource may change OpenCode configuration; unreadable resources count as protected."""
+    parsed = _path(resource)
+    if parsed is None or extra is None:
+        return True
+    absolute, raw, resolved = parsed
+    return _config_hit(raw, absolute, extra) or _config_hit(resolved, absolute, extra)
+
+
+def managed_denial(action, resources, extra=()):
+    """The S3.3d denial a managed session gets for this permission request: "image_generation", "config_edit" or None.
+
+    An edit with missing, malformed or too many resources is denied (fail closed).
+    """
+    if action == IMAGE_ACTION:
+        return "image_generation"
+    if action not in EDIT_ACTIONS:
+        return None
+    if not isinstance(resources, list) or not resources or len(resources) > MAX_RESOURCES:
+        return "config_edit"
+    return "config_edit" if any(protected_path(resource, extra) for resource in resources) else None
+
+
 def _unknown(source, name):
     return {"schema": SCHEMA, "client": CLIENT, "kind": "unknown", "source": source,
             "name" if source == "hook" else "type": name if isinstance(name, str) and NAME.fullmatch(name) else None}
@@ -324,7 +441,8 @@ def normalize_hook(hook, payload, families=None):
         else:
             kept = []
         result.update(action=action, effect=_text(data, "effect", reason="invalid permission effect"),
-                      resources=kept[:MAX_ITEMS], resource_count=len(resources))
+                      resources=kept[:MAX_ITEMS], resource_count=len(resources),
+                      managed_deny=managed_denial(action, resources))
     else:  # shell.create.before carries no session ID (capability matrix).
         names, dropped = _names(data.get("env"), ENV_NAME)
         result.update(env_names=names, env_names_dropped=dropped,
@@ -434,10 +552,11 @@ def probe(capabilities):
     """Classify observed OpenCode capabilities without launching OpenCode.
 
     `capabilities`: {"version", "hooks": [registered hook names], "plugin_health": "ok" when the
-    `routing.health` RPC answered for the canonical directory, "worker_tools": {shell|mcp|execute|webfetch:
-    "deny"|"narrow"|"allow"}}. Managed launches refuse unless health is ok and every hook S3 uses is present;
-    enforcement also needs the qualified version, `shell` denied (commands inside any allowed shell stay
-    unenforceable) and the other tools denied or narrowed by the caller's policy rules.
+    `routing.health` RPC answered for the canonical directory, "worker_tools": {shell|mcp|execute|webfetch|
+    image_generation|config_edit: "deny"|"narrow"|"allow"}}. Managed launches refuse unless health is ok and every hook
+    S3 uses is present; enforcement also needs the qualified version, `shell` denied (commands inside any allowed shell
+    stay unenforceable), the other tools denied or narrowed by the caller's policy rules, image generation denied and
+    model edits of OpenCode configuration denied or narrowed to exclude it (S3.3d). A missing state is not enforced.
     """
     caps = _object(capabilities, "invalid capabilities")
     version = _text(caps, "version", reason="invalid capabilities")
@@ -445,7 +564,8 @@ def probe(capabilities):
     tools = caps.get("worker_tools") or {}
     if (not isinstance(hooks, list) or not isinstance(tools, dict) or len(hooks) > MAX_ITEMS
             or any(not isinstance(hook, str) for hook in hooks)
-            or any(key not in WORKER_TOOLS or value not in ("deny", "narrow", "allow") for key, value in tools.items())):
+            or any(key not in WORKER_TOOLS + MANAGED_DENIES or value not in ("deny", "narrow", "allow")
+                   for key, value in tools.items())):
         raise AdapterError("invalid capabilities")
     supported = sorted(set(hooks) & set(HOOKS))
     missing = sorted(set(HOOKS) - set(hooks))
@@ -459,6 +579,10 @@ def probe(capabilities):
         unsupported.append("version_unqualified")
     if tools.get("shell") != "deny" or any(tools.get(tool) not in ("deny", "narrow") for tool in WORKER_TOOLS):
         unsupported.append("worker_unmediated_tools")
+    if tools.get("image_generation") != "deny":
+        unsupported.append("image_generation_unmediated")
+    if tools.get("config_edit") not in ("deny", "narrow"):
+        unsupported.append("config_edit_unmediated")
     managed = "allow" if healthy and not missing else "refuse"
     enforced = managed == "allow" and unsupported == list(ALWAYS_UNSUPPORTED)
     return {"schema": SCHEMA, "client": CLIENT, "version": version, "qualified_version": QUALIFIED_VERSION,

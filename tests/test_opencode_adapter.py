@@ -624,7 +624,7 @@ class ManagedDenies(unittest.TestCase):
 class Probe(unittest.TestCase):
     HOOKS = ["model.request", "tool.execute.before", "permission.evaluate", "shell.create.before"]
     ENFORCED_TOOLS = {"shell": "deny", "mcp": "deny", "execute": "deny", "webfetch": "deny",
-                      "image_generate": "deny", "config_edit": "deny"}
+                      "image_generation": "deny", "config_edit": "deny"}
 
     def test_enforced_profile_on_the_qualified_version(self):
         result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
@@ -652,7 +652,7 @@ class Probe(unittest.TestCase):
 
     def test_narrow_is_enforceable_except_for_shell(self):
         narrow = {"shell": "deny", "mcp": "narrow", "execute": "narrow", "webfetch": "narrow",
-                  "image_generate": "deny", "config_edit": "narrow"}
+                  "image_generation": "deny", "config_edit": "narrow"}
         result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
                                  "worker_tools": narrow})
         self.assertEqual(result["enforcement_profile"], "enforced")
@@ -663,13 +663,13 @@ class Probe(unittest.TestCase):
 
     def test_enforced_requires_image_generation_denied_and_config_edits_mediated(self):
         base = {"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok"}
-        cases = [({"image_generate": "deny", "config_edit": "deny"}, []),
-                 ({"image_generate": "deny", "config_edit": "narrow"}, []),
-                 ({"image_generate": "narrow", "config_edit": "deny"}, ["image_generation_unmediated"]),
-                 ({"image_generate": "allow", "config_edit": "deny"}, ["image_generation_unmediated"]),
+        cases = [({"image_generation": "deny", "config_edit": "deny"}, []),
+                 ({"image_generation": "deny", "config_edit": "narrow"}, []),
+                 ({"image_generation": "narrow", "config_edit": "deny"}, ["image_generation_unmediated"]),
+                 ({"image_generation": "allow", "config_edit": "deny"}, ["image_generation_unmediated"]),
                  ({"config_edit": "deny"}, ["image_generation_unmediated"]),
-                 ({"image_generate": "deny", "config_edit": "allow"}, ["config_edit_unmediated"]),
-                 ({"image_generate": "deny"}, ["config_edit_unmediated"]),
+                 ({"image_generation": "deny", "config_edit": "allow"}, ["config_edit_unmediated"]),
+                 ({"image_generation": "deny"}, ["config_edit_unmediated"]),
                  ({}, ["image_generation_unmediated", "config_edit_unmediated"])]
         four = {tool: self.ENFORCED_TOOLS[tool] for tool in ("shell", "mcp", "execute", "webfetch")}
         for denies, reasons in cases:
@@ -678,7 +678,7 @@ class Probe(unittest.TestCase):
             self.assertEqual(extra, reasons, denies)
             self.assertEqual(result["managed_launch"], "allow")
             self.assertEqual(result["enforcement_profile"], "advisory" if reasons else "enforced", denies)
-        for bad in ({"image_generate": "maybe"}, {"config_edit": None}, {"image": "deny"}):
+        for bad in ({"image_generation": "maybe"}, {"config_edit": None}, {"image": "deny"}):
             assert_error_hides(self, opencode.probe, {**base, "worker_tools": {**four, **bad}})
 
     def test_missing_hook_and_unqualified_version(self):
