@@ -5,6 +5,7 @@ import copy
 import json
 from pathlib import Path
 import re
+import time
 import unittest
 from unittest.mock import patch
 
@@ -560,9 +561,106 @@ class HostileInput(unittest.TestCase):
                 self.assertEqual(result["route_identity"]["resolved_model"], "unknown")
 
 
+CONFIG_PATHS = json.loads((ROOT / "tests" / "opencode_plugin" / "config_paths.json").read_text(encoding="utf-8"))
+
+
+def permission(action, resources, effect="allow"):
+    """The live-recorded `permission.evaluate` key set (s3-3-shim-live.json) with another action and resources."""
+    return {"action": action, "agent": "build", "effect": effect, "metadata": {}, "resources": resources,
+            "sessionID": "ses_hook1", "source": {"id": "toolu_hook1", "messageID": "msg_hook1", "type": "tool"}}
+
+
+class ManagedDenies(unittest.TestCase):
+    """S3.3d: image generation and model edits of OpenCode configuration (clients/opencode.md)."""
+
+    ROOTS = opencode.config_roots(CONFIG_PATHS["env"], CONFIG_PATHS["home"])
+
+    def protected(self, resource, directory=None, extra=()):
+        return opencode.protected_path(resource, extra, directory, self.ROOTS)
+
+    def test_config_roots(self):
+        self.assertEqual(self.ROOTS, [tuple(root) for root in CONFIG_PATHS["roots"]])
+        self.assertEqual(opencode.config_roots({}, None),
+                         [("etc", "opencode"), ("library", "application support", "opencode"), ("c", "programdata", "opencode")])
+        # Relative or unreadable values are not roots; they never loosen the built-in ones.
+        self.assertEqual(opencode.config_roots({"XDG_CONFIG_HOME": "rel", "OPENCODE_CONFIG_DIR": "/"}, ""),
+                         opencode.config_roots({}, None))
+
+    def test_config_path_table(self):
+        for directory in [CONFIG_PATHS["directory"]] + CONFIG_PATHS["unknown_directories"]:
+            known = directory == CONFIG_PATHS["directory"]
+            for resource in CONFIG_PATHS["deny"]:
+                self.assertTrue(self.protected(resource, directory), (directory, resource))
+            for resource in CONFIG_PATHS["deny_without_directory"]:
+                self.assertEqual(self.protected(resource, directory), not known, (directory, resource))
+            for resource in CONFIG_PATHS["allow"]:
+                self.assertFalse(self.protected(resource, directory), (directory, resource))
+            for resource in CONFIG_PATHS["unparseable"] + [None, 5, ["a"], {"path": "a"}, "x" * 5000]:
+                self.assertTrue(self.protected(resource, directory), repr(resource)[:40])
+
+    def test_session_directory_inside_a_config_directory(self):
+        for case in CONFIG_PATHS["config_directories"]:
+            for resource in case.get("deny", []):
+                self.assertTrue(self.protected(resource, case["directory"]), (case["directory"], resource))
+            for resource in case.get("allow", []):
+                self.assertFalse(self.protected(resource, case["directory"]), (case["directory"], resource))
+
+    def test_extra_paths_add_and_never_loosen(self):
+        extra = opencode.extra_paths([".cursor", "Tools\\Agents", "/rules/"])
+        self.assertEqual(extra, [(".cursor",), ("tools", "agents"), ("rules",)])
+        for directory in (None, "/repo"):
+            for resource in ("a/.cursor/x", ".CURSOR", "x/tools/agents/y.md", "rules/z", "/abs/rules/z"):
+                self.assertTrue(self.protected(resource, directory, extra), resource)
+            for resource in ("tools/x.md", "agents.md", "x/tools/y/agents/z"):
+                self.assertFalse(self.protected(resource, directory, extra), resource)
+            for resource in CONFIG_PATHS["deny"]:
+                self.assertTrue(self.protected(resource, directory, extra), resource)
+        self.assertEqual(opencode.extra_paths(None), [])
+        self.assertEqual(opencode.extra_paths([]), [])
+        self.assertEqual(len(opencode.extra_paths(["a"] * 32)), 32)
+        self.assertEqual(opencode.extra_paths(["/".join("abcdefghijklmnop")]), [tuple("abcdefghijklmnop")])
+        for bad in ("a", [""], [".."], ["a/../b"], [5], ["x" * 300], ["a"] * 33, ["/".join("abcdefghijklmnopq")],
+                    ["a\u0000"], {"a": 1}, ["."]):
+            self.assertIsNone(opencode.extra_paths(bad), repr(bad)[:40])
+
+    def test_pathological_inputs_stay_fast(self):
+        extra = opencode.extra_paths(["/".join(["a"] * 15 + [f"z{index}"]) for index in range(32)])
+        resources = ["/".join(["a"] * 2047 + ["b"])] * 256
+        began = time.monotonic()
+        self.assertIsNone(opencode.managed_denial("patch", resources, extra, "/repo", self.ROOTS))
+        self.assertLess(time.monotonic() - began, 2.0)
+
+    def test_managed_denial_by_action(self):
+        self.assertEqual(opencode.managed_denial("experimental_image_generate", ["openai/gpt-image-1"]), "image_generation")
+        self.assertEqual(opencode.managed_denial("experimental_image_generate", []), "image_generation")
+        for action in ("edit", "write", "patch"):
+            self.assertEqual(opencode.managed_denial(action, [".opencode/command/x.md"]), "config_edit")
+            self.assertEqual(opencode.managed_denial(action, ["src/x.ts", "opencode.json"]), "config_edit")
+            self.assertIsNone(opencode.managed_denial(action, ["src/x.ts", "docs/a.md"]))
+            for odd in (None, [], "src/x.ts", [None], ["src/x.ts", 5], ["a"] * 257):
+                self.assertEqual(opencode.managed_denial(action, odd), "config_edit", repr(odd)[:40])
+        self.assertEqual(opencode.managed_denial("edit", ["tools/agents/a.md"], [("tools", "agents")]), "config_edit")
+        self.assertEqual(opencode.managed_denial("edit", ["src/x.ts"], None), "config_edit")  # invalid extra option
+        for action in ("read", "webfetch", "shell", "subagent", "external_directory"):
+            self.assertIsNone(opencode.managed_denial(action, [".opencode/command/x.md"]))
+
+    def test_permission_evaluate_reports_the_managed_denial_without_paths(self):
+        image = opencode.normalize_hook("permission.evaluate", permission("experimental_image_generate", ["openai/gpt-image-1"]))
+        self.assertEqual((image["action"], image["managed_deny"], image["resources"], image["resource_count"]),
+                         ("experimental_image_generate", "image_generation", [], 1))
+        edit = opencode.normalize_hook("permission.evaluate", permission("edit", [f".opencode/command/{SECRET}.md"]))
+        self.assertEqual((edit["managed_deny"], edit["resources"], edit["resource_count"]), ("config_edit", [], 1))
+        self.assertNotIn(SECRET, json.dumps(edit))
+        plain = opencode.normalize_hook("permission.evaluate", permission("edit", ["src/x.ts"]))
+        self.assertIsNone(plain["managed_deny"])
+        fetch = opencode.normalize_hook("permission.evaluate", permission("webfetch", ["https://example.test/"]))
+        self.assertIsNone(fetch["managed_deny"])
+
+
 class Probe(unittest.TestCase):
     HOOKS = ["model.request", "tool.execute.before", "permission.evaluate", "shell.create.before"]
-    ENFORCED_TOOLS = {"shell": "deny", "mcp": "deny", "execute": "deny", "webfetch": "deny"}
+    ENFORCED_TOOLS = {"shell": "deny", "mcp": "deny", "execute": "deny", "webfetch": "deny",
+                      "image_generation": "deny", "config_edit": "deny"}
 
     def test_enforced_profile_on_the_qualified_version(self):
         result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
@@ -589,7 +687,8 @@ class Probe(unittest.TestCase):
             self.assertIn("worker_unmediated_tools", result["unsupported"])
 
     def test_narrow_is_enforceable_except_for_shell(self):
-        narrow = {"shell": "deny", "mcp": "narrow", "execute": "narrow", "webfetch": "narrow"}
+        narrow = {"shell": "deny", "mcp": "narrow", "execute": "narrow", "webfetch": "narrow",
+                  "image_generation": "deny", "config_edit": "narrow"}
         result = opencode.probe({"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok",
                                  "worker_tools": narrow})
         self.assertEqual(result["enforcement_profile"], "enforced")
@@ -597,6 +696,26 @@ class Probe(unittest.TestCase):
                                  "worker_tools": {**narrow, "shell": "narrow"}})
         self.assertEqual(result["enforcement_profile"], "advisory")
         self.assertIn("worker_unmediated_tools", result["unsupported"])
+
+    def test_enforced_requires_image_generation_denied_and_config_edits_mediated(self):
+        base = {"version": "2.2.6", "hooks": self.HOOKS, "plugin_health": "ok"}
+        cases = [({"image_generation": "deny", "config_edit": "deny"}, []),
+                 ({"image_generation": "deny", "config_edit": "narrow"}, []),
+                 ({"image_generation": "narrow", "config_edit": "deny"}, ["image_generation_unmediated"]),
+                 ({"image_generation": "allow", "config_edit": "deny"}, ["image_generation_unmediated"]),
+                 ({"config_edit": "deny"}, ["image_generation_unmediated"]),
+                 ({"image_generation": "deny", "config_edit": "allow"}, ["config_edit_unmediated"]),
+                 ({"image_generation": "deny"}, ["config_edit_unmediated"]),
+                 ({}, ["image_generation_unmediated", "config_edit_unmediated"])]
+        four = {tool: self.ENFORCED_TOOLS[tool] for tool in ("shell", "mcp", "execute", "webfetch")}
+        for denies, reasons in cases:
+            result = opencode.probe({**base, "worker_tools": {**four, **denies}})
+            extra = [reason for reason in result["unsupported"] if reason not in opencode.ALWAYS_UNSUPPORTED]
+            self.assertEqual(extra, reasons, denies)
+            self.assertEqual(result["managed_launch"], "allow")
+            self.assertEqual(result["enforcement_profile"], "advisory" if reasons else "enforced", denies)
+        for bad in ({"image_generation": "maybe"}, {"config_edit": None}, {"image": "deny"}):
+            assert_error_hides(self, opencode.probe, {**base, "worker_tools": {**four, **bad}})
 
     def test_missing_hook_and_unqualified_version(self):
         result = opencode.probe({"version": "2.3.0", "hooks": self.HOOKS[:2], "plugin_health": "ok",
@@ -623,7 +742,7 @@ class Purity(unittest.TestCase):
                 names.add((node.module or "").split(".")[0])
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 self.assertNotIn(node.func.id, {"open", "print", "exec", "eval", "__import__", "input", "compile"})
-        self.assertLessEqual(names, {"math", "re"})
+        self.assertLessEqual(names, {"math", "re", "unicodedata"})
 
     def test_normalization_performs_no_io(self):
         def refuse(*args, **kwargs):

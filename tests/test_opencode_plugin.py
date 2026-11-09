@@ -15,6 +15,7 @@ from runtime.adapters.opencode import AdapterError
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "tests/opencode_plugin/plugin.test.ts"
 PROBES = ROOT / "tests/fixtures/smart-routing/probes"
+CONFIG_PATHS = ROOT / "tests/opencode_plugin/config_paths.json"
 
 
 def _requested(hook, payload):
@@ -70,7 +71,27 @@ def parity_cases():
     sessions += [{"id": session, "derived": False} for session in [
         "ses_live1", "ses_01JABCDEFGHJKMNPQRSTVWXYZ", "ses_" + "0" * 31, "ses_" + "0" * 33, "ses_" + "A" * 32,
         "msg_" + "0" * 32, derived[0].upper()]]
-    return {"env": env, "models": model_cases, "spawns": spawn_cases, "sessions": sessions}
+    table = json.loads(CONFIG_PATHS.read_text(encoding="utf-8"))
+    resources = (table["deny"] + table["deny_without_directory"] + table["allow"] + table["unparseable"]
+                 + [None, 5, "x" * 5000, "\u212a/x", "a/.cursor/b", "x/tools/agents/y", "agents/x.md", "../commands/x"])
+    extra_options = [None, [], [".cursor", "Tools\\Agents"], [".."], "a", [""], ["a"] * 33, ["/".join("abcdefghijklmnopq")]]
+    extras = [{"option": option, "paths": opencode.extra_paths(option)} for option in extra_options]
+    environments = [{"env": table["env"], "home": table["home"]}, {"env": {}, "home": None},
+                    {"env": {"OPENCODE_CONFIG_DIR": "rel", "XDG_CONFIG_HOME": "C:\\Users\\u\\cfg"}, "home": "/root"}]
+    roots = [{**item, "roots": opencode.config_roots(item["env"], item["home"])} for item in environments]
+    configured = opencode.extra_paths([".cursor", "Tools\\Agents"])
+    table_roots = opencode.config_roots(table["env"], table["home"])
+    directories = [None, table["directory"], "relative/dir"] + [case["directory"] for case in table["config_directories"]]
+    paths = [{"resource": resource, "directory": directory,
+              "protected": opencode.protected_path(resource, (), directory, table_roots),
+              "configured": opencode.protected_path(resource, configured, directory, table_roots)}
+             for resource in resources for directory in directories]
+    denials = [{"action": action, "resources": value, "deny": opencode.managed_denial(action, value)}
+               for action in ("experimental_image_generate", "edit", "write", "patch", "read", "webfetch")
+               for value in ([".opencode/command/x.md"], ["src/x.ts"], [], None, ["src/x.ts", 5], "src/x.ts",
+                             ["/etc/opencode/a.md"])]
+    return {"env": env, "models": model_cases, "spawns": spawn_cases, "sessions": sessions,
+            "paths": paths, "extras": extras, "denials": denials, "roots": roots, "table_roots": table_roots}
 
 
 class OpenCodePluginTests(unittest.TestCase):
@@ -83,6 +104,9 @@ class OpenCodePluginTests(unittest.TestCase):
         self.assertTrue(any(item["credential"] for item in cases["env"]))
         self.assertTrue(any(item["derived"] for item in cases["sessions"]))
         self.assertTrue(all(opencode.SESSION.fullmatch(item["id"]) for item in cases["sessions"] if item["derived"]))
+        self.assertEqual({item["protected"] for item in cases["paths"]}, {True, False})
+        self.assertEqual({item["paths"] is None for item in cases["extras"]}, {True, False})
+        self.assertEqual({item["deny"] for item in cases["denials"]}, {"image_generation", "config_edit", None})
 
     def test_node_suite(self):
         node = shutil.which("node")
