@@ -1,7 +1,7 @@
 # Advanced Workstreams controls
 
 This procedure covers explicitly selected resource-admission or capacity-recovery
-status and enable/disable requests. For the ordinary project checkbox, use the
+status and enable/disable requests. For the ordinary project choice, use the
 [project preference](procedure.md). Load operation details only for the route requested.
 
 Use the installed package's `scripts/workflow.py delegation workstreams` controls
