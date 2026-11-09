@@ -18,13 +18,13 @@ import tomllib
 from types import SimpleNamespace
 
 from runtime import onboarding as d3, startup
+from runtime.setup_canary import _public_canary_patch  # re-exported for existing callers
 
 
 BEHAVIOR_CASES = ('startup-context', 'pre-tool-enforcement', 'post-tool-handling',
     'stop-ownership', 'interrupt-ownership', 'adoption', 'review-readiness', 'repository-gate', 'recovery')
 _ISSUER = object()
 _FEATURES = ('hooks', 'codex_hooks', 'plugins', 'remote_plugin')
-CLIENT_SURFACES = {'codex': 'codex-cli', 'claude-code': 'claude-code-cli'}
 _EVENTS = ('SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'Interrupt')
 OPERATION_CAPABILITIES = {
     'observe-cli-basic': ('startup-context',),
@@ -153,7 +153,7 @@ def plugin_content_hash(root, budget):
     return _package_scan(root,budget)[0]
 
 
-def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bundle-v1'):
+def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bundle-v1', include=None):
     root = Path(root)
     sources = list(runtime_sources) if runtime_sources is not None else None
     selected = set(sources) if sources is not None else set()
@@ -166,6 +166,8 @@ def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bu
         path = pending.pop()
         if path != root and (path.name in ('__pycache__', '.venv') or path.name.endswith(('.pyc', '.egg-info'))):
             continue
+        if include is not None and path.parent == root and path.name not in include:
+            continue  # only the top-level entries the client actually loads
         budget['paths'] += 1
         relative = os.fsencode(str(path.relative_to(root))) if path != root else b''
         digest.update(len(relative).to_bytes(8, 'little')); digest.update(relative)
@@ -249,69 +251,11 @@ def _configuration_files(config, cwd):
     return [files[key] for key in sorted(files)]
 
 
-def _claude_settings_paths(config, root, budget):
-    """Documented file-backed Claude settings sources, in precedence order; managed policy is files only."""
-    from runtime.adapters import claude_code
-    paths = [('user', Path(config['claude_config'])/'settings.json'), ('project', root/'.claude/settings.json'),
-             ('local', root/'.claude/settings.local.json')]
-    directory = claude_code.MANAGED_DIRECTORIES.get(sys.platform)
-    if directory is not None:
-        managed = Path(directory)
-        paths.append(('managed', managed/'managed-settings.json'))
-        drop = managed/'managed-settings.d'
-        if drop.is_dir():
-            paths.extend(('managed', child) for child in sorted(_children(drop, budget)) if child.suffix == '.json')
-    return paths
-
-
-def _claude_projection(scope, value, config):
-    """Only the documented hook controls and this plugin's enablement; no other settings are retained."""
-    d3._require(isinstance(value, dict), 'Observable Claude configuration is not an object')
-    result = {}
-    for key in ('disableAllHooks', 'allowManagedHooksOnly'):
-        if key in value:
-            result[key] = value[key]
-    if value.get('hooks') is not None:
-        d3._require(isinstance(value['hooks'], dict), 'Unsupported Claude hook configuration')
-        result['hooks'] = d3._digest(value['hooks'])
-    enabled = value.get('enabledPlugins') or {}
-    d3._require(isinstance(enabled, dict), 'Unsupported Claude plugin configuration')
-    selected = {key: enabled[key] for key in sorted(enabled) if str(key).split('@')[0] == config['plugin_name']}
-    if selected:
-        result['enabledPlugins'] = selected
-    return result
-
-
-def current_claude_configuration(config, cwd, budget=None, *, bundle_budget=None, runtime_sources=None):
-    """Local observable inputs only: hook-relevant settings, the plugin bundle and its hook definitions."""
-    budget = budget if budget is not None else _budget()
-    root = startup._canonical_path(str(cwd))
-    selected = Path(config['roots'][0])
-    d3._require(root.is_relative_to(selected), 'Configuration observation left its selected checkout')
-    observed = []
-    for scope, path in _claude_settings_paths(config, selected, budget):
-        raw = _read(path, budget, absent=True, limit=256 * 1024)
-        value = {} if raw is None else startup.json_object(raw)
-        observed.append(dict(path=str(path), scope=scope, values=_claude_projection(scope, value, config)))
-    package = Path(config['package_root']); source = package/'hooks/claude-code.json'
-    hook_owner = dict(root=str(package), binding=d3._filesystem_binding(package), source=str(source),
-        sha256=hashlib.sha256(_read(source, budget)).hexdigest())
-    scan = bundle_budget if bundle_budget is not None else budget
-    scan['paths'] = budget['paths']
-    bundle, runtime_digest = _package_scan(package, scan, runtime_sources=runtime_sources, label=b'claude-plugin-bundle-v1')
-    budget['paths'] = scan['paths']
-    material = dict(files=observed, bundle=bundle)
-    result = dict(digest=d3._digest(material), hook_owner=hook_owner, material=material)
-    if runtime_sources is not None:
-        result['runtime_digest'] = runtime_digest
-    return result
-
-
 def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runtime_sources=None):
     """Compare captured local inputs; never query native processes or reconstruct precedence."""
     budget = budget if budget is not None else _budget()
     if 'claude_config' in config:
-        return current_claude_configuration(config, cwd, budget, bundle_budget=bundle_budget, runtime_sources=runtime_sources)
+        from runtime import setup_claude; return setup_claude.current_configuration(config, cwd, budget, bundle_budget=bundle_budget, runtime_sources=runtime_sources)
     observed = []
     for item in _configuration_files(config, cwd):
         raw = _read(Path(item['path']), budget, absent=True)
@@ -430,73 +374,12 @@ def _system_layer_path(path):
     return directory/'codex/config.toml'
 
 
-def _collect_claude_content(observed, identity, transaction_id, verified_assessment, *, predecessor=None):
-    """A staged Claude receipt from facts the client itself reported; nothing beyond them is verified."""
-    from runtime.adapters import claude_setup
-    from runtime.state import _runtime_sources, PACKAGE
-    d3._require(predecessor is None, 'Claude successors need a managed behavior source, which is not available yet')
-    binding = observed['binding']
-    d3._object(binding, ('accepted_scope_digest','attempt_ref','transaction_id'))
-    d3._require(binding['accepted_scope_digest'] == d3._digest(identity) and binding['transaction_id'] == transaction_id,
-        'Native witness belongs to another setup operation or scope')
-    startup._canonical_ref(binding['attempt_ref'])
-    native = observed['native']
-    d3._object(native, ('surface', 'version', 'executable'))
-    d3._require(native['surface'] == CLIENT_SURFACES['claude-code'], 'This setup source does not qualify the selected frontend')
-    startup._canonical_text(native['version'], 128); startup._canonical_path(native['executable'])
-    root = startup._canonical_path(identity['repository_root']); package = startup._canonical_path(observed['package_root'])
-    budget = _budget()
-    assessment = _assessment(verified_assessment, staged=True)
-    claude_setup.verify_facts(observed['claude_observation'], observed['observations'], observed['bootstrap'])
-    from runtime.changes import _evidence
-    d3._require(_evidence(observed['bootstrap'], many=True) and set(observed['observations']) <= set(BEHAVIOR_CASES),
-        'Genuine frontend observations are missing')
-    for case in assessment['cases']:
-        actual = observed['observations'].get(case['id'], [])
-        _evidence(actual, many=True)
-        if case['status'] == 'verified':
-            d3._require(actual and all(proof in case['evidence'] for proof in actual),
-                'A verified behavior lacks its actual frontend observations')
-    d3._require(observed['claude_observation']['init']['claude_version'] == native['version']
-        and observed['claude_observation']['init']['cwd'] == str(root)
-        and observed['claude_observation']['init']['plugin']['path'] == str(package),
-        'The observed run differs from the selected checkout, package or version')
-    d3._require(identity['configuration']['policy_digest'] == startup.policy_digest(package, budget=budget),
-        'Setup candidate policy/runtime identity differs')
-    d3._require(d3._filesystem_binding(Path(identity['project_root'])) == identity['project_binding']
-        and all(d3._filesystem_binding(Path(identity['repository_root' if key == 'root' else key])) == value
-            for key, value in identity['bindings'].items()), 'Setup physical project/checkout identity differs')
-    for dependency in identity['shared_policy']:
-        d3._require(hashlib.sha256(_read(Path(dependency['path']), budget)).hexdigest() == dependency['sha256'],
-            'Setup shared instruction source differs')
-    plugin_name = startup.json_object(_read(package/'.claude-plugin/plugin.json', budget))['name']
-    config = dict(package_root=str(package), claude_config=str(Path(os.environ.get('CLAUDE_CONFIG_DIR')
-        or Path.home()/'.claude').resolve()), plugin_name=plugin_name, roots=[str(root), identity['primary_root']])
-    current = current_claude_configuration(config, root, budget,
-        runtime_sources=[source.relative_to(PACKAGE) for source in _runtime_sources()])
-    d3._require(identity['configuration']['runtime_digest'] == current['runtime_digest'],
-        'Setup candidate policy/runtime identity differs')
-    for row in current['material']['files']:
-        values = row['values']
-        d3._require(values.get('disableAllHooks') is not True and not any(value is False for value in
-            values.get('enabledPlugins', {}).values()), 'Hooks or this plugin are disabled in the observed configuration')
-        d3._require(row['scope'] != 'managed' or not values,
-            'Managed hook or plugin policy is outside this personal setup source')
-    config.update(digest=current['digest'], hook_owner=current['hook_owner'])
-    content = dict(version=2, kind='owner-observed-setup', transaction_id=transaction_id, identity=identity,
-        native=dict(native), configuration=config, runs=[], assessment=assessment, predecessor=None,
-        source=dict(binding=binding, bootstrap=observed['bootstrap'], observations=observed['observations'],
-            pending_reason=observed['pending_reason'], claude_observation=observed['claude_observation']))
-    d3._bounded(content)
-    return _SetupObservation(startup._canonical_freeze(content), _ISSUER)
-
-
 def _collect_content(observed, accepted_identity, transaction_id, verified_assessment, *, predecessor=None, capture_reference=None):
     from runtime.doctor import inspect_hooks
     from runtime.state import _accepted_identity, _runtime_sources, PACKAGE
     identity = _accepted_identity(accepted_identity)
     if identity['client'] == 'claude-code':
-        return _collect_claude_content(observed, identity, transaction_id, verified_assessment, predecessor=predecessor)
+        from runtime import setup_claude; return setup_claude.collect_content(observed, identity, transaction_id, verified_assessment, predecessor=predecessor)
     d3._require(identity['client'] == 'codex', 'Only the Codex local setup source is supported')
     binding = observed['binding']
     d3._object(binding, ('accepted_scope_digest','attempt_ref','transaction_id'))
@@ -673,23 +556,8 @@ def receipt_shape(content):
                 'Verified behavior lost its genuine frontend observation')
     else:
         d3._require('predecessor' not in content and 'source' not in content, 'Original setup history cannot be rewritten')
-    client = content['identity']['client']
-    d3._require(CLIENT_SURFACES.get(client) == content['native']['surface'], 'Unsupported original setup scope')
-    source = content.get('source', {})
-    if client == 'claude-code':
-        # A Claude receipt is exactly its client's reported events: no Codex capture families, proofs match facts.
-        d3._require(content['version'] == 2 and 'claude_observation' in source and not {'native_origin', 'native_capture',
-            'capture_reference', 'command_origin', 'command_origins', 'source_capture', 'native_safety', 'managed'} & set(source),
-            'Claude setup needs its observed client events')
-        from runtime.adapters import claude_setup
-        try:
-            claude_setup.verify_facts(source['claude_observation'], source['observations'], source['bootstrap'])
-        except startup.StartupError:
-            raise
-        except (KeyError, TypeError):
-            raise startup.StartupError('Invalid retained Claude Code observation') from None
-    else:
-        d3._require('claude_observation' not in source, 'Unsupported retained observation family')
+    d3._require(content['native']['surface'] == {'codex': 'codex-cli', 'claude-code': 'claude-code-cli'}.get(content['identity']['client']), 'Unsupported original setup scope')
+    from runtime import setup_claude; setup_claude.check_receipt(content)
     startup._canonical_text(content['transaction_id'], 128)
     startup._canonical_hash(content['configuration']['digest']); startup._canonical_hook(content['configuration']['hook_owner'])
 
@@ -850,8 +718,7 @@ def setup_capture_projection(decision, *, process):
 
 def collect_retained_setup(reference, identity, new_transaction, assessment, *, witness=None, readiness=None):
     """Publish an exact successor, preserving the actual native capture transaction."""
-    d3._require(startup._canonical_plain(identity).get('client') != 'claude-code' or (witness is None and readiness is None),
-        'Claude managed behavior and review-readiness sources are not available yet')
+    d3._require(startup._canonical_plain(identity).get('client') != 'claude-code' or (witness is None and readiness is None), 'Claude managed behavior and review-readiness sources are not available yet')
     native_origin = '#native-observation:' in reference['reference']
     readiness_facts = None
     if readiness is not None:
@@ -968,56 +835,6 @@ def _monotonic_coverage(previous, successor):
         d3._require(retained is not None and retained['status']=='verified'
             and all(reference in retained['evidence'] for reference in original['evidence']),
             'Successor lost the original independently verified native bootstrap evidence')
-
-
-def _public_canary_patch(descriptor, repository_root, *, readback=None):
-    """The qualification probe supports one unambiguous public-file update hunk."""
-    d3._object(descriptor,('canary','patch','before_sha256'))
-    canary=startup._canonical_path(descriptor['canary']);root=startup._canonical_path(str(repository_root))
-    startup._canonical_hash(descriptor['before_sha256'])
-    patch=descriptor['patch']
-    d3._require(isinstance(patch,str) and 0<len(patch.encode('utf-8'))<=65536
-        and not any(ord(character)<32 and character not in '\n\t' or 127<=ord(character)<=159 for character in patch),
-        'Public canary patch contains unsupported bytes')
-    lines=patch.removesuffix('\n').split('\n')
-    d3._require(len(lines)>=6 and lines[0]=='*** Begin Patch' and lines[-1]=='*** End Patch'
-        and lines[1].startswith('*** Update File: ') and lines[2]=='@@',
-        'Public canary patch requires one Update File hunk')
-    relative=lines[1][len('*** Update File: '):]
-    # Codex trims the update header before interpreting its path.
-    d3._require(relative and relative == relative.rstrip() and not Path(relative).is_absolute() and '\\' not in relative
-        and all(part not in ('','.','..') for part in relative.split('/')) and root/relative==canary,
-        'Public canary patch selected another file')
-    hunk=lines[3:-1]
-    d3._require(all(line and line[0] in ' +-' for line in hunk)
-        and any(line.startswith('-') for line in hunk) and any(line.startswith('+') for line in hunk),
-        'Public canary patch requires a nonempty single-file change')
-    original=[line[1:] for line in hunk if line[0] in ' -']
-    changed=[line[1:] for line in hunk if line[0] in ' +']
-    d3._require(original!=changed and any(line[1:] for line in hunk if line[0] in '+-'),
-        'Public canary patch does not change original content')
-    if readback is not None:
-        d3._require(isinstance(readback,str) and len(readback.encode('utf-8'))<=65536,'Public canary readback exceeds its bound')
-        parts=re.split(r'(\r\n|\r|\n)',readback)
-        current='\n'+'\n'.join(parts[::2]).removesuffix('\n')+'\n';needle='\n'+'\n'.join(original)+'\n'
-        occurrence=current.find(needle)
-        d3._require(occurrence>=0 and current.find(needle,occurrence+1)==-1,
-            'Public canary patch does not match its original readback')
-        # Codex preserves existing endings and uses the first ending for changed lines.
-        ending=parts[1] if len(parts)>1 else '\n'
-        cursor=2*current.count('\n',0,occurrence)
-        updated=parts[:cursor]
-        for line in hunk:
-            if line[0]=='+':
-                updated.extend((line[1:],ending))
-            else:
-                if line[0]==' ':
-                    context_ending=parts[cursor+1] if cursor+1<len(parts) else ending
-                    updated.extend((parts[cursor],context_ending))
-                cursor+=2
-        updated.extend(parts[cursor:])
-        result=''.join(updated)
-        return result if result.endswith(('\r','\n')) else result+ending
 
 
 def _authorization_shape(value):
@@ -1565,7 +1382,7 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
             if checkout['root'] == root and key[2] == client]
         if len(matches) != 1:return None
         key, entry = matches[0]; activation = entry['activation']; binding = activation['qualification_binding']
-        if client not in CLIENT_SURFACES or binding is None:return None
+        if client not in ('codex', 'claude-code') or binding is None:return None
         path, separator, name = binding['receipt']['reference'].partition('#setup:')
         if not separator:return None
         pointer = startup._canonical_path(path)
@@ -1605,18 +1422,12 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
         final = changes._scoped_entries(journal['manifest']['enrollment']['record']).get(key)
         d3._require(final is not None and final[2]['activation'] == activation, 'Setup receipt was replayed into another activation')
         config = content['configuration']
-        if client == 'claude-code':
-            home = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude').resolve()
-            d3._require(str(home) == config['claude_config'] and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
-        else:
-            home = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex'))).resolve()
-            d3._require(str(home) == config['codex_home'] and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
+        home = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')) if client == 'codex' else os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude').resolve()
+        d3._require(str(home) == config['codex_home' if client == 'codex' else 'claude_config'] and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
         # Native bundle bytes have their own 8 MiB cap; time and path limits stay shared.
         scan = _budget(budget.get('deadline'))
         current = current_configuration(config, Path(cwd or root), budget, bundle_budget=scan)
-        # A non-Codex current observation also names its surface and version (startup compares the surface).
-        extra = dict(surface=content['native']['surface'], version=content['native']['version']) if client != 'codex' else {}
-        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner'], **extra),
+        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner'], **({} if client == 'codex' else dict(surface=content['native']['surface'], version=content['native']['version']))),
             receipt=binding['receipt'], binding=binding, provenance=dict(kind='trusted-coordinator', **binding['receipt']))
         if content['version'] == 2:
             verified, complete = _coverage(content)

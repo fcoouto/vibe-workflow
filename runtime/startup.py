@@ -451,9 +451,8 @@ def orient(event, package, *, acquisition=None):
             "Startup supplies orientation only; it does not establish enforcement or readiness."
         )
     if scope.runtime is not None and event.client in ("codex", "claude-code"):
-        label = "Codex" if event.client == "codex" else "Claude Code"
         context += (f" Runtime state: {json.dumps(str(scope.runtime.state_dir / 'runtime.sqlite3'))}; "
-                    f"native {label} session: {json.dumps(event.session_id)}. Read existing task status with task status; startup never changes bindings or pins.")
+                    f"native {'Codex' if event.client == 'codex' else 'Claude Code'} session: {json.dumps(event.session_id)}. Read existing task status with task status; startup never changes bindings or pins.")
         if len(context.split()) > 150:
             raise StartupError("Runtime startup orientation exceeds the context limit")
     return context

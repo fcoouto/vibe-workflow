@@ -115,6 +115,32 @@ class StreamObservationTests(unittest.TestCase):
             doctor.NativeSetupWitness({}, _issuer=object())
 
 
+class BundleScopeTests(unittest.TestCase):
+    def test_only_the_content_claude_loads_changes_the_configuration_digest(self):
+        import shutil
+        base = Path(tempfile.mkdtemp(prefix="claude-bundle-")).resolve()
+        self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
+        package, checkout, config_dir = base / "package", base / "checkout", base / "config"
+        for directory in (".claude-plugin", "hooks", "clients", "docs", "tests", "assets"):
+            (package / directory).mkdir(parents=True)
+        for relative in (".claude-plugin/plugin.json", "hooks/claude-code.json", "clients/a.md", "docs/a.md",
+                         "tests/t.py", "assets/a.bin"):
+            (package / relative).write_text("{}" if relative.endswith("json") else "x")
+        checkout.mkdir()
+        config_dir.mkdir()
+        config = dict(package_root=str(package), claude_config=str(config_dir), plugin_name="p",
+                      roots=[str(checkout), str(checkout)])
+        digest = lambda: setup.current_configuration(config, checkout)["digest"]
+        original = digest()
+        for ignored in ("docs/a.md", "tests/t.py", "assets/a.bin"):
+            (package / ignored).write_text("changed " + ignored)
+            self.assertEqual(digest(), original, ignored)
+        for loaded in ("clients/a.md", "hooks/claude-code.json"):
+            (package / loaded).write_text("changed " + loaded)
+            self.assertNotEqual(digest(), original, loaded)
+            original = digest()
+
+
 class ClaudeQualificationTests(unittest.TestCase):
     def setUp(self):
         self.config = Path(tempfile.mkdtemp(prefix="claude-config-")).resolve()

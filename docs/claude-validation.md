@@ -66,3 +66,11 @@ Their tests run on Claude-born canonical scopes whose synthetic trusted-owner qu
 | `check-run`, `verify-completion` | `review-readiness` | refused: pending capability needs an exact qualification attempt |
 
 So a real Claude project cannot yet use the guard, task controls, checks or completion without an admitted qualification attempt. Closing this needs N4 stage 2 (managed pre-tool, post-tool and stop behavior) and review readiness, which in turn need the D6 integration. Native hook execution of the guard, post-tool and stop handlers under a bound task remains unobserved.
+
+## Rebase onto main and a pre-existing size problem (9 November 2026)
+
+The branch was rebased onto `origin/main` (215 commits ahead; two mechanical conflicts in `scripts/workflow.py` and the generated instruction map). To meet the new Python file-size ratchet, `_public_canary_patch` moved unchanged to `runtime/setup_canary.py` (re-exported under its old name) and the Claude setup code lives in `runtime/setup_claude.py`; three ceilings were lowered and none raised.
+
+**Pre-existing on `main`, not caused by this branch:** the tracked package is now 9.46 MB (7.76 MB at the old fork point), above the 8 MiB total-bytes cap that `_package_scan` enforces when it hashes the plugin bundle. Seven Codex tests that hash the real package fail on a pristine `origin/main` and on this branch alike: six in `test_staged_setup` and `CooperativeQualificationTests.test_guarded_worker_check_and_review_complete_only_the_qualification`. The same scan runs for production Codex qualification, so Codex qualification reads on the real package are likely affected. That needs its own fix (for example scoping the Codex bundle or raising the cap deliberately). Claude avoids the problem by hashing only the directories it loads (about 3.7 MB).
+
+A differential run (`test_setup_source`, `test_setup_observation`, `test_native_bootstrap`, `test_staged_setup`, `test_package_versions`; 93 tests) gave identical failing sets on `origin/main` and on this branch.
