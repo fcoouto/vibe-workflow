@@ -39,16 +39,16 @@ class ProbeServer(FakeOpenCode):
                                dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
                                dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")]
         self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
-        self.oauth_extra = {}
+        self.oauth_extra = {}  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
         self.upstream_error, self.upstream_retry = None, None
-        self.assistant_overrides, self.retry_message = {}, "retrying"
-        self.connection_label = "ChatGPT"
-        self.no_reply = False
-        self.upstream_by_model = {}  # model id -> StructuredError (or None for a normal reply), overriding upstream_error  # transmitted, then the session goes idle (failed) with no assistant message
+        self.assistant_overrides, self.retry_message = {}, "retrying"  # fuzzing: extra assistant fields, status text
+        self.connection_label = "ChatGPT"  # the credential's label as GET /api/integration/openai lists it
+        self.no_reply = False  # transmitted, then the session goes idle (failed) with no assistant message
+        self.upstream_by_model = {}  # model id -> StructuredError (or None for a normal reply), overriding upstream_error
         store = self.project.parent / "data" / "opencode"  # the isolated server's own store, as 2.2.6 writes it
         store.mkdir(parents=True, exist_ok=True)
-        (store / "opencode.db").write_text("")  # the credential's label as GET /api/integration/openai lists it  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        (store / "opencode.db").write_text("")
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
