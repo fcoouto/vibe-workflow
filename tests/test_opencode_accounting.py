@@ -185,9 +185,9 @@ def idle(message_id, created_ms):
             "tokens": None, "cost": None, "rate_limit": None, "tool_calls": [], "tool_calls_dropped": 0}
 
 
-def spawn_call(child):
-    return {"tool": "subagent", "tool_class": "subagent", "tool_call_id": "toolu_x", "executed": False,
-            "status": "completed", "child_session_id": child, "spawn": None}
+def spawn_call(child, status="completed", tool="subagent"):
+    return {"tool": tool, "tool_class": "subagent" if tool == "subagent" else "builtin", "tool_call_id": "toolu_x",
+            "executed": False, "status": status, "child_session_id": child, "spawn": None}
 
 
 def synthetic(message_id, values, kind="assistant", alias="haiku", variant="default", cost=None, **extra):
@@ -580,7 +580,8 @@ class Consistency(unittest.TestCase):
             "countable": 2, "duplicates": 0, "conflicting_duplicates": 0, "missing_tokens": 0,
             "in_progress": 0, "unknown_records": 0, "missing_model": 0, "complete": True, "title": "known",
             "title_reason": None, "negative_classes": [], "rate_limit_messages": 1, "children_referenced": 0,
-            "children_included": 0, "children_unaccounted": 0, "tool_calls_dropped": 0})
+            "children_included": 0, "children_unaccounted": 0, "spawns_without_session": 0,
+            "tool_calls_dropped": 0})
         self.assertEqual(accounting.consistency_report(state(D_MESSAGES, D_TOTAL, D_ID))["children_unaccounted"], 1)
 
     def test_report_counts_problems_without_raising_or_echoing(self):
@@ -720,9 +721,6 @@ class Purity(unittest.TestCase):
             accounting.consistency_report(state())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 # Session `ses_fixture3` (agent "nester", child of session D): only its session total is recorded, so the test
 # supplies one synthetic message carrying that total.
@@ -826,3 +824,83 @@ class LedgerSettlement(ledger_tests.Accounting):
         settlement = response["settlement"]
         self.assertEqual((settlement["cost_source"], settlement["charged"], settlement["released"]),
                          ("estimate", 5 * M, M))
+
+
+def tree_session(session_id, spawns=()):
+    """A one-message session whose message spawns `spawns`; ids like `ses_x1` give messages like `msg_x1a`."""
+    message = synthetic(f"msg_{session_id[4:]}a", tokens(1, 1, 0, 0, 0), cost=0.01,
+                        tool_calls=[spawn_call(child) for child in spawns])
+    return {"session_id": session_id, "tokens": tokens(1, 1, 0, 0, 0), "cost": 0.01, "messages": [message]}
+
+
+def tree(root_spawns, children, funding="subscription"):
+    root = tree_session("ses_root", root_spawns)
+    return accounting.usage_from_messages(root["messages"], root["tokens"], session_id="ses_root", funding=funding,
+                                          session_cost=0.01, children=children)
+
+
+class SpawnsWithoutSession(unittest.TestCase):
+    def with_call(self, call):
+        return [dict(m, tool_calls=[call]) if m["message_id"] == "msg_fixture34" else m for m in D_MESSAGES]
+
+    def test_errored_or_running_spawn_without_child_id_leaves_spend_unaccounted(self):
+        for status in ("error", "running"):
+            messages = self.with_call(spawn_call(None, status))
+            result = account(messages, D_TOTAL, D_ID)
+            self.assertIn("child_session_unaccounted", result["unknown"])
+            self.assertEqual(result["title"]["state"], "zero")
+            priced = [dict(m, cost=0.01) if m["type"] == "assistant" else m for m in messages]
+            api = account(priced, D_TOTAL, D_ID, funding="api", session_cost=0.02)
+            self.assertIn("cost_unknown", api["unknown"])
+            self.assertTrue(all(r["cost_usd_micros"] is None for r in api["usage"]["requests"]))
+            report = accounting.consistency_report(state(messages, D_TOTAL, D_ID))
+            self.assertEqual(report["spawns_without_session"], 1)
+
+    def test_completed_spawn_with_its_child_included_is_accounted(self):
+        result = account(D_MESSAGES, D_TOTAL, D_ID, children=[CHILD])
+        self.assertNotIn("child_session_unaccounted", result["unknown"])
+        priced = [dict(m, cost=0.01) if m["type"] == "assistant" else m for m in D_MESSAGES]
+        child = dict(CHILD, cost=0.02, messages=[dict(CHILD["messages"][0], cost=0.02), CHILD["messages"][1]])
+        api = account(priced, D_TOTAL, D_ID, funding="api", session_cost=0.02, children=[child])
+        self.assertEqual(api["unknown"], [])
+        self.assertEqual(api["totals"]["usd_micros"], 40000)
+
+    def test_other_tools_without_a_child_id_are_fine(self):
+        messages = self.with_call(spawn_call(None, tool="read"))
+        self.assertNotIn("child_session_unaccounted", account(messages, D_TOTAL, D_ID)["unknown"])
+
+
+class Reachability(unittest.TestCase):
+    def test_valid_chain_from_the_root(self):
+        result = tree(["ses_a1"], [tree_session("ses_a1", ["ses_a2"]), tree_session("ses_a2")], funding="api")
+        self.assertEqual(result["unknown"], [])
+        self.assertEqual([s["session_id"] for s in result["sessions"]], ["ses_root", "ses_a1", "ses_a2"])
+        self.assertEqual(result["totals"]["usd_micros"], 30000)
+
+    def test_two_parents_referencing_one_child_count_it_once(self):
+        result = tree(["ses_b1", "ses_b2"], [tree_session("ses_b1", ["ses_b3"]), tree_session("ses_b2", ["ses_b3"]),
+                                             tree_session("ses_b3")])
+        self.assertEqual(result["unknown"], [])
+        self.assertEqual(result["totals"]["counted"], tokens(4, 4, 0, 0, 0))
+
+    def test_island_of_sessions_spawning_each_other_is_refused(self):
+        children = [tree_session("ses_c1"), tree_session("ses_c2", ["ses_c3"]), tree_session("ses_c3", ["ses_c2"])]
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_c1"], children), "session not in the attempt")
+
+    def test_link_back_to_the_root_is_refused(self):
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_d1"], [tree_session("ses_d1", ["ses_root"])]),
+                         "session not in the attempt")
+
+    def test_cycle_below_the_root_is_refused(self):
+        children = [tree_session("ses_e1", ["ses_e2"]), tree_session("ses_e2", ["ses_e1"])]
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_e1"], children), "session not in the attempt")
+
+    def test_session_bound(self):
+        names = [f"ses_f{index}" for index in range(64)]
+        self.assertEqual(len(tree(names[:63], [tree_session(name) for name in names[:63]])["sessions"]), 64)
+        self.assertEqual(assert_fixed_error(self, tree, names, [tree_session(name) for name in names]),
+                         "invalid session")
+
+
+if __name__ == "__main__":
+    unittest.main()
