@@ -53,7 +53,7 @@ Each step starts with failing tests (TDD) and ends with its listed check passing
    - Check: `validate.py`, link check of changed instructions.
 
 9. **Verification and review.**
-   - `python3 -B scripts/test_sharded.py` (runtime behavior changes) and `validate.py`.
+   - Affected modules via `python3 -B scripts/test_sharded.py <modules>`, `--fast`, and `validate.py`; the full suite only if the slice touches the shared core listed in `AGENTS.md`.
    - Observe startup in a real Codex and Claude Code session on the export: the `Features:` line appears in the enrolled checkout and nothing in an unrelated repository.
    - Independent review covering behavior and security (consent cannot be enabled by the committed file, a clone or a copied grant), then a `[READY]` PR.
 
