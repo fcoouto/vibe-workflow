@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import statistics
 import subprocess
@@ -42,6 +43,10 @@ SLOWEST_SHOWN = 5
 TAIL_LINES = 20
 POLL_SECONDS = 0.05
 TERMINATE_GRACE_SECONDS = 5
+HOMES_DIR = "homes"
+HOME_OVERRIDES = ("CODEX_HOME", "XDG_STATE_HOME")
+LEAK_PATHS_KEPT = 20
+LEAK_PATHS_SHOWN = 5
 
 
 class UsageError(Exception):
@@ -59,6 +64,10 @@ def parse_args(argv):
                         help="record durations and rewrite the timings file after the run")
     parser.add_argument("--fast", action="store_true",
                         help="development aid: skip modules the timings file marks slow; not a release gate")
+    parser.add_argument("--fail-on-home-writes", action="store_true",
+                        help="exit 1 when a unit leaves files under its private HOME")
+    parser.add_argument("--keep-homes", action="store_true",
+                        help="keep (and print the path of) private HOMEs that hold leaked files")
     parser.add_argument("--list", action="store_true", help="print the unit plan and predicted wall time, then exit")
     parser.add_argument("modules", nargs="*", metavar="MODULE_OR_GLOB",
                         help="module names or globs, e.g. test_state, tests.test_state, 'test_delegation*'")
@@ -300,6 +309,71 @@ def unit_command(item, root, timings_out):
     return command
 
 
+class HomeError(Exception):
+    """A unit's private HOME could not be created; the unit must not run with the real one."""
+
+
+def make_home(index, root, log_dir):
+    """Create a fresh canonical HOME with .local/share for one unit, outside the root and its parent."""
+    base = log_dir / HOMES_DIR
+    home = base / f"home-{index:03d}"
+    try:
+        if is_inside(base, root) or base == root.parent:
+            raise HomeError(f"private HOME directory {base} would be inside the root or beside it")
+        base.mkdir(exist_ok=True)
+        home.mkdir()
+        (home / ".local" / "share").mkdir(parents=True)
+        if Path(os.path.realpath(home)) != home:
+            raise HomeError(f"private HOME {home} is not a canonical path")
+    except OSError as error:
+        raise HomeError(f"cannot create private HOME {home}: {error}") from error
+    return home
+
+
+def unit_env(home):
+    """Environment for a unit: the parent's, with HOME redirected and the overriding variables removed."""
+    env = {key: value for key, value in os.environ.items() if key not in HOME_OVERRIDES}
+    env["HOME"] = env["VCW_TEST_HOME"] = str(home)
+    return env
+
+
+def home_leaks(home):
+    """Return (count, first relative paths) of everything in a HOME except the empty .local/share."""
+    found = []
+    for directory, names, files in os.walk(home):
+        base = Path(directory).relative_to(home)
+        found += [str(base / name) for name in names + files]
+    # The pre-created directories are not leaks; whatever is inside them still is.
+    scaffold = {".local", str(Path(".local") / "share")}
+    leaked = sorted(path for path in found
+                    if path not in scaffold or (home / path).is_symlink() or not (home / path).is_dir())
+    return len(leaked), leaked[:LEAK_PATHS_KEPT]
+
+
+def remove_empty_homes_dir(log_dir):
+    try:
+        (log_dir / HOMES_DIR).rmdir()
+    except OSError:
+        pass  # absent, or it still holds a kept HOME
+
+
+def drop_home(run):
+    shutil.rmtree(run["home"], ignore_errors=True)
+
+
+def finish_home(run, keep):
+    """Record what the unit left in its HOME, then remove the HOME; never raises."""
+    run["leak"] = None
+    try:
+        count, paths = home_leaks(run["home"])
+        if count:
+            run["leak"] = {"count": count, "paths": paths, "kept": run["home"] if keep else None}
+    except OSError as error:
+        print(f"test_sharded: cannot inspect {run['home']}: {error}", file=sys.stderr)
+    if not (run["leak"] and run["leak"]["kept"]):
+        drop_home(run)
+
+
 def start_unit(index, item, root, log_dir, record):
     stem = file_stem(index, item)
     log_path = log_dir / f"{stem}.log"
@@ -307,12 +381,18 @@ def start_unit(index, item, root, log_dir, record):
     # Exclusive create: never overwrite logs from an earlier run.
     log = open(log_path, "x", encoding="utf-8")
     try:
-        process = subprocess.Popen(unit_command(item, root, timings_out), cwd=root, stdin=subprocess.DEVNULL,
-                                   stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        home = make_home(index, root, log_dir)
+        try:
+            process = subprocess.Popen(unit_command(item, root, timings_out), cwd=root, env=unit_env(home),
+                                       stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+        except BaseException:
+            shutil.rmtree(home, ignore_errors=True)
+            raise
     finally:
         log.close()
-    return {"unit": item, "log": log_path, "timings_out": timings_out, "process": process,
-            "started": time.monotonic(), "elapsed": None}
+    return {"unit": item, "log": log_path, "timings_out": timings_out, "process": process, "home": home,
+            "leak": None, "finished": False, "started": time.monotonic(), "elapsed": None}
 
 
 def signal_group(process, sig):
@@ -335,7 +415,7 @@ def stop_all(runs):
             process.wait()
 
 
-def run_units(units, workers, root, log_dir, record):
+def run_units(units, workers, root, log_dir, record, keep_homes=False):
     """Start the next unit whenever a worker slot frees; a failing unit does not stop the rest."""
     queue = list(enumerate(units, start=1))
     runs, active = [], []
@@ -348,12 +428,19 @@ def run_units(units, workers, root, log_dir, record):
                 active.append(run)
             for run in [run for run in active if run["process"].poll() is not None]:
                 run["elapsed"] = time.monotonic() - run["started"]
+                finish_home(run, keep_homes)
+                run["finished"] = True
                 active.remove(run)
             if active and (len(active) == workers or not queue):
                 time.sleep(POLL_SECONDS)
     except BaseException:
         stop_all(runs)
+        for run in runs:
+            if not run["finished"]:
+                drop_home(run)
+        remove_empty_homes_dir(log_dir)
         raise
+    remove_empty_homes_dir(log_dir)
     return runs
 
 
@@ -379,6 +466,7 @@ def read_result(run):
         "skipped": int(skipped.group(1)) if skipped else 0,
         "failed_tests": FAILED_TEST.findall(text),
         "stale": STALE.findall(text),
+        "leak": run["leak"],
         "ok": returncode == 0 and bool(ran),
         "tail": text.splitlines()[-TAIL_LINES:],
         "durations": read_durations(run["timings_out"]) if run["timings_out"] else None,
@@ -460,14 +548,32 @@ def print_crashes(results):
                 print(f"  | {line}")
 
 
-def print_summary(results, workers, wall, log_dir):
+def print_home_writes(results):
+    leaks = [result for result in results if result["leak"]]
+    if not leaks:
+        return
+    print("\nFiles written under the private HOME (tests that write to default home locations):")
+    for result in leaks:
+        leak = result["leak"]
+        print(f"  {result['unit']['name']}: {leak['count']} path(s) [{result['log']}]")
+        for path in leak["paths"][:LEAK_PATHS_SHOWN]:
+            print(f"    {path}")
+        if leak["count"] > LEAK_PATHS_SHOWN:
+            print(f"    ... and {leak['count'] - LEAK_PATHS_SHOWN} more (first {len(leak['paths'])} recorded)")
+        if leak["kept"]:
+            print(f"    kept HOME: {leak['kept']}")
+
+
+def print_summary(results, workers, wall, log_dir, fail_on_home_writes=False):
     tests = sum(result["tests"] or 0 for result in results)
     skipped = sum(result["skipped"] for result in results)
     modules = len({result["unit"]["module"] for result in results})
     ok = all(result["ok"] for result in results)
+    leaked = any(result["leak"] for result in results)
+    final = ok and not (fail_on_home_writes and leaked)
     print(f"\nSummary\n  workers: {workers}, units: {len(results)}")
     print(f"  total: {modules} modules, {tests} tests, {skipped} skipped, "
-          f"{wall:.1f}s wall, {'OK' if ok else 'FAILED'}")
+          f"{wall:.1f}s wall, {'OK' if final else 'FAILED'}")
     print("  slowest units:")
     for result in sorted(results, key=lambda item: -item["elapsed"])[:SLOWEST_SHOWN]:
         print("    " + unit_line(result))
@@ -477,6 +583,9 @@ def print_summary(results, workers, wall, log_dir):
         for test, log in failures:
             print(f"  {test}  [{log}]")
     print_crashes(results)
+    print_home_writes(results)
+    if fail_on_home_writes and leaked:
+        print("\nFAILED: --fail-on-home-writes and at least one unit wrote under its private HOME.")
     stale = sorted({test_id for result in results for test_id in result["stale"]})
     if stale:
         print("\nStale timing entries (no such test; refresh with --update-timings):")
@@ -486,7 +595,7 @@ def print_summary(results, workers, wall, log_dir):
         print("\nTiming-sensitive tests can fail on an overloaded machine; rerun one module alone with:"
               "\n  python3 -B -m unittest tests.<module>")
     print(f"\nLogs: {log_dir}")
-    return ok
+    return final
 
 
 def print_plan(units, workers, module_count, source):
@@ -527,20 +636,24 @@ def prepare(args, root):
             "notice": notice, "banner": banner, "units": units, "workers": workers, "source": source}
 
 
-def execute(plan, root, log_dir, record):
+def execute(plan, root, log_dir, args):
+    record = args.update_timings
     print(f"Running {len(plan['chosen'])} modules as {len(plan['units'])} units on "
           f"{plan['workers']} workers; logs: {log_dir}", flush=True)
     started = time.monotonic()
     try:
-        runs = run_units(plan["units"], plan["workers"], root, log_dir, record)
+        runs = run_units(plan["units"], plan["workers"], root, log_dir, record, args.keep_homes)
     except KeyboardInterrupt:
         print(f"\nInterrupted; stopped all units. Logs: {log_dir}", file=sys.stderr)
         return 130
+    except HomeError as error:
+        print(f"test_sharded: unit failed to start, stopped all units: {error}", file=sys.stderr)
+        return 1
     except FileExistsError as error:
         print(f"test_sharded: log already exists, not overwriting: {error.filename}", file=sys.stderr)
         return 2
     results = [read_result(run) for run in runs]
-    ok = print_summary(results, plan["workers"], time.monotonic() - started, log_dir)
+    ok = print_summary(results, plan["workers"], time.monotonic() - started, log_dir, args.fail_on_home_writes)
     if record:
         update_timings(plan["timings_path"], plan["timings"], results, set(plan["sizes"]))
     if plan["banner"]:
@@ -568,7 +681,7 @@ def main(argv=None):
         return 2
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGHUP, terminate)
-    return execute(plan, root, log_dir, args.update_timings)
+    return execute(plan, root, log_dir, args)
 
 
 if __name__ == "__main__":

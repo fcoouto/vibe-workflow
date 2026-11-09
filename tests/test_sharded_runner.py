@@ -93,6 +93,32 @@ class Second(unittest.TestCase):
         mark("{module}.Second.test_alone")
 """
 
+# Records its environment, optionally waits for a peer unit, then writes under the default home location.
+HOME_WRITING = """import json
+import os
+from pathlib import Path
+import time
+import unittest
+
+
+class HomeWriting(unittest.TestCase):
+    def test_home(self):
+        home = Path.home()
+        record = {{"home": str(home), "real": os.path.realpath(home), "home_env": os.environ.get("HOME"),
+                  "vcw": os.environ.get("VCW_TEST_HOME"), "codex": os.environ.get("CODEX_HOME"),
+                  "xdg": os.environ.get("XDG_STATE_HOME"), "share": (home / ".local" / "share").is_dir(),
+                  "share_entries": os.listdir(home / ".local" / "share")}}
+        marks = Path(os.environ["MARK_DIR"])
+        (marks / "{module}.json").write_text(json.dumps(record))
+        if os.environ.get("WAIT_FOR_PEER"):
+            deadline = time.monotonic() + 20
+            while len(list(marks.glob("*.json"))) < 2 and time.monotonic() < deadline:
+                time.sleep(0.05)
+        if {write}:
+            (home / ".config").mkdir()
+            (home / ".config" / "tool.txt").write_text("x")
+"""
+
 MARKED_TESTS = ["First.test_heavy", "First.test_light", "First.test_other", "Second.test_alone"]
 
 # Distinct sizes give a known planning order: pass, fail, skip, crash.
@@ -386,6 +412,84 @@ class ShardedRunnerTest(unittest.TestCase):
                 expected = 130 if sig == signal.SIGINT else 128 + signal.SIGTERM
                 self.assertEqual(expected, runner.wait(timeout=30))
                 self.wait_until(lambda: not any(self.alive(child) for child in children))
+
+    def run_home_modules(self, *args, modules=("test_homewriter",), clean=(), write=True, **extra):
+        for name in modules:
+            self.add_module(name, HOME_WRITING.format(module=name, write=write))
+        for name in clean:
+            self.add_module(name, HOME_WRITING.format(module=name, write=False))
+        modules = modules + tuple(clean)
+        self.marks = self.workspace / "marks"
+        self.marks.mkdir(exist_ok=True)
+        env = {**os.environ, "MARK_DIR": str(self.marks), "CODEX_HOME": str(self.workspace / "codex-parent"),
+               "XDG_STATE_HOME": str(self.workspace / "xdg-parent"), **extra}
+        return self.run_script("--workers", "2", *args, *modules, env=env)
+
+    def record(self, name):
+        return json.loads((self.marks / f"{name}.json").read_text())
+
+    def test_unit_runs_with_a_private_canonical_home(self):
+        result = self.run_home_modules()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        record = self.record("test_homewriter")
+        home = Path(record["home"])
+        self.assertNotEqual(os.environ.get("HOME"), record["home"])
+        self.assertEqual(record["home"], record["real"])
+        self.assertFalse(test_sharded.is_inside(home, self.root))
+        self.assertNotEqual(self.root.parent, home.parent)
+        self.assertEqual(record["home"], record["vcw"])
+        self.assertEqual(record["home"], record["home_env"])
+        self.assertTrue(record["share"])
+        self.assertEqual([], record["share_entries"])
+        self.assertIsNone(record["codex"])
+        self.assertIsNone(record["xdg"])
+
+    def test_home_writes_are_reported_without_failing_by_default(self):
+        result = self.run_home_modules()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("Files written under the private HOME", result.stdout)
+        self.assertIn("test_homewriter: 2 path(s)", result.stdout)
+        self.assertIn("    .config\n    .config/tool.txt\n", result.stdout)
+        self.assertNotIn("kept HOME", result.stdout)
+        self.assertFalse((self.log_dir / "homes").exists())
+
+    def test_fail_on_home_writes_exits_one(self):
+        result = self.run_home_modules("--fail-on-home-writes")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("--fail-on-home-writes", result.stdout)
+        self.assertIn("1 tests", result.stdout)
+        clean = self.run_script("--fail-on-home-writes", "test_pass", log_dir="logs-clean")
+        self.assertEqual(0, clean.returncode, clean.stdout + clean.stderr)
+
+    def test_keep_homes_keeps_only_homes_with_leaked_files(self):
+        result = self.run_home_modules("--keep-homes", clean=("test_homeclean",))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        kept = Path(self.record("test_homewriter")["home"])
+        self.assertIn(f"kept HOME: {kept}", result.stdout)
+        self.assertEqual("x", (kept / ".config" / "tool.txt").read_text())
+        self.assertEqual([kept.name], [path.name for path in (self.log_dir / "homes").iterdir()])
+
+    def test_clean_unit_reports_nothing_and_leaves_no_home(self):
+        result = self.run_home_modules("--keep-homes", write=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("Files written under the private HOME", result.stdout)
+        self.assertFalse((self.log_dir / "homes").exists())
+
+    def test_concurrent_units_get_different_homes(self):
+        result = self.run_home_modules(modules=("test_home_a", "test_home_b"), WAIT_FOR_PEER="1")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        homes = {self.record(name)["home"] for name in ("test_home_a", "test_home_b")}
+        self.assertEqual(2, len(homes))
+
+    def test_unit_does_not_start_when_its_home_cannot_be_created(self):
+        self.log_dir = self.workspace / "logs"
+        self.log_dir.mkdir()
+        (self.log_dir / "homes").write_text("in the way")
+        result = self.run_home_modules()
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("unit failed to start", result.stderr)
+        self.assertIn("cannot create private HOME", result.stderr)
+        self.assertEqual([], list(self.marks.iterdir()))
 
     def kill_all(self, pids):
         for pid in pids:
