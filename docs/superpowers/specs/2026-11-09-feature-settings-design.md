@@ -1,7 +1,7 @@
 # Feature settings — design
 
 - **Date:** 2026-11-09
-- **Status:** Draft for user review. Brainstormed by the coordinator and an independent Astra (high) design partner; user decisions recorded in section 2.
+- **Status:** Approved by the user on 2026-11-09. Brainstormed by the coordinator and an independent Astra (high) design partner; user decisions recorded in section 2.
 - **Plan:** [phase 1](../plans/2026-11-09-feature-settings-phase-1.md)
 
 ## 1. Problem
@@ -23,6 +23,7 @@ Feature state is scattered. An inventory on 9 November 2026 found 28 settings in
 | Layers in this design | Package defaults and project (team) settings only; no user or personal layer for now | User |
 | Rollout | Phased: phase 1 builds the standard and moves Workstreams; consent stores move later, one per change | User |
 | Consent | Never granted by a committed file; stays private and checkout-bound | Policy (`policies/01-project-scope.md`) and existing stores |
+| Onboarding ignore entries | `.git/info/exclude`, through a new journaled Git-metadata operation; the project's `.gitignore` stays untouched | User |
 
 ## 3. Model
 
@@ -70,7 +71,7 @@ Effective value: **package default < project settings**. A missing entry inherit
 
 Everything private lives under `private/`, created with owner-only modes; no private temporary file is written anywhere else in `.vibe-workflow/`. Any other new file there is treated as shareable and must be reviewed as such. Before creating anything under `private/`, writers check the ignore rules with `git check-ignore --no-index` (which evaluates rules even for tracked paths) and, separately, whether the path is tracked. They refuse when `private/` is not covered by a rule or is tracked, so a first write cannot expose private files. An already-tracked `project.json` does not block settings writes; it is reported as a warning.
 
-Onboarding makes sure both entries are ignored and warns when `project.json` is already tracked. Where it records them is decided in section 9.
+Onboarding makes sure both entries are ignored and warns when `project.json` is already tracked. It records them in the repository's `.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude` so linked worktrees share one file. Because onboarding's change machinery refuses `.git/` targets (`runtime/changes.py:77-81`), this is a new, narrowly scoped operation: it touches only that file, holds a lock for the shared resource, records the preimage, writes atomically, survives a crash and resumes, and undo removes only the lines it added while keeping later edits.
 
 ## 5. Settings file
 
@@ -137,7 +138,7 @@ Secrets (keychain or environment), accounting ledgers and reservations, task rec
 
 ## 9. Risks and open questions
 
-- **Where onboarding records the ignore entries (decision needed).** Onboarding's change machinery refuses `.git/` targets (`runtime/changes.py:77-81`), and linked worktrees share one exclude file, so `.git/info/exclude` would need a new, separately journaled Git-metadata operation. The alternative is the project's `.gitignore`: an ordinary recoverable project-file change that protects every clone, which suits a folder that now holds a committed file next to private ones.
+- **Exclude entries protect one repository's checkouts, not other clones.** A fresh clone has no entries until onboarding runs there; until then, writers refuse to create `private/` (section 4), and an untracked `project.json` must not be committed by hand.
 
 - **Old and new writers at once.** During a migration, a running old package could write a legacy store. Each migration quiesces affected writers first and tests that path.
 - **Inheritance of permission.** Tests must show a committed file, a cloned checkout and a copied grant cannot activate a consent feature.

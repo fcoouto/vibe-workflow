@@ -40,7 +40,8 @@ Each step starts with failing tests (TDD) and ends with its listed check passing
 
 7. **Onboarding.**
    - The Workstreams question writes `.vibe-workflow/settings.json` through the CLI instead of the `AGENTS.md` block.
-   - Make sure `/.vibe-workflow/project.json` and `/.vibe-workflow/private/` are ignored, through the mechanism the user selects (spec section 9): the project's `.gitignore` as an ordinary recorded project-file change, or a new journaled `.git/info/exclude` operation with shared-resource locking, recorded preimages, ownership-aware undo, and linked-worktree, concurrent-edit and crash/resume tests. Warn when `project.json` is tracked. Undo removes only what onboarding added.
+   - Add `/.vibe-workflow/project.json` and `/.vibe-workflow/private/` to the repository's `.git/info/exclude` (path from `git rev-parse --git-path info/exclude`) when no rule covers them, through a new journaled Git-metadata operation: only that file, a lock for the shared resource, a recorded preimage, atomic write, crash resume, and undo that removes only the lines it added. Warn when `project.json` is tracked.
+   - Check: tests for a linked worktree sharing the file, a concurrent edit to the file, crash and resume, undo keeping later edits, and an existing rule that makes the entry unnecessary.
    - The settings change is a recorded onboarding effect (preimage, readback, undo), not an unjournaled CLI call.
    - The shared instruction pointer tells agents to run `features status` before feature-dependent work.
    - Check: onboarding apply, resume and rollback tests for these effects.
