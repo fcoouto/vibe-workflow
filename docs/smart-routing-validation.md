@@ -1,6 +1,6 @@
 # Smart Routing cutover criteria
 
-- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line.
+- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line. Edit 5, before attempt 2 and changing no number: the settled-accounting re-read rule and titled sessions for admissions 2 to 20 (see Mechanism).
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
 
@@ -114,6 +114,13 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
    10. `detach`;
    11. check `status`.
 
+   **Settled accounting (Edit 5).** Before `record complete`, step 8 re-reads when the result may still be catching up: an `unknown` reason of `message_in_progress`, `negative_remainder` or `title_unknown`, or a title sent but not counted. It re-reads at most 5 times, 1 s apart, and accepts the first read where:
+   - that condition has cleared;
+   - the set of message ids is unchanged;
+   - no token class of the session total has decreased.
+
+   A decrease or a changed message set aborts (`recovery_error`, `accounting_regressed`). Accounting refusals are never retried. A result still unsettled after the limit is recorded `complete` with the deviation `title_unaccounted`. Only the first admission's session is created without a title, so it observes the one real title request; sessions 2 to 20 are titled at creation, so OpenCode sends no title request for them, and the guard still blocks any unexpected one at 0 tokens.
+
    The project working tree is checked at the start, after every 5 admissions and at the end, using HEAD, `git status --porcelain=v1 -z` and content hashes of every changed or untracked file. A change to a path that was not already dirty at the start aborts the pilot. Changes to already-dirty paths (other sessions edit this repository) and HEAD moves are reported. Any exception or signal during an admission also aborts it. The recovery depends on how far the admission got:
    - before dispatch: `not_dispatched`;
    - dispatched but not launched: left as is and reported, because no proof of non-launch exists;
@@ -155,9 +162,8 @@ Replay, disagreement, re-execution and the pre-registered canary: not yet run.
 Attempt 1 of the pilot.
 
 - **Run.** Harness at `0a19e6c`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state, a fresh isolated directory and `claude-agent/haiku#low` only. Evidence: [`pilot-results.json`](../tests/fixtures/smart-routing/probes/pilot-results.json) (harness output, unchanged) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) (exported from the durable ledger).
-- **Before admission 1.** Every refusal check passed:
+- **Before admission 1.** Every refusal check passed, including a clean `status` (no holds, 0 open attempts):
   - The canary state was created on first use: `authority_required` on (canary ledger only), Smart Routing ON, API Usage off, no organization.
-  - `status` was clean: no holds, 0 open attempts.
   - The plugin-chain probes passed. The guard probe was refused by the guard with `guard_variant`, and the pending probe was refused by the shim with `attach_required`, before `qual-post` saw it. Both settled at 0.
 - **Admission 1** (implementer, low band). The pilot sent the managed request and its one title: 2 calls, settled against the 2 reserved. Then the harness's accounting step raised a `TypeError`. The driver aborted with `recovery_error` (detail `accounting: TypeError`, phase `launched`), recorded the hold `uncertain` (the launch had happened) and ran the kill switch, which reported `updated`.
 - **Cause, unknown at the time of the run, found offline afterwards: a harness defect.** `Run.__init__` assigned the pilot's account id to `self.account` (`self.pool, self.account = ...`). That shadowed the method `Run.account(session)`, so `CanaryEnv.account` called the string `"anthropic:pilot-canary"` and raised `TypeError: 'str' object is not callable`. The attribute was added after the qualification re-run, which had used the method successfully. The run stopped as pre-registered and was not retried.
@@ -178,6 +184,8 @@ Attempt 1 of the pilot.
   - `.vibe-qual-canary/` removed, and `.git/info/exclude` byte-identical.
   - Project HEAD and the full `git status --porcelain=v1 -z --untracked-files=all` output identical to before the run.
 
+**What attempt 1 does not show.** It is not the pre-registered canary, and cutover stays blocked. It is subscription-only. Window telemetry is not observable on this host, so the call cap was the proxy. One admission ran: no role other than implementer and no band other than low was exercised, and no latency budget was measured.
+
 **After attempt 1** (no model call, no server):
 
 - The defect was fixed test-first: the attribute was renamed `route_account`.
@@ -187,4 +195,4 @@ Attempt 1 of the pilot.
 
 ### Pilot canary, attempt 2: pending
 
-**What the pilot does not show.** It is not the pre-registered canary, and cutover stays blocked. It is subscription-only. Window telemetry is not observable on this host, so the call cap was the proxy. One admission ran: no role other than implementer and no band other than low was exercised, and no latency budget was measured.
+Not yet run.

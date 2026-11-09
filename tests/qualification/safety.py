@@ -548,7 +548,13 @@ def shape_of(value, depth=0):
     if depth >= 4:
         return "..."
     if isinstance(value, dict):
-        shape = {str(key)[:40]: shape_of(value[key], depth + 1) for key in sorted(value, key=str)[:24]}
+        shape, hidden = {}, 0
+        for key in sorted(value, key=str)[:24]:
+            text = str(key)
+            if ID_TOKEN.fullmatch(text) or re.fullmatch(r"[A-Za-z0-9_-]{20,}", text):  # an id used as a key
+                hidden += 1
+                text = "<key#%d>" % hidden
+            shape[text[:40]] = shape_of(value[key], depth + 1)
         if len(value) > 24:
             shape["..."] = len(value) - 24
     elif isinstance(value, list):

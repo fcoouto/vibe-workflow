@@ -25,7 +25,8 @@ Safety rules it enforces itself (tests/test_qualification_harness.py covers the 
   proved the chain: all three plugins present, a guard probe refused by `qual-post` (`guard_variant`) after
   `qual-pre`, and a pending probe refused by the shim between them.
 - Every send is written ahead to the durable `--call-ledger` (owner-only, outside the run directory, flock-protected,
-  caps per purpose: qualification 14, pilot 24). The count is OpenCode `model.request` hooks, not upstream API calls.
+  caps per purpose: qualification 14, pilot 24 in code, raised to 28 by a recorded cap line under pre-registration
+  Edit 4). The count is OpenCode `model.request` hooks, not upstream API calls.
 - It never prints or stores the dispatch token, the server password or credentials; output goes through `Redactor`
   and is refused if anything unsanitized remains.
 - On exit, error or SIGTERM/SIGINT it stops the server and every child, removes the isolated directory (it holds
@@ -56,8 +57,9 @@ from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_M
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
                                         check_opencode_version, classify_changes, compare_snapshots, id_shape,
-                                        latency_pairs, on_route, repo_changes, repo_snapshot, shape_of, snapshot_tree,
+                                        latency_pairs, on_route, repo_snapshot, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
+from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
 from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
                                         processes, server_environment, status_view)
 
@@ -98,6 +100,8 @@ class Run:
         # Not `self.account`: that name is the accounting method (shadowing it caused pilot attempt 1's TypeError).
         self.pool, self.route_account = (canary.POOL, canary.ACCOUNT) if canary_project else ("sub", "anthropic:qual")
         self.repo_start = None
+        self.reread_wait = canary.REREAD_WAIT_S
+        self.account_progress = None
         self.results = dict(mode=self.purpose, stages={}, ledger=[], blockers=[], deviations=[])
         self.redact = Redactor(paths=[str(base), os.path.realpath(base), str(base).replace("/private/", "/", 1), str(ROOT),
                                       str(Path.home())], names=[os.environ.get("USER", "")])
@@ -222,7 +226,11 @@ class Run:
     def descendants(self, root):
         """Every listed session under `root` by `parentID` (command children included) and the lineage list."""
         _, listing, _ = self.server.request("GET", "/api/session")
-        sessions = [s for s in (self.data(listing) or []) if isinstance(s, dict) and s.get("id")]
+        listed = self.data(listing)
+        if self.account_progress is not None:
+            self.account_progress["listing"] = dict(type=type(listed).__name__,
+                                                    count=len(listed) if isinstance(listed, list) else None)
+        sessions = [s for s in (listed or []) if isinstance(s, dict) and s.get("id")]
         parents = {s["id"]: s.get("parentID") for s in sessions}
         found, frontier = [], [root]
         while frontier:
@@ -238,12 +246,16 @@ class Run:
         """S3.6b-1 accounting per #146: the root, every descendant as `children`, every listed session as `lineage`."""
         from runtime import opencode_accounting as accounting
         from runtime.adapters import opencode as adapter
-        _, record, _ = self.server.request("GET", "/api/session/%s" % session)
+        progress = self.account_progress = dict(session_read=None, message_pages=None, listing=None, children=None,
+                                                lineage=None)
+        status, record, _ = self.server.request("GET", "/api/session/%s" % session)
+        progress["session_read"] = status
         raw = self.messages(session)
-        pages = self.last_pages
+        pages = progress["message_pages"] = self.last_pages
         normalized = [adapter.normalize_message(m) for m in raw]
         total = accounting.normalize_session(self.data(record))
         found, lineage = self.descendants(session)
+        progress.update(children=len(found), lineage=len(lineage))
         children = []
         for child in found:
             _, child_record, _ = self.server.request("GET", "/api/session/%s" % child)
@@ -255,6 +267,25 @@ class Run:
                                                 complete=True, session_cost=total["cost"], children=children, lineage=lineage)
         return dict(result=result, state=state, raw=raw, pages=pages, total=total, normalized=normalized,
                     children=len(children), lineage=len(lineage))
+
+    def account_settled(self, session, titles_sent=0):
+        """`account`, re-read while the result may still be catching up (`canary.unsettled`): at most
+        `canary.MAX_REREADS` full re-reads, `reread_wait` seconds apart. Accepted once settled; a token class that
+        decreases or a message set that changes raises `AccountingRegressed`. Accounting and adapter errors are
+        deterministic and propagate unretried. Still unsettled after the limit: `deviation: title_unaccounted`."""
+        read, rereads = self.account(session), 0
+        while canary.unsettled(read["result"], titles_sent) and rereads < canary.MAX_REREADS:
+            time.sleep(self.reread_wait)
+            again, rereads = self.account(session), rereads + 1
+            before, after = read["total"]["tokens"] or {}, again["total"]["tokens"] or {}
+            if {m.get("id") for m in again["raw"]} != {m.get("id") for m in read["raw"]} or any(
+                    after.get(k) is None and before.get(k) is not None or
+                    (after.get(k) is not None and before.get(k) is not None and after[k] < before[k]) for k in before):
+                raise canary.AccountingRegressed("accounting_regressed")
+            read = again
+        read["rereads"] = rereads
+        read["deviation"] = "title_unaccounted" if canary.unsettled(read["result"], titles_sent) else None
+        return read
 
     # ------------------------------------------------------------ stage 0
     def start(self, stage):
@@ -538,10 +569,14 @@ class Run:
         s = "3"
         from runtime import opencode_accounting as accounting
         from runtime.adapters import opencode as adapter
+        titles = sum(1 for r in self.server.transmitted() if r.get("kind") == "title" and r.get("session") == self.session)
         try:
-            read = self.account(self.session)
-        except accounting.AccountingError as error:
-            raise Blocker("usage_from_messages refused the live session: %s" % error)
+            read = self.account_settled(self.session, titles)
+        except (accounting.AccountingError, adapter.AdapterError, canary.AccountingRegressed) as error:
+            raise Blocker("the live session could not be accounted: %s" % canary.classify(error))
+        self.note(s, "rereads", dict(count=read["rereads"], deviation=read["deviation"]))
+        if read["deviation"]:
+            self.results["deviations"].append("stage 3: %s" % read["deviation"])
         result, state = read["result"], read["state"]
         title = accounting.title_tokens(read["total"]["tokens"], read["normalized"])
         events, failures = [], 0
@@ -795,96 +830,6 @@ class Run:
         meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose, provider=ROUTE,
                     counting=COUNTING, sanitized=True, generated_by="tests/qualification/opencode_live.py (no post-processing)")
         return self.redact(dict(_meta=meta, **results))
-
-
-class CanaryEnv:
-    """The live environment the pilot driver runs against (see canary.py for the contract)."""
-
-    def __init__(self, run):
-        self.run = run
-
-    def status(self):
-        return self.run.routing.served("status")[0]
-
-    def health(self):
-        return self.run.server.rpc("health", {})[1] or {}
-
-    def prepare(self, body):
-        body = json.loads(json.dumps(body))
-        body["observations"]["now"] = int(time.time())
-        return self.run.routing.served("prepare", **body)
-
-    def dispatch(self, attempt):
-        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=canary.request())
-        self.run.redact.add_secret(answer.get("authority"))
-        return answer, ms
-
-    def attach(self, session, attempt, token):
-        status, body, _ = self.run.server.rpc("attach", dict(session_id=session, attempt_id=attempt, authority=token,
-                                                             funding_pool=canary.POOL, model=ROUTE))
-        return status == 200 and (body or {}).get("state") == "attached"
-
-    def detach(self, session, attempt, token):
-        status, body, _ = self.run.server.rpc("detach", dict(session_id=session, attempt_id=attempt, authority=token))
-        return status == 200 and (body or {}).get("state") == "detached"
-
-    def launch(self, session, message, allow_title):
-        run = self.run
-        _, created, _ = run.create_session(session)
-        if (run.data(created) or {}).get("id") != session:
-            return dict(idle=False)
-        run.server.write_control(title_session=session if allow_title else None)
-        mark, began = len(run.server.hooks()), int(time.time() * 1000)
-        run.gate(2 if allow_title else 1)  # the driver already wrote the reservation ahead
-        run.prompt(session, message)
-        try:
-            messages = run.wait_idle(session, began)
-            if allow_title:
-                time.sleep(3)
-        except Blocker:
-            return dict(idle=False)
-        finally:
-            run.gate(0)
-        records = run.server.hooks()[mark:]
-        sent = [r for r in records if r.get("decision") == "transmit"]
-        transmitted = dict(primary=sum(1 for r in sent if r["session"] == session and r["kind"] == "primary"),
-                           title=sum(1 for r in sent if r["session"] == session and r["kind"] == "title"))
-        transmitted["other"] = len(sent) - transmitted["primary"] - transmitted["title"]
-        pairs, _ = latency_pairs([r for r in records if r.get("session") == session and r.get("kind") == "primary"])
-        return dict(idle=True, transmitted=transmitted, outcome=run.outcome(messages, began)["outcome"],
-                    off_route=sum(1 for r in records if r.get("hook") == "model.request" and r.get("phase") == "pre" and not on_route(r)),
-                    blocked_titles=sum(1 for r in records if r.get("decision") == "guard_title"),
-                    check_ms=pairs[0]["ms"] if pairs else None)
-
-    def account(self, session):
-        return self.run.account(session)["result"]
-
-    def diagnostics(self, session):
-        """Structure only (no text, no ids) of what accounting read, kept for an aborted admission."""
-        run = self.run
-        _, record, _ = run.server.request("GET", "/api/session/%s" % session)
-        messages = run.messages(session)
-        _, listing, _ = run.server.request("GET", "/api/session")
-        listed = run.data(listing)
-        return dict(record=shape_of(run.data(record)), messages=[shape_of(m) for m in messages[:12]], message_count=len(messages),
-                    listing=dict(type=type(listed).__name__, count=len(listed) if isinstance(listed, list) else None))
-
-    def record(self, event):
-        return self.run.routing.served("record", event=event)
-
-    def repo_changes(self):
-        """Working-tree changes since the pilot started (D5): new dirty paths abort, already-dirty ones are reported."""
-        return repo_changes(self.run.repo_start, repo_snapshot(self.run.canary_project))
-
-    def quiesce(self):
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, signal.SIG_IGN)
-
-    def kill_switch(self):
-        status = self.status()
-        answer, _ = self.run.routing.served("set", expected_revision=status.get("settings_revision"),
-                                            change={"smart_routing": False})
-        return dict(state=answer.get("state"), reason=answer.get("reason"))
 
 
 def main(argv=None):

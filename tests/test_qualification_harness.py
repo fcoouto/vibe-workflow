@@ -13,7 +13,7 @@ import subprocess
 import threading
 import unittest
 
-from tests.qualification import canary, safety
+from tests.qualification import canary, safety, structure
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import FAKE_SERVE, Fake, Temp
 
@@ -642,8 +642,10 @@ class SmallFixTests(Temp):
             safety.check_isolated_dir(str(self.private(real_local / "share" / "opencode" / "q")), self.home)
 
     def test_signals_are_ignored_before_any_recovery_step(self):
-        fake = Fake(raises=dict(launch=KeyError("x")))
-        fake.quiesce = lambda: fake.calls.append("quiesce")
+        class Quiet(Fake):
+            def quiesce(self):
+                self.calls.append("quiesce")
+        fake = Quiet(raises=dict(launch=KeyError("x")))
         state = self.private(self.tmp / "state")
         driver = canary.PilotDriver(fake, safety.CallLedger.initialize(state / "c.jsonl"), n=1, run="t")
         driver.run()
@@ -679,6 +681,97 @@ class CapEditTests(Temp):
         ledger.set_cap("pilot", 28, "edit")
         ledger.settle(ledger.reserve("pilot", "fill", 25), 25)
         self.assertEqual(ledger.remaining("pilot"), 3)
+
+
+class StructureTests(Temp):
+    """The class of defect behind pilot attempt 1 (an instance attribute shadowing `Run.account`), checked statically
+    and on real instances, plus duplicate methods, call signatures across the harness classes and undefined names."""
+
+    FILES = sorted((Path(live.__file__).parent).glob("*.py"))
+
+    def instances(self):
+        from tests.qualification import server
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
+        qualification = live.Run(self.private(self.tmp / "iso1"), ledger)
+        pilot = live.Run(self.private(self.tmp / "iso2"), ledger, canary_project=str(project), canary_state=state)
+        return [qualification, pilot, live.CanaryEnv(pilot), server.Routing(), server.Server(self.private(self.tmp / "iso3")),
+                ledger, canary.PilotDriver(Fake(), ledger, n=1, run="t"), server.ProjectConfig(project)]
+
+    def test_no_instance_attribute_shadows_a_method_or_property(self):
+        for instance in self.instances():
+            cls = type(instance)
+            shadowed = [name for name in vars(instance) if callable(getattr(cls, name, None))
+                        or isinstance(getattr(cls, name, None), property)]
+            self.assertEqual(shadowed, [], cls.__name__)
+
+    def test_the_checker_catches_the_attempt_one_defect(self):
+        class Broken:
+            def __init__(self):
+                self.pool, self.account = "p", "a"
+
+            def account(self, session):
+                return session
+        instance = Broken()
+        self.assertEqual([n for n in vars(instance) if callable(getattr(Broken, n, None))], ["account"])
+
+    def trees(self):
+        import ast
+        return {path.name: ast.parse(path.read_text(), str(path)) for path in self.FILES}
+
+    def test_no_class_defines_a_method_twice(self):
+        import ast
+        for name, tree in self.trees().items():
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.ClassDef, ast.Module)):
+                    defs = [item.name for item in node.body if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+                    self.assertEqual(len(defs), len(set(defs)), "%s: %s" % (name, getattr(node, "name", "module")))
+
+    def test_calls_through_self_env_run_match_the_target_signatures(self):
+        problems = structure.signature_problems(self.FILES)
+        self.assertEqual(problems, [])
+
+    def test_the_signature_checker_finds_a_mismatch(self):
+        sample = self.tmp / "sample.py"
+        sample.write_text("class CanaryEnv:\n    def account(self, session, titles_sent=0):\n        return 1\n\n"
+                          "class Run:\n    def go(self, env):\n        env.account()\n        env.account(1, 2, 3)\n"
+                          "        env.account(1, nope=2)\n        self.missing(1)\n        env.account(1, titles_sent=1)\n")
+        problems = structure.signature_problems([sample])
+        self.assertEqual(len(problems), 4, problems)
+
+    def test_the_doubles_match_the_environment_contract(self):
+        import inspect
+        from tests.qualification.doubles import Fake as FakeEnv
+        for name, method in inspect.getmembers(live.CanaryEnv, inspect.isfunction):
+            if name.startswith("_") or name in ("diagnostics", "quiesce", "progress"):
+                continue
+            self.assertEqual(list(inspect.signature(getattr(FakeEnv, name)).parameters),
+                             list(inspect.signature(method).parameters), name)
+
+    def test_every_harness_file_compiles_and_names_are_defined(self):
+        import py_compile
+        for path in self.FILES:
+            py_compile.compile(str(path), doraise=True, cfile=str(self.tmp / (path.name + "c")))
+        self.assertEqual(structure.undefined_names(self.FILES), [])
+        sample = self.tmp / "typo.py"
+        sample.write_text("import os\n\ndef f(x):\n    return REQUESTS + x + os.sep\n")
+        self.assertEqual(structure.undefined_names([sample]), ["typo.py:4 REQUESTS"])
+
+    def test_doubles_refuse_method_overrides(self):
+        fake = Fake()
+        with self.assertRaises(TypeError):
+            fake.account = lambda session: None
+        with self.assertRaises(TypeError):
+            Fake(account=lambda session: None)
+        fake.transmit = dict(primary=1, title=0, other=0)  # data knobs stay settable
+
+
+class ShapeKeyTests(unittest.TestCase):
+    def test_id_like_keys_are_replaced(self):
+        shape = safety.shape_of({"ses_1bf0000000000AaBbCcDdEeFfG": 1, "a" * 32: "x", "tokens": {"input": 1}})
+        self.assertEqual(sorted(shape), ["<key#1>", "<key#2>", "tokens"])
 
 
 if __name__ == "__main__":

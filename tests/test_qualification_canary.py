@@ -149,7 +149,14 @@ class PilotDriverTests(Temp):
 
     def test_kill_switch_failure_is_reported(self):
         fake = Fake(off_route=1)
-        fake.kill_switch = lambda: (fake.calls.append("kill_switch"), dict(state="blocked", reason="x"))[1]
+        with self.assertRaises(TypeError):
+            fake.kill_switch = lambda: None  # doubles may not replace methods (subclass instead)
+
+        class Refusing(Fake):
+            def kill_switch(self):
+                self.calls.append("kill_switch")
+                return dict(state="blocked", reason="x")
+        fake = Refusing(off_route=1)
         driver, _ = self.driver(fake)
         result = driver.run()
         self.assertEqual(result["abort"]["kill_switch"], dict(state="blocked", reason="x"))
@@ -389,9 +396,8 @@ class SequencingTests(Temp):
         self.assertIn("guard_probe_failed", results["blockers"][0])
 
 
-@unittest.skipUnless(shutil.which("git"), "git is required")
-class PilotEndToEndTests(Temp):
-    """The whole driver path with the live-shaped fake OpenCode client and the real routing command on temp stores."""
+class PilotHarness(Temp):
+    """A canary-mode Run on temp stores with the live-shaped OpenCode double and the real routing command."""
 
     def pilot(self):
         project = self.private(self.tmp / "project")
@@ -406,6 +412,11 @@ class PilotEndToEndTests(Temp):
         run.server = FakeOpenCode(run.routing, base / "hooks.jsonl")
         run.repo_start = safety.repo_snapshot(project)
         return run, ledger
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class PilotEndToEndTests(PilotHarness):
+    """The whole driver path with the live-shaped fake OpenCode client and the real routing command on temp stores."""
 
     def test_the_run_object_keeps_its_account_method_in_both_modes(self):
         run, _ = self.pilot()
@@ -435,7 +446,11 @@ class PilotEndToEndTests(Temp):
         self.assertIsNone(result["abort"], result["abort"])
         self.assertEqual((result["completed"], result["settlements"]), (20, {"window": 20}))
         self.assertEqual([a["sent"]["title"] for a in result["admissions"]], [1] + [0] * 19)
-        self.assertEqual(result["blocked_titles"], 19)
+        # Admissions 2-20 create their session with a title, so OpenCode sends no title request at all.
+        self.assertEqual(result["blocked_titles"], 0)
+        self.assertEqual([a["kinds"] for a in result["admissions"]], [["primary", "title"]] + [["primary"]] * 19)
+        self.assertEqual([a["title_state"] for a in result["admissions"]], ["known"] + ["zero"] * 19)
+        self.assertEqual({a["rereads"] for a in result["admissions"]}, {0})
         self.assertEqual({a["role"] for a in result["admissions"]}, {"implementer", "reviewer", "researcher"})
         self.assertEqual({a["band"] for a in result["admissions"]}, {"low", "medium"})
         self.assertTrue(all(a["released"] and not a["charged"] for a in result["admissions"]))
@@ -453,7 +468,7 @@ class AbortRecordingTests(Temp):
         secret = "payload text sk-not-a-real-key"
 
         class Leaky(Fake):
-            def account(self, session):
+            def account(self, session, titles_sent=0):
                 raise TypeError(secret)
         fake = Leaky()
         result = self.driver(fake).run()
@@ -531,6 +546,91 @@ class CanaryResetTests(Temp):
             canary.reset_state(command.default_settings().parent, processes="")  # the production state
         with self.assertRaises(safety.Refused):
             canary.reset_state(self.tmp / "q" / "absent", processes="", home=self.home)
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class SettledAccountingTests(PilotHarness):
+    """SF1: a lagging session total is re-read (bounded); a regression or a changed message set aborts."""
+
+    def admit(self, **knobs):
+        run, ledger = self.pilot()
+        run.reread_wait = 0
+        run.server.__dict__.update(knobs)
+        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=1, run=run.run_id, tag="settle").run()
+        return result, run
+
+    def test_a_lagging_title_total_is_reread_until_it_settles(self):
+        result, run = self.admit(lag_reads=2)
+        self.assertIsNone(result["abort"], result["abort"])
+        admission = result["admissions"][0]
+        self.assertEqual((admission["rereads"], admission["kinds"], admission["title_state"]), (2, ["primary", "title"], "known"))
+        self.assertEqual(result["deviations"], [])
+
+    def test_exhausted_rereads_record_complete_with_a_deviation(self):
+        result, run = self.admit(lag_reads=50)
+        self.assertIsNone(result["abort"])
+        admission = result["admissions"][0]
+        self.assertEqual((admission["rereads"], admission["kinds"]), (5, ["primary"]))
+        self.assertEqual(result["deviations"], [dict(admission=1, deviation="title_unaccounted")])
+        self.assertEqual(run.server.session_reads, 6)  # the first read plus at most five re-reads
+
+    def test_a_decreasing_total_aborts(self):
+        result, _ = self.admit(lag_reads=50, regress_at=2)
+        self.assertEqual((result["abort"]["reason"], result["abort"]["detail"]), ("recovery_error", "accounting_regressed"))
+
+    def test_a_changed_message_set_aborts(self):
+        result, _ = self.admit(lag_reads=50, extra_message_at=2)
+        self.assertEqual((result["abort"]["reason"], result["abort"]["detail"]), ("recovery_error", "accounting_regressed"))
+
+    def test_accounting_errors_are_never_retried_and_name_their_fixed_reason(self):
+        result, run = self.admit(malformed_total=True)
+        abort = result["abort"]
+        self.assertEqual((abort["reason"], abort["detail"]), ("recovery_error", "refusal: invalid session"))
+        self.assertEqual(run.server.session_reads, 2)  # one accounting read (never retried) + the abort's diagnostics read
+        progress = abort["account_progress"]
+        self.assertEqual(progress["session_read"], 200)
+        self.assertEqual(progress["message_pages"], 2)  # how far the read got before the refusal
+
+    def test_an_unexpected_extra_title_is_still_blocked_at_zero(self):
+        run, ledger = self.pilot()
+        run.server.force_title = True
+        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=2, run=run.run_id, tag="force").run()
+        self.assertIsNone(result["abort"], result["abort"])
+        self.assertEqual(result["blocked_titles"], 1)  # admission 2's titled session still tried one: guard_title
+        self.assertEqual(result["admissions"][1]["sent"], dict(primary=1, title=0, other=0))
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class BudgetArithmeticTests(PilotHarness):
+    def test_attempt_two_fits_the_raised_cap(self):
+        self.assertEqual(canary.planned_exposure(20), 23)  # 2 probes + 2 (first admission and its title) + 19
+        run, ledger = self.pilot()
+        ledger.settle(ledger.reserve("pilot", "attempt 1, admission 1", 2), 2)
+        self.assertEqual(ledger.remaining("pilot"), 26)
+        self.assertLessEqual(canary.planned_exposure(20), ledger.remaining("pilot"))
+        for label in ("guard probe", "pending probe"):
+            ledger.settle(ledger.reserve("pilot", label, 1), 0)
+        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=20, run=run.run_id, tag="budget").run()
+        self.assertIsNone(result["abort"], result["abort"])
+        self.assertEqual(ledger.summary()["pilot"], dict(cap=28, spent=23, remaining=5, open_reservations=0))
+
+
+class AbortDetailTests(Temp):
+    def run_with(self, error):
+        class Raising(Fake):
+            def account(self, session, titles_sent=0):
+                raise error
+        state = self.private(self.tmp / "state")
+        ledger = safety.CallLedger.initialize(state / ("c%d.jsonl" % len(list(state.iterdir()))))
+        return canary.PilotDriver(Raising(), ledger, n=1, run="t").run()["abort"]["detail"]
+
+    def test_refusals_and_harness_errors_are_told_apart(self):
+        from runtime.adapters.opencode import AdapterError
+        from runtime.opencode_accounting import AccountingError
+        self.assertEqual(self.run_with(AccountingError("invalid lineage")), "refusal: invalid lineage")
+        self.assertEqual(self.run_with(AdapterError("invalid message id")), "refusal: invalid message id")
+        for error in (TypeError("x"), AttributeError("x"), NameError("x"), KeyError("x")):
+            self.assertEqual(self.run_with(error), "harness_error: %s" % type(error).__name__)
 
 
 if __name__ == "__main__":

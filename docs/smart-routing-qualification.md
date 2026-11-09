@@ -85,7 +85,14 @@ The bounded pilot aborted at admission 1. The harness's accounting step raised a
 - **Why tests missed it:** they used doubles for the environment and never called the real `Run.account` from the canary path. A new end-to-end test runs the whole driver path against a live-shaped OpenCode double and the real routing command. The pilot tests now live in `tests/test_qualification_canary.py`.
 - **Abort recording:** aborts now record a sanitized origin, as type, the harness file, line and function, and the innermost frame's file and function; never a message or locals. They also record per-operation timings even for a partial admission, and bounded payload shapes for aborted admissions.
 - **Reset:** the canary state was deleted with `--reset-canary-state`, after confirming no harness process was alive.
-- **Pilot cap:** raised from 24 to 28 by pre-registration Edit 4. The [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1) have the per-criterion table.
+- **Pilot cap:** raised from 24 to 28 by pre-registration Edit 4.
+
+**Round-4 review items (no live run):**
+
+- **Settled accounting.** Before `record complete`, in the pilot and in stage 3, a result that may still be catching up is re-read: at most 5 times, 1 s apart. Any decrease of a token class or change of the message set aborts with `accounting_regressed`. Accounting and adapter errors are never retried. A result still unsettled at the limit is recorded with the deviation `title_unaccounted`. Each admission records the request kinds counted, `title.state` and its number of re-reads.
+- **Titled sessions.** Admissions 2 to 20 create their session with a title, so the blocked-title path is no longer relied on; the guard still blocks an unexpected title at 0 tokens.
+- **Abort details** separate fixed refusal reasons (`refusal: <reason>`) from harness errors (`harness_error: <type>`) and record how far accounting got: the session read's status, the message pages read, the listing's type and count, and the numbers of children and lineage entries.
+- **Collision guard.** Unit tests check real harness instances for attributes that shadow methods or properties, the sources for duplicate method definitions and for calls through `self.`/`env.`/`run.` that do not match the target signature, and every harness file for compile errors and undefined names. The test doubles refuse method overrides. The [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1) have the per-criterion table.
 
 - **Observed again on a dedicated canary state:** the plugin-chain proof (guard refusal `guard_variant`, pending probe refused by the shim), an attached managed request, `uncertain` recovery after an abort, the kill switch, and harness-verified cleanup. The repository was left byte-identical.
 - **Harness gaps found:**

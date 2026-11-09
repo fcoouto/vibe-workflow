@@ -9,7 +9,9 @@ limit, working-tree checks, and a catch-all abort that recovers by phase and run
 
 The environment (`opencode_live.CanaryEnv` in a live run, a fake in tests) provides: `status()`, `health()`,
 `prepare(body)`, `dispatch(attempt)`, `attach(session, attempt, token)`, `detach(...)`, `launch(session, message,
-allow_title)`, `account(session)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally `quiesce()`.
+allow_title)`, `account(session, titles_sent)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally
+`quiesce()`, `diagnostics(session)` (payload shapes for an aborted admission) and `progress()` (how far the last
+accounting read got).
 """
 import os
 from pathlib import Path
@@ -39,6 +41,37 @@ BANDS = ("low", "medium")
 # How far an admission got, in order; recovery after an abort depends on it.
 PHASES = ("planned", "preparing", "admitted", "dispatching", "dispatched", "attached", "launching", "launched",
           "recorded", "completed")
+
+
+MAX_REREADS = 5  # SF1: bounded re-reads of a lagging session total, `REREAD_WAIT_S` apart
+REREAD_WAIT_S = 1.0
+# Accounting results that may only mean the host has not caught up yet.
+REREAD_REASONS = ("message_in_progress", "negative_remainder", "title_unknown")
+
+
+class AccountingRegressed(Exception):
+    """A re-read saw a token class decrease or the message set change: never settled, always an abort."""
+
+
+def unsettled(result, titles_sent):
+    """Whether an accounting result may still be catching up: a reason above, or a title was sent but not counted."""
+    kinds = [request["kind"] for request in ((result.get("usage") or {}).get("requests") or [])]
+    return bool(set(REREAD_REASONS) & set(result.get("unknown") or [])) or (titles_sent >= 1 and "title" not in kinds)
+
+
+def planned_exposure(n):
+    """Pilot calls an attempt may reserve at most: two probe exposures, the first admission and its title, then one
+    per further admission (Edit 4: 2 + 2 + 19 = 23 for 20 admissions)."""
+    return 2 + 2 + (n - 1)
+
+
+def classify(error):
+    """The abort detail for an accounting failure: a fixed refusal reason, or the harness error's type."""
+    if isinstance(error, AccountingRegressed):
+        return "accounting_regressed"
+    if type(error).__name__ in ("AccountingError", "AdapterError"):
+        return "refusal: %s" % error  # a fixed reason from a closed set; never payload text
+    return "harness_error: %s" % type(error).__name__
 
 
 def request(pool=POOL):
@@ -270,7 +303,7 @@ class PilotDriver:
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
         self.plan = plan_assignments(n, tag or run, now)
         self.current = None
-        self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[],
+        self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[], deviations=[],
                             latency={op: [] for op in self.OPS}, blocked_titles=0)
 
     def run(self):
@@ -359,6 +392,11 @@ class PilotDriver:
         self.results["abort"] = dict(reason=reason, admission=current.get("index"), phase=current.get("phase"), detail=detail,
                                      origin=origin, timings=dict(current.get("timings") or {}), recovery=recovery,
                                      kill_switch=switched, kill_switch_ok=(switched or {}).get("state") == "updated")
+        if callable(getattr(self.env, "progress", None)):
+            try:
+                self.results["abort"]["account_progress"] = self.env.progress()
+            except BaseException as error:  # noqa: BLE001
+                self.results["abort"]["account_progress"] = dict(unavailable=type(error).__name__)
         if shapes is not None:
             self.results["abort"]["shapes"] = shapes
 
@@ -417,9 +455,11 @@ class PilotDriver:
                         else "managed_request_blocked", sent)
         self.results["blocked_titles"] += launched.get("blocked_titles", 0)
         try:
-            accounting = env.account(session)
+            accounting = env.account(session, titles_sent=sent.get("title", 0))
         except Exception as error:  # noqa: BLE001 - any accounting refusal is a recovery error
-            raise Abort("recovery_error", "accounting: %s" % type(error).__name__, exception_origin(error)) from None
+            raise Abort("recovery_error", classify(error), exception_origin(error)) from None
+        if accounting.get("deviation"):
+            self.results["deviations"].append(dict(admission=label["index"], deviation=accounting["deviation"]))
         answer, timings["record"] = env.record(dict(event_id=attempt + "-complete", attempt_id=attempt, kind="complete",
                                             stage="worker", usage=accounting.get("usage")))
         settlement = answer.get("settlement") or {}
@@ -438,7 +478,10 @@ class PilotDriver:
         self.results["settlements"][settlement["kind"]] = self.results["settlements"].get(settlement["kind"], 0) + 1
         for op, value in timings.items():
             self.results["latency"][op].append(value)
+        kinds = [r["kind"] for r in ((accounting.get("usage") or {}).get("requests") or [])]
         self.results["admissions"].append(dict(label, sent=sent, unknown=sorted(accounting.get("unknown") or []),
+                                               kinds=kinds, title_state=(accounting.get("title") or {}).get("state"),
+                                               rereads=accounting.get("rereads", 0),
                                                settlement=settlement.get("kind"), outcome=launched.get("outcome"),
                                                released=sorted(settlement.get("released") or {}),
                                                charged=settlement.get("charged") or 0, timings=dict(timings)))

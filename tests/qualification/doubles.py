@@ -43,7 +43,14 @@ class Fake:
         self.fail = {}
         self.raises = {}
         self.repo = dict(new=[], dirty_changed=[], head_changed=False)
-        self.__dict__.update(change)
+        for name, value in change.items():
+            setattr(self, name, value)
+
+    def __setattr__(self, name, value):
+        """Data knobs only: replacing a method would hide a signature mismatch (subclass instead)."""
+        if callable(getattr(type(self), name, None)):
+            raise TypeError("doubles may not replace the method %s; subclass instead" % name)
+        super().__setattr__(name, value)
 
     def _raise(self, name):
         if name in self.raises:
@@ -88,7 +95,7 @@ class Fake:
         transmit = dict(self.transmit, title=1 if allow_title else 0) if self.transmit.get("title") is None else dict(self.transmit)
         return dict(idle=True, transmitted=transmit, off_route=self.off_route, outcome="succeeded", check_ms=0.7)
 
-    def account(self, session):
+    def account(self, session, titles_sent=0):
         self.calls.append("account")
         self._raise("account")
         if "account" in self.fail:
@@ -154,6 +161,11 @@ class FakeOpenCode:
         self.log.touch()
         self.control = dict(budget=0, hold=[], title_session=None)
         self.process, self.project_config, self.directory, self.counter = None, None, "/fake-location", 0
+        # Knobs: a total that omits the title's tokens for the first `lag_reads` session reads; a total that drops
+        # from read `regress_at` on; an extra message from read `extra_message_at` on; a malformed total; and a
+        # title attempt on every prompt (`force_title`, to exercise the guard on titled sessions).
+        self.lag_reads, self.regress_at, self.extra_message_at, self.malformed_total = 0, None, None, False
+        self.force_title, self.session_reads = False, 0
 
     def write_control(self, **change):
         self.control.update(change)
@@ -226,17 +238,32 @@ class FakeOpenCode:
             return 200, dict(data=[s["record"] for s in self.sessions.values()]), 1.0
         session = self.sessions[parts[2]]
         if method == "GET" and len(parts) == 3:
-            return 200, dict(data=session["record"]), 1.0
+            self.session_reads += 1
+            record = json.loads(json.dumps(session["record"]))
+            flat = dict(input=record["tokens"]["input"], output=record["tokens"]["output"], reasoning=record["tokens"]["reasoning"],
+                        cache_read=record["tokens"]["cache"]["read"], cache_write=record["tokens"]["cache"]["write"])
+            if session.get("titled_tokens") and self.session_reads <= self.lag_reads:
+                flat = {k: flat[k] - self.TITLE[k] for k in flat}  # the session total lags behind the title
+            if self.regress_at is not None and self.session_reads >= self.regress_at:
+                flat = dict.fromkeys(flat, 0)
+            record["tokens"] = "malformed" if self.malformed_total else raw_tokens(flat)
+            return 200, dict(data=record), 1.0
         if method == "GET" and parts[3] == "message":
             if query and "cursor" in query:
                 return 200, dict(data=[], cursor=dict(previous="p", next=None)), 1.0
-            return 200, dict(data=list(session["messages"]), cursor=dict(previous=None, next="n")), 1.0
+            listed = list(session["messages"])
+            if self.extra_message_at is not None and self.session_reads >= self.extra_message_at:
+                listed.append(dict(id="msg_1bf99999999999999999999Zz", type="idle", outcome="succeeded",
+                                   time=dict(created=listed[-1]["time"]["created"] + 5)))
+            return 200, dict(data=listed, cursor=dict(previous=None, next="n")), 1.0
         if method == "POST" and parts[3] == "prompt":
             sid = parts[2]
             session["messages"].append(dict(id=body.get("id") or self._id("msg"), type="user", time=dict(created=now)))
             totals = dict.fromkeys(self.PRIMARY, 0)
-            if session["record"]["title"] is None and not session["prompted"] and self._request_hook(sid, "title"):
+            untitled_first = session["record"]["title"] is None and not session["prompted"]
+            if (untitled_first or self.force_title) and self._request_hook(sid, "title"):
                 totals = {k: totals[k] + self.TITLE[k] for k in totals}
+                session["titled_tokens"] = True
             session["prompted"] = True
             ok = self._request_hook(sid, "primary")
             if ok:
