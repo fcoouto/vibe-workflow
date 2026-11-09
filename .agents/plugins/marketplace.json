@@ -8,7 +8,7 @@
       "name": "vibe-workflow",
       "source": {
         "source": "local",
-        "path": "./"
+        "path": "./plugins/vibe-workflow"
       },
       "policy": {
         "installation": "AVAILABLE",
