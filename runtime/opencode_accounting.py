@@ -12,8 +12,9 @@ On API routes OpenCode's cost is still only an estimate from a local price catal
 is reported with source `estimate` and a zero cost for a request that used tokens is unknown.
 
 Wiring (S3.6b-2 and the launcher): once the attempt's sessions are idle, the launcher re-reads the root session, its
-spawned descendant sessions and all their messages, normalizes them with the adapter and sends
-`usage_from_messages(...)["usage"]` in `record complete {usage}`.
+spawned descendant sessions (including `subagent: true` command children, linked only by `parentID`) and all their
+messages, normalizes them with the adapter and `normalize_session`, and sends `usage_from_messages(..., lineage=...)
+["usage"]` in `record complete {usage}`; `lineage` lists every session it knows of under the root.
 Errors are AccountingError with a fixed reason that never includes payload text.
 """
 
@@ -31,7 +32,9 @@ MAX_MESSAGES = 4096
 MAX_EVENTS = 4096
 MAX_AGGREGATES = 1024
 MAX_SESSIONS = 64  # the root and its descendant sessions in one attempt
-SESSION_KEYS = {"session_id", "messages", "tokens", "cost", "complete"}
+MAX_LINEAGE = 1024  # sessions the launcher lists from session listing and lineage events
+SESSION_KEYS = {"session_id", "parent_session_id", "messages", "tokens", "cost", "complete"}
+LINEAGE_KEYS = {"session_id", "parent_session_id"}
 MAX_RECENT = 64  # sequence numbers remembered per aggregate to tell a duplicate from a conflict
 MAX_SECONDS = 10 ** 11  # an epoch-seconds reset above this looks like milliseconds
 KINDS = {"assistant": "primary", "compaction": "compaction"}  # message types that carry a model request's tokens
@@ -42,12 +45,12 @@ COVERAGE = ("incomplete_coverage", "message_tokens_missing", "message_in_progres
             "unexpected_tokens")
 # Reasons that leave part of the attempt's spend unattributed, so every dollar cost is unknown.
 COST_BLOCKING = COVERAGE + ("title_unknown", "title_cost_inconsistent", "child_session_unaccounted",
-                            "tool_calls_dropped")
+                            "tool_calls_dropped", "lineage_not_checked")
 REASONS = ("invalid input", "invalid message", "invalid session", "invalid tokens", "invalid cost",
            "invalid rate limit", "invalid event", "invalid tracker state", "invalid previous", "too many messages",
            "too many events", "too many aggregates", "too many routes", "total too large",
            "conflicting duplicate message", "message in two sessions", "session not in the attempt",
-           "session mismatch")
+           "session mismatch", "invalid lineage", "too many sessions")
 RATE_UNITS = {"utilization": "fraction_0_1", "resets_at": "epoch_seconds", "observed_at": "epoch_ms"}
 ZERO = dict.fromkeys(TOKEN_FIELDS, 0)
 
@@ -132,6 +135,15 @@ def _message(record):
     message_id = _name(record.get("message_id"), opencode.MESSAGE, "invalid message", nullable=False)
     if record.get("kind") == "unknown" and record.get("source") == "message":
         return {"id": message_id, "type": None, "unknown": True}
+    if record.get("kind") == "synthetic":
+        # A command child's result delivered to its parent: no model request, never counted.
+        if record.get("type") != "synthetic":
+            _fail("invalid message")
+        return {"id": message_id, "type": "synthetic", "unknown": False, "requested": None,
+                "tokens": _tokens(record.get("tokens")), "cost": None,
+                "created_ms": _count(record.get("created_ms"), "invalid message"),
+                "completed_ms": _count(record.get("completed_ms"), "invalid message"), "finish": None,
+                "children": (), "unlinked": 0, "dropped": 0, "has_rate_limit": False}
     if record.get("kind") != "message" or record.get("type") not in opencode.MESSAGE_TYPES:
         _fail("invalid message")
     requested = record.get("requested")
@@ -308,9 +320,10 @@ def _api_cost(cost, tokens):
 
 def _session_state(value, root=True):
     if type(value) is not dict or not {"session_id", "messages"} <= set(value) <= (
-            SESSION_KEYS | {"children"} if root else SESSION_KEYS):
+            SESSION_KEYS | {"children", "lineage"} if root else SESSION_KEYS):
         _fail("invalid session")
     _flag(value.get("complete", True), "invalid session")
+    _name(value.get("parent_session_id"), opencode.SESSION, "invalid session")
     _cost(value.get("cost"))
     children = value.get("children") or []
     if type(children) is not list or len(children) >= MAX_SESSIONS:
@@ -326,11 +339,11 @@ def _part(state):
         _fail("conflicting duplicate message")
     total = _tokens(state.get("tokens"))
     title, reason, _ = _remainder(total, scan)
-    return {"session_id": session_id, "scan": scan, "total": total, "cost": _cost(state.get("cost")),
-            "title": title, "title_reason": reason}
+    return {"session_id": session_id, "parent": state.get("parent_session_id"), "scan": scan, "total": total,
+            "cost": _cost(state.get("cost")), "title": title, "title_reason": reason}
 
 
-def _attempt(root, children, funding):
+def _attempt(root, children, funding, lineage):
     """Account a root session and the descendant sessions its spawns created (one attempt)."""
     if sum(len(state["messages"]) if type(state["messages"]) is list else 0 for state in [root] + children) \
             > MAX_MESSAGES:
@@ -345,9 +358,14 @@ def _attempt(root, children, funding):
             if owners.setdefault(message_id, part["session_id"]) != part["session_id"]:
                 _fail("message in two sessions")
     spawned = set().union(*(part["scan"]["children"] for part in parts))
-    _reachable(ids[0], {part["session_id"]: part["scan"]["children"] for part in parts})
+    referrers = _linked(parts)
     unknown = set().union(*(part["scan"]["reasons"] for part in parts))
     if spawned - set(ids):
+        unknown.add("child_session_unaccounted")
+    if lineage is None:
+        unknown.add("lineage_not_checked")
+    elif _lineage_check(lineage, parts[0]["session_id"], {part["session_id"]: part["parent"] for part in parts[1:]},
+                        referrers):
         unknown.add("child_session_unaccounted")
     messages, titles = [], []
     for part in parts:
@@ -391,6 +409,96 @@ def _attempt(root, children, funding):
     return parts, requests, usd, unknown, grouped
 
 
+def _linked(parts):
+    """Check the attempt's links and return each child's tool-part referrers. A child links to its parent by a
+    subagent call's child session id or by its verified `parentID`; a parent outside the attempt, a parent that
+    contradicts a tool-part link, or a root whose parent is in the attempt is refused."""
+    ids = {part["session_id"] for part in parts}
+    referrers = {}
+    for part in parts:
+        for child in part["scan"]["children"]:
+            referrers.setdefault(child, set()).add(part["session_id"])
+    links = {part["session_id"]: set(part["scan"]["children"]) for part in parts}
+    if parts[0]["parent"] in ids:
+        _fail("session not in the attempt")  # a root whose parent is in the attempt: a cycle through the root
+    for part in parts[1:]:
+        parent = part["parent"]
+        if parent is None:
+            continue
+        if parent not in ids or (part["session_id"] in referrers and parent not in referrers[part["session_id"]]):
+            _fail("session not in the attempt")
+        links[parent].add(part["session_id"])
+    _reachable(parts[0]["session_id"], links)
+    return referrers
+
+
+def _raise(kind):
+    _fail("invalid lineage")
+
+
+def _lineage(value, problem=_raise):
+    """The launcher's `[{session_id, parent_session_id}]` as a map (first parent kept); a session listed with two
+    parents is a `conflicts` problem. Malformed or oversized lineage is always refused."""
+    if type(value) is not list:
+        _fail("invalid lineage")
+    if len(value) > MAX_LINEAGE:
+        _fail("too many sessions")
+    parents = {}
+    for entry in value:
+        if type(entry) is not dict or set(entry) != LINEAGE_KEYS:
+            _fail("invalid lineage")
+        session = _name(entry["session_id"], opencode.SESSION, "invalid lineage", nullable=False)
+        parent = _name(entry["parent_session_id"], opencode.SESSION, "invalid lineage")
+        if parents.setdefault(session, parent) != parent:
+            problem("conflicts")
+    return parents
+
+
+def _missing(parents, included, root, problem=_raise):
+    """How many listed sessions descend from an included session (so from the root) but are not included.
+
+    Follows each listed session's recorded parent chain (iteratively, each session once). A chain that leaves the
+    list ends outside the attempt. A cycle (whose chain then ends outside), or a root whose recorded parent descends
+    from the attempt, is a `loops` problem."""
+    under = {}
+    for start in parents:
+        path, seen, current = [], set(), start
+        while True:
+            if current in included:
+                found = True
+                break
+            if current in under:
+                found = under[current]
+                break
+            if current not in parents or parents[current] is None:
+                found = False
+                break
+            if current in seen:
+                problem("loops")
+                found = False
+                break
+            seen.add(current)
+            path.append(current)
+            current = parents[current]
+        under.update(dict.fromkeys(path, found))
+    parent = parents.get(root)
+    if parent is not None and (parent in included or under.get(parent)):
+        problem("loops")
+    return sum(found and session not in included for session, found in under.items())
+
+
+def _lineage_check(value, root, links, referrers, problem=_raise):
+    """Unaccounted descendants listed in `lineage`, after checking it agrees with the included children's links
+    (`links`: child id -> verified parent or None; `referrers`: child id -> sessions whose tool parts spawn it).
+    `problem` raises by default; diagnostics pass a counter instead."""
+    parents = _lineage(value, problem)
+    for session, parent in links.items():
+        if session in parents and parents[session] != parent and (
+                parent is not None or parents[session] not in referrers.get(session, ())):
+            problem("conflicts")
+    return _missing(parents, set(links) | {root}, root, problem)
+
+
 def _reachable(root, links):
     """Every included session must be reachable from the root through spawn links, with no link back to the root
     and no cycle (depth-first, iterative). Links to sessions that are not included are left to the caller."""
@@ -419,13 +527,20 @@ def _title(part):
 
 @_guard
 def usage_from_messages(messages, session_total=None, *, session_id, funding="subscription", complete=True,
-                        session_cost=None, children=None):
+                        session_cost=None, children=None, lineage=None):
     """Account one attempt from its re-read, normalized root session and the descendant sessions it spawned.
 
-    `children` lists descendant session states `{session_id, messages, tokens?, cost?, complete?}`; each must be
-    spawned by a subagent call in an included session, and a spawned session that is not included leaves the
-    attempt's cost unknown (`child_session_unaccounted`). Messages are bound to the session state that lists them;
-    a message id under two sessions is refused.
+    `children` lists descendant session states `{session_id, parent_session_id?, messages, tokens?, cost?,
+    complete?}` (`normalize_session` output plus messages). Each must be reached from the root through subagent
+    calls' child session ids or verified `parent_session_id` links (a `subagent: true` command child has only the
+    latter); a parent outside the attempt or contradicting a tool-part link is refused. A spawned session that is not
+    included leaves the attempt's cost unknown (`child_session_unaccounted`). Messages are bound to the session state
+    that lists them; a message id under two sessions is refused.
+
+    `lineage` is the launcher's `[{session_id, parent_session_id}]` for every session it knows of under the root
+    (session listing and lineage events); launchers must supply it. A listed session whose recorded parent chain
+    reaches an included session but that is not included adds `child_session_unaccounted`; without `lineage` the
+    result carries `lineage_not_checked`, so an API route's cost is unknown rather than silently complete.
 
     Returns `{session_id, funding, usage, totals, title, sessions, message_ids, unknown, grouped, reported_cost,
     rate_limit}`; `usage` is the S3.6a `record` usage object or None when nothing was requested. One request per
@@ -439,14 +554,15 @@ def usage_from_messages(messages, session_total=None, *, session_id, funding="su
     request that used tokens, a missing session cost for a title, or any unattributed tokens make every cost null.
     """
     root, kids = _session_state({"session_id": session_id, "messages": messages, "tokens": session_total,
-                                 "cost": session_cost, "complete": complete, "children": children or []})
+                                 "cost": session_cost, "complete": complete, "children": children or [],
+                                 "lineage": lineage})
     return _usage(root, kids, funding)
 
 
 def _usage(root, children, funding):
     if funding not in FUNDING:
         _fail("invalid input")
-    parts, requests, usd, unknown, grouped = _attempt(root, children, funding)
+    parts, requests, usd, unknown, grouped = _attempt(root, children, funding, root.get("lineage"))
     counted, messages_total, sessions = dict(ZERO), dict(ZERO), []
     for part in parts:
         part_counted = part["scan"]["messages_total"] if part["title"] is None else \
@@ -493,10 +609,11 @@ def normalize_session(session):
 
 @_guard
 def consistency_report(session_state):
-    """Bounded diagnostics for a re-read session (`{session_id, messages, tokens?, cost?, complete?, children?}`):
-    counts of message types, duplicates, conflicts, unknown records and missing fields, spawned and included child
-    sessions, and whether the title remainder is known. Inconsistencies are counted, not raised; ids, counts and
-    field names only, never text."""
+    """Bounded diagnostics for a re-read session (`{session_id, messages, tokens?, cost?, complete?, children?,
+    lineage?}`): counts of message types, duplicates, conflicts, unknown records and missing fields, spawned,
+    included and unaccounted child sessions, listed descendants not included and lineage `conflicts` and `loops`
+    (each None without `lineage`), and whether the title remainder is known. Inconsistencies are counted, not
+    raised; malformed input is refused. Ids, counts and field names only, never text."""
     state, children = _session_state(session_state)
     session_id, complete = _session(state["session_id"]), state.get("complete", True)
     scan = _scan(state["messages"], complete)
@@ -504,9 +621,18 @@ def consistency_report(session_state):
     if scan["conflicts"]:
         title, reason = None, reason or "inconsistent_messages"
     included = {_session(child["session_id"]) for child in children}
-    spawned = set(scan["children"])
-    for child in children:
-        spawned |= _scan(child["messages"], True)["children"]
+    spawned, referrers = set(scan["children"]), {}
+    for owner, children_of in [(session_id, scan["children"])] + [
+            (_session(child["session_id"]), _scan(child["messages"], True)["children"]) for child in children]:
+        spawned |= children_of
+        for spawn in children_of:
+            referrers.setdefault(spawn, set()).add(owner)
+    lineage, problems, unlisted = state.get("lineage"), {"conflicts": None, "loops": None}, None
+    if lineage is not None:
+        problems = {"conflicts": 0, "loops": 0}
+        links = {_session(child["session_id"]): child.get("parent_session_id") for child in children}
+        unlisted = _lineage_check(lineage, session_id, links, referrers,
+                                  lambda kind: problems.__setitem__(kind, problems[kind] + 1))
     return {"session_id": session_id, "messages": len(state["messages"]), "by_type": dict(sorted(scan["by_type"].items())),
             "countable": len(scan["countable"]), "duplicates": scan["duplicates"],
             "conflicting_duplicates": scan["conflicts"], "missing_tokens": scan["missing_tokens"],
@@ -516,7 +642,8 @@ def consistency_report(session_state):
             "title_reason": reason, "negative_classes": negative, "rate_limit_messages": len(scan["rate_limited"]),
             "children_referenced": len(spawned), "children_included": len(included),
             "children_unaccounted": len(spawned - included), "spawns_without_session": scan["unlinked"],
-            "tool_calls_dropped": scan["dropped"]}
+            "tool_calls_dropped": scan["dropped"], "lineage_unaccounted": unlisted,
+            "lineage_conflicts": problems["conflicts"], "lineage_loops": problems["loops"]}
 
 
 def _previous(previous, session_id):
@@ -539,7 +666,7 @@ def _previous(previous, session_id):
 @_guard
 def reconcile_with_state(previous, session_state, *, funding="subscription", tracker=None):
     """Resync after an event gap or at attempt end: recompute the attempt's accounting from freshly re-read state
-    (`{session_id, messages, tokens?, cost?, complete?, children?}`, as for `usage_from_messages`).
+    (`{session_id, messages, tokens?, cost?, complete?, children?, lineage?}`, as for `usage_from_messages`).
 
     `previous` is the last `usage_from_messages` result for the same root session (or None). Returns `{accounting,
     changes, tracker}`; `changes` = `{tokens_delta, regressed, messages_added, messages_missing, usd_micros_delta}`
