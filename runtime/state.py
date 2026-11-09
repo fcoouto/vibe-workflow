@@ -224,7 +224,7 @@ def _capture_point(db,operation,parameters):
     except BaseException as error:owner.fail(error);raise
     else:
         row=measured=None;owner.release(payload);owner.release(control)
-from runtime.task_statuses import ATTENTION_STATES, RETIRED_STATES, STATES
+from runtime.task_statuses import ATTENTION_STATES, RETIRED_ATTENTION_STATES, RETIRED_STATES, STATES
 _HISTORICAL_STATES = {"planned", "active", "awaiting_user", "blocked", "verifying", "ready", "cancelled"}
 TABLE_SQL = {
     "checkouts": """CREATE TABLE checkouts(scope_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
@@ -1966,7 +1966,7 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
     for field in ("decision_ref", "reason", "reference", "resolution_ref"):
         if field in task:
             _text(task[field], "stored " + field)
-    legacy = (historical and (version in (1, 2) and task['state'] in _HISTORICAL_STATES or task['state'] in RETIRED_STATES)
+    legacy = ((historical and version in (1, 2) and task['state'] in _HISTORICAL_STATES or task['state'] in RETIRED_STATES)
         and isinstance(task['pins'], dict) and task['pins'].get('runtime_digest') != runtime_fingerprint())
     if (task['state'] in _HISTORICAL_STATES or task['state'] in RETIRED_STATES) and not legacy:
         raise StateError('Historical task vocabulary requires its original pinned package; current authority requires approved D4 birth')
@@ -2010,7 +2010,7 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
         from runtime.delegation import validate_delegation
         validate_delegation(task["delegation"])
     if "milestones" in task:_milestones(task["milestones"])
-    if 'user_attention' in task and (type(task['user_attention']) is not bool or task['state'] not in ATTENTION_STATES):
+    if 'user_attention' in task and (type(task['user_attention']) is not bool or task['state'] not in ATTENTION_STATES | RETIRED_ATTENTION_STATES):
         raise StateError('Invalid stored title attention')
     if "writer_stop" in task:_writer_stop_shape(task["writer_stop"])
     if "retirement" in task:

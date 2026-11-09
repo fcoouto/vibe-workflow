@@ -41,9 +41,10 @@ class CanonicalTaskStatusTests(unittest.TestCase):
         path = scope.runtime.state_dir / 'runtime.sqlite3'
         with closing(sqlite3.connect(path)) as db:
             original = json.loads(db.execute('SELECT data FROM tasks').fetchone()[0])
-        for retired in ('READY', 'BLOCKED'):
-            with self.subTest(state=retired):
-                raw = json.dumps(original | dict(state=retired))
+        for retired, extra in (('READY', {}), ('BLOCKED', {}), ('BLOCKED', dict(user_attention=True)),
+                               ('BLOCKED', dict(user_attention=False))):
+            with self.subTest(state=retired, **extra):
+                raw = json.dumps(original | dict(state=retired) | extra)
                 with closing(sqlite3.connect(path)) as db, db:
                     db.execute('UPDATE tasks SET data=?', (raw,))
                 with self.assertRaisesRegex(ValueError, 'original pinned'):
@@ -52,12 +53,14 @@ class CanonicalTaskStatusTests(unittest.TestCase):
                 identity = deepcopy(original['accepted_identity'])
                 identity['configuration']['runtime_digest'] = 'f' * 64
                 pins = original['pins'] | dict(runtime_digest='f' * 64, accepted_scope_digest=state._digest(identity))
-                raw = json.dumps(original | dict(state=retired, pins=pins, accepted_identity=identity))
+                raw = json.dumps(original | dict(state=retired, pins=pins, accepted_identity=identity) | extra)
                 with closing(sqlite3.connect(path)) as db, db:
                     db.execute('UPDATE tasks SET data=?', (raw,))
                 with state._database(scope) as db:
-                    task = state._task(db, state._scope_id(scope), 'codex', 'session', 'task', historical=True)
-                    self.assertEqual(task['state'], retired)
+                    # Inventories read retained records with the ordinary reader too.
+                    for historical in (True, False):
+                        task = state._task(db, state._scope_id(scope), 'codex', 'session', 'task', historical=historical)
+                        self.assertEqual((task['state'], task.get('user_attention')), (retired, extra.get('user_attention')))
                     with self.assertRaises(ValueError):
                         state._save(db, state._scope_id(scope), task)
                 with self.assertRaisesRegex(ValueError, 'original pinned'):
