@@ -93,7 +93,7 @@ class ProjectConfig:
 class Server:
     """One `opencode serve` on a random localhost port with its own XDG dirs."""
 
-    def __init__(self, base, canary_project=None, settings=None, ledger=None):
+    def __init__(self, base, canary_project=None, settings=None, ledger=None, route=(PROVIDER, MODEL, VARIANT)):
         self.base = base
         self.canary = canary_project is not None
         self.project_config = ProjectConfig(canary_project) if self.canary else None
@@ -107,7 +107,8 @@ class Server:
         # Qualification pins temporary stores in the run dir; canary pins the dedicated canary state.
         self.settings = settings or base / "routing" / "settings.json"
         self.ledger = ledger or base / "usage" / "organizations.sqlite3"
-        self.control = dict(budget=0, hold=[], title_session=None)
+        # `route`: the one route `qual-post` lets through (None blocks every model request until the harness sets it).
+        self.control = dict(budget=0, hold=[], title_session=None, route=None if route is None else list(route))
 
     def write_control(self, **change):
         self.control.update(change)
@@ -126,7 +127,13 @@ class Server:
                         {"package": str(self.base / "plugins/qual-post"), "options": recorder}],
             # A background child session on another model: the spawn test of stage 2 (blocked before sending).
             "commands": {"qualspawn": {"template": PROMPT_TEXT, "model": "%s/sonnet#%s" % (PROVIDER, VARIANT),
-                                       "subagent": True, "agent": "general"}},
+                                       "subagent": True, "agent": "general"},
+                         # descendants stage: a `subagent: true` command child on the qualification route.
+                         "qualchild": {"template": PROMPT_TEXT, "model": "%s/%s#%s" % (PROVIDER, MODEL, VARIANT),
+                                       "subagent": True, "agent": "general"},
+                         # s33d stage: only whether the dummy credential-like variable exists, never its value.
+                         "qualenv": {"template": "!`env | grep -q '^%s=' && echo QUAL_PROBE_PRESENT || echo QUAL_PROBE_ABSENT`"
+                                                 % PROBE_ENV}},
         }
 
     def prepare_files(self):

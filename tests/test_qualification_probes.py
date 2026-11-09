@@ -60,6 +60,17 @@ class PurposeApprovalTests(Temp):
             ledger.set_cap("openai", 4, "x", approval=APPROVAL)
 
 
+class ApprovalCliTests(Temp):
+    def test_set_cap_records_the_approval_and_refuses_without_one(self):
+        path = self.private(self.tmp / "state") / "calls.jsonl"
+        safety.CallLedger.initialize(path)
+        base = ["--call-ledger", str(path), "--reason", "approved"]
+        self.assertEqual(live.main(base + ["--set-cap", "chatgpt", "4"]), 2)
+        self.assertEqual(live.main(base + ["--set-cap", "chatgpt", "4", "--approval", "user", "2026-11-09", "probe"]), 0)
+        cap = [e for e in safety.CallLedger(path).export()["entries"] if e["kind"] == "cap"]
+        self.assertEqual(cap[0]["approval"], dict(by="user", at="2026-11-09", scope="probe"))
+
+
 class RouteTests(unittest.TestCase):
     LISTED = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"]),
               dict(id="haiku", providerID="claude-agent", variants=["low"])]
@@ -106,6 +117,7 @@ console.log(JSON.stringify(out))
         (self.tmp / "recorder.mjs").write_text(safety.recorder_source("post"))
         (self.tmp / "driver.mjs").write_text(self.DRIVER)
         (self.tmp / "control.json").write_text(json.dumps(dict(budget=9, route=route)))
+        (self.tmp / "hooks.jsonl").touch()  # live, qual-pre has written the log before qual-post reads it
         done = subprocess.run([NODE, str(self.tmp / "driver.mjs"), str(self.tmp / "hooks.jsonl"), str(self.tmp / "control.json"),
                                json.dumps(events)], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -256,9 +268,7 @@ class S33dStageTests(StageHarness):
         self.assertTrue(result["pass"])
 
     def test_an_allowed_config_edit_fails_the_stage(self):
-        run, ledger, server = self.probe_run(stages=["s33d"])
-        original = server._permission
-        server._permission = lambda session, resource: original(None, resource)  # as if the shim were not loaded
+        run, ledger, server = self.probe_run(stages=["s33d"], shim_denies_config=False)  # as if the shim did not deny
         probe_stages.setup(run, "s33d")
         probe_stages.s33d(run)
         result = run.results["stages"]["s33d"]
@@ -357,13 +367,13 @@ class ModeRefusalTests(Temp):
 
 class ProbeStructureTests(StageHarness):
     def test_new_runs_shadow_no_method(self):
+        ledger = approved_ledger(self.private(self.tmp / "state") / "calls.jsonl")
         for purpose, model in (("qualification-2", None), ("chatgpt", "openai/gpt-test-mini#low")):
-            run, *_ = self.probe_run(purpose=purpose, model=model)
+            run = live.Run(self.private(self.tmp / ("iso-" + purpose)), ledger, purpose=purpose,
+                           stages=["descendants"] if purpose == "qualification-2" else None, chatgpt_model=model)
             cls = type(run)
             shadowed = [name for name in vars(run) if callable(getattr(cls, name, None)) or isinstance(getattr(cls, name, None), property)]
             self.assertEqual(shadowed, [], purpose)
-            shutil.rmtree(self.tmp / "iso")
-            shutil.rmtree(self.tmp / "state")
 
 
 if __name__ == "__main__":

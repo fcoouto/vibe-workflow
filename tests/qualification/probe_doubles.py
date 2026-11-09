@@ -28,7 +28,7 @@ class ProbeServer(FakeOpenCode):
         self.parents = {}
         self.roots = {}  # attached root -> dict(attempt, token, watched, recorded={child: parent})
         # Knobs.
-        self.tool_subagent, self.strip_env, self.image_models = True, True, []
+        self.tool_subagent, self.strip_env, self.image_models, self.shim_denies_config = True, True, [], True
         self.models = [dict(id="haiku", providerID="claude-agent", variants=["low", "high"])]
         self.oauth_pending_polls, self.oauth_result, self.oauth_polls, self.connected = 2, "complete", 0, False
         self.cancelled = []
@@ -138,7 +138,7 @@ class ProbeServer(FakeOpenCode):
         base = dict(hook="permission.evaluate", action="edit", session=session, resources=[resource])
         self._log(phase="pre", effect="allow", **base)
         segments = {segment.lower() for segment in resource.split("/")}
-        denied = self._root_of(session) is not None and bool(segments & CONFIG_SEGMENTS)
+        denied = self.shim_denies_config and self._root_of(session) is not None and bool(segments & CONFIG_SEGMENTS)
         self._log(phase="post", effect="deny" if denied else "allow", **base)
         if not denied:
             target = self.project / resource

@@ -256,8 +256,10 @@ def preconditions(status, health, probes):
     return reasons
 
 
-def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT):
-    """`n` (1-20) explicit subscription admissions cycling three roles and two complexity bands."""
+def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None):
+    """`n` (1-20) explicit subscription admissions cycling three roles and two complexity bands. `route` is
+    `{provider, model, effort, harness}` (default: the pilot's claude-agent/haiku#low)."""
+    route = dict(route or dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME))
     if type(n) is not int or not 1 <= n <= PILOT_MAX:
         raise Refused("the pilot runs 1 to %d admissions" % PILOT_MAX)
     now = int(time.time()) if now is None else now
@@ -266,14 +268,14 @@ def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT):
         role, profile_role, explicit = ROLES[index % len(ROLES)]
         band = BANDS[(index // len(ROLES)) % len(BANDS)]
         attempt = "%s-%02d" % (tag, index + 1)
-        assignment = dict(attempt_id=attempt, task="%s-task-%02d" % (tag, index + 1), scope="pilot-scope", choice=dict(CHOICE))
+        assignment = dict(attempt_id=attempt, task="%s-task-%02d" % (tag, index + 1), scope="pilot-scope",
+                          choice=dict(route, funding="subscription"))
         if explicit:
             assignment["role"] = explicit
         job = dict(id="job-" + attempt, role=profile_role, scope_ref="pilot-scope", objective="o", context="c",
                    profile=dict(task_family="code", complexity_band=band, risk_band="medium", review_policy="independent",
                                 context_tokens=100, tools=["read"], uncertainty="low"))
-        observations = dict(now=now, routes=[dict(route="sub", strategy_id="s-sub", provider=PROVIDER, model=MODEL, effort=VARIANT,
-                                                  harness=HARNESS_NAME, account=account,
+        observations = dict(now=now, routes=[dict(route="sub", strategy_id="s-sub", **route, account=account,
                                                   billing_class="included_subscription", pool=pool, demand={"5h": 10},
                                                   capable=True, permitted=True, binding_enforceable=True)],
                             pools={pool: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None,
