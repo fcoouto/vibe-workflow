@@ -14,7 +14,7 @@ Run the user's approved commands only. Keep the client configuration, permission
 **Codex**
 
 - Git marketplace: `codex plugin marketplace upgrade <marketplace>`.
-- Local source (a folder on this machine): refresh the folder first, then `codex plugin remove vibe-workflow@<marketplace>` and `codex plugin add vibe-workflow@<marketplace>`. Codex copies a local package when it installs, so it does not refresh on its own.
+- Local source (a folder on this machine): refresh the folder first, then `codex plugin remove vibe-workflow@<marketplace>` and `codex plugin add vibe-workflow@<marketplace>`. Codex copies a local package when it installs, so it does not refresh on its own. For an export of a development checkout, refresh it with `python3 -B scripts/package.py` from that checkout.
 
 **Claude Code**
 
