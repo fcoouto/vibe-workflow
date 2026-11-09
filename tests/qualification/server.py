@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import socket
@@ -261,7 +262,11 @@ class Routing:
 
     Both modes pin the stores: the run dir's temporary ones, or the dedicated canary state with `--project`."""
 
-    def __init__(self, settings=None, ledger=None, project=None):
+    # Requests that only read: the only ones re-sent after a lost or mismatched reply. Writes are never re-sent.
+    READS = ("status", "check")
+
+    def __init__(self, settings=None, ledger=None, project=None, reply_timeout=30, child_argv=None):
+        self.reply_timeout, self.child_argv, self.buffer = reply_timeout, child_argv, b""
         self.argv = []
         if settings is not None:
             self.argv += ["--settings", str(settings), "--ledger", str(ledger)]
@@ -280,28 +285,76 @@ class Routing:
         except ValueError:
             return dict(state="unparsed", code=done.returncode), elapsed
 
+    def _spawn(self):
+        argv = self.child_argv or [sys.executable, "-I", "-B", str(ROOT / "scripts" / "routing.py"), "--serve", *self.argv]
+        self.child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.buffer = b""
+
+    def _kill(self):
+        """Drop the child and anything it still owes: a late reply must never be read as another request's answer."""
+        child, self.child, self.buffer = self.child, None, b""
+        if child is not None:
+            try:
+                child.kill()
+                child.wait(10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+    def _readline(self, deadline):
+        """One reply line from the child before `deadline` (monotonic), or None."""
+        fd = self.child.stdout.fileno()
+        while b"\n" not in self.buffer:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                return None
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return None
+            self.buffer += chunk
+        line, _, self.buffer = self.buffer.partition(b"\n")
+        return line
+
     def served(self, op, **body):
-        """The same request through a persistent `--serve` child (routing work without interpreter start-up)."""
-        if self.child is None or self.child.poll() is not None:
-            self.child = subprocess.Popen([sys.executable, "-I", "-B", str(ROOT / "scripts" / "routing.py"), "--serve", *self.argv],
-                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        self.seq += 1
-        began = time.perf_counter()
-        self.child.stdin.write(json.dumps(dict(v=1, op=op, id="q%d" % self.seq, **body)) + "\n")
-        self.child.stdin.flush()
-        line = self.child.stdout.readline()
-        elapsed = round((time.perf_counter() - began) * 1000, 2)
-        try:
-            answer = json.loads(line)
-        except ValueError:
-            return dict(state="unparsed"), elapsed
-        answer.pop("id", None)
-        return answer, elapsed
+        """The same request through a persistent `--serve` child (routing work without interpreter start-up).
+
+        Every reply must carry this request's id. A timeout, an unreadable or mismatched reply, or an interrupt
+        kills the child (so nothing it still owes is read later). Reads (`status`, `check`) are then sent once more
+        to a fresh child; a write is never re-sent and answers `unconfirmed` with the reason."""
+        tries = 2 if op in self.READS else 1
+        for attempt in range(tries):
+            if self.child is None or self.child.poll() is not None:
+                self._spawn()
+            self.seq += 1
+            expected = "q%d" % self.seq
+            began = time.perf_counter()
+            try:
+                self.child.stdin.write((json.dumps(dict(v=1, op=op, id=expected, **body)) + "\n").encode())
+                self.child.stdin.flush()
+                line = self._readline(time.monotonic() + self.reply_timeout)
+            except (BrokenPipeError, OSError):
+                line = None
+            except BaseException:
+                self._kill()
+                raise
+            elapsed = round((time.perf_counter() - began) * 1000, 2)
+            problem, answer = None, None
+            if line is None:
+                problem = "reply_timeout"
+            else:
+                try:
+                    answer = json.loads(line)
+                except ValueError:
+                    problem = "reply_unparsed"
+                if problem is None and (type(answer) is not dict or answer.get("id") != expected):
+                    problem = "reply_mismatch"
+            if problem is None:
+                answer.pop("id", None)
+                return answer, elapsed
+            self._kill()
+        return dict(state="unconfirmed" if op not in self.READS else "unavailable", reason=problem), elapsed
 
     def stop(self):
-        if self.child is not None and self.child.poll() is None:
-            self.child.kill()
-            self.child.wait(10)
+        self._kill()
 
     def admission_ids(self, attempt):
         """Derived ids of an admitted, not yet dispatched attempt (read-only, in process), for the pending probe."""

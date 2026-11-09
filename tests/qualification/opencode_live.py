@@ -657,6 +657,7 @@ class Run:
         refusals = canary.preflight(before)
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.RESET_ADVICE))
+        canary.check_ancestor_configs(self.canary_project)
         if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
         self.repo_start = repo_snapshot(self.canary_project)
@@ -720,10 +721,35 @@ class Run:
         self.compare_user_dirs(user_before, home_before)
         return self.results
 
+    def read_hooks(self):
+        """The recorder log, tolerant of a damaged last line (a write cut short): one retry, then recorded as unreadable."""
+        for attempt in range(2):
+            try:
+                return (self.server.hooks() if self.server.log.exists() else []), False
+            except Blocker:
+                if attempt == 0:
+                    time.sleep(0.2)
+        return [], True
+
     def cleanup(self):
+        """Stop and restore first, each step on its own so one failure never skips the next; read results after."""
+        errors = []
+
+        def step(name, action):
+            try:
+                return action()
+            except Exception as error:  # noqa: BLE001 - recorded; the remaining steps still run
+                errors.append("%s: %s" % (name, type(error).__name__))
+                return None
         if self.events:
             self.events.stopped = True
-        hooks = self.server.hooks() if self.server.log.exists() else []
+        pgid = self.server.process.pid if self.server.process else None
+        step("stop_server", self.server.stop)
+        config_removed = step("remove_project_config", self.server.project_config.remove) if self.server.project_config else None
+        step("stop_routing", self.routing.stop)
+        left = step("kill_leftovers", lambda: kill_leftovers(pgid, [str(self.base), os.path.realpath(self.base)]))
+        hooks, unreadable = self.read_hooks()
+        self.results["hooks_unreadable"] = unreadable
         self.results["hook_records"] = len(hooks)
         pairs, blocked = latency_pairs(hooks)
         by_hook = {}
@@ -735,20 +761,16 @@ class Run:
                                                  and not on_route(r))
         fields = ("phase", "hook", "kind", "model", "variant", "tool", "effect", "probe_present", "decision", "session")
         self.results["hooks"] = [{k: r.get(k) for k in fields if r.get(k) is not None} for r in hooks]
-        pgid = self.server.process.pid if self.server.process else None
-        self.server.stop()
-        self.routing.stop()
-        left = kill_leftovers(pgid, [str(self.base), os.path.realpath(self.base)])
-        config_removed = self.server.project_config.remove() if self.server.project_config else None
         if not self.keep:
-            shutil.rmtree(self.base, ignore_errors=True)
+            step("remove_isolated_dir", lambda: shutil.rmtree(self.base, ignore_errors=True))
         dir_removed = not self.base.exists()
-        self.results["cleanup"] = dict(processes_left=len(left), isolated_dir_removed=dir_removed, kept=self.keep,
-                                       project_config_removed=config_removed,
-                                       verified_by_harness=not left and (dir_removed or self.keep) and config_removed is not False)
+        self.results["cleanup"] = dict(processes_left=None if left is None else len(left), isolated_dir_removed=dir_removed,
+                                       kept=self.keep, project_config_removed=config_removed, errors=errors,
+                                       verified_by_harness=not errors and left == [] and (dir_removed or self.keep)
+                                       and config_removed is not False)
         if not self.results["cleanup"]["verified_by_harness"]:
             self.results["blockers"].append("cleanup could not be verified")
-        self.results["call_ledger"] = self.ledger.summary()
+        self.results["call_ledger"] = step("call_ledger", self.ledger.summary)
 
     def compare_user_dirs(self, before, home_before):
         after = self.snapshot_user_dirs()
@@ -891,6 +913,8 @@ def main(argv=None):
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
         project = canary.check_project(args.project) if args.canary else None
+        if args.canary:
+            canary.check_ancestor_configs(project)
         state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
         if args.canary:
             canary.plan_assignments(args.admissions, "check")

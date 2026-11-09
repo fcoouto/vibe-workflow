@@ -92,7 +92,7 @@ def check_isolated_dir(path, home=None):
     if resolved == home or resolved in home.parents:
         raise Refused("--isolated-dir must not be the home directory or above it")
     for protected in PROTECTED:
-        guarded = home / protected
+        guarded = (home / protected).resolve()  # a symlinked ~/.local or ~/.config cannot slip past
         if resolved == guarded or guarded in resolved.parents:
             raise Refused("--isolated-dir must be outside the user's OpenCode and application directories")
     if inside_git_worktree(resolved):
@@ -452,7 +452,9 @@ MAX_REPO_FILES = 5000
 
 
 def _git(project, *args, run=subprocess.run):
-    done = run(["git", "-C", str(project), *args], capture_output=True, timeout=60)
+    # No optional locks: a snapshot must never rewrite .git/index (git status refreshes it otherwise).
+    done = run(["git", "-C", str(project), *args], capture_output=True, timeout=60,
+               env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
     return done.returncode, done.stdout
 
 

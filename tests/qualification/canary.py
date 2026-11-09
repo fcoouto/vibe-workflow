@@ -54,6 +54,20 @@ def check_project(project):
     return resolved
 
 
+CONFIG_NAMES = ("opencode.json", "opencode.jsonc", ".opencode")
+
+
+def check_ancestor_configs(project):
+    """Refuse when the project or any ancestor up to / holds an OpenCode config. OpenCode merges every ancestor's
+    config into the isolated server's location, so such a file could load another copy of the routing plugin
+    (with default pins: the production state). The user's global config is already excluded by XDG isolation."""
+    for directory in (Path(project), *Path(project).parents):
+        for name in CONFIG_NAMES:
+            candidate = directory / name
+            if candidate.exists() or candidate.is_symlink():
+                raise Refused("an OpenCode config above the canary location would be loaded: %s" % candidate)
+
+
 def _production_paths():
     from scripts import routing as command
     return command.default_settings(), command.default_ledger()
@@ -78,7 +92,7 @@ def check_canary_state(path, home=None, production=None, isolated=None):
     if inside_git_worktree(resolved):
         raise Refused("the canary state must not be inside a git worktree")
     for guarded in (*PROTECTED, PRODUCTION_STATE_ROOT):
-        root = home / guarded
+        root = (home / guarded).resolve()  # a symlinked ~/.local cannot slip past
         if resolved == root or root in resolved.parents:
             raise Refused("the canary state must be outside OpenCode's and the production routing state directories")
     if isolated is not None and (resolved == Path(isolated) or Path(isolated) in resolved.parents):
@@ -239,8 +253,10 @@ class PilotDriver:
             self.current = None
             self.repo_check("end")
         except Abort as stop:
+            self.quiesce()  # first: no signal may skip the recovery
             self.abort(stop.reason, stop.detail)
         except BaseException as error:  # noqa: BLE001 - every exception and signal ends the pilot the same way
+            self.quiesce()
             interrupted = isinstance(error, KeyboardInterrupt) or type(error).__name__ == "Interrupted"
             self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__)
         latency = self.results["latency"]
@@ -277,9 +293,11 @@ class PilotDriver:
             return "uncertain" if answer.get("state") == "recorded" else "uncertain_refused:%s" % answer.get("reason")
         return "none"
 
-    def abort(self, reason, detail=None):
+    def quiesce(self):
         if callable(getattr(self.env, "quiesce", None)):
             self.env.quiesce()  # no further signal interrupts the recovery
+
+    def abort(self, reason, detail=None):
         try:
             recovery = self.recover()
         except BaseException as error:  # noqa: BLE001

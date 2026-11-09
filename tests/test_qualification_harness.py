@@ -977,5 +977,173 @@ class SequencingTests(Temp):
         self.assertIn("guard_probe_failed", results["blockers"][0])
 
 
+FAKE_SERVE = r"""
+import json, sys, time
+mode, count_file = sys.argv[1], sys.argv[2]
+spawns = int(open(count_file).read() or 0) + 1 if __import__("os").path.exists(count_file) else 1
+open(count_file, "w").write(str(spawns))
+for line in sys.stdin:
+    request = json.loads(line)
+    with open(count_file + ".requests", "a") as log:
+        log.write(request["op"] + "\n")
+    if spawns == 1 and mode == "stale":
+        print(json.dumps(dict(v=1, state="ok", id="q-old", stale=True)), flush=True)
+        continue
+    if spawns == 1 and mode == "delay":
+        time.sleep(5)
+    print(json.dumps(dict(v=1, state="ok", id=request["id"], op=request["op"], spawn=spawns)), flush=True)
+"""
+
+
+class ServedReplyTests(Temp):
+    def routing(self, mode, timeout=0.5):
+        from tests.qualification import server
+        script = self.tmp / "fake_serve.py"
+        script.write_text(FAKE_SERVE)
+        self.count = self.tmp / ("spawns-%s" % mode)
+        routing_cmd = server.Routing(reply_timeout=timeout, child_argv=[shutil.which("python3") or "python3", str(script), mode, str(self.count)])
+        self.addCleanup(routing_cmd.stop)
+        return routing_cmd
+
+    def requests(self):
+        path = Path(str(self.count) + ".requests")
+        return path.read_text().split() if path.exists() else []
+
+    def test_a_stale_reply_to_a_read_respawns_and_retries(self):
+        routing_cmd = self.routing("stale")
+        answer, _ = routing_cmd.served("status")
+        self.assertEqual((answer["state"], answer["spawn"], answer["op"]), ("ok", 2, "status"))
+        self.assertNotIn("stale", answer)
+        self.assertEqual(self.requests(), ["status", "status"])
+
+    def test_a_stale_reply_to_a_write_is_reported_never_resent(self):
+        for op in ("record", "dispatch", "prepare", "set"):
+            with self.subTest(op=op):
+                routing_cmd = self.routing("stale")
+                Path(str(self.count) + ".requests").unlink(missing_ok=True)
+                self.count.unlink(missing_ok=True)
+                answer, _ = routing_cmd.served(op, event={})
+                self.assertEqual(answer, dict(state="unconfirmed", reason="reply_mismatch"))
+                self.assertEqual(self.requests(), [op])
+                routing_cmd.stop()
+
+    def test_a_delayed_reply_times_out_kills_and_retries_reads_only(self):
+        routing_cmd = self.routing("delay")
+        answer, _ = routing_cmd.served("check", request={})
+        self.assertEqual((answer["state"], answer["spawn"]), ("ok", 2))
+        self.count.unlink()
+        Path(str(self.count) + ".requests").unlink()
+        routing_cmd.stop()
+        routing_cmd = self.routing("delay")
+        self.assertEqual(routing_cmd.served("record", event={})[0], dict(state="unconfirmed", reason="reply_timeout"))
+        self.assertEqual(self.requests(), ["record"])
+
+    def test_an_interrupt_while_waiting_kills_the_child_so_no_reply_is_read_late(self):
+        routing_cmd = self.routing("ok")
+        calls = []
+        original = routing_cmd._readline
+
+        def interrupted(deadline):
+            if not calls:
+                calls.append(routing_cmd.child.pid)
+                raise live.Interrupted("signal 15")
+            return original(deadline)
+        routing_cmd._readline = interrupted
+        with self.assertRaises(live.Interrupted):
+            routing_cmd.served("status")
+        self.assertIsNone(routing_cmd.child)  # killed; its pending reply can never be read as another answer
+        answer, _ = routing_cmd.served("status")
+        self.assertEqual(answer["op"], "status")
+        self.assertNotEqual(routing_cmd.child.pid, calls[0])  # a fresh child answered
+
+
+class CleanupOrderTests(Temp):
+    def run_with_config(self, damaged=True, stop_fails=False):
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        exclude = project / ".git" / "info" / "exclude"
+        before = exclude.read_bytes()
+        state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        base = self.private(self.tmp / "iso")
+        run = live.Run(base, ledger, canary_project=str(project), canary_state=state)
+        run.server.project_config.create({"plugins": []})
+        run.server.log.write_text('{"hook":"model.request","phase":"pre"}\n{"hook":"model.req' if damaged else "")
+        order = []
+
+        def stop():
+            order.append("stop")
+            if stop_fails:
+                raise OSError("stop failed")
+        run.server.stop = stop
+        original_remove = run.server.project_config.remove
+        run.server.project_config.remove = lambda: order.append("remove") or original_remove()
+        run.cleanup()
+        return run, order, project, exclude, before
+
+    def test_the_server_stops_and_the_repo_is_restored_before_hooks_are_read(self):
+        run, order, project, exclude, before = self.run_with_config()
+        self.assertEqual(order[:2], ["stop", "remove"])
+        self.assertFalse((project / ".vibe-qual-canary").exists())
+        self.assertEqual(exclude.read_bytes(), before)
+        self.assertTrue(run.results["hooks_unreadable"])
+        self.assertTrue(run.results["cleanup"]["verified_by_harness"])
+        self.assertFalse(run.base.exists())
+
+    def test_a_failing_stop_still_restores_the_repo_and_is_reported(self):
+        run, order, project, exclude, before = self.run_with_config(damaged=False, stop_fails=True)
+        self.assertEqual(order[:2], ["stop", "remove"])
+        self.assertEqual(exclude.read_bytes(), before)
+        self.assertIn("stop_server: OSError", run.results["cleanup"]["errors"])
+        self.assertFalse(run.results["cleanup"]["verified_by_harness"])
+
+
+class AncestorConfigTests(Temp):
+    def test_any_opencode_config_above_the_server_location_is_refused(self):
+        project = self.private(self.tmp / "a" / "b" / "project")
+        canary.check_ancestor_configs(project)
+        for where, name, directory in ((project, "opencode.json", False), (self.tmp / "a", "opencode.jsonc", False),
+                                       (self.tmp / "a" / "b", ".opencode", True)):
+            with self.subTest(where=str(where), name=name):
+                target = where / name
+                target.mkdir() if directory else target.write_text("{}")
+                with self.assertRaises(safety.Refused):
+                    canary.check_ancestor_configs(project)
+                target.rmdir() if directory else target.unlink()
+        canary.check_ancestor_configs(project)
+
+
+class SmallFixTests(Temp):
+    def test_git_snapshots_never_take_optional_locks(self):
+        seen = []
+
+        def run(argv, **kwargs):
+            seen.append(kwargs.get("env", {}).get("GIT_OPTIONAL_LOCKS"))
+            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+        safety.repo_snapshot(self.tmp, run=run)
+        self.assertEqual(seen, ["0", "0", "0"])
+
+    def test_guarded_roots_are_resolved_through_symlinks(self):
+        real_local = self.private(self.tmp / "real_local")
+        self.private(real_local / "state" / "vibe-workflow")
+        (self.home / ".local").symlink_to(real_local)
+        with self.assertRaises(safety.Refused):
+            canary.check_canary_state(real_local / "state" / "vibe-workflow" / "canary", home=self.home,
+                                      production=(self.tmp / "p" / "s.json", self.tmp / "p" / "l.db"))
+        self.private(real_local / "share" / "opencode")
+        with self.assertRaises(safety.Refused):
+            safety.check_isolated_dir(str(self.private(real_local / "share" / "opencode" / "q")), self.home)
+
+    def test_signals_are_ignored_before_any_recovery_step(self):
+        fake = Fake(raises=dict(launch=KeyError("x")))
+        fake.quiesce = lambda: fake.calls.append("quiesce")
+        state = self.private(self.tmp / "state")
+        driver = canary.PilotDriver(fake, safety.CallLedger.initialize(state / "c.jsonl"), n=1, run="t")
+        driver.run()
+        after = fake.calls[fake.calls.index("launch") + 1:]
+        self.assertEqual(after[0], "quiesce")
+        self.assertEqual(after, ["quiesce", "record:uncertain", "kill_switch"])
+
+
 if __name__ == "__main__":
     unittest.main()
