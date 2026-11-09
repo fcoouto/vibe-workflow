@@ -15,6 +15,7 @@ from runtime.adapters.opencode import AdapterError
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "tests/opencode_plugin/plugin.test.ts"
 PROBES = ROOT / "tests/fixtures/smart-routing/probes"
+CONFIG_PATHS = ROOT / "tests/opencode_plugin/config_paths.json"
 
 
 def _requested(hook, payload):
@@ -70,7 +71,19 @@ def parity_cases():
     sessions += [{"id": session, "derived": False} for session in [
         "ses_live1", "ses_01JABCDEFGHJKMNPQRSTVWXYZ", "ses_" + "0" * 31, "ses_" + "0" * 33, "ses_" + "A" * 32,
         "msg_" + "0" * 32, derived[0].upper()]]
-    return {"env": env, "models": model_cases, "spawns": spawn_cases, "sessions": sessions}
+    table = json.loads(CONFIG_PATHS.read_text(encoding="utf-8"))
+    resources = table["deny"] + table["allow"] + table["unparseable"] + [None, 5, "x" * 5000, "K/x"]
+    extra_options = [None, [], [".cursor", "Tools\\Agents"], [".."], "a", [""], ["a"] * 65]
+    extras = [{"option": option, "paths": opencode.extra_paths(option)} for option in extra_options]
+    configured = opencode.extra_paths([".cursor", "Tools\\Agents"])
+    paths = [{"resource": resource, "protected": opencode.protected_path(resource),
+              "configured": opencode.protected_path(resource, configured)}
+             for resource in resources + ["a/.cursor/b", "x/tools/agents/y"]]
+    denials = [{"action": action, "resources": value, "deny": opencode.managed_denial(action, value)}
+               for action in ("experimental_image_generate", "edit", "write", "patch", "read", "webfetch")
+               for value in ([".opencode/command/x.md"], ["src/x.ts"], [], None, ["src/x.ts", 5], "src/x.ts")]
+    return {"env": env, "models": model_cases, "spawns": spawn_cases, "sessions": sessions,
+            "paths": paths, "extras": extras, "denials": denials}
 
 
 class OpenCodePluginTests(unittest.TestCase):
@@ -83,6 +96,9 @@ class OpenCodePluginTests(unittest.TestCase):
         self.assertTrue(any(item["credential"] for item in cases["env"]))
         self.assertTrue(any(item["derived"] for item in cases["sessions"]))
         self.assertTrue(all(opencode.SESSION.fullmatch(item["id"]) for item in cases["sessions"] if item["derived"]))
+        self.assertEqual({item["protected"] for item in cases["paths"]}, {True, False})
+        self.assertEqual({item["paths"] is None for item in cases["extras"]}, {True, False})
+        self.assertEqual({item["deny"] for item in cases["denials"]}, {"image_generation", "config_edit", None})
 
     def test_node_suite(self):
         node = shutil.which("node")
