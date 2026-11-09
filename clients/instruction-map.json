@@ -2,11 +2,11 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "11fb2a85d2e53c286e465ea92430558042f3e24b010efd428d01b1b43ba8eaba",
+      "sha256": "49a35244d41dc2a6efed43662c9a85aa3af2e357da29ed9f203612b7669aced8",
       "ranges": [
         [
           1,
-          44
+          50
         ]
       ]
     },

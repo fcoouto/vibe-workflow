@@ -107,7 +107,8 @@ class HookManifestTests(unittest.TestCase):
     def test_claude_manifest_registers_exactly_its_supported_events(self):
         path, data = self.read_hooks("claude-code")
         self.assertEqual(set(data["hooks"]), {"SessionStart", "PreToolUse", "PostToolUse",
-                                              "PostToolUseFailure", "Stop", "UserPromptSubmit"})
+                                              "PostToolUseFailure", "Stop", "UserPromptSubmit",
+                                              "SubagentStart", "SubagentStop"})
         self.assertEqual(data["hooks"]["PreToolUse"][0]["matcher"], "Edit|Write|NotebookEdit")
 
     def test_unsupported_claude_event_is_rejected(self):
