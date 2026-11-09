@@ -42,12 +42,43 @@ AUTO_RULE = ("openai provider only; chat (type absent or chat, text in and out w
 CODEX_WINDOW = "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)"
 
 
+REGISTER_S = 60  # the openai integration's plugins register its methods shortly after start-up
+
+
+def methods_of(info):
+    """An integration's methods as `{id, type, label}` only (no form, no connection, nothing credential-like)."""
+    return [dict(id=m.get("id") if isinstance(m.get("id"), str) else None, type=m.get("type"),
+                 label=str(m.get("label"))[:80] if m.get("label") is not None else None)
+            for m in (info or {}).get("methods") or [] if isinstance(m, dict)]
+
+
+def offered(methods):
+    return ", ".join("%s (%s)" % (m["id"] or "-", m["type"]) for m in methods) or "none"
+
+
+def wait_integration(run, integration, method_id, timeout_s=REGISTER_S, sleep=time.sleep, clock=time.monotonic):
+    """Poll `GET /api/integration/<id>` (bounded) until it lists `method_id` as an OAuth method. Returns the last
+    HTTP status, the sanitized methods and every change seen (status and method ids), for the record."""
+    deadline, polls, last = clock() + timeout_s, [], None
+    while True:
+        status, info, _ = run.server.request("GET", "/api/integration/%s" % integration)
+        methods = methods_of(run.data(info) if status == 200 else None)
+        seen = (status, [m["id"] for m in methods])
+        if seen != last:
+            polls.append(dict(http=status, methods=seen[1]))
+            last = seen
+        if any(m["id"] == method_id and m["type"] == "oauth" for m in methods) or clock() >= deadline:
+            return status, methods, polls
+        sleep(0.5)
+
+
 def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=time.monotonic, announce=print):
     """Start "Sign in with ChatGPT", announce the URL, and poll (bounded) until it completes."""
-    _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
-    methods = [m for m in (run.data(info) or {}).get("methods") or [] if m.get("id") == METHOD_ID and m.get("type") == "oauth"]
-    if not methods:
-        raise Blocker("the openai integration offers no 'Sign in with ChatGPT' OAuth method")
+    http, methods, polls = wait_integration(run, INTEGRATION, METHOD_ID, sleep=sleep, clock=clock)
+    run.note(PURPOSE, "offered_methods", dict(http=http, methods=methods, polls=polls))
+    if not any(m["id"] == METHOD_ID and m["type"] == "oauth" for m in methods):
+        raise Blocker("the openai integration offers no 'Sign in with ChatGPT' OAuth method (%s; HTTP %d; offered: %s)"
+                      % (METHOD_ID, http, offered(methods)))
     status, started, _ = run.server.request("POST", "/api/integration/%s/connect/oauth" % INTEGRATION, {"methodID": METHOD_ID})
     attempt = run.data(started) or {}
     if status != 200 or not attempt.get("attemptID") or not attempt.get("url"):
@@ -78,7 +109,8 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
     if not connections:
         raise Blocker("no ChatGPT connection is listed after the sign-in")
     run.server.request("POST", "/api/location/reload")
-    outcome = dict(status=state, polls=polls, connections=connections, method=METHOD_ID, mode=public["mode"])
+    outcome = dict(status=state, polls=polls, connections=connections, method=METHOD_ID, mode=public["mode"],
+                   offered_methods=[m["id"] for m in methods])
     run.note(PURPOSE, "oauth", outcome)
     return outcome
 
@@ -230,7 +262,25 @@ def request(run):
     run.note(s, "pass", not failures)
 
 
-def run(run_, announce=print):
+def diagnose(run, sleep=time.sleep, clock=time.monotonic):
+    """`--chatgpt-methods` (0 calls): what the isolated server's integrations offer. No sign-in, no reservation, no
+    model request; only ids, types and labels are recorded."""
+    run.start(PURPOSE)
+    http, methods, polls = wait_integration(run, INTEGRATION, METHOD_ID, sleep=sleep, clock=clock)
+    _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
+    _, listing, _ = run.server.request("GET", "/api/integration")
+    integrations = {i["id"]: ["%s (%s)" % (m["id"] or "-", m["type"]) for m in methods_of(i)]
+                    for i in (run.data(listing) or []) if isinstance(i, dict) and isinstance(i.get("id"), str)}
+    connections = (run.data(info) or {}).get("connections") if http == 200 else None
+    run.note(PURPOSE, "methods", dict(openai=dict(http=http, methods=methods, polls=polls,
+                                                  connections=len(connections) if isinstance(connections, list) else None),
+                                      integrations=integrations))
+    run.note(PURPOSE, "sign_in_method_listed", any(m["id"] == METHOD_ID and m["type"] == "oauth" for m in methods))
+
+
+def run(run_, announce=print, sleep=time.sleep):
+    if getattr(run_, "chatgpt_methods", False):
+        return diagnose(run_, sleep=sleep)
     """The whole chatgpt run: server, sign-in, model check, authority, the plugin-chain proof, one request."""
     run_.start(PURPOSE)
     connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
