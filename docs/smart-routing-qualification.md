@@ -75,6 +75,15 @@ RPC round trips: `health` 17 ms warm and 58 ms with the child's start-up; `attac
 - API-funded holds.
 - The canary and pilot.
 
+## Pilot canary, run 1 (aborted)
+
+The bounded pilot aborted at admission 1. The harness's accounting step raised a `TypeError` (cause unknown; only the exception type was recorded), after the managed request and its title had been sent (2 calls). The [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1) have the per-criterion table.
+
+- **Observed again on a dedicated canary state:** the plugin-chain proof (guard refusal `guard_variant`, pending probe refused by the shim), an attached managed request, `uncertain` recovery after an abort, the kill switch, and harness-verified cleanup. The repository was left byte-identical.
+- **Harness gaps found:**
+  - The abort records only the exception type, not its location.
+  - Latencies are recorded only for completed admissions.
+
 ## Accepted deviations and follow-ups (recorded after the re-run)
 
 - **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.

@@ -17,8 +17,8 @@
   },
   "pilot": {
    "cap": 24,
-   "spent": 0,
-   "remaining": 24,
+   "spent": 2,
+   "remaining": 22,
    "open_reservations": 0
   }
  },
@@ -154,6 +154,30 @@
    "label": "interactive session, routing child killed",
    "reserved": 1,
    "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 1 (implementer, low)",
+   "reserved": 2,
+   "sent": 2,
    "settled": true
   }
  ]

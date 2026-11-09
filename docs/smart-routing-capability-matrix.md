@@ -111,6 +111,8 @@ In total 9 of the 14 authorized calls were used. The [report](smart-routing-qual
 
 RPC refusals reach the caller as HTTP 500 `rpc.internal` without the shim's reason code.
 
+Pilot run 1 (9 November 2026, dedicated canary state): the hook order and the guard proof were observed again. A managed request on the canary ledger was allowed; 2 calls were sent (the request and its title). The pilot then aborted on a harness `TypeError` in its accounting step, so no settlement was observed. See the [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1).
+
 Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
 
 ## Gate status (P0)

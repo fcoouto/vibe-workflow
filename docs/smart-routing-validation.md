@@ -148,4 +148,32 @@ Results go to `tests/fixtures/smart-routing/probes/pilot-results.json` and to Re
 
 ## Results
 
-Not yet run. Record the replay report, the disagreement rate, any re-execution outcome, the latency measurements and the canary outcome here, separately from package validation and unit tests.
+Replay, disagreement, re-execution and the pre-registered canary: not yet run.
+
+### Pilot canary, run 1 (9 November 2026): aborted at admission 1
+
+- **Run.** Harness at `0a19e6c`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state, a fresh isolated directory and `claude-agent/haiku#low` only. Evidence: [`pilot-results.json`](../tests/fixtures/smart-routing/probes/pilot-results.json) (harness output, unchanged) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) (exported from the durable ledger).
+- **Before admission 1.** Every refusal check passed:
+  - The canary state was created on first use: `authority_required` on (canary ledger only), Smart Routing ON, API Usage off, no organization.
+  - `status` was clean: no holds, 0 open attempts.
+  - The plugin-chain probes passed. The guard probe was refused by the guard with `guard_variant`, and the pending probe was refused by the shim with `attach_required`, before `qual-post` saw it. Both settled at 0.
+- **Admission 1** (implementer, low band). The pilot sent the managed request and its one title: 2 calls, settled against the 2 reserved. Then the harness's accounting step raised a `TypeError`. The driver aborted with `recovery_error` (detail `accounting: TypeError`, phase `launched`), recorded the hold `uncertain` (the launch had happened) and ran the kill switch, which reported `updated`.
+- **Cause: unknown.** The accounting library converts its own errors into `AccountingError`, so the `TypeError` came from harness code around it (`Run.account` or `descendants`). The abort records only the exception type, and the session data was deleted with the isolated directory. An offline run of the same code on plausible payloads did not reproduce it. This is a harness defect; the run stopped as pre-registered and was not retried.
+- **State left behind, in the canary state only.** Smart Routing is OFF (settings revision 2), and one `uncertain` hold is open (1 open attempt), as accepted in the pre-registration. Recovery is the coordinator's decision. The production routing state was not touched.
+
+| Pass criterion (pre-registered) | Observed | Result |
+|---|---|---|
+| 20 admissions with zero abort conditions | 0 completed; aborted at admission 1 (`recovery_error`) | **fail** |
+| Every settlement a `complete` subscription settlement, units recorded, no dollar charge | No settlement: the hold was recorded `uncertain` before `record complete`; no charge (subscription only, no organization) | **fail** (not reached) |
+| `status` clean at the end | 1 `uncertain` hold, 1 open attempt, Smart Routing OFF (after the kill switch) | **fail** |
+| Latency p95 within budgets: warm preparation 50 ms, cold 500 ms, admission transaction 100 ms (single caller) | Not measured: the driver records an admission's latencies only on completion, and none completed. Shim hook time was `model.request` 0.44 ms median / 0.69 ms max (n=2, including the guard probe) and title 3.17 ms (n=1). | **unobserved** |
+| Every blocked path blocked at 0 tokens | Guard probe (`haiku#high`) and pending probe both blocked, 0 sent; 1 off-route request (the guard probe) was recorded and not sent | pass (n=2) |
+| Zero interactive-session disturbance; user's OpenCode directories unchanged | No interactive session was run. The user's OpenCode config, data, state and cache showed 0 unexpected changes (1 desktop-app churn entry in `~/.local/share/opencode`). Report-only: `~/.claude` had 3 entries added, 1 changed and 1 removed, and `~/.claude.json` changed. | pass for the directories; interactive sessions unobserved |
+
+- **Calls.** Pilot 2 of 24 (both probes reserved 1 and settled at 0; admission 1 reserved 2 and sent 2). Qualification remains 9 of 14. No open reservations.
+- **Cleanup (verified by the harness, and checked again afterwards):**
+  - No processes left; isolated directory removed.
+  - `.vibe-qual-canary/` removed, and `.git/info/exclude` byte-identical.
+  - Project HEAD and the full `git status --porcelain=v1 -z --untracked-files=all` output identical to before the run.
+
+**What the pilot does not show.** It is not the pre-registered canary, and cutover stays blocked. It is subscription-only. Window telemetry is not observable on this host, so the call cap was the proxy. One admission ran: no role other than implementer and no band other than low was exercised, and no latency budget was measured.
