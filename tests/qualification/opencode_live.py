@@ -55,7 +55,7 @@ sys.path.insert(0, str(ROOT))
 from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
-                                        Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
+                                        Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
                                         check_opencode_version, classify_changes, compare_snapshots, id_shape,
                                         latency_pairs, on_route, repo_snapshot, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
@@ -956,6 +956,7 @@ def main(argv=None):
         state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
         if args.canary:
             canary.plan_assignments(args.admissions, "check")
+        check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)

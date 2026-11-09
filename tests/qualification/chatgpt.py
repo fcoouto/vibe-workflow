@@ -31,10 +31,11 @@ STATE_NAME = "chatgpt-login.json"
 # picks one model by this fixed rule. The listing fields come from OpenCode 2.2.6's `Model.Info` schema in the binary
 # (no live listing is recorded), so the name exclusions and the two-variant rule apply as well.
 AUTO = "auto"
-NON_CHAT = re.compile(r"image|embed|audio|transcri|tts|speech|realtime|moderation|search-preview|dall-e|whisper|sora", re.I)
+NON_CHAT = re.compile(r"image|embed|audio|transcri|tts|speech|realtime|moderation|search-preview|deep-research|"
+                      r"computer-use|dall-e|whisper|sora", re.I)
 HINTS = ("nano", "mini", "small")
 AUTO_RULE = ("openai provider only; chat (type absent or chat, text in and out when listed, enabled, not deprecated, "
-             "no image/embedding/audio/transcription/tts/realtime/moderation/search-preview name); at least two variants "
+             "no image/embedding/audio/transcription/tts/realtime/moderation/search-preview/deep-research/computer-use name); at least two variants "
              "with one in the known order; cheapest untiered input+output catalog cost per million (missing or zero = "
              "unknown, last); then nano, mini, small in the id; then the id; lowest variant; refused when the pick has "
              "neither a cost nor a hint")
@@ -115,8 +116,9 @@ def hint(model_id):
     return next((rank for rank, word in enumerate(HINTS) if word in model_id.lower()), len(HINTS))
 
 
-def auto_select(listed, announce):
-    """`openai/<id>` by `AUTO_RULE` and the sanitized record of the choice (ids only), or `Refused`."""
+def auto_select(listed, announce, note):
+    """`openai/<id>` by `AUTO_RULE` and the sanitized record of the choice (ids only), or `Refused` (the record
+    is noted in the results either way)."""
     openai = [m for m in listed if m.get("providerID") == "openai" and isinstance(m.get("id"), str)]
     excluded = {m["id"]: exclusion(m) for m in openai if exclusion(m)}
     candidates = sorted((m for m in openai if m["id"] not in excluded),
@@ -126,6 +128,7 @@ def auto_select(listed, announce):
                   other_providers=sum(1 for m in listed if m.get("providerID") != "openai"),
                   costs={m["id"]: catalog_cost(m) for m in candidates})
     if not candidates or (catalog_cost(candidates[0]) is None and hint(ids[0]) == len(HINTS)):
+        note(PURPOSE, "model_selection", dict(record, selected=None))
         announce("chatgpt model candidates: %s" % (", ".join(ids) or "none"))
         reason = "no candidate" if not candidates else "the cheapest candidate is ambiguous (no cost, no name hint)"
         raise Refused("--chatgpt-model auto: %s; pass --chatgpt-model openai/MODEL; candidates: %s"
@@ -152,7 +155,7 @@ def select_model(run, announce=print):
     ref = run.chatgpt_model or ""
     selection = dict(mode="explicit")
     if ref == AUTO:
-        ref, selection = auto_select(listed, announce)
+        ref, selection = auto_select(listed, announce, run.note)
     if "#" not in ref:
         ref += "#" + lowest_variant(listed, ref)
     route = check_route(PURPOSE, parse_route(ref), listed)

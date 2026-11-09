@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import stat
@@ -535,6 +536,16 @@ def watched_changes(before, after):
                              churn_count=len(names) - len(unexpected))
         unexpected_all += ["%s/%s" % (name, n) for n in unexpected]
     return changes, unexpected_all
+
+
+def check_real_home(home=None, passwd_home=None):
+    """The owner's real home, or `Refused` when `HOME` points elsewhere (for example `python3 -m` importing `tests`,
+    whose __init__ redirects HOME): the user-directory snapshots and the server environment would silently watch
+    and use a temporary home."""
+    real = Path(passwd_home or pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    if Path(home or Path.home()).resolve() != real:
+        raise Refused("HOME is not the owner's real home; run as python3 -B tests/qualification/opencode_live.py")
+    return real
 
 
 def classify_changes(diff):
