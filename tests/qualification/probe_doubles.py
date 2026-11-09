@@ -42,7 +42,8 @@ class ProbeServer(FakeOpenCode):
         self.oauth_extra = {}
         # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
         self.upstream_error, self.upstream_retry = None, None
-        self.assistant_overrides, self.retry_message = {}, "retrying"  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        self.assistant_overrides, self.retry_message = {}, "retrying"
+        self.connection_label = "ChatGPT"  # the credential's label as GET /api/integration/openai lists it  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -268,7 +269,7 @@ class ProbeServer(FakeOpenCode):
                 return 404, dict(type="not_found", message="Integration not found"), 1.0
             methods = list(self.openai_methods) if integration == "openai" \
                 else [dict(id="claude-login", type="external", label="Claude Code login")]
-            connections = [dict(type="credential", id="cred_1bf0000000000000000000Aa", method="oauth")] \
+            connections = [dict(type="credential", id="cred_1bf0000000000000000000Aa", method="oauth", label=self.connection_label)] \
                 if integration == "openai" and self.connected else []
             return 200, dict(data=dict(id=integration, methods=methods, connections=connections)), 1.0
         if parts[3:5] == ["connect", "external"]:

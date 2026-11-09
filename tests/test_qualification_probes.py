@@ -520,7 +520,7 @@ class ChatGPTMethodTests(StageHarness):
 
 UPSTREAM = dict(type="APIError", status=403, retryAfterMs=1500,
                 message="Not eligible (subscription_sharing_user_not_eligible), see https://help.openai.com/x?t=tok-not-real",
-                response=dict(body=json.dumps(dict(error=dict(code="subscription_sharing_user_not_eligible", type="invalid_request",
+                response=dict(body=json.dumps(dict(error=dict(code="subscription_sharing_user_not_eligible", type="invalid_request_error",
                                                               message="plan not eligible", access_token="tok-not-real",
                                                               param="reasoning.effort")))))
 
@@ -557,7 +557,7 @@ class ChatGPTRequestFactsTests(StageHarness):
         self.assertIn("<redacted:url>", error["message"]["text"])
         fields = error["body"]["fields"]
         self.assertEqual((fields["code"], fields["type"], fields["param"], fields["message"]["text"]),
-                         ("subscription_sharing_user_not_eligible", "invalid_request", "reasoning.effort", "plan not eligible"))
+                         ("subscription_sharing_user_not_eligible", "invalid_request_error", "reasoning.effort", "plan not eligible"))
         self.assertIn("subscription_sharing_user_not_eligible", error["body"]["codes"])
         self.assertIn("<key>", error["body"]["keys"])  # access_token: not an allow-listed name
         self.assertEqual(assistant["retry"]["attempt"], 2)
