@@ -113,6 +113,12 @@ RPC refusals reach the caller as HTTP 500 `rpc.internal` without the shim's reas
 
 Pilot run 1 (9 November 2026, dedicated canary state): the hook order and the guard proof were observed again. A managed request on the canary ledger was allowed; 2 calls were sent (the request and its title). The pilot then aborted on a harness `TypeError` in its accounting step, so no settlement was observed. See the [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1).
 
+Pilot attempt 2 (same day, harness `94f9e0e`, dedicated canary state):
+
+- **P0.6 and P0.7:** 20 managed admissions ran end to end, each with derived ids and an attached token-checked request (one primary request each, plus one title in admission 1). The plugin-chain proof held.
+- **P0.8:** usage was accounted with `children` and `lineage`, the title was known by subtraction (admission 1) or zero (titled sessions), and 0 re-reads were needed. Every subscription hold settled as a window settlement with no charge, and `status` was clean at the end.
+- **Not covered:** subagents, compaction, retries and API-funded holds were not exercised. See the [validation results](smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort).
+
 Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
 
 ## Gate status (P0)

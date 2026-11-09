@@ -161,7 +161,7 @@ Replay, disagreement, re-execution and the pre-registered canary: not yet run.
 
 Attempt 1 of the pilot.
 
-- **Run.** Harness at `0a19e6c`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state, a fresh isolated directory and `claude-agent/haiku#low` only. Evidence: [`pilot-results.json`](../tests/fixtures/smart-routing/probes/pilot-results.json) (harness output, unchanged) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) (exported from the durable ledger).
+- **Run.** Harness at `0a19e6c`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state, a fresh isolated directory and `claude-agent/haiku#low` only. Evidence: [`pilot-attempt1-results.json`](../tests/fixtures/smart-routing/probes/pilot-attempt1-results.json) (harness output, unchanged; renamed from `pilot-results.json` when attempt 2 was recorded) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) (exported from the durable ledger).
 - **Before admission 1.** Every refusal check passed, including a clean `status` (no holds, 0 open attempts):
   - The canary state was created on first use: `authority_required` on (canary ledger only), Smart Routing ON, API Usage off, no organization.
   - The plugin-chain probes passed. The guard probe was refused by the guard with `guard_variant`, and the pending probe was refused by the shim with `attach_required`, before `qual-post` saw it. Both settled at 0.
@@ -193,6 +193,53 @@ Attempt 1 of the pilot.
 - Aborts now record a sanitized exception origin, the timing of each operation even when the admission is partial, and payload shapes for aborted admissions.
 - The canary state was reset by deleting the canary directory with the harness's guarded `--reset-canary-state`, after confirming no harness process was alive. The durable call ledger was left as it was (pilot 2 spent), and the pilot cap was then raised to 28 by Edit 4.
 
-### Pilot canary, attempt 2: pending
+### Pilot canary, attempt 2 (9 November 2026): 20 of 20 admissions, no abort
 
-Not yet run.
+- **Run.** Harness at `94f9e0e`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state (created fresh on first use), a fresh isolated directory and `claude-agent/haiku#low` only. It ran under Edits 4 and 5: pilot cap 28, the settled-accounting re-read rule, and titled sessions for admissions 2 to 20. Single run, not split.
+- **Evidence.** [`pilot-results.json`](../tests/fixtures/smart-routing/probes/pilot-results.json) is the harness output, unchanged; [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) is exported from the durable ledger.
+- **Before admission 1.** Every refusal check passed: a clean `status` (no holds, 0 open attempts), `routing.health` `ok` and no refusals. The canary state was created: `authority_required` on (canary ledger only), Smart Routing ON, API Usage off, no organization. The plugin-chain probes passed: the guard probe was refused by the guard with `guard_variant`, and the pending probe was refused by the shim with `attach_required` before `qual-post` saw it. Both settled at 0.
+- **Admissions.** All 20 completed: prepare, health, dispatch, attach, one prompt with derived ids, settled accounting, `record complete`, detach and `status`.
+  - **Roles × bands:** implementer, reviewer and researcher (7, 7 and 6 admissions), each in the low and medium bands.
+  - **Titles:** admission 1 sent its request and the one title (`title.state` `known`). Admissions 2 to 20 each sent one request and no title (`title.state` `zero`, sessions titled at creation).
+  - **Re-reads:** 0 in all 20 admissions; 0 `title_unaccounted` deviations; no accounting `unknown` reason in any admission.
+  - **Settlement:** every one a window settlement (`win:pilot-sub/5h` released), charged 0.
+  - **Working tree:** checked after admissions 5, 10, 15 and 20 and at the end; no new dirty path, no change to an already-dirty path, and HEAD unchanged.
+
+| Pass criterion (pre-registered) | Observed | Result |
+|---|---|---|
+| 20 admissions with zero abort conditions | 20 completed, no abort, no deviation | **pass** |
+| Every settlement a `complete` subscription settlement, units recorded, no dollar charge | 20 of 20 `record complete` settled as window settlements, releasing the `win:pilot-sub/5h` claim; charged 0; no organization and no API usage | **pass** |
+| `status` clean at the end | no holds, 0 open attempts, `unstamped_open_holds: 0`; no `cost_unknown`, uncertain, blocked or awaiting-reconciliation state; Smart Routing still ON (the kill switch was not needed) | **pass** |
+| Warm preparation p95 ≤ 50 ms | `prepare` through the persistent `routing.py --serve` child: n=20, median 1.36 ms, p95 1.85 ms, max 1.86 ms | **pass** |
+| Cold preparation p95 ≤ 500 ms | No cold-path preparation was timed separately (every timed `prepare` ran on the already-running child). The slowest `prepare` was 1.86 ms. | **unobserved** |
+| Admission transaction p95 ≤ 100 ms (single caller, as pre-registered) | `dispatch`: n=20, median 1.32 ms, p95 1.75 ms, max 1.75 ms | **pass** (single caller) |
+| Every blocked path blocked at 0 tokens | Guard probe (`haiku#high`, `guard_variant`) and pending probe (`attach_required`): 2 of 2 blocked, 0 sent. The 1 off-route request recorded was the guard probe, not sent. No unexpected title occurred to block. | **pass** (n=2) |
+| Zero interactive-session disturbance; the user's directories unchanged | No interactive session was run. The user's OpenCode config, data, state and cache showed 0 unexpected changes (2 desktop-app churn entries in `~/.local/share/opencode`). Report-only: `~/.claude` had 22 entries added, 2 changed and 2 removed (Claude CLI session state), and `~/.claude.json` changed. Project HEAD, the full porcelain status and `.git/info/exclude` were identical before and after. | **pass** for the directories and the project; interactive sessions **unobserved** |
+
+Other per-operation timings, all n=20:
+
+| Operation | Median | p95 | Max |
+|---|---|---|---|
+| `health` | 1.69 ms | 2.61 ms | 2.62 ms |
+| `attach` | 1.72 ms | 2.35 ms | 2.36 ms |
+| Shim check (`qual-pre` → `qual-post`) | 0.84 ms | 1.18 ms | 7.16 ms |
+| `record complete` | 1.78 ms | 2.35 ms | 2.37 ms |
+
+The title request's shim time was 2.76 ms (n=1).
+
+- **Calls.** Pilot 23 of 28: attempt 1 spent 2, and attempt 2 sent 21 (20 requests and 1 title); both probes reserved 1 each and settled at 0. Qualification remains 9 of 14. No open reservations.
+- **Cleanup**, verified by the harness and checked again afterwards:
+  - no processes left; isolated directory removed;
+  - `.vibe-qual-canary/` removed; `.git/info/exclude` byte-identical;
+  - project HEAD and `git status --porcelain=v1 -z --untracked-files=all` identical;
+  - the production routing state was not touched.
+
+  The canary state remains, clean.
+
+**What the pilot does not show.**
+
+- It is not the pre-registered canary: it ran 20 admissions in one run rather than 60 over up to 7 days. Cutover stays blocked; replay has not met its 200-assignment minimum, and no production launcher is wired.
+- It is subscription-only, on `claude-agent/haiku#low`, with tiny tool-less prompts and explicit worker choices; neither the strategy table nor the ranker was used.
+- It ran one admission at a time on a dedicated canary ledger with a fixed synthetic window observation. The admission-transaction budget was measured with a single caller, not four.
+- Window telemetry is not observable on this host, so the call cap was the proxy for the per-window spend cap.
+- Cold preparation, interactive sessions, compaction, retries, subagent spawns and any failure path after admission were not exercised.

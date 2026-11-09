@@ -21,8 +21,8 @@
   },
   "pilot": {
    "cap": 28,
-   "spent": 2,
-   "remaining": 26,
+   "spent": 23,
+   "remaining": 5,
    "open_reservations": 0
   }
  },
@@ -189,6 +189,182 @@
    "purpose": "pilot",
    "cap": 28,
    "reason": "Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are"
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 1 (implementer, low)",
+   "reserved": 2,
+   "sent": 2,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 2 (reviewer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 3 (researcher, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 4 (implementer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 5 (reviewer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 6 (researcher, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 7 (implementer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 8 (reviewer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 9 (researcher, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 10 (implementer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 11 (reviewer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 12 (researcher, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 13 (implementer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 14 (reviewer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 15 (researcher, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 16 (implementer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 17 (reviewer, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 18 (researcher, medium)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 19 (implementer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "pilot",
+   "label": "admission 20 (reviewer, low)",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
   }
  ]
 }

@@ -99,6 +99,19 @@ The bounded pilot aborted at admission 1. The harness's accounting step raised a
   - The abort records only the exception type, not its location.
   - Latencies are recorded only for completed admissions.
 
+## Pilot canary, attempt 2 (completed)
+
+Harness `94f9e0e`, dedicated canary state, `claude-agent/haiku#low`: 20 of 20 admissions completed with no abort and no deviation.
+
+- **Settlement and status:** 20 window settlements with no charge, and a clean `status` at the end.
+- **Calls:** 21 sent (20 requests plus the one title of admission 1); pilot 23 of 28 in total.
+- **Accounting:** 0 re-reads and 0 `title_unaccounted`.
+- **Probes:** guard (`guard_variant`) and pending (`attach_required` by the shim) were both blocked at 0.
+- **Working tree and cleanup:** the working tree was unchanged throughout, and cleanup was verified.
+- **Latency:** routing operations through the persistent child had p95 between 1.75 and 2.61 ms.
+
+The per-criterion table is in the [validation results](smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort).
+
 ## Accepted deviations and follow-ups (recorded after the re-run)
 
 - **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.
