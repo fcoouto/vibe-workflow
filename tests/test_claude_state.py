@@ -160,10 +160,21 @@ class ClaudeStateTests(unittest.TestCase):
                  state="WORKING", reason="work", reference="user:1"))
         status = self.cli(["task", "status", "--client", "claude-code", "--session", "main"])
         self.assertEqual(status["task"]["state"], "WORKING")
-        # The state layer keeps evidence, delegation and retirement Codex-only; the CLI must not suggest otherwise.
-        for arguments in (["task", "retire"], ["evidence", "review", "prepare"], ["delegation", "plan"]):
+        # Retirement stays Codex-only, and so do Claude's workers, coordinators and continuations.
+        result = self.cli(["task", "retire"], identity, expected=1)
+        self.assertIn("supported native task client", result["error"])
+        for arguments in (["delegation", "coordinator", "reserve"], ["delegation", "workstreams", "status"],
+                          ["delegation", "workstreams", "prepare-continuation"]):
             result = self.cli(arguments, identity, expected=1)
-            self.assertIn("supported native task client", result["error"], arguments)
+            self.assertIn("Codex-only", result["error"], arguments)
+        status = self.cli(["delegation", "status", "--client", "claude-code", "--session", "main"])
+        self.assertEqual(status["assignments"], [])
+        # Review-side evidence and delegation controls are open to Claude; these empty requests fail on their own fields.
+        for arguments in (["evidence", "review", "prepare"], ["evidence", "review", "collect"], ["delegation", "plan"],
+                          ["delegation", "observe"], ["delegation", "reconcile"]):
+            result = self.cli(arguments, identity, expected=1)
+            self.assertNotIn("supported native task client", result["error"], arguments)
+            self.assertNotIn("Codex-only", result["error"], arguments)
         # Evidence plan, check, verify and status are open to Claude; this empty request fails on its own fields.
         result = self.cli(["evidence", "plan"], identity, expected=1)
         self.assertNotIn("supported native task client", result["error"])

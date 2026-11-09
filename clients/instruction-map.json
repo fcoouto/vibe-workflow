@@ -2,11 +2,15 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "49a35244d41dc2a6efed43662c9a85aa3af2e357da29ed9f203612b7669aced8",
+      "sha256": "2545a13ce1ffe4a3ebd546432091b43f6a131055ea6090a48d5b6639bcc68978",
       "ranges": [
         [
           1,
-          50
+          43
+        ],
+        [
+          44,
+          62
         ]
       ]
     },
@@ -51,7 +55,7 @@
       ]
     },
     "clients/delegation.md": {
-      "sha256": "03d8c561fe555459ecaccd5c032d2675e34d45b68b0e9dc3dddf0ab671544251",
+      "sha256": "853122a45fa5bdbabe0cda6d2db3efa412e59d1a291b3943abcc27b11e23fb0f",
       "ranges": [
         [
           1,
@@ -254,18 +258,18 @@
       ]
     },
     "clients/runtime.md": {
-      "sha256": "5df1135201214cdfdca0a2e6cfb045a06d79b13a385a6f81196e2c54910174bf",
+      "sha256": "6d9e3a6223bf39dbd76ff1f7bcf687130b32e71967fd964cec8e74920f760eb5",
       "ranges": [
         [
           1,
-          45
+          43
         ],
         [
-          46,
-          95
+          44,
+          86
         ],
         [
-          96,
+          87,
           100
         ]
       ]

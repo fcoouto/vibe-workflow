@@ -31,7 +31,7 @@ Independent review, 8 November 2026. Package-level only; no native Claude run wa
 | P10 | Bash truncation notice | X: Codex exec marker; Claude's Bash response is an object | — |
 | S1, S2 | Runtime scope gates in `startup.py`; Claude orientation line | N | after N4 |
 | S3 | Client choice in task, evidence, delivery, delegation and doctor controls | N | S3 |
-| S4 | `DONE`, `revalidate_ready`, evidence on Claude records | N; review-requiring plans stay unsatisfiable until N1 | S4 |
+| S4 | `DONE`, `revalidate_ready`, evidence on Claude records | N; review-requiring plans stay unsatisfiable until the D6 review route (package level) | S4 |
 | S5 | `doctor` | N: `claude --version`, `--init-only`, plugin validation; `claude doctor` is unverified | S5 |
 | S6 | Title Sync | N for the parent title; U for child titles and mid-turn writes | S6 |
 | N1, N2 | Review collection, worker observation and dispatch controls | N via a registered `SubagentStop`/`SubagentStart` | S7 |
@@ -51,8 +51,7 @@ Missed by the first matrix: **M1** `PostToolUseFailure` invalidation (N, in S1);
 - **N4 qualification** *stage 1 implemented*: a real receipt from Claude's own hook event stream activates a qualification-only scope with only `startup-context` verified. Managed successors for pre-tool, post-tool and stop behavior are not implemented.
 - **S3 task controls** (`start`, `update`, `status`, `title`) *implemented*; **S4 evidence** *implemented at package level*: plan, check, reconcile, verify, cleanup and status work for Claude and `DONE` is revalidated; review-requiring plans stay unsatisfiable. Delegation and retirement stay refused. **Scope of that claim:** it holds on scopes without a capability projection (fixtures). A real scope with a stage-1 receipt refuses `task-start`, `task-patch`, `check-run` and `verify-completion` until their capabilities are verified (observed), so Claude cannot yet complete work in a real qualified project.
 - **S5 doctor** *implemented*: version, installed and enabled state, hook locks; hook trust and execution cannot be observed, so a healthy result exits 2.
-- **N1/N2 observation source** *implemented*: hook-recorded spawn chains and collectors for the review receipt and worker facts. *Not implemented:* the D6 ledger integration (guidance, routes, `_prepare_native`, receipt pins, delegation CLI), then M3.
-- **N7, then M5.**
+- **N1/N2 observation source** *implemented*: hook-recorded spawn chains and collectors for the review receipt and worker facts. **D6 ledger integration for review** *implemented at package level* (see [Claude Code](../clients/claude-code.md#native-review-through-the-delegation-ledger)): a route table in `runtime/native_routes.py`, Claude discovery, observation and collection in `runtime/adapters/claude_delegation.py`, the review-side delegation and evidence CLI, and surface-agnostic guidance for `claude-code-cli` (N7 for review). It runs on fixture scopes only: a real stage-1 scope has no verified `native-review` capability. Claude workers, Workstreams, coordinators, continuations, cooperative completion, M3 writer retirement and M5 external routes are *not implemented*.
 - **S6 parent title** *implemented*. Native finding: Claude delivers and returns a hook-set title but strips the leading `U+FFFB`, so the transport delivers without it and canonicalizes observations; an exact-equality acknowledgment would have paused every title as a manual rename.
 - **D1** with every slice.
 

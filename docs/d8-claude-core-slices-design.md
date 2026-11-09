@@ -1,6 +1,6 @@
 # D8: design for the remaining core slices
 
-Proposal · 8 November 2026 · **Awaiting approval before implementation.** Slices S1, S3, S5 and S6 of the [parity plan](d8-claude-parity-plan.md) are implemented. The slices below change the evidence, delegation and setup-qualification owners (about 20,000 lines of fail-closed code). They depend on one another and need decisions that the code cannot make, so each is proposed here with its native facts, approach, risks and tests.
+Proposal · 8 November 2026 · **Approved; implementation status is in the parity plan.** Slices S1, S3, S5 and S6 of the [parity plan](d8-claude-parity-plan.md) are implemented. The slices below change the evidence, delegation and setup-qualification owners (about 20,000 lines of fail-closed code). They depend on one another and need decisions that the code cannot make, so each is proposed here with its native facts, approach, risks and tests.
 
 ## Native facts observed on Claude Code 2.1.311
 

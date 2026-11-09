@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 
-from runtime import state
+from runtime import native_routes, state
 from runtime.startup import MAX_INPUT, StartupError, AcceptedScope, ProjectScope, RuntimeSettings, json_object, policy_digest, _canonical_freeze, _canonical_plain
 
 VERSION = 1
@@ -5762,8 +5762,7 @@ def _review_quality_matches(scope, attempt, record, collected=None, *, context=N
         actual, receipt = latest['receipt'], collected['receipt']
         if actual is None or actual['turn_status'] != 'completed' or not isinstance(latest['result'], str):
             return False
-        correspondence = dict(reviewer_id='worker_id', review_turn_id='worker_turn_id', report_item_id='result_item_id',
-            report_digest='result_digest', requested_model='spawn_observed_model', requested_effort='spawn_observed_effort')
+        correspondence = native_routes.REVIEW_CORRESPONDENCE | native_routes.REVIEW_REQUESTED[record['owner']['client']]
         _report(collected['report'], attempt)
         return (receipt['assignment_digest'] == attempt['assignment_digest'] and
             receipt['candidate_digest'] == attempt['candidate_digest'] and
@@ -5779,7 +5778,7 @@ def _review_quality_matches(scope, attempt, record, collected=None, *, context=N
 
 
 def collect_review(scope, request):
-    _request(request, ('attempt_id', 'parent_turn_id', 'spawn_item_id'), codex_only=True)
+    _request(request, ('attempt_id', 'parent_turn_id', 'spawn_item_id'))
     for key in ('attempt_id', 'parent_turn_id', 'spawn_item_id'):
         state._text(request[key], key)
     with state._database(scope) as db:
@@ -5794,15 +5793,14 @@ def collect_review(scope, request):
     latest = history[0][1] if history else None
     _require(latest is not None and latest['status'] == 'observed' and latest['error'] is None and latest['conflict'] is None and
         latest['receipt'] is not None and latest['receipt']['turn_status'] == 'completed', 'Review lifecycle is not exactly observed and complete')
-    from runtime.adapters.codex import collect_native_review
-    observed = collect_native_review(scope, attempt['id'], request['parent_turn_id'], request['spawn_item_id'])
+    observed = native_routes.collector(latest['receipt']['client_surface'])(scope, attempt['id'], request['parent_turn_id'], request['spawn_item_id'])
     state._fields(observed, ('receipt', 'report'))
     receipt = observed['receipt']
     state._fields(receipt, ('version', 'mechanism', 'native_version', 'parent_session_id', 'parent_turn_id', 'spawn_item_id',
                            'reviewer_id', 'review_turn_id', 'report_item_id', 'assignment_digest', 'candidate_digest',
                            'report_digest', 'requested_model', 'requested_effort'), ('task_name', 'agent_path', *delegation.VERSION_PROVENANCE_FIELDS))
     delegation._validate_version_provenance(receipt)
-    _require(type(receipt['version']) is int and receipt['version'] == VERSION and receipt['mechanism'] in {'codex-persisted-history', 'codex-native-agent-path', 'codex-native-collab-call'} and
+    _require(type(receipt['version']) is int and receipt['version'] == VERSION and receipt['mechanism'] in native_routes.REVIEW_MECHANISMS and
              receipt['parent_session_id'] == request['session_id'] and receipt['parent_turn_id'] == request['parent_turn_id'] and
              receipt['spawn_item_id'] == request['spawn_item_id'] and receipt['reviewer_id'] != request['session_id'] and
              receipt['assignment_digest'] == attempt['assignment_digest'] and receipt['candidate_digest'] == attempt['candidate_digest'],
@@ -5810,7 +5808,7 @@ def collect_review(scope, request):
     if receipt['mechanism'] == 'codex-native-agent-path':
         _require(receipt.get('task_name') == attempt['task_name'] and isinstance(receipt.get('agent_path'), str)
                  and receipt['agent_path'].split('/')[-1] == attempt['task_name'], 'Native prepared task marker is unverified')
-    elif receipt['mechanism'] == 'codex-native-collab-call':
+    elif receipt['mechanism'] != 'codex-persisted-history':
         _require(receipt.get('task_name') == attempt['task_name'] and 'agent_path' in receipt,
                  'Native prepared collaboration assignment is unverified')
         if receipt['agent_path'] is not None:
@@ -5827,7 +5825,7 @@ def collect_review(scope, request):
 
 
 def assess_review(scope, request):
-    _request(request, ('attempt_id', 'assessment'), codex_only=True)
+    _request(request, ('attempt_id', 'assessment'))
     with state._database(scope) as db:
         task = _task(db, scope, request)
         attempt = deepcopy(next((a for a in task.get('evidence', {}).get('attempts', []) if a['id'] == request['attempt_id']), None))

@@ -188,6 +188,14 @@ def chain(scope, session_id, agent_id):
     return dict(session_id=session_id, agent_id=agent_id, spawn=spawn, start=start, stop=stop)
 
 
+def agent_for_spawn(scope, session_id, prompt_id, tool_use_id):
+    """The one agent a given Agent tool call spawned, or None when the spool does not show exactly one."""
+    agents = (_load(_path(scope, session_id)) or {}).get("agents", {})
+    found = [agent for agent, entry in agents.items() if not entry.get("conflict") and "spawn" in entry
+             and entry["spawn"]["tool_use_id"] == tool_use_id and entry["spawn"]["prompt_id"] == prompt_id]
+    return found[0] if len(found) == 1 else None
+
+
 def _chain_for(scope, session_id, agent_id, marker):
     verified = chain(scope, session_id, agent_id)
     if verified is None:
@@ -210,10 +218,12 @@ def observe_worker(scope, *, session_id, agent_id, marker, native_version):
 
 
 def collect_review(scope, *, session_id, agent_id, marker, attempt_id, assignment_digest, candidate_digest,
-                   coverage, native_version):
+                   coverage, native_version, requested_model, requested_effort):
     """The receipt and report contract `collect_native_review` returns, from a complete recorded chain."""
     verified = _chain_for(scope, session_id, agent_id, marker)
     spawn, stop = verified["spawn"], verified["stop"]
+    if spawn["requested_model"] != requested_model:
+        raise StartupError("The reviewer was spawned with a different model than the prepared assignment")
     try:
         report = json_object(stop["message"].strip().encode("utf-8"), limit=MAX_REPORT)
     except (StartupError, ValueError):
@@ -230,6 +240,5 @@ def collect_review(scope, *, session_id, agent_id, marker, attempt_id, assignmen
                    spawn_item_id=spawn["tool_use_id"], reviewer_id=agent_id, review_turn_id=agent_id,
                    report_item_id=stop["message_sha256"], assignment_digest=assignment_digest,
                    candidate_digest=candidate_digest, report_digest=stop["message_sha256"],
-                   requested_model=spawn["requested_model"], requested_effort=None,
-                   spawn_observed_model=spawn["resolved_model"])
+                   requested_model=requested_model, requested_effort=requested_effort)
     return dict(receipt=receipt, report=report)

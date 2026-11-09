@@ -118,15 +118,14 @@ class ClaudeEvidenceTests(unittest.TestCase):
         self.assertNotEqual(self.status()["task"]["state"], "DONE")
         self.assertTrue(any("review" in str(blocker).lower() for blocker in result["blockers"]), result["blockers"])
 
-    def test_review_and_worker_controls_and_linked_plans_refuse_for_claude(self):
+    def test_workers_and_linked_plans_refuse_for_claude_and_review_has_its_own_tests(self):
+        # Native review for Claude lives in test_claude_delegation; workers and linked plans stay Codex-only.
+        from runtime import delegation
         self.plan(review=True)
-        prepare = dict(dispatch_id="d", job_id="j", selection={}, control_observation={}, discovery_expectation={},
-                       guidance={}, resource_units=1, coverage={}, criteria=[], assignment={})
-        for call, request in ((self.api.prepare_review, prepare),
-                              (self.api.collect_review, dict(attempt_id="a", parent_turn_id="t", spawn_item_id="s")),
-                              (self.api.assess_review, dict(attempt_id="a", assessment={}))):
-            with self.subTest(call.__name__), self.assertRaisesRegex(Exception, "Unsupported task client"):
-                call(self.scope, self.request(**request))
+        brief = dict(dispatch_id="d", job_id="j", selection={}, control_observation={}, discovery_expectation={},
+                     guidance={}, resource_units=1, brief={})
+        with self.assertRaisesRegex(Exception, "Unsupported task client"):
+            delegation._prepare_native(self.scope, self.request(**brief), role="worker")
         with patch.object(self.api, "_plan", return_value=dict(version=2)), \
                 self.assertRaisesRegex(Exception, "Codex client"):
             self.api.plan_evidence(self.scope, self.request(plan={}))
