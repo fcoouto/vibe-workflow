@@ -217,6 +217,8 @@ the selected checkout. Other-provider/local choices retain priority.
 
 ## Optional local checks
 
+Run these from a checkout of this repository; installed packages may omit `tests/`.
+
 ```sh
 python3 -B -m unittest tests.test_usage_budget tests.test_usage_routing tests.test_usage_settings tests.test_smart_balance tests.test_openai_api tests.test_usage_admission tests.test_usage_live
 ```

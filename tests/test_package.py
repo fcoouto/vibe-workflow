@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 from scripts import package
@@ -16,7 +17,8 @@ PACKAGE = Path(__file__).resolve().parents[1]
 def tracked():
     output = subprocess.run(["git", "-C", str(PACKAGE), "ls-files", "-z"], check=True,
                             capture_output=True).stdout.decode()
-    return {name for name in output.split("\0") if name and (PACKAGE / name).is_file()}
+    return {name for name in output.split("\0")
+            if name and (PACKAGE / name).is_file() and not name.startswith("tests/")}
 
 
 def exported(root):
@@ -33,12 +35,18 @@ class BuildTests(unittest.TestCase):
     def test_exports_only_tracked_files_and_validates(self):
         report = package.build(PACKAGE, self.output)
         self.assertEqual(exported(self.output), tracked())
-        for ignored in (".git", ".superpowers", ".vibe-workflow", "__pycache__"):
+        for ignored in (".git", ".superpowers", ".vibe-workflow", "__pycache__", "tests"):
             self.assertFalse(any(part == ignored for path in exported(self.output)
                                  for part in Path(path).parts), ignored)
         self.assertEqual(report["validation"], "passed")
         self.assertEqual(report["files"], len(tracked()))
         self.assertEqual(report["output"], str(self.output))
+
+    def test_export_fits_the_codex_bundle_scan(self):
+        from runtime import setup_observation
+        package.build(PACKAGE, self.output)
+        budget = {"paths": 0, "bytes": 0, "deadline": time.monotonic() + 30}
+        self.assertTrue(setup_observation.plugin_content_hash(self.output, budget).startswith("sha256:"))
 
     def test_rebuild_replaces_previous_build_and_removes_leftovers(self):
         package.build(PACKAGE, self.output)
