@@ -39,6 +39,7 @@ class ProbeServer(FakeOpenCode):
                                dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
                                dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")]
         self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
+        self.oauth_extra = {}  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -257,8 +258,8 @@ class ProbeServer(FakeOpenCode):
             if self.oauth_polls <= self.oauth_pending_polls or self.oauth_result == "never":
                 return 200, dict(data=dict(status="pending")), 1.0
             self.connected = self.oauth_result == "complete"
-            return 200, dict(data=dict(status=self.oauth_result,
-                                       access="tok-not-real", refresh="ref-not-real", id_token="idt-not-real")), 1.0
+            return 200, dict(data=dict(dict(status=self.oauth_result, access="tok-not-real", refresh="ref-not-real",
+                                            id_token="idt-not-real"), **self.oauth_extra)), 1.0
         if parts[3:5] == ["connect", "oauth"] and method == "DELETE":
             self.cancelled.append(parts[5])
             return 204, None, 1.0

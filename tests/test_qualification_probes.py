@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import unittest
+from contextlib import redirect_stderr
+import io
 from unittest.mock import patch
 
 from tests.qualification import chatgpt, probe_stages, safety
@@ -421,7 +423,19 @@ def gpt(model_id, variants=("low", "medium"), cost=None, provider="openai", **ex
 
 
 class ChatGPTMethodTests(StageHarness):
-    connect = ChatGPTTests.connect
+    def connect(self, **knobs):
+        self.connect_run = None
+        original = self.probe_run
+
+        def keep(*args, **kwargs):
+            made = original(*args, **kwargs)
+            self.connect_run = made[0]
+            return made
+        self.probe_run = keep
+        try:
+            return ChatGPTTests.connect(self, **knobs)
+        finally:
+            self.probe_run = original
 
     def test_the_sign_in_waits_for_the_integration_to_register(self):
         run, ledger, server, announced, state_file, outcome = self.connect(integration_pending=3)
@@ -438,6 +452,53 @@ class ChatGPTMethodTests(StageHarness):
             self.connect(integration_pending=10 ** 6)
         self.assertIn("HTTP 404", str(caught.exception))
 
+    def refused_sign_in(self, result, extra):
+        with self.assertRaises(safety.Blocker) as caught:
+            self.connect(oauth_result=result, oauth_extra=extra)
+        run = self.connect_run
+        text = str(caught.exception) + json.dumps(run.output(run.results))
+        for secret in ("tok-not-real", "ref-not-real", "idt-not-real", "dev-code-not-real", "https://"):
+            self.assertNotIn(secret, text)
+        return str(caught.exception), run.results["stages"]["chatgpt"]["signin"]
+
+    def test_a_refused_sign_in_keeps_its_reason(self):
+        message, signin = self.refused_sign_in("failed", dict(message="subscription_sharing_user_not_eligible"))
+        self.assertIn("failed: subscription_sharing_user_not_eligible", message)
+        self.assertEqual(signin, dict(status="failed", error=dict(message="subscription_sharing_user_not_eligible"),
+                                      keys=["access", "id_token", "message", "refresh", "status"]))
+        message, signin = self.refused_sign_in("error", dict(code="subscription_sharing_user_not_eligible", reason="plan"))
+        self.assertEqual(signin["error"], dict(code="subscription_sharing_user_not_eligible", reason="plan"))
+        self.assertIn("code=subscription_sharing_user_not_eligible", message)
+
+    def test_an_unknown_refusal_shape_records_only_key_names(self):
+        message, signin = self.refused_sign_in("weird", dict(detail=dict(inner="x"), count=3))
+        self.assertEqual(signin["error"], {})
+        self.assertEqual(signin["keys"], ["access", "count", "detail", "id_token", "refresh", "status"])
+
+    def test_secret_looking_refusal_fields_are_never_recorded(self):
+        message, signin = self.refused_sign_in("failed", dict(
+            message="see https://auth.openai.com/oauth?code=abc", error="bad tok-not-real", device_code="dev-code-not-real",
+            reason="r" * 500))
+        self.assertNotIn("message", signin["error"])  # a URL is dropped whole
+        self.assertNotIn("device_code", signin["error"])
+        self.assertEqual(len(signin["error"]["reason"]), 200)
+        self.assertNotIn("tok-not-real", signin["error"]["error"])
+
+    def test_the_registration_wait_uses_short_requests_and_a_total_deadline(self):
+        run, ledger, server = self.probe_run(purpose="chatgpt", model=None)
+        original, timeouts, ticks = server.request, [], iter(range(0, 10 ** 6, 7))
+
+        def slow(method, path, body=None, query=None, timeout=60):
+            timeouts.append(timeout)
+            raise TimeoutError("no answer")
+        server.request = slow
+        status, methods, polls = chatgpt.wait_integration(run, "openai", chatgpt.METHOD_ID, sleep=lambda s: None,
+                                                          clock=lambda: next(ticks))
+        self.assertEqual((status, methods), (None, []))
+        self.assertTrue(timeouts and max(timeouts) <= chatgpt.REQUEST_S, timeouts)
+        self.assertLessEqual(len(timeouts), chatgpt.REGISTER_S // 7 + 2)
+        server.request = original
+
     def test_the_methods_diagnostic_lists_without_signing_in_or_reserving(self):
         run, ledger, server = self.probe_run(purpose="chatgpt", model=None, integration_pending=2)
         run.chatgpt_methods = True
@@ -447,8 +508,8 @@ class ChatGPTMethodTests(StageHarness):
                                                       dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
                                                       dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")])
         self.assertEqual([p["http"] for p in found["openai"]["polls"]], [404, 200])
-        self.assertEqual(found["integrations"]["github-copilot"], ["device (oauth)"])
-        self.assertEqual(found["integrations"]["anthropic"], ["- (key)"])
+        self.assertEqual((found["integrations_count"], "integrations" in found), (4, False))  # openai only, plus a count
+        self.assertEqual(run.results["mode"], "chatgpt-methods")
         self.assertEqual((server.oauth_started, server.transmitted()), ([], []))
         self.assertEqual([e for e in ledger.export()["entries"] if e["kind"] == "reserve"], [])
         self.assertNotIn("cred_", json.dumps(run.results))
@@ -657,7 +718,10 @@ class ModeRefusalTests(Temp):
         for extra in (["--chatgpt"], ["--stages", "s33d"], ["--canary"], ["--keep"], ["--chatgpt-model", "auto"]):
             with self.subTest(extra=extra), patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
                     patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
-                self.assertEqual(live.main(base + ["--chatgpt-methods"] + extra), 2)
+                with redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(live.main(base + ["--chatgpt-methods"] + extra), 2)
+                if extra in (["--chatgpt"], ["--keep"]):
+                    self.assertIn("--chatgpt-methods", err.getvalue())
 
     def test_the_keep_warning_names_the_stored_logins(self):
         self.assertIn("ChatGPT", live.KEEP_WARNING)
