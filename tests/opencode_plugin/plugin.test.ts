@@ -1634,6 +1634,16 @@ test("descendants: complete is false, with one fixed reason, whenever the shim c
       t.state.failLookup = true
       await assertUntouched(t, "ses_unknown1")  // an undeterminable chain: it may have been this root's child
     }],
+    ["lineage_lookup_failed", {}, async (t) => {
+      // Every lookup answers, but the chain is longer than one question's 8 lookups: undetermined, so interactive.
+      const ctxSessions = t.ctx.session as any
+      const original = ctxSessions.get
+      ctxSessions.get = async ({ sessionID }: { sessionID: string }) => {
+        const depth = Number(sessionID.slice("ses_deep".length))
+        return { id: sessionID, ...(depth < 20 ? { parentID: `ses_deep${depth + 1}` } : {}) }
+      }
+      try { await assertUntouched(t, "ses_deep0") } finally { ctxSessions.get = original }
+    }],
     ["lineage_lookup_failed", { failedLookupMs: 60000 }, async (t) => {
       await t.detach()
       await t.attach(D("first1"))
