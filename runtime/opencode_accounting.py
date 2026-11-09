@@ -8,9 +8,12 @@ caller re-reads session and message state, and totals are always recomputed from
 
 Units stay separate: token classes, USD micro-units and quota fractions are never added or compared across units.
 A subscription route's cost is unknown: a provider's token-price estimate is not proof of out-of-pocket spend.
+On API routes OpenCode's cost is still only an estimate from a local price catalog (0 for unpriced models), so it
+is reported with source `estimate` and a zero cost for a request that used tokens is unknown.
 
-Wiring (S3.6b-2 and the launcher): at attempt end the launcher re-reads the attempt's session and its messages,
-normalizes them with the adapter and sends `usage_from_messages(...)["usage"]` in `record complete {usage}`.
+Wiring (S3.6b-2 and the launcher): once the attempt's sessions are idle, the launcher re-reads the root session, its
+spawned descendant sessions and all their messages, normalizes them with the adapter and sends
+`usage_from_messages(...)["usage"]` in `record complete {usage}`.
 Errors are AccountingError with a fixed reason that never includes payload text.
 """
 
@@ -20,12 +23,15 @@ from decimal import Decimal, ROUND_CEILING
 from runtime.adapters import opencode
 
 TOKEN_FIELDS = ("input", "output", "reasoning", "cache_read", "cache_write")  # usage_budget.TOKEN_FIELDS
-SOURCE = "host_message_totals"
+SOURCE = "host_message_totals"  # subscription routes: host token totals, no dollar cost
+ESTIMATE = "estimate"  # API routes: OpenCode's catalog-priced cost
 MAX_USAGE_REQUESTS = 32  # routing.MAX_USAGE_REQUESTS: one `record` usage report
 MAX_TOTAL = 2 ** 53 - 1  # usage_budget.MAX_INTEGER: the ledger's integer bound
 MAX_MESSAGES = 4096
 MAX_EVENTS = 4096
 MAX_AGGREGATES = 1024
+MAX_SESSIONS = 64  # the root and its descendant sessions in one attempt
+SESSION_KEYS = {"session_id", "messages", "tokens", "cost", "complete"}
 MAX_RECENT = 64  # sequence numbers remembered per aggregate to tell a duplicate from a conflict
 MAX_SECONDS = 10 ** 11  # an epoch-seconds reset above this looks like milliseconds
 KINDS = {"assistant": "primary", "compaction": "compaction"}  # message types that carry a model request's tokens
@@ -34,10 +40,14 @@ UNKNOWN_MODEL = "unknown"
 # Reasons that leave part of the session's tokens unattributed, so the title remainder and any dollar cost are unknown.
 COVERAGE = ("incomplete_coverage", "message_tokens_missing", "message_in_progress", "unknown_record",
             "unexpected_tokens")
+# Reasons that leave part of the attempt's spend unattributed, so every dollar cost is unknown.
+COST_BLOCKING = COVERAGE + ("title_unknown", "title_cost_inconsistent", "child_session_unaccounted",
+                            "tool_calls_dropped")
 REASONS = ("invalid input", "invalid message", "invalid session", "invalid tokens", "invalid cost",
            "invalid rate limit", "invalid event", "invalid tracker state", "invalid previous", "too many messages",
            "too many events", "too many aggregates", "too many routes", "total too large",
-           "conflicting duplicate message", "message from another session", "session mismatch")
+           "conflicting duplicate message", "message in two sessions", "session not in the attempt",
+           "session mismatch")
 RATE_UNITS = {"utilization": "fraction_0_1", "resets_at": "epoch_seconds", "observed_at": "epoch_ms"}
 ZERO = dict.fromkeys(TOKEN_FIELDS, 0)
 
@@ -120,9 +130,8 @@ def _message(record):
     if type(record) is not dict or record.get("schema") != opencode.SCHEMA or record.get("client") != opencode.CLIENT:
         _fail("invalid message")
     message_id = _name(record.get("message_id"), opencode.MESSAGE, "invalid message", nullable=False)
-    session_id = _name(record.get("session_id"), opencode.SESSION, "invalid message")
     if record.get("kind") == "unknown" and record.get("source") == "message":
-        return {"id": message_id, "session_id": session_id, "type": None, "unknown": True}
+        return {"id": message_id, "type": None, "unknown": True}
     if record.get("kind") != "message" or record.get("type") not in opencode.MESSAGE_TYPES:
         _fail("invalid message")
     requested = record.get("requested")
@@ -134,10 +143,16 @@ def _message(record):
     finish = record.get("finish")
     if finish is not None and (type(finish) is not str or len(finish) > opencode.MAX_TEXT):
         _fail("invalid message")
-    return {"id": message_id, "session_id": session_id, "type": record["type"], "unknown": False,
-            "requested": requested, "tokens": _tokens(record.get("tokens")), "cost": _cost(record.get("cost")),
+    calls = record.get("tool_calls") or []
+    if type(calls) is not list or len(calls) > opencode.MAX_ITEMS or any(type(call) is not dict for call in calls):
+        _fail("invalid message")
+    children = tuple(sorted({_name(call.get("child_session_id"), opencode.SESSION, "invalid message")
+                             for call in calls} - {None}))
+    return {"id": message_id, "type": record["type"], "unknown": False, "requested": requested,
+            "tokens": _tokens(record.get("tokens")), "cost": _cost(record.get("cost")),
             "created_ms": _count(record.get("created_ms"), "invalid message"),
             "completed_ms": _count(record.get("completed_ms"), "invalid message"), "finish": finish,
+            "children": children, "dropped": _count(record.get("tool_calls_dropped"), "invalid message") or 0,
             "has_rate_limit": record.get("rate_limit") is not None}
 
 
@@ -145,23 +160,28 @@ def _projection(message):
     tokens = message.get("tokens")
     return (message["type"], message.get("requested"), None if tokens is None else tuple(tokens.values()),
             message.get("cost"), message.get("created_ms"), message.get("completed_ms"), message.get("finish"),
-            message.get("session_id"))
+            message.get("children"), message.get("dropped"))
 
 
-def _scan(records, session_id, complete):
+def _terminal(message, idle_after):
+    """Finished: a completion time or finish reason, or an idle message created after it. The recorded compaction
+    message has neither of its own; the session's later idle message is the only sign that it ended."""
+    if message["completed_ms"] is not None or message["finish"] is not None:
+        return True
+    return message["created_ms"] is not None and idle_after is not None and idle_after > message["created_ms"]
+
+
+def _scan(records, complete):
     """One pass over a session's messages: validated, deduplicated, with every problem counted, never raised."""
     if type(records) is not list:
         _fail("invalid message")
     if len(records) > MAX_MESSAGES:
         _fail("too many messages")
-    seen, scan = {}, {"by_type": {}, "duplicates": 0, "conflicts": 0, "foreign": 0, "unknown_records": 0,
-                      "missing_tokens": 0, "in_progress": 0, "missing_model": 0, "unexpected_tokens": 0,
-                      "countable": [], "rate_limited": []}
+    seen, scan = {}, {"by_type": {}, "duplicates": 0, "conflicts": 0, "unknown_records": 0, "missing_tokens": 0,
+                      "in_progress": 0, "missing_model": 0, "unexpected_tokens": 0, "dropped": 0, "countable": [],
+                      "rate_limited": [], "children": set()}
     for record in records:
         message = _message(record)
-        if None not in (message["session_id"], session_id) and message["session_id"] != session_id:
-            scan["foreign"] += 1
-            continue
         if message["id"] in seen:
             if _projection(seen[message["id"]]) == _projection(message):
                 scan["duplicates"] += 1
@@ -173,6 +193,8 @@ def _scan(records, session_id, complete):
             scan["unknown_records"] += 1
             continue
         scan["by_type"][message["type"]] = scan["by_type"].get(message["type"], 0) + 1
+        scan["children"].update(message["children"])
+        scan["dropped"] += message["dropped"]
         if message["has_rate_limit"]:
             scan["rate_limited"].append(record)
         if message["type"] not in KINDS:
@@ -182,17 +204,18 @@ def _scan(records, session_id, complete):
         if not _known(message["tokens"]):
             scan["missing_tokens"] += 1
             continue
-        if message["type"] == "assistant" and message["completed_ms"] is None and message["finish"] is None:
-            scan["in_progress"] += 1
         if message["requested"] is None:
             scan["missing_model"] += 1
         scan["countable"].append(message)
+    idle_after = max((m["created_ms"] for m in seen.values() if m["type"] == "idle" and m["created_ms"] is not None),
+                     default=None)
+    scan["in_progress"] = sum(not _terminal(m, idle_after) for m in scan["countable"])
     scan["countable"].sort(key=lambda m: (m["created_ms"] is not None, m["created_ms"] or 0, m["id"]))
     scan["ids"] = sorted(seen)
     reasons = set()
     for reason, key in (("message_tokens_missing", "missing_tokens"), ("message_in_progress", "in_progress"),
                         ("unknown_record", "unknown_records"), ("unexpected_tokens", "unexpected_tokens"),
-                        ("model_unknown", "missing_model")):
+                        ("model_unknown", "missing_model"), ("tool_calls_dropped", "dropped")):
         if scan[key]:
             reasons.add(reason)
     if not complete:
@@ -232,11 +255,11 @@ def title_tokens(session_total, messages, complete=True):
     """Session total minus the sum of its messages, per token class: `{tokens, reason}`.
 
     `tokens` is None (unknown) when any class would go negative, the message list is not known to be complete
-    (paging gaps, `complete=False`), a message's tokens are missing or still growing, or the session total lacks a
-    class; `reason` names which. Messages from one session only; `session_id` binding is checked by the callers.
+    (paging gaps, `complete=False`), a message's tokens are missing or it has not finished, an unknown record or
+    tokens on a non-model message appear, or the session total lacks a class; `reason` names which.
     """
     _flag(complete, "invalid input")
-    scan = _scan(messages, None, complete)
+    scan = _scan(messages, complete)
     if scan["conflicts"]:
         _fail("conflicting duplicate message")
     tokens, reason, _ = _remainder(_tokens(session_total), scan)
@@ -253,65 +276,103 @@ def _request(kind, model, tokens, cost, receipt=None):
     return request
 
 
-def _grouped(requests):
+def _grouped(requests, by_route=True):
+    """Requests summed per (kind, model, variant), or per kind alone with model `unknown`; receipts dropped."""
     groups = {}
     for request in requests:
-        key = (request["kind"], request["model"], request.get("variant") or "")
+        key = (request["kind"], request["model"], request.get("variant") or "") if by_route else (request["kind"],)
         if key in groups:
             group = groups[key]
             group["tokens"] = _add(group["tokens"], request["tokens"])
             both = (group["cost_usd_micros"], request["cost_usd_micros"])
             group["cost_usd_micros"] = None if None in both else both[0] + both[1]
-        else:
+        elif by_route:
             groups[key] = {name: value for name, value in request.items() if name != "receipt"}
+        else:
+            groups[key] = _request(request["kind"], None, request["tokens"], None)
     return [groups[key] for key in sorted(groups)]
 
 
-@_guard
-def usage_from_messages(messages, session_total=None, *, session_id, funding="subscription", complete=True,
-                        session_cost=None):
-    """Account one session (one attempt) from its re-read, normalized messages and its session token total.
+def _api_cost(cost, tokens):
+    """A reported USD cost as micro-units, or None when it is no evidence: absent, or zero (or less) for a request
+    that used tokens. OpenCode computes the figure from a local price catalog and reports 0 for unpriced models."""
+    if cost is None or (cost <= 0 and any(tokens.values())):
+        return None
+    return _micros(cost)
 
-    Returns `{session_id, funding, usage, totals, title, message_ids, unknown, grouped, reported_cost, rate_limit}`;
-    `usage` is the S3.6a `record` usage object (`{source: host_message_totals, requests}`) or None when nothing was
-    requested. One request per assistant (`primary`) or compaction message, with its message id as `receipt`, plus one
-    `title` request for a non-zero session remainder (model `unknown`: no message records it). Above 32 requests they
-    are grouped by kind, model and variant, without receipts. Child (subagent) sessions are accounted separately.
-    Cost: `subscription` keeps every `cost_usd_micros` null; `api` passes each message's reported `cost` through as
-    ceiling micro-units and nulls every cost when any is missing or any tokens are unattributed. A message with a
-    `session_id` other than `session_id` is refused.
-    """
-    session_id = _session(session_id)
-    if funding not in FUNDING:
-        _fail("invalid input")
-    _flag(complete, "invalid input")
-    session_total, session_cost = _tokens(session_total), _cost(session_cost)
-    scan = _scan(messages, session_id, complete)
-    if scan["foreign"]:
-        _fail("message from another session")
+
+def _session_state(value, root=True):
+    if type(value) is not dict or not {"session_id", "messages"} <= set(value) <= (
+            SESSION_KEYS | {"children"} if root else SESSION_KEYS):
+        _fail("invalid session")
+    _flag(value.get("complete", True), "invalid session")
+    _cost(value.get("cost"))
+    children = value.get("children") or []
+    if type(children) is not list or len(children) >= MAX_SESSIONS:
+        _fail("invalid session")
+    return value, [_session_state(child, root=False)[0] for child in children]
+
+
+def _part(state):
+    """One session's scan, title remainder and session cost."""
+    session_id = _session(state["session_id"])
+    scan = _scan(state["messages"], state.get("complete", True))
     if scan["conflicts"]:
         _fail("conflicting duplicate message")
-    title, title_reason, _ = _remainder(session_total, scan)
-    unknown = set(scan["reasons"])
-    if title is None:
-        unknown |= {"title_unknown", title_reason}
-    requests = [_request(KINDS[m["type"]], m["requested"], m["tokens"],
-                         None if m["cost"] is None else _micros(m["cost"]), m["id"]) for m in scan["countable"]]
-    counted = scan["messages_total"]
-    if title is not None:
-        counted = _add(counted, title)
-        message_cost = [m["cost"] for m in scan["countable"]]
-        title_cost = None if session_cost is None or None in message_cost else session_cost - sum(message_cost)
-        if any(title.values()) or (funding == "api" and title_cost is not None and title_cost != 0):
-            requests.append(_request("title", None, title, None if title_cost is None or title_cost < 0
-                                     else _micros(title_cost)))
-    reported = [m["cost"] for m in scan["countable"] if m["cost"] is not None]
+    total = _tokens(state.get("tokens"))
+    title, reason, _ = _remainder(total, scan)
+    return {"session_id": session_id, "scan": scan, "total": total, "cost": _cost(state.get("cost")),
+            "title": title, "title_reason": reason}
+
+
+def _attempt(root, children, funding):
+    """Account a root session and the descendant sessions its spawns created (one attempt)."""
+    if sum(len(state["messages"]) if type(state["messages"]) is list else 0 for state in [root] + children) \
+            > MAX_MESSAGES:
+        _fail("too many messages")
+    parts = [_part(root)] + sorted((_part(child) for child in children), key=lambda part: part["session_id"])
+    ids = [part["session_id"] for part in parts]
+    if len(set(ids)) != len(ids):
+        _fail("invalid session")
+    owners = {}
+    for part in parts:
+        for message_id in part["scan"]["ids"]:
+            if owners.setdefault(message_id, part["session_id"]) != part["session_id"]:
+                _fail("message in two sessions")
+    spawned = set().union(*(part["scan"]["children"] for part in parts))
+    if set(ids[1:]) - spawned:
+        _fail("session not in the attempt")
+    unknown = set().union(*(part["scan"]["reasons"] for part in parts))
+    if spawned - set(ids):
+        unknown.add("child_session_unaccounted")
+    messages, titles = [], []
+    for part in parts:
+        countable = part["scan"]["countable"]
+        messages += [((m["created_ms"] is not None, m["created_ms"] or 0, m["id"]),
+                      _request(KINDS[m["type"]], m["requested"], m["tokens"], _api_cost(m["cost"], m["tokens"]),
+                               m["id"])) for m in countable]
+        title = part["title"]
+        if title is None:
+            unknown |= {"title_unknown", part["title_reason"]}
+            continue
+        costs = [m["cost"] for m in countable]
+        delta = None if part["cost"] is None or None in costs else part["cost"] - sum(costs)
+        if any(title.values()):
+            titles.append(_request("title", None, title, _micros(delta) if delta is not None and delta > 0 else None))
+        elif funding == "api" and delta is not None and delta != 0:
+            if delta < 0:
+                unknown.add("title_cost_inconsistent")
+            else:
+                titles.append(_request("title", None, title, _micros(delta)))
+    requests = [request for _, request in sorted(messages, key=lambda item: item[0])] + titles
     usd = None
     if funding == "api":
-        if unknown & ({"title_unknown"} | set(COVERAGE)) or any(r["cost_usd_micros"] is None for r in requests):
+        if unknown & set(COST_BLOCKING) or any(r["cost_usd_micros"] is None for r in requests):
             unknown.add("cost_unknown")
         else:
             usd = sum(r["cost_usd_micros"] for r in requests)
+            if usd > MAX_TOTAL:
+                _fail("total too large")
     if usd is None:
         for request in requests:
             request["cost_usd_micros"] = None
@@ -319,53 +380,118 @@ def usage_from_messages(messages, session_total=None, *, session_id, funding="su
     if grouped:
         requests = _grouped(requests)
         if len(requests) > MAX_USAGE_REQUESTS:
-            _fail("too many routes")
+            requests, usd = _grouped(requests, by_route=False), None
+            unknown |= {"too_many_routes"} | ({"cost_unknown"} if funding == "api" else set())
     if not requests:
         unknown.add("no_requests")
-    if usd is not None and usd > MAX_TOTAL:
-        _fail("total too large")
-    latest = max(scan["rate_limited"], key=lambda r: (r.get("completed_ms") or r.get("created_ms") or 0,
-                                                      r["message_id"]), default=None)
-    return {"session_id": session_id, "funding": funding,
-            "usage": {"source": SOURCE, "requests": requests} if requests else None,
-            "totals": {"counted": counted, "messages": scan["messages_total"], "session": session_total,
-                       "usd_micros": usd},
-            "title": {"state": "unknown" if title is None else "known" if any(title.values()) else "zero",
-                      "tokens": title, "reason": title_reason},
-            "message_ids": scan["ids"], "unknown": sorted(unknown), "grouped": grouped,
+    return parts, requests, usd, unknown, grouped
+
+
+def _title(part):
+    title = part["title"]
+    return {"state": "unknown" if title is None else "known" if any(title.values()) else "zero", "tokens": title,
+            "reason": part["title_reason"]}
+
+
+@_guard
+def usage_from_messages(messages, session_total=None, *, session_id, funding="subscription", complete=True,
+                        session_cost=None, children=None):
+    """Account one attempt from its re-read, normalized root session and the descendant sessions it spawned.
+
+    `children` lists descendant session states `{session_id, messages, tokens?, cost?, complete?}`; each must be
+    spawned by a subagent call in an included session, and a spawned session that is not included leaves the
+    attempt's cost unknown (`child_session_unaccounted`). Messages are bound to the session state that lists them;
+    a message id under two sessions is refused.
+
+    Returns `{session_id, funding, usage, totals, title, sessions, message_ids, unknown, grouped, reported_cost,
+    rate_limit}`; `usage` is the S3.6a `record` usage object or None when nothing was requested. One request per
+    assistant (`primary`) or compaction message with its message id as `receipt`, in creation order, plus one `title`
+    request per session with a non-zero remainder (model `unknown`). Above 32 requests they are grouped by route,
+    without receipts; above 32 routes by kind, with every cost unknown (`too_many_routes`).
+
+    Cost: `subscription` keeps every `cost_usd_micros` null (source `host_message_totals`). `api` reports OpenCode's
+    figure with source `estimate` (S3.6a charges an estimate at no less than the admitted estimate): each message's
+    `cost` as ceiling micro-units, the title's as the session cost minus its messages'. A zero or missing cost for a
+    request that used tokens, a missing session cost for a title, or any unattributed tokens make every cost null.
+    """
+    root, kids = _session_state({"session_id": session_id, "messages": messages, "tokens": session_total,
+                                 "cost": session_cost, "complete": complete, "children": children or []})
+    return _usage(root, kids, funding)
+
+
+def _usage(root, children, funding):
+    if funding not in FUNDING:
+        _fail("invalid input")
+    parts, requests, usd, unknown, grouped = _attempt(root, children, funding)
+    counted, messages_total, sessions = dict(ZERO), dict(ZERO), []
+    for part in parts:
+        part_counted = part["scan"]["messages_total"] if part["title"] is None else \
+            _add(part["scan"]["messages_total"], part["title"])
+        counted, messages_total = _add(counted, part_counted), _add(messages_total, part["scan"]["messages_total"])
+        sessions.append({"session_id": part["session_id"], "counted": part_counted, "title": _title(part)})
+    totals = [part["total"] for part in parts]
+    session_total = None
+    if all(_known(total) for total in totals):
+        session_total = dict(ZERO)
+        for total in totals:
+            session_total = _add(session_total, total)
+    countable = [m for part in parts for m in part["scan"]["countable"]]
+    reported = [m["cost"] for m in countable if m["cost"] is not None]
+    rate_limited = [record for part in parts for record in part["scan"]["rate_limited"]]
+    latest = max(rate_limited, key=lambda r: (_time(r), r["message_id"]), default=None)
+    return {"session_id": parts[0]["session_id"], "funding": funding,
+            "usage": {"source": ESTIMATE if funding == "api" else SOURCE, "requests": requests} if requests else None,
+            "totals": {"counted": counted, "messages": messages_total, "session": session_total, "usd_micros": usd,
+                       "usd_basis": "estimate" if usd is not None else None},
+            "title": _title(parts[0]), "sessions": sessions,
+            "message_ids": sorted(m for part in parts for m in part["scan"]["ids"]), "unknown": sorted(unknown),
+            "grouped": grouped,
             "reported_cost": {"usd_micros": _micros(sum(reported)), "messages": len(reported),
                               "basis": "provider_estimate"} if reported else None,
             "rate_limit": None if latest is None else rate_limit_observation(latest)}
 
 
-def _session_state(value):
-    if type(value) is not dict or not {"session_id", "messages"} <= set(value) <= {
-            "session_id", "messages", "tokens", "cost", "complete"}:
+@_guard
+def normalize_session(session):
+    """`{session_id, parent_session_id, tokens, cost}` from a `session.get` record, its token total and cost
+    validated by the adapter's own message normalizer (the adapter has no session normalizer)."""
+    if type(session) is not dict:
         _fail("invalid session")
-    complete = value.get("complete", True)
-    _flag(complete, "invalid session")
-    _cost(value.get("cost"))
-    return value
+    try:
+        normalized = opencode.normalize_message({"type": "assistant", "tokens": session.get("tokens"),
+                                                 "cost": session.get("cost")})
+    except opencode.AdapterError:
+        _fail("invalid session")
+    return {"session_id": _session(session.get("id")),
+            "parent_session_id": _name(session.get("parentID"), opencode.SESSION, "invalid session"),
+            "tokens": normalized["tokens"], "cost": normalized["cost"]}
 
 
 @_guard
 def consistency_report(session_state):
-    """Bounded diagnostics for a re-read session (`{session_id, messages, tokens?, cost?, complete?}`): counts of
-    message types, duplicates, conflicts, foreign or unknown records and missing fields, and whether the title
-    remainder is known. Inconsistencies are counted, not raised; ids, counts and field names only, never text."""
-    state = _session_state(session_state)
+    """Bounded diagnostics for a re-read session (`{session_id, messages, tokens?, cost?, complete?, children?}`):
+    counts of message types, duplicates, conflicts, unknown records and missing fields, spawned and included child
+    sessions, and whether the title remainder is known. Inconsistencies are counted, not raised; ids, counts and
+    field names only, never text."""
+    state, children = _session_state(session_state)
     session_id, complete = _session(state["session_id"]), state.get("complete", True)
-    scan = _scan(state["messages"], session_id, complete)
+    scan = _scan(state["messages"], complete)
     title, reason, negative = _remainder(_tokens(state.get("tokens")), scan)
-    if scan["conflicts"] or scan["foreign"]:
+    if scan["conflicts"]:
         title, reason = None, reason or "inconsistent_messages"
+    included = {_session(child["session_id"]) for child in children}
+    spawned = set(scan["children"])
+    for child in children:
+        spawned |= _scan(child["messages"], True)["children"]
     return {"session_id": session_id, "messages": len(state["messages"]), "by_type": dict(sorted(scan["by_type"].items())),
             "countable": len(scan["countable"]), "duplicates": scan["duplicates"],
-            "conflicting_duplicates": scan["conflicts"], "foreign_session": scan["foreign"],
-            "missing_tokens": scan["missing_tokens"], "in_progress": scan["in_progress"],
-            "unknown_records": scan["unknown_records"], "missing_model": scan["missing_model"], "complete": complete,
+            "conflicting_duplicates": scan["conflicts"], "missing_tokens": scan["missing_tokens"],
+            "in_progress": scan["in_progress"], "unknown_records": scan["unknown_records"],
+            "missing_model": scan["missing_model"], "complete": complete,
             "title": "unknown" if title is None else "known" if any(title.values()) else "zero",
-            "title_reason": reason, "negative_classes": negative, "rate_limit_messages": len(scan["rate_limited"])}
+            "title_reason": reason, "negative_classes": negative, "rate_limit_messages": len(scan["rate_limited"]),
+            "children_referenced": len(spawned), "children_included": len(included),
+            "children_unaccounted": len(spawned - included), "tool_calls_dropped": scan["dropped"]}
 
 
 def _previous(previous, session_id):
@@ -387,29 +513,32 @@ def _previous(previous, session_id):
 
 @_guard
 def reconcile_with_state(previous, session_state, *, funding="subscription", tracker=None):
-    """Resync after an event gap or at attempt end: recompute the session's accounting from freshly re-read state.
+    """Resync after an event gap or at attempt end: recompute the attempt's accounting from freshly re-read state
+    (`{session_id, messages, tokens?, cost?, complete?, children?}`, as for `usage_from_messages`).
 
-    `previous` is the last `usage_from_messages` result for the same session (or None). Returns `{accounting,
+    `previous` is the last `usage_from_messages` result for the same root session (or None). Returns `{accounting,
     changes, tracker}`; `changes` = `{tokens_delta, regressed, messages_added, messages_missing, usd_micros_delta}`
     against `previous`. Totals are recomputed from state, never accumulated from events, so repeating a resync
     changes nothing. A negative delta (`regressed`: a message deleted or reverted) is reported, never charged back.
-    When `tracker` (a `track_events` state) is given, the session's aggregate is re-baselined in the returned copy.
+    When `tracker` (a `track_events` state) is given, every included session is re-baselined in the returned copy.
     """
-    state = _session_state(session_state)
+    state, children = _session_state(session_state)
     session_id = _session(state["session_id"])
     before, before_ids, before_usd = _previous(previous, session_id)
-    result = usage_from_messages(state["messages"], state.get("tokens"), session_id=session_id, funding=funding,
-                                 complete=state.get("complete", True), session_cost=state.get("cost"))
+    result = _usage(state, children, funding)
     after = result["totals"]["counted"]
     delta = {field: after[field] - before[field] for field in TOKEN_FIELDS}
     now_ids, old_ids = set(result["message_ids"]), set(before_ids)
     usd = result["totals"]["usd_micros"]
+    if tracker is not None:
+        for session in result["sessions"]:
+            tracker = mark_resynced(tracker, session["session_id"])
     return {"accounting": result,
             "changes": {"tokens_delta": delta, "regressed": [field for field in TOKEN_FIELDS if delta[field] < 0],
                         "messages_added": len(now_ids - old_ids), "messages_missing": len(old_ids - now_ids),
                         "usd_micros_delta": None if usd is None or (previous is not None and before_usd is None)
                         else usd - (before_usd or 0)},
-            "tracker": None if tracker is None else mark_resynced(tracker, session_id)}
+            "tracker": tracker}
 
 
 def _aggregate(value):
@@ -530,6 +659,12 @@ def mark_resynced(state, aggregate_id):
     return {"aggregates": dict(sorted(aggregates.items()))}
 
 
+def _time(record):
+    """The record's observation time: its completion time when it has one, else its creation time."""
+    completed = record.get("completed_ms")
+    return record.get("created_ms") if completed is None else completed
+
+
 def _utilization(value):
     if value is None:
         return None
@@ -573,7 +708,7 @@ def rate_limit_observation(record):
     overage = limit.get("is_using_overage")
     if overage is not None and type(overage) is not bool:
         _fail("invalid rate limit")
-    observed = _count(record.get("completed_ms") or record.get("created_ms"), "invalid rate limit")
+    observed = _count(_time(record), "invalid rate limit")
     return {"kind": "rate_limit_observation", "source": "opencode.native.rateLimit", "units": dict(RATE_UNITS),
             "observed_ms": observed, "status": _label(limit.get("status")),
             "rate_limit_type": _label(limit.get("rate_limit_type")), "resets_at_s": _reset(limit.get("resets_at_s")),
