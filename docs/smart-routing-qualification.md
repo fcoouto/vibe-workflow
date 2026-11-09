@@ -96,7 +96,33 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   - the transmitted request kinds;
   - the title state.
 - **Codex window: not read.** The repository has no standalone reader of the Codex `account/rateLimits/read` (`scripts/usage_codex_host.js` is a host bridge that receives limits from the Codex app), so the before and after windows are `unobserved`.
-- **Observed:** _(not yet run; waits for the user's interactive sign-in)_
+- **Observed:**
+  - **Attempt 1** (9 November 2026, 21:05 CET, harness `3a3ee91`, `--chatgpt-model auto`) stopped at its first step with the blocker "the openai integration offers no 'Sign in with ChatGPT' OAuth method". 0 calls were spent (chatgpt 0 of 4), no sign-in happened, and cleanup was verified. See [the diagnosis](#chatgpt-sign-in-method-lookup-diagnosis).
+  - The request run itself has not run yet.
+
+### ChatGPT sign-in method lookup (diagnosis)
+
+**Cause: a start-up race, not a missing method.** The chatgpt run asked `GET /api/integration/openai` immediately after the server started. The Claude path, by contrast, waits for its integration to register. The harness also did not check the HTTP status, so a 404 looked like "no method".
+
+**What the 2.2.6 binary shows** (read-only `strings` inspection). The `openai` integration gets three OAuth methods from built-in plugins in the unconditional plugin list, with no feature flag, config or plan gate:
+
+| Method id | Label | Registered by |
+| --- | --- | --- |
+| `chatgpt-token-sharing` | "Sign in with ChatGPT" | `opencode.provider.chatgpt`; random `127.0.0.1` callback, scope `chatgpt.tokens.use.direct` |
+| `chatgpt-browser` | "Codex browser (legacy)" | `opencode.provider.openai`; fixed `localhost:1455` or `1457` callback |
+| `chatgpt-headless` | "Codex device code (legacy)" | `opencode.provider.openai`; device code |
+
+The [providers documentation](https://opencode.ai/docs/providers/#chatgpt) agrees: "Connect **OpenAI**, then choose **Sign in with ChatGPT** or one of the legacy **Codex** sign-in methods". This is a server API flow, not a CLI-only one.
+
+**Live diagnostic** (`--chatgpt-methods`, 0 calls; 9 November 2026, 20:10 UTC; [`chatgpt-methods-results.json`](../tests/fixtures/smart-routing/probes/chatgpt-methods-results.json)):
+- The first poll of `GET /api/integration/openai` answered **HTTP 404**. The next answered **200** with `- (key)`, `- (env)`, `chatgpt-token-sharing (oauth, "Sign in with ChatGPT")`, `chatgpt-browser (oauth)` and `chatgpt-headless (oauth)`, and 0 connections.
+- No sign-in was started, nothing was reserved or sent, the durable ledger was byte-identical before and after, and cleanup was verified.
+
+**Fix:**
+- The sign-in now polls `GET /api/integration/openai` (bounded, 60 s) until `chatgpt-token-sharing` is listed as an OAuth method.
+- Every status and method-id change goes into the results (`offered_methods`).
+- A missing method blocks with the HTTP status and the offered ids.
+- The method id, its type and the provider are unchanged, and nothing was enabled in any config.
 
 ## Live probe run: descendants and s33d (harness 85ae5f4)
 
