@@ -27,6 +27,8 @@ args = sys.argv[1:]
 operation = args[1] if len(args) > 1 else ''
 params = dict(a.split('=', 1) for i, a in enumerate(args) if i and args[i - 1] == '--param')
 session = params.get('sessionID', '')
+if operation == 'GET':
+    session = args[2].split('/')[3] if len(args) > 2 and args[2].count('/') == 4 else ''
 if step == 'down':
     json.dump(state, open(state_path, 'w'))
     sys.stderr.write('Unable to connect to the server\n'); sys.exit(1)
@@ -56,6 +58,10 @@ if operation == 'session.update':
     json.dump(state, open(state_path, 'w'))
     sys.exit(0)
 json.dump(state, open(state_path, 'w'))
+if operation == 'GET':
+    if step == 'malformed':
+        print('not json {'); sys.exit(0)
+    print(json.dumps({'data': state.get('messages', {}).get(session, []), 'cursor': None})); sys.exit(0)
 if step == 'malformed':
     print('not json {'); sys.exit(0)
 if step == 'shape':
@@ -68,14 +74,23 @@ print(json.dumps({'data': data}))
 '''
 
 
+PROOF = 'vibe-title-5d0e7c1a9b'
+
+
+def shell_call(command, status='running'):
+    """One newest-first message page entry: an assistant message with one shell tool part."""
+    return {'id': 'msg_1', 'type': 'assistant', 'content': [
+        {'type': 'tool', 'name': 'shell', 'state': {'status': status, 'input': {'command': command}}}]}
+
+
 class FakeOpenCode:
-    def __init__(self, test, title='', steps=()):
+    def __init__(self, test, title='', steps=(), messages=None):
         self.directory = Path(tempfile.mkdtemp())
         test.addCleanup(lambda: __import__('shutil').rmtree(self.directory, ignore_errors=True))
         executable = self.directory / 'opencode'
         executable.write_text(FAKE.replace('{python}', sys.executable))
         executable.chmod(0o755)
-        self.save(dict(titles={SESSION: title}, steps=list(steps)))
+        self.save(dict(titles={SESSION: title}, steps=list(steps), messages={SESSION: messages or []}))
         path = patch.dict(os.environ, {'PATH': str(self.directory) + os.pathsep + os.environ.get('PATH', '')})
         path.start()
         test.addCleanup(path.stop)
@@ -328,13 +343,92 @@ class OpenCodeTitleTests(unittest.TestCase):
             raise RuntimeError('private detail')
         self.assertEqual(self.deliver(transport=broken), dict(ok=False, deferred=True, reason='failed'))
 
+    def test_proof_in_a_running_shell_call_verifies_the_session_before_writing(self):
+        command = f'python3 -I -B scripts/opencode_title.py --proof {PROOF} < title.json'
+        fake = FakeOpenCode(self, messages=[shell_call(command)])
+        self.assertEqual(self.deliver(proof=PROOF), dict(ok=True, deferred=False, reason=None, baseline=DESIRED))
+        self.assertEqual(fake.title, DESIRED)
+        self.assertEqual(fake.calls[0], ['api', 'GET', f'/api/session/{SESSION}/message'])
+        self.assertEqual([call[1] for call in fake.calls[1:]], ['session.get', 'session.update', 'session.get'])
+
+    def test_session_without_the_running_proof_is_never_written(self):
+        # An inherited OPENCODE_SESSION_ID names another session, which is not running this command.
+        for messages in ([], [shell_call('opencode serve --port 4096')],
+                         [shell_call(f'opencode_title.py --proof {PROOF}', status='completed')],
+                         [shell_call(f'opencode_title.py --proof {PROOF}x')],
+                         [dict(shell_call(f'opencode_title.py --proof {PROOF}'), type='user')],
+                         [{'id': 'msg_1', 'type': 'assistant', 'content': [{'type': 'text', 'text': PROOF}]}]):
+            with self.subTest(messages=messages):
+                fake = FakeOpenCode(self, messages=messages)
+                self.assertEqual(self.deliver(proof=PROOF),
+                                 dict(ok=False, deferred=False, reason='session_unverified'))
+                self.assertEqual(fake.title, '')
+                self.assertEqual([call[1] for call in fake.calls], ['GET'])
+
+    def test_proof_lookup_failures_defer_without_writing(self):
+        for steps, reason, calls in ((['down'] * 3, 'failed', 3), (['malformed'] * 3, 'malformed', 1)):
+            with self.subTest(reason=reason):
+                fake = FakeOpenCode(self, steps=steps, messages=[shell_call(f'x --proof {PROOF}')])
+                self.assertEqual(self.deliver(proof=PROOF), dict(ok=False, deferred=True, reason=reason))
+                self.assertEqual(len(fake.calls), calls)
+                self.assertEqual(fake.title, '')
+
+    def test_proof_is_checked_once_across_retries(self):
+        fake = FakeOpenCode(self, steps=['ok', 'down'], messages=[shell_call(f'x --proof {PROOF}')])
+        self.assertTrue(self.deliver(proof=PROOF)['ok'])
+        self.assertEqual([call[1] for call in fake.calls].count('GET'), 1)
+
+    def test_invalid_proof_is_rejected_without_spawning(self):
+        fake = FakeOpenCode(self, messages=[shell_call('x --proof short')])
+        for proof in ('', 'short', 'x' * 65, 'vibe title 5d0e7c1a9b', '$(id)aaaaaaaaaaaa', 7, b'vibe-title-5d0e7c1a9b'):
+            with self.subTest(proof=proof):
+                self.assertEqual(self.deliver(proof=proof), dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(fake.calls, [])
+
 
 class OpenCodeTitleCommandTests(unittest.TestCase):
-    def run_command(self, payload, path='/nonexistent'):
+    def run_command(self, payload, path='/nonexistent', args=(), session=None):
         root = Path(__file__).resolve().parents[1]
-        return subprocess.run([sys.executable, '-I', '-B', str(root / 'scripts' / 'opencode_title.py')],
+        env = {k: v for k, v in os.environ.items() if k != 'OPENCODE_SESSION_ID'}
+        if session is not None:
+            env['OPENCODE_SESSION_ID'] = session
+        return subprocess.run([sys.executable, '-I', '-B', str(root / 'scripts' / 'opencode_title.py'), *args],
                               input=payload, capture_output=True, text=True, timeout=30,
-                              env=dict(os.environ, PATH=path))
+                              env=dict(env, PATH=path))
+
+    def test_proof_titles_the_session_named_by_the_environment(self):
+        fake = FakeOpenCode(self, messages=[shell_call(f'opencode_title.py --proof {PROOF} < t.json')])
+        completed = self.run_command(json.dumps(dict(title=DESIRED, adopt=True)), os.environ['PATH'],
+                                     args=('--proof', PROOF), session=SESSION)
+        self.assertEqual((completed.returncode, completed.stderr), (0, ''))
+        self.assertEqual(json.loads(completed.stdout),
+                         dict(ok=True, deferred=False, reason=None, baseline=DESIRED, previous=''))
+        self.assertEqual(fake.title, DESIRED)
+
+    def test_proof_without_an_environment_session_does_nothing(self):
+        fake = FakeOpenCode(self, messages=[shell_call(f'x --proof {PROOF}')])
+        for session in (None, ''):
+            with self.subTest(session=session):
+                completed = self.run_command(json.dumps(dict(title=DESIRED)), os.environ['PATH'],
+                                             args=('--proof', PROOF), session=session)
+                self.assertEqual(json.loads(completed.stdout),
+                                 dict(ok=False, deferred=False, reason='session_unknown'))
+        self.assertEqual(fake.calls, [])
+
+    def test_proof_arguments_are_strict(self):
+        fake = FakeOpenCode(self, messages=[shell_call(f'x --proof {PROOF}')])
+        path = os.environ['PATH']
+        cases = ((dict(session_id=SESSION, title=DESIRED), ('--proof', PROOF)),  # one identity source only
+                 (dict(title=DESIRED), ('--proof',)),
+                 (dict(title=DESIRED), ('--proof', PROOF, 'extra')),
+                 (dict(title=DESIRED), ('--other', PROOF)),
+                 (dict(title=DESIRED), ()))
+        for payload, args in cases:
+            with self.subTest(args=args, payload=payload):
+                completed = self.run_command(json.dumps(payload), path, args=args, session=SESSION)
+                self.assertEqual(json.loads(completed.stdout),
+                                 dict(ok=False, deferred=False, reason='invalid_request'))
+        self.assertEqual(fake.calls, [])
 
     def test_command_accepts_adopt_with_the_same_validation(self):
         fake = FakeOpenCode(self, title='Generated summary of the chat')
@@ -368,6 +462,7 @@ class OpenCodeTitleCommandTests(unittest.TestCase):
         spec.loader.exec_module(script)
         out, err = io.StringIO(), io.StringIO()
         with patch.object(opencode_titles, 'deliver', side_effect=KeyboardInterrupt), \
+                patch('sys.argv', ['opencode_title.py']), \
                 patch('sys.stdin', io.StringIO(json.dumps(dict(session_id=SESSION, title=DESIRED)))), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             self.assertEqual(script.main(), 0)
