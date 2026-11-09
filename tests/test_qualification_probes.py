@@ -472,6 +472,25 @@ class ChatGPTAutoTests(StageHarness):
         self.assertEqual(selection["other_providers"], 1)
         self.assertEqual(sorted(selection["excluded"]), sorted(m["id"] for m in models[1:-1]))
 
+    def test_selection_table(self):
+        table = [  # (listed, expected pick)
+            ([gpt("o4-mini-deep-research", cost=(0, 0)), gpt("o4-mini-high", cost=(0, 0))], "o4-mini-high"),
+            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-5-mini", cost=(1, 1))], "gpt-5-mini"),
+            ([gpt("gpt-5", cost=(1.25, 10)), gpt("gpt-5-mini", cost=(0.25, 2)), gpt("gpt-5-nano", cost=(0.05, 0.4))],
+             "gpt-5-nano"),
+            ([gpt("gpt-5.1-codex", cost=(0, 0)), gpt("gpt-5.1-codex-mini", cost=(0, 0))], "gpt-5.1-codex-mini"),
+            ([gpt("gpt-5-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+        ]
+        for listed, expected in table:
+            with self.subTest(expected=expected):
+                run, server, route, printed = self.select(listed)
+                self.assertEqual(route[1], expected)
+        excluded = run.results["stages"]["chatgpt"]["model_selection"]["excluded"]
+        self.assertEqual(excluded, {})
+        run, server, route, printed = self.select(table[0][0] + table[1][0])
+        self.assertEqual(run.results["stages"]["chatgpt"]["model_selection"]["excluded"],
+                         {"o4-mini-deep-research": "name", "computer-use-preview": "name"})
+
     def test_the_selection_is_announced_before_any_reservation_and_recorded(self):
         run, server, route, printed = self.select([gpt("gpt-a", cost=(1, 4)), gpt("gpt-b-nano", cost=(3, 4))])
         self.assertEqual(printed[0][1], 0)
@@ -491,6 +510,12 @@ class ChatGPTAutoTests(StageHarness):
         (self.tmp / "iso" / "chatgpt-login.json").unlink()  # the run signs in again and creates it afresh
         with self.assertRaises(safety.Refused) as caught:
             chatgpt.run(run, announce=announce)
+        selection = run.results["stages"]["chatgpt"]["model_selection"]
+        self.assertEqual((selection["mode"], selection["rule"], selection["selected"]), ("auto", chatgpt.AUTO_RULE, None))
+        self.assertEqual(selection["candidates"], [m["id"] for m in models if m["id"] not in selection["excluded"]])
+        text = json.dumps(run.output(run.results))
+        for secret in ("tok-not-real", "ref-not-real", "idt-not-real"):
+            self.assertNotIn(secret, text)
         self.assertEqual(reservations(), [])
         self.assertEqual(server.transmitted(), [])
         self.assertIsNone(server.control["route"])
@@ -551,13 +576,28 @@ class ModeRefusalTests(Temp):
 
             def output(self, results):
                 return dict(results, cleanup=None, call_ledger=None)
-        with patch.object(live, "Run", FakeRun), patch.object(live, "check_opencode_version", lambda env: None):
+        with patch.object(live, "Run", FakeRun), patch.object(live, "check_opencode_version", lambda env: None), \
+                patch.object(live, "check_real_home", lambda: None):
             self.assertEqual(live.main(base + ["auto"]), 0)
         self.assertEqual(captured["chatgpt_model"], "auto")
         for ref in ("auto#low", "openai/auto#", "AUTO"):
             with patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
                     patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
                 self.assertEqual(live.main(base + [ref]), 2, ref)
+
+    def test_a_redirected_home_refuses_every_live_mode_before_anything_starts(self):
+        real = self.private(self.tmp / "real")
+        with self.assertRaises(safety.Refused):
+            safety.check_real_home(home=self.private(self.tmp / "fake"), passwd_home=real)
+        self.assertEqual(safety.check_real_home(home=real, passwd_home=real), real.resolve())
+        ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
+        approved_ledger(ledger_path)
+        base = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger_path)]
+        for extra in ([], ["--stages", "descendants"], ["--chatgpt", "--chatgpt-model", "auto"]):
+            with self.subTest(extra=extra), patch.dict("os.environ", HOME=str(self.private(self.tmp / ("fake-%d" % len(extra))))), \
+                    patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
+                    patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
+                self.assertEqual(live.main(base + extra), 2)
 
     def test_the_keep_warning_names_the_stored_logins(self):
         self.assertIn("ChatGPT", live.KEEP_WARNING)
