@@ -1,10 +1,13 @@
 import os
 import pwd
+import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path, PurePath
+from unittest.mock import patch
 
 import tests
 from runtime import changes, openrouter_settings
@@ -170,6 +173,155 @@ class LifecycleTests(unittest.TestCase):
 
     def test_guard_error_escapes_oserror_handlers(self):
         self.assertFalse(issubclass(tests.HomeLeakError, OSError))
+
+
+class RebindFilterTests(unittest.TestCase):
+    def rebound(self, source, **constants):
+        """Rebind a synthetic module loaded from ``source`` against the real home; return its constants."""
+        module = types.ModuleType('vcw_isolation_fake')
+        module.__file__ = str(source)
+        vars(module).update(constants)
+        tests.rebind({REAL_HOME}, tests.HOME, [module])
+        return {name: getattr(module, name) for name in constants}
+
+    def test_only_state_paths_move(self):
+        home, new = Path(REAL_HOME), Path(tests.HOME)
+        moved = {'LOCK': str(home / '.local/share/vcw-transactions'), 'MACHINE': home / '.vibe-workflow/machine.json',
+                 'SHARE': str(home / '.local/share'), 'HOME_PATH': home, 'USAGE': home / '.local/state/vibe-workflow/u'}
+        kept = {'NODE': str(home / '.local/state/fnm_multishells/1_2/bin/node'), 'GITCONFIG': str(home / '.gitconfig'),
+                'OPENCODE': str(home / '.local/share/opencode/bin'), 'NEAR': str(home / '.vibe-workflowx/y'),
+                'CODEX': home / '.codex/config.toml', 'LOCAL': str(home / '.local'), 'TEXT': 'plain'}
+        result = self.rebound(ROOT / 'tests' / 'vcw_isolation_fake.py', **moved, **kept)
+        for name, value in moved.items():
+            relative = os.path.relpath(os.fspath(value), REAL_HOME)
+            expected = new if relative == '.' else new / relative
+            self.assertEqual(result[name], type(value)(expected), name)
+        self.assertEqual({name: result[name] for name in kept}, kept)
+
+    def test_symlinked_checkout_still_rebinds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            link = Path(directory) / 'checkout'
+            link.symlink_to(ROOT, target_is_directory=True)
+            result = self.rebound(link / 'tests' / 'vcw_isolation_fake.py',
+                                  LOCK=REAL_HOME + '/.local/share/vcw-transactions')
+        self.assertEqual(result['LOCK'], tests.HOME + '/.local/share/vcw-transactions')
+
+    def test_modules_outside_the_repository_are_left_alone(self):
+        lock = REAL_HOME + '/.local/share/vcw-transactions'
+        self.assertEqual(self.rebound('/private/tmp/elsewhere.py', LOCK=lock)['LOCK'], lock)
+
+
+class DeferralTests(unittest.TestCase):
+    PROBE = "import os, tests\nprint(os.environ['HOME'], os.environ['VCW_TEST_HOME'], tests.created, sep='\\n')"
+
+    def probe(self, home, preset):
+        environment = {'HOME': home} if preset is None else {'HOME': home, 'VCW_TEST_HOME': preset}
+        status, out, err = run(self.PROBE, **environment)
+        self.assertEqual(status, 0, err)
+        return out.split('\n')[:3]
+
+    def assertRedirected(self, home, preset):
+        new, variable, created = self.probe(home, preset)
+        self.assertEqual((new, variable), (created, created), (home, preset))
+        self.assertNotEqual(new, home)
+        self.assertTrue(created.startswith(os.path.realpath(tempfile.gettempdir())), created)
+        self.assertFalse(os.path.exists(created), 'the created HOME must be removed at exit')
+
+    def test_stale_or_invalid_values_are_ignored(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            first, second = os.path.realpath(first), os.path.realpath(second)
+            cases = [(first, None), (first, '1'), (REAL_HOME, '1'), ('relative/home', 'relative/home'),
+                     (first + '/missing', first + '/missing'), (REAL_HOME, REAL_HOME), (second, first),
+                     (first + '/.', first + '/.')]
+            if str(ROOT).startswith(REAL_HOME + os.sep):
+                cases.append((str(ROOT), str(ROOT)))  # an existing directory under the real home
+            unresolved = tempfile.gettempdir()
+            if os.path.realpath(unresolved) != unresolved:
+                cases.append((unresolved, unresolved))
+            for home, preset in cases:
+                with self.subTest(home=home, preset=preset):
+                    self.assertRedirected(home, preset)
+
+    def test_valid_runner_home_is_kept(self):
+        with tempfile.TemporaryDirectory() as home:
+            home = os.path.realpath(home)
+            self.assertEqual(self.probe(home, home), [home, home, 'None'])
+
+
+class AncestorGuardTests(unittest.TestCase):
+    def test_destructive_operations_on_state_parents_are_refused(self):
+        home = REAL_HOME
+        events = [('shutil.rmtree', (home + '/.local', None)), ('shutil.rmtree', (home + '/.codex', None)),
+                  ('shutil.rmtree', (home + '/.local/share/', None)), ('shutil.rmtree', (home + '/.claude', None)),
+                  ('os.rename', (home + '/.local/state', '/tmp/x', None, None)),
+                  ('os.rename', ('/tmp/x', home + '/.codex/plugins', None, None)),
+                  ('os.rmdir', (home + '/.local/share', None)), ('os.remove', (home + '/.local/state', None)),
+                  ('shutil.move', (home + '/.codex/plugins/cache', '/tmp/y'))]
+        for event, args in events:
+            with self.subTest(event=event, args=args), self.assertRaisesRegex(tests.HomeLeakError, 'real-home'):
+                tests.audit(event, args)
+
+    def test_ancestor_refusal_stays_inside_its_bounds(self):
+        home = REAL_HOME
+        allowed = [('shutil.rmtree', (home, None)), ('open', (home + '/.local/share/x', 'w', 0)),
+                   ('open', (home + '/.local/share', None, os.O_RDONLY)),
+                   ('os.mkdir', (home + '/.codex/n', 0o777, None)),
+                   ('shutil.rmtree', (home + '/.local/share/opencode', None)), ('shutil.rmtree', ('/tmp/.local', None)),
+                   ('os.rename', ('/tmp/a', '/tmp/.codex', None, None))]
+        for event, args in allowed:
+            with self.subTest(event=event, args=args):
+                tests.audit(event, args)
+
+    def setUp(self):
+        tests._cwd[0] = None
+        self.addCleanup(tests._cwd.__setitem__, 0, None)
+
+    def test_relative_paths_resolve_against_the_cwd(self):
+        lock = REAL_HOME + '/.local/share/vcw-transactions'
+        with patch('os.getcwd', return_value=lock):
+            for event, args in (('open', ('x', 'w', 0)), ('os.mkdir', ('sub', 0o777, None)), ('open', ('.', None, 0))):
+                with self.subTest(event=event), self.assertRaises(tests.HomeLeakError):
+                    tests.audit(event, args)
+        tests.audit('os.chdir', ('/tmp',))  # invalidates the cached cwd
+        with patch('os.getcwd', return_value=REAL_HOME + '/.local'):
+            with self.assertRaises(tests.HomeLeakError):
+                tests.audit('shutil.rmtree', ('share', None))
+        tests.audit('os.chdir', ('/tmp',))
+        with patch('os.getcwd', side_effect=FileNotFoundError):
+            tests.audit('open', ('x', 'w', 0))
+
+    def test_descriptor_relative_names_are_not_resolved_against_the_cwd(self):
+        with patch('os.getcwd', return_value=REAL_HOME):
+            for event, args in (('os.rmdir', ('.local', 5)), ('shutil.rmtree', ('.codex', 5)),
+                                ('os.remove', (b'.vibe-workflow', 5)), ('os.rename', ('.local', 'x', 5, 5)),
+                                ('os.mkdir', (Path('.vibe-workflow'), 0o777, 5)),
+                                ('os.symlink', ('../.vibe-workflow', '/tmp/link', None))):
+                with self.subTest(event=event, args=args):
+                    tests.audit(event, args)
+            with self.assertRaises(tests.HomeLeakError):  # absolute paths are still checked with a dir_fd
+                tests.audit('os.rmdir', (REAL_HOME + '/.local', 5))
+
+    def test_temporary_trees_with_state_names_can_be_removed_from_a_home_cwd(self):
+        # rmtree removes `.local` through a dir_fd; with the cwd at the home it must not look like ~/.local.
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory) / 'home'
+            (tree / '.local/share').mkdir(parents=True)
+            (tree / '.codex').mkdir()
+            tests._cwd[0] = REAL_HOME
+            shutil.rmtree(tree)
+            self.assertFalse(tree.exists())
+
+    def test_a_real_chdir_refreshes_the_cached_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            before = os.getcwd()
+            tests.audit('open', ('x', 'r', 0))
+            os.chdir(directory)
+            try:
+                self.assertIsNone(tests._cwd[0])
+                tests.audit('open', ('x', 'r', 0))
+                self.assertEqual(tests._cwd[0], os.path.realpath(directory))
+            finally:
+                os.chdir(before)
 
 
 if __name__ == '__main__':
