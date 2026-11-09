@@ -149,11 +149,11 @@
       ]
     },
     "clients/external-delegation.md": {
-      "sha256": "742b931c1e153edc231793d5745104416b129f4664892f1fc8cc7236687046c3",
+      "sha256": "6057b04d4054ef32ed19bd063792ea1da71c2692b487644d0eedd4a1639cc269",
       "ranges": [
         [
           1,
-          121
+          123
         ]
       ]
     },
@@ -562,11 +562,11 @@
       ]
     },
     "skills/manage-usage-routing/references/delegation.md": {
-      "sha256": "e942ceeffc68faa78e5f1ec4fed2e24d4449b42f5adf534a9507c80294871e77",
+      "sha256": "1a29f3cba621d02aaa7d1339ccaaf0d9632f7d83b160a58695d9354b05678cbc",
       "ranges": [
         [
           1,
-          100
+          101
         ]
       ]
     },

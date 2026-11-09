@@ -58,8 +58,9 @@ canonical role and retains any custom role name in the declaration.
 
 ## Recovery
 
-Each attempt sends at most once. A repeated run/attempt ID returns stored state,
-never another generation. A host transport result proving no send can reject that
+Each attempt sends at most once. A repeated run/attempt ID never produces another
+generation: the live host refuses it (`live_run_id_already_used`) and an offline
+replay returns the stored state. A host transport result proving no send can reject that
 attempt with zero cost and close its claim. Sent or uncertain failures retain
 maximum reservations and unresolved exposure; do not infer zero cost from
 elapsed time, process death or a refreshed balance. No automatic retry, provider

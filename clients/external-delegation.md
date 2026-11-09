@@ -89,7 +89,9 @@ for truthful provenance and content inspection: hashes do not prove permission,
 absence of secrets or arbitrary prose origins. There is no automatic taint scanner.
 
 Add `automatic` and `local_preferred` booleans to `binding` and pass it as the
-existing task/proposal's optional `external` field. `local_preferred` stays true
+task or proposal's `external` field. OpenRouter proposals and workers always
+require it; an API Usage task may omit it only for a self-contained packet with no
+snapshots and no saved restriction. `local_preferred` stays true
 through local wait/failure recovery unless a later explicit choice supersedes it.
 OpenRouter also supplies `class_name`, observed native `coordinator` and distinct
 `reviewer`, and `integration_available:true`; these are native attestations, not
