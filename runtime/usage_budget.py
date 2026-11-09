@@ -262,8 +262,10 @@ class Ledger:
         3 -> 4 (S3.6a) changes no claim, hold or admission: it marks the ledger as one whose R may include settled
         charges (`organizations.*.settled`, `settled_tasks`), so code that would ignore them refuses it
         (`ledger_identity_changed`) instead of resetting caps and credit. A stored `blocked: true` becomes
-        `legacy_block` (the block is derived from now on). The event and root tables are created idempotently on
-        the first accounting write.
+        `legacy_block` (the block is derived from now on); every unresolved S1 call of such an organization is
+        marked `over_bound` at its maximum (v3 recorded no marker, so an over-bound call cannot be told from an
+        uncertain one: fail closed); every hold gets its accounting root. The event and root tables are created
+        idempotently on the first accounting write.
         """
         if data['version'] == 1:
             data.pop('slot', None)
@@ -274,19 +276,9 @@ class Ledger:
             data['version'] = 2
         if data['version'] == 2:
             data['version'] = 3
-        if data['version'] == 3:
+        upgraded = data['version'] == 3
+        if upgraded:
             data['version'] = 4
-        for org in data['organizations'].values():
-            # v4 derives the admission block (`block_reasons`) and stores no flag. A stored `blocked: true` (written
-            # by v3, or by S1's run path before v4) has no recorded source, so it becomes the sticky `legacy_block`.
-            if org.pop('blocked', False):
-                org['legacy_block'] = True
-            org.pop('overrun_block', None)
-            # Holds admitted before v4 get their accounting root now, while their admission record still exists.
-            for attempt, hold in data.get('holds', {}).items():
-                if 'root' not in hold and 'task' in hold:
-                    hold.update(zip(('root', 'stage'), Ledger._record_root(Ledger.admission(data, attempt) or {},
-                                                                           hold['task'])))
         data.setdefault('holds', {})
         data.setdefault('admissions', [])
         data.setdefault('seen_attempts', [])
@@ -295,6 +287,29 @@ class Ledger:
             if 'windows' not in hold:
                 vector = hold.pop('vector', {})
                 hold.update(organization=None, amount=0, cycle=None, windows={WIN + k: v for k, v in vector.items()})
+        if upgraded:  # 3 -> 4, once per migrated ledger (the upgrade is persisted by its first write)
+            for organization, org in data['organizations'].items():
+                if not org.get('blocked'):
+                    continue
+                # v3's run path left an over-bound call `unresolved` with no marker; it cannot be told apart from an
+                # uncertain one, so every unresolved call of a blocked organization is treated as over-bound at its
+                # maximum: a later lower report can never settle it (case C) and the books keep the maximum.
+                for run in data['runs'].values():
+                    if run['organization'] == organization:
+                        for call in run['calls'].values():
+                            if call['state'] == 'unresolved':
+                                call.setdefault('over_bound', call['maximum'])
+            # Every hold admitted before v4 gets its accounting root, while its admission record still exists.
+            for attempt, hold in data['holds'].items():
+                if 'root' not in hold and 'task' in hold:
+                    hold.update(zip(('root', 'stage'), Ledger._record_root(Ledger.admission(data, attempt) or {},
+                                                                           hold['task'])))
+        for org in data['organizations'].values():
+            # v4 derives the admission block (`block_reasons`) and stores no flag. A stored `blocked: true` (written
+            # by v3, or by S1's run path before v4) has no recorded source, so it becomes the sticky `legacy_block`.
+            if org.pop('blocked', False):
+                org['legacy_block'] = True
+            org.pop('overrun_block', None)
 
     def snapshot(self):
         with self.transaction(False) as data:
@@ -477,10 +492,10 @@ class Ledger:
 
     @staticmethod
     def overrun_backlog(data):
-        """The hold table is full and only pending overruns (never pruned) keep it full."""
-        holds = data['holds'].values()
-        return len(data['holds']) >= MAX_HOLDS and any(Ledger._unconfirmed(h) for h in holds) and \
-            not any(h['closed'] and not Ledger._unconfirmed(h) for h in holds)
+        """The hold table is full and at least one pending overrun (never pruned) occupies it, even when open holds
+        fill the rest. `admit` then refuses every new admission with `overrun_backlog`: any organization's and
+        subscription admissions alike, until an operator resolves overruns or holds close."""
+        return len(data['holds']) >= MAX_HOLDS and any(Ledger._unconfirmed(h) for h in data['holds'].values())
 
     @staticmethod
     def _unconfirmed(hold):
@@ -892,8 +907,7 @@ class Ledger:
                     raise BudgetError('invalid_admission') from error
                 require(size <= limit, 'record_too_large')
             self._prune(data)
-            require(len(data['holds']) < MAX_HOLDS,
-                    'overrun_backlog' if any(self._unconfirmed(h) for h in data['holds'].values())
+            require(len(data['holds']) < MAX_HOLDS, 'overrun_backlog' if self.overrun_backlog(data)
                     else 'ledger_capacity_reached')
             data['holds'][attempt_id] = hold
             data['admissions'].append(record)

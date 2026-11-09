@@ -1385,8 +1385,12 @@ def ledger_summary(data):
                 reason: _capped(sources[reason](data, organization) if reason in sources else [])
                 for reason in sorted(reasons)}))
     unknown = [attempt for attempt, hold in Ledger.open_holds(data).items() if hold['state'] == 'cost_unknown']
+    # Uncertain dollar holds have no way out before S3.6b reconciliation; the operator must see them.
+    uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
+                 if hold['state'] == 'uncertain' and hold.get('amount')]
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
-                blocked_organizations=blocked, cost_unknown=_capped(unknown), overrun_backlog=Ledger.overrun_backlog(data),
+                blocked_organizations=blocked, cost_unknown=_capped(unknown), uncertain_dollar=_capped(uncertain),
+                overrun_backlog=Ledger.overrun_backlog(data),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
                 unbound_open_holds=unbound,
                 caps=dict(total=total, per_account=per_account), organizations=organizations)

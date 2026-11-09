@@ -723,6 +723,9 @@ class BlockReasonTests(Accounting):
 
     def test_status_lists_uncertain_dollar_holds_until_s36b(self):
         """Round 4 S1: an uncertain dollar hold has no way out before S3.6b, so `status` names it."""
+        with self.open_ledger() as ledger:
+            ledger.set_caps(32, 32)
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=32, per_account=32))))
         for i in range(18):
             self.funded('d%02d' % i)
             self.call(record('d%02d' % i, 'uncertain'))
