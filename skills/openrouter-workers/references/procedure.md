@@ -1,11 +1,12 @@
 # Background OpenRouter workers
 
-Use only within explicit OpenRouter authorization. These workers support read-only
+Use only on a checkout whose OpenRouter workers route is enabled; that enablement
+is the only approval needed. These workers support read-only
 investigation over copied UTF-8 files. OpenCode owns the external tool loop; Codex
 owns original files, integration and acceptance. The original proposal route remains
 separate. Its successful tests do not qualify tool use or autonomous editing.
 
-Apply the [shared selection and consent contract](../../../clients/external-delegation.md) for automatic consideration or reusable source permission.
+Apply the [shared selection contract](../../../clients/external-delegation.md) for automatic consideration or a saved restriction.
 
 ## Prepare
 
@@ -67,7 +68,8 @@ python3 -I -B <plugin-root>/scripts/openrouter_workers.py run
 
 The brief requires `task_id`, `coordinator_chat_id`,
 `model`, `provider`, `effort`, `objective`, `source_root`,
-`files`, `timeout_seconds`, `steps`, and `approval_ref`. Map the shared declaration
+`files`, `timeout_seconds` and `steps`. `approval_ref` is optional: when omitted,
+the brief records the enablement's activation reference. Map the shared declaration
 to `role` and `specialty`; add `model_display_name` when known. Add `custom_role_name`
 only for an explicit native fallback declaration, using the shared bounds.
 New external badges display the declared role followed by the
@@ -78,7 +80,7 @@ supervisor UUID separately in evidence. This keeps both workers visible in consu
 whose sidebar does not render nested children. Do not invent a native identity. Model is an
 OpenRouter author/slug; provider is the selected endpoint routing slug. File names
 are nonhidden relative paths under the canonical source root, without symlinks.
-Explicitly inspect the selected files for secrets before approving transmission.
+Explicitly inspect the selected files for secrets before transmission.
 Legacy optional `credit` is ignored and discarded. Choose 1–8 steps and 1–300 seconds. The runner currently caps
 requested output at 2048 tokens per model response. These controls do not set money
 limits, and API requests already in flight may still be billed after cancellation.

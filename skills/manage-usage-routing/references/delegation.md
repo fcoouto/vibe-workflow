@@ -1,22 +1,23 @@
 # Proposal selection, verification and recovery
 
 Use existing coordinator task scoping, native worker selection and independent
-review contracts. API proposals receive only the bounded approved task packet;
+review contracts. API proposals receive only the bounded task packet;
 no shell, tools, native connector access, external writes or reviewer authority.
 For foreground work, load [Codex host admission](codex-host.md). For optional
 local tests, drive the private runner with a connection factory and credential resolver fixture.
 
-For external consideration and reusable source permission, apply the [shared contract](../../../clients/external-delegation.md).
+For external consideration and saved restrictions, apply the [shared contract](../../../clients/external-delegation.md).
 
 ## Admission and execution
 
-1. Preserve explicit provider/model/local choices, scope and transmission consent.
+1. Preserve explicit provider/model/local choices, the activation's scope and any
+   saved restriction.
    Freeze the source snapshot, task, profile, reasoning, output allowance and price
    evidence. Track each original task through native integration and review.
-2. Select a bounded eligible assignment. Manual needs explicit task selection.
-   Smart Balance may choose within standing consent. Require independently
-   checkable output and a ready native reviewer. Unknown consent, funding, price, expiry or budget pauses the API assignment.
-3. Pin current consent and admission evidence through atomic begin/dispatch. Count
+2. Select a bounded eligible assignment on your own within the active scope; a
+   user's request to use the API for a task is an ordinary instruction. Require
+   independently checkable output and a ready native reviewer. Unknown activation, funding, price, expiry or budget pauses the API assignment.
+3. Pin the current activation and admission evidence through atomic begin/dispatch. Count
    and generation have separate attempt IDs under one run, which holds its own claim. Reserve count's
    known maximum first; generation needs its own bound after the exact count.
    Never assume counting is free or shrink the maximum using cache discounts.
@@ -29,7 +30,7 @@ For external consideration and reusable source permission, apply the [shared con
    `requires_native_review:true`. Snapshot-check native integration, run accepted
    checks, and obtain a fresh independent reviewer against the exact candidate.
    Author rationale or model-produced receipts cannot replace that review.
-6. Include the route in the approval or result summary and report the outcome,
+6. Include the route in the result summary and report the outcome,
    review state and any pause reason. If the host uses a real native supervisor,
    prepare its [route suffix](../../../clients/worker-visibility.md#external-routes-in-chat-and-habblaud)
    before dispatch. Use the applicable host procedure for optional Habblaud
@@ -43,9 +44,9 @@ task through existing context and evidence references.
 | Fact | Source |
 | --- | --- |
 | Task, scope, bounded brief, source snapshots, role, specialty and custom name | Coordinator assignment context and original visibility declaration |
-| Requested selection | Proposal `provider` (`openai-api` or Smart `auto`) and existing local and API-only choices |
+| Requested selection | Proposal `provider` (`openai-api` when the user asked for the API, `auto` when the agent chose it) and existing local and API-only choices |
 | Actual route | Successful generation result `execution_route: openai-api` from the runner. The host verifies it. A replay of stored state makes no execution claim. |
-| Attempts and costs | Existing ledger run ID, `<run_id>:count`, `<run_id>:generation`, consent scope, admission pin and generation state and cost |
+| Attempts and costs | Existing ledger run ID, `<run_id>:count`, `<run_id>:generation`, activation scope, admission pin and generation state and cost |
 | Configured and observed model | Approved profile and validated provider response. The display name is for presentation. |
 | Native child | Observed native spawn and its parent and attempt. Foreground generation creates no child. |
 | External display | Stable UUIDv5 derived from actual route, observed parent and run ID. The existing receipt retains the original declaration and binding. |
@@ -64,10 +65,11 @@ maximum reservations and unresolved exposure; do not infer zero cost from
 elapsed time, process death or a refreshed balance. No automatic retry, provider
 switch, new purchases or paid funding is permitted.
 
-Count completion does not authorize generation. If later consent, reviewer readiness,
+Count completion does not authorize generation. If later activation, reviewer readiness,
 source, price or affordability checks fail before sending generation, retain the
-count charge and release only the proven-unsent generation reservation. A scoped
-correction uses a new run within the original task budget; it requires reasoned selection under the accepted envelope.
+count charge and release only the proven-unsent generation reservation. Each task
+is sent live at most once per checkout, so a correction continues natively; when
+the user asks for another API attempt, propose it as a new task under the same caps.
 
 Known generation completion can close the run's claim while retaining credit
 charges. Native integration and independent review establish task completion.
@@ -77,8 +79,8 @@ Existing conservative deductions can pause before provider credits run out.
 
 ## Continue remaining work natively
 
-Credit/budget/freshness/expiry stops recommend native handoff under the user's
-standing authorization for the original task. Preserve any later explicit API-only
+Credit/budget/freshness/expiry stops recommend native handoff under the existing
+authorization for the original task. Preserve any later explicit API-only
 or other-provider choice and wait if the independent reviewer is unavailable. Send
 one bounded remaining-work brief and fresh source references, not billing pages or
 the whole conversation. Preserve coordinator model/authentication and existing

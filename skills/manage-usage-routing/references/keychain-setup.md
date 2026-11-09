@@ -36,5 +36,5 @@ grants no permission to create a key or start inference.
    authorized action.
 
 The bridge accepts no approval field and makes no account calls. A bridge receipt
-establishes local storage. Use [explicit activation](procedure.md#set-up-and-select-a-mode)
-to select a live mode after setup.
+establishes local storage. Use [activation](procedure.md#set-up-and-activate)
+to activate the checkout after setup.

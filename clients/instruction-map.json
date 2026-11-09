@@ -531,7 +531,7 @@
       ]
     },
     "skills/manage-openrouter/references/procedure.md": {
-      "sha256": "239c0d7033db299c2e7309bf3743c3ebc267565ecb3e67f45684501452dd218c",
+      "sha256": "8eba14e6159b018b433cb4241c6f2e0929bd00824abbbcce9121520c16113187",
       "ranges": [
         [
           1,
@@ -539,7 +539,7 @@
         ],
         [
           132,
-          150
+          149
         ]
       ]
     },
@@ -553,34 +553,34 @@
       ]
     },
     "skills/manage-usage-routing/references/codex-host.md": {
-      "sha256": "5377678f8b832c974007f461526b722c6a13766c0f40e7958dc4777cae44520d",
+      "sha256": "f1e3e4f3f1652298130b35d9e6d7db10930eefb7417487c2f9af77e6dc570e82",
       "ranges": [
         [
           1,
-          124
+          91
         ]
       ]
     },
     "skills/manage-usage-routing/references/delegation.md": {
-      "sha256": "518602780bb7da2742a90a3c9f3dc977db91c10b9daa400183c35d31058ee10a",
+      "sha256": "e942ceeffc68faa78e5f1ec4fed2e24d4449b42f5adf534a9507c80294871e77",
       "ranges": [
         [
           1,
-          98
+          100
         ]
       ]
     },
     "skills/manage-usage-routing/references/first-canary.md": {
-      "sha256": "d60ce14df3b8e96af46e273d27e9c2d2dd17c9f748270d75101a13dace6e9e1e",
+      "sha256": "4355ed344c539c82361c35f247ca83f00d6a8ba155b2fc07bcc3bcff59f74b53",
       "ranges": [
         [
           1,
-          43
+          44
         ]
       ]
     },
     "skills/manage-usage-routing/references/keychain-setup.md": {
-      "sha256": "002deb23e74941b05014cc657761948e78cddfe4a70ba6372e07715289d35955",
+      "sha256": "084a72ed22d76d49230c9d1ed5442e38ebec99d2ae812edc48d54eeb39aa1c5e",
       "ranges": [
         [
           1,
@@ -589,7 +589,7 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "c46612996973ee3f010a9d6006c8a359e66fb4c64572fe207d317cb844eb38e4",
+      "sha256": "06430c496528ef639b329d13f6b791c89d526da234c28d780b22314096e017bd",
       "ranges": [
         [
           1,
@@ -597,11 +597,11 @@
         ],
         [
           124,
-          249
+          250
         ],
         [
-          250,
-          252
+          251,
+          253
         ]
       ]
     },
@@ -685,18 +685,18 @@
       ]
     },
     "skills/openrouter-proposals/references/procedure.md": {
-      "sha256": "962c2bb3292eca80e44be4f70b3338327176f12c33ab26977fa6661797cb7302",
+      "sha256": "71eaebf8aedbb0dac173f897f80bb1570a03cfbd71fe6491f6b5cfff43790f29",
       "ranges": [
         [
           1,
-          92
+          90
         ],
         [
-          93,
-          159
+          91,
+          153
         ],
         [
-          160,
+          154,
           204
         ]
       ]
@@ -711,7 +711,7 @@
       ]
     },
     "skills/openrouter-workers/references/procedure.md": {
-      "sha256": "a1aa714b6a5fac130b5bc410829013354a34071c06b8d7970a677981caa73d54",
+      "sha256": "04759f5300fad96ed15faff36bd90a063f2339264d909f91fdc82631c0f2f110",
       "ranges": [
         [
           1,
@@ -719,7 +719,7 @@
         ],
         [
           124,
-          193
+          195
         ]
       ]
     },

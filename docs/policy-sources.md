@@ -309,7 +309,7 @@ catalog lookup is unavailable, following Vibe Setup's
 
 The user authorized first-task routing after Keychain setup and explicit
 activation in either mode while other Codex work continues. The
-[management procedure](../skills/manage-usage-routing/references/procedure.md#set-up-and-select-a-mode)
+[management procedure](../skills/manage-usage-routing/references/procedure.md#set-up-and-activate)
 binds consent to the selected configuration. The
 [proposal procedure](../skills/manage-usage-routing/references/delegation.md)
 and [trusted host](../skills/manage-usage-routing/references/codex-host.md)
@@ -329,7 +329,7 @@ separately from current admission rules.
 ## API usage activation — 5 November 2026
 
 The user approved [safe setup reuse and the public name Manage API Usage](superpowers/specs/2026-11-05-api-usage-activation-design.md).
-The [management procedure](../skills/manage-usage-routing/references/procedure.md#set-up-and-select-a-mode)
+The [management procedure](../skills/manage-usage-routing/references/procedure.md#set-up-and-activate)
 routes explicit enablement through read-only discovery, unique compatible reuse
 or explicit selection. Its [status contract](../skills/manage-usage-routing/references/procedure.md#read-only-status-quoting-and-selection)
 distinguishes provider project identity from enrolled local checkout scope.

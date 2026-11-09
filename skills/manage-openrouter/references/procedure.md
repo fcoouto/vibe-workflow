@@ -50,16 +50,17 @@ enrollment and native lifecycle own those prerequisites.
 
 ## Configure and enable
 
-For reusable source/automatic selection, `configure` accepts optional
-`external_permission` under the [shared permission contract](../../../clients/external-delegation.md#reusable-permission).
-Omission preserves existing permission; null removes it. Keep existing funding
-choices and approvals. Enablement alone does not authorize automatic selection.
+Enablement is the only approval: it authorizes automatic selection of the
+enabled routes and transmission of the checkout's task-relevant files. To narrow
+that, `configure` accepts an optional `external_permission` restriction under the
+[shared permission contract](../../../clients/external-delegation.md#saved-permission-optional);
+omission preserves it and null removes it. Keep existing funding choices.
 
-Reuse the user's authorization within its scope. An explicit request to enable
-this integration authorizes the selected checkout's controls; merely opening this
-skill or completing onboarding does not. Keep task transmission within approved
-scope and inspect selected files for secrets. Do not repeat approval requests for
-already-authorized work.
+An explicit request to enable this integration activates the selected checkout;
+merely opening this skill or completing onboarding does not. Keep task
+transmission within the activation's scope and any saved restriction, and
+inspect selected files for secrets. Never ask for approval of work on an enabled
+route.
 
 Read `status`, then use its exact `revision` as `expected_revision` for each
 mutation. A conflict requires rereading current state and reconciling the user's
@@ -81,29 +82,27 @@ This skill does not install clients, initiate login, change providers or add a
 connection. If separate setup is needed, identify it without pretending local
 configuration verifies execution.
 
-Version-2 worker consent preserves authorization for scoped worktree editing and
-registered checks under the task's declared ownership. The implemented runner is
+Enabling the workers route records version-2 consent, which also covers scoped
+worktree editing and registered checks under the task's declared ownership. The implemented runner is
 read-only over copied files: status reports `worker_capability:read_only`. Editing,
 registered-check execution and automatic native worker dispatch remain unavailable.
 Explain this distinction when enabling; saved authorization is not implemented
 capability or execution qualification. Do not add a mode selector or revoke existing
 consent. Preserve task scope and authorization without recurring confirmation.
 
-For worker `enable`, send
-`{"expected_revision":<current-revision>,"consent_version":2}`. The exact integer
-acknowledgement is required for initial permission or renewal of an older record.
-A successful acknowledgement records version 2 and advances the revision even if
-saved `enabled` was already true. Never infer this permission from an account
-connection, a configured path or an old read-only approval. Status with
-`enablement_renewal_required:true` means worker admission is unavailable until
-explicitly renewed; it does not erase or rewrite the historical configuration.
+For any `enable`, send `{"expected_revision":<current-revision>}`; a legacy
+`"consent_version":2` field is still accepted but no longer required. Enabling a
+workers route records version 2; enabling an already enabled record changes
+nothing. A legacy version-1 record that is already enabled keeps read-only worker
+admission without renewal and becomes version 2 only through a later disable and
+enable. Never infer enablement from an account connection or a configured path.
+`enablement_renewal_required` is always false and remains for compatibility.
 
-For proposal-only `enable`, retain `{"expected_revision":<current-revision>}`;
-the proposal route grants no file tools. Enabling saves consent without inference
-or a connection probe. Use status after the mutation to report the observed result.
-Reuse saved configuration when re-enabling. Once worktree permission has been
-acknowledged, ordinary disable/re-enable retains it; reconfiguration requires
-disable first, another current revision and acknowledgement of the new configuration.
+The proposal route grants no file tools. Enabling saves the activation without
+inference or a connection probe. Use status after the mutation to report the
+observed result. Reuse saved configuration when re-enabling. Reconfiguration
+requires disable first and another current revision; enabling then activates
+the new configuration.
 
 Saved permission and local references do not establish coding-dispatch readiness.
 Worktree editing and registered checks require the executor's qualified task/worktree
