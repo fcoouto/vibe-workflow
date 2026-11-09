@@ -116,12 +116,14 @@ def scan_skips(root, path, members):
 def export_usage(root, *, deadline=None):
     """Measure, by file metadata, the export of root as the bundle scan would read it.
 
-    The export is a checkout's membership, or any other directory minus EXCLUDED. Errors for unsupported entries.
+    The export is a checkout's membership, or any other directory as it is. Development-only paths are
+    listed in "excluded" and not measured: a checkout's membership never has them, and an export that still
+    does would have them scanned and installed. Errors for unsupported entries.
     """
     root = Path(root)
     members = export_members(root, deadline=deadline)
     usage = dict(files=0, directories=0, bytes=0, largest_file=None, largest_bytes=0,
-                 excluded=sorted(name for name in members or () if excluded(name)))
+                 excluded=[name for name in members or () if excluded(name)])
     pending = [root]
     while pending:
         path = pending.pop()
@@ -130,6 +132,7 @@ def export_usage(root, *, deadline=None):
             continue
         info = path.lstat()
         if path != root and (excluded(relative) or stat.S_ISDIR(info.st_mode) and excluded(relative + "/")):
+            usage["excluded"].append(relative + "/" if stat.S_ISDIR(info.st_mode) else relative)
             continue
         if stat.S_ISDIR(info.st_mode):
             usage["directories"] += path != root
@@ -141,6 +144,7 @@ def export_usage(root, *, deadline=None):
                 usage["largest_file"], usage["largest_bytes"] = relative, info.st_size
         else:
             raise PackageManifestError(f"Package export has an unsupported entry: {relative}")
+    usage["excluded"].sort()
     # The scan charges each entry when listed and when visited, and each file once more when read.
     usage["scan_paths"] = 1 + 3 * usage["files"] + 2 * usage["directories"]
     return usage

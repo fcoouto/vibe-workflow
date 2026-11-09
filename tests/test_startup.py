@@ -16,6 +16,7 @@ from unittest.mock import patch
 from runtime.adapters import claude_code, codex
 from runtime.startup import MAX_INPUT, PROJECT_FILE, checkout, orient, policy_digest
 from scripts.validate import validate
+from tests.fixture_package import copy_package
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -324,7 +325,7 @@ class StartupTests(unittest.TestCase):
 
     def test_package_validator_rejects_missing_or_escaping_hook_path(self):
         package = self.base / "package"
-        shutil.copytree(PACKAGE, package, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        copy_package(PACKAGE, package)
         self.assertEqual(validate(package)["validation"], "passed")
         path = package / self.manifest_directory / "plugin.json"
         manifest = json.loads(path.read_text())

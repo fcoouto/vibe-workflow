@@ -12,6 +12,7 @@ import stat
 import subprocess
 import uuid
 
+from runtime.entry_budget import observe_within
 from runtime.startup import PROJECT_FILE, StartupError, checkout, _checkout_identity, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
 from runtime.state import runtime_fingerprint
 
@@ -20,7 +21,8 @@ PACKAGE = Path(__file__).resolve().parents[1]
 MAX_REQUEST = 2 * 1024 * 1024
 MAX_PLAN = 4 * 1024 * 1024
 MAX_FILE = 1024 * 1024
-MAX_TOTAL = 16 * 1024 * 1024  # Aggregate project inventory; Codex's bundle bound is package_manifest's own.
+MAX_TOTAL = 16 * 1024 * 1024  # Project inventory (user decision); each startup observation keeps Codex's bundle bound.
+LEGACY_MAX_TOTAL = 8 * 1024 * 1024  # MAX_TOTAL before 9 November 2026; other aggregates that reused it keep it.
 MAX_PATHS = 4096
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 CHECKOUT_INPUTS = ("repository_root", "git_common_dir", "head", "index_digest", "dirty_inventory", "paths")
@@ -457,12 +459,7 @@ def _snapshot(root, targets=(), *, budget=None, inventory=False, relevant=False)
     else:
         check(reading=True)
         _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
-        try:
-            identity = checkout(root, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
-                                deadline=budget.get("deadline"), budget=budget)
-        except (StartupError, OSError, subprocess.SubprocessError):
-            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
-            raise
+        identity = observe_within(budget, MAX_TOTAL, checkout, root, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]))
         check()
     _require(identity is not None and identity[0] == root, "Selected checkout identity changed")
     if relevant:
@@ -762,7 +759,7 @@ def _checkout_observation(value, budget):
         _check_observation_deadline(budget)
         _require(str(root.resolve(strict=True)) == str(root), "Member boundary contains a link or noncanonical root")
         observed["binding"]["root"] = _filesystem_binding(root)
-        identity = _checkout_identity(root, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
+        identity = observe_within(budget, MAX_TOTAL, _checkout_identity, root, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]))
         _require(identity is not None and identity[0] == root, "Member must select an existing checkout root")
         common = identity[1]
         observed["git_common_dir"] = str(common)
@@ -795,7 +792,7 @@ def _checkout_observation(value, budget):
                 _require(not any(f == b"bare" or f.startswith(b"prunable") for f in fields)
                          and sum(f.startswith(b"HEAD ") for f in fields) == 1,
                          "Unsupported primary or selected worktree metadata")
-        primary_identity = _checkout_identity(primary, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
+        primary_identity = observe_within(budget, MAX_TOTAL, _checkout_identity, primary, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]))
         _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
         _require(primary_identity is not None and primary_identity[:2] == (primary, common)
                  and os.fsdecode(primary_identity[2].rstrip(b"\n")) == str(common), "Primary worktree identity is ambiguous")
@@ -1116,12 +1113,8 @@ def _target_observations(assessment, fingerprints, repositories=(), *, budget):
             check()
             _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
             _require(budget["bytes"] < MAX_TOTAL, "Project aggregate byte limit exceeded; inventory remains incomplete")
-            try:
-                identity = checkout(existing, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
-                                    deadline=budget.get("deadline"), budget=budget)
-            except (StartupError, OSError, subprocess.SubprocessError):
-                budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
-                raise
+            identity = observe_within(budget, MAX_TOTAL, checkout, existing,
+                                      limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]))
             check()
             _require(identity == (root, Path(owner["git_common_dir"])),
                      "Action target/cwd enters another checkout or Git tree")

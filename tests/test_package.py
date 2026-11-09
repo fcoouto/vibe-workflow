@@ -395,11 +395,12 @@ class ExportBudgetTests(unittest.TestCase):
         after = validate.package_export(self.root)
         self.assertEqual((after["files"], after["bytes"]), (before["files"] + 1, before["bytes"] + 1))
         # The scan reads an export as it is, so a development-only path in it would be scanned and installed.
-        for name in ("tests/t.py", "CLAUDE.md", ".codex/config.toml", "scripts/test_sharded.py"):
+        for name, reported in (("tests/t.py", "tests/"), ("CLAUDE.md", "CLAUDE.md"),
+                               (".codex/config.toml", ".codex/"), ("scripts/test_sharded.py", "scripts/test_sharded.py")):
             with self.subTest(name), tempfile.TemporaryDirectory() as other:
                 export = Path(other).resolve()
                 write_tree(export, (("a", b"x"), (name, b"x")))
-                with self.assertRaisesRegex(ValueError, f"development-only paths: {name}"):
+                with self.assertRaisesRegex(ValueError, f"development-only paths: {reported}$"):
                     validate.package_export(export)
         with patch.object(package_manifest, "export_members", return_value=frozenset({"a", "tests", "tests/t.py"})), \
                 self.assertRaisesRegex(ValueError, "development-only paths: tests/t.py"):
