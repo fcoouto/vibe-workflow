@@ -34,6 +34,8 @@ class ProbeServer(FakeOpenCode):
         self.models = [dict(id="haiku", providerID="claude-agent", variants=["low", "high"])]
         self.oauth_pending_polls, self.oauth_result, self.oauth_polls, self.connected = 2, "complete", 0, False
         self.cancelled = []
+        # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
+        self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
     # ---------------------------------------------------------------- the shim's view
     def _root_of(self, session):
@@ -160,8 +162,7 @@ class ProbeServer(FakeOpenCode):
         if path == "/api/location/reload":
             return 204, None, 1.0
         if path == "/api/model":
-            models = self.models + ([dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
-                                    if self.connected else []) + list(self.image_models)
+            models = self.models + (list(self.openai_models) if self.connected else []) + list(self.image_models)
             return 200, dict(data=models), 1.0
         if path == "/api/plugin":
             return 200, dict(data=[dict(id=i) for i in ("qual-pre", "vibe-workflow.routing", "qual-post")]), 1.0

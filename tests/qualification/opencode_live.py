@@ -55,7 +55,7 @@ sys.path.insert(0, str(ROOT))
 from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
-                                        Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
+                                        Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
                                         check_opencode_version, classify_changes, compare_snapshots, id_shape,
                                         latency_pairs, on_route, repo_snapshot, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
@@ -888,7 +888,7 @@ def main(argv=None):
     parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
                                          "descendants,s33d (docs/smart-routing-qualification.md)")
     parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
-    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's model list (default: lowest)")
+    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
     parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
@@ -943,8 +943,8 @@ def main(argv=None):
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
         if args.chatgpt:
-            ref = args.chatgpt_model or ""  # without #VARIANT the model's lowest listed variant is used
-            route = safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
+            ref = args.chatgpt_model or ""  # without #VARIANT the lowest listed variant; `auto`: chatgpt.AUTO_RULE
+            route = ("openai",) if ref == chatgpt.AUTO else safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
             if route[0] != "openai":
                 raise Refused("the chatgpt run allows only an openai model")
             if not 60 <= args.chatgpt_timeout <= 1800:
@@ -956,6 +956,7 @@ def main(argv=None):
         state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
         if args.canary:
             canary.plan_assignments(args.admissions, "check")
+        check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
