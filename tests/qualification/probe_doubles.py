@@ -29,6 +29,8 @@ class ProbeServer(FakeOpenCode):
         self.roots = {}  # attached root -> dict(attempt, token, watched, recorded={child: parent})
         # Knobs.
         self.tool_subagent, self.strip_env, self.image_models, self.shim_denies_config = True, True, [], True
+        # The edits the model attempts, and whether the permission's resources are relative or project-absolute.
+        self.edit_attempts, self.resource_form = EDIT_RESOURCES, "relative"
         self.models = [dict(id="haiku", providerID="claude-agent", variants=["low", "high"])]
         self.oauth_pending_polls, self.oauth_result, self.oauth_polls, self.connected = 2, "complete", 0, False
         self.cancelled = []
@@ -135,7 +137,8 @@ class ProbeServer(FakeOpenCode):
                                                        time=dict(created=now + 2)))
 
     def _permission(self, session, resource):
-        base = dict(hook="permission.evaluate", action="edit", session=session, resources=[resource])
+        shown = str(self.project / resource) if self.resource_form == "absolute" else resource
+        base = dict(hook="permission.evaluate", action="edit", session=session, resources=[shown])
         self._log(phase="pre", effect="allow", **base)
         segments = {segment.lower() for segment in resource.split("/")}
         denied = self.shim_denies_config and self._root_of(session) is not None and bool(segments & CONFIG_SEGMENTS)
@@ -191,7 +194,7 @@ class ProbeServer(FakeOpenCode):
             ok = self._turn(sid, now, parts) and (not parts or self._turn(sid, now + 1))  # continuation after a tool call
         else:
             ok = self._turn(sid, now)
-            for resource in EDIT_RESOURCES:
+            for resource in self.edit_attempts:
                 self._permission(sid, resource)
             ok = ok and self._turn(sid, now + 1)
         self._idle(sid, ok, now + 3)

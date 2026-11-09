@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import unittest
+from unittest.mock import patch
 
 from tests.qualification import chatgpt, probe_stages, safety
 from tests.qualification import opencode_live as live
@@ -251,13 +252,53 @@ class S33dStageTests(StageHarness):
         self.assertFalse((project / ".opencode" / "command" / "x.md").exists())
         self.assertFalse((project / "sub" / "opencode.json").exists())
         self.assertEqual((project / "agents" / "ok.txt").read_text(), "ok")
-        self.assertEqual(result["config_edits"], dict(denied=2, files_absent=True))
-        self.assertEqual(result["ordinary_edit"], dict(allowed=1, written=True))
+        self.assertEqual(result["config_edits"], dict(state="observed", files_absent=True, paths={
+            ".opencode/command/x.md": dict(attempted=1, denied=1), "sub/opencode.json": dict(attempted=1, denied=1)}))
+        self.assertEqual(result["ordinary_edit"], dict(state="observed", attempted=1, allowed=1, written=True))
+        self.assertEqual({e["form"] for e in result["edit_resources"]}, {"relative"})
+        self.assertEqual(sorted(e["target"] for e in result["edit_resources"]),
+                         [".opencode/command/x.md", "agents/ok.txt", "sub/opencode.json"])
         self.assertEqual(result["project_changes"], ["agents/", "agents/ok.txt"])
         self.assertEqual(result["env_command"]["marker"], "absent")
         self.assertEqual(result["image_generation"], "unobserved: no claude-agent image model in the isolated server")
         self.assertEqual(result["calls"], 2)
         self.assertNotIn("dummy-not-a-secret", json.dumps(run.results))
+
+    def test_project_absolute_resources_still_match_and_the_form_is_recorded(self):
+        run, ledger, server = self.probe_run(stages=["s33d"], resource_form="absolute")
+        probe_stages.setup(run, "s33d")
+        probe_stages.s33d(run)
+        result = run.results["stages"]["s33d"]
+        self.assertTrue(result["pass"], result)
+        self.assertEqual(result["ordinary_edit"]["allowed"], 1)
+        self.assertEqual({(e["form"], e["inside_project"]) for e in result["edit_resources"]}, {("absolute", True)})
+        self.assertNotIn(str(run.server.project), json.dumps(result))  # the shape, never the path itself
+
+    def test_no_config_edit_attempted_is_unobserved_not_a_pass(self):
+        run, ledger, server = self.probe_run(stages=["s33d"], edit_attempts=("agents/ok.txt",))
+        probe_stages.setup(run, "s33d")
+        probe_stages.s33d(run)
+        result = run.results["stages"]["s33d"]
+        self.assertEqual(result["config_edits"]["state"], "unobserved")
+        self.assertFalse(result["pass"])
+        self.assertIn("config_edit_unobserved", result["failures"])
+
+    def test_one_config_path_attempted_and_denied_passes_and_the_other_is_reported(self):
+        run, ledger, server = self.probe_run(stages=["s33d"], edit_attempts=("sub/opencode.json", "agents/ok.txt"))
+        probe_stages.setup(run, "s33d")
+        probe_stages.s33d(run)
+        result = run.results["stages"]["s33d"]
+        self.assertTrue(result["pass"], result)
+        self.assertEqual(result["config_edits"]["paths"][".opencode/command/x.md"], dict(attempted=0, denied=0))
+
+    def test_no_ordinary_edit_attempted_is_unobserved_with_the_shapes_seen(self):
+        run, ledger, server = self.probe_run(stages=["s33d"], edit_attempts=(".opencode/command/x.md", "elsewhere/y.txt"))
+        probe_stages.setup(run, "s33d")
+        probe_stages.s33d(run)
+        result = run.results["stages"]["s33d"]
+        self.assertEqual(result["ordinary_edit"]["state"], "unobserved")
+        self.assertIn("ordinary_edit_unobserved", result["failures"])
+        self.assertIn(dict(form="relative", inside_project=None, config=False, target="other"), result["edit_resources"])
 
     def test_an_unstripped_env_is_recorded_not_failed(self):
         run, ledger, server = self.probe_run(stages=["s33d"], strip_env=False)
@@ -331,6 +372,26 @@ class ChatGPTTests(StageHarness):
         self.assertIsNone(server.control["route"])
         self.assertEqual(server.transmitted(), [])
 
+    def test_a_model_without_a_variant_gets_its_lowest_listed_variant(self):
+        run, ledger, server, *_ = self.connect()
+        run.chatgpt_model = "openai/gpt-test-mini"
+        self.assertEqual(chatgpt.select_model(run), GPT)
+        self.assertEqual(run.guard_variant, "medium")
+        server.models = [dict(id="gpt-odd", providerID="openai", variants=["fast", "slow"])]
+        run.chatgpt_model = "openai/gpt-odd"
+        with self.assertRaises(safety.Refused):  # no known order: the operator must name the variant
+            chatgpt.select_model(run)
+
+    def test_prepare_admits_the_openai_explicit_choice_with_the_real_routing(self):
+        run, ledger, server, *_ = self.connect()
+        chatgpt.select_model(run)
+        attempt = probe_stages.managed(run, "chatgpt", run.run_id + "-prep")
+        self.assertTrue(attempt["session"].startswith("ses_"))
+        status = run.routing("status")[0]["ledger"]
+        self.assertEqual(status["open_attempts"], 1)
+        self.assertEqual(run.request_facts()["harness"], "opencode provider openai")
+        self.assertEqual(run.request_facts()["funding_pool"], "chatgpt-sub")
+
     def test_one_managed_request_on_the_chosen_model(self):
         run, ledger, server, *_ = self.connect()
         self.assertIsNone(server.control["route"])  # nothing may be sent before the model is checked
@@ -357,12 +418,69 @@ class ModeRefusalTests(Temp):
         base = ["--isolated-dir", str(target), "--call-ledger", str(ledger_path)]
         for extra in (["--stages", "descendants", "--chatgpt", "--chatgpt-model", "openai/gpt-test-mini#low"],
                       ["--stages", "bogus"], ["--chatgpt"], ["--chatgpt", "--chatgpt-model", "claude-agent/haiku#low"],
-                      ["--chatgpt", "--chatgpt-model", "openai/gpt-test-mini"], ["--stages", "s33d", "--canary"],
+                      ["--stages", "s33d", "--canary"],
                       ["--chatgpt", "--chatgpt-model", "openai/gpt-test-mini#low", "--canary"],
-                      ["--chatgpt-model", "openai/gpt-test-mini#low"]):
-            with self.subTest(extra=extra):
+                      ["--chatgpt-model", "openai/gpt-test-mini#low"],
+                      ["--chatgpt", "--chatgpt-model", "openai/gpt-test-mini#low", "--keep"]):
+            with self.subTest(extra=extra), patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
+                    patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
                 self.assertEqual(live.main(base + extra), 2)
         self.assertEqual(list(target.iterdir()), [])
+
+
+    def test_the_keep_warning_names_the_stored_logins(self):
+        self.assertIn("ChatGPT", live.KEEP_WARNING)
+        self.assertIn("refresh", live.KEEP_WARNING)
+
+
+class WatchedHomeTests(Temp):
+    def fake_home(self):
+        home = self.private(self.tmp / "home")
+        for name in ("auth.json", "config.toml", "logs_2.sqlite", "models_cache.json"):
+            (self.private(home / ".codex") / name).write_text("x")
+        deep = home / ".codex" / "sessions" / "a" / "b"
+        deep.mkdir(parents=True)
+        for index in range(30):
+            (deep / ("s%d.jsonl" % index)).write_text("x")
+        return home
+
+    @staticmethod
+    def touch(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("y")
+        stamp = path.stat().st_mtime_ns + 5_000_000_000
+        import os
+        os.utime(path, ns=(stamp, stamp))
+
+    def test_codex_credentials_and_config_fail_but_app_churn_is_reported(self):
+        home = self.fake_home()
+        before = safety.watched_home(home, max_entries=20)  # depth 1: the deep sessions tree is never walked
+        self.touch(home / ".codex" / "logs_2.sqlite")
+        self.touch(home / ".codex" / "models_cache.json")
+        self.touch(home / ".codex" / "sessions" / "new")
+        self.assertEqual(safety.watched_changes(before, safety.watched_home(home))[1], [])
+        self.touch(home / ".codex" / "auth.json")
+        self.touch(home / ".codex" / "chatgpt-token.json")
+        changes, unexpected = safety.watched_changes(before, safety.watched_home(home))
+        self.assertEqual(sorted(unexpected), [".codex/auth.json", ".codex/chatgpt-token.json"])
+        self.assertEqual(changes[".codex"]["churn_count"], 2)
+
+    def test_any_change_under_config_openai_fails(self):
+        home = self.fake_home()
+        before = safety.watched_home(home)
+        self.touch(home / ".config" / "openai" / "anything")
+        self.assertEqual(safety.watched_changes(before, safety.watched_home(home))[1], [".config/openai/anything"])
+
+    def test_the_run_watches_codex_through_its_user_dir_check(self):
+        home = self.fake_home()
+        run = live.Run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
+                       purpose="chatgpt", chatgpt_model="openai/gpt-test-mini#low")
+        with patch.dict("os.environ", HOME=str(home)):
+            before, report = run.snapshot_user_dirs(), run.report_only_home()
+            self.touch(home / ".codex" / "config.toml")
+            run.compare_user_dirs(before, report)
+        self.assertIn("the user's ~/.codex credentials or config changed during the run", run.results["blockers"])
+        self.assertEqual(run.results["user_dirs"]["codex"][".codex"]["unexpected"], [".codex/config.toml"])
 
 
 class ProbeStructureTests(StageHarness):
