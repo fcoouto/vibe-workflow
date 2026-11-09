@@ -19,7 +19,7 @@ def tracked():
     output = subprocess.run(["git", "-C", str(PACKAGE), "ls-files", "-z"], check=True,
                             capture_output=True).stdout.decode()
     return {name for name in output.split("\0")
-            if name and (PACKAGE / name).is_file() and not name.startswith(package.EXCLUDED)}
+            if name and (PACKAGE / name).is_file() and not package.excluded(name)}
 
 
 def exported(root):
@@ -36,7 +36,7 @@ class BuildTests(unittest.TestCase):
     def test_exports_only_tracked_files_and_validates(self):
         report = package.build(PACKAGE, self.output)
         self.assertEqual(exported(self.output), tracked())
-        for ignored in (".git", ".superpowers", ".vibe-workflow", "__pycache__", "tests"):
+        for ignored in (".git", ".superpowers", ".vibe-workflow", ".codex", "CLAUDE.md", "__pycache__", "tests"):
             self.assertFalse(any(part == ignored for path in exported(self.output)
                                  for part in Path(path).parts), ignored)
         self.assertEqual(report["validation"], "passed")
@@ -85,6 +85,13 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             package.build(PACKAGE, self.output)
         self.assertEqual((checkout / "my-work.txt").read_text(encoding="utf-8"), "uncommitted")
+
+    def test_exclusions_match_directories_and_exact_files(self):
+        for name, expected in (("tests/x.py", True), (".codex/config.toml", True), (".codex-plugin/plugin.json", False),
+                               ("CLAUDE.md", True), ("CLAUDE.md.bak", False), ("docs/CLAUDE.md", False),
+                               (".vibe-workflow/project.json", True), ("scripts/test_sharded.py", True)):
+            with self.subTest(name=name):
+                self.assertEqual(package.excluded(name), expected)
 
     def test_refuses_tracked_paths_through_symlinked_directories(self):
         repo, outside = self.base / "repo", self.base / "outside"
