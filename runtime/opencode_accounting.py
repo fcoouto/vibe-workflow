@@ -146,13 +146,16 @@ def _message(record):
     calls = record.get("tool_calls") or []
     if type(calls) is not list or len(calls) > opencode.MAX_ITEMS or any(type(call) is not dict for call in calls):
         _fail("invalid message")
-    children = tuple(sorted({_name(call.get("child_session_id"), opencode.SESSION, "invalid message")
-                             for call in calls} - {None}))
+    links = [(call.get("tool"), _name(call.get("child_session_id"), opencode.SESSION, "invalid message"))
+             for call in calls]
+    children = tuple(sorted({child for _, child in links} - {None}))
+    # A subagent call without a child session (errored, aborted or still starting) may still have spent.
+    unlinked = sum(tool == "subagent" and child is None for tool, child in links)
     return {"id": message_id, "type": record["type"], "unknown": False, "requested": requested,
             "tokens": _tokens(record.get("tokens")), "cost": _cost(record.get("cost")),
             "created_ms": _count(record.get("created_ms"), "invalid message"),
             "completed_ms": _count(record.get("completed_ms"), "invalid message"), "finish": finish,
-            "children": children, "dropped": _count(record.get("tool_calls_dropped"), "invalid message") or 0,
+            "children": children, "unlinked": unlinked, "dropped": _count(record.get("tool_calls_dropped"), "invalid message") or 0,
             "has_rate_limit": record.get("rate_limit") is not None}
 
 
@@ -160,7 +163,7 @@ def _projection(message):
     tokens = message.get("tokens")
     return (message["type"], message.get("requested"), None if tokens is None else tuple(tokens.values()),
             message.get("cost"), message.get("created_ms"), message.get("completed_ms"), message.get("finish"),
-            message.get("children"), message.get("dropped"))
+            message.get("children"), message.get("unlinked"), message.get("dropped"))
 
 
 def _terminal(message, idle_after):
@@ -178,7 +181,7 @@ def _scan(records, complete):
     if len(records) > MAX_MESSAGES:
         _fail("too many messages")
     seen, scan = {}, {"by_type": {}, "duplicates": 0, "conflicts": 0, "unknown_records": 0, "missing_tokens": 0,
-                      "in_progress": 0, "missing_model": 0, "unexpected_tokens": 0, "dropped": 0, "countable": [],
+                      "in_progress": 0, "missing_model": 0, "unexpected_tokens": 0, "unlinked": 0, "dropped": 0, "countable": [],
                       "rate_limited": [], "children": set()}
     for record in records:
         message = _message(record)
@@ -195,6 +198,7 @@ def _scan(records, complete):
         scan["by_type"][message["type"]] = scan["by_type"].get(message["type"], 0) + 1
         scan["children"].update(message["children"])
         scan["dropped"] += message["dropped"]
+        scan["unlinked"] += message["unlinked"]
         if message["has_rate_limit"]:
             scan["rate_limited"].append(record)
         if message["type"] not in KINDS:
@@ -215,7 +219,8 @@ def _scan(records, complete):
     reasons = set()
     for reason, key in (("message_tokens_missing", "missing_tokens"), ("message_in_progress", "in_progress"),
                         ("unknown_record", "unknown_records"), ("unexpected_tokens", "unexpected_tokens"),
-                        ("model_unknown", "missing_model"), ("tool_calls_dropped", "dropped")):
+                        ("model_unknown", "missing_model"), ("tool_calls_dropped", "dropped"),
+                        ("child_session_unaccounted", "unlinked")):
         if scan[key]:
             reasons.add(reason)
     if not complete:
@@ -340,8 +345,7 @@ def _attempt(root, children, funding):
             if owners.setdefault(message_id, part["session_id"]) != part["session_id"]:
                 _fail("message in two sessions")
     spawned = set().union(*(part["scan"]["children"] for part in parts))
-    if set(ids[1:]) - spawned:
-        _fail("session not in the attempt")
+    _reachable(ids[0], {part["session_id"]: part["scan"]["children"] for part in parts})
     unknown = set().union(*(part["scan"]["reasons"] for part in parts))
     if spawned - set(ids):
         unknown.add("child_session_unaccounted")
@@ -385,6 +389,26 @@ def _attempt(root, children, funding):
     if not requests:
         unknown.add("no_requests")
     return parts, requests, usd, unknown, grouped
+
+
+def _reachable(root, links):
+    """Every included session must be reachable from the root through spawn links, with no link back to the root
+    and no cycle (depth-first, iterative). Links to sessions that are not included are left to the caller."""
+    state, stack = {root: "open"}, [(root, iter(sorted(links[root])))]
+    while stack:
+        session, pending = stack[-1]
+        child = next(pending, None)
+        if child is None:
+            state[session] = "done"
+            stack.pop()
+        elif child in links:
+            if state.get(child) == "open" or child == root:
+                _fail("session not in the attempt")  # a cycle or a link back to the root
+            if child not in state:
+                state[child] = "open"
+                stack.append((child, iter(sorted(links[child]))))
+    if set(links) - set(state):
+        _fail("session not in the attempt")  # not reachable from the root
 
 
 def _title(part):
@@ -491,7 +515,8 @@ def consistency_report(session_state):
             "title": "unknown" if title is None else "known" if any(title.values()) else "zero",
             "title_reason": reason, "negative_classes": negative, "rate_limit_messages": len(scan["rate_limited"]),
             "children_referenced": len(spawned), "children_included": len(included),
-            "children_unaccounted": len(spawned - included), "tool_calls_dropped": scan["dropped"]}
+            "children_unaccounted": len(spawned - included), "spawns_without_session": scan["unlinked"],
+            "tool_calls_dropped": scan["dropped"]}
 
 
 def _previous(previous, session_id):
