@@ -105,6 +105,16 @@ Every send is written ahead to the durable call ledger, and an unsettled reserva
 | D6: dead runs | `--settle-dead SEQ`; reservations now record the reserving pid. Malformed ledger records are refused as damaged instead of raising `KeyError`. |
 | D8: output defects and tests | The redactor no longer takes field names such as `call_ledger` for ids: an id needs a digit or 20 characters. Added tests for run sequencing, `CanaryEnv`, and the canary state and kill switch against the real `routing.py` on temporary stores. |
 
+## Round-3 review fixes (no live run)
+
+- **Persistent routing child.** `served()` checks every reply id. A timeout, an unreadable or mismatched reply, or an interrupt kills the child, so a late reply can never be read as another request's answer. Only reads (`status`, `check`) are re-sent, to a fresh child; a write (`prepare`, `dispatch`, `record`, `set`) is never re-sent and answers `unconfirmed`.
+- **Cleanup order.** Cleanup stops the server, removes the project config and restores `.git/info/exclude` first, each step independent. It reads the hooks afterwards, tolerating a damaged last line (one retry, then `hooks_unreadable`) without failing cleanup.
+- **Ancestor configs.** Canary mode refuses any OpenCode config in the project or its ancestors. None exists today on the allowlisted path.
+- **Signals.** The abort path ignores signals before any recovery step.
+- **Working-tree snapshots** use `GIT_OPTIONAL_LOCKS=0`, so they never rewrite `.git/index`.
+- **Guarded directories** are resolved through symlinks.
+- **Guard-probe reason.** Its exact text was not observed live through this check. A different reason stops the pilot before any admission, and the two probe reservations settle at 0.
+
 ## Run 1 (stopped in stage 3)
 
 - Harness: [`tests/qualification/opencode_live.py`](../tests/qualification/opencode_live.py) acted as the managed launcher. [`opencode_inspect.py`](../tests/qualification/opencode_inspect.py) re-read the stopped run without any model call. Pure parts are tested in `tests/test_qualification_harness.py`. The harness was hardened after an independent review; see [Harness changes after review](#harness-changes-after-review-no-live-run). This report's results come from the earlier version.

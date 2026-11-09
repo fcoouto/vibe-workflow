@@ -1,6 +1,6 @@
 # Smart Routing cutover criteria
 
-- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed.
+- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed.
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
 
@@ -79,7 +79,7 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
 | Project allowlist | Exactly `/Users/fcouto/dev/git/vibe-workflow`. Any other project or working directory is refused. |
 | Routes | The subscription route `claude-agent/haiku#low` only. No API Usage, no organization, no OpenAI or Codex. |
 | Sample | Up to 20 admissions, across at least three roles (implementer, reviewer, researcher, each through an explicit worker choice) and two complexity bands. |
-| Requests | At most 1 real request per admission, plus one title request in the whole pilot. The durable call ledger caps the pilot at 24 real requests, separate from the 9 qualification calls that remain. |
+| Requests | At most 1 real request per admission, plus one title request in the whole pilot. The durable call ledger caps the pilot at 24 real requests, separate from the qualification budget (9 of 14 spent, 5 remain). |
 | Concurrency | The defaults (4 total, 2 per account), never raised. The driver runs one admission at a time. |
 | Maximum duration | 24 hours of wall-clock time. |
 | Abort conditions | Any funding violation, unresolved launch, recovery error, non-haiku request, `status` anomaly, or cap breach. |
@@ -100,7 +100,7 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
    - enough pilot budget remains.
 
    An unclean canary state is refused with reset advice: the operator deletes the canary directory after confirming no harness run is alive.
-3. **Before any admission, once the server runs.** The `routing.health` RPC answers `ok`, and the plugin-chain probes pass; the guard probe must be refused by the guard with `guard_variant`. Otherwise the harness refuses, and removes the project config and the server.
+3. **Before any admission, once the server runs.** The `routing.health` RPC answers `ok`, and the plugin-chain probes pass; the guard probe must be refused by the guard with `guard_variant`. Otherwise the harness refuses, and removes the project config and the server. In particular, if the guard probe is refused for any reason other than the expected `guard_variant` text (its exact text was not observed live through this check), the pilot stops before any admission, and the two probe reservations settle at 0 because nothing was sent. The harness also refuses when the project or any ancestor directory up to `/` holds an `opencode.json`, `opencode.jsonc` or `.opencode/`, because OpenCode would load it.
 4. **Each admission**, in order:
    1. `prepare`;
    2. `health`;
