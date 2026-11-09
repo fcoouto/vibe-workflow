@@ -17,7 +17,7 @@ import re
 import time
 
 from tests.qualification import probe_stages
-from tests.qualification.safety import Blocker, Refused, check_route, parse_route
+from tests.qualification.safety import PROMPT_TEXT, Blocker, Refused, check_route, parse_route
 
 PURPOSE = "chatgpt"
 INTEGRATION = "openai"
@@ -222,7 +222,7 @@ def select_model(run, announce=print):
         announce("chatgpt model selected: %s (rule: %s)" % (selection["selected"], AUTO_RULE))
         write_state(run, selection=dict(selected=selection["selected"], rule=AUTO_RULE, candidates=selection["candidates"]))
     run.note(PURPOSE, "model_selection", selection)
-    run.route, run.guard_variant = route, others[0]
+    run.route, run.guard_variant, run.chatgpt_variants = route, others[0], [str(v)[:40] for v in variants][:10]
     run.server.write_control(route=list(route))
     run.note(PURPOSE, "model", dict(listed=True, variants=len(variants),
                                     openai_models=sum(1 for m in listed if m.get("providerID") == "openai")))
@@ -242,6 +242,142 @@ def lowest_variant(listed, ref):
     return known[0]
 
 
+# Sanitized facts about what the server returned for the managed request, so one run can tell an upstream refusal,
+# an invalid variant, a wrong request shape and a harness cut apart. OpenCode 2.2.6 shapes (binary): an assistant
+# message has finish, rawFinish, cost, tokens, error and retry {attempt, at, error}; an idle record has outcome
+# (succeeded, failed, interrupted) and error; errors are `Session.StructuredError` {type, message, status?,
+# response?: {body}, retryAfterMs?}; session status events are idle, busy or retry {attempt, message, next}.
+URL = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I)
+BODY_FIELDS = ERROR_FIELDS + ("param", "type")
+# Refusal codes the 2.2.6 chatgpt plugin itself recognizes, and common OpenAI error codes; matched in error bodies.
+KNOWN_CODES = ("subscription_sharing_usage_limit_exceeded", "subscription_sharing_user_not_eligible",
+               "subscription_sharing_unsupported_capability", "subscription_sharing_route_not_supported",
+               "subscription_sharing_invalid_user", "chatpass_v2_scope_not_authorized",
+               "chatpass_v2_invalid_authorization_context", "usage_limit_reached", "rate_limit_exceeded",
+               "insufficient_quota", "model_not_found", "unsupported_value", "unsupported_parameter",
+               "invalid_request_error", "context_length_exceeded")
+EVENT_TYPES = ("session.status", "session.error", "session.idle", "message.updated")
+
+
+def short(run, value, cap=ERROR_CAP):
+    """A redacted, URL-free, length-capped string, or None."""
+    return URL.sub("<url>", run.redact(value))[:cap] if isinstance(value, str) and value.strip() else None
+
+
+def body_facts(run, raw):
+    """An upstream error body: whitelisted short fields of its (inner) error object, its key names, known codes."""
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = None
+    inner = parsed.get("error") if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict) else parsed
+    inner = run.redact(inner) if isinstance(inner, dict) else {}
+    return dict(fields={k: short(run, inner[k]) for k in BODY_FIELDS if short(run, inner.get(k))},
+                keys=sorted(str(k)[:40] for k in inner)[:30], codes=[c for c in KNOWN_CODES if c in raw],
+                json=isinstance(parsed, dict), length=len(raw))
+
+
+def structured_error(run, error):
+    if not isinstance(error, dict):
+        return None
+    raw = (error.get("response") or {}).get("body") if isinstance(error.get("response"), dict) else None
+    clean = run.redact(error)
+    return dict(type=short(run, clean.get("type"), 80), message=short(run, clean.get("message")),
+                status=error.get("status") if type(error.get("status")) is int else None,
+                retry_after_ms=error.get("retryAfterMs") if type(error.get("retryAfterMs")) is int else None,
+                keys=sorted(str(k)[:40] for k in error)[:20], body=body_facts(run, raw) if isinstance(raw, str) else None)
+
+
+def integer_tokens(tokens):
+    flat = {}
+    for key, value in (tokens or {}).items() if isinstance(tokens, dict) else ():
+        if isinstance(value, dict):
+            flat.update({"%s.%s" % (key, k): v for k, v in value.items() if type(v) is int})
+        elif type(value) is int:
+            flat[str(key)] = value
+    return flat
+
+
+def assistant_facts(run, message):
+    model = message.get("model") if isinstance(message.get("model"), dict) else {}
+    retry = message.get("retry") if isinstance(message.get("retry"), dict) else None
+    times = message.get("time") if isinstance(message.get("time"), dict) else {}
+    return dict(finish=short(run, message.get("finish"), 40), raw_finish=short(run, message.get("rawFinish"), 80),
+                error=structured_error(run, message.get("error")), time_completed=bool(times.get("completed")),
+                time_streamed=bool(times.get("streamed")), tokens=integer_tokens(message.get("tokens")),
+                cost_present=message.get("cost") is not None,
+                model={k: short(run, model.get(k), 80) for k in ("providerID", "id", "variant")},
+                retry=dict(attempt=retry.get("attempt") if type(retry.get("attempt")) is int else None,
+                           error=structured_error(run, retry.get("error"))) if retry else None,
+                content_types=sorted({str(p.get("type"))[:20] for p in message.get("content") or [] if isinstance(p, dict)}))
+
+
+def event_facts(run, root):
+    found = []
+    for event in (run.events.events if run.events else []):
+        data = event.get("data") if isinstance(event, dict) and isinstance(event.get("data"), dict) else {}
+        if event.get("type") not in EVENT_TYPES or data.get("sessionID") != root:
+            continue
+        status = data.get("status") if isinstance(data.get("status"), dict) else None
+        error = data.get("error") or ((data.get("info") or {}).get("error") if isinstance(data.get("info"), dict) else None)
+        if event["type"] == "message.updated" and not error:
+            continue
+        entry = dict(type=event["type"])
+        if status:
+            entry["status"] = {k: v for k, v in (("type", short(run, status.get("type"), 20)),
+                                                 ("attempt", status.get("attempt"))) if v is not None and v != ""}
+            if short(run, status.get("message")):
+                entry["status"]["message"] = short(run, status.get("message"))
+        if error:
+            entry["error"] = structured_error(run, error)
+        found.append(entry)
+    return found[:30]
+
+
+def session_facts(run, root, began, body, waited, wait_ms):
+    """What the server returned for the managed session (ids, kinds, shapes and short redacted errors only)."""
+    status, session, _ = run.server.request("GET", "/api/session/%s" % root)
+    info = run.data(session) if status == 200 and isinstance(run.data(session), dict) else {}
+    http, page, _ = run.server.request("GET", "/api/session/%s/message" % root, query={"order": "asc"})
+    try:
+        messages = run.messages(root)
+    except Blocker:
+        messages = []
+    counts = {}
+    for message in messages:
+        kind = str(message.get("type"))[:30]
+        counts[kind] = counts.get(kind, 0) + 1
+    recent = [m for m in messages if ((m.get("time") or {}).get("created") or 0) >= began]
+    return dict(session=dict(http=status, keys=sorted(str(k)[:40] for k in info)[:40],
+                             outcome=info.get("outcome") if info.get("outcome") in ("succeeded", "failed", "interrupted") else None),
+                messages_http=http, messages_keys=sorted(str(k)[:40] for k in page)[:20] if isinstance(page, dict) else None,
+                messages_by_type=counts, user_message=any(m.get("type") == "user" for m in messages),
+                assistant=[assistant_facts(run, m) for m in messages if m.get("type") == "assistant"][:5],
+                idle=[dict(outcome=short(run, m.get("outcome"), 20),
+                           error_type=(structured_error(run, m.get("error")) or {}).get("type"))
+                      for m in recent if m.get("type") == "idle"][:5],
+                events=event_facts(run, root), request_body_keys=sorted(body), variant=run.route[2],
+                variants_listed=list(getattr(run, "chatgpt_variants", None) or []),
+                wait=dict(ms=wait_ms, reason=waited))
+
+
+def upstream_code(facts):
+    """The most specific refusal recorded: a known code, the error body's code or type, else the error's type."""
+    errors = [a["error"] for a in facts["assistant"] if a["error"]] + \
+        [a["retry"]["error"] for a in facts["assistant"] if a["retry"] and a["retry"]["error"]] + \
+        [e["error"] for e in facts["events"] if e.get("error")]
+    for error in errors:
+        body = error.get("body") or {}
+        if body.get("codes"):
+            return body["codes"][0]
+    for error in errors:
+        fields = (error.get("body") or {}).get("fields") or {}
+        if fields.get("code") or fields.get("type"):
+            return fields.get("code") or fields.get("type")
+    failed = [i for i in facts["idle"] if i["outcome"] == "failed"]
+    return next((e.get("type") for e in errors if e.get("type")), None) or ("idle_failed" if failed else None)
+
+
 def request(run):
     """One tiny prompt through the full managed handshake; accounting, `record complete`, a clean `status`."""
     s, failures = PURPOSE, []
@@ -253,8 +389,18 @@ def request(run):
     run.create_session(root, title="qual chatgpt")  # titled: OpenCode sends no title request
     mark, began = len(run.server.hooks()), probe_stages.now_ms()
     token = run.expect(s, "chatgpt: one managed request", 1)
-    run.prompt(root, a["message"])
-    run.wait_idle(root, began)
+    body = {"text": PROMPT_TEXT, "id": a["message"]}  # exactly what is sent; its key names are recorded
+    run.server.request("POST", "/api/session/%s/prompt" % root, body)
+    started = time.monotonic()
+    try:
+        run.wait_idle(root, began)
+    except Blocker as error:
+        run.note(s, "session_facts", session_facts(run, root, began, body, "timeout: %s" % error,
+                                                    round((time.monotonic() - started) * 1000)))
+        raise
+    facts = session_facts(run, root, began, body, "idle record after the prompt and the session not active",
+                          round((time.monotonic() - started) * 1000))
+    run.note(s, "session_facts", facts)
     sent = run.done(token)
     transmitted = [r for r in run.server.hooks()[mark:] if r.get("decision") == "transmit"]
     status, answer = probe_stages.ask_descendants(run, a)
@@ -270,7 +416,11 @@ def request(run):
                     unknown=sorted(result["unknown"]), title=(result.get("title") or {}).get("state"),
                     descendants=dict(http=status, complete=(answer or {}).get("complete")), settlement=settlement,
                     detached=detached)
-    for condition, reason in ((sent == 1 and observed["kinds"] == ["primary"], "not_one_primary_request"),
+    upstream = upstream_code(facts) if sent == 1 and observed["kinds"] != ["primary"] else None
+    if upstream:  # transmitted, then refused or failed upstream: reported apart from a missing or extra request
+        failures.append("request_failed_upstream")
+        run.note(s, "upstream_error", upstream)
+    for condition, reason in ((upstream or (sent == 1 and observed["kinds"] == ["primary"]), "not_one_primary_request"),
                               (all(c is None for c in observed["costs"]), "cost_not_null"),
                               (settlement == "window" and detached, "not_settled"), (clean, "status_not_clean")):
         if not condition:

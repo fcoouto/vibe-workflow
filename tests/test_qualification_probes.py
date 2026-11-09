@@ -562,7 +562,7 @@ class ChatGPTRequestFactsTests(StageHarness):
         self.assertEqual(assistant["retry"]["attempt"], 2)
         self.assertEqual(facts["idle"], [dict(outcome="failed", error_type="APIError")])
         self.assertEqual([e["type"] for e in facts["events"]], ["session.status", "session.error", "session.status"])
-        self.assertEqual(facts["events"][0]["status"], dict(type="retry", attempt=1))
+        self.assertEqual(facts["events"][0]["status"], dict(type="retry", attempt=1, message="retrying"))
         self.assertEqual(facts["request_body_keys"], ["id", "text"])
         self.assertEqual((facts["variant"], facts["variants_listed"]), ("low", ["low", "medium"]))
         self.assertEqual(facts["wait"]["reason"], "idle record after the prompt and the session not active")

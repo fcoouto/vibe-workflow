@@ -106,6 +106,30 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
     - **`auto` refused as designed,** before any reservation: 0 calls, chatgpt 0 of 4. On a listing without costs or hints, an explicit `--chatgpt-model` is required; the coordinator will pass `openai/gpt-5.5`.
     - **False positive:** the post-run check reported "the user's .local/share/opencode changed during the run". The unexpected names were `shell/<project>/sh_*.out` files written for the coordinator's own OpenCode session, now report-only under the rule above.
     - **Unobserved:** the request.
+  - **Attempt 3** (9 November 2026, 21:51 CET, run `chatgpt-c8f09645`, `--chatgpt-model openai/gpt-5.5`):
+    - **Observed:**
+      - the sign-in through `chatgpt-token-sharing` completed, and 18 models were listed; gpt-5.5 had 5 variants, and the lowest, `none`, was used;
+      - one primary request was transmitted through the shim after the full managed handshake (`health` ok, `dispatch`, `attach`): the hooks show `model.request` pre and post `transmit`, kind `primary`, model `gpt-5.5`, variant `none`;
+      - the ledger stands at chatgpt **1 of 4**;
+      - accounting found no assistant message and no tokens: unknown `message_tokens_missing`, `no_requests`, `title_unknown`, with no settlement and failures `not_one_primary_request` and `not_settled`;
+      - `status` was clean, `native.rateLimit` was absent, and `descendants` was complete.
+    - **Unobserved:** the upstream outcome. The harness recorded nothing about why there was no reply, and the isolated directory is deleted after the run.
+- **Recorded for the next run (added after attempt 3, before any further run).** After the managed request goes idle, and also when the wait fails, the results get sanitized `session_facts`:
+  - **Messages:** the session's messages counted by type, and whether the user message exists.
+  - **Each assistant message:**
+    - `finish` and `rawFinish`;
+    - its structured error: `type`, HTTP `status`, `retryAfterMs`, and a redacted, URL-free `message` of at most 200 characters. For the error body, the whitelisted fields `code`, `error`, `error_description`, `message`, `reason`, `param` and `type`, its key names, its length, and the known refusal codes it contains;
+    - its retry marker (`attempt` and error);
+    - whether `time.completed` and `time.streamed` exist;
+    - integer token values by key, whether a cost exists, the model's provider, id and variant, and its content part types.
+  - **Idle records:** outcome and error type.
+  - **Events:** the session's `session.status` (type, retry attempt, short message) and `session.error` / `message.updated` error events.
+  - **HTTP:** the statuses and key names of `GET` session and messages.
+  - **The request:** the exact key names of the prompt body the harness sent (`id`, `text`), the variant used and the variants listed.
+  - **The wait:** its duration and the reason it ended.
+
+  A transmitted request that the upstream refused or failed is reported as `request_failed_upstream` with `upstream_error` (a known code, the body's code or type, or the error type). It is no longer reported as `not_one_primary_request`.
+- **The variant `none` is kept.** In OpenCode 2.2.6, `none` is the first value of its own `ReasoningEffort` set (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), and the ChatGPT model list carries `supported_reasoning_levels`. So `none` is a normal variant meaning "no reasoning", not a placeholder. If the recorded error points at the reasoning effort (for example `unsupported_value` with `param` `reasoning.effort`), the next run should name another listed variant explicitly.
 
 ### ChatGPT sign-in method lookup (diagnosis)
 

@@ -1,12 +1,12 @@
 # Policy source map
 
-## Smart Routing qualification: OpenCode tool-output churn is report-only — 9 November 2026
+## Smart Routing qualification: OpenCode tool-output churn and ChatGPT request facts — 9 November 2026
 
-The ChatGPT run's user-directory check failed on OpenCode's own per-command output files. No model call, server or live run was made for this change, and the durable ledger is unchanged.
+The ChatGPT run's user-directory check failed on OpenCode's own per-command output files, and attempt 3 transmitted one request whose missing reply left no trace. No model call, server or live run was made for these changes, and the durable ledger was not written.
 
 | Contract | Source |
 | --- | --- |
-| The [pre-registration](smart-routing-qualification.md#run-chatgpt-chatgpt-at-most-4-calls-its-own-run) rule for OpenCode session tool output and the attempt 2 observation; `tests/qualification/safety.py` (`snapshot_tree` records symlinks distinctly; `session_output` and `classify_snapshots` count added or changed names strictly inside `shell/` and `tool-output/` of `~/.local/share/opencode`; deletions, symlinks, dot segments and every other path stay unexpected); `opencode_live.py` (`session_output_count`) | The 21:47 CET ChatGPT run of 9 November 2026 (sign-in completed, 18 openai models without cost or hints, `auto` refused with 0 calls, `shell/<project>/sh_*.out` flagged); the coordinator's fix brief; `tests/test_qualification_probes.py` |
+| The [pre-registration](smart-routing-qualification.md#run-chatgpt-chatgpt-at-most-4-calls-its-own-run) rule for OpenCode session tool output and the attempt 2 observation; `tests/qualification/safety.py` (`snapshot_tree` records symlinks distinctly; `session_output` and `classify_snapshots` count added or changed names strictly inside `shell/` and `tool-output/` of `~/.local/share/opencode`; deletions, symlinks, dot segments and every other path stay unexpected); `opencode_live.py` (`session_output_count`); in `chatgpt.py`, the sanitized `session_facts` after the managed request (and on a failed wait), and `request_failed_upstream` with `upstream_error` | The 21:47 CET ChatGPT run of 9 November 2026 (sign-in completed, 18 openai models without cost or hints, `auto` refused with 0 calls, `shell/<project>/sh_*.out` flagged); attempt 3 at 21:51 CET (one primary request transmitted on `openai/gpt-5.5#none`, no assistant tokens); the 2.2.6 binary's assistant, idle, structured-error and session-status shapes and its `ReasoningEffort` set; the coordinator's fix briefs; `tests/test_qualification_probes.py` |
 
 ## Package scan matches the export; separate Codex bundle bound — 9 November 2026
 
