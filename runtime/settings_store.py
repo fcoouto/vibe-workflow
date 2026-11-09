@@ -23,8 +23,8 @@ MAX_FILE = 1024 * 1024
 MAX_REVISION = 2**53 - 1
 BACKUP = re.compile(r"backups/[0-9]{8}T[0-9]{6}Z-[a-z_.]+-[A-Za-z0-9_]+")
 COPY = re.compile(r"file-[0-9]+")
-# Files written under private/ before backups; backup files are checked by their exact paths.
-PROBES = ("settings.lock", ".stage-probe")
+# The lock is the only file written outside a backup folder; backup and staged files are checked by exact path.
+PROBES = ("settings.lock",)
 
 
 class SettingsError(ValueError):
@@ -135,10 +135,11 @@ def check_ignored(root):
 
 
 def owned_directory(folder):
-    """Create or accept an owner-only directory; refuse links and shared modes."""
+    """Create or accept an owner-only directory; refuse links and shared modes; a new entry is made durable."""
     folder = Path(folder)
-    if not folder.is_symlink():
-        folder.mkdir(mode=0o700, exist_ok=True)
+    if not folder.is_symlink() and not folder.exists():
+        folder.mkdir(mode=0o700)
+        _fsync(folder.parent)
     info = folder.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise SettingsError(f"{folder.name} must be an owner-only directory, not a link")
@@ -150,7 +151,9 @@ def locked(root):
     """Serialize every settings change and undo in this checkout; yield (private directory, warnings)."""
     warnings = check_ignored(root)
     _folder(root)
-    (Path(root) / DIRECTORY).mkdir(exist_ok=True)
+    if not (Path(root) / DIRECTORY).exists():
+        (Path(root) / DIRECTORY).mkdir()
+        _fsync(root)
     directory = owned_directory(private(root))
     lock = os.open(directory / "settings.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
@@ -190,13 +193,18 @@ def render(root, change):
     return raw, data
 
 
-def _stage(directory, data, mode):
-    descriptor, staged = tempfile.mkstemp(prefix=".stage-", dir=directory)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(data)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(staged, mode)
+def _stage(staged, data, mode):
+    """Write data to staged, a path already confirmed ignored; remove it on failure."""
+    try:
+        descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(staged, mode)
+    except BaseException:
+        Path(staged).unlink(missing_ok=True)
+        raise
     return staged
 
 
@@ -208,11 +216,11 @@ def _fsync(path):
         os.close(descriptor)
 
 
-def _replace(root, relative, before, data, directory, limit):
+def _replace(root, relative, before, data, staging, limit):
     """Replace relative with data (None deletes) only if it still holds before; atomic and durable."""
     target = Path(root) / relative
     first, identity = snapshot(target, limit)
-    staged = None if data is None else _stage(directory, data, (target.stat().st_mode & 0o777) if first is not None else 0o644)
+    staged = None if data is None else _stage(staging, data, (target.stat().st_mode & 0o777) if first is not None else 0o644)
     try:
         current, now = snapshot(target, limit)
         # Git and hand edits do not take the lock: recheck content and file identity right before replacing.
@@ -237,7 +245,8 @@ def apply(root, directory, feature, changes):
     names = [f"file-{index}" for index in range(len(changes))]
     inside = Path(DIRECTORY) / PRIVATE / folder.relative_to(directory)
     try:
-        _require_ignored(root, [str(inside / name) for name in names + ["record.json"]])
+        _require_ignored(root, [str(inside / name) for name in names + ["record.json"]] +
+                         [str(inside / f"stage-{index}") for index in range(len(changes))])
     except SettingsError:
         folder.rmdir()
         raise
@@ -252,8 +261,8 @@ def apply(root, directory, feature, changes):
     _fsync(record)
     _fsync(folder)
     _fsync(backups)
-    for relative, (before, after) in changes.items():
-        _replace(root, relative, digest(before), after, directory, MAX_FILE)
+    for index, (relative, (before, after)) in enumerate(changes.items()):
+        _replace(root, relative, digest(before), after, folder / f"stage-{index}", MAX_FILE)
     return str(folder.relative_to(directory))
 
 
@@ -277,8 +286,10 @@ def undo(root, backup):
             raise SettingsError(f"No backup {backup}")
         owned_directory(folder)
         record = parse_object(read_bytes(folder / "record.json") or b"", "Backup record")
+        inside = Path(DIRECTORY) / PRIVATE / backup
+        _require_ignored(root, [str(inside / f"restore-{index}") for index in range(len(record["files"]))])
         restored, kept = [], []
-        for relative, entry in record["files"].items():
+        for index, (relative, entry) in enumerate(record["files"].items()):
             if relative not in (SETTINGS, "AGENTS.md") or not COPY.fullmatch(str(entry.get("copy"))):
                 raise SettingsError(f"Backup {backup} names an unsupported file")
             before = None if entry["before"] == "absent" else read_bytes(folder / entry["copy"], MAX_FILE)
@@ -290,6 +301,6 @@ def undo(root, backup):
             if digest(current) != entry["after"]:
                 kept.append(relative)
                 continue
-            _replace(root, relative, entry["after"], before, directory, MAX_FILE)
+            _replace(root, relative, entry["after"], before, folder / f"restore-{index}", MAX_FILE)
             restored.append(relative)
         return dict(restored=restored, kept=kept)

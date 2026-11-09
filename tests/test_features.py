@@ -259,12 +259,15 @@ class WriteTests(PackageFeatures):
             features.change(self.root, "workstreams", enabled=True, package=self.package)
         self.assertFalse((self.root / ".vibe-workflow").exists())
         for rules in ("/.vibe-workflow/private/settings.lock\n",
-                      "/.vibe-workflow/private/*\n!/.vibe-workflow/private/backups/\n"):
+                      "/.vibe-workflow/private/*\n!/.vibe-workflow/private/backups/\n",
+                      "/.vibe-workflow/private/settings.lock\n/.vibe-workflow/private/backups/*/record.json\n"
+                      "/.vibe-workflow/private/backups/*/file-*\n"):
             with self.subTest(rules=rules):
                 (self.root / ".gitignore").write_text(rules, encoding="utf-8")
                 with self.assertRaises(ValueError):
                     features.change(self.root, "workstreams", enabled=True, package=self.package)
                 self.assertFalse(list((self.root / ".vibe-workflow/private").glob("backups/*/*")))
+                self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=all", ".vibe-workflow"), "")
         (self.root / ".gitignore").write_text("/.vibe-workflow/private/settings.lock\n/.vibe-workflow/private/.stage-*\n"
                                              "/.vibe-workflow/private/backups/*/record.json\n"
                                              "/.vibe-workflow/private/backups/*/file-0\n", encoding="utf-8")

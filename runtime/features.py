@@ -148,11 +148,8 @@ def resolve(cwd, package=PACKAGE):
         settings_input = settings_store.digest(raw)
     except SettingsError as error:
         settings, raw = None, None
+        # Only bytes from the validated read path are hashed; an invalid file contributes its error.
         settings_input = "invalid:" + str(error)
-        try:
-            settings_input += ":" + settings_store.digest(settings_store.read_bytes(settings_store.path(root)))
-        except SettingsError:
-            pass
         errors.append(str(error))
         broken = {name: str(error) for name in loaded}
     for name, entry in (settings or {}).get("features", {}).items():
