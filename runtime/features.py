@@ -1,5 +1,6 @@
 """Feature manifests and project settings: one resolver for every feature's default and effective state."""
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -36,7 +37,8 @@ def _relative(value, field, name):
 
 def _manifest(path):
     name = path.stem
-    value = settings_store.parse_object(path.read_bytes(), f"manifest {name}")
+    raw = settings_store.read_bytes(path)
+    value = settings_store.parse_object(raw or b"", f"manifest {name}")
     keys = set(value)
     if not REQUIRED <= keys or keys - REQUIRED - OPTIONAL:
         raise ValueError(f"Manifest {name}: needs exactly {sorted(REQUIRED)} plus optional {sorted(OPTIONAL)}")
@@ -44,6 +46,8 @@ def _manifest(path):
         raise ValueError(f"Manifest {name}: unsupported version or an id that does not match its file name")
     if value["control"] not in CONTROLS or value["consent"] not in CONSENT:
         raise ValueError(f"Manifest {name}: unknown control or consent")
+    if value["control"] == "fixed" and value["consent"] != "none":
+        raise ValueError(f"Manifest {name}: a fixed feature cannot need consent")
     if not isinstance(value["default"], dict) or set(value["default"]) != {"enabled"} \
             or type(value["default"]["enabled"]) is not bool:
         raise ValueError(f"Manifest {name}: default must be {{\"enabled\": true|false}}")
@@ -63,11 +67,17 @@ def _manifest(path):
         source = value.get("source")
         if not isinstance(source, dict) or set(source) != {"store", "scope"}:
             raise ValueError(f"Manifest {name}: an adapter feature describes its source store and scope")
-    return value
+    return value, raw
+
+
+def _load(package):
+    found = {path.stem: _manifest(path) for path in sorted((Path(package) / "features").glob("*.json"))}
+    return {name: value for name, (value, _) in found.items()}, \
+        hashlib.sha256(b"".join(raw + b"\0" for _, raw in found.values())).hexdigest()
 
 
 def manifests(package=PACKAGE):
-    return {path.stem: _manifest(path) for path in sorted((Path(package) / "features").glob("*.json"))}
+    return _load(package)[0]
 
 
 def checkout_root(cwd):
@@ -131,7 +141,7 @@ def resolve(cwd, package=PACKAGE):
     from runtime import features_migration
 
     root = checkout_root(cwd)
-    loaded = manifests(package)
+    loaded, manifest_digest = _load(package)
     errors, entries, broken = [], {}, {}
     try:
         settings, raw = settings_store.read(root)
@@ -161,12 +171,18 @@ def resolve(cwd, package=PACKAGE):
             legacy["workstreams"] = found["value"]
     report = {name: _feature(manifest, entries.get(name), broken.get(name), legacy.get(name))
               for name, manifest in loaded.items()}
-    for name, manifest in loaded.items():
-        missing = [item for item in manifest["requires"] if report.get(item, {}).get("effective") is not True]
-        if missing and report[name]["effective"]:
-            report[name] = dict(report[name], effective=False, reason="prerequisite_missing")
-    return dict(ok=True, checkout=str(root), settings=str(settings_store.path(root).relative_to(root)),
-                revision=settings["revision"] if settings else 0, fingerprint=settings_store.digest(raw),
+    changed = True
+    while changed:
+        changed = False
+        for name, manifest in loaded.items():
+            if report[name]["effective"] and any(report.get(item, {}).get("effective") is not True
+                                                 for item in manifest["requires"]):
+                report[name] = dict(report[name], effective=False, reason="prerequisite_missing")
+                changed = True
+    inputs = dict(settings=settings_store.digest(raw), legacy=legacy, manifests=manifest_digest)
+    return dict(ok=not errors, checkout=str(root), settings=settings_store.SETTINGS,
+                revision=settings["revision"] if settings else 0, settings_digest=inputs["settings"],
+                fingerprint="sha256:" + hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest(),
                 errors=errors, warnings=[], features=report)
 
 
@@ -194,7 +210,7 @@ def change(cwd, name, *, enabled=None, values=None, unset=None, package=PACKAGE)
     manifest = loaded.get(name)
     if manifest is None:
         raise SettingsError(f"Unknown feature: {name}")
-    if manifest["control"] != "settings" or manifest["consent"] != "none":
+    if manifest["control"] != "settings" or manifest["consent"] != "none" or "project" not in manifest["scopes"]:
         raise SettingsError(f"{name} is not managed through project settings; use {manifest['procedure']}")
     if values:
         _entry(manifest, dict(values=values))
@@ -218,10 +234,14 @@ def change(cwd, name, *, enabled=None, values=None, unset=None, package=PACKAGE)
             features.pop(name, None)
         return current
 
-    _, warnings = settings_store.update(checkout_root(cwd), apply)
-    return dict(resolve(cwd, package), warnings=warnings)
+    warnings, backup = settings_store.update(checkout_root(cwd), apply)
+    return dict(resolve(cwd, package), warnings=warnings, backup=backup)
 
 
-def migrate(cwd, action, backup=None):
+def migrate(cwd, action):
     from runtime import features_migration
-    return features_migration.run(checkout_root(cwd), action, backup)
+    return features_migration.run(checkout_root(cwd), action)
+
+
+def undo(cwd, backup):
+    return dict(ok=True, **settings_store.undo(checkout_root(cwd), backup))

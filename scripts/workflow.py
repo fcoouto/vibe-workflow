@@ -70,7 +70,7 @@ def features_main(args):
                 raise ValueError(f"Unknown feature: {name}")
             if args.summary:
                 print(features.summary(report, only=name))
-                return 0
+                return 0 if report["ok"] else 1
         elif args.action in ("enable", "disable") and len(args.arguments) == 1:
             report = features.change(args.cwd, name, enabled=args.action == "enable")
         elif args.action == "set" and len(args.arguments) == 3:
@@ -78,14 +78,16 @@ def features_main(args):
         elif args.action == "unset" and len(args.arguments) == 2:
             report = features.change(args.cwd, name, unset=args.arguments[1])
         elif args.action == "migrate" and len(args.arguments) == 1:
-            report = dict(ok=True, **features.migrate(args.cwd, args.arguments[0], args.backup))
+            report = dict(ok=True, **features.migrate(args.cwd, args.arguments[0]))
+        elif args.action == "undo" and not args.arguments and args.backup:
+            report = features.undo(args.cwd, args.backup)
         else:
             raise ValueError(f"Wrong arguments for features {args.action}")
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         print(json.dumps({"ok": False, "error": str(error)}))
         return 1
     print(json.dumps(report))
-    return 0
+    return 0 if report["ok"] else 1
 
 
 def control_main():
@@ -170,7 +172,7 @@ def control_main():
         upgrade = commands.add_parser("upgrade", add_help=False)
         upgrade.add_argument("action", choices=("status", "record"))
         settings = commands.add_parser("features", add_help=False)
-        settings.add_argument("action", choices=("status", "enable", "disable", "set", "unset", "migrate"))
+        settings.add_argument("action", choices=("status", "enable", "disable", "set", "unset", "migrate", "undo"))
         settings.add_argument("arguments", nargs="*")
         settings.add_argument("--cwd", required=True)
         settings.add_argument("--summary", action="store_true")

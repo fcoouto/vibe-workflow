@@ -40,15 +40,17 @@ python3 -I -B <package>/scripts/workflow.py features disable workstreams --cwd <
    configured) or `legacy` (an unmigrated `AGENTS.md` block). `invalid_settings`
    means unavailable: report the error and leave automatic coordination off.
 3. For enable or disable, run the command and report the effective value it
-   returns. Repeating the effective choice is a no-op. On an error, such as
-   private files not being ignored or the file changing during the write, report
-   it and leave files alone; do not edit the settings file by hand around it.
+   returns. Repeating the effective choice is a no-op. Each change keeps a private
+   backup and returns its name; `features undo --backup <backup>` restores only
+   files still holding that change's result, preserving later edits. On an error,
+   such as private files not being ignored or the file changing during the write,
+   report it and leave files alone; do not edit the settings file by hand around it.
 4. When status reports `legacy`, the project still holds the old `AGENTS.md`
    block. Within an authorized change, run `features migrate plan` and then
    `features migrate apply` with the same `--cwd`. It moves the choice into the
    settings file, replaces the block with a short pointer, keeps a private backup,
-   and refuses when the block and the file disagree. `features migrate undo
-   --backup <backup>` restores only files still matching the migration's result.
+   and refuses when the block and the file disagree. `features undo` reverses it
+   the same way.
 5. Report the effective choice and exact checkout. It applies to subsequent work
    under these instructions, including this chat. Other checkouts receive it
    through normal Git integration of the committed file.

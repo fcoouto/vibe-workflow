@@ -31,7 +31,7 @@ Behavior reads the resolved value with `runtime.features.resolve(cwd)["features"
 
 - Missing entries use the manifest default. An invalid file or entry makes the affected feature unavailable, so a broken file never switches anything on.
 - No machine paths, secrets or identities. Private files live only under `.vibe-workflow/private/` (owner-only); `.vibe-workflow/project.json` and `private/` must be ignored by Git, and writes refuse otherwise.
-- Write only through the command, which holds a lock, compares revision and content, and replaces the file atomically.
+- Write only through the command. It holds a lock, writes a private backup record first, rechecks the file's content right before an atomic replace, and returns the backup name for `undo`.
 
 ## Commands
 
@@ -40,7 +40,8 @@ workflow.py features status [<id>] --cwd <checkout> [--summary]
 workflow.py features enable|disable <id> --cwd <checkout>
 workflow.py features set <id> <key> <json-value> --cwd <checkout>
 workflow.py features unset <id> <key> --cwd <checkout>
-workflow.py features migrate plan|apply|undo --cwd <checkout> [--backup <backup>]
+workflow.py features migrate plan|apply --cwd <checkout>
+workflow.py features undo --backup <backup> --cwd <checkout>
 ```
 
-`status` is read-only. Each feature reports `desired` (value and source: `default`, `project`, `legacy`), `consent`, `effective`, `observed` and a `reason`: `default`, `project`, `migration_pending`, `ignored_override`, `needs_consent`, `prerequisite_missing`, `invalid_settings` or `unchecked`. Writes accept only `control: settings` features without consent; others point to their procedure. Errors exit 1 with `{"ok": false, "error": ...}`.
+`status` is read-only. Each feature reports `desired` (value and source: `default`, `project`, `legacy`), `consent`, `effective`, `observed` and a `reason`: `default`, `project`, `migration_pending`, `ignored_override`, `needs_consent`, `prerequisite_missing`, `invalid_settings` or `unchecked`. Writes accept only `control: settings` features without consent; others point to their procedure. Errors exit 1 with `{"ok": false, "error": ...}`; `status` also exits 1, with `ok: false` and its `errors` list, when settings are invalid. Messages name keys and paths, never supplied values.
