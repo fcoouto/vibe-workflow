@@ -1,0 +1,1419 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-09",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "pilot",
+    "opencode": "2.2.6",
+    "provider": "claude-agent/haiku#low",
+    "sanitized": true
+  },
+  "blockers": [],
+  "call_ledger": {
+    "pilot": {
+      "cap": 28,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 23
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": true,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 45,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#5>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#5>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#6>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#6>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#7>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#8>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#8>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#9>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#9>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#10>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#10>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#11>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#11>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#12>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#12>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#13>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#13>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#14>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#14>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#15>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#15>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#16>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#16>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#17>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#17>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#18>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#18>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#19>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#19>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#20>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#20>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#21>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#21>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#22>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#22>",
+      "variant": "low"
+    }
+  ],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 7.162,
+        "median_ms": 0.803,
+        "n": 21,
+        "p95_ms": 1.176
+      },
+      "model.request/title": {
+        "max_ms": 2.755,
+        "median_ms": 2.755,
+        "n": 1,
+        "p95_ms": 2.755
+      }
+    },
+    "unmatched_pre_records": 1
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "pilot"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "pilot"
+    }
+  ],
+  "mode": "pilot",
+  "off_route_requests": 1,
+  "stages": {
+    "pilot": {
+      "canary_state": {
+        "authority_required": "one-way flag set on the canary ledger only; the production routing state is untouched",
+        "created": true,
+        "settings": {
+          "api_usage_enabled": false,
+          "smart_routing": true
+        }
+      },
+      "claude_agent_connect_http": 204,
+      "haiku_listed": {
+        "listed": true,
+        "low_variant": true
+      },
+      "pilot": {
+        "abort": null,
+        "admissions": [
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 1,
+            "kinds": [
+              "primary",
+              "title"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 1
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.71,
+              "check": 0.615,
+              "dispatch": 0.68,
+              "health": 1.68,
+              "prepare": 0.86,
+              "record": 1.44
+            },
+            "title_state": "known",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 2,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.7,
+              "check": 0.709,
+              "dispatch": 1.11,
+              "health": 1.57,
+              "prepare": 1.05,
+              "record": 2.01
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 3,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 2.04,
+              "check": 0.795,
+              "dispatch": 1.31,
+              "health": 2.39,
+              "prepare": 1.41,
+              "record": 1.78
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 4,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.76,
+              "check": 0.917,
+              "dispatch": 1.5,
+              "health": 2.61,
+              "prepare": 1.51,
+              "record": 1.67
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 5,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.76,
+              "check": 0.851,
+              "dispatch": 1.32,
+              "health": 2.31,
+              "prepare": 1.86,
+              "record": 1.79
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 6,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.09,
+              "check": 0.66,
+              "dispatch": 0.82,
+              "health": 1.67,
+              "prepare": 1.07,
+              "record": 2.35
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 7,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 2.35,
+              "check": 0.971,
+              "dispatch": 1.65,
+              "health": 2.62,
+              "prepare": 1.52,
+              "record": 1.16
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 8,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.42,
+              "check": 0.975,
+              "dispatch": 0.9,
+              "health": 1.38,
+              "prepare": 1.14,
+              "record": 1.52
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 9,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.7,
+              "check": 0.797,
+              "dispatch": 1.28,
+              "health": 1.69,
+              "prepare": 1.28,
+              "record": 1.57
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 10,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.72,
+              "check": 0.835,
+              "dispatch": 1.44,
+              "health": 2.0,
+              "prepare": 1.46,
+              "record": 2.02
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 11,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.13,
+              "check": 0.672,
+              "dispatch": 1.05,
+              "health": 1.6,
+              "prepare": 1.18,
+              "record": 1.56
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 12,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 2.01,
+              "check": 0.972,
+              "dispatch": 1.5,
+              "health": 1.97,
+              "prepare": 1.4,
+              "record": 2.01
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 13,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 2.13,
+              "check": 0.988,
+              "dispatch": 1.75,
+              "health": 1.89,
+              "prepare": 1.65,
+              "record": 1.12
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 14,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.24,
+              "check": 0.803,
+              "dispatch": 1.07,
+              "health": 0.96,
+              "prepare": 1.01,
+              "record": 1.55
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 15,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.45,
+              "check": 0.723,
+              "dispatch": 1.22,
+              "health": 1.41,
+              "prepare": 1.07,
+              "record": 1.89
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 16,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.39,
+              "check": 0.734,
+              "dispatch": 1.14,
+              "health": 1.52,
+              "prepare": 1.05,
+              "record": 1.82
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 17,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 2.36,
+              "check": 0.929,
+              "dispatch": 1.6,
+              "health": 2.02,
+              "prepare": 1.5,
+              "record": 2.37
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "medium",
+            "charged": 0,
+            "index": 18,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "researcher",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.92,
+              "check": 7.162,
+              "dispatch": 1.75,
+              "health": 2.04,
+              "prepare": 1.85,
+              "record": 1.31
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 19,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "implementer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.46,
+              "check": 0.687,
+              "dispatch": 1.4,
+              "health": 1.14,
+              "prepare": 1.18,
+              "record": 1.95
+            },
+            "title_state": "zero",
+            "unknown": []
+          },
+          {
+            "band": "low",
+            "charged": 0,
+            "index": 20,
+            "kinds": [
+              "primary"
+            ],
+            "outcome": "succeeded",
+            "released": [
+              "win:pilot-sub/5h"
+            ],
+            "rereads": 0,
+            "role": "reviewer",
+            "sent": {
+              "other": 0,
+              "primary": 1,
+              "title": 0
+            },
+            "settlement": "window",
+            "timings": {
+              "attach": 1.94,
+              "check": 1.176,
+              "dispatch": 1.57,
+              "health": 1.56,
+              "prepare": 1.36,
+              "record": 1.21
+            },
+            "title_state": "zero",
+            "unknown": []
+          }
+        ],
+        "blocked_titles": 0,
+        "completed": 20,
+        "deviations": [],
+        "latency": {
+          "attach": [
+            1.71,
+            1.7,
+            2.04,
+            1.76,
+            1.76,
+            1.09,
+            2.35,
+            1.42,
+            1.7,
+            1.72,
+            1.13,
+            2.01,
+            2.13,
+            1.24,
+            1.45,
+            1.39,
+            2.36,
+            1.92,
+            1.46,
+            1.94
+          ],
+          "check": [
+            0.615,
+            0.709,
+            0.795,
+            0.917,
+            0.851,
+            0.66,
+            0.971,
+            0.975,
+            0.797,
+            0.835,
+            0.672,
+            0.972,
+            0.988,
+            0.803,
+            0.723,
+            0.734,
+            0.929,
+            7.162,
+            0.687,
+            1.176
+          ],
+          "dispatch": [
+            0.68,
+            1.11,
+            1.31,
+            1.5,
+            1.32,
+            0.82,
+            1.65,
+            0.9,
+            1.28,
+            1.44,
+            1.05,
+            1.5,
+            1.75,
+            1.07,
+            1.22,
+            1.14,
+            1.6,
+            1.75,
+            1.4,
+            1.57
+          ],
+          "health": [
+            1.68,
+            1.57,
+            2.39,
+            2.61,
+            2.31,
+            1.67,
+            2.62,
+            1.38,
+            1.69,
+            2.0,
+            1.6,
+            1.97,
+            1.89,
+            0.96,
+            1.41,
+            1.52,
+            2.02,
+            2.04,
+            1.14,
+            1.56
+          ],
+          "prepare": [
+            0.86,
+            1.05,
+            1.41,
+            1.51,
+            1.86,
+            1.07,
+            1.52,
+            1.14,
+            1.28,
+            1.46,
+            1.18,
+            1.4,
+            1.65,
+            1.01,
+            1.07,
+            1.05,
+            1.5,
+            1.85,
+            1.18,
+            1.36
+          ],
+          "record": [
+            1.44,
+            2.01,
+            1.78,
+            1.67,
+            1.79,
+            2.35,
+            1.16,
+            1.52,
+            1.57,
+            2.02,
+            1.56,
+            2.01,
+            1.12,
+            1.55,
+            1.89,
+            1.82,
+            2.37,
+            1.31,
+            1.95,
+            1.21
+          ]
+        },
+        "latency_summary": {
+          "attach": {
+            "max_ms": 2.36,
+            "median_ms": 1.72,
+            "n": 20,
+            "p95_ms": 2.35
+          },
+          "check": {
+            "max_ms": 7.162,
+            "median_ms": 0.835,
+            "n": 20,
+            "p95_ms": 1.176
+          },
+          "dispatch": {
+            "max_ms": 1.75,
+            "median_ms": 1.32,
+            "n": 20,
+            "p95_ms": 1.75
+          },
+          "health": {
+            "max_ms": 2.62,
+            "median_ms": 1.69,
+            "n": 20,
+            "p95_ms": 2.61
+          },
+          "prepare": {
+            "max_ms": 1.86,
+            "median_ms": 1.36,
+            "n": 20,
+            "p95_ms": 1.85
+          },
+          "record": {
+            "max_ms": 2.37,
+            "median_ms": 1.78,
+            "n": 20,
+            "p95_ms": 2.35
+          }
+        },
+        "planned": 20,
+        "repo": [
+          {
+            "at": 5,
+            "dirty_changed": [],
+            "head_changed": false,
+            "new": []
+          },
+          {
+            "at": 10,
+            "dirty_changed": [],
+            "head_changed": false,
+            "new": []
+          },
+          {
+            "at": 15,
+            "dirty_changed": [],
+            "head_changed": false,
+            "new": []
+          },
+          {
+            "at": 20,
+            "dirty_changed": [],
+            "head_changed": false,
+            "new": []
+          },
+          {
+            "at": "end",
+            "dirty_changed": [],
+            "head_changed": false,
+            "new": []
+          }
+        ],
+        "settlements": {
+          "window": 20
+        }
+      },
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "high"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "high"
+          }
+        ],
+        "guard_probe_reason": "guard_variant",
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "preconditions": {
+        "health": "ok",
+        "refusals": []
+      },
+      "repo_at_start": {
+        "dirty_paths": 6,
+        "head_known": true
+      },
+      "server": {
+        "location": "canary project subdirectory",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "status_at_end": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {},
+          "open_attempts": 0,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 0,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      },
+      "status_at_start": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {},
+          "open_attempts": 0,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 0,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      }
+    }
+  },
+  "user_dirs": {
+    "home_report_only": {
+      ".claude": {
+        "added": 22,
+        "changed": 2,
+        "removed": 2
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 1,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "desktop_churn_count": 2,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/state/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}

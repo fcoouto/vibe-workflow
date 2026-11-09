@@ -94,6 +94,33 @@ Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate co
 3. The plugin is installed globally from the start and does nothing outside the bounded canary project until cutover (Task C.4).
 4. Route identity is alias + requested variant + catalog family; the resolved model is unknown.
 
+## Live re-qualification (9 November 2026)
+
+Two staged runs on one isolated OpenCode 2.2.6 server, using `claude-agent/haiku#low` only:
+
+- **Run 1** stopped in stage 3 on an accounting blocker, which #146 fixed.
+- **The re-run** (harness 3f87159, 4 calls) completed stages 0–4 with no blocker.
+
+In total 9 of the 14 authorized calls were used. The [report](smart-routing-qualification.md) has the tables; [`qual-rerun-results.json`](../tests/fixtures/smart-routing/probes/qual-rerun-results.json) has the re-run evidence. "Observed" below means seen in these runs (n=1 each); "unobserved" means it did not run.
+
+| Gate | Observed | Unobserved |
+|---|---|---|
+| P0.6 | **Handshake:** `prepare` → `routing.health` `ok` → `dispatch` → `attach` (a wrong token refused) → managed request allowed → `detach` (a wrong token refused). The hook order `qual-pre` → shim → `qual-post` was proven by probes. **Blocked at 0 tokens:** unattached and wrong-token sessions (`attach_required`); a finished attempt's session (with the reason `attach_required` instead of `attempt_closed` while its 5-minute pending entry lasted); and a `subagent: true` command child on another model (`route_mismatch`). Command subagents never reach `tool.execute.before`, so only lineage protects them. **Also:** `webfetch` evaluation denied; credential-like environment names stripped from shells while attached; an interactive session passed untouched with the routing child killed. | Real `webfetch` execution; subagent and nested spawns through the tool; MCP and Code Mode calls; a failed plugin load. |
+| P0.7 | The server accepts and returns derived session and message ids. One prompt with a derived message id: exactly one model request. The same prompt again: no request, the original id returned, plus an extra `idle` record. Read back by derived id. OpenCode's own ids are 26-character mixed-case bodies, never `ses_` + 32 lowercase hex. Messages list in insertion order. A repeated `dispatch`: `already_dispatched` with no token. **Lost acknowledgment:** a launcher killed after `dispatch` left the hold dispatched and counted with the derived message absent (HTTP 404); `record uncertain` kept the exposure, and checks and `complete` stayed refused. No operator path exists for an uncertain subscription hold (`reconcile_uncertain` → `hold_state_forbidden`). | Racing launchers against the host; server restart. |
+| P0.8 | **Accounting** under #146 of a managed attempt with a command-spawned child: `children` by `parentID`, `lineage` with 0 unaccounted, `synthetic` messages counted as their own type. **One real title** known by subtraction. **Usage:** subscription usage with every cost null. **Events:** `track_events` saw no sequence gap over 81 live session events, but flagged `version_changed` on every aggregate (meaning of `durable.version` unverified); `reconcile_with_state` gave zero deltas. **Settlement:** `record complete` settled the subscription hold as a window settlement (claims released, no dollar charge), and `status` was clean afterwards. | `generate`, compaction and retry requests; subagent tool-call children; API-funded holds; coordinator, review and repair stages. |
+
+RPC refusals reach the caller as HTTP 500 `rpc.internal` without the shim's reason code.
+
+Pilot run 1 (9 November 2026, dedicated canary state): the hook order and the guard proof were observed again. A managed request on the canary ledger was allowed; 2 calls were sent (the request and its title). The pilot then aborted on a harness `TypeError` in its accounting step, so no settlement was observed. See the [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1).
+
+Pilot attempt 2 (same day, harness `94f9e0e`, dedicated canary state):
+
+- **P0.6 and P0.7:** 20 managed admissions ran end to end, each with derived ids and an attached token-checked request (one primary request each, plus one title in admission 1). The plugin-chain proof held.
+- **P0.8:** usage was accounted with `children` and `lineage`, the title was known by subtraction (admission 1) or zero (titled sessions), and 0 re-reads were needed. Every subscription hold settled as a window settlement with no charge, and `status` was clean at the end.
+- **Not covered:** subagents, compaction, retries and API-funded holds were not exercised. See the [validation results](smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort).
+
+Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
+
 ## Gate status (P0)
 
 | Gate | Status | Basis |
@@ -103,9 +130,9 @@ Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate co
 | P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
 | P0.3, P0.4 API grants and key binding | unverified | Not probed. |
 | P0.5 Model/effort | **partly established** | Requested model and variant observed; resolved model unsupported. |
-| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. |
-| P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. |
-| P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. |
+| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. The finished shim was observed live for the handshake, the blocked paths and the command-subagent path [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
+| P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. Re-qualified live on 9 November 2026 for derived ids, one request per derived message id, duplicates, read-back, id shapes, ordering and the lost-acknowledgment drill. Open: an uncertain subscription hold has no operator recovery path. |
+| P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. Re-qualified live on 9 November 2026 for a worker attempt with a command-spawned child, its title, event tracking, resync and subscription settlement (#146); auxiliary kinds other than the title, retries and API-funded holds were not observed. |
 
 ## Live checks still open
 

@@ -1,0 +1,315 @@
+{
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-09",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "pilot",
+    "opencode": "2.2.6",
+    "provider": "claude-agent/haiku#low",
+    "sanitized": true
+  },
+  "blockers": [
+    "pilot aborted: recovery_error"
+  ],
+  "call_ledger": {
+    "pilot": {
+      "cap": 24,
+      "open_reservations": 0,
+      "remaining": 22,
+      "spent": 2
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    }
+  },
+  "cleanup": {
+    "errors": [],
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": true,
+    "verified_by_harness": true
+  },
+  "deviations": [],
+  "hook_records": 7,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "high"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#3>",
+      "variant": "low"
+    }
+  ],
+  "hooks_unreadable": false,
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 0.689,
+        "median_ms": 0.437,
+        "n": 2,
+        "p95_ms": 0.689
+      },
+      "model.request/title": {
+        "max_ms": 3.166,
+        "median_ms": 3.166,
+        "n": 1,
+        "p95_ms": 3.166
+      }
+    },
+    "unmatched_pre_records": 1
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "pilot"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "pilot"
+    }
+  ],
+  "mode": "pilot",
+  "off_route_requests": 1,
+  "stages": {
+    "pilot": {
+      "canary_state": {
+        "authority_required": "one-way flag set on the canary ledger only; the production routing state is untouched",
+        "created": true,
+        "settings": {
+          "api_usage_enabled": false,
+          "smart_routing": true
+        }
+      },
+      "claude_agent_connect_http": 204,
+      "haiku_listed": {
+        "listed": true,
+        "low_variant": true
+      },
+      "pilot": {
+        "abort": {
+          "admission": 1,
+          "detail": "accounting: TypeError",
+          "kill_switch": {
+            "reason": null,
+            "state": "updated"
+          },
+          "kill_switch_ok": true,
+          "phase": "launched",
+          "reason": "recovery_error",
+          "recovery": "uncertain"
+        },
+        "admissions": [],
+        "blocked_titles": 0,
+        "completed": 0,
+        "latency": {
+          "check": [],
+          "dispatch": [],
+          "prepare": [],
+          "record": []
+        },
+        "latency_summary": {
+          "check": null,
+          "dispatch": null,
+          "prepare": null,
+          "record": null
+        },
+        "planned": 20,
+        "repo": [],
+        "settlements": {}
+      },
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "high"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "high"
+          }
+        ],
+        "guard_probe_reason": "guard_variant",
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "preconditions": {
+        "health": "ok",
+        "refusals": []
+      },
+      "repo_at_start": {
+        "dirty_paths": 6,
+        "head_known": true
+      },
+      "server": {
+        "location": "canary project subdirectory",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "status_at_end": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {
+            "uncertain": 1
+          },
+          "open_attempts": 1,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 1,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      },
+      "status_at_start": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {},
+          "open_attempts": 0,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 0,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      }
+    }
+  },
+  "user_dirs": {
+    "home_report_only": {
+      ".claude": {
+        "added": 3,
+        "changed": 1,
+        "removed": 1
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 1,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "desktop_churn_count": 1,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/state/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}
