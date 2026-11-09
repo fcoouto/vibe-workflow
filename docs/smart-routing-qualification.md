@@ -89,11 +89,7 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   Do not use `python3 -m tests.qualification.opencode_live`: importing the `tests` package as the main module makes `tests/__init__.py` redirect `HOME` to a temporary directory. The real-directory snapshots and the server environment would then use that temporary home. Every live mode therefore refuses to start, with exit 2 and before anything starts, when `HOME` is not the current user's home from the password database.
 - **Untested live:** `prepare` for the explicit `openai` choice (harness `opencode provider openai`, pool `chatgpt-sub`) is unit-tested against the real `scripts/routing.py` on a temporary store, but has never run on OpenCode. The unit tests stub the server start and the plugin-chain probes.
 - **The user's directories.** The run also watches `~/.codex` (top level only: names and mtimes, never contents) and `~/.config/openai`. A change to `~/.codex/auth.json`, `config.toml` or any top-level file named like auth, token or credential, or any change under `~/.config/openai`, fails the run. Other `~/.codex` changes are the running Codex app's own, so they are counted and reported, not failed. `~/.claude` and `~/.opencode` stay report-only as before.
-- **OpenCode session tool output (report-only; added after the 21:47 run, before any further run).** OpenCode writes the output of every command and tool call of any running session under `~/.local/share/opencode`. That includes the coordinator's own session, and the shell call that launches the harness. Rule:
-  - **Counted, not failed:** new or rewritten files and subdirectories strictly inside `shell/` or `tool-output/` there, matched by exact first path segment. The results record only `session_output_count`, never the names.
-  - **Still fails the run:** deletions there; symlinks (never followed; a store replaced by a link shows as removed and added); a file with more than one hard link (a hard link to `auth.json` never passes as tool output); anything that is neither a plain file nor a directory; names with `.`, `..` or empty segments; look-alikes such as `shell-evil/` or `tool-output.bak`; and every other path under the OpenCode and Codex directories, such as auth, config, `storage/`, `snapshot/` or a file directly in the data directory.
-  - **When `shell/` or `tool-output/` does not exist before the run,** its creation fails the run. That is the safe direction.
-  - **Pre-flight:** OpenCode seems to prune old `shell/` output after about 37 hours. A prune during a run fails the run safely, but wastes its calls. The operator should avoid starting a run when outputs from about 37 hours earlier may be pruned during it.
+- **The user's OpenCode directories:** see [the final rules](#the-users-opencode-directories-final-rules) below. They were first added after the 21:47 run for `shell/` and `tool-output/`, then revised after attempt 4 and in the third review.
 - **Request (1 call).** One titled session (so no title request) with `Reply with exactly: OK` goes through the full managed handshake. Then `descendants`, accounting (subscription: tokens only, cost null), `record complete`, `detach` and `status`. The run stops after the first successful request. The 3 remaining calls are reserved for retries, title or compaction observations only with the coordinator's go, and the harness does not send them by itself.
 - **Pass:** exactly one `primary` request, null costs, settlement `window`, `detach` succeeded, and `status` is clean.
 - **Recorded:**
@@ -125,13 +121,32 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
     - Concurrent-session churn is report-only, with counts only (rule below).
     - Recorded names of unexpected changes are masked.
     - A new end-to-end test runs the whole ChatGPT stage on the stand-in server (upstream error, no reply, success; with concurrent sessions writing) and requires the complete results file to pass the leak check with no blocker.
-- **The user's OpenCode directories (revised after attempt 4).** Other running OpenCode sessions, both the coordinator's and the user's, write to these directories during a run. Around attempt 4 that was `log/` (2), `snapshot/` (1), `worktree/` (2), `shell/` (29) and the database, among 7,641 entries. The check cannot tell their writes from the isolated server's. Isolation is evidenced instead by XDG pinning, the strict credential and config rules below, and the isolated server's own store (`isolated_store`: `<isolated>/data/opencode` exists with its session store, checked after the request). Rules:
-  - **`~/.local/share/opencode`:**
-    - **Report-only, counted as `concurrent_session_churn` by store:** `log/`, `snapshot/`, `worktree/`, `storage/`, `shell/`, `tool-output/` and the database files. `shell/` and `tool-output/` keep their added-or-changed, plain-file, single-link rules.
-    - **Fails the run:** names like auth, token, credential, config, settings or keychain (outside `worktree/`, which holds repository checkouts); any file directly in the directory, such as `auth.json`, `mcp-auth.json` or any `*.json`; and anything else not on the list.
-  - **`~/.cache/opencode`:** report-only, except names like auth, token, credential or keychain.
-  - **`~/.local/state/opencode`:** report-only, except names like auth, token, credential, config, settings or keychain.
-  - **`~/.config/opencode`:** stays strict.
+- **The user's OpenCode directories: final rules** (after attempt 4 and the third review; `tests/qualification/user_dirs.py`). <a id="the-users-opencode-directories-final-rules"></a> The check reads names and modification times only, never contents.
+  - **Why some churn is tolerated.** Other running OpenCode sessions, both the coordinator's and the user's, write to these directories during a run. Around attempt 4 that was `log/` (2), `snapshot/` (1), `worktree/` (2), `shell/` (29) and the database, among 7,641 entries. A names-and-mtimes check cannot tell their writes from the isolated server's.
+  - **`~/.local/share/opencode`, counted as `concurrent_session_churn` by store (never file names):**
+    - added or rewritten files, and added directories, inside `log/`, `snapshot/`, `worktree/`, `repos/`, `storage/`, `shell/` and `tool-output/`;
+    - a recognized store directory created during the run;
+    - the database files, and deletions of single files or subdirectories inside `log/`, `snapshot/`, `worktree/`, `repos/` and `storage/`.
+
+    `shell/` and `tool-output/` accept only added or rewritten plain files with a single link.
+  - **`~/.local/share/opencode`, fails the run:**
+    - deleting `opencode.db`, a store directory, a whole `snapshot/<hash>/` tree, or anything in `shell/` or `tool-output/`;
+    - any other file or directory directly in the data directory, such as `auth.json`, `mcp-auth.json` or any `*.json`;
+    - symlinks, and names with `.`, `..` or empty segments;
+    - names with a part `auth`, `token(s)`, `credential(s)`, `config`, `settings`, `keychain`, `secret(s)`, `key(s)`, `apikey`, `pem` or `env`. Parts are split on `-`, `_` and `.`, so `author` or `monkey` don't count. Inside repository checkouts and package trees (`worktree/`, `repos/`, `node_modules/`, `npm/`), only the exact sensitive files fail: `auth.json`, `mcp-auth.json`, `.env*`, `*.pem` and `*.key`;
+    - any NEW name that contains one of this run's own session or message ids. The harness keeps those ids in memory, and the name is recorded only as a placeholder.
+  - **`~/.cache/opencode` and `~/.local/state/opencode`:** counted, except the same sensitive names (cache: without `config`/`settings`; package names under `npm/` and `node_modules/` such as `js-tokens` stay counted), names with this run's ids, symlinks and dot segments.
+  - **`~/.config/opencode`:** strict, except the desktop app's own database and logs.
+  - **What this proves and what it does not.**
+    - `isolated_store`, recorded on the success and the timeout paths, shows that the isolated server wrote its own store under `<isolated>/data/opencode`, where XDG pinning sends it.
+    - The own-ids check shows that no NEW file or directory named after this run's sessions or messages appeared in the user's real stores.
+    - Neither proves that nothing reached the user's real `opencode.db`: the harness never opens or queries that database, and a write into it would not be visible. Isolation therefore rests on XDG pinning, these strict rules, the own-ids names check and the isolated server's own store together.
+  - **Pre-flight:** OpenCode seems to prune old `shell/` output after about 37 hours. A prune during a run fails the run safely, but wastes its calls. Avoid starting a run when outputs from about 37 hours earlier may be pruned during it.
+- **Writing the results** (`tests/qualification/outputs.py`):
+  - The results are redacted twice, so a secret the Redactor learns partway through its first pass is removed everywhere.
+  - A live run refuses an `--out` inside any repository: results are committed only after the operator reads them.
+  - A skeleton is itself leak-checked; if it still matches, a fixed minimal record is written instead (blocker count, cleanup status, ledger totals, `results_withheld: true`).
+  - The withheld directory and file are never symlinks and never inside a repository (`O_EXCL | O_NOFOLLOW`).
 - **When the leak check refuses the results file,** nothing is destroyed. The full masked results are written to `~/.local/state/vibe-workflow-qualification/withheld/<run-id>.json` (next to the durable ledger: directory 0700, file 0600, outside every repository and the isolated directory), and the path is printed. The skeleton written to `--out` names each flagged fragment only by its JSON path and kind. **Operator step:** read the withheld file, judge it, never commit it, and delete it afterwards.
 - **`request_outcome_summary`** (recorded even when the facts are withheld), built from integers and fixed enumerations only:
   - `transmitted_count`, the number of assistant messages, those with tokens and those with an error;

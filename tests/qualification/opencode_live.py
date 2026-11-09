@@ -52,7 +52,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, probe_stages, safety, sanitize  # noqa: E402
+from tests.qualification import canary, chatgpt, outputs, probe_stages, safety, user_dirs  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
@@ -853,7 +853,8 @@ class Run:
         after = self.snapshot_user_dirs()
         changes = {}
         for name in USER_OPENCODE_DIRS:  # concurrent OpenCode sessions' churn is counted; credentials and config fail
-            changes[name], unexpected = safety.user_dir_entry(name, before[name], after[name], Path.home() / name)
+            changes[name], unexpected = user_dirs.user_dir_entry(name, before[name], after[name], Path.home() / name,
+                                                                 getattr(self, "own_ids", ()))
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
         codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
@@ -932,6 +933,7 @@ def main(argv=None):
         if not args.isolated_dir:
             parser.error("--isolated-dir is required")
         base = check_isolated_dir(args.isolated_dir)
+        outputs.check_out(args.out)  # results are committed only after the operator reads them
         ledger = CallLedger(args.call_ledger or "")
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
@@ -965,16 +967,15 @@ def main(argv=None):
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     results = run.run()
-    clean = run.output(results)
+    clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)
     leaks = run.redact.leaks(text)
     if leaks:
-        kept = safety.withhold(text, args.call_ledger, run.run_id)  # the full results stay local for the operator
+        kept = outputs.withhold(text, args.call_ledger, run.run_id)  # the full results stay local for the operator
         print("refused to write output: %d unsanitized fragments; full results kept at %s (owner-only, never commit; "
               "delete after reading); wrote a skeleton" % (len(leaks), kept))
-        if args.out:  # blockers (masked), cleanup status, ledger totals, leak kinds and flagged JSON paths only
-            flags = sanitize.flagged(clean, run.redact.secrets)
-            Path(args.out).write_text(json.dumps(sanitize.skeleton(clean, leaks, flags), indent=2, sort_keys=True) + "\n")
+        if args.out:  # leak-checked skeleton (masked blockers, statuses, totals, kinds, flagged paths) or a minimal record
+            Path(args.out).write_text(outputs.skeleton_text(clean, leaks, run.redact))
         return 3
     if args.out:
         Path(args.out).write_text(text + "\n")

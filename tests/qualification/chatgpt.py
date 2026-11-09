@@ -18,7 +18,8 @@ import re
 import time
 
 from tests.qualification import probe_stages, sanitize
-from tests.qualification.safety import MAX_CAPS, PROMPT_TEXT, Blocker, Refused, check_route, isolated_store, parse_route
+from tests.qualification.safety import MAX_CAPS, PROMPT_TEXT, Blocker, Refused, check_route, parse_route
+from tests.qualification.user_dirs import isolated_store
 
 PURPOSE = "chatgpt"
 INTEGRATION = "openai"
@@ -476,6 +477,19 @@ def outcome_summary(run, root, began, mark, wait_s, end_reason):
                 wait_seconds=round(wait_s, 1), end_reason=known(end_reason, END_REASONS))
 
 
+def remember_own_ids(run, attempt):
+    """This run's own session and message ids (the derived ids, every session the isolated server lists, the root's
+    messages), kept in memory on `run.own_ids` for the user-directory names check; never recorded."""
+    found = {attempt["session"], attempt["message"]}
+    try:
+        _, listing, _ = run.server.request("GET", "/api/session")
+        found |= {s["id"] for s in (run.data(listing) or []) if isinstance(s, dict) and isinstance(s.get("id"), str)}
+        found |= {m["id"] for m in run.messages(attempt["session"]) if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    except Exception:  # noqa: BLE001 - the derived ids are always known; the rest is best effort
+        pass
+    run.own_ids = set(getattr(run, "own_ids", set())) | {i for i in found if isinstance(i, str) and len(i) >= 8}
+
+
 def request(run):
     """One tiny prompt through the full managed handshake; accounting, `record complete`, a clean `status`."""
     s, failures = PURPOSE, []
@@ -494,11 +508,14 @@ def request(run):
         run.wait_idle(root, began)
     except Blocker as error:
         run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "timeout"))
+        run.note(s, "isolated_store", isolated_store(run.base))
+        remember_own_ids(run, a)
         run.note(s, "session_facts", session_facts(run, root, began, body, "timeout: %s" % error,
                                                     round((time.monotonic() - started) * 1000)))
         raise
     run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "idle"))
     run.note(s, "isolated_store", isolated_store(run.base))  # the isolated server wrote its own store where pinned
+    remember_own_ids(run, a)
     facts = session_facts(run, root, began, body, "idle record after the prompt and the session not active",
                           round((time.monotonic() - started) * 1000))
     run.note(s, "session_facts", facts)

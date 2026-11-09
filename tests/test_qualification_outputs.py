@@ -48,7 +48,7 @@ class WritingTests(Temp):
 
     def test_a_secret_learned_late_in_the_pass_is_still_removed(self):
         code, out, printed, _ = self.main({"blockers": ["failed with tok-SECRETVALUE"], "z": {"access": "tok-SECRETVALUE"}})
-        self.assertEqual(code, 1)  # a blocker, written normally
+        self.assertEqual(code, 0)  # written normally: nothing left for the leak check
         self.assertNotIn("SECRETVALUE", out.read_text())
 
     def test_a_skeleton_that_would_leak_becomes_the_fixed_minimal_record(self):
