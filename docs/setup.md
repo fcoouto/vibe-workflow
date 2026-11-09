@@ -12,8 +12,8 @@ Vibe Coding Toolkit `soumatheusgomes/vibe-coding-toolkit` at `21b71b68679c11184f
 | --- | --- | --- |
 | Publishing | Commit, push a task branch, open a draft PR | User, 2026-11-08 |
 | Merging into `main` | Yes, for independently reviewed `[READY]` PRs when checks pass | User, 2026-11-08 |
-| Workstreams | Not configured: the `AGENTS.md` block was removed in `502896f`; set it again with the Workstreams skill | Block removed 2026-11-09; choice pending |
-| `.vibe-workflow/project.json` in Git | Not committed; `/.vibe-workflow/` is in `.gitignore` | User, 2026-11-09 |
+| Workstreams | Enabled, in `.vibe-workflow/settings.json` | User, 2026-11-09 |
+| `.vibe-workflow/project.json` in Git | Not committed; `.gitignore` lists `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`, and `.vibe-workflow/settings.json` is committed | User, 2026-11-09 |
 
 The repository has no CI or branch protection, so the merge permission relies on the local checks and independent review.
 
