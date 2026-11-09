@@ -410,6 +410,137 @@ class ChatGPTTests(StageHarness):
         self.assertEqual({(r["provider"], r["model"]) for r in server.transmitted()}, {("openai", "gpt-test-mini")})
 
 
+def gpt(model_id, variants=("low", "medium"), cost=None, provider="openai", **extra):
+    """A listed model in OpenCode 2.2.6's `Model.Info` shape (from the binary; no live listing is recorded)."""
+    entry = dict(id=model_id, modelID=model_id, providerID=provider, name=model_id,
+                 variants=[dict(id=v) for v in variants], status="active", enabled=True,
+                 capabilities=dict(tools=True, input=["text", "image"], output=["text"]),
+                 cost=[] if cost is None else [dict(input=cost[0], output=cost[1], cache=dict(read=0, write=0))])
+    entry.update(extra)
+    return entry
+
+
+class ChatGPTAutoTests(StageHarness):
+    connect = ChatGPTTests.connect
+
+    def auto(self, models):
+        for name in ("iso", "state"):  # a test may select more than once: each gets a fresh ledger and dir
+            shutil.rmtree(self.tmp / name, ignore_errors=True)
+        run, ledger, server, *_ = self.connect()
+        server.openai_models = models
+        run.chatgpt_model = "auto"
+        printed = []
+        reservations = lambda: [e for e in ledger.export()["entries"] if e["kind"] == "reserve"]  # noqa: E731
+        announce = lambda line: printed.append((line, len(reservations())))  # noqa: E731
+        return run, ledger, server, printed, announce, reservations
+
+    def select(self, models):
+        run, ledger, server, printed, announce, _ = self.auto(models)
+        route = chatgpt.select_model(run, announce=announce)
+        return run, server, route, printed
+
+    def test_the_cheapest_catalog_cost_wins_over_a_name_hint(self):
+        run, server, route, printed = self.select([gpt("gpt-b-mini", cost=(2, 8)), gpt("gpt-a", cost=(1, 4)),
+                                                   gpt("gpt-c-nano")])
+        self.assertEqual(route, ("openai", "gpt-a", "low"))
+        self.assertEqual(run.guard_variant, "medium")
+        self.assertEqual(server.control["route"], ["openai", "gpt-a", "low"])
+
+    def test_without_costs_the_name_hint_decides_nano_then_mini_then_small(self):
+        self.assertEqual(self.select([gpt("gpt-x"), gpt("gpt-x-mini"), gpt("gpt-x-nano")])[2][1], "gpt-x-nano")
+        self.assertEqual(self.select([gpt("gpt-y-small"), gpt("gpt-y-mini")])[2][1], "gpt-y-mini")
+
+    def test_zero_costs_are_unknown_and_ties_go_to_the_hint_then_the_id(self):
+        self.assertEqual(self.select([gpt("gpt-b", cost=(0, 0)), gpt("gpt-z-small", cost=(0, 0))])[2][1], "gpt-z-small")
+        self.assertEqual(self.select([gpt("gpt-b", cost=(1, 1)), gpt("gpt-a", cost=(1, 1))])[2][1], "gpt-a")
+        self.assertEqual(self.select([gpt("gpt-b-mini", cost=(1, 1)), gpt("gpt-a", cost=(1, 1))])[2][1], "gpt-b-mini")
+
+    def test_non_chat_non_openai_and_single_variant_models_are_excluded(self):
+        models = [gpt("gpt-cheap", cost=(0.1, 0.1), provider="opencode"),
+                  gpt("gpt-image-1", cost=(0.1, 0.1)), gpt("text-embedding-3-small", cost=(0.1, 0.1)),
+                  gpt("whisper-1", cost=(0.1, 0.1)), gpt("gpt-4o-mini-tts", cost=(0.1, 0.1)),
+                  gpt("gpt-4o-realtime-preview", cost=(0.1, 0.1)), gpt("omni-moderation-latest", cost=(0.1, 0.1)),
+                  gpt("gpt-4o-mini-search-preview", cost=(0.1, 0.1)), gpt("gpt-typed", cost=(0.1, 0.1), type="image"),
+                  gpt("gpt-voice", cost=(0.1, 0.1), capabilities=dict(tools=True, input=["audio"], output=["audio"])),
+                  gpt("gpt-off", cost=(0.1, 0.1), enabled=False), gpt("gpt-old", cost=(0.1, 0.1), status="deprecated"),
+                  gpt("gpt-one", variants=("low",), cost=(0.1, 0.1)), gpt("gpt-odd", variants=("fast", "slow"), cost=(0.1, 0.1)),
+                  gpt("gpt-real", cost=(5, 5))]
+        run, server, route, printed = self.select(models)
+        self.assertEqual(route[1], "gpt-real")
+        selection = run.results["stages"]["chatgpt"]["model_selection"]
+        self.assertEqual(selection["candidates"], ["gpt-real"])
+        self.assertEqual(selection["other_providers"], 1)
+        self.assertEqual(sorted(selection["excluded"]), sorted(m["id"] for m in models[1:-1]))
+
+    def test_selection_table(self):
+        table = [  # (listed, expected pick)
+            ([gpt("o4-mini-deep-research", cost=(0, 0)), gpt("o4-mini-high", cost=(0, 0))], "o4-mini-high"),
+            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-5-mini", cost=(1, 1))], "gpt-5-mini"),
+            ([gpt("gpt-5", cost=(1.25, 10)), gpt("gpt-5-mini", cost=(0.25, 2)), gpt("gpt-5-nano", cost=(0.05, 0.4))],
+             "gpt-5-nano"),
+            ([gpt("gpt-5.1-codex", cost=(0, 0)), gpt("gpt-5.1-codex-mini", cost=(0, 0))], "gpt-5.1-codex-mini"),
+            ([gpt("gpt-5-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+        ]
+        for listed, expected in table:
+            with self.subTest(expected=expected):
+                run, server, route, printed = self.select(listed)
+                self.assertEqual(route[1], expected)
+        excluded = run.results["stages"]["chatgpt"]["model_selection"]["excluded"]
+        self.assertEqual(excluded, {})
+        run, server, route, printed = self.select(table[0][0] + table[1][0])
+        self.assertEqual(run.results["stages"]["chatgpt"]["model_selection"]["excluded"],
+                         {"o4-mini-deep-research": "name", "computer-use-preview": "name"})
+
+    def test_the_selection_is_announced_before_any_reservation_and_recorded(self):
+        run, server, route, printed = self.select([gpt("gpt-a", cost=(1, 4)), gpt("gpt-b-nano", cost=(3, 4))])
+        self.assertEqual(printed[0][1], 0)
+        self.assertTrue(printed[0][0].startswith("chatgpt model selected: openai/gpt-a#low (rule: "), printed)
+        selection = run.results["stages"]["chatgpt"]["model_selection"]
+        self.assertEqual((selection["mode"], selection["selected"], selection["candidates"]),
+                         ("auto", "openai/gpt-a#low", ["gpt-a", "gpt-b-nano"]))
+        self.assertEqual(selection["rule"], chatgpt.AUTO_RULE)
+        state = json.loads((self.tmp / "iso" / "chatgpt-login.json").read_text())
+        self.assertEqual(state["selection"]["selected"], "openai/gpt-a#low")
+        self.assertEqual(oct((self.tmp / "iso" / "chatgpt-login.json").stat().st_mode & 0o777), "0o600")
+
+    def refused(self, models):
+        run, ledger, server, printed, announce, reservations = self.auto(models)
+        run.start, run.probes = (lambda stage: None), (lambda stage: [])
+        server.oauth_pending_polls, server.oauth_polls, server.connected = 0, 0, False
+        (self.tmp / "iso" / "chatgpt-login.json").unlink()  # the run signs in again and creates it afresh
+        with self.assertRaises(safety.Refused) as caught:
+            chatgpt.run(run, announce=announce)
+        selection = run.results["stages"]["chatgpt"]["model_selection"]
+        self.assertEqual((selection["mode"], selection["rule"], selection["selected"]), ("auto", chatgpt.AUTO_RULE, None))
+        self.assertEqual(selection["candidates"], [m["id"] for m in models if m["id"] not in selection["excluded"]])
+        text = json.dumps(run.output(run.results))
+        for secret in ("tok-not-real", "ref-not-real", "idt-not-real"):
+            self.assertNotIn(secret, text)
+        self.assertEqual(reservations(), [])
+        self.assertEqual(server.transmitted(), [])
+        self.assertIsNone(server.control["route"])
+        return str(caught.exception), printed
+
+    def test_ambiguous_or_empty_candidates_refuse_before_any_reservation(self):
+        message, printed = self.refused([gpt("gpt-x"), gpt("gpt-y")])
+        self.assertIn("ambiguous", message)
+        self.assertIn("gpt-x, gpt-y", message)
+        self.assertTrue(any("candidates: gpt-x, gpt-y" in line for line, _ in printed), printed)
+        message, _ = self.refused([gpt("gpt-x", cost=(0, 0)), gpt("gpt-y", cost=(0, 0))])
+        self.assertIn("ambiguous", message)
+        message, _ = self.refused([gpt("gpt-one", variants=("low",), cost=(1, 1)), gpt("gpt-image-1", cost=(1, 1))])
+        self.assertIn("no candidate", message)
+
+    def test_an_explicit_model_is_unchanged(self):
+        run, ledger, server, printed, announce, _ = self.auto([gpt("gpt-a", cost=(1, 1)), gpt("gpt-test-mini")])
+        run.chatgpt_model = "openai/gpt-test-mini"
+        self.assertEqual(chatgpt.select_model(run, announce=announce), ("openai", "gpt-test-mini", "low"))
+        self.assertEqual(run.results["stages"]["chatgpt"]["model_selection"]["mode"], "explicit")
+        run.chatgpt_model = "openai/gpt-unlisted#low"
+        with self.assertRaises(safety.Refused):
+            chatgpt.select_model(run, announce=announce)
+
+
 class ModeRefusalTests(Temp):
     def test_modes_are_exclusive_and_routes_checked_before_anything_starts(self):
         ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
@@ -427,6 +558,46 @@ class ModeRefusalTests(Temp):
                 self.assertEqual(live.main(base + extra), 2)
         self.assertEqual(list(target.iterdir()), [])
 
+
+    def test_auto_reaches_the_run_and_auto_with_a_variant_is_refused(self):
+        ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
+        approved_ledger(ledger_path)
+        target = self.private(self.tmp / "ok")
+        base = ["--isolated-dir", str(target), "--call-ledger", str(ledger_path), "--chatgpt", "--chatgpt-model"]
+        captured = {}
+
+        class FakeRun:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+                self.redact = safety.Redactor()
+
+            def run(self):
+                return dict(blockers=[])
+
+            def output(self, results):
+                return dict(results, cleanup=None, call_ledger=None)
+        with patch.object(live, "Run", FakeRun), patch.object(live, "check_opencode_version", lambda env: None), \
+                patch.object(live, "check_real_home", lambda: None):
+            self.assertEqual(live.main(base + ["auto"]), 0)
+        self.assertEqual(captured["chatgpt_model"], "auto")
+        for ref in ("auto#low", "openai/auto#", "AUTO"):
+            with patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
+                    patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
+                self.assertEqual(live.main(base + [ref]), 2, ref)
+
+    def test_a_redirected_home_refuses_every_live_mode_before_anything_starts(self):
+        real = self.private(self.tmp / "real")
+        with self.assertRaises(safety.Refused):
+            safety.check_real_home(home=self.private(self.tmp / "fake"), passwd_home=real)
+        self.assertEqual(safety.check_real_home(home=real, passwd_home=real), real.resolve())
+        ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
+        approved_ledger(ledger_path)
+        base = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger_path)]
+        for extra in ([], ["--stages", "descendants"], ["--chatgpt", "--chatgpt-model", "auto"]):
+            with self.subTest(extra=extra), patch.dict("os.environ", HOME=str(self.private(self.tmp / ("fake-%d" % len(extra))))), \
+                    patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
+                    patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
+                self.assertEqual(live.main(base + extra), 2)
 
     def test_the_keep_warning_names_the_stored_logins(self):
         self.assertIn("ChatGPT", live.KEEP_WARNING)
