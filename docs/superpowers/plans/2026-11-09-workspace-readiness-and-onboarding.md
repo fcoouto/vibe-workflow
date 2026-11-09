@@ -1,117 +1,121 @@
 # Workspace readiness and onboarding — improvement plan
 
-Date: 2026-11-09. Status: **draft for user review.** Supersedes the narrower [workspace client coverage plan](2026-11-09-workspace-client-coverage.md) (its parts A and C are folded in below).
+Date: 2026-11-09, revised 2026-11-10. Status: **draft for user review.** Supersedes the narrower [workspace client coverage plan](2026-11-09-workspace-client-coverage.md).
 
-## 1. What goes wrong today
+## 1. Problems observed
 
-Observed in this repository's own onboarding (2026-11-08/09):
-
-| Failure | Where it came from |
-|---|---|
-| Superpowers, Ponytail, Context7, RTK and the Graphify skill were never set up for OpenCode, the client the user works in. | `prepare-my-workspace` follows a Toolkit prompt that names only Codex and Claude Code; nothing discovers which clients are installed. |
-| Onboarding went ahead on a workspace that was not ready, without saying so. | `onboard-my-project` treats machine tools as someone else's job and only "reuses" them. No readiness check exists. |
-| Graphify was skipped as "pending, separate user choice". | Optional ≠ omittable was never enforced; the plan validator accepts `omit` for an applicable component. |
-| Codex silently ran a stale plugin copy; trust silently lapsed after an upgrade. | Install, trust and startup were reported as one fuzzy state; the version check could not see a same-version change. |
-| The agent skipped Thread Naming, role declarations and worker selection. | Procedures depend on the agent remembering to load them. |
-
-The Toolkit already states the rule this plan enforces: *"Mandatory plugins are not optional extras and must not be skipped because they are not yet on the machine."* Its environment prompt also says the request itself authorizes the required foundation.
+- Superpowers, Ponytail, Context7, RTK and the Graphify skill were never set up for OpenCode, the client in daily use: nothing asks which clients are installed.
+- Onboarding ran on an unprepared workspace without saying so: it only "reuses" machine tools.
+- Graphify was skipped as "pending": the plan validator accepts `omit` for an applicable component.
+- Codex ran a stale plugin copy and its hook trust lapsed silently after an upgrade.
+- Preparation executes the Toolkit's entire environment prompt, so it installs and checks things `vibe-workflow` never uses (Docker, Node toolchains), and the instructions grow with it.
 
 ## 2. Principles
 
-1. **One definition of "ready".** A single requirements catalog says what the workspace needs, why each item matters, how to check it per client, and whether it is mandatory. Both skills read it; neither keeps its own list.
-2. **Check with code, act with the agent.** A read-only readiness command produces the same answer every time. The agent then fixes what it reports, following each tool's official instructions.
-3. **Every installed client counts.** The client running the session and every other installed agent client (Codex, Claude Code, OpenCode) are covered, or reported as an explicit gap.
-4. **Mandatory means presented as a requirement, with its value.** The user sees what is missing and why the harness needs it, then the agent proceeds. Only actions that need the user (sign-in, trust approval, system password, purchase, authentication-mode change) wait for them.
-5. **Separate procedures, one gate.** Preparation and onboarding remain distinct skills. Onboarding calls the readiness gate first and hands off to preparation when needed, then resumes.
-6. **No silent states.** Every requirement and every catalog component ends in a named state. "Not seen" stays pending; nothing is reported as working before a new session shows it.
+1. **One short requirements list, owned here.** It names what the workflow needs and why. Both skills read it. The Toolkit is the source the list is authored and updated from, not a prompt executed at run time.
+2. **Code checks, the agent acts.** A read-only command reports readiness the same way every time; the agent fixes what it reports with each tool's official instructions.
+3. **Every installed client counts:** Codex, Claude Code and OpenCode, plus the client running the session.
+4. **Required means required.** The user is told what is missing and the value it brings, then the agent proceeds. Only sign-ins, trust approvals, system passwords, purchases and authentication changes wait for the user.
+5. **One gate, two skills.** Onboarding checks readiness first and hands off to preparation when needed, then resumes.
+6. **Nothing silent.** Every requirement and catalog component ends in a named state; nothing is called working before a new session shows it.
+7. **Less text.** Each rule is stated once; procedures are numbered steps with a done condition; anything the workflow does not use is removed.
 
-## 3. Requirements catalog (new, single owner)
+## 3. Requirements list
 
-File: `clients/workspace-requirements.json` with a plain-language companion `clients/workspace-requirements.md`.
+New file `clients/workspace-requirements.md` (plain list) with a machine-readable twin used by the readiness command. Each item: name, why it matters (one sentence shown to the user), per-client check, where the official install instructions live, user actions.
 
-Each entry: `id`, `name`, `why` (one sentence of value shown to the user), `tier`, `scope` (`machine` or `per-client`), `check` (how the readiness command observes it per client), `install_ref` (where the agent reads the official instructions; no hard-coded commands as truth), `user_actions` (sign-in, trust…).
+**Required (blocks onboarding):**
 
-| Tier | Items | Gate behavior |
+| Item | Scope | Why |
 |---|---|---|
-| **Harness (mandatory, gates onboarding)** | Python 3.11+, Git, GitHub CLI; the `vibe-workflow` plugin at the expected version with hooks trusted (in every client it supports); Superpowers, Ponytail, Caveman, RTK, Context7, Graphify in every installed agent client that officially supports them | Onboarding cannot finish while any is missing; it prepares them first. |
-| **Foundation (mandatory, machine)** | Node.js LTS, npm, pnpm, ripgrep/fd/jq, Docker + Compose, package manager | Always prepared by `prepare-my-workspace`, as the Toolkit requires. Gates onboarding only when the project or a selected workflow needs it (e.g. a Node project without Node). Always reported, never silent. |
-| **Optional extras** | Toolkit extras, browser tools, Sentry… | Never gate; offered with their value when a project needs them. |
+| Python 3.11+, Git, GitHub CLI | machine | Run the plugin's hooks and checks; publish task branches and PRs. |
+| `vibe-workflow` plugin, expected version, hooks trusted | each client | Loads the workflow rules at session start; version drift and lapsed trust leave a client running old rules. |
+| Superpowers | each client | Design, planning, execution and review skills the workflow relies on. |
+| Ponytail | each client | Smallest complete change by default. |
+| Caveman | each client | Concise communication without losing technical substance. |
+| RTK | each client | Compact command output, fewer wasted tokens. |
+| Context7 | each client | Current library and tool documentation instead of stale memory. |
+| Graphify | machine + each client skill | Local code map so agents find dependencies without reading many files. |
 
-A tool with no official support for a client is `not supported (reason)`, never improvised.
+A tool with no official support for a client is reported `not supported` with the reason, never installed by improvisation.
 
-**Docker is foundation, not harness (user decision, 2026-11-10).** The Toolkit lists Docker and Compose as mandatory machine foundation, but none of its workflows, prompts, tool guides or templates use it; only the optional Harness2 benchmark lab does. `vibe-workflow` itself needs only Python, Git and the agent plugins. Docker is therefore never an onboarding blocker: preparation installs it, and onboarding requires it only when the project or a selected workflow uses containers.
+**Project needs (from onboarding's inspection):** a runtime or tool the project itself declares (for example its language toolchain or package manager). Onboarding reports and, with the project's existing commands, checks them; they are not machine requirements.
 
-## 4. Readiness command (new code, read-only)
+**Removed:** Docker and every other Toolkit foundation item the workflow does not use. Recorded as a deliberate local deviation in `docs/policy-sources.md`.
 
-`python3 -B scripts/workflow.py workspace status [--json]`
+## 4. Readiness command
 
-- Discovers installed agent clients (CLI on PATH, version, config directory) plus the one running the session.
-- For each catalog item × client, records one state: `ready`, `missing`, `outdated`, `needs-user` (sign-in, trust), `not-supported`, `unknown` (with reason).
-- Reuses existing observation: `runtime/package_versions.py` (plugin versions), each client's own listing commands (`plugin list --json`, `mcp list`), PATH probes. Bounded time, no writes, no network beyond the clients' own local listings.
-- Writes nothing. A separate `workspace record` stores the last verified result privately (like `upgrade record`) so startup can warn cheaply.
-- Exit code: 0 ready, 1 not ready, 2 could not determine.
+`python3 -B scripts/workflow.py workspace status [--json]`, read-only, bounded time.
 
-## 5. `prepare-my-workspace`, step by step
+- Finds installed clients (CLI on PATH, version, config directory) and the session's client.
+- One state per requirement × client: `ready`, `missing`, `outdated`, `needs-user`, `not-supported`, `unknown` (with reason).
+- Reuses `runtime/package_versions.py` and each client's own listing commands.
+- `workspace record` stores the last result privately so startup can warn cheaply.
+- Exit 0 ready, 1 not ready, 2 undetermined.
 
-Each step names what the agent does, when it is done, and what to do on failure. The entry point stays ≤150 words and links this procedure.
+## 5. `prepare-my-workspace`
 
-| # | Step | Agent does | Done when | If it fails |
-|---|---|---|---|---|
-| 1 | Discover | Run `workspace status`. Identify OS, shell, installed agent clients, the session's client. | Status table produced. | `unknown` cells stay listed; continue. |
-| 2 | Tell the user | Show missing items grouped by tier, each with its `why`, and the user actions that will be needed. Say the agent is proceeding with the mandatory ones. | Message shown. | — |
-| 3 | Back up | Back up every client config the run will touch, outside the project. | Backup paths recorded. | Stop that client's changes. |
-| 4 | Install / update | In dependency order (prerequisites → Git/gh → runtimes → agent CLIs → mandatory plugins per client → foundation → updates), using each tool's official instructions for that client, read now; record source and date. | Each item's install command succeeded. | Mark `failed` with the error; continue with the rest; no improvised workaround. |
-| 5 | Collect user actions | One consolidated list: sign-ins, trust approvals, restarts, OS prompts. | User confirms each, or it stays `needs-user`. | Stays pending; never approved on the user's behalf. |
-| 6 | Verify | Rerun `workspace status`; for each client start a new session (or the client's no-model init mode) and confirm discovery/loading. | Every mandatory cell `ready`, `not-supported` with reason, or `needs-user`. | Report the exact cell; no "done". |
-| 7 | Record and report | `workspace record` and `upgrade record`; report the client × requirement table and remaining user actions. | Record written; report shown. | — |
+1. **Check:** run `workspace status`. Done: table produced.
+2. **Tell:** list what is missing with its value; say you are proceeding; list the user actions that will come. Done: message shown.
+3. **Back up:** each client config you will edit, outside projects. Done: paths recorded. On failure: skip that client's edits and report.
+4. **Install:** per missing item and client, follow the official instructions read now; record source and date. Done: command succeeded. On failure: mark `failed`, continue with the rest.
+5. **User actions:** one consolidated list; never approve for the user. Done: confirmed, or left `needs-user`.
+6. **Verify:** rerun `workspace status`; start a new session per client and confirm loading. Done: every cell is `ready`, `not-supported` or `needs-user`.
+7. **Record and report:** `workspace record`, `upgrade record`; show the table and open user actions.
 
-Upgrades follow the existing [upgrade procedure](../../../skills/prepare-my-workspace/references/upgrade.md) as part of step 4.
+Upgrades use the existing [upgrade procedure](../../../skills/prepare-my-workspace/references/upgrade.md) within step 4.
 
-## 6. `onboard-my-project`, step by step
+## 6. `onboard-my-project`
 
-| # | Step | Agent does | Done when | If it fails |
-|---|---|---|---|---|
-| 0 | **Workspace gate** | Run `workspace status`. If any harness item is missing, say so plainly ("Your workspace is missing X, Y. They give …. I'll prepare them first, then continue onboarding."), run `prepare-my-workspace` scoped to the missing items, then resume. | Harness tier `ready`, or each remaining cell is `needs-user`/`not-supported` and listed. | Items waiting on the user are carried into the final report; independent onboarding continues. |
-| 1 | Target and clients | Confirm the checkout; name the session's client and every installed client; for clients the plugin cannot enroll, report the gap (what is unavailable). | Target and client list recorded. | Ask only if the target is ambiguous. |
-| 2 | Inspect | Instructions, configuration, commands, baseline checks, brief source-size screening. | Facts and assumptions separated. | Unknowns stay explicit. |
-| 3 | Preferences | Ask the standing questions one at a time (publish, merge, Workstreams, Graphify, memory). | Answers recorded, or defaults applied as written. | — |
-| 4 | Catalog and plan | Assess every Toolkit component; each ends **planned**, **reused with evidence**, **inapplicable with reason**, or **blocked with prerequisite and resume condition**. Never `omit` an applicable one. | Validator accepts the plan with no silent omission. | Validator names the row. |
-| 5 | Apply | Recoverable file changes; startup membership per supported client. | Changes applied and read back. | Rollback path recorded. |
-| 6 | Verify | Project checks; policy discovery; startup per client in a new session; Graphify query; memory pointer readable. | Each claim has evidence or stays pending. | Report the gap. |
-| 7 | Report | Four states per client (installed, trusted, startup observed, version); changes; user actions; undo location. | Report shown and setup record updated. | — |
+0. **Gate:** run `workspace status`. If a required item is missing, tell the user what and why, run preparation for those items, then resume. Done: required items `ready`, or each remaining one listed as `needs-user`/`not-supported`.
+1. **Target and clients:** confirm the checkout and the clients to enroll (all installed supported clients by default).
+2. **Inspect:** instructions, configuration, project commands and needs, baseline checks.
+3. **Preferences:** the standing questions, one at a time.
+4. **Plan:** every catalog component ends planned, reused with evidence, inapplicable with reason, or blocked with prerequisite and resume condition. Done: validator accepts it.
+5. **Apply:** recoverable file changes and startup membership per client. Done: read back.
+6. **Verify:** project checks, policy discovery, startup in a new session per client.
+7. **Report:** per client — version, trust, startup observed; changes; user actions; undo location.
 
-## 7. Enforcement (what code checks, not just text)
+## 7. OpenCode as a full plugin client (decided 2026-11-10)
 
-| Check | Owner | Effect |
-|---|---|---|
-| Readiness command | `scripts/workflow.py`, new `runtime/workspace.py` | Same answer every run; both skills start from it. |
-| Plan validator: no `omit` for an applicable component; `blocked` needs prerequisite + resume condition; unresolved harness requirements are listed as blockers | `runtime/onboarding.py` `_validate_proposal` | The Graphify-style skip cannot pass. |
-| Startup readiness warning: an enrolled client whose last workspace record shows missing harness items warns once, like the drift warning | startup path, reads the record only | A user who skips preparation is told at the next session. |
-| Version bump per release; `validate.py` refuses a release whose content changed without one | `scripts/validate.py` / release step | Same-version stale copies become visible. |
+OpenCode gets the same plugin behavior as Codex and Claude Code: it receives routing delegation to its own models (free and OpenCode Go plan), so it must load the workflow rules too.
 
-## 8. Slices
+- Install path: the plugin packaged as an OpenCode V2 plugin; the existing routing shim becomes part of it rather than a separate artifact.
+- Startup orientation: inject the same enrollment context Codex and Claude Code receive, through OpenCode's supported plugin hooks.
+- Enrollment and version checks: add `opencode` to the client lists in onboarding, startup, `package_versions` and the readiness command.
+- Contracts: `clients/opencode.md` stops saying "not an onboarding or startup client"; the plan's support targets include OpenCode.
 
-| Slice | Delivers | Depends on |
-|---|---|---|
-| R1 | Requirements catalog + readiness command (`workspace status/record`) with tests | — |
-| R2 | `prepare-my-workspace` procedure rewrite (steps 1–7, all installed clients; folds in the client-coverage draft) | R1 |
-| R3 | `onboard-my-project` gate (step 0), client naming, step table; plan validator "no silent omission" | R1 |
-| R4 | Startup readiness warning; release version-bump check | R1 |
-| R5 | Behavior qualification on this machine: run onboarding from OpenCode on an unprepared client, observe gate → preparation → resume → report | R2, R3 |
+Routing delegation itself stays in the Smart Routing plan.
 
-Each slice: short design note, implementer worker, independent review, affected tests via `scripts/test_sharded.py` (full run only where shared core changes: R1 and R4 touch `scripts/workflow.py`/startup, so they get one full run each), then merge.
+## 8. Enforcement in code
 
-## 9. Decisions needed from the user
+- Readiness command: same answer every run.
+- Plan validator: no `omit` for an applicable component; `blocked` needs prerequisite and resume condition.
+- Startup warning: an enrolled client whose last workspace record shows missing required items warns once.
+- `validate.py`: a release whose content changed without a version bump is refused.
 
-1. **Consent for mandatory items.** Proposed: an onboarding or preparation request authorizes installing and configuring harness- and foundation-tier items, announced before acting; the agent still stops for purchases, licensing (e.g. Docker Desktop), authentication-mode changes, sign-ins and trust approvals. Optional extras need a choice.
-2. **Gate scope.** **Decided 2026-11-10:** only the harness tier blocks onboarding; foundation items (Docker included) gate only when the project or a selected workflow needs them, and are always reported.
-3. **OpenCode as a full plugin client (part B).** Until decided, the readiness report lists "vibe-workflow startup/enrollment: not available in OpenCode" as a known gap.
-4. **AGENTS.md wording.** "Keep environment preparation, project enrollment, and routine development distinct" stays true for procedures; add that onboarding must check workspace readiness first and hand off to preparation.
+## 9. Slices
 
-## 10. Acceptance
+| Slice | Delivers |
+|---|---|
+| R1 | Requirements list, readiness command (`workspace status/record`), tests |
+| R2 | `prepare-my-workspace` rewritten to the seven steps; Toolkit prompt no longer executed; Docker and unused foundation items removed |
+| R3 | `onboard-my-project` gate and step list; validator rule |
+| R4 | OpenCode as a full plugin client (install, startup, enrollment, version checks) |
+| R5 | Startup readiness warning; version-bump check |
+| R6 | Live check on this machine from OpenCode: gate → preparation → resume → report |
 
-- Starting `onboard-my-project` on a machine missing a mandatory plugin in any installed client produces the gate message (with the item's value), prepares it, and resumes onboarding without a second request.
-- No client × harness requirement is ever left unreported; unsupported cases carry a reason.
+Each slice: short design note, implementer, independent review, affected tests (`scripts/test_sharded.py`), full run only for shared-core slices (R1, R4, R5), then merge.
+
+## 10. Still to decide
+
+1. **Consent:** an onboarding or preparation request authorizes installing the required items, announced first; purchases, licensing, authentication changes, sign-ins and trust approvals still wait for the user.
+2. **AGENTS.md:** add one line: onboarding checks workspace readiness first and hands off to preparation.
+
+## 11. Acceptance
+
+- Onboarding on a machine missing a required plugin in any installed client announces it with its value, prepares it and resumes without a second request.
+- Every requirement × client cell is reported; unsupported ones carry a reason.
 - A plan with an applicable component marked `omit` is rejected.
-- After an upgrade, a client with lapsed trust or a stale copy is reported, never "ready".
-- Package, unit and instruction checks pass; observed client results are reported separately.
+- A client with lapsed trust or a stale copy is never reported ready.
+- No instruction or check in the repository references Docker.
