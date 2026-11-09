@@ -182,7 +182,7 @@ class UsageFromMessages(unittest.TestCase):
         self.assertEqual(result["totals"]["counted"], C_TOTAL)
         self.assertEqual(result["totals"]["session"], C_TOTAL)
         self.assertEqual(result["title"], {"state": "known", "tokens": tokens(2, 9, 0, 605, 549), "reason": None})
-        self.assertEqual(result["message_ids"], ["msg_fixture28", "msg_fixture30"])
+        self.assertEqual(result["message_ids"], [f"msg_fixture{n}" for n in range(27, 32)])
         self.assertEqual(result["unknown"], [])
         self.assertFalse(result["grouped"])
 
@@ -191,9 +191,10 @@ class UsageFromMessages(unittest.TestCase):
         requests = result["usage"]["requests"]
         self.assertEqual(len(requests), 8)
         self.assertEqual({request["kind"] for request in requests}, {"primary"})
-        self.assertEqual([request["variant"] for request in requests], ["low"] * 6 + ["default"] * 2)
+        # Chronological (by creation time): the fixture lists messages newest first.
+        self.assertEqual([request["variant"] for request in requests], ["default"] * 2 + ["low"] * 6)
         self.assertEqual([request["receipt"] for request in requests],
-                         [f"msg_fixture{n}" for n in (2, 3, 6, 7, 10, 17, 21, 25)])
+                         [f"msg_fixture{n}" for n in (25, 21, 17, 10, 7, 6, 3, 2)])
         self.assertEqual(result["title"]["state"], "zero")
         self.assertEqual(result["totals"]["counted"], A_TOTAL)
         self.assertIsNone(routing._usage_error(result["usage"]))
