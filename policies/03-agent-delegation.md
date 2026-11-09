@@ -20,7 +20,7 @@ Apply with the [shared contract rules](00-index.md).
 - Any non-native model or execution route requires explicit user approval before use, including local models, proxies and separately billed API routes. Local models also require capability assessment, even when a client supports them natively.
 - Select each worker's model and reasoning from that platform's current official recommendations, the task's requirements and locally available controls. Prefer the lightest capable option by total effort; do not downgrade solely for price. Set worker choices through supported dispatch controls without changing the coordinator or global defaults. When only inheritance/configuration is supported, record the limitation and use it only if it satisfies the assignment. Keep commercial model names out of portable rules.
 - Read a concise local copy of the relevant platform guidance. Store source URLs, checked time, applicability and a content/version digest. Refresh during periodic environment maintenance, on relevant capability/catalog changes, missing/corrupt guidance or user request, outside hooks; apply [capability-based compatibility](11-tool-integrations.md#qualify-the-actual-workflow) to client updates and do not query upstream on every task. Cache age is a maintenance signal, not a correctness guarantee or automatic dispatch blocker. A failed refresh retains the last verified copy with stale freshness; suppress repeated attempts for the same trigger until a later maintenance run, relevant change or explicit retry. Reuse guidance only while its applicability and available controls remain compatible; otherwise hold dependent dispatch and continue independent work. Discover actual model availability separately.
-- Give each worker its objective, necessary context/instructions, the checkout it edits in (normally the coordinator's task worktree and branch), exact files, dependencies, mutable resources, acceptance criteria, checks and stop condition. Apply [handoff and supervision](#progress-and-result-retrieval). Grant only necessary tools and permissions; avoid copying the whole conversation or loading an unused specialist roster.
+- Write each worker's assignment from the [worker brief template](../templates/worker-brief.md) and apply [handoff and supervision](#progress-and-result-retrieval). Grant only necessary tools and permissions; avoid copying the whole conversation or loading an unused specialist roster.
 - Apply the test-first and self-review procedure in [Task Planning](02-task-planning.md#planning-and-verification) to each assignment; parallel dispatch preserves it.
 - Split work by the [outcome ownership rules](#outcome-ownership). Use narrow specialist roles with distinct triggers; retain a standing role only for a recurring need.
 
@@ -71,8 +71,8 @@ receipt and continuation.
 
 ## Progress and result retrieval
 
-Each brief names one coordinator and the permitted handoff route. Use the
-[lifecycle record's compact child report](07-context-and-handoff.md#lifecycle-record-and-reports)
+Children report to the brief's one coordinator through its permitted route, using the
+[compact child report](07-context-and-handoff.md#lifecycle-record-and-reports)
 and its report triggers rather than repeating the assignment.
 Use native completion/attention delivery. Separate sidebar peer chats may push
 only with direct human authorization to message the recipient; a coordinator's

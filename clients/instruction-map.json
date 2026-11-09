@@ -390,14 +390,14 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "c157eb760b684fe103993a3b5332c35edd0441138cbe9206bdefdbd76735550a",
+      "sha256": "1df4455e8d52d1ca76819e1f8eae79279efd754b9572231a4a2b9fd374a96e1b",
       "ranges": [
         [
           1,
-          54
+          55
         ],
         [
-          55,
+          56,
           119
         ]
       ]
@@ -434,11 +434,11 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "a5aff702df5bb3bf6c185029d141f01cb1496e4fa85c09bd50cc5406db4ade6f",
+      "sha256": "edacb0758c7e44a568227d817d56a2344d916b2bfcd573576a7276952fc411af",
       "ranges": [
         [
           1,
-          53
+          44
         ]
       ]
     },
@@ -797,6 +797,24 @@
         [
           1,
           61
+        ]
+      ]
+    },
+    "templates/task-record.md": {
+      "sha256": "2441769237ae9999a8e60d4d71b06f74966eebaa590aca3f3b4f0039bf0c5510",
+      "ranges": [
+        [
+          1,
+          42
+        ]
+      ]
+    },
+    "templates/worker-brief.md": {
+      "sha256": "02ca2867804641a0a823e92fbe116e4c7316fb28b3371b134303c259ac7c2fca",
+      "ranges": [
+        [
+          1,
+          15
         ]
       ]
     }

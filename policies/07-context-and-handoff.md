@@ -26,12 +26,7 @@ Apply with the [shared contract rules](00-index.md).
 
 ## Lifecycle record and reports
 
-Use the existing task context or plan for starts, meaningful checkpoints, completion and unfinished work. Keep standing context once; update changes using short prose or this optional layout, omitting irrelevant headings:
-
-- **Assignment:** objective, authorized scope, acceptance criteria and standing constraints.
-- **Result and proof:** current result/phase, exact candidate and relevant paths, actual checks/results and evidence references. Distinguish planned, observed, reviewable and accepted.
-- **Material exceptions:** findings, limits, unknowns, pending work and blockers; changed permissions, remaining budgets, dependencies, owned resources, process state and recovery when relevant. Distinguish stopped, running and unknown workers/processes; claim background work only when active execution is verified.
-- **Next:** necessary next action and its owner, including the condition for resuming blocked work.
+Use the existing task context or plan for starts, meaningful checkpoints, completion and unfinished work. Keep standing context once and update only changes, in short prose or the optional [task record template](../templates/task-record.md). Keep planned, observed, reviewable and accepted results distinct, and stopped, running and unknown workers or processes; claim background work only when active execution is verified.
 
 A child report sends this record's changed result, snapshot-bound candidate/proof references when output changes, material exceptions and necessary next action/owner. Reuse known assignment context, saved role declarations and native sender identity; supply compact context when the receiver cannot resolve it after resume or reassignment. Reports grant no authority and replace neither independent verification nor required decision-time observations of readiness, permissions, liveness and ownership.
 
@@ -39,15 +34,11 @@ Report reviewable output, material blockers/decisions and changed dependency/own
 
 At applicable starts, checkpoints and completion, follow the existing [Thread Naming owner](../clients/workstreams-naming.md), including eligibility, overrides, pauses and pending-write recovery. Keep actual readback or a truthful preserved/pending/unavailable outcome in existing presentation metadata. Report only decision-relevant display exceptions; display failure remains nonblocking. A turn ending or child report never implies `DONE`: child output awaits parent acceptance; root completion includes the full agreed deliverable and required integration. Before marking a task or its title `DONE`, apply the [PR merge gate](../clients/workstreams-naming.md#status-and-accepted-progress), including its scope exemptions, whether or not naming is active. Add no model turns solely for acknowledgments or title repair.
 
-For example, when the assignment and sender are already known:
-
-> Reviewable: `src/cleaning.py`, candidate `abc123`; linked `checks.txt` records `python3 -B check.py` passed on that snapshot. Independent review pending. Next: coordinator reviews; child retains ownership.
-
-This optional layout adds no required artifact or status store and replaces no policy, machine request or continuation contract.
+The template adds no required artifact or status store and replaces no policy, machine request or continuation contract.
 
 ## Handoff and resumption
 
-Use the [lifecycle record](#lifecycle-record-and-reports) for unfinished work.
+Use the [lifecycle record](#lifecycle-record-and-reports) for unfinished work, adding the template's handoff lines.
 On resume, inspect the actual checkout, branch, files, checks and processes before trusting the handoff. Edits found outside the [resolved destination](02-task-planning.md#planning-and-verification), such as on a merge target, are a discrepancy: preserve them, report it and stop editing there. Reconcile discrepancies and use [Agent Delegation](03-agent-delegation.md) before taking over uncertain worker resources. Preserve pauses and limits; continue only the authorized remainder. Keep temporary progress out of permanent memory. Durable lessons belong once in the responsible record, supported by evidence and a condition for rechecking them.
 
 Selected managed delivery also loads the [continuation protocol](../clients/workstreams-protocol.md). Reconcile writers and review readers before resuming; preserve identity, original scope, pins and remaining budgets.
