@@ -70,6 +70,8 @@ class CrossCheck(unittest.TestCase):
             self.assertEqual(assert_fixed_error(self, account, bad), "invalid lineage")
         listing = Q_LINEAGE + [{"session_id": GHOST, "parent_session_id": Q_ROOT}]
         self.assertEqual(assert_fixed_error(self, account, shim((GHOST, Q_CHILD)), lineage=listing), "invalid lineage")
+        unparented = Q_LINEAGE + [{"session_id": GHOST, "parent_session_id": None}]  # listed as a root of its own
+        self.assertEqual(assert_fixed_error(self, account, shim((GHOST, Q_ROOT)), lineage=unparented), "invalid lineage")
         self.assertEqual(assert_fixed_error(self, account, shim((Q_CHILD, GHOST)), lineage=[]), "invalid lineage")
         same = account(shim((GHOST, None)), lineage=listing)  # a null shim parent never contradicts
         self.assertEqual(same["unknown"], ["child_session_unaccounted", "cost_unknown"])  # listed, not included
