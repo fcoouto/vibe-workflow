@@ -21,7 +21,7 @@ from runtime.startup import (StartupError, AcceptedScope, RuntimeSettings, PROJE
 SCHEMA_VERSION = 2
 APPLICATION_ID = 0x56494245
 PACKAGE = Path(__file__).resolve().parents[1]
-LIMITATIONS = ["Supported apply_patch guard only; shell and external edits remain possible",
+LIMITATIONS = ["Supported file-edit guard only (Codex apply_patch, Claude Edit/Write/NotebookEdit); shell and external edits remain possible",
                "Hooks alone do not establish client execution, filesystem locality or current completion evidence"]
 _CAPTURE_SQL_SCOPE = ContextVar('capture_sql_scope', default=None)
 
@@ -2151,7 +2151,6 @@ def _guard_assignments(db, scope, client, session):
 def start_task(scope, request):
     _fields(request, ("client", "session_id", "task_id", "scope_ref", "mode", "decision_ref"), ("replaces", "attempt_ref"))
     _identity(request, allow_claude=request.get("client") == "claude-code")
-    _require_claude_scope(scope, request["client"])
     _text(request["decision_ref"], "decision_ref")
     if request["mode"] not in ("read-only", "editable"):
         raise StateError("Invalid task mode")
@@ -2162,8 +2161,8 @@ def start_task(scope, request):
         _fields(replacement, ("task_id", "expected_revision"))
         _text(replacement["task_id"], "replaced task_id", 128)
         _integer(replacement["expected_revision"], "expected_revision", 1)
-    if isinstance(scope, AcceptedScope) and request["client"] != scope.client:
-        raise StateError("Task client differs from accepted scope")
+    if request["client"] == "claude-code" and not isinstance(scope, AcceptedScope) or isinstance(scope, AcceptedScope) and request["client"] != scope.client:
+        raise StateError("Task client needs a matching accepted canonical scope")
     pins = _pins(scope)
     if isinstance(scope, AcceptedScope) and not _path(scope).exists():
         raise StateError('Canonical authority birth requires the owned D4 operation')
@@ -2261,7 +2260,8 @@ def _condition(value, task, previous):
 def update_task(scope, request):
     _fields(request, ("client", "session_id", "task_id", "scope_ref", "expected_revision", "state", "reason", "reference"),
             ("conditions", "resolutions", "resolution_ref", "milestones", "user_attention"))
-    _identity(request)
+    _identity(request, allow_claude=request.get("client") == "claude-code")
+    _require_claude_scope(scope, request["client"])
     _integer(request["expected_revision"], "expected_revision", 1)
     for field in ("reason", "reference"):
         _text(request[field], field)
@@ -2377,7 +2377,7 @@ def retained_patch_guard(event, *, deadline=None):
         return None
     from runtime import local_ownership, evidence
     try:
-        owner = local_ownership.acquire(event.cwd, deadline=deadline)
+        owner = local_ownership.acquire(event.cwd, deadline=deadline, client=event.client)
     except (StartupError, OSError, ValueError, TypeError, KeyError):
         return None
     if not os.path.lexists(owner.database):

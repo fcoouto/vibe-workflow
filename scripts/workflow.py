@@ -332,25 +332,26 @@ def main():
     if control:
         return control_main()
     requested_event = sys.argv[2] if len(sys.argv) == 3 else None
-    from runtime.adapters import claude_code, codex, session_start
+    from runtime.adapters import claude_code, codex, hook_events, session_start
     from runtime.engine import HookResult
     from runtime.startup import MAX_INPUT, RuntimeScopeError, StartupError, json_object, orient, acquire_project_entry, _entry_scope, qualification_only
-    runtime_kind = requested_event if requested_event in codex.RUNTIME_EVENTS else None
+    adapters = {"codex": codex, "claude-code": claude_code}
+    adapter = adapters.get(sys.argv[1]) if len(sys.argv) == 3 else None
+    runtime_kind = requested_event if adapter is not None and requested_event in adapter.RUNTIME_EVENTS else None
 
     def failure(reason):
         if runtime_kind is not None:
-            return codex.runtime_diagnostic(runtime_kind, reason)
+            return hook_events.runtime_diagnostic(runtime_kind, reason)
         return session_start.diagnostic(reason)
 
     deadline = time.monotonic() + 4
     try:
-        adapters = {"codex": codex, "claude-code": claude_code}
-        if len(sys.argv) != 3 or sys.argv[1] not in adapters:
+        if adapter is None:
             raise StartupError("Expected a supported client and event")
-        if requested_event != "SessionStart" and (sys.argv[1] != "codex" or runtime_kind is None):
+        if requested_event != "SessionStart" and runtime_kind is None:
             raise StartupError("Unsupported client runtime event")
-        adapter = adapters[sys.argv[1]]
-        payload = json_object(sys.stdin.buffer.read(MAX_INPUT + 1))
+        limit = MAX_INPUT if requested_event == "SessionStart" else getattr(adapter, "RUNTIME_INPUT_LIMIT", MAX_INPUT)
+        payload = json_object(sys.stdin.buffer.read(limit + 1), limit=limit)
         if payload.get("hook_event_name") != requested_event:
             raise StartupError("CLI event does not match the payload event")
         if requested_event == "SessionStart":
@@ -380,7 +381,7 @@ def main():
                     # The optional drift warning must preserve the startup result.
                     pass
         else:
-            event = codex.normalize_runtime(payload)
+            event = adapter.normalize_runtime(payload)
             acquisition = acquire_project_entry(event, PACKAGE, deadline=deadline)
             scope = _entry_scope(acquisition, managed=False)
             result = HookResult(event.kind)
@@ -390,19 +391,19 @@ def main():
             else:
                 from runtime.state import retained_patch_guard
                 result = retained_patch_guard(event, deadline=deadline) or result
-            output = codex.render_runtime(result)
-            if scope is not None and scope.runtime is not None and event.kind in {"PostToolUse", "Stop"}:
+            output = adapter.render_runtime(result, native_event=requested_event)
+            if event.client == "codex" and scope is not None and scope.runtime is not None and event.kind in {"PostToolUse", "Stop"}:
                 from runtime.title_sync import repair
                 presentation = repair(scope, event.client, event.session_id)
                 if presentation.get("notification"):
                     output = dict(output or {})
                     output["systemMessage"] = (output.get("systemMessage", "") + " " + presentation["notification"]).strip()
-            if scope is not None and event.kind == "PostToolUse":
+            if event.client == "codex" and scope is not None and event.kind == "PostToolUse":
                 output = codex.with_output_notice(payload, output)
     except RuntimeScopeError as error:
         from runtime.state import retained_patch_guard
         retained = retained_patch_guard(event, deadline=deadline) if runtime_kind == "PreToolUse" else None
-        output = codex.render_runtime(retained) if retained is not None else failure(str(error))
+        output = adapter.render_runtime(retained, native_event=requested_event) if retained is not None else failure(str(error))
     except StartupError as error:
         output = failure(str(error))
     except (ValueError, OSError, RecursionError, subprocess.TimeoutExpired):

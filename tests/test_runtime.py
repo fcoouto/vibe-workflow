@@ -445,14 +445,36 @@ class RuntimeTests(unittest.TestCase):
                     self.assertNotIn("PRIVATE_SENTINEL", str(output))
                     self.assertNotIn("decision", output)
 
-    def test_cli_event_must_match_payload_and_claude_remains_startup_only(self):
+    def test_claude_write_guard_reads_whole_file_payloads_and_codex_keeps_its_bound(self):
+        self.enroll(clients=["claude-code", "codex"])
+        large = {"hook_event_name": "PreToolUse", "session_id": "session-1", "cwd": str(self.repo),
+                 "prompt_id": "prompt-1", "tool_use_id": "call-1", "tool_name": "Write",
+                 "tool_input": {"file_path": str(self.repo / "big.txt"), "content": "x" * (1024 * 1024)}}
+        # An enrolled checkout without runtime stays silent: the payload was read, not rejected.
+        self.assertIsNone(self.invoke("PreToolUse", large, client="claude-code"))
+        oversized = {**large, "tool_input": {**large["tool_input"], "content": "x" * (9 * 1024 * 1024)}}
+        output = self.invoke("PreToolUse", oversized, client="claude-code")
+        self.assertIn("PreToolUse", output["systemMessage"])
+        self.assertNotIn("permissionDecision", str(output))
+        patch = {**self.payload, "tool_input": {"command": "x" * (200 * 1024)}}
+        self.assertIn("128 KiB", self.invoke("PreToolUse", patch)["systemMessage"])
+
+    def test_cli_event_must_match_payload_and_each_client_accepts_only_its_events(self):
         self.enroll(runtime=self.runtime())
         output = self.invoke("Stop")
         self.assertIn("Stop", output.get("systemMessage", ""))
         self.assertNotIn("decision", output)
-        output = self.invoke(client="claude-code")
+        # Claude Code has no Interrupt hook, so the dispatcher rejects it rather than guessing.
+        output = self.invoke("Interrupt", {**self.payload, "hook_event_name": "Interrupt"}, client="claude-code")
         self.assertIn("unsupported", output.get("systemMessage", "").lower())
         self.assertNotIn("permissionDecision", str(output))
+        # A Claude write hook in a checkout enrolled only for Codex stays silent.
+        edit = {"hook_event_name": "PreToolUse", "session_id": "session-1", "cwd": str(self.repo),
+                "prompt_id": "prompt-1", "tool_use_id": "call-1", "tool_name": "Edit",
+                "tool_input": {"file_path": str(self.repo / "a.txt"), "old_string": "a", "new_string": "b"}}
+        self.assertIsNone(self.invoke("PreToolUse", edit, client="claude-code"))
+        self.assertIsNone(self.invoke("PostToolUseFailure", {**edit, "hook_event_name": "PostToolUseFailure",
+                                                             "error": "Exit code 1"}, client="claude-code"))
 
 
 class RuntimeAdapterTests(unittest.TestCase):
