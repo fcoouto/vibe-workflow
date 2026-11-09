@@ -1,6 +1,6 @@
-# Vibe Coding Workflow
+# Vibe Workflow
 
-<img src="assets/logo.png" alt="Vibe Coding Workflow logo: a gold W on a dark rounded square" width="160" height="160">
+<img src="assets/logo.png" alt="Vibe Workflow logo: a gold W on a dark rounded square" width="160" height="160">
 
 [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit), packaged for your coding agent.
 
@@ -56,7 +56,7 @@ For Codex releases, register the Git-backed marketplace:
 codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref codex/marketplace-release
 ```
 
-In Codex Desktop, select **Vibe Coding Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
+In Codex Desktop, select **Vibe Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
 
 For local plugin testing, install a clean export as described in [Development](#development), in a separate Codex profile. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
 

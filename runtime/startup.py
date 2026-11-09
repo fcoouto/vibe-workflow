@@ -409,7 +409,7 @@ def qualification_only(scope):
 
 def qualification_context(scope, package):
     if not qualification_only(scope):return None
-    return ('Vibe Coding Workflow: qualification-only scope for this approved disposable checkout. '
+    return ('Vibe Workflow: qualification-only scope for this approved disposable checkout. '
         'Use only its exact owner-admitted qualification attempts, within their original operations, claims, native identities and finite budgets. '
         f'Read {json.dumps(str(package/"skills/onboard-my-project/references/apply-and-recovery.md"))} and accepted configuration '
         f'{json.dumps(str(scope.authority_path))}. '
@@ -428,7 +428,7 @@ def orient(event, package, *, acquisition=None):
     client_file = package / "clients" / f"{event.client}.md"
     authority_path = acquisition.authority_path or scope.repository_root / PROJECT_FILE
     context = (
-        "Vibe Coding Workflow applies to this enrolled checkout. Read the client instructions at "
+        "Vibe Workflow applies to this enrolled checkout. Read the client instructions at "
         f"{json.dumps(str(client_file))}, the policy index at "
         f"{json.dumps(str(package / 'policies/00-index.md'))}, and accepted project configuration at "
         f"{json.dumps(str(authority_path))}. Load only triggered policies and applicable "
@@ -438,7 +438,7 @@ def orient(event, package, *, acquisition=None):
     if event.client == "codex":
         command = shlex.join(["python3", "-I", "-B", str(package / "scripts/read_instructions.py"), "--batch", "bootstrap"])
         context = (
-            "Vibe Coding Workflow applies to this enrolled checkout. Before task work, including independent review, "
+            "Vibe Workflow applies to this enrolled checkout. Before task work, including independent review, "
             f"read the required client instructions and policy index through `{command}` unless their complete "
             "current text is already available in this context. Run each needed read alone: "
             "child max_output_tokens=10000; functions.exec max_output_tokens=12000. "
