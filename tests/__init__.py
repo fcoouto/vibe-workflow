@@ -6,8 +6,11 @@ the real home, and installs an audit hook that refuses file operations on the re
 and destructive ones (rmtree, rename, rmdir, remove) on their ancestors below the home, such as ~/.local or ~/.codex.
 
 What the hook cannot see, and only the redirected HOME prevents:
-- a relative name used with a ``dir_fd`` (never resolved against the cwd), e.g. on a descriptor for
-  ~/.local/share, which may be opened; a root itself or anything below it may not be opened by path;
+- relative names that the audit event cannot place: those used with a ``dir_fd``, and every relative ``open``
+  (its event carries no dir_fd, so the name may belong to a descriptor such as rmtree's). So ``chdir`` into a
+  state directory followed by a relative ``open`` is not caught; opening a root by absolute path is. Relative
+  paths of mkdir, rename, remove, rmdir, link, symlink, chmod, chown, utime and rmtree without a dir_fd are
+  resolved against the current ``os.getcwd()``;
 - symlinks pointing into a root;
 - subprocesses (they inherit the redirected HOME, not the hook), ctypes and C extensions bypassing audited calls;
 - ``unittest discover -p`` selecting only modules that never import ``tests``: then this file never runs.
@@ -50,14 +53,14 @@ def _temporary(path):
 
 
 def _inside(path, base):
-    return path == base or path.startswith(base + os.sep)
+    return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
 
 
 account_homes = {os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir), pwd.getpwuid(os.getuid()).pw_dir}
 preset, original = os.environ.get('VCW_TEST_HOME'), {name: os.environ.get(name) for name in ('HOME', *HOME_VARIABLES)}
 # Defer only to a runner-made home: HOME is that same canonical, existing directory outside the real home.
 deferred = bool(preset and preset == original['HOME'] and os.path.isabs(preset) and os.path.realpath(preset) == preset
-                and os.path.isdir(preset) and not any(_inside(preset, home) for home in account_homes))
+                and os.path.isdir(preset) and not any(_inside(preset, h) or _inside(h, preset) for h in account_homes))
 real_homes = set(account_homes)
 if not deferred and original['HOME'] and os.path.isabs(original['HOME']) and not _temporary(original['HOME']):
     real_homes |= {original['HOME'], os.path.realpath(original['HOME'])}
@@ -81,26 +84,23 @@ _ROOT_PREFIXES = tuple(root + '/' for root in ROOTS)
 _SCAN_PREFIXES = tuple({os.path.dirname(root) + '/' for root in ROOTS | ANCESTORS} | {h + '/' for h in real_homes})
 
 
-_cwd = [None]
 
-
-def blocked(path, destructive=False):
-    """The normalized real-home state path ``path`` names, or None. Unresolvable arguments return None."""
+def blocked(path, destructive=False, cwd_relative=False):
+    """The normalized real-home state path ``path`` names, or None. Relative paths count only when
+    ``cwd_relative`` says the event resolves them against the cwd; unresolvable arguments return None."""
     if isinstance(path, bytes):
         path = os.fsdecode(path)
     elif not isinstance(path, str):
         if isinstance(path, int) or path is None or not hasattr(path, '__fspath__'):
             return None
-        return blocked(os.fspath(path), destructive)
+        return blocked(os.fspath(path), destructive, cwd_relative)
     if not path.startswith('/'):
-        # The cwd may be inside a root (fchdir, inherited cwd); cached because getcwd costs ~8 us on macOS.
-        cwd = _cwd[0]
-        if cwd is None:
-            try:
-                cwd = _cwd[0] = os.getcwd()
-            except OSError:
-                return None
-        path = os.path.join(cwd, path)
+        if not cwd_relative:
+            return None
+        try:
+            path = os.path.join(os.getcwd(), path)  # fresh each time: nothing cached can go stale
+        except OSError:
+            return None
     if not path.startswith(_SCAN_PREFIXES):
         return None
     path = os.path.normpath(path)
@@ -113,17 +113,12 @@ def audit(event, args):
     spec = PATH_EVENTS.get(event)
     if spec is None:
         return
-    if event == 'os.chdir':
-        _cwd[0] = None  # os.chdir and os.fchdir; a racing thread can briefly see the previous directory
     for index, fd_index in spec:
         argument = args[index] if index < len(args) else None
-        if fd_index is not None and fd_index < len(args) and args[fd_index] is not None:
-            try:  # relative to a descriptor, not the cwd: unresolvable (see the docstring); absolute still checked
-                if not os.fsdecode(os.fspath(argument)).startswith('/'):
-                    continue
-            except TypeError:
-                continue
-        path = blocked(argument, event in DESTRUCTIVE)
+        # Only events that report a dir_fd, and report none (None, or -1 from os.*), resolve against the cwd.
+        fd = args[fd_index] if fd_index is not None and fd_index < len(args) else None
+        cwd_relative = fd_index is not None and (fd is None or isinstance(fd, int) and fd < 0)
+        path = blocked(argument, event in DESTRUCTIVE, cwd_relative)
         if path is not None:
             raise HomeLeakError(f'test isolation: refused {event} on real-home state {path}; tests must use '
                                 f'the temporary HOME ({os.environ.get("HOME")}) or patch the path constant')
