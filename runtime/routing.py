@@ -1277,7 +1277,8 @@ def overrun_event(value):
 # S3.6b-2 operator ops (never client lifecycle events; `record` refuses their kinds and fields).
 RECONCILE_KIND = 'reconcile_uncertain'
 BLOCK_KIND = 'resolve_block'
-# Evidence that settles an uncertain dollar hold. Both charge: no kind releases the hold without spend. A no-spend
+# Evidence that settles an uncertain dollar hold. Both charge (receipts at least 1 micro-USD, enforced by the ledger
+# as `evidence_invalid`); receipts release the unspent rest on the operator's word. A no-spend
 # proof (a provider usage report covering the attempt with zero cost) is refused as `evidence_unsupported`: nothing
 # offline can check an operator-typed report, the ledger keeps no uncertain-mark time, a worker can still spend after
 # the mark, and a later `observed_at` is not proof the report reflects the window (spec 8).
@@ -1328,7 +1329,12 @@ def block_event(value):
                  and LEGACY_MARKER.fullmatch(marker) is not None)
     else:
         valid = False
-    return (dict(value, kind=BLOCK_KIND), None) if valid else (None, 'invalid_request')
+    if not valid:
+        return None, 'invalid_request'
+    event = dict(value, kind=BLOCK_KIND)
+    if 'ids' in event:
+        event['ids'] = sorted(event['ids'])  # canonical: a reordered retry is a duplicate
+    return event, None
 
 
 def resolve_block(ledger, event, now):
@@ -1438,11 +1444,12 @@ def _by_organization(entries):
     return dict(organizations=entries[:usage_budget.SUMMARY_IDS], more=max(0, len(entries) - usage_budget.SUMMARY_IDS))
 
 
-RECONCILE_HINT = ('Operator recovery: reconcile_uncertain settles an uncertain dollar hold from provider receipts '
-                  '(charged as reported) or charge_reservation (the full reservation); nothing releases it without '
-                  'spend, so stop the worker first. resolve_block over_bound confirms or dismisses the listed run ids. '
+RECONCILE_HINT = ('Operator recovery (one-shot commands): stop the worker first. reconcile_uncertain settles an uncertain '
+                  'dollar hold from provider receipts (charged as reported, at least 1 micro-USD; the unspent rest is '
+                  "released on the operator's word) or charge_reservation (the full reservation, nothing released). "
+                  'resolve_block over_bound confirms or dismisses the listed run ids. '
                   'resolve_block legacy needs the marker listed here, after reviewing the unresolved items; a stale '
-                  'marker is refused. Each op lifts only its own reason.')
+                  'marker is refused.')
 
 
 def reconcile_summary(data):

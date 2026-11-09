@@ -18,8 +18,9 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.67M, 88.9%
-# with S3.6a's settlement fields (352 per hold) and a legacy block (10.53M, 87.8% after S3.5's binding allowance). S3.6a's event and root tables
+# identifiers, every native task finished, every call with a maximal `incomplete` record and one `over_bound` marker
+# per run): 10,698,684, 89.16% with S3.6a's settlement fields (352 per hold) and a legacy block (10.53M, 87.8% after
+# S3.5's binding allowance). The margin to the 90% test ceiling is thin: avoid further per-hold or per-call fields. S3.6a's event and root tables
 # are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
@@ -1295,17 +1296,21 @@ class Ledger:
             # receipt-backed; a cost above the reservation is an overrun either way.
             require(state == 'cost_unknown', 'hold_state_forbidden')
             cost, receipts = event['cost_usd_micros'], event.get('receipts') or []
+            # A receipt-backed zero would release the whole reservation with no spend at all (S3.6b-2 review).
+            require(cost > 0 or not receipts, 'evidence_invalid')
             charge = cost if receipts else max(cost, hold['amount'])
             return self._settle_cost(data, attempt, hold, cost, charge, None, self._resolution(receipts))
         elif kind == 'reconcile_uncertain':
             # S3.6b-2 operator reconciliation of an uncertain DOLLAR hold. Provider receipts settle it like a measured
-            # completion (charged as reported, an overrun above the reservation); `charge_reservation` charges the full
-            # reservation. No evidence kind releases it without spend: the hold keeps its exposure otherwise.
+            # completion (charged as reported, the unspent rest released on the operator's word, an overrun above the
+            # reservation); `charge_reservation` charges the full reservation. A zero cost is refused (`evidence_invalid`):
+            # it would release the whole hold without spend, i.e. the refused no-spend proof.
             require(state == 'uncertain' and hold['amount'] > 0, 'hold_state_forbidden')
             evidence = event['evidence']
             require(evidence['kind'] in ('receipts', 'charge_reservation'), 'evidence_unsupported')
             if evidence['kind'] == 'receipts':
                 cost = evidence['cost_usd_micros']
+                require(cost > 0, 'evidence_invalid')
                 return self._settle_cost(data, attempt, hold, cost, cost, None, self._resolution(evidence['receipts']))
             return self._settle_cost(data, attempt, hold, None, hold['amount'], None, self._resolution([]))
         elif kind == 'resolve_overrun':

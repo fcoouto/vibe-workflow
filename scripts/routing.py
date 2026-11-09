@@ -47,6 +47,9 @@ FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constra
               resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()),
               reconcile_uncertain=({'attempt_id', 'evidence', 'event_id'}, set()),
               resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}))
+# Operator ops are one-shot commands only: the OpenCode shim's persistent `--serve` child never exposes them, so a
+# plugin or worker that can reach it cannot settle, release or unblock anything (`operator_op_not_served`).
+OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block')
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -148,6 +151,7 @@ class Service:
         self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
+        self.serving = serving
         self._open = None
         self._expired_at = None
 
@@ -174,6 +178,7 @@ class Service:
             require(op is None or value.get('op', op) == op, 'invalid_request')
             name = value.get('op', op)
             require(type(name) is str and name in FIELDS, 'unknown_op')
+            require(not (self.serving and name in OPERATOR_OPS), 'operator_op_not_served')
             body = {key: item for key, item in value.items() if key not in ('v', 'op', 'id')}
             required, optional = FIELDS[name]
             require(required <= set(body) <= required | optional, 'invalid_request')
