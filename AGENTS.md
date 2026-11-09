@@ -19,6 +19,7 @@ Hooks supplement these instructions. Their presence or silence does not establis
 - Preserve the user's permissions, model choices, subscriptions, and customizations.
 - Preserve the user's chosen coordinator model and reasoning. Before delegating implementation or review, follow [worker selection](policies/03-agent-delegation.md#select-capability-and-dispatch), including cached official platform guidance and its refresh rules.
 - Prefer existing code and native capabilities. Reassess complex controls against concrete user risks; consolidate duplicate checks and evidence while preserving applicable requirements.
+- Keep each Python file at or under 1000 lines so agents can read it in context. `scripts/validate.py` enforces this; the legacy runtime modules it lists have fixed ceilings that must not be raised. Split by responsibility instead.
 
 ## Where to look
 

@@ -1,5 +1,7 @@
 # Task Delivery Lifecycle Implementation Plan
 
+> **Historical record:** test file names below are as written at the time. Several were later merged into `tests/test_delivery.py`, `tests/test_delivery_github.py`, `tests/test_delivery_reconcile.py` and `tests/test_workstreams*.py`; test class and method names are unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Follow the user's chosen execution method and the repository's worker-selection rules; this document does not dispatch workers.
 
 **Goal:** Deliver reviewed changes through tracked PRs, with manual merge by default, optional authorized agent merge, accurate `WAITING`/`DONE` titles, and remote-only branch cleanup.

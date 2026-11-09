@@ -1,5 +1,7 @@
 # Workstreams Project Choice Implementation Plan
 
+> **Historical record:** test file names below are as written at the time. Several were later merged into `tests/test_delivery.py`, `tests/test_delivery_github.py`, `tests/test_delivery_reconcile.py` and `tests/test_workstreams*.py`; test class and method names are unchanged.
+
 > **For agentic workers:** Use superpowers:executing-plans for this single instruction slice, followed by independent Astra review.
 
 **Goal:** Make onboarding and the Workstreams skill manage the same effective Enabled/Disabled choice.

@@ -8,12 +8,12 @@ from unittest.mock import patch
 
 from runtime import delegation, evidence, repository_gate as gate, state
 from runtime.adapters.github_delivery import GitHubDelivery
-from tests import test_merge_verification
+from tests import test_delivery
 
 
 class RepositoryReadinessTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = test_merge_verification.MergeVerificationTests('runTest')
+        self.fixture = test_delivery.MergeVerificationTests('runTest')
         self.addCleanup(self.fixture.doCleanups)
         self.fixture.setUp()
         self.local = self.fixture.fixture
