@@ -739,6 +739,7 @@ class BlockPropertyTests(Accounting):
         with self.open_ledger() as ledger:
             ledger.enable_organization('other', self.POLICY, 0)
             ledger.observe('other', self.BALANCE, now(), issued=self.BALANCE)
+            ledger.set_caps(64, 64)  # in-flight holds and runs of both organizations stay open throughout
 
     def hold(self, ledger, attempt, organization):
         revision = ledger.snapshot()['organizations'][organization]['revision']
@@ -763,6 +764,7 @@ class BlockPropertyTests(Accounting):
                 self.start_run('%s-r%d' % (org, i), org)
                 runs[org].append('%s-r%d' % (org, i))
         expected = {org: dict(overrun=set(), over_bound=set(), legacy=False) for org in orgs}
+        seen = set()
         for step in range(120):
             org = rng.choice(orgs)
             action = rng.choice(['overrun', 'over_bound', 'in_bound', 'legacy', 'confirm', 'dismiss', 'admit'])
@@ -792,6 +794,7 @@ class BlockPropertyTests(Accounting):
                     expected[org]['overrun'].discard(attempt)
             data = self.snapshot()
             for name in orgs:
+                seen |= budget.Ledger.block_reasons(data, name)
                 want = {reason for reason, present in (('overrun', expected[name]['overrun']),
                                                        ('over_bound', expected[name]['over_bound']),
                                                        ('legacy', expected[name]['legacy'])) if present}
@@ -801,6 +804,7 @@ class BlockPropertyTests(Accounting):
                 with self.open_ledger() as ledger:
                     self.hold(ledger, 'new%d' % step, org)
                     holds[org].append('new%d' % step)
+        self.assertEqual(seen, {'overrun', 'over_bound', 'legacy'})  # the sequence reached every reason
 
 
 class ProjectPinTests(Accounting):

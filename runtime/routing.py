@@ -1357,6 +1357,11 @@ def unsent_admissions(data, settings_revision):
     return stale
 
 
+def _capped(ids):
+    ids = sorted(ids)
+    return dict(ids=ids[:usage_budget.SUMMARY_IDS], more=max(0, len(ids) - usage_budget.SUMMARY_IDS))
+
+
 def ledger_summary(data):
     """Counts and nonsecret labels only: open holds by state and unstamped, caps and the user's organizations."""
     holds = {}
@@ -1371,7 +1376,17 @@ def ledger_summary(data):
     # Open holds with no workflow job (S3.5): fine for explicit delegation, never for a planned job.
     unbound = sum(1 for attempt in Ledger.open_holds(data)
                   if not ((Ledger.admission(data, attempt) or {}).get('binding') or {}).get('job'))
+    blocked = []
+    for organization in sorted(data['organizations']):
+        reasons = Ledger.block_reasons(data, organization)
+        if reasons:
+            sources = dict(overrun=Ledger.pending_overruns, over_bound=Ledger.over_bound_runs)
+            blocked.append(dict(id=organization, reasons={
+                reason: _capped(sources[reason](data, organization) if reason in sources else [])
+                for reason in sorted(reasons)}))
+    unknown = [attempt for attempt, hold in Ledger.open_holds(data).items() if hold['state'] == 'cost_unknown']
     return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
+                blocked_organizations=blocked, cost_unknown=_capped(unknown), overrun_backlog=Ledger.overrun_backlog(data),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
                 unbound_open_holds=unbound,
                 caps=dict(total=total, per_account=per_account), organizations=organizations)

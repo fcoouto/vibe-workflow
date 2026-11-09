@@ -892,6 +892,7 @@ class CapacityTests(Funded):
         data['organizations'][organization]['settled'] = dict(total=budget.MAX_INTEGER, cycles={
             unique(i, long('cycle')): budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_CYCLES)})
         data['settled_tasks'] = {'%064x' % i: budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_TASKS)}
+        data['organizations'][organization]['legacy_block'] = True  # the only stored block source (v4)
         data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
         # An admitted hold at its bound plus the fixed fields dispatch, uncertainty and proof add later (S3.4).
