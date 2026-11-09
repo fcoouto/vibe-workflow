@@ -43,7 +43,11 @@ class ProbeServer(FakeOpenCode):
         # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
         self.upstream_error, self.upstream_retry = None, None
         self.assistant_overrides, self.retry_message = {}, "retrying"
-        self.connection_label = "ChatGPT"  # the credential's label as GET /api/integration/openai lists it  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        self.connection_label = "ChatGPT"
+        self.no_reply = False  # transmitted, then the session goes idle (failed) with no assistant message
+        store = self.project.parent / "data" / "opencode"  # the isolated server's own store, as 2.2.6 writes it
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "opencode.db").write_text("")  # the credential's label as GET /api/integration/openai lists it  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -188,6 +192,12 @@ class ProbeServer(FakeOpenCode):
             return 200, dict(data=self.sessions[session]["record"]), 1.0
         if method == "POST" and len(parts) == 4 and parts[3] == "command":
             return self._command(parts[2], body["name"], now)
+        if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.no_reply:
+            state = self.sessions[parts[2]]
+            state["messages"].append(dict(id=body.get("id") or self._id("msg"), type="user", time=dict(created=now)))
+            self._request_hook(parts[2], "primary")
+            state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", time=dict(created=now + 2)))
+            return 200, dict(data=state["messages"][0]), 1.0
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.upstream_error is not None:
             return self._failed_prompt(parts[2], body, now)
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and (
