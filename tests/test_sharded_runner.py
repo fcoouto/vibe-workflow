@@ -1,7 +1,10 @@
+import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
+import time
 import tempfile
 import unittest
 
@@ -75,12 +78,12 @@ class ShardedRunnerTest(unittest.TestCase):
     def snapshot(self):
         return sorted(str(path.relative_to(self.root)) for path in self.root.rglob("*"))
 
-    def run_script(self, *args, log_dir=True):
+    def run_script(self, *args, log_dir=True, env=None):
         command = [sys.executable, "-B", str(SCRIPT), "--root", str(self.root)]
         if log_dir:
             self.log_dir = self.workspace / "logs"
             command += ["--log-dir", str(self.log_dir)]
-        result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command + list(args), capture_output=True, text=True, timeout=60, env=env)
         self.assertEqual(self.created, self.snapshot(), "runner wrote inside the root")
         return result
 
@@ -153,6 +156,53 @@ class ShardedRunnerTest(unittest.TestCase):
         again = self.run_script("test_pass")
         self.assertEqual(2, again.returncode)
         self.assertIn("not overwriting", again.stderr)
+
+    def test_refuses_a_temp_directory_inside_the_root_without_creating_it(self):
+        inside = self.root / "scratch"
+        inside.mkdir()
+        self.created = self.snapshot()
+        result = self.run_script(log_dir=False, env={**os.environ, "TMPDIR": str(inside)})
+        self.assertEqual(2, result.returncode)
+        self.assertIn("inside the root", result.stderr)
+        self.assertEqual([], list(inside.iterdir()))
+
+    def test_sigterm_stops_the_shards(self):
+        pid_file = self.workspace / "child.pid"
+        sleeper = (f"import os, time, unittest\n\nclass Sleeper(unittest.TestCase):\n"
+                   f"    def test_sleep(self):\n        open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+                   f"        time.sleep(120)\n")
+        (self.root / "tests" / "test_sleep.py").write_text(sleeper)
+        self.created = self.snapshot()
+        runner = subprocess.Popen([sys.executable, "-B", str(SCRIPT), "--root", str(self.root), "--shards", "1",
+                                   "--log-dir", str(self.workspace / "logs"), "test_sleep"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(runner.kill)
+        self.wait_until(pid_file.exists)
+        child = int(pid_file.read_text())
+
+        def kill_child():
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self.addCleanup(kill_child)
+        runner.send_signal(signal.SIGTERM)
+        self.assertEqual(128 + signal.SIGTERM, runner.wait(timeout=30))
+        self.wait_until(lambda: not self.alive(child))
+
+    @staticmethod
+    def alive(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def wait_until(self, condition, seconds=30):
+        deadline = time.monotonic() + seconds
+        while not condition():
+            self.assertLess(time.monotonic(), deadline, "condition not reached in time")
+            time.sleep(0.05)
 
 
 if __name__ == "__main__":

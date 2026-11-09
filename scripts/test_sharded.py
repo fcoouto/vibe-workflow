@@ -21,7 +21,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 RAN = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
-FAILED_TEST = re.compile(r"^(?:ERROR|FAIL): .+$", re.MULTILINE)
+FAILED_TEST = re.compile(r"^(?:ERROR|FAIL): \S+ \(.+\)", re.MULTILINE)
 SKIPPED = re.compile(r"\bskipped=(\d+)")
 TAIL_LINES = 20
 POLL_SECONDS = 0.1
@@ -87,14 +87,14 @@ def is_inside(path, root):
 
 
 def prepare_log_dir(requested, root):
+    # Check before creating anything: a directory created inside the root is a write there.
+    parent = Path(tempfile.gettempdir()) if requested is None else requested
+    if is_inside(parent, root):
+        raise UsageError(f"log directory {parent} is inside the root {root}; choose one outside it")
     if requested is None:
-        log_dir = Path(tempfile.mkdtemp(prefix="test-shards-"))
-    else:
-        log_dir = requested
-    if is_inside(log_dir, root):
-        raise UsageError(f"log directory {log_dir} is inside the root {root}; choose one outside it")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir.resolve()
+        return Path(tempfile.mkdtemp(prefix="test-shards-", dir=parent)).resolve()
+    requested.mkdir(parents=True, exist_ok=True)
+    return requested.resolve()
 
 
 def start_shard(index, modules, root, log_dir):
@@ -214,6 +214,11 @@ def print_assignment(assignment, loads):
               + " ".join(f"tests.{name}" for name in modules))
 
 
+def terminate(signum, frame):
+    """Turn a terminating signal into an exit so run_shards stops its shards."""
+    raise SystemExit(128 + signum)
+
+
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     root = args.root.resolve()
@@ -231,6 +236,8 @@ def main(argv=None):
     except (UsageError, FileNotFoundError) as error:
         print(f"test_sharded: {error}", file=sys.stderr)
         return 2
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGHUP, terminate)
     print(f"Running {len(chosen)} modules in {count} shards; logs: {log_dir}", flush=True)
     started = time.monotonic()
     try:
