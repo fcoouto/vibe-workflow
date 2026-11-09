@@ -18,13 +18,15 @@ SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
     "runtime/adapters/codex.py": 1579,
     "runtime/changes.py": 6074,
-    "runtime/delegation.py": 3215,
+    "runtime/delegation.py": 3369,
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
+    "runtime/routing.py": 1506,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
-    "runtime/state.py": 2577,
+    "runtime/state.py": 2613,
+    "runtime/usage_budget.py": 1616,
 }
 
 
