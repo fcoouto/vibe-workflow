@@ -107,10 +107,11 @@ Routing delegation itself stays in the Smart Routing plan.
 
 Each slice: short design note, implementer, independent review, affected tests (`scripts/test_sharded.py`), full run only for shared-core slices (R1, R4, R5), then merge.
 
-## 10. Still to decide
+## 10. Decisions (2026-11-10)
 
-1. **Consent:** an onboarding or preparation request authorizes installing the required items, announced first; purchases, licensing, authentication changes, sign-ins and trust approvals still wait for the user.
-2. **AGENTS.md:** add one line: onboarding checks workspace readiness first and hands off to preparation.
+1. **Consent:** an onboarding or preparation request authorizes installing the required items, announced first. Purchases, licensing, authentication changes, sign-ins and trust approvals still wait for the user.
+2. **AGENTS.md:** one line is added in R3: onboarding checks workspace readiness first and hands off to preparation.
+3. **OpenCode (R4):** designed here as a brief; brainstorming, review and the implementation plan continue in a separate session.
 
 ## 11. Acceptance
 
