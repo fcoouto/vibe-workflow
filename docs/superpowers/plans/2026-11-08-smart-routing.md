@@ -522,6 +522,7 @@ The contract (dispatch, derived ids, the shim handshake, `authority_required`, `
 ### Task S3.7: Canary
 
 - [ ] Enable enforced routing for one explicitly chosen project on OpenCode within the S2.7 canary bounds; record admissions, blocks, latency and settlement against the S2.7 criteria, and abort on any bound or abort condition. Other projects and clients continue on current selectors.
+- [ ] Bounded pilot (approved 9 November 2026, pre-registered in [validation](../../smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary)): up to 20 subscription-only `claude-agent/haiku#low` admissions in the allowlisted project, with a durable cap of 24 requests and the Smart Routing OFF kill switch on abort. It runs through `tests/qualification/opencode_live.py --canary` and does not satisfy this task; cutover stays blocked.
 
 ### Task C.1: Confirm the cutover criteria
 

@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing qualification harness review and pilot pre-registration — 9 November 2026
+
+The independent review of the live qualification harness (PR #145) asked for fail-closed counting, a durable budget and verified cleanup. The user approved a bounded pilot canary. No model call or server run was made for this change.
+
+| Contract | Source |
+| --- | --- |
+| [Pilot canary pre-registration](smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary) and the S3.7 plan note; `tests/qualification/safety.py` (route and variant rule, isolation and version refusals, the durable write-ahead call ledger with caps per purpose, the fail-closed recorder guard, plugin-chain proof, user-directory snapshots, leftover processes), `canary.py` (allowlist, preconditions, sequential pilot driver, abort with the OFF kill switch) and `server.py` (isolated server, git-excluded canary config in a project subdirectory, cleanup) | The independent review of PR #145 (B1 fail-open counter; SF1 durable budget; SF2 variant; SF3 what is counted; SF4 isolation under HOME; SF5 cleanup; SF6 fixture provenance; SF7 cleanup claim; nits); the user's approval of a bounded pilot with its bounds, abort conditions and pass criteria in the coordinator's 9 November 2026 brief; S2.7 canary and latency budgets in the same file; #146 accounting `lineage` contract in [clients/opencode.md](../clients/opencode.md#usage-accounting-and-resync); `tests/test_qualification_harness.py` |
+
 ## Smart Routing live qualification on OpenCode — 9 November 2026
 
 A staged live run of the finished S3 stack on an isolated OpenCode 2.2.6 server ([report](smart-routing-qualification.md)). It changes no runtime behavior; it records observations, adds an operator harness, and stopped on a P0.8 blocker.
