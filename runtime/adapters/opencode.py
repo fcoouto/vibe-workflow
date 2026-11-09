@@ -34,12 +34,16 @@ EDIT_ACTIONS = ("edit", "write", "patch")
 # Config discovery reads these at every ancestor (case-insensitively) and loads agents, commands, modes and plugins
 # from the config directories: denied as any segment of any path.
 CONFIG_NAMES = frozenset({".opencode", ".claude", ".agents", "opencode.json", "opencode.jsonc"})
-# Agent, command and mode directories: denied directly under the session directory or an ancestor (the first segment
-# after any leading `..`), and anywhere in an absolute path, as is any `opencode` segment (global and system config).
+# Agents, commands and modes load only inside config directories (system, global, `.opencode`, `.claude`, `.agents`).
+# When the instance directory is unknown, a relative path whose first segment after any leading `..` is one of these
+# may sit in one, so it is denied (fail closed); with the directory known the path is checked as an absolute one.
 CONFIG_DIRS = frozenset({"agent", "agents", "command", "commands", "mode", "modes"})
+# System config directories of every platform (the 2.2.6 binary picks one by platform; all are protected).
+SYSTEM_CONFIG = ("/etc/opencode", "/Library/Application Support/opencode")
 MAX_PATH = 4096
 MAX_RESOURCES = 256
-MAX_EXTRA = 64
+MAX_EXTRA = 32
+MAX_EXTRA_SEGMENTS = 16
 MAX_EXTRA_TEXT = 256
 PATH_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 DRIVE = re.compile(r"[a-z]:")
@@ -292,11 +296,12 @@ def credential_name(name):
 
 
 def _path(value, limit=MAX_PATH):
-    """(absolute, raw segments, lexically resolved segments) of a resource, or None when it cannot be read.
+    """(absolute, raw segment names, lexically resolved segment names) of a path, or None when it cannot be read.
 
     Compatibility-normalized (NFKC) and lower-cased, so lookalike and case spellings compare equal (conservative on
-    case-sensitive filesystems); `\\` is a separator; empty and `.` segments drop; trailing dots and spaces of a segment
-    are ignored, as Windows does. Raw segments keep `..`, so a symlink before it cannot hide a name.
+    case-sensitive filesystems); `\\` is a separator; empty and `.` segments drop; a segment is compared by its name
+    before any `:` (an NTFS stream or a drive letter) with trailing dots and spaces ignored, as Windows does. Raw
+    segments keep `..`, so a symlink before it cannot hide a name.
     """
     if not isinstance(value, str) or not value or len(value) > limit:
         return None
@@ -308,10 +313,16 @@ def _path(value, limit=MAX_PATH):
     for segment in text.split("/"):
         if segment in ("", "."):
             continue
-        trimmed = segment if segment == ".." else segment.rstrip(". ")
-        if not trimmed:
+        if segment == "..":
+            raw.append(segment)
+            continue
+        if not segment.rstrip(". "):
             return None
-        raw.append(trimmed)
+        raw.append(segment.split(":", 1)[0].rstrip(". ") or segment.rstrip(". "))
+    return absolute, raw, _resolve(raw, absolute)
+
+
+def _resolve(raw, absolute):
     resolved = []
     for segment in raw:
         if segment != "..":
@@ -320,36 +331,50 @@ def _path(value, limit=MAX_PATH):
             resolved.pop()
         elif not absolute:
             resolved.append(segment)
-    return absolute, raw, resolved
+    return resolved
 
 
-def _segment_names(segment):
-    """A segment and its name before any `:` (an NTFS stream or a drive letter)."""
-    return {segment, segment.split(":", 1)[0].rstrip(". ")}
+def config_roots(env, home):
+    """Global and system config directories as segment tuples: the system ones, `<home>/.config/opencode`,
+    `$XDG_CONFIG_HOME/opencode` and `$OPENCODE_CONFIG_DIR`. Values that are not absolute paths are skipped."""
+    env = env if isinstance(env, dict) else {}
+    program_data = env.get("ProgramData") if isinstance(env.get("ProgramData"), str) else "C:\\ProgramData"
+    candidates = [*SYSTEM_CONFIG, program_data + "/opencode"]
+    if isinstance(home, str) and home:
+        candidates.append(home + "/.config/opencode")
+    if isinstance(env.get("XDG_CONFIG_HOME"), str) and env["XDG_CONFIG_HOME"]:
+        candidates.append(env["XDG_CONFIG_HOME"] + "/opencode")
+    candidates.append(env.get("OPENCODE_CONFIG_DIR"))
+    roots = []
+    for candidate in candidates:
+        parsed = _path(candidate)
+        if parsed is not None and parsed[0] and parsed[2] and tuple(parsed[2]) not in roots:
+            roots.append(tuple(parsed[2]))
+    return roots
 
 
-def _config_hit(segments, absolute, extra):
-    names = [_segment_names(segment) for segment in segments]
-    if any(found & CONFIG_NAMES for found in names):
+DEFAULT_ROOTS = config_roots({}, None)
+
+
+def _config_hit(segments, absolute, extra, roots):
+    if any(segment in CONFIG_NAMES for segment in segments):
         return True
-    if any(".config" in names[i] and "opencode" in names[i + 1] for i in range(len(names) - 1)):
+    if any(segments[i] == ".config" and segments[i + 1] == "opencode" for i in range(len(segments) - 1)):
         return True
     if absolute:
-        if any(found & (CONFIG_DIRS | {"opencode"}) for found in names):
+        if any(tuple(segments[:len(root)]) == root for root in roots):
             return True
     else:
-        first = next((found for found, segment in zip(names, segments) if segment != ".."), set())
-        if first & CONFIG_DIRS:
+        first = next((segment for segment in segments if segment != ".."), None)
+        if first in CONFIG_DIRS:
             return True
-    for pattern in extra:
-        for start in range(len(names) - len(pattern) + 1):
-            if all(part in names[start + offset] for offset, part in enumerate(pattern)):
-                return True
-    return False
+    joined = "/" + "/".join(segments) + "/"
+    return any("/" + "/".join(pattern) + "/" in joined for pattern in extra)
 
 
 def extra_paths(value):
-    """The plugin's `protected_paths` option as segment tuples: [] when absent, None when invalid (deny every edit)."""
+    """The plugin's `protected_paths` option as segment tuples: [] when absent, None when invalid (every edit denied,
+    and `routing.health` not ready). At most 32 entries of at most 16 segments."""
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > MAX_EXTRA:
@@ -357,25 +382,35 @@ def extra_paths(value):
     paths = []
     for item in value:
         parsed = _path(item, MAX_EXTRA_TEXT)
-        if parsed is None or not parsed[1] or ".." in parsed[1]:
+        if parsed is None or not parsed[1] or ".." in parsed[1] or len(parsed[1]) > MAX_EXTRA_SEGMENTS:
             return None
         paths.append(tuple(parsed[1]))
     return paths
 
 
-def protected_path(resource, extra=()):
-    """Whether an edit resource may change OpenCode configuration; unreadable resources count as protected."""
+def protected_path(resource, extra=(), directory=None, roots=None):
+    """Whether an edit resource may change OpenCode configuration; unreadable resources count as protected.
+
+    `directory` is the instance directory relative resources resolve against (the plugin's `ctx.location.directory`);
+    when it is unknown (missing, not absolute or unreadable) the fail-closed relative rule applies. `roots` are the
+    global and system config directories (`config_roots`), the system ones by default.
+    """
     parsed = _path(resource)
     if parsed is None or extra is None:
         return True
     absolute, raw, resolved = parsed
-    return _config_hit(raw, absolute, extra) or _config_hit(resolved, absolute, extra)
+    base = _path(directory)
+    if not absolute and base is not None and base[0]:
+        absolute, raw = True, base[2] + raw
+        resolved = _resolve(raw, True)
+    roots = DEFAULT_ROOTS if roots is None else roots
+    return _config_hit(raw, absolute, extra, roots) or _config_hit(resolved, absolute, extra, roots)
 
 
-def managed_denial(action, resources, extra=()):
+def managed_denial(action, resources, extra=(), directory=None, roots=None):
     """The S3.3d denial a managed session gets for this permission request: "image_generation", "config_edit" or None.
 
-    An edit with missing, malformed or too many resources is denied (fail closed).
+    An edit with missing, malformed or more than 256 resources (a patch touching more files) is denied (fail closed).
     """
     if action == IMAGE_ACTION:
         return "image_generation"
@@ -383,7 +418,7 @@ def managed_denial(action, resources, extra=()):
         return None
     if not isinstance(resources, list) or not resources or len(resources) > MAX_RESOURCES:
         return "config_edit"
-    return "config_edit" if any(protected_path(resource, extra) for resource in resources) else None
+    return "config_edit" if any(protected_path(resource, extra, directory, roots) for resource in resources) else None
 
 
 def _unknown(source, name):
