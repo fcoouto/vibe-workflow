@@ -300,24 +300,31 @@ class ResourceExecutionTests(unittest.TestCase):
     def test_feature_combinations_apply_to_every_role(self):
         from tests import test_delegation, test_delegation_review
         from runtime import resource_execution, delegation
+        # One owner per role; each combination re-toggles both features and runs a distinct phase in
+        # its own host directory, so finite runs release capacity before the next combination.
         for role in ('worker', 'review', 'coordinator'):
+            stage = prepared = None
+            with self.subTest(role=role):
+                stage = (test_delegation_review.Stage4NativeReviewTests if role == 'review' else
+                    test_delegation.AdmissionTests)('runTest')
+                stage.setUp()
+                self.addCleanup(stage.doCleanups)
+                stage.plan(stage.review_plan() if role == 'review' else stage.plan_value())
+                if role == 'review':
+                    prepared = stage.prepared()
+                elif role == 'worker':
+                    prepared = stage.prepare()
+                else:
+                    prepared = delegation.reserve_coordinator(stage.scope, stage.operation_request())
             for resource, recovery in ((False, False), (False, True), (True, False), (True, True)):
                 with self.subTest(role=role, resource=resource, recovery=recovery):
-                    stage = (test_delegation_review.Stage4NativeReviewTests if role == 'review' else
-                        test_delegation.AdmissionTests)('runTest')
-                    stage.setUp()
-                    self.addCleanup(stage.doCleanups)
-                    stage.plan(stage.review_plan() if role == 'review' else stage.plan_value())
-                    if role == 'review':
-                        prepared = stage.prepared()
-                    elif role == 'worker':
-                        prepared = stage.prepare()
-                    else:
-                        prepared = delegation.reserve_coordinator(stage.scope, stage.operation_request())
+                    self.assertIsNotNone(prepared, 'Role owner was not prepared')
                     self.feature('enable' if recovery else 'disable', 'capacity_recovery', stage.scope)
                     setting = self.feature('enable' if resource else 'disable', scope=stage.scope)
+                    self.assertEqual(setting['enabled'], resource)
                     request = stage.request(**{k:v for k,v in self.request.items() if k not in stage.identity})
-                    request.update(attempt_id=prepared['attempt_id'], resource_revision=setting['revision'])
+                    request.update(attempt_id=prepared['attempt_id'], resource_revision=setting['revision'],
+                        phase_id='unit-check-%s-%s' % (resource, recovery))
                     directory = self.directory / role / str(resource) / str(recovery)
                     if resource:
                         self.assertEqual(resource_execution.operate(stage.scope, directory, 'run', request)['returncode'], 0)

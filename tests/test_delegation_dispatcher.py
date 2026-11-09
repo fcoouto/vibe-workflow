@@ -77,11 +77,15 @@ with ExitStack() as mocks:
 
     def test_guidance_leaves_accept_surface_request_without_injected_client(self):
         # Catch status treated as flag-only, client injection, and wrong guidance dispatch.
-        for surface in ("codex-cli", "codex-desktop"):
-            for action in ("status", "claim", "record"):
+        # One enrollment serves every case: status cases run first, while no guidance state exists;
+        # guidance control is per surface; record publishes through the live claim that surface's
+        # CLI claim case made (the API claims only if that case failed).
+        scope = self.fixture.scope
+        state_dir = scope.runtime.state_dir
+        claimed = {}
+        for action in ("status", "claim", "record"):
+            for surface in ("codex-cli", "codex-desktop"):
                 with self.subTest(surface=surface, action=action):
-                    scope=self.canonical()
-                    state_dir=scope.runtime.state_dir
                     before={str(p):p.read_bytes() for p in state_dir.rglob('*') if p.is_file()}
                     request = self.cache | dict(client_surface=surface)
                     field, expected = "freshness", "unavailable"
@@ -89,8 +93,7 @@ with ExitStack() as mocks:
                         request |= dict(trigger=dict(kind="routine", id="fixture"))
                         field, expected = "claimed", True
                     elif action == "record":
-                        scope = self.fixture.scope
-                        claim = delegation.claim_guidance(scope, request | dict(trigger=dict(kind="routine", id="fixture")))
+                        claim = claimed.get(surface) or delegation.claim_guidance(scope, request | dict(trigger=dict(kind="routine", id="fixture")))
                         guidance = dict(schema_version=1, client_surface=surface, checked_at="2026-01-01T00:00:00Z",
                             applicability=request["applicability"], sources=[dict(id="official",
                                 url="https://example.org/official", sha256="b" * 64)],
@@ -106,6 +109,8 @@ with ExitStack() as mocks:
                         self.assertEqual(before,{str(p):p.read_bytes() for p in state_dir.rglob("*") if p.is_file()})
                     self.assertEqual(code, 0, report)
                     self.assertEqual(report.get(field), expected, report)
+                    if action == "claim":
+                        claimed[surface] = report
                     if action == "record":
                         code, status = self.cli(["guidance", "status"], self.cache | dict(client_surface=surface))
                         self.assertEqual(code, 0, status)
@@ -205,7 +210,7 @@ with ExitStack() as mocks:
         self.assertEqual(record['data']['resource_units'], 0)
 
     def test_scope_resolution_and_rejected_controls_never_initialize_unrelated_state(self):
-        self.canonical()
+        # setUp already enrolled a fresh unlinked canonical checkout.
         status = ['--client', 'codex', '--session', 'session-1']
         nested_repo = self.nested / 'inner'
         nested_repo.mkdir(); self.fixture.git(nested_repo, 'init', '-q')

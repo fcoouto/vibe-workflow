@@ -104,18 +104,34 @@ class Stage4NativeReviewTests(unittest.TestCase):
             self.assertEqual(self.api._ledger(self.scope, db), [])
             self.assertEqual(state._task(db, state._scope_id(self.scope), 'codex', 'parent')['evidence']['attempts'], [])
         request = self.review_request()
+        # A concurrent loser either replays or is rejected by whichever lock it meets first: the
+        # reservation guard ('busy'), or, under load, a 0.1 s SQLite lock on artifact registration or
+        # task state. Each rejection must leave no reservation of its own; a retry must replay.
+        contention = ('D4 transaction busy', 'Evidence authority registration unavailable or locked',
+                      'Runtime state is unavailable, corrupt, locked or incompatible')
+        rejected = []
         def reserve(_):
             try:
                 return evidence.prepare_review(self.scope, request)
             except state.StateError as error:
-                self.assertIn('busy', str(error))
+                rejected.append(str(error))
                 return None
         with ThreadPoolExecutor(max_workers=2) as pool:
             admitted = list(pool.map(reserve, range(2)))
+        for message in rejected:
+            self.assertTrue(any(text in message for text in contention), message)
         self.assertEqual(sum(item['launch_admitted'] for item in admitted if item), 1)
-        admitted = [item or evidence.prepare_review(self.scope, request) for item in admitted]
-        self.assertEqual(len({item['attempt_id'] for item in admitted}), 1)
-        self.assertEqual(sum(item['launch_admitted'] for item in admitted), 1)
+        with state._database(self.scope) as db:
+            ledger = self.api._ledger(self.scope, db)
+            task = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual([attempt['id'] for attempt in task['evidence']['attempts']], [ledger[0]['id']])
+        self.assertEqual(task['revision'], request['expected_revision'] + 1)
+        retried = [item or evidence.prepare_review(self.scope, request) for item in admitted]
+        self.assertEqual({item['attempt_id'] for item in retried}, {ledger[0]['id']})
+        self.assertEqual(sum(item['launch_admitted'] for item in retried), 1)
+        with state._database(self.scope) as db:
+            self.assertEqual(len(self.api._ledger(self.scope, db)), 1)
 
     def test_review_pair_digests_and_replay_precede_discovery_and_candidate(self):
         self.plan(self.review_plan())
