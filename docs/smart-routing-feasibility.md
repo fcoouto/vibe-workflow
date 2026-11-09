@@ -35,9 +35,8 @@ All paths other than F08 and F09 were confirmed present on the baseline revision
 
 ## Test toolchain
 
-- Standard-library `unittest`, run as `python3 -B -m unittest <module>` or `python3 -B -m unittest discover -s tests`. Python 3.11+ (3.15.2 observed). No package manager, linter or CI.
+- Standard-library `unittest`, run as `python3 -B -m unittest <module>`. Python 3.11+ (3.15.2 observed). No package manager, linter or CI.
 - Package check: `python3 -B scripts/validate.py` (does not check client execution).
-- The full suite takes more than 20 minutes locally; slice work runs the relevant modules and the package check.
 - At the baseline no `tests/fixtures/` directory exists; `main` has since gained `tests/fixtures/project_review/`. `tests/fixtures/smart-routing/` is created by Task 0.3.
 - OpenCode V2 shim loader and test runner are not yet pinned (P0.1, Task 0.4). Nothing on this baseline runs TypeScript.
 
