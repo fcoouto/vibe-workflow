@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 DEFAULT_OUTPUT = Path("~/.cache/vibe-workflow/dev-package")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 # Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
-EXCLUDED = ("tests/",)
+EXCLUDED = ("tests/", "scripts/test_sharded.py")
 
 
 def read_json(path):

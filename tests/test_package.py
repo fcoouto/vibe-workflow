@@ -18,7 +18,7 @@ def tracked():
     output = subprocess.run(["git", "-C", str(PACKAGE), "ls-files", "-z"], check=True,
                             capture_output=True).stdout.decode()
     return {name for name in output.split("\0")
-            if name and (PACKAGE / name).is_file() and not name.startswith("tests/")}
+            if name and (PACKAGE / name).is_file() and not name.startswith(package.EXCLUDED)}
 
 
 def exported(root):
