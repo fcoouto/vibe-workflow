@@ -31,8 +31,8 @@
   },
   "qualification-2": {
    "cap": 10,
-   "spent": 0,
-   "remaining": 10,
+   "spent": 7,
+   "remaining": 3,
    "open_reservations": 0
   },
   "chatgpt": {
@@ -404,6 +404,62 @@
     "by": "Fernando Couto (user), relayed by the coordinator",
     "scope": "up to 4 requests on one openai model; interactive sign-in inside the isolated server; no API keys, API Usage, organization or OpenRouter"
    }
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "descendants: tool subagent",
+   "reserved": 3,
+   "sent": 3,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "descendants: command child",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "descendants: API child",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "s33d: config and ordinary edits",
+   "reserved": 3,
+   "sent": 2,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification-2",
+   "label": "s33d: env command (its prompt is held)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
   }
  ]
 }

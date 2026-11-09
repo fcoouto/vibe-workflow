@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing live probe results: descendants and S3.3d — 9 November 2026
+
+The pre-registered `descendants` and `s33d` stages ran once on an isolated OpenCode 2.2.6 server (7 calls under `qualification-2`). The instruction edits record what was observed and correct the claims it disproved. No runtime behavior changed.
+
+| Contract | Source |
+| --- | --- |
+| [OpenCode client](../clients/opencode.md): `shell.create.before` strips only shells that pass the hook (the `shell` tool and `/shell`), and a command's `` !`cmd` `` expansion keeps the full environment; the launcher rule against project commands in managed sessions is the protection, and user-invoked commands are a residual risk; the S3.3d required-probe results (config-path writes denied; an edit of an existing config file, image generation, absolute-path edits and launcher-policy precedence not observed); the S3.3c observation. The [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026), the S3.3c, S3.3d and P0.6 [plan](superpowers/plans/2026-11-08-smart-routing.md) notes and the [live report](smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4) | The live run of 9 November 2026 (harness `85ae5f4`, [`qual2-results.json`](../tests/fixtures/smart-routing/probes/qual2-results.json), [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json)); the stages 0–4 re-run as the positive control for `shell.create.before`; the independent review of PR #163 (B1 and B2 contradictions in the client file, S3 to S6 and nits) |
+
 ## Smart Routing live probes: descendants, S3.3d and the ChatGPT route — 9 November 2026
 
 The harness gains the stages that observe #152 and #154 live, plus a separate ChatGPT route run. No model call, server or live run was made for this change; the durable ledger gained only the two approval cap lines.
