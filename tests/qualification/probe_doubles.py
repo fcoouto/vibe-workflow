@@ -41,7 +41,8 @@ class ProbeServer(FakeOpenCode):
         self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
         self.oauth_extra = {}
         # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
-        self.upstream_error, self.upstream_retry = None, None  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        self.upstream_error, self.upstream_retry = None, None
+        self.assistant_overrides, self.retry_message = {}, "retrying"  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -204,11 +205,12 @@ class ProbeServer(FakeOpenCode):
                          model=model, content=[], error=dict(self.upstream_error), time=dict(created=now))
         if self.upstream_retry:
             assistant["retry"] = dict(self.upstream_retry)
+        assistant.update(self.assistant_overrides)
         state["messages"].append(assistant)
         state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", error=dict(self.upstream_error),
                                       time=dict(created=now + 2)))
         self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(
-            type="retry", attempt=1, message="retrying", next=now + 1000))))
+            type="retry", attempt=1, message=self.retry_message, next=now + 1000))))
         self.events.append(dict(type="session.error", data=dict(sessionID=sid, error=dict(self.upstream_error))))
         self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(type="idle"))))
         return 200, dict(data=state["messages"][0]), 1.0
