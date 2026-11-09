@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 MAX_PYTHON_LINES = 1000
 SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
-    "runtime/adapters/codex.py": 1579,
+    "runtime/adapters/codex.py": 1556,
     "runtime/changes.py": 6074,
     "runtime/delegation.py": 3369,
     "runtime/evidence.py": 8505,
