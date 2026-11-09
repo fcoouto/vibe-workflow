@@ -101,7 +101,7 @@ class ReconcileUncertainTests(Reconcile):
         self.assertEqual(checked, dict(v=1, state='blocked', reason='attempt_closed'))
 
     def test_receipt_arithmetic_is_exact_at_every_boundary(self):
-        for i, cost in enumerate((0, 1, 6 * M - 1, 6 * M, 6 * M + 1, budget.MAX_INTEGER)):
+        for i, cost in enumerate((1, 6 * M - 1, 6 * M, 6 * M + 1, budget.MAX_INTEGER)):
             attempt = 'b%d' % i
             with self.subTest(cost=cost):
                 self.uncertain(attempt)
@@ -126,6 +126,27 @@ class ReconcileUncertainTests(Reconcile):
         self.assertEqual(self.reasons(), [])
         self.assertEqual(self.settled(), 9 * M)
         self.assert_identity()
+
+    def test_a_zero_receipt_cost_is_refused_because_it_would_release_without_spend(self):
+        """Review round 1: receipts at cost 0 would release the whole reservation, i.e. the refused no-spend proof."""
+        self.uncertain('a1')
+        before, stored = self.snapshot(), self.ledger_bytes()
+        self.assertEqual(self.call(reconcile('a1', receipts(0, 'fake'))),
+                         dict(v=1, state='blocked', reason='evidence_invalid'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        self.assertEqual(self.call(reconcile('a1', receipts(1, 'real')))['settlement']['charged'], 1)  # not remembered
+
+    def test_a_receipt_backed_cost_unknown_resolution_needs_a_cost_too(self):
+        self.funded('a1')
+        self.call(complete('a1', 'c1'))
+        self.assertEqual(self.hold('a1')['state'], 'cost_unknown')
+        before, stored = self.snapshot(), self.ledger_bytes()
+        backed = dict(v=1, op='resolve_cost_unknown', attempt_id='a1', cost_usd_micros=0, event_id='r1',
+                      receipts=['fake'], source='provider_receipt')
+        self.assertEqual(self.call(backed), dict(v=1, state='blocked', reason='evidence_invalid'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        floor = dict(v=1, op='resolve_cost_unknown', attempt_id='a1', cost_usd_micros=0, event_id='r1')
+        self.assertEqual(self.call(floor)['settlement']['charged'], 6 * M)  # no receipts: the reservation floor
 
     def test_charge_reservation_charges_the_full_reservation_and_releases_nothing(self):
         self.uncertain('a1')
@@ -365,6 +386,18 @@ class ResolveBlockTests(Reconcile):
         self.assertEqual(self.call(resolve_block('ghost', 'over_bound', ids=['s1'])),
                          dict(v=1, state='blocked', reason='organization_unconfigured'))
         self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))  # all or nothing
+
+    def test_a_reordered_retry_of_the_same_ids_is_a_duplicate(self):
+        for run in ('s1', 's2'):
+            self.start_run(run)  # both start while the organization is admissible
+        for run in ('s1', 's2'):
+            self.over_bound(run)
+        first = self.call(resolve_block('personal', 'over_bound', ids=['s2', 's1']))
+        self.assertEqual(first['resolved'], dict(ids=['s1', 's2'], count=2))
+        stored = self.ledger_bytes()
+        self.assertEqual(self.call(resolve_block('personal', 'over_bound', ids=['s1', 's2'])),
+                         dict(first, duplicate=True))
+        self.assertEqual(self.ledger_bytes(), stored)
 
     def test_a_block_resolution_is_idempotent_and_conflicts_are_refused(self):
         self.start_run('s1')
@@ -607,7 +640,7 @@ class DerivedUnblockTests(Reconcile):
                     uncertain[org].append(attempt)
                 elif action in ('receipts', 'charge') and uncertain[org]:
                     attempt = uncertain[org].pop()
-                    cost = rng.choice([0, M // 3, M, 2 * M])
+                    cost = rng.choice([1, M // 3, M, 2 * M])
                     event, reason = routing.reconcile_event(dict(
                         event_id='u%d' % step, attempt_id=attempt,
                         evidence=receipts(cost, 'q%d' % step) if action == 'receipts' else CHARGE))
@@ -692,6 +725,8 @@ class StatusTests(Reconcile):
         self.assertIsInstance(hint, str)
         self.assertLessEqual(len(hint), 512)
         self.assertIn('reconcile_uncertain', hint)
+        self.assertIn("operator's word", hint)  # receipts release the unspent rest on the operator's word
+        self.assertNotIn('nothing releases', hint)
         self.assertIn('resolve_block', hint)
         # Everything the S3.6a status already reported is unchanged.
         self.assertEqual(ledger['uncertain_dollar'], dict(ids=['d%02d' % i for i in range(16)], more=2))
@@ -759,23 +794,40 @@ class ProtocolTests(Reconcile):
                          dict(v=1, state='blocked', reason='invalid_json'))  # a duplicate key
         self.assertEqual(self.hold('a1')['state'], 'uncertain')
 
-    def test_serve_answers_operator_ops_line_by_line(self):
+    def test_serve_refuses_every_operator_op_and_one_shot_still_applies_it(self):
+        """Review round 1: the shim's persistent child (`--serve`) never exposes operator ops; they stay one-shot."""
         self.uncertain('a1')
-        self.start_run('s1')
+        self.funded('a2')
+        self.call(complete('a2', 'c2'))  # cost_unknown
+        self.funded('a3')
+        self.start_run('s1')  # every claim starts while the organization is admissible
+        self.call(complete('a3', 'c3', usage=usage(9 * M)))  # overrun
         self.over_bound('s1')
         self.service.close()
-        lines = [reconcile('a1', receipts(M)), reconcile('a1', receipts(M)), b'not json',
-                 dict(resolve_block('personal', 'over_bound', ids=['s1']), id=7),
-                 reconcile('a\u0000', CHARGE), dict(v=1, op='status')]
+        before, stored = self.snapshot(), self.ledger_bytes()
+        operator = [reconcile('a1', receipts(M)), dict(reconcile('a1', CHARGE, 'u2'), id=7),
+                    resolve_block('personal', 'over_bound', ids=['s1']),
+                    dict(v=1, op='resolve_overrun', attempt_id='a3', decision='dismiss', event_id='r1'),
+                    dict(v=1, op='resolve_cost_unknown', attempt_id='a2', cost_usd_micros=0, event_id='r2')]
+        lines = operator + [b'not json', reconcile('a\u0000', CHARGE), dict(v=1, op='status')]
         raw = b''.join((line if isinstance(line, bytes) else json.dumps(line).encode()) + b'\n' for line in lines)
         done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
                                '--ledger', str(self.ledger)], input=raw, capture_output=True, timeout=60)
         answers = [json.loads(line) for line in done.stdout.splitlines()]
-        self.assertEqual((done.returncode, done.stderr), (0, b''))
-        self.assertEqual([a.get('duplicate', a.get('reason')) for a in answers[:5]],
-                         [False, True, 'invalid_json', False, 'invalid_request'])
-        self.assertEqual(answers[3]['id'], 7)
-        self.assertEqual(answers[5]['ledger']['reconcile']['reconcile_uncertain']['count'], 0)
+        self.assertEqual((done.returncode, done.stderr, len(answers)), (0, b'', len(lines)))
+        for answer in answers[:5]:
+            self.assertEqual({k: v for k, v in answer.items() if k != 'id'},
+                             dict(v=1, state='blocked', reason='operator_op_not_served'))
+        self.assertEqual(answers[1]['id'], 7)
+        self.assertEqual([a.get('reason') for a in answers[5:7]], ['invalid_json', 'operator_op_not_served'])
+        self.assertEqual(answers[7]['ledger']['reconcile']['reconcile_uncertain']['count'], 1)
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        for op, request in (('reconcile_uncertain', operator[0]), ('resolve_block', operator[2]),
+                            ('resolve_overrun', operator[3]), ('resolve_cost_unknown', operator[4])):
+            with self.subTest(op=op):
+                done = self.run_cli([op], request)
+                self.assertEqual(json.loads(done.stdout)['state'], 'recorded', done.stdout)
+        self.assertEqual(self.reasons(), [])
 
     def test_a_closed_stdout_exits_quietly(self):
         self.uncertain('a1')
