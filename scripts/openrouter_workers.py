@@ -75,8 +75,7 @@ def visibility_declaration(brief):
 
 
 def scoped_packet(brief, report, now=None, workspace=None):
-    if 'external' not in brief:
-        return None
+    external_delegation.require('external' in brief, 'binding_required')
     binding = brief['external']
     checkout = Path(report['checkout'])
     external_delegation.require(Path(brief['source_root']) == checkout, 'checkout_changed')
@@ -101,14 +100,15 @@ def scoped_packet(brief, report, now=None, workspace=None):
 
 def prepare(root, brief, now=None):
     if not isinstance(brief, dict): raise ValueError('invalid_brief_fields')
+    external_delegation.require('external' in brief, 'binding_required')
     # Older callers supplied credit observations; they no longer gate or persist.
     brief = {key: value for key, value in brief.items() if key != 'credit'}
     required = {'task_id', 'coordinator_chat_id', 'model', 'provider', 'objective', 'source_root', 'files',
-                'timeout_seconds', 'steps', 'effort'}
-    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'external', 'approval_ref'}
+                'timeout_seconds', 'steps', 'effort', 'external'}
+    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'approval_ref'}
     if not required <= set(brief) <= required | optional: raise ValueError('invalid_brief_fields')
     if len(json.dumps(brief, ensure_ascii=True, allow_nan=False).encode()) > MAX_INPUT: raise ValueError('input_limit')
-    for key in (required - {'files', 'timeout_seconds', 'steps'}) | ({'approval_ref'} & brief.keys()):
+    for key in (required - {'files', 'timeout_seconds', 'steps', 'external'}) | ({'approval_ref'} & brief.keys()):
         if not isinstance(brief[key], str) or not brief[key].strip() or len(brief[key]) > 16000:
             raise ValueError('invalid_brief_value')
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', brief['task_id']): raise ValueError('invalid_task_id')
@@ -148,8 +148,7 @@ def prepare(root, brief, now=None):
                                     expected_binding=dict(device=info.st_dev,inode=info.st_ino))
         total += len(raw)
         if total > allowance: raise ValueError('input_too_large')
-        if selected is not None:
-            external_delegation.require(hashlib.sha256(raw).hexdigest() == selected[name], 'source_changed')
+        external_delegation.require(hashlib.sha256(raw).hexdigest() == selected[name], 'source_changed')
         inputs[name] = raw.decode('utf-8')
     if time.monotonic() >= deadline: raise TimeoutError('preparation_deadline')
     root = Path(root)
@@ -488,6 +487,7 @@ def verify(run, disposition, checks, publish=None, *, reviewer=None, native_revi
     if not isinstance(checks, list) or not checks or any(not isinstance(x, str) or not x.strip() for x in checks):
         raise ValueError('native_checks_required')
     brief = json.loads((run / 'brief.json').read_text())
+    # Only historical, already-launched runs may lack a reviewer binding; no new launch admits them.
     if 'external' in brief and disposition == 'accepted':
         external_delegation.require(reviewer == brief['external']['reviewer']
             and isinstance(native_review_ref, str) and native_review_ref.strip(), 'independent_review_required')

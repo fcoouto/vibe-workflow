@@ -275,10 +275,9 @@ def act(action, state, request, now, *, activation_ref=None):
         row['discovery_evidence'] = dict(model=model, endpoint=endpoint, benchmarks=[b for b in metadata['benchmarks'] if b.get('model') == request['model']])
         if visibility is not None:
             row['visibility'] = visibility
-        if 'external' in request:
-            row['external_digest'] = external_delegation.digest({key: value for key, value in request.items()
-                if key not in ('attempt_token', 'visibility')})
-            row['reviewer'] = request['external']['reviewer']
+        row['external_digest'] = external_delegation.digest({key: value for key, value in request.items()
+            if key not in ('attempt_token', 'visibility')})
+        row['reviewer'] = request['external']['reviewer']
         row.update(attempt_token=token, begun_at=now, snapshot_fetched_at=current['fetched_at'])
         state['attempts'].append(row)
         return dict(attempt_token=token, advisory=True)
@@ -306,6 +305,7 @@ def act(action, state, request, now, *, activation_ref=None):
         if disposition not in ('accepted', 'repaired', 'rejected', 'transport_failure', 'unresolved'):
             raise ValueError('unknown disposition')
         if disposition in ('accepted', 'repaired'):
+            # Historical unbound attempts may settle; every new admission records this binding.
             if 'external_digest' in row and request.get('reviewer') != row['reviewer']:
                 raise ValueError('external_independent_review_required')
             text(request.get('native_review_ref'), 'native_review_ref')
@@ -322,19 +322,15 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
     if action in ('begin', 'dispatch'):
         try:
             with settings.admission(cwd, 'proposals', store=store) as report:
-                packet = None
-                if 'external' in request:
-                    binding = request['external']
-                    external_delegation.native_review(binding)
-                    assignment = dict(service='openrouter', mode='proposal', model=request['model'],
-                        provider=request['provider'], effort=request.get('effort'), class_name=binding['class_name'])
-                    permission = external_delegation.effective_permission(report['external_permission'],
-                        report['activation'], **assignment)
-                    packet = external_delegation.check(Path(report['checkout']), permission, binding,
-                        **assignment,
-                        now=time.time() if now is None else now)
-                elif action == 'dispatch':
-                    raise ValueError('external_binding_required')
+                external_delegation.require('external' in request, 'binding_required')
+                binding = request['external']
+                external_delegation.native_review(binding)
+                assignment = dict(service='openrouter', mode='proposal', model=request['model'],
+                    provider=request['provider'], effort=request.get('effort'), class_name=binding['class_name'])
+                permission = external_delegation.effective_permission(report['external_permission'],
+                    report['activation'], **assignment)
+                packet = external_delegation.check(Path(report['checkout']), permission, binding,
+                    **assignment, now=time.time() if now is None else now)
                 result = _run(action, store, request, now=now,
                     management=dict(scope_id=report['scope_id'], revision=report['revision']),
                     activation_ref=report['activation']['ref'])

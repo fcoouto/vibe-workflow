@@ -77,9 +77,20 @@ class WorkerTests(unittest.TestCase):
                           model_display_name='Model', provider='provider', objective='Read input.txt and count lines.',
                           source_root=str(self.source), files=['input.txt'], timeout_seconds=5,
                           steps=3, approval_ref='user-approved', effort='low')
+        self.brief = self.bound_brief(self.brief)
+
+    def bound_brief(self, brief):
+        from runtime import external_delegation as external
+        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
+            service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
+            effort=brief['effort'], class_name='investigation')
+        packet = external.prepare(self.source, consent,
+            [dict(kind='text', text=brief['objective'], sources=brief['files'])])
+        return dict(brief, external=dict(packet['binding'], automatic=True, local_preferred=False,
+            class_name='investigation', coordinator=brief['coordinator_chat_id'], reviewer='native-reviewer',
+            integration_available=True))
 
     def scoped_brief(self, *, saved=True):
-        from runtime import external_delegation as external
         from tests.test_external_delegation import permission
         consent = permission('openrouter', 'worker', model='vendor/model', provider='provider', effort='low')
         consent['sources'] = ['input.txt']
@@ -88,15 +99,16 @@ class WorkerTests(unittest.TestCase):
             opencode=str(self.root / 'worker'), auth_data=str(self.root / 'auth'),
             external_permission=consent if saved else None))
         self.settings = settings.enable(self.source, dict(expected_revision=configured['revision'], consent_version=2))
-        if not saved:
-            consent = external.effective_permission(None, self.settings['activation'], service='openrouter',
-                mode='worker', model='vendor/model', provider='provider', effort='low', class_name='investigation')
-        packet = external.prepare(self.source, consent,
-            [dict(kind='text', text=self.brief['objective'], sources=['input.txt'])])
-        brief = dict(self.brief, external=dict(packet['binding'], automatic=True, local_preferred=False,
-            class_name='investigation', coordinator=self.brief['coordinator_chat_id'], reviewer='native-reviewer',
-            integration_available=True))
-        return brief
+        return self.bound_brief(self.brief)
+
+    def test_unbound_worker_cannot_bypass_saved_scope_or_activation(self):
+        for saved in (False, True):
+            brief = {key: value for key, value in self.scoped_brief(saved=saved).items()
+                     if key not in ('external', 'approval_ref')}
+            brief.update(provider='other-provider', files=['README.md'])
+            with self.subTest(saved=saved), self.assertRaisesRegex(ValueError, 'external_binding_required'):
+                self.api.prepare(self.runs, brief)
+            self.assertFalse((self.runs / brief['task_id']).exists())
 
     def test_enabled_worker_without_approval_ref_uses_checked_files(self):
         brief = self.scoped_brief(saved=False)
@@ -111,9 +123,9 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(retained['external'], brief['external'])
         self.assertEqual((run / 'workspace/input.txt').read_bytes(), (self.source / 'input.txt').read_bytes())
         self.assertEqual(self.api.execute(run, exe, self.root / 'auth')['state'], 'awaiting_verification')
-        with self.assertRaisesRegex(ValueError, 'independent_review'):
-            self.api.verify(run, 'accepted', ['Native line count'], reviewer=brief['coordinator_chat_id'],
-                            native_review_ref='review')
+        for reviewer in (None, brief['coordinator_chat_id']):
+            with self.assertRaisesRegex(ValueError, 'independent_review'):
+                self.api.verify(run, 'accepted', ['Native line count'], reviewer=reviewer, native_review_ref='review')
         self.assertEqual(self.api.verify(run, 'accepted', ['Native line count'], reviewer='native-reviewer',
             native_review_ref='review')['state'], 'accepted')
         with self.assertRaisesRegex(ValueError, 'already_started'):
@@ -158,7 +170,7 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(result['local_execution_stopped'])
         self.assertFalse(result['accounting_complete'])
 
-    def test_scoped_worker_rejects_subroot_but_keeps_legacy_manual_subroot(self):
+    def test_scoped_worker_rejects_subroot_and_unbound_legacy_subroot(self):
         from runtime import external_delegation as external
         brief = self.scoped_brief()
         subroot = self.source / 'excluded'
@@ -171,8 +183,9 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checkout'):
             self.api.prepare(self.runs, nested)
         legacy = {key: value for key, value in nested.items() if key != 'external'}
-        run = self.api.prepare(self.runs, legacy)
-        self.assertEqual((run / 'workspace/input.txt').read_text(), 'unapproved subdirectory bytes')
+        with self.assertRaisesRegex(ValueError, 'external_binding_required'):
+            self.api.prepare(self.runs, legacy)
+        self.assertFalse((self.runs / 'pilot-1').exists())
 
     def test_scoped_worker_preserves_supported_80_kib_source_with_short_objective(self):
         (self.source / 'input.txt').write_text('x' * (80 * 1024))
@@ -250,7 +263,8 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             self.assertEqual(child.returncode, 0, error)
             result = json.loads(output.splitlines()[-1])
             self.assertEqual(result['state'], 'awaiting_verification')
-            self.assertEqual(self.api.verify(self.runs / 'pilot-1', 'accepted', ['Native line count equals three'])['state'], 'accepted')
+            self.assertEqual(self.api.verify(self.runs / 'pilot-1', 'accepted', ['Native line count equals three'],
+                reviewer='native-reviewer', native_review_ref='review')['state'], 'accepted')
             self.assertFalse(settings.status(self.source)['enabled'])
         finally:
             if child.poll() is None: child.kill(); child.wait()
@@ -326,7 +340,8 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             self.assertEqual(client.events, [])
             result = self.api.execute(run, exe, self.root / 'auth', publisher)
             self.assertEqual(result['state'], 'awaiting_verification')
-            result = self.api.verify(run, 'accepted', ['Native fixture verification'])
+            result = self.api.verify(run, 'accepted', ['Native fixture verification'],
+                                     reviewer='native-reviewer', native_review_ref='review')
             self.api.habblaud_publisher(*args)(result['state'])
         external = str(uuid.uuid5(uuid.NAMESPACE_URL, str(run)))
         self.assertNotEqual(external, self.brief['coordinator_chat_id'])
@@ -418,7 +433,8 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
                            "print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0,'tokens':{}}}))\n")
         self.assertEqual(self.api.execute(run, exe, self.root / 'auth')['state'], 'awaiting_verification')
         stdin = SimpleNamespace(buffer=io.BytesIO(json.dumps(dict(task_id='pilot-1',
-            disposition='accepted', checks=['Native fixture verification'])).encode()))
+            disposition='accepted', checks=['Native fixture verification'],
+            reviewer='native-reviewer', native_review_ref='review')).encode()))
         output = io.StringIO()
         args = [str(SCRIPT), 'verify', '--root', str(self.runs), '--visibility-plugin', str(self.root)]
 
@@ -501,7 +517,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             difficulty='small', scope='files', verification='native inspection'),
             snapshot_digest=status['snapshot_digest'], requirements=dict(context_tokens=1000,
             output_tokens=8192, modalities=['text'], parameters=['tools']), max_files=32, max_input_bytes=4096)
-        return dict(self.brief, files=files, sizing=sizing), catalog, store
+        return self.bound_brief(dict(self.brief, files=files, sizing=sizing)), catalog, store
 
     def test_sized_preparation_and_child_receive_larger_finite_budget(self):
         brief, _, _ = self.sized_brief()
@@ -547,6 +563,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         with self.assertRaises(ValueError): self.api.prepare(self.runs,brief)
         brief['files'] = ['input-0.txt']
         (self.source/'input-0.txt').write_text('')
+        brief = self.bound_brief(brief)
         brief['sizing']['max_input_bytes']=1
         with self.assertRaises(ValueError): self.api.prepare(self.runs,brief)
         brief['sizing']['max_input_bytes']=4096
@@ -621,7 +638,8 @@ for event in [
         self.assertEqual(result['reported_tokens']['input'], 10)
         self.assertNotIn('PRIVATE CONTENT', (run / 'progress.jsonl').read_text())
         with self.assertRaises(ValueError): self.api.verify(run, 'accepted', [])
-        self.assertEqual(self.api.verify(run, 'accepted', ['Native line count: 3; matches response'])['state'], 'accepted')
+        self.assertEqual(self.api.verify(run, 'accepted', ['Native line count: 3; matches response'],
+            reviewer='native-reviewer', native_review_ref='review')['state'], 'accepted')
 
     def test_error_even_with_zero_exit_never_becomes_success(self):
         exe = self.fixture("sys.stdin.read()\nprint(json.dumps({'type':'error','error':{'message':'SECRET'}}))\n")
@@ -749,8 +767,8 @@ for event in [
 
     def test_stalled_stdin_cannot_bypass_the_worker_deadline(self):
         exe = self.fixture('time.sleep(4)\n')
-        run = self.api.prepare(self.runs, dict(self.brief, objective='😀' * 15000,
-                                                       timeout_seconds=1))
+        run = self.api.prepare(self.runs, self.bound_brief(dict(self.brief, objective='😀' * 15000,
+                                                       timeout_seconds=1)))
         self.clock.idle = True
         started = self.clock.monotonic()
         result, processes = self.execute_with_backpressure(run, exe)
@@ -791,7 +809,7 @@ for event in [
             "payload = sys.stdin.buffer.read().lstrip(b'!')\n"
             "print(json.dumps({'type':'text','part':{'text':hashlib.sha256(payload).hexdigest()}}))\n"
             "print(json.dumps({'type':'step_finish','part':{'reason':'stop','cost':0,'tokens':{}}}))\n")
-        run = self.api.prepare(self.runs, dict(self.brief, objective=objective, timeout_seconds=2))
+        run = self.api.prepare(self.runs, self.bound_brief(dict(self.brief, objective=objective, timeout_seconds=2)))
         started = self.clock.monotonic()
         result, processes = self.execute_with_backpressure(run, exe)
         self.assertLess(self.clock.monotonic() - started, 4)

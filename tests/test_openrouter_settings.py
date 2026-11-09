@@ -429,4 +429,34 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(json.loads(result.stdout)['enabled'])
 
 
+class LegacyWorkerSettlementTests(unittest.TestCase):
+    def test_legacy_worker_can_settle_but_cannot_start_another_send(self):
+        from tests.test_openrouter_workers import WorkerTests
+        worker = WorkerTests(methodName='runTest')
+        WorkerTests.setUpClass()
+        self.addCleanup(worker.doCleanups)
+        worker.setUp()
+        run = worker.runs / 'legacy-run'
+        run.mkdir(parents=True, mode=0o700)
+        (run / 'workspace').mkdir(mode=0o700)
+        brief = {key: value for key, value in worker.brief.items() if key != 'external'}
+        brief.update(task_id='legacy-run', management=dict(scope_id=worker.settings['scope_id'],
+                                                         revision=worker.settings['revision']))
+        worker.api.save(run / 'brief.json', brief)
+        worker.api.save(run / 'result.json', dict(state='prepared', task_id='legacy-run'))
+        marker = worker.root / 'launched'
+        exe = worker.fixture(f'from pathlib import Path\nsys.stdin.read()\nPath({str(marker)!r}).touch()\n')
+        result = worker.api.execute(run, exe, worker.root / 'auth')
+        self.assertTrue(result['local_execution_stopped'])
+        self.assertFalse(marker.exists(), 'a legacy preparation must not authorize a new send')
+        # An already-admitted legacy run may finish and settle under its historical contract.
+        worker.api.save(run / 'result.json', dict(state='awaiting_verification', task_id='legacy-run',
+                                                local_execution_stopped=True))
+        worker.api.settings.disable(worker.source, dict(expected_revision=worker.settings['revision']))
+        self.assertEqual(worker.api.verify(run, 'accepted', ['Legacy native check'])['state'], 'accepted')
+        self.assertEqual(worker.api.status(run)['state'], 'accepted')
+        with self.assertRaisesRegex(ValueError, 'already_started'):
+            worker.api.execute(run, exe, worker.root / 'auth')
+
+
 if __name__ == '__main__': unittest.main()
