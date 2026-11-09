@@ -71,9 +71,10 @@ only from managed delegation controls.
   2 skipped, 2 failures. The OpenCode plugin's node suite passed when rerun
   alone (73 seconds under load, 31 alone). The release package test compared
   the committed README with an uncommitted edit and passed once committed.
-- **Rebased candidate** (`1dbce05`): the nine slow affected modules passed
-  (229 tests) and `--fast` passed (1,716 tests, 2 skipped). The reviewer's
-  isolated run of twelve affected modules passed (246 tests, 1 skipped).
+- **Head `54f6b5b` on base `1dbce05`**, the reviewed candidate: the nine slow
+  affected modules passed (229 tests) and `--fast` passed (1,716 tests,
+  2 skipped). The reviewer's isolated run of twelve affected modules on the same
+  head passed (246 tests, 1 skipped).
 - **After review fixes** (`4c04b6b` base): the OpenRouter modules passed (170
   tests, 1 skipped), the routing evidence module passed (28 tests), and the
   final run on head `44c374a` passed: the nine slow affected modules (235
