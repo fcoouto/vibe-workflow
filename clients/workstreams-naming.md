@@ -149,9 +149,12 @@ the same.
 **PR merge gate.** `DONE` also requires every PR the thread opened or took over to
 be observed merged on the remote: provider state merged, with a merge commit (for
 example `gh pr view <PR> --json state,mergedAt,mergeCommit`). A local merge, an
-approval, a readiness marker such as `[READY]`, the user's statement or a title
-does not count. Until then show `WAITING` for the manual merge, or the actual
-`WORKING`/`REVIEW` state while other work remains. A PR closed unmerged keeps the
+approval, a `[READY]` prefix, the user's statement or a title does not count.
+Until then show `WAITING` while a `[READY]` PR awaits the user's merge, or the
+actual `WORKING`/`REVIEW` state while other work remains. A PR's `[BLOCKED]` or
+`[READY]` prefix ([PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle))
+is not a thread status: a `[BLOCKED]` PR still in progress leaves the thread
+`WORKING` or `REVIEW`. A PR closed unmerged keeps the
 thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
 remote state cannot be read, report it unverified and withhold `DONE`.
 

@@ -86,8 +86,8 @@ Start a new session in each client afterwards. To refresh after changes, rerun `
 
 To publish a release to the Codex Git marketplace, follow [Publish a release](docs/release.md).
 
-Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and the tests that [AGENTS.md](AGENTS.md#verification-and-delivery) selects for a change. `python3 -B scripts/test_sharded.py <module-or-glob>...` runs selected test modules in parallel; without names it runs the full suite, which `python3 -B -m unittest discover -s tests` runs serially. None of these establishes live client behavior.
+Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and the tests that the [development guide](docs/development.md#checks) selects for a change. `python3 -B scripts/test_sharded.py <module-or-glob>...` runs selected test modules in parallel; without names it runs the full suite, which `python3 -B -m unittest discover -s tests` runs serially. None of these establishes live client behavior.
 
 Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
 
-[Development guide](AGENTS.md)
+[Development guide](docs/development.md)

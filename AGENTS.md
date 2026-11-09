@@ -23,20 +23,10 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Where to look
 
+- Before the first edit of a task, and before selecting checks, marking a PR `[READY]`, merging or creating a release archive, read the [development guide](docs/development.md): where to work, which checks to run and how changes reach `main`.
 - For client-specific work, use [Clients](clients/index.md) and load only the entry whose trigger applies.
 - For an explicit workflow operation, read its `skills/<name>/SKILL.md` entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation.
 - For setup decisions, maintenance and undo, read [Setup record](docs/setup.md).
-
-## Verification and delivery
-
-- Validate with `python3 -B scripts/validate.py`.
-- Run tests in proportion to what a change can break. While working, run the affected modules with `python3 -B scripts/test_sharded.py <module-or-glob>...`: the test modules that import or run a changed file, directly or through another module; that read a changed instruction or policy file, including by reading its whole directory; or that are named for the changed area. Find them with `grep -l` in `tests/*.py` for the changed file's name, its directory and the modules that import it, repeating for their importers (a change to `runtime/task_statuses.py` reaches every test that imports `runtime/state.py`). Before marking a PR `[READY]`, run the affected modules once more and `python3 -B scripts/test_sharded.py --fast`.
-- Run the full suite once per slice, before marking its PR `[READY]`, only when the slice changes shared core: `hooks/`, `scripts/workflow.py`, `scripts/validate.py`, `scripts/test_sharded.py`, `tests/__init__.py`, `runtime/__init__.py`, `runtime/adapters/`, `runtime/state.py`, `runtime/startup.py`, `runtime/evidence.py`, `runtime/changes.py`, `runtime/delegation.py` or `runtime/engine.py`. Also run it before creating a release archive, and when the affected modules cannot be identified. Reuse a full run only for the same candidate and base.
-- `python3 -B scripts/test_sharded.py` runs the full suite in parallel, longest first (predicted at about 10 minutes on an idle machine, over 18 minutes when the machine was loaded), and lists failing tests; `python3 -B -m unittest discover -s tests` runs it serially in about two hours. `--fast` skips the slow modules and does not replace a required full run; `--update-timings` records timings for the modules whose units all passed in `tests/timings.json`. Each unit runs with a private `HOME` and the summary lists files a unit wrote there (tests must never write to the real home). Rerun a failure alone before judging it, since timing-sensitive tests can fail on an overloaded machine.
-- Sessions start in the primary checkout on `main`; use it only to read, coordinate and fast-forward. Before creating or changing files for a task, move to a task worktree on its own branch from current `main`, created with the client's native worktree tool when it has one, and edit, commit and push only there. Setup records, documentation and one-line fixes are task changes too.
-- `main` is the merge target and the base for task branches, never a working branch: do not commit on it or push to it; it changes only when a PR merges. Publish completed task changes by committing, pushing the task branch and opening a draft PR against `main`. Merge only completed, independently reviewed slices against current `main`, in PRs marked `[READY]`, after local checks pass. The repository has no CI or branch protection, so these rules are not enforced mechanically. Preserve unfinished work separately and retain newer changes when reconciling older branches.
-- Create release archives only when requested.
-- Report package validation and observed client execution separately.
 
 ## Instruction authoring
 

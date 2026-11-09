@@ -129,10 +129,12 @@ affected choice as inapplicable or pending, respectively.
    - Keep changes local. Ask me before committing or publishing. (default)
    - Commit the task changes, push a task branch, and open a draft PR. (recommended)
 2. **May agents merge pull requests into `<project_name>`’s primary branch, `<primary_branch_name>`?**
-   Explain that permission is scoped to the named target and still depends on
-   [merge readiness](../../../policies/08-merge-readiness.md).
-   - No. I will review and merge them myself. (default)
-   - Yes. Merge independently reviewed PRs marked `[READY]` when all required checks pass.
+   Explain that agents open each PR as a `[BLOCKED]` draft and mark it `[READY]`
+   only after its checks and review pass ([PR lifecycle](../../../policies/08-merge-readiness.md#pr-lifecycle)),
+   and that this choice decides who merges `[READY]` PRs. Permission is scoped to
+   the named target.
+   - No. I will merge `[READY]` PRs myself. (default)
+   - Yes. Agents merge their PRs once they are `[READY]`.
 3. **Enable Workstreams for `<project_name>`?**
    Explain that Enabled automatically uses suitable native child work; small
    tasks can stay with the coordinator. Show one choice:
@@ -175,8 +177,8 @@ Not now only at the next onboarding update. Report a question that cannot apply
 (for example Graphify with no code) as inapplicable, with the reason.
 
 Retain submitted choices in the setup record with their scope and provenance.
-Publication and merge choices are separate. The `[READY]` marker summarizes
-verified readiness and grants no authority. The current Workstreams choice is the
+Publication and merge choices are separate. The `[READY]` prefix summarizes
+verified readiness and grants no authority; agents set it, never the user. The current Workstreams choice is the
 `workstreams` entry in `.vibe-workflow/settings.json`; the setup record retains
 provenance. Resource
 admission and capacity recovery remain independent advanced settings. Report
