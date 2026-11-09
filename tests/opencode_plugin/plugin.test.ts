@@ -1634,6 +1634,16 @@ test("descendants: complete is false, with one fixed reason, whenever the shim c
       t.state.failLookup = true
       await assertUntouched(t, "ses_unknown1")  // an undeterminable chain: it may have been this root's child
     }],
+    ["lineage_lookup_failed", { failedLookupMs: 60000 }, async (t) => {
+      await t.detach()
+      await t.attach(D("first1"))
+      t.state.failLookup = true
+      await assertUntouched(t, "ses_unknown2")  // fails while only another root is attached...
+      t.state.failLookup = false
+      await t.attach()
+      await t.emit(created(MANAGED))  // (a repeated creation event, so only the lookup can make it incomplete)
+      await assertUntouched(t, "ses_unknown2")  // ...and is answered from the failure memory, still undetermined
+    }],
   ]
   for (const [reason, config, act] of cases) {
     const t = await start({ check: ["blocked"] }, {}, config)
