@@ -4,9 +4,9 @@
 
 ## Candidate
 
-- Export of `clean-dev-package` at `42b813c` in `~/.cache/vibe-workflow/dev-package`: 541 tracked files, 9.5 MB, package validation passed.
-- Package digest `b9d33b418fbf175116cb138c56cba1370c1ecd5e8d20fa2e4cb576302217eea2`: SHA-256 over the sorted `shasum -a 256` lines of every exported file.
-- The installed copy was byte-identical to the export (`diff -r`), 10 MB, with no ignored files, `.git` or enrollment state.
+- Export of `clean-dev-package` at `42b813c` in `~/.cache/vibe-workflow/dev-package`: 541 tracked files totalling 9,457,813 bytes (10 MB on disk), package validation passed.
+- Package digest `b9d33b418fbf175116cb138c56cba1370c1ecd5e8d20fa2e4cb576302217eea2`: SHA-256 of the output of `find . -type f -print0 | sort -z | xargs -0 shasum -a 256`, run inside the export.
+- The installed copy was byte-identical to the export (`diff -r`), with no ignored files, `.git` or enrollment state.
 
 ## Method
 

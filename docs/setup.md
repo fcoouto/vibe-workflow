@@ -46,7 +46,7 @@ Harness improvement: native method adaptation. No observed instruction, memory, 
 - Registration: both plugins installed and enabled as `vibe-workflow@vibe-workflow-local` 0.1.33 (Codex and Claude Code, user scope). Since 9 November 2026 the marketplace source is the clean export `~/.cache/vibe-workflow/dev-package`, built by `scripts/package.py` from `clean-dev-package` at `42b813c`, instead of this checkout: copying the checkout put ignored files and Git history into the caches (103–182 MB per copy, now 10 MB). Refresh: rerun `python3 -B scripts/package.py`, then reinstall in each client.
 - Cache cleanup (9 November 2026): removed Claude's orphaned 0.1.0 copy with `--prune-caches`, and ten `vibe-coding-workflow@vcw-*` qualification installs with `codex plugin remove`. Their Codex hook-trust entries remain in `~/.codex/config.toml`. Codex's `.marketplace-plugin-source-staging` holds other marketplaces' leftovers and was left alone.
 - Startup membership: canonical startup-only `.vibe-workflow/project.json` for `codex` and `claude-code`, status `configured`, no runtime.
-- Codex installation from the clean export and its startup hook are qualified in a disposable home on Codex 0.167.0; see [dev package validation](dev-package-validation.md).
+- Codex installation from the clean export and its startup hook are qualified in a disposable home on Codex 0.167.0 (CLI app-server, unauthenticated, SessionStart only); see [dev package validation](dev-package-validation.md).
 - Not observed: a fresh session in this machine's own Codex or Claude Code receiving the startup context after the move to the clean export. Codex lists the five hooks as `modified` and skips them until the user approves them again.
 
 ## Rename migration (8 November 2026)
