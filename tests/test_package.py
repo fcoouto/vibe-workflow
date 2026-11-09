@@ -50,7 +50,7 @@ class BuildTests(unittest.TestCase):
         report = package.build(PACKAGE, self.output)
         self.assertFalse((self.output / "stale.txt").exists())
         self.assertEqual(sorted(path.name for path in self.base.iterdir()),
-                         [".dev-package.lock", "dev-package", "keep-me"])
+                         [".dev-package.build", ".dev-package.lock", "dev-package", "keep-me"])
         self.assertEqual(report["removed_builds"], 3)
 
     def test_refuses_unsafe_outputs(self):
@@ -63,6 +63,34 @@ class BuildTests(unittest.TestCase):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 package.build(PACKAGE, output)
         self.assertEqual((foreign / "notes.txt").read_text(encoding="utf-8"), "user data")
+
+    def test_refuses_checkouts_and_unmarked_package_folders(self):
+        checkout = self.base / "vibe-workflow"
+        (checkout / ".codex-plugin").mkdir(parents=True)
+        (checkout / ".codex-plugin/plugin.json").write_text('{"name": "vibe-workflow"}', encoding="utf-8")
+        (checkout / "my-work.txt").write_text("uncommitted", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            package.build(PACKAGE, checkout)
+        package.build(PACKAGE, self.output)
+        (self.output / ".git").mkdir()
+        with self.assertRaises(ValueError):
+            package.build(PACKAGE, self.output)
+        self.assertEqual((checkout / "my-work.txt").read_text(encoding="utf-8"), "uncommitted")
+
+    def test_refuses_tracked_paths_through_symlinked_directories(self):
+        repo, outside = self.base / "repo", self.base / "outside"
+        (repo / "d").mkdir(parents=True)
+        (repo / "d/f").write_text("tracked", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "add", "d/f"], check=True)
+        outside.mkdir()
+        (outside / "f").write_text("secret", encoding="utf-8")
+        for item in (repo / "d").iterdir():
+            item.unlink()
+        (repo / "d").rmdir()
+        (repo / "d").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            package.tracked_files(repo)
 
     def test_empty_existing_output_is_accepted(self):
         self.output.mkdir()
@@ -130,6 +158,18 @@ class PruneTests(unittest.TestCase):
         self.assertTrue((self.claude / "9.9.9").is_dir())
         self.assertTrue(link.is_symlink())
         self.assertNotIn(str(link), report["removed"])
+
+    def test_unreadable_claude_record_skips_claude(self):
+        for content in (None, "not json", '{"version": 3}'):
+            with self.subTest(content=content):
+                records = self.home / ".claude/plugins/installed_plugins.json"
+                if content is None:
+                    records.unlink(missing_ok=True)
+                else:
+                    records.write_text(content, encoding="utf-8")
+                report = package.prune(PACKAGE, self.home, dry_run=True)
+                self.assertFalse(any("/.claude/" in path for path in report["removed"]))
+                self.assertEqual(report["skipped"], ["claude-code: unreadable install record"])
 
     def test_missing_caches_are_not_errors(self):
         self.assertEqual(package.prune(PACKAGE, self.home / "empty", dry_run=False)["removed"], [])

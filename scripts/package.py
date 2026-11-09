@@ -4,6 +4,7 @@
 import argparse
 import fcntl
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -31,11 +32,12 @@ def git(root, *args):
 
 
 def tracked_files(root):
-    names = [name for name in git(root, "ls-files", "-z").decode("utf-8").split("\0") if name]
+    # Unmerged files appear once per conflict stage.
+    names = dict.fromkeys(name for name in git(root, "ls-files", "-z").decode("utf-8").split("\0") if name)
     files = []
     for name in names:
         path = root / name
-        if path.is_symlink():
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
             raise ValueError(f"Tracked symlinks cannot be packaged: {name}")
         if path.is_file():
             files.append(name)
@@ -44,9 +46,16 @@ def tracked_files(root):
     return files
 
 
-def is_build(path, name):
+def marker(output):
+    return output.parent / f".{output.name}.build"
+
+
+def is_build(output, name):
+    # A manifest alone also matches checkouts and client caches; only builds have the marker.
     try:
-        return read_json(path / ".codex-plugin/plugin.json").get("name") == name
+        recorded = marker(output).read_text(encoding="utf-8")
+        return (recorded == str(output.resolve()) and not (output / ".git").exists()
+                and read_json(output / ".codex-plugin/plugin.json").get("name") == name)
     except (OSError, ValueError, AttributeError):
         return False
 
@@ -78,7 +87,8 @@ def build(root, output):
     output = Path(output).expanduser().absolute()
     check_output(root, output, name)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with open(output.parent / f".{output.name}.lock", "w") as lock:
+    lock = os.open(output.parent / f".{output.name}.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
         fcntl.flock(lock, fcntl.LOCK_EX)
         output = check_output(root, output, name)
         removed = 0
@@ -97,14 +107,25 @@ def build(root, output):
             if output.exists():
                 previous = Path(tempfile.mkdtemp(prefix=f".{output.name}.old-", dir=output.parent))
                 output.rename(previous / "build")
-                staging.rename(output)
-                shutil.rmtree(previous)
+                try:
+                    staging.rename(output)
+                except OSError:
+                    (previous / "build").rename(output)
+                    shutil.rmtree(previous, ignore_errors=True)
+                    raise
+                # A leftover is removed by the next build.
+                shutil.rmtree(previous, ignore_errors=True)
                 removed += 1
             else:
                 staging.rename(output)
+            record = os.open(marker(output), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(record, "w", encoding="utf-8") as handle:
+                handle.write(str(output))
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
+    finally:
+        os.close(lock)
     untracked = [item for item in git(root, "ls-files", "-z", "--others", "--exclude-standard")
                  .decode("utf-8").split("\0") if item]
     return {"package": name, "version": manifest(root)["version"], "output": str(output),
@@ -139,17 +160,22 @@ def prune(root, home, dry_run):
     root = root.resolve(strict=True)
     details = manifest(root)
     name, current = details["name"], details["version"]
-    removed, total = [], 0
+    removed, skipped, total, candidates = [], [], 0, []
 
     marketplace = read_json(root / ".claude-plugin/marketplace.json")["name"]
     claude = home / ".claude/plugins/cache" / marketplace / name
-    keep = {claude / current}
+    versions = cached_versions(claude, ".claude-plugin/plugin.json", name)
     try:
-        records = read_json(home / ".claude/plugins/installed_plugins.json")["plugins"]
-        keep |= {Path(entry["installPath"]) for entry in records.get(f"{name}@{marketplace}", [])}
+        records = read_json(home / ".claude/plugins/installed_plugins.json")
+        if records.get("version") != 2:
+            raise ValueError("unknown install record version")
+        keep = {claude / current} | {Path(entry["installPath"])
+                                     for entry in records["plugins"].get(f"{name}@{marketplace}", [])}
+        candidates += [(path, keep) for path in versions]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        pass
-    candidates = [(path, keep) for path in cached_versions(claude, ".claude-plugin/plugin.json", name)]
+        # Without the record, the copy Claude uses is unknown.
+        if versions:
+            skipped.append("claude-code: unreadable install record")
 
     # Codex records no install path; keep its newest copy so an older install survives.
     marketplace = read_json(root / ".agents/plugins/marketplace.json")["name"]
@@ -165,7 +191,7 @@ def prune(root, home, dry_run):
         removed.append(str(path))
         if not dry_run:
             shutil.rmtree(path)
-    return {"removed": removed, "bytes": total, "dry_run": dry_run}
+    return {"removed": removed, "skipped": skipped, "bytes": total, "dry_run": dry_run}
 
 
 def main():
