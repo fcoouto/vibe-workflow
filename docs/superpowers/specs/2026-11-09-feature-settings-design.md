@@ -48,15 +48,15 @@ Feature state is scattered. An inventory on 9 November 2026 found 28 settings in
 }
 ```
 
-- **`default`** is required. A feature with no declared default fails validation.
+- **`default`** is the value used when project settings say nothing.
 - **`settings`** declares typed values and their defaults; unknown keys are rejected.
 - **`scopes`** lists where a value may be set. This design implements `project` only.
 - **`consent`** is `none`, `transmits` or `spends`. Features other than `none` need a private grant to be active, whatever the settings say.
 - **`requires`** names prerequisite features or capabilities (for example a managed runtime); unmet prerequisites make the feature unavailable, never silently on.
-- **`control`** is `settings` when the feature's behavior reads the resolved value, `adapter` when its state still lives in its own store, or `fixed` for behavior with no off switch: core operations (`onboard-my-project`, `prepare-my-workspace`, `review-my-project`) and, until it reads settings, `thread_naming`. Only `settings` features accept writes through this standard; a value in the settings file for an `adapter` feature is reported as ignored, so the file never claims control it does not have.
+- **`control`** is `settings` when the feature's behavior reads the resolved value, `adapter` when its state still lives in its own store, or `fixed` for behavior with no off switch, such as `thread_naming` until it reads settings. Only `settings` features accept writes through this standard; a value in the settings file for an `adapter` feature is reported as ignored, so the file never claims control it does not have.
 - **`adapter`** names the package module that reports status for `adapter` features, and **`source`** describes where their state lives and at which scope (for example `{"store": "usage-ledger", "scope": "checkout"}`). `source` is descriptive; `scopes` lists only where this standard can write.
 
-Manifests contain no code, expressions or paths outside the package. `scripts/validate.py` checks every manifest and requires every packaged skill to belong to at least one feature, so a new skill cannot ship without declaring its feature and default.
+Manifests contain no code, expressions or paths outside the package; the resolver rejects a manifest it cannot read safely. No separate validation is added: new features follow the standard through the author contract (`clients/features.md`).
 
 ## 4. Layout and precedence
 

@@ -4,7 +4,7 @@ Date: 2026-11-09. Status: draft for user review. Design: [feature settings](../s
 
 ## Outcome
 
-Every packaged feature has a manifest with a declared default; one resolver, CLI and startup line report all of them; `workstreams` is read from `.vibe-workflow/settings.json` instead of `AGENTS.md` and the legacy runtime gate; onboarding writes the new file and keeps private files out of Git. Consent features keep their existing stores and are reported through read-only adapters.
+Every feature that has a setting today has a manifest with its default; one resolver, CLI and startup line report all of them; `workstreams` is read from `.vibe-workflow/settings.json` instead of `AGENTS.md` and the legacy runtime gate; onboarding writes the new file and keeps private files out of Git. Consent features keep their existing stores and are reported through read-only adapters.
 
 **Excluded:** user and checkout layers; moving `resource_admission`, `capacity_recovery`, `smart_routing`, `usage_routing`, `openrouter.*` or `observability.langfuse` state (phase 1 only materializes the two Workstreams advanced values in place); revocation records; renaming `vcw` roots. These are phase 2, one feature per change.
 
@@ -12,10 +12,10 @@ Every packaged feature has a manifest with a declared default; one resolver, CLI
 
 Each step starts with failing tests (TDD) and ends with its listed check passing. Python files stay at or under 1000 lines.
 
-1. **Manifests and validation.**
-   - Add `features/*.json` for: `workstreams` (`settings`, default off), `workstreams.resource_admission` and `workstreams.capacity_recovery` (`adapter`, source: runtime file, checkout), `thread_naming` (`fixed`, on), `core` (`fixed`, on; skills `onboard-my-project`, `prepare-my-workspace`, `review-my-project`), `smart_routing` (`adapter`, on, source: per-user settings), `usage_routing` (`adapter`, `spends`, off), `openrouter.proposals` and `openrouter.workers` (`adapter`, `transmits`, off), `observability.langfuse` (`adapter`, `transmits`, off).
-   - `scripts/validate.py` checks the manifest schema, unique IDs, required defaults, `source` on every `adapter` feature, that `procedure` and `adapter` paths stay inside the package, and that every skill under `skills/` belongs to at least one feature. A test pins the explicit feature inventory, so a feature cannot disappear unnoticed. The new manifests ship in the export (`scripts/package.py` unchanged).
-   - Check: `python3 -B scripts/validate.py`; tests for each rejection (missing default, unknown key, unmapped skill, adapter without source, path outside the package) and the inventory test.
+1. **Manifests.**
+   - Add `features/*.json` for: `workstreams` (`settings`, default off), `workstreams.resource_admission` and `workstreams.capacity_recovery` (`adapter`, source: runtime file, checkout), `thread_naming` (`fixed`, on), `smart_routing` (`adapter`, on, source: per-user settings), `usage_routing` (`adapter`, `spends`, off), `openrouter.proposals` and `openrouter.workers` (`adapter`, `transmits`, off), `observability.langfuse` (`adapter`, `transmits`, off).
+   - The resolver (step 2) loads them and rejects one it cannot read safely: unknown keys, paths outside the package. No new `validate.py` checks. The manifests ship in the export (`scripts/package.py` unchanged).
+   - Check: resolver tests load every shipped manifest and reject a malformed one.
 
 2. **Settings store and resolver.**
    - `runtime/settings_store.py`: bounded no-link read, strict JSON (duplicate keys rejected), compare-and-set on `revision` and content digest under `.vibe-workflow/private/settings.lock`, recheck of the file's identity before an atomic replace with directory fsync. Committed-file rules: no absolute paths, normal file mode. Before creating `private/` (owner-only modes), `git check-ignore --no-index` must confirm a rule covers `private/` and `git ls-files` must show it untracked; otherwise refuse. A tracked `project.json` is a warning, not a refusal.
@@ -49,7 +49,7 @@ Each step starts with failing tests (TDD) and ends with its listed check passing
 8. **This repository.**
    - `.gitignore`: replace `/.vibe-workflow/` with `/.vibe-workflow/project.json` and `/.vibe-workflow/private/`.
    - Commit `.vibe-workflow/settings.json` with the Workstreams value the user chooses.
-   - `AGENTS.md`: one rule that new features and skills ship a manifest with a declared default, linking a new author contract `clients/features.md`. Update `docs/setup.md`, `docs/policy-sources.md` and the instruction map.
+   - `AGENTS.md`: one line pointing feature authors to a new author contract, `clients/features.md`, which describes the manifest and settings file. Update `docs/setup.md`, `docs/policy-sources.md` and the instruction map.
    - Check: `validate.py`, link check of changed instructions.
 
 9. **Verification and review.**
@@ -65,4 +65,3 @@ Each step starts with failing tests (TDD) and ends with its listed check passing
 - New ordinary Workstreams admissions have one source of truth: `.vibe-workflow/settings.json`, with the package default when absent. The `AGENTS.md` block is gone; the runtime top-level `enabled` is retained solely for historical requests and their pins.
 - Startup shows one `Features:` line in enrolled checkouts only.
 - Onboarding leaves `project.json` and `private/` untracked in a new project and reports an already-tracked record.
-- Package validation fails for a skill without a feature or a feature without a default.
