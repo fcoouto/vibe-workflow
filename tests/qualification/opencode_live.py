@@ -852,11 +852,8 @@ class Run:
     def compare_user_dirs(self, before, home_before):
         after = self.snapshot_user_dirs()
         changes = {}
-        for name in USER_OPENCODE_DIRS:
-            unexpected, churn, session = safety.classify_snapshots(before[name], after[name], name == safety.SESSION_OUTPUT_DIR,
-                                                                   Path.home() / name)
-            changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn),
-                                 session_output_count=len(session))
+        for name in USER_OPENCODE_DIRS:  # concurrent OpenCode sessions' churn is counted; credentials and config fail
+            changes[name], unexpected = safety.user_dir_entry(name, before[name], after[name], Path.home() / name)
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
         codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
@@ -972,9 +969,12 @@ def main(argv=None):
     text = json.dumps(clean, indent=2, sort_keys=True)
     leaks = run.redact.leaks(text)
     if leaks:
-        print("refused to write output: %d unsanitized fragments; wrote a skeleton" % len(leaks), file=sys.stderr)
-        if args.out:  # blockers (masked), cleanup status, ledger totals and the leak kinds only
-            Path(args.out).write_text(json.dumps(sanitize.skeleton(clean, leaks), indent=2, sort_keys=True) + "\n")
+        kept = safety.withhold(text, args.call_ledger, run.run_id)  # the full results stay local for the operator
+        print("refused to write output: %d unsanitized fragments; full results kept at %s (owner-only, never commit; "
+              "delete after reading); wrote a skeleton" % (len(leaks), kept))
+        if args.out:  # blockers (masked), cleanup status, ledger totals, leak kinds and flagged JSON paths only
+            flags = sanitize.flagged(clean, run.redact.secrets)
+            Path(args.out).write_text(json.dumps(sanitize.skeleton(clean, leaks, flags), indent=2, sort_keys=True) + "\n")
         return 3
     if args.out:
         Path(args.out).write_text(text + "\n")

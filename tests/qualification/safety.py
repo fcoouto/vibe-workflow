@@ -31,7 +31,10 @@ QUALIFIED_OPENCODE = "2.2.6"
 # New purposes start at 0 in code: nothing may be spent until a recorded approval cap line opens them.
 CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0}
 # The most a recorded cap line may raise each purpose to (pre-registration edit 4: pilot 24 -> 28 before attempt 2).
-MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 4}
+# chatgpt 4 -> 6: approved by the user (Fernando Couto) on 2026-11-10 at about 00:05 CET for ChatGPT-via-OpenCode
+# qualification requests on one tiny OpenAI model, after attempts 3 and 4 each spent one real request without a usable
+# diagnosis while the run needs 3 remaining. The cap itself rises only through a recorded `--set-cap` line.
+MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 6}
 # The one route each live-probe mode may send to. `chatgpt` is an `openai` model chosen by the operator from the
 # ChatGPT login's own model list (see `check_route`); a run never allows two providers.
 MODE_ROUTES = {"qualification-2": ("claude-agent", "haiku", "low"), "chatgpt": None}
@@ -543,7 +546,8 @@ def watched_changes(before, after):
         diff = compare_snapshots(before.get(name) or {}, after.get(name) or {})
         names = sorted(diff["added"] + diff["removed"] + diff["changed"])
         unexpected = [n for n in names if name != ".codex" or CODEX_GUARDED.match(n)]
-        changes[name] = dict(unexpected=["%s/%s" % (name, n) for n in unexpected][:50], unexpected_count=len(unexpected),
+        changes[name] = dict(unexpected=[sanitize.text("%s/%s" % (name, n)) for n in unexpected][:50],
+                             unexpected_count=len(unexpected),
                              churn_count=len(names) - len(unexpected))
         unexpected_all += ["%s/%s" % (name, n) for n in unexpected]
     return changes, unexpected_all
@@ -599,6 +603,80 @@ def classify_snapshots(before, after, stores=False, root=None):
     session = session_output(diff, before, after, root) if stores else []
     unexpected, churn = classify_changes({k: [n for n in v if n not in session] for k, v in diff.items()})
     return unexpected, churn, session
+
+
+# How each of the user's OpenCode directories is judged. Other running OpenCode sessions (the coordinator's own, the
+# user's) write there during a run, and the check cannot tell their writes from the isolated server's; isolation is
+# evidenced by XDG pinning, these strict credential/config rules and the isolated server's own store (`isolated_store`).
+USER_DIR_POLICY = {".config/opencode": "strict", ".local/share/opencode": "data", ".cache/opencode": "cache",
+                   ".local/state/opencode": "state"}
+DATA_STORES = ("log", "snapshot", "worktree", "storage", "shell", "tool-output")  # concurrent-session stores
+DATA_DB = re.compile(r"opencode\.db(?:-wal|-shm|-journal)?")
+STRICT_NAMES = dict(data=re.compile(r"auth|token|credential|config|settings|keychain", re.I),
+                    cache=re.compile(r"auth|token|credential|keychain", re.I),
+                    state=re.compile(r"auth|token|credential|config|settings|keychain", re.I))
+
+
+def classify_user_dir(policy, before, after, root):
+    """`(unexpected names, {store: count})` for one user OpenCode directory under its policy. `data`: the stores in
+    `DATA_STORES` and the database files are concurrent-session churn (shell/ and tool-output/ keep their added-or-
+    changed, plain-file, single-link rules), except names like auth/token/config (outside worktree/, which holds
+    repository checkouts); anything else directly in the directory fails. `cache`, `state`: churn except names like
+    auth/token (and config in state). `strict`: everything fails except the desktop app's own database and logs."""
+    diff = compare_snapshots(before, after)
+    if policy == "strict":
+        unexpected, churn = classify_changes(diff)
+        return unexpected, ({"desktop": len(churn)} if churn else {})
+    session = set(session_output(diff, before, after, root))
+    unexpected, churn = [], {}
+    for name in sorted(diff["added"] + diff["removed"] + diff["changed"]):
+        segments = (name[:-1] if name.endswith("/") else name).split("/")
+        store, nested = segments[0], segments[1:]
+        bad = any(s in ("", ".", "..") for s in segments)
+        named = any(STRICT_NAMES[policy].search(s) for s in (nested if policy == "data" else segments))
+        if policy == "data":
+            if bad or (not nested and not DATA_DB.fullmatch(store)) or (nested and store not in DATA_STORES):
+                ok = False
+            elif store in ("shell", "tool-output"):
+                ok = name in session and not named
+            else:
+                ok = not nested or store == "worktree" or not named
+            key = store if nested else "db"
+        else:
+            ok, key = not bad and not named, policy
+        if ok:
+            churn[key] = churn.get(key, 0) + 1
+        else:
+            unexpected.append(name)
+    return unexpected, churn
+
+
+def user_dir_entry(name, before, after, root):
+    """The results entry for one user OpenCode directory: masked unexpected names (at most 50), counts of concurrent-
+    session churn by store (never file names)."""
+    unexpected, churn = classify_user_dir(USER_DIR_POLICY.get(name, "strict"), before, after, root)
+    return dict(unexpected=[sanitize.text(n) for n in unexpected][:50], unexpected_count=len(unexpected),
+                concurrent_session_churn=churn, desktop_churn_count=churn.get("desktop", 0),
+                session_output_count=churn.get("shell", 0) + churn.get("tool-output", 0)), unexpected
+
+
+def isolated_store(base):
+    """Whether the isolated server wrote its own store where XDG pinning sends it (`<isolated>/data/opencode`)."""
+    data = Path(base) / "data" / "opencode"
+    return dict(data_dir=data.is_dir(), session_store=(data / "opencode.db").is_file() or (data / "storage").is_dir())
+
+
+def withhold(results_text, ledger_path, run_id):
+    """Keep refused full results for the operator in an owner-only file next to the durable ledger (outside every
+    repository and the isolated dir); returns its path. Never committed; the operator deletes it after reading."""
+    directory = Path(ledger_path).parent / "withheld"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    target = directory / ("%s.json" % re.sub(r"[^A-Za-z0-9_.-]", "_", str(run_id)))
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(results_text + "\n")
+    return target
 
 
 def classify_changes(diff):

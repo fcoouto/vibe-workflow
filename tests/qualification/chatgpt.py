@@ -18,7 +18,7 @@ import re
 import time
 
 from tests.qualification import probe_stages, sanitize
-from tests.qualification.safety import PROMPT_TEXT, Blocker, Refused, check_route, parse_route
+from tests.qualification.safety import MAX_CAPS, PROMPT_TEXT, Blocker, Refused, check_route, isolated_store, parse_route
 
 PURPOSE = "chatgpt"
 INTEGRATION = "openai"
@@ -290,6 +290,9 @@ BODY_FIELDS = ERROR_FIELDS + ("param", "type")
 CODE_FIELDS = ("code", "type", "error")  # kept only as codes (sanitize.code_value)
 EVENT_TYPES = ("session.status", "session.error", "session.idle", "message.updated")
 STATUS_TYPES = ("idle", "busy", "retry")  # SessionStatus in 2.2.6
+FINISH = ("stop", "length", "tool-calls", "content-filter", "error", "unknown")  # the assistant `finish` set in 2.2.6
+END_REASONS = ("idle", "timeout")
+OUTCOMES = ("succeeded", "failed", "interrupted")
 MESSAGE_TYPES = ("user", "assistant", "idle", "synthetic", "system", "skill", "shell", "compaction", "agent-switched",
                  "model-switched", "location-switched")  # Session.Message.Info in 2.2.6
 # Our own blocks, not upstream refusals: the qual-post guard and the routing shim name their reason in the error.
@@ -450,6 +453,29 @@ def upstream_code(facts):
     return next((e.get("type") for e in errors if e.get("type")), None) or ("idle_failed" if failed and errors else None)
 
 
+def outcome_summary(run, root, began, mark, wait_s, end_reason):
+    """`request_outcome_summary`: why there was (no) reply, from integers and fixed enumerations only (no string from
+    the server), so it is recorded even when the facts are withheld."""
+    try:
+        messages = [m for m in run.messages(root) if isinstance(m, dict)]
+    except Exception:  # noqa: BLE001 - the summary must never fail the run
+        messages = []
+    assistant = [m for m in messages if m.get("type") == "assistant"]
+    errors = [m["error"] for m in assistant if isinstance(m.get("error"), dict)]
+    idle = [m for m in messages if m.get("type") == "idle" and ((m.get("time") or {}).get("created") or 0) >= began]
+    statuses = [((e.get("data") or {}).get("status") or {}).get("type") for e in (run.events.events if run.events else [])
+                if isinstance(e, dict) and e.get("type") == "session.status" and (e.get("data") or {}).get("sessionID") == root]
+    known = lambda value, allowed: value if value in allowed else "<other>"  # noqa: E731
+    return dict(transmitted_count=sum(1 for r in run.server.hooks()[mark:] if r.get("decision") == "transmit"),
+                assistant_messages=len(assistant),
+                assistant_with_tokens=sum(1 for m in assistant if sum(integer_tokens(m.get("tokens")).values()) > 0),
+                assistant_with_error=len(errors), finish=[known(m.get("finish"), FINISH) for m in assistant if m.get("finish")],
+                error_type=[known(e.get("type"), sanitize.KNOWN_CODES + tuple(sanitize.ERROR_CLASSES)) for e in errors],
+                session_status=known(statuses[-1], STATUS_TYPES) if statuses else None,
+                idle_outcome=known(idle[-1].get("outcome"), OUTCOMES) if idle else None,
+                wait_seconds=round(wait_s, 1), end_reason=known(end_reason, END_REASONS))
+
+
 def request(run):
     """One tiny prompt through the full managed handshake; accounting, `record complete`, a clean `status`."""
     s, failures = PURPOSE, []
@@ -467,9 +493,12 @@ def request(run):
     try:
         run.wait_idle(root, began)
     except Blocker as error:
+        run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "timeout"))
         run.note(s, "session_facts", session_facts(run, root, began, body, "timeout: %s" % error,
                                                     round((time.monotonic() - started) * 1000)))
         raise
+    run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "idle"))
+    run.note(s, "isolated_store", isolated_store(run.base))  # the isolated server wrote its own store where pinned
     facts = session_facts(run, root, began, body, "idle record after the prompt and the session not active",
                           round((time.monotonic() - started) * 1000))
     run.note(s, "session_facts", facts)
@@ -535,8 +564,11 @@ def run(run_, announce=print, sleep=time.sleep):
     run_.start(PURPOSE)
     connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
     select_model(run_, announce=announce)
-    if run_.ledger.remaining(PURPOSE) < 3:  # two probe exposures plus the request
-        raise Refused("the chatgpt purpose needs 3 calls left (2 probe exposures and 1 request)")
+    remaining = run_.ledger.remaining(PURPOSE)
+    if remaining < 3:  # two probe exposures (normally 0 sent) plus the request
+        raise Refused("the chatgpt purpose has %d remain and 3 needed (2 guard/pending probe exposures, normally 0 sent, "
+                      "and 1 request); raising the cap needs the user's approval, recorded with --set-cap chatgpt <N> "
+                      "--reason ... --approval BY AT SCOPE (at most %d)" % (remaining, MAX_CAPS[PURPOSE]))
     answer, _ = run_.routing("set", authority_required=True)
     status, health, _ = run_.server.rpc("health", {})
     run_.note(PURPOSE, "setup", dict(authority_required=answer.get("state"), health=(health or {}).get("state")))

@@ -116,6 +116,29 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
       - accounting found no assistant message and no tokens: unknown `message_tokens_missing`, `no_requests`, `title_unknown`, with no settlement and failures `not_one_primary_request` and `not_settled`;
       - `status` was clean, `native.rateLimit` was absent, and `descendants` was complete.
     - **Unobserved:** the upstream outcome. The harness recorded nothing about why there was no reply, and the isolated directory is deleted after the run.
+  - **Attempt 4** (9 November 2026, 23:51 CET, harness `7d6ff43`, `--chatgpt-model openai/gpt-5.5`):
+    - **Observed:** the sign-in completed, and the request was transmitted again (chatgpt **2 of 4**).
+    - **The harness withheld its own results:** "refused to write output: 2 unsanitized fragments", with `facts_withheld` `pattern:hex` and `pattern:token`. The skeleton also carried the blocker "the user's .local/share/opencode changed during the run".
+    - **Cause, reproduced offline:** both fragments were the harness's own `user_dirs.opencode[".local/share/opencode"].unexpected[*]` entries. These are names under `snapshot/<40-hex git hash>/objects/…` written by other running OpenCode sessions. The check failed on them and recorded them, and their hashes matched both patterns. The `sha256` prefixes and `<code:…>` values (12 hex characters) did not match.
+    - **Unobserved:** the upstream outcome, because the diagnostics were lost with the isolated directory.
+  - **Fixed before attempt 5:**
+    - Concurrent-session churn is report-only, with counts only (rule below).
+    - Recorded names of unexpected changes are masked.
+    - A new end-to-end test runs the whole ChatGPT stage on the stand-in server (upstream error, no reply, success; with concurrent sessions writing) and requires the complete results file to pass the leak check with no blocker.
+- **The user's OpenCode directories (revised after attempt 4).** Other running OpenCode sessions, both the coordinator's and the user's, write to these directories during a run. Around attempt 4 that was `log/` (2), `snapshot/` (1), `worktree/` (2), `shell/` (29) and the database, among 7,641 entries. The check cannot tell their writes from the isolated server's. Isolation is evidenced instead by XDG pinning, the strict credential and config rules below, and the isolated server's own store (`isolated_store`: `<isolated>/data/opencode` exists with its session store, checked after the request). Rules:
+  - **`~/.local/share/opencode`:**
+    - **Report-only, counted as `concurrent_session_churn` by store:** `log/`, `snapshot/`, `worktree/`, `storage/`, `shell/`, `tool-output/` and the database files. `shell/` and `tool-output/` keep their added-or-changed, plain-file, single-link rules.
+    - **Fails the run:** names like auth, token, credential, config, settings or keychain (outside `worktree/`, which holds repository checkouts); any file directly in the directory, such as `auth.json`, `mcp-auth.json` or any `*.json`; and anything else not on the list.
+  - **`~/.cache/opencode`:** report-only, except names like auth, token, credential or keychain.
+  - **`~/.local/state/opencode`:** report-only, except names like auth, token, credential, config, settings or keychain.
+  - **`~/.config/opencode`:** stays strict.
+- **When the leak check refuses the results file,** nothing is destroyed. The full masked results are written to `~/.local/state/vibe-workflow-qualification/withheld/<run-id>.json` (next to the durable ledger: directory 0700, file 0600, outside every repository and the isolated directory), and the path is printed. The skeleton written to `--out` names each flagged fragment only by its JSON path and kind. **Operator step:** read the withheld file, judge it, never commit it, and delete it afterwards.
+- **`request_outcome_summary`** (recorded even when the facts are withheld), built from integers and fixed enumerations only:
+  - `transmitted_count`, the number of assistant messages, those with tokens and those with an error;
+  - `finish` from the schema set (`stop`, `length`, `tool-calls`, `content-filter`, `error`, `unknown`);
+  - `error_type` from the known codes and error classes, else `<other>`;
+  - `session_status`, `idle_outcome`, `wait_seconds`, and `end_reason` (`idle` or `timeout`).
+- **Budget:** the run needs 3 `chatgpt` calls remaining (2 probe exposures, normally 0 sent, and 1 request). With 2 of 4 spent it refuses, and the message states what remains, what is needed, and that a raise needs the user's approval through `--set-cap`. On 10 November 2026 at about 00:05 CET the user approved raising the `chatgpt` maximum from 4 to 6 (the code constant now records it). The cap itself rises only through the recorded `--set-cap chatgpt 6` line, which the coordinator runs after the merge.
 - **Recorded for the next run (added after attempt 3, before any further run).** After the managed request goes idle, and also when the wait fails, the results get sanitized `session_facts`:
   - **Messages:** the session's messages counted by type, and whether the user message exists.
   - **Each assistant message:**

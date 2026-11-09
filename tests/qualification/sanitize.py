@@ -176,7 +176,29 @@ def leaks(value):
     return sorted(found)
 
 
-def skeleton(results, kinds):
+def flagged(value, secrets=(), path=""):
+    """`[{path, kind}]` for every string or key name in `value` still matching a pattern or a known secret: JSON paths
+    (keys and indices) and kinds only, never the value (at most 50)."""
+    found = []
+
+    def visit(item, where):
+        if len(found) >= 50:
+            return
+        if isinstance(item, dict):
+            for key, inner in item.items():
+                visit(str(key), "%s/<key>" % where)
+                visit(inner, "%s/%s" % (where, text(str(key), 80) if not leaks(str(key)) else "<key>"))
+        elif isinstance(item, list):
+            for index, inner in enumerate(item):
+                visit(inner, "%s[%d]" % (where, index))
+        elif isinstance(item, str):
+            kinds = leaks(item) + (["secret"] if any(s and s in item for s in secrets) else [])
+            found.extend(dict(path=where, kind=kind) for kind in kinds)
+    visit(value, path)
+    return found[:50]
+
+
+def skeleton(results, kinds, flags=()):
     """The minimal results written when the leak check refuses the full file: masked blockers, the cleanup status,
     the call ledger totals and the leak kinds, never an id or a value."""
     kinds = sorted({kind if str(kind).startswith("pattern:") else "secret" for kind in kinds})
@@ -186,4 +208,4 @@ def skeleton(results, kinds):
                 blockers=[text(str(b)) for b in results.get("blockers") or []][:20], results_withheld=True,
                 cleanup={k: v for k, v in cleanup.items() if type(v) in (bool, int) or v is None},
                 call_ledger={p: {k: v for k, v in (t or {}).items() if type(v) is int} for p, t in ledger.items()
-                             if isinstance(t, dict)}, facts_withheld=kinds)
+                             if isinstance(t, dict)}, facts_withheld=kinds, flagged=list(flags))

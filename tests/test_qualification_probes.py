@@ -44,7 +44,7 @@ class PurposeApprovalTests(Temp):
         ledger.set_cap("chatgpt", 4, "approved", approval=APPROVAL)
         self.assertEqual(ledger.summary()["qualification-2"]["remaining"], 10)
         self.assertEqual(ledger.summary()["chatgpt"]["remaining"], 4)
-        for purpose, cap in (("qualification-2", 11), ("chatgpt", 5)):
+        for purpose, cap in (("qualification-2", 11), ("chatgpt", 7)):
             with self.assertRaises(safety.Refused):
                 ledger.set_cap(purpose, cap, "too much", approval=APPROVAL)
         for purpose in ("qualification", "pilot"):  # the existing purposes and their history stay untouched

@@ -268,6 +268,8 @@ class SkeletonTests(Temp):
                 "--chatgpt", "--chatgpt-model", "openai/gpt-5.5", "--out", str(out)]
 
         class FakeRun:
+            run_id = "chatgpt-skeleton"
+
             def __init__(self, *args, **kwargs):
                 self.redact = safety.Redactor()
 
@@ -282,7 +284,8 @@ class SkeletonTests(Temp):
                 patch.object(live, "check_real_home", lambda: None), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(live.main(base), 3)
         written = json.loads(out.read_text())
-        self.assertEqual(sorted(written), ["_meta", "blockers", "call_ledger", "cleanup", "facts_withheld", "results_withheld"])
+        self.assertEqual(sorted(written), ["_meta", "blockers", "call_ledger", "cleanup", "facts_withheld", "flagged",
+                                           "results_withheld"])
         self.assertEqual(written["call_ledger"], dict(chatgpt=dict(cap=4, spent=1)))
         self.assertIn("pattern:email", written["facts_withheld"])
         text = out.read_text()
