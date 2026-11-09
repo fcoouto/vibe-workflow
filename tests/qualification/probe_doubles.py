@@ -40,6 +40,15 @@ class ProbeServer(FakeOpenCode):
                                dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")]
         self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
         self.oauth_extra = {}  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
+        self.upstream_error, self.upstream_retry = None, None
+        self.assistant_overrides, self.retry_message = {}, "retrying"  # fuzzing: extra assistant fields, status text
+        self.connection_label = "ChatGPT"  # the credential's label as GET /api/integration/openai lists it
+        self.no_reply = False  # transmitted, then the session goes idle (failed) with no assistant message
+        self.upstream_by_model = {}  # model id -> StructuredError (or None for a normal reply), overriding upstream_error
+        store = self.project.parent / "data" / "opencode"  # the isolated server's own store, as 2.2.6 writes it
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "opencode.db").write_text("")
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -72,9 +81,13 @@ class ProbeServer(FakeOpenCode):
             return 200, dict(state="ok" if ledger == "ready" else "not_ready",
                              managed_denies=["config_edit", "image_generation"]), 1.0
         if method == "attach":
+            facts = dict(self.request_facts, funding_pool=payload["funding_pool"])
+            ref = payload.get("model") or ""
+            if "/" in ref and "#" in ref:  # the attempt's own route, as the shim receives it
+                provider, rest = ref.split("/", 1)
+                facts.update(provider=provider, model=rest.split("#")[0], variant=rest.split("#")[1])
             answer = self.routing("check", attempt_id=payload["attempt_id"], session_id=payload["session_id"],
-                                  authority=payload["authority"],
-                                  request=dict(self.request_facts, funding_pool=payload["funding_pool"]))[0]
+                                  authority=payload["authority"], request=facts)[0]
             if answer.get("state") == "allow" and answer.get("authority") == "verified":
                 self.roots[payload["session_id"]] = dict(attempt=payload["attempt_id"], token=payload["authority"],
                                                          watched=False, recorded={})
@@ -184,10 +197,49 @@ class ProbeServer(FakeOpenCode):
             return 200, dict(data=self.sessions[session]["record"]), 1.0
         if method == "POST" and len(parts) == 4 and parts[3] == "command":
             return self._command(parts[2], body["name"], now)
+        if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.no_reply:
+            state = self.sessions[parts[2]]
+            state["messages"].append(dict(id=body.get("id") or self._id("msg"), type="user", time=dict(created=now)))
+            self._request_hook(parts[2], "primary")
+            state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", time=dict(created=now + 2)))
+            return 200, dict(data=state["messages"][0]), 1.0
+        model_id = ((self.sessions.get(parts[2]) or {}).get("record") or {}).get("model", {}).get("id") \
+            if method == "POST" and len(parts) == 4 and parts[3] == "prompt" else None
+        if model_id in self.upstream_by_model:
+            if self.upstream_by_model[model_id] is None:
+                return super().request(method, path, body, query, timeout)
+            saved, self.upstream_error = self.upstream_error, self.upstream_by_model[model_id]
+            try:
+                return self._failed_prompt(parts[2], body, now)
+            finally:
+                self.upstream_error = saved
+        if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.upstream_error is not None:
+            return self._failed_prompt(parts[2], body, now)
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and (
                 TOOL_PROMPT_MARK in body["text"] or EDIT_PROMPT_MARK in body["text"]):
             return self._scripted_prompt(parts[2], body, now)
         return super().request(method, path, body, query, timeout)
+
+    def _failed_prompt(self, sid, body, now):
+        """The request is transmitted, then the upstream answers with an error: no tokens, no completion time."""
+        state = self.sessions[sid]
+        state["messages"].append(dict(id=body.get("id") or self._id("msg"), type="user", time=dict(created=now)))
+        state["prompted"] = True
+        self._request_hook(sid, "primary")
+        model = state["record"]["model"]
+        assistant = dict(id=self._id("msg"), type="assistant", agent="build", finish="error", rawFinish="error",
+                         model=model, content=[], error=dict(self.upstream_error), time=dict(created=now))
+        if self.upstream_retry:
+            assistant["retry"] = dict(self.upstream_retry)
+        assistant.update(self.assistant_overrides)
+        state["messages"].append(assistant)
+        state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", error=dict(self.upstream_error),
+                                      time=dict(created=now + 2)))
+        self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(
+            type="retry", attempt=1, message=self.retry_message, next=now + 1000))))
+        self.events.append(dict(type="session.error", data=dict(sessionID=sid, error=dict(self.upstream_error))))
+        self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(type="idle"))))
+        return 200, dict(data=state["messages"][0]), 1.0
 
     def _scripted_prompt(self, sid, body, now):
         state = self.sessions[sid]
@@ -242,7 +294,7 @@ class ProbeServer(FakeOpenCode):
                 return 404, dict(type="not_found", message="Integration not found"), 1.0
             methods = list(self.openai_methods) if integration == "openai" \
                 else [dict(id="claude-login", type="external", label="Claude Code login")]
-            connections = [dict(type="credential", id="cred_1bf0000000000000000000Aa", method="oauth")] \
+            connections = [dict(type="credential", id="cred_1bf0000000000000000000Aa", method="oauth", label=self.connection_label)] \
                 if integration == "openai" and self.connected else []
             return 200, dict(data=dict(id=integration, methods=methods, connections=connections)), 1.0
         if parts[3:5] == ["connect", "external"]:

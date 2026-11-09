@@ -52,11 +52,11 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E402
+from tests.qualification import canary, chatgpt, outputs, probe_stages, safety, user_dirs  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
-                                        check_opencode_version, classify_changes, compare_snapshots, id_shape,
+                                        check_opencode_version, compare_snapshots, id_shape,
                                         latency_pairs, on_route, repo_snapshot, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
@@ -852,9 +852,9 @@ class Run:
     def compare_user_dirs(self, before, home_before):
         after = self.snapshot_user_dirs()
         changes = {}
-        for name in USER_OPENCODE_DIRS:
-            unexpected, churn = classify_changes(compare_snapshots(before[name], after[name]))
-            changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn))
+        for name in USER_OPENCODE_DIRS:  # concurrent OpenCode sessions' churn is counted; credentials and config fail
+            changes[name], unexpected = user_dirs.user_dir_entry(name, before[name], after[name], Path.home() / name,
+                                                                 getattr(self, "own_ids", ()))
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
         codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
@@ -933,6 +933,7 @@ def main(argv=None):
         if not args.isolated_dir:
             parser.error("--isolated-dir is required")
         base = check_isolated_dir(args.isolated_dir)
+        outputs.check_out(args.out)  # results are committed only after the operator reads them
         ledger = CallLedger(args.call_ledger or "")
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
@@ -944,10 +945,7 @@ def main(argv=None):
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
         if args.chatgpt:
-            ref = args.chatgpt_model or ""  # without #VARIANT the lowest listed variant; `auto`: chatgpt.AUTO_RULE
-            route = ("openai",) if ref == chatgpt.AUTO else safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
-            if route[0] != "openai":
-                raise Refused("the chatgpt run allows only an openai model")
+            chatgpt.parse_models(args.chatgpt_model)  # auto, one model, or up to 3 in order (fallback on refusal)
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
         purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None
@@ -966,11 +964,15 @@ def main(argv=None):
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     results = run.run()
-    clean = run.output(results)
+    clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)
     leaks = run.redact.leaks(text)
     if leaks:
-        print("refused to write output: %d unsanitized fragments" % len(leaks), file=sys.stderr)
+        kept = outputs.withhold(text, args.call_ledger, run.run_id)  # the full results stay local for the operator
+        print("refused to write output: %d unsanitized fragments; full results kept at %s (owner-only, never commit; "
+              "delete after reading); wrote a skeleton" % (len(leaks), kept))
+        if args.out:  # leak-checked skeleton (masked blockers, statuses, totals, kinds, flagged paths) or a minimal record
+            Path(args.out).write_text(outputs.skeleton_text(clean, leaks, run.redact))
         return 3
     if args.out:
         Path(args.out).write_text(text + "\n")

@@ -14,6 +14,8 @@ import subprocess
 import time
 import traceback
 
+from tests.qualification import sanitize
+
 PROVIDER, MODEL, VARIANT = "claude-agent", "haiku", "low"
 ROUTE = "%s/%s#%s" % (PROVIDER, MODEL, VARIANT)
 HARNESS_NAME = "claude-agent-sdk via opencode"
@@ -29,7 +31,10 @@ QUALIFIED_OPENCODE = "2.2.6"
 # New purposes start at 0 in code: nothing may be spent until a recorded approval cap line opens them.
 CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0}
 # The most a recorded cap line may raise each purpose to (pre-registration edit 4: pilot 24 -> 28 before attempt 2).
-MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 4}
+# chatgpt 4 -> 6: approved by the user (Fernando Couto) on 2026-11-10 at about 00:05 CET for ChatGPT-via-OpenCode
+# qualification requests on one tiny OpenAI model, after attempts 3 and 4 each spent one real request without a usable
+# diagnosis while the run needs 3 remaining. The cap itself rises only through a recorded `--set-cap` line.
+MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 6}
 # The one route each live-probe mode may send to. `chatgpt` is an `openai` model chosen by the operator from the
 # ChatGPT login's own model list (see `check_route`); a run never allows two providers.
 MODE_ROUTES = {"qualification-2": ("claude-agent", "haiku", "low"), "chatgpt": None}
@@ -486,7 +491,9 @@ def verify_plugin_chain(plugins, guard, pending, guard_outcome, guard_reason, pe
 # ---------------------------------------------------------------- user directories and cleanup
 
 def snapshot_tree(root, max_entries=20000, max_depth=8):
-    """`{relative name: mtime_ns}` for files and `{name/: None}` for directories under `root` (no contents)."""
+    """`{relative name: mtime_ns}` for files and `{name/: None}` for directories under `root` (no contents). A symlink
+    (to a file or a directory) is `{name: "symlink:<mtime_ns>"}`, never followed, so replacing a directory by a link
+    shows as `name/` removed and `name` added."""
     root = Path(root)
     if not root.is_dir():
         return {}
@@ -496,13 +503,20 @@ def snapshot_tree(root, max_entries=20000, max_depth=8):
         depth = 0 if relative == "." else relative.count(os.sep) + 1
         if depth >= max_depth:
             dirs[:] = []
-        for name in dirs:
+        for name in list(dirs):
+            if os.path.islink(os.path.join(current, name)):
+                dirs.remove(name)
+                files.append(name)
+                continue
             found[os.path.normpath(os.path.join(relative, name)) + "/"] = None
         for name in files:
             try:
-                found[os.path.normpath(os.path.join(relative, name))] = os.lstat(os.path.join(current, name)).st_mtime_ns
+                info = os.lstat(os.path.join(current, name))
             except FileNotFoundError:
                 continue
+            link = stat.S_ISLNK(info.st_mode)
+            found[os.path.normpath(os.path.join(relative, name))] = "%s%d" % (SYMLINK, info.st_mtime_ns) if link \
+                else info.st_mtime_ns
         if len(found) > max_entries:
             raise Refused("too many entries to snapshot under a user directory")
     return found
@@ -532,7 +546,8 @@ def watched_changes(before, after):
         diff = compare_snapshots(before.get(name) or {}, after.get(name) or {})
         names = sorted(diff["added"] + diff["removed"] + diff["changed"])
         unexpected = [n for n in names if name != ".codex" or CODEX_GUARDED.match(n)]
-        changes[name] = dict(unexpected=["%s/%s" % (name, n) for n in unexpected][:50], unexpected_count=len(unexpected),
+        changes[name] = dict(unexpected=[sanitize.text("%s/%s" % (name, n)) for n in unexpected][:50],
+                             unexpected_count=len(unexpected),
                              churn_count=len(names) - len(unexpected))
         unexpected_all += ["%s/%s" % (name, n) for n in unexpected]
     return changes, unexpected_all
@@ -546,6 +561,48 @@ def check_real_home(home=None, passwd_home=None):
     if Path(home or Path.home()).resolve() != real:
         raise Refused("HOME is not the owner's real home; run as python3 -B tests/qualification/opencode_live.py")
     return real
+
+
+# OpenCode writes every session's command and tool output to these stores under ~/.local/share/opencode (for
+# example `shell/<project>/sh_*.out` for each command the coordinator's own OpenCode session runs). New or rewritten
+# files strictly inside them are report-only (counted, never named); deletions, symlinks and every other path stay
+# unexpected.
+SESSION_OUTPUT_DIR = ".local/share/opencode"
+SESSION_OUTPUT_STORES = ("shell", "tool-output")
+SYMLINK = "symlink:"
+
+
+def session_output(diff, before, after, root=None):
+    """The added or changed names strictly inside a session-output store: exact first segment, no `.`, `..` or empty
+    segments, neither side a symlink, and (with `root`) now a plain file with one link or a directory, so a hard link
+    to a credential file never passes as tool output."""
+    found = []
+    for name in diff["added"] + diff["changed"]:
+        segments = name[:-1].split("/") if name.endswith("/") else name.split("/")
+        linked = any(str(side.get(name, "")).startswith(SYMLINK) for side in (before, after))
+        if len(segments) >= 2 and segments[0] in SESSION_OUTPUT_STORES and not linked \
+                and all(segment not in ("", ".", "..") for segment in segments) and _plain(root, name):
+            found.append(name)
+    return found
+
+
+def _plain(root, name):
+    if root is None:
+        return True
+    try:
+        info = os.lstat(Path(root) / name)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) or (stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+
+
+def classify_snapshots(before, after, stores=False, root=None):
+    """`(unexpected, desktop_churn, session_output)` names between two snapshots of one OpenCode user directory;
+    `stores` (the session-output rule) applies only to `SESSION_OUTPUT_DIR`."""
+    diff = compare_snapshots(before, after)
+    session = session_output(diff, before, after, root) if stores else []
+    unexpected, churn = classify_changes({k: [n for n in v if n not in session] for k, v in diff.items()})
+    return unexpected, churn, session
 
 
 def classify_changes(diff):
@@ -700,7 +757,7 @@ class Redactor:
         if isinstance(value, dict):
             clean = {}
             for key, item in value.items():
-                if str(key).lower() in SECRET_KEYS and item not in (None, "", [], {}):
+                if str(key).lower() in SECRET_KEYS and item not in (None, "", [], {}, "<secret>"):  # not its own placeholder
                     for text in (item if isinstance(item, list) else [item]):
                         self.add_secret(str(text))  # remembered, so the same value is caught anywhere else
                     clean[self.text(str(key))] = "<secret>"
@@ -717,6 +774,7 @@ class Redactor:
         found += [path for path in self.paths if path in text]
         found += [match.group(0) for match in ID_TOKEN.finditer(text)]
         found += [name for name in self.names if re.search(r"(?<![A-Za-z0-9])%s(?![A-Za-z0-9])" % re.escape(name), text)]
+        found += ["pattern:%s" % kind for kind in sanitize.leaks(text)]  # account ids, credentials, emails, ...
         return found
 
 

@@ -2,6 +2,7 @@
 route allowlist per mode (guard, CLI and harness), redaction of OAuth secrets, and the `descendants`, `s33d` and
 `chatgpt` stages against a stand-in OpenCode server with the real scripts/routing.py on temporary stores."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -43,7 +44,7 @@ class PurposeApprovalTests(Temp):
         ledger.set_cap("chatgpt", 4, "approved", approval=APPROVAL)
         self.assertEqual(ledger.summary()["qualification-2"]["remaining"], 10)
         self.assertEqual(ledger.summary()["chatgpt"]["remaining"], 4)
-        for purpose, cap in (("qualification-2", 11), ("chatgpt", 5)):
+        for purpose, cap in (("qualification-2", 11), ("chatgpt", 7)):
             with self.assertRaises(safety.Refused):
                 ledger.set_cap(purpose, cap, "too much", approval=APPROVAL)
         for purpose in ("qualification", "pilot"):  # the existing purposes and their history stay untouched
@@ -475,7 +476,7 @@ class ChatGPTMethodTests(StageHarness):
     def test_an_unknown_refusal_shape_records_only_key_names(self):
         message, signin = self.refused_sign_in("weird", dict(detail=dict(inner="x"), count=3))
         self.assertEqual(signin["error"], {})
-        self.assertEqual(signin["keys"], ["access", "count", "detail", "id_token", "refresh", "status"])
+        self.assertEqual(signin["keys"], ["<key>", "<key>", "access", "id_token", "refresh", "status"])  # allow-listed names only
 
     def test_secret_looking_refusal_fields_are_never_recorded(self):
         message, signin = self.refused_sign_in("failed", dict(
@@ -515,6 +516,81 @@ class ChatGPTMethodTests(StageHarness):
         self.assertEqual((server.oauth_started, server.transmitted()), ([], []))
         self.assertEqual([e for e in ledger.export()["entries"] if e["kind"] == "reserve"], [])
         self.assertNotIn("cred_", json.dumps(run.results))
+
+
+UPSTREAM = dict(type="APIError", status=403, retryAfterMs=1500,
+                message="Not eligible (subscription_sharing_user_not_eligible), see https://help.openai.com/x?t=tok-not-real",
+                response=dict(body=json.dumps(dict(error=dict(code="subscription_sharing_user_not_eligible", type="invalid_request_error",
+                                                              message="plan not eligible", access_token="tok-not-real",
+                                                              param="reasoning.effort")))))
+
+
+class ChatGPTRequestFactsTests(StageHarness):
+    connect = ChatGPTTests.connect
+
+    def requested(self, **knobs):
+        run, ledger, server, *_ = self.connect(**knobs)
+        run.redact.add_secret("tok-not-real")
+        chatgpt.select_model(run)
+        chatgpt.request(run)
+        result = run.results["stages"]["chatgpt"]
+        text = json.dumps(run.output(run.results))
+        for secret in ("tok-not-real", "ref-not-real", "https://"):
+            self.assertNotIn(secret, text)
+        return run, ledger, server, result
+
+    def test_an_upstream_error_is_recorded_and_classified(self):
+        run, ledger, server, result = self.requested(upstream_error=UPSTREAM,
+                                                     upstream_retry=dict(attempt=2, at=1, error=dict(type="RateLimit", message="slow")))
+        self.assertIn("request_failed_upstream", result["failures"])
+        self.assertNotIn("not_one_primary_request", result["failures"])
+        self.assertEqual(result["upstream_error"], "subscription_sharing_user_not_eligible")
+        facts = result["session_facts"]
+        self.assertEqual(facts["messages_by_type"], dict(user=1, assistant=1, idle=1))
+        self.assertTrue(facts["user_message"])
+        assistant = facts["assistant"][0]
+        self.assertEqual((assistant["finish"], assistant["time_completed"], assistant["tokens"], assistant["cost_present"]),
+                         ("error", False, {}, False))
+        self.assertEqual(assistant["model"], dict(providerID="openai", id="gpt-test-mini", variant="low"))
+        error = assistant["error"]
+        self.assertEqual((error["type"], error["status"], error["retry_after_ms"]), ("APIError", 403, 1500))
+        self.assertIn("<redacted:url>", error["message"]["text"])
+        fields = error["body"]["fields"]
+        self.assertEqual((fields["code"], fields["type"], fields["param"], fields["message"]["text"]),
+                         ("subscription_sharing_user_not_eligible", "invalid_request_error", "reasoning.effort", "plan not eligible"))
+        self.assertIn("subscription_sharing_user_not_eligible", error["body"]["codes"])
+        self.assertIn("<key>", error["body"]["keys"])  # access_token: not an allow-listed name
+        self.assertEqual(assistant["retry"]["attempt"], 2)
+        self.assertEqual(facts["idle"], [dict(outcome="failed", error_type="APIError", guard=None)])
+        self.assertEqual([e["type"] for e in facts["events"]], ["session.status", "session.error", "session.status"])
+        status = facts["events"][0]["status"]
+        self.assertEqual((status["type"], status["attempt"], status["message"]["text"]), ("retry", 1, "retrying"))
+        self.assertEqual(facts["request_body_keys"], ["id", "text"])
+        self.assertEqual((facts["variant"], facts["variants_listed"]), ("low", ["low", "medium"]))
+        self.assertEqual(facts["wait"]["reason"], "idle record after the prompt and the session not active")
+        self.assertEqual((facts["session"]["http"], facts["messages_http"]), (200, 200))
+        self.assertEqual(ledger.summary()["chatgpt"]["spent"], 1)
+
+    def test_a_normal_reply_records_the_same_facts_and_passes(self):
+        run, ledger, server, result = self.requested()
+        self.assertTrue(result["pass"], result)
+        assistant = result["session_facts"]["assistant"][0]
+        self.assertEqual((assistant["finish"], assistant["time_completed"], assistant["error"]), ("stop", True, None))
+        self.assertTrue(assistant["tokens"] and all(type(v) is int for v in assistant["tokens"].values()))
+        self.assertNotIn("upstream_error", result)
+
+    def test_a_wait_that_never_ends_still_records_the_facts(self):
+        run, ledger, server, *_ = self.connect()
+        chatgpt.select_model(run)
+
+        def stuck(session, after_ms, timeout=120):
+            raise safety.Blocker("session did not become idle")
+        run.wait_idle = stuck
+        with self.assertRaises(safety.Blocker):
+            chatgpt.request(run)
+        facts = run.results["stages"]["chatgpt"]["session_facts"]
+        self.assertEqual(facts["wait"]["reason"], "timeout: session did not become idle")
+        self.assertEqual(facts["messages_by_type"]["user"], 1)
 
 
 class ChatGPTAutoTests(StageHarness):
@@ -572,18 +648,20 @@ class ChatGPTAutoTests(StageHarness):
     def test_selection_table(self):
         table = [  # (listed, expected pick)
             ([gpt("o4-mini-deep-research", cost=(0, 0)), gpt("o4-mini-high", cost=(0, 0))], "o4-mini-high"),
-            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-5-mini", cost=(1, 1))], "gpt-5-mini"),
-            ([gpt("gpt-5", cost=(1.25, 10)), gpt("gpt-5-mini", cost=(0.25, 2)), gpt("gpt-5-nano", cost=(0.05, 0.4))],
-             "gpt-5-nano"),
-            ([gpt("gpt-5.1-codex", cost=(0, 0)), gpt("gpt-5.1-codex-mini", cost=(0, 0))], "gpt-5.1-codex-mini"),
-            ([gpt("gpt-5-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+            # versioned gpt ids must pass the Codex-with-ChatGPT rule (above 5.5, attempt 6): gpt-6 stands in for them
+            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-6-mini", cost=(1, 1))], "gpt-6-mini"),
+            ([gpt("gpt-6", cost=(1.25, 10)), gpt("gpt-6-mini", cost=(0.25, 2)), gpt("gpt-6-nano", cost=(0.05, 0.4))],
+             "gpt-6-nano"),
+            ([gpt("gpt-6.1-codex", cost=(0, 0)), gpt("gpt-6.1-codex-mini", cost=(0, 0))], "gpt-6.1-codex-mini"),
+            ([gpt("gpt-6-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+            ([gpt("gpt-5.5", cost=(0, 0)), gpt("gpt-6-luna"), gpt("gpt-6-sol")], "gpt-6-luna"),  # public price ranks
         ]
         for listed, expected in table:
             with self.subTest(expected=expected):
                 run, server, route, printed = self.select(listed)
                 self.assertEqual(route[1], expected)
         excluded = run.results["stages"]["chatgpt"]["model_selection"]["excluded"]
-        self.assertEqual(excluded, {})
+        self.assertEqual(excluded, {"gpt-5.5": "not_codex_chatgpt"})
         run, server, route, printed = self.select(table[0][0] + table[1][0])
         self.assertEqual(run.results["stages"]["chatgpt"]["model_selection"]["excluded"],
                          {"o4-mini-deep-research": "name", "computer-use-preview": "name"})
@@ -778,6 +856,94 @@ class WatchedHomeTests(Temp):
             run.compare_user_dirs(before, report)
         self.assertIn("the user's ~/.codex credentials or config changed during the run", run.results["blockers"])
         self.assertEqual(run.results["user_dirs"]["codex"][".codex"]["unexpected"], [".codex/config.toml"])
+
+
+class SessionOutputChurnTests(Temp):
+    """OpenCode's own session tool-output stores under ~/.local/share/opencode are report-only, nothing else."""
+
+    def tree(self):
+        root = self.private(self.tmp / "data")
+        for name in ("auth.json", "opencode.db", "storage/session/a.json", "shell/abc/sh_1.out", "tool-output/t1.txt",
+                     "snapshot/x"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text("x")
+        return root
+
+    @staticmethod
+    def touch(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("y")
+        stamp = path.stat().st_mtime_ns + 5_000_000_000
+        os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
+
+    def classify(self, root, before, session_output=True):
+        return safety.classify_snapshots(before, safety.snapshot_tree(root), stores=session_output)
+
+    def test_new_and_rewritten_tool_output_is_report_only(self):
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        for name in ("shell/abc/sh_2.out", "shell/abc/sh_1.out", "shell/new/sh_3.out", "tool-output/t2.txt",
+                     "tool-output/t1.txt"):
+            self.touch(root / name)
+        unexpected, churn, session = self.classify(root, before)
+        self.assertEqual((unexpected, churn), ([], []))
+        self.assertEqual(len(session), 6)  # five files and the new shell/new/ directory
+        unexpected, _, session = self.classify(root, before, session_output=False)  # other OpenCode dirs: unchanged rule
+        self.assertEqual((len(unexpected), session), (6, []))
+
+    def test_everything_else_stays_unexpected(self):
+        for name in ("auth.json", "storage/session/a.json", "snapshot/x", "plugins.json", "shell-evil/x", "tool-output.bak",
+                     "shell", "x/shell/y", "toolOutput/t"):
+            with self.subTest(name=name):
+                shutil.rmtree(self.tmp / "data", ignore_errors=True)
+                root = self.tree()
+                before = safety.snapshot_tree(root)
+                if (root / name).is_dir():
+                    continue
+                self.touch(root / name)
+                unexpected, churn, session = self.classify(root, before)
+                self.assertIn(name, unexpected)
+                self.assertEqual(session, [])
+
+    def test_deletions_and_symlinks_stay_unexpected(self):
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        (root / "shell" / "abc" / "sh_1.out").unlink()
+        os.symlink(root / "auth.json", root / "tool-output" / "link.txt")
+        unexpected, _, session = self.classify(root, before)
+        self.assertEqual(sorted(unexpected), ["shell/abc/sh_1.out", "tool-output/link.txt"])
+        self.assertEqual(session, [])
+        shutil.rmtree(self.tmp / "data")
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        shutil.rmtree(root / "shell")
+        elsewhere = self.private(self.tmp / "elsewhere")
+        (elsewhere / "sh_9.out").write_text("z")
+        os.symlink(elsewhere, root / "shell")  # the store replaced by a symlink: never followed, never tolerated
+        unexpected, _, session = self.classify(root, before)
+        self.assertIn("shell", unexpected)
+        self.assertIn("shell/", unexpected)
+        self.assertNotIn("shell/sh_9.out", unexpected + session)
+        self.assertEqual(session, [])
+
+    def test_names_with_dot_segments_are_never_report_only(self):
+        diff = dict(added=["shell/../auth.json", "tool-output/./x", "shell//x"], removed=[], changed=[])
+        self.assertEqual(safety.session_output(diff, {}, {}), [])
+
+    def test_the_run_counts_session_output_without_names(self):
+        home = self.private(self.tmp / "home")
+        data = home / ".local" / "share" / "opencode"
+        (data / "shell" / "abc").mkdir(parents=True)
+        run = live.Run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
+                       purpose="chatgpt", chatgpt_model="openai/gpt-test-mini#low")
+        with patch.dict("os.environ", HOME=str(home)):
+            before, report = run.snapshot_user_dirs(), run.report_only_home()
+            self.touch(data / "shell" / "abc" / "sh_1.out")
+            run.compare_user_dirs(before, report)
+        self.assertEqual(run.results["blockers"], [])
+        entry = run.results["user_dirs"]["opencode"][".local/share/opencode"]
+        self.assertEqual((entry["unexpected_count"], entry["session_output_count"]), (0, 1))
+        self.assertNotIn("sh_1.out", json.dumps(run.results))
 
 
 class ProbeStructureTests(StageHarness):

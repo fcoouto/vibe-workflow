@@ -89,6 +89,7 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   Do not use `python3 -m tests.qualification.opencode_live`: importing the `tests` package as the main module makes `tests/__init__.py` redirect `HOME` to a temporary directory. The real-directory snapshots and the server environment would then use that temporary home. Every live mode therefore refuses to start, with exit 2 and before anything starts, when `HOME` is not the current user's home from the password database.
 - **Untested live:** `prepare` for the explicit `openai` choice (harness `opencode provider openai`, pool `chatgpt-sub`) is unit-tested against the real `scripts/routing.py` on a temporary store, but has never run on OpenCode. The unit tests stub the server start and the plugin-chain probes.
 - **The user's directories.** The run also watches `~/.codex` (top level only: names and mtimes, never contents) and `~/.config/openai`. A change to `~/.codex/auth.json`, `config.toml` or any top-level file named like auth, token or credential, or any change under `~/.config/openai`, fails the run. Other `~/.codex` changes are the running Codex app's own, so they are counted and reported, not failed. `~/.claude` and `~/.opencode` stay report-only as before.
+- **The user's OpenCode directories:** see [the final rules](#the-users-opencode-directories-final-rules) below. They were first added after the 21:47 run for `shell/` and `tool-output/`, then revised after attempt 4 and in the third review.
 - **Request (1 call).** One titled session (so no title request) with `Reply with exactly: OK` goes through the full managed handshake. Then `descendants`, accounting (subscription: tokens only, cost null), `record complete`, `detach` and `status`. The run stops after the first successful request. The 3 remaining calls are reserved for retries, title or compaction observations only with the coordinator's go, and the harness does not send them by itself.
 - **Pass:** exactly one `primary` request, null costs, settlement `window`, `detach` succeeded, and `status` is clean.
 - **Recorded:**
@@ -98,7 +99,149 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
 - **Codex window: not read.** The repository has no standalone reader of the Codex `account/rateLimits/read` (`scripts/usage_codex_host.js` is a host bridge that receives limits from the Codex app), so the before and after windows are `unobserved`.
 - **Observed:**
   - **Attempt 1** (9 November 2026, 21:05 CET, harness `3a3ee91`, `--chatgpt-model auto`) stopped at its first step with the blocker "the openai integration offers no 'Sign in with ChatGPT' OAuth method". 0 calls were spent (chatgpt 0 of 4), no sign-in happened, and cleanup was verified. See [the diagnosis](#chatgpt-sign-in-method-lookup-diagnosis).
-  - The request run itself has not run yet.
+  - **Attempt 2** (9 November 2026, 21:47 CET, `--chatgpt-model auto`):
+    - **Observed:** the "Sign in with ChatGPT" flow through the isolated server completed with the user's interactive browser sign-in. OpenCode then listed 18 `openai` models: `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`, each with a `-fast` twin. None had cost metadata, and none matched a name hint.
+    - **`auto` refused as designed,** before any reservation: 0 calls, chatgpt 0 of 4. On a listing without costs or hints, an explicit `--chatgpt-model` is required; the coordinator will pass `openai/gpt-5.5`.
+    - **False positive:** the post-run check reported "the user's .local/share/opencode changed during the run". The unexpected names were `shell/<project>/sh_*.out` files written for the coordinator's own OpenCode session, now report-only under the rule above.
+    - **Unobserved:** the request.
+  - **Attempt 3** (9 November 2026, 21:51 CET, run `chatgpt-c8f09645`, `--chatgpt-model openai/gpt-5.5`):
+    - **Observed:**
+      - the sign-in through `chatgpt-token-sharing` completed, and 18 models were listed; gpt-5.5 had 5 variants, and the lowest, `none`, was used;
+      - one primary request was transmitted through the shim after the full managed handshake (`health` ok, `dispatch`, `attach`): the hooks show `model.request` pre and post `transmit`, kind `primary`, model `gpt-5.5`, variant `none`;
+      - the ledger stands at chatgpt **1 of 4**;
+      - accounting found no assistant message and no tokens: unknown `message_tokens_missing`, `no_requests`, `title_unknown`, with no settlement and failures `not_one_primary_request` and `not_settled`;
+      - `status` was clean, `native.rateLimit` was absent, and `descendants` was complete.
+    - **Unobserved:** the upstream outcome. The harness recorded nothing about why there was no reply, and the isolated directory is deleted after the run.
+  - **Attempt 4** (9 November 2026, 23:51 CET, harness `7d6ff43`, `--chatgpt-model openai/gpt-5.5`):
+    - **Observed:** the sign-in completed, and the request was transmitted again (chatgpt **2 of 4**).
+    - **The harness withheld its own results:** "refused to write output: 2 unsanitized fragments", with `facts_withheld` `pattern:hex` and `pattern:token`. The skeleton also carried the blocker "the user's .local/share/opencode changed during the run".
+    - **Cause, reproduced offline:** both fragments were the harness's own `user_dirs.opencode[".local/share/opencode"].unexpected[*]` entries. These are names under `snapshot/<40-hex git hash>/objects/…` written by other running OpenCode sessions. The check failed on them and recorded them, and their hashes matched both patterns. The `sha256` prefixes and `<code:…>` values (12 hex characters) did not match.
+    - **Unobserved:** the upstream outcome, because the diagnostics were lost with the isolated directory.
+  - **Fixed before attempt 5:**
+    - Concurrent-session churn is report-only, with counts only (rule below).
+    - Recorded names of unexpected changes are masked.
+    - A new end-to-end test runs the whole ChatGPT stage on the stand-in server (upstream error, no reply, success; with concurrent sessions writing) and requires the complete results file to pass the leak check with no blocker.
+- **The user's OpenCode directories: final rules** (after attempt 4 and the third review; `tests/qualification/user_dirs.py`). <a id="the-users-opencode-directories-final-rules"></a> The check reads names and modification times only, never contents.
+  - **Why some churn is tolerated.** Other running OpenCode sessions, both the coordinator's and the user's, write to these directories during a run. Around attempt 4 that was `log/` (2), `snapshot/` (1), `worktree/` (2), `shell/` (29) and the database, among 7,641 entries. A names-and-mtimes check cannot tell their writes from the isolated server's.
+  - **`~/.local/share/opencode`, counted as `concurrent_session_churn` by store (never file names):**
+    - added or rewritten files, and added directories, inside `log/`, `snapshot/`, `worktree/`, `repos/`, `storage/`, `shell/` and `tool-output/`;
+    - a recognized store directory created during the run;
+    - the database files, and deletions of single files or subdirectories inside the stores: in `shell/`, `tool-output/`, `log/` and `snapshot/` they are counted as `pruned`, OpenCode's own retention.
+
+    Added or rewritten files in `shell/` and `tool-output/` must be plain files with a single link. Each failing entry is recorded with a reason code in `unexpected_reasons` (for example `deleted_db`, `deleted_store`, `deleted_snapshot_tree`, `sensitive_name`, `outside_stores`, `not_plain_single_link`, `symlink_or_dot_segment`, `own_id`).
+  - **`~/.local/share/opencode`, fails the run:**
+    - deleting `opencode.db`, a store directory or a whole `snapshot/<hash>/` tree;
+    - any other file or directory directly in the data directory, such as `auth.json`, `mcp-auth.json` or any `*.json`;
+    - symlinks, and names with `.`, `..` or empty segments;
+    - names with a part `auth`, `token(s)`, `credential(s)`, `config`, `settings`, `keychain`, `secret(s)`, `key(s)`, `apikey`, `pem` or `env`. Parts are split on `-`, `_` and `.`, so `author` or `monkey` don't count. Inside repository checkouts and package trees (`worktree/`, `repos/`, `node_modules/`, `npm/`), only the exact sensitive files fail: `auth.json`, `mcp-auth.json`, `.env*`, `*.pem` and `*.key`;
+    - any NEW name that contains one of this run's own session or message ids. The harness keeps those ids in memory, and the name is recorded only as a placeholder.
+  - **`~/.cache/opencode` and `~/.local/state/opencode`:** counted, except the same sensitive names (cache: without `config`/`settings`; package names under `npm/` and `node_modules/` such as `js-tokens` stay counted), names with this run's ids, symlinks and dot segments.
+  - **`~/.config/opencode`:** strict, except the desktop app's own database and logs.
+  - **What this proves and what it does not.**
+    - `isolated_store`, recorded on the success and the timeout paths, shows that the isolated server wrote its own store under `<isolated>/data/opencode`, where XDG pinning sends it.
+    - The own-ids check shows that no NEW file or directory named after this run's sessions or messages appeared in the user's real stores.
+    - Neither proves that nothing reached the user's real `opencode.db`: the harness never opens or queries that database, and a write into it would not be visible. Isolation therefore rests on XDG pinning, these strict rules, the own-ids names check and the isolated server's own store together.
+  - **Pre-flight:** OpenCode seems to prune old `shell/` output after about 37 hours. A prune during a run fails the run safely, but wastes its calls. Avoid starting a run when outputs from about 37 hours earlier may be pruned during it.
+- **Writing the results** (`tests/qualification/outputs.py`):
+  - The results are redacted twice, so a secret the Redactor learns partway through its first pass is removed everywhere.
+  - A live run refuses an `--out` inside any repository: results are committed only after the operator reads them.
+  - A skeleton is itself leak-checked; if it still matches, a fixed minimal record is written instead (blocker count, cleanup status, ledger totals, `results_withheld: true`).
+  - The withheld directory and file are never symlinks and never inside a repository (`O_EXCL | O_NOFOLLOW`).
+- **When the leak check refuses the results file,** nothing is destroyed. The full masked results are written to `~/.local/state/vibe-workflow-qualification/withheld/<run-id>.json` (next to the durable ledger: directory 0700, file 0600, outside every repository and the isolated directory), and the path is printed. The skeleton written to `--out` names each flagged fragment only by its JSON path and kind. **Operator step:** read the withheld file, judge it, never commit it, and delete it afterwards.
+- **`request_outcome_summary`** (recorded even when the facts are withheld), built from integers and fixed enumerations only:
+  - `transmitted_count`, the number of assistant messages, those with tokens and those with an error;
+  - `finish` from the schema set (`stop`, `length`, `tool-calls`, `content-filter`, `error`, `unknown`);
+  - `error_type` from the known codes and error classes, else `<other>`;
+  - `session_status`, `idle_outcome`, `wait_seconds`, and `end_reason` (`idle` or `timeout`).
+- **Budget:** the run needs 3 `chatgpt` calls remaining (2 probe exposures, normally 0 sent, and 1 request). With 2 of 4 spent it refuses, and the message states what remains, what is needed, and that a raise needs the user's approval through `--set-cap`. On 10 November 2026 at about 00:05 CET the user approved raising the `chatgpt` maximum from 4 to 6 (the code constant now records it). The cap itself rises only through the recorded `--set-cap chatgpt 6` line, which the coordinator runs after the merge.
+  - **Attempts 5 and 6** (10 November 2026; attempt 6 at 00:22 CET with harness `adb61ff`, `--chatgpt-model openai/gpt-5.5`, lowest variant `none`). <a id="chatgpt-attempts-5-and-6"></a>
+    - **Observed:**
+      - the sign-in through `chatgpt-token-sharing` completed, and 18 `openai` models were listed without cost metadata;
+      - the full managed handshake ran (`health` ok, `dispatch`, `attach`, guard and shim proof), and one primary request was transmitted;
+      - OpenAI refused it with HTTP 400 `model_not_found` (type `invalid_request_error`): "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account." The assistant message had `finish: error`, there were no tokens, and the wait was 1.5 s;
+      - `native.rateLimit` was absent, `status` clean, `isolated_store` ok, and `descendants` complete;
+      - the results were written in full;
+      - the ledger stands at chatgpt **3 of 6**.
+    - **Unobserved:** a successful ChatGPT request, `native.rateLimit`, and the Codex window.
+    - **False blocker:** the run also raised a false "`.local/share/opencode` changed" blocker. The unexpected entries were four `shell/<project>/sh_*.out` files that OpenCode itself had pruned; deletions inside `shell/` had been made failing in the third review. Such pruning is now counted as `pruned` churn (below).
+  - **Lesson: a listed model is not an entitled model.**
+    - The token-sharing plugin lists the fixed set `bV` (18 ids, 2.2.6 binary about offset 156944524) without consulting the account.
+    - The refusal text is not in the binary, so it comes from OpenAI.
+    - OpenCode's own rule for its legacy Codex-with-ChatGPT sign-ins (`opencode.provider.openai`, about offset 157035620: `if(IH.has(q)||!A||!(M>5||M===5&&P>5)){x.enabled=!1;...}` with `IH = {"gpt-5.6"}`) enables only `gpt-N.M` above 5.5, and never the exact id `gpt-5.6`.
+    - **Of the 18 listed ids, that rule allows 16** (all except `gpt-5.5` and `gpt-5.5-fast`). That matches the refusal, but whether the token-sharing route applies the same rule cannot be proven offline (medium confidence).
+    - **Public prices** (models.dev, read 2026-11-10, input + output per million tokens): `gpt-6-luna` 0.6, `gpt-5.6-luna` 1.4, `gpt-6.1-terra` 6, `gpt-6-sol` and `gpt-6.1-sol` 12, `gpt-5.6-terra` 14, `gpt-5.6-sol` 24, `gpt-5.5` 35, `gpt-6-astra` 60. The `-fast` twins have no entry, which fits a priority tier of the same model but is not evidence.
+    - **The user reports that GPT-6 Luna works on their account.**
+    - **Recommended order:** `openai/gpt-6-luna`, `openai/gpt-5.6-luna`, `openai/gpt-6.1-terra`, each with its lowest listed variant. `none` is OpenCode's normal "no reasoning" effort, and the refusal was about the model, not the variant.
+  - **Attempt 7: pass** (10 November 2026, 00:40 CET, harness `942da99`, `--chatgpt-model openai/gpt-6-luna`; [results](../tests/fixtures/smart-routing/probes/chatgpt-attempt7-results.json); attempt 6's are in [`chatgpt-attempt6-results.json`](../tests/fixtures/smart-routing/probes/chatgpt-attempt6-results.json)).
+    - **Observed: the ChatGPT-via-OpenCode subscription route works end to end through the managed handshake for `gpt-6-luna`.**
+      - The sign-in went through `chatgpt-token-sharing`.
+      - One primary request on `gpt-6-luna#none` finished with `stop` after 2.5 s.
+      - Tokens were recorded: input 708, output 5, reasoning 0, cache 0. Cost was null, so there was no dollar charge, and there was no title request.
+      - The subscription hold settled as a window settlement; accounting had no unknowns.
+      - `status` was clean, `isolated_store` ok, `descendants` complete, and cleanup verified. There were no blockers or failures.
+      - Concurrent-session churn was counted, not failed: `{db: 2, log: 1, pruned: 1, shell: 1}`.
+      - The ledger stands at chatgpt **4 of 6**.
+    - **Not observed:**
+      - OpenCode's `native.rateLimit`, which was absent on this route;
+      - whether the Codex weekly window moved (no reader) or whether this route shares Codex's pool;
+      - the multi-model fallback live;
+      - any model other than `gpt-6-luna` succeeding.
+    - **The entitlement lesson in short:** OpenCode lists a hard-coded set of 18 ids; `gpt-5.5` was refused (400 `model_not_found`); `gpt-6-luna` was accepted.
+  - **Changed for attempt 7:**
+    - `auto` excludes versioned `gpt` ids that the Codex-with-ChatGPT rule disables (`not_codex_chatgpt`) and ranks by the recorded public prices.
+    - The refusal is classified as `model_not_supported_for_account`: `model_not_found` with that text, apart from `request_failed_upstream`.
+    - `--chatgpt-model A,B,C` (at most 3 openai models, each listed) tries the candidates in order within the same sign-in. It moves on only after `model_not_supported_for_account`; any other outcome (success, another error, a guard block, a timeout) stops. Each attempt has its own write-ahead reservation of 1 call, its own new session and derived ids, and the guard route switched to that model alone. The budget check requires `remaining >= candidates + 2`. The results keep each attempt under `attempts`, and the last one also at the top level.
+    - The user-directory rules count OpenCode's own pruning of `shell/`, `tool-output/`, `log/` and `snapshot/` entries as `pruned` churn, and give each failing entry a reason code (`unexpected_reasons`).
+  - **Tightened after attempt 7** (fourth review):
+    - every fallback candidate and its variant must be listed before the first reservation;
+    - earlier attempts' records survive a later failure;
+    - a guard block stops the fallback;
+    - `model_not_supported_for_account` needs HTTP 400, `model_not_found` and OpenAI's text;
+    - the Codex-with-ChatGPT rule applies only to well-formed ids (`gpt-<digit>[.<digit>]` plus at most two lowercase suffixes);
+    - `auto` records the public price snapshot date and warns when it is older than 30 days.
+- **Recorded for the next run (added after attempt 3, before any further run).** After the managed request goes idle, and also when the wait fails, the results get sanitized `session_facts`:
+  - **Messages:** the session's messages counted by type, and whether the user message exists.
+  - **Each assistant message:**
+    - `finish` and `rawFinish`;
+    - its structured error: `type`, HTTP `status`, `retryAfterMs`, and a redacted, URL-free `message` of at most 200 characters. For the error body, the whitelisted fields `code`, `error`, `error_description`, `message`, `reason`, `param` and `type`, its key names, its length, and the known refusal codes it contains;
+    - its retry marker (`attempt` and error);
+    - whether `time.completed` and `time.streamed` exist;
+    - integer token values by key, whether a cost exists, the model's provider, id and variant, and its content part types.
+  - **Idle records:** outcome and error type.
+  - **Events:** the session's `session.status` (type, retry attempt, short message) and `session.error` / `message.updated` error events.
+  - **HTTP:** the statuses and key names of `GET` session and messages.
+  - **The request:** the exact key names of the prompt body the harness sent (`id`, `text`), the variant used and the variants listed.
+  - **The wait:** its duration and the reason it ended.
+
+  A transmitted request that the upstream refused or failed is reported as `request_failed_upstream` with `upstream_error` (a known code, the body's code or type, or the error type). It is no longer reported as `not_one_primary_request`. A request our own guard or the shim blocked, for example a retry stopped by `qualification guard (guard_budget)` or `routing: blocked (<reason>)`, is reported as `request_blocked_by_guard` with `guard_block`. It is never reported as an upstream refusal; both appear when a refused request's retry was then blocked.
+
+  **Strict masking** (`tests/qualification/sanitize.py`, after both PR #182 security reviews). The results are committed, so every recorded string in `session_facts` (and in the sign-in refusal record) is handled as follows:
+  - **Normalized first:** zero-width characters are dropped, and percent- or HTML-encoded `@` and `-` are decoded. Each input is cut to 8 KB before masking, and every pattern is bounded, so adversarial 1 MB inputs finish in well under a second (tested).
+  - **Masked with a typed placeholder** (`<redacted:email>`, `:id`, `:key`, `:jwt`, `:credential`, `:uuid`, `:url`, `:path`, `:ip`, `:model`, `:hex`, `:token`):
+    - emails, including non-ASCII and dotless ones (`alice@localhost`);
+    - ids after `org`, `user`, `acct`, `proj`, `sess`, `ses`, `req`, `resp`, `chatcmpl`, `msg`, `thr`, `cred`, `file`, `asst`, `run`, `batch` or `cus` in any case. After a hyphen, a body of 6 or more characters is masked whatever it looks like; after an underscore, it is masked when random-looking or one word of 8 or more characters;
+    - any `sk-`/`sk_` value, including masked fragments such as `sk-proj-****abcd`, and `ft:` model names;
+    - JWTs, and `Bearer`, `Basic` or `Token` credentials;
+    - UUIDs, IPv4 addresses and IPv6 addresses (also compressed), and home paths;
+    - runs of 20 or more hex characters, and random-looking base64 runs of 16 or more characters (camelCase names such as `assistantMessageID` are not random-looking).
+  - **Key names:** recorded only from a fixed allow-list of OpenCode and OpenAI schema names; any other name is `<key>`.
+  - **Code values** (`code`, `type`, `error`): kept verbatim only when they are one of the known refusal or error codes, or (for error types) one of the error class names in the 2.2.6 binary. Any other value becomes `<code:` plus a 12-hex hash of its masked form, so repeats can be matched.
+  - **Message and status types:** kept only from the 2.2.6 schema sets; anything else is `<other>`.
+  - **Messages:** keep the masked text (at most 200 characters), `masked: true` when anything was replaced or cut, a 12-hex SHA-256 prefix of the **masked** text, and the known codes they contain.
+  - **Fail closed:**
+    - If the finished facts still match any pattern or a known secret, the whole block is `{facts_withheld: [kinds]}`.
+    - If reading or sanitizing fails on an unexpected shape, the block is `{facts_withheld: ["facts_error:<ExceptionType>"]}`, and the run still settles, accounts and cleans up.
+    - The final leak check on the results file uses the same patterns. When it refuses, the harness writes a skeleton instead: masked blockers, the cleanup status, the call-ledger totals and the leak kinds.
+  - **The login's identity:** after the sign-in, every identity value the server API itself returns is added to the redactor's secrets in memory, so an echo in any recorded text becomes `<secret>`. That covers claims in an attempt status that carries tokens, decoded without verification, and connection labels that look like an email, id or name. Nothing is logged, and no credential or auth file is read. The 2.2.6 attempt-status schema carries no tokens, so in practice the source is the connection label; if that label is generic, the identity is not known to the harness.
+  - **Known gaps** (best effort, not detected):
+    - personal, plan or workspace names in prose, such as "ChatGPT Plus for Alice" or a workspace called "Acme Research";
+    - phone numbers and postal addresses;
+    - encoded secrets shorter than 16 characters, and secrets split across fields;
+    - homoglyphs, such as a Cyrillic letter inside an id prefix;
+    - identifiers without a known prefix or a random shape.
+
+    **The operator must read the sanitized results before committing them.**
+- **The variant `none` is kept.** In OpenCode 2.2.6, `none` is the first value of its own `ReasoningEffort` set (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), and the ChatGPT model list carries `supported_reasoning_levels`. So `none` is a normal variant meaning "no reasoning", not a placeholder. If the recorded error points at the reasoning effort (for example `unsupported_value` with `param` `reasoning.effort`), the next run should name another listed variant explicitly.
 
 ### ChatGPT sign-in method lookup (diagnosis)
 

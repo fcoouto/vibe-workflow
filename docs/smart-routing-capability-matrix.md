@@ -135,7 +135,7 @@ Open P0.8 item: the live event stream flagged `version_changed` on every session
 
 | Gate | Status | Basis |
 |---|---|---|
-| P0.0 Billing/terms | **partly established** | Route table above. The reference route stays disputed; ChatGPT-via-OpenCode and API grant debit order need live checks. |
+| P0.0 Billing/terms | **partly established** | Route table above. The reference route stays disputed. ChatGPT-via-OpenCode was observed live on 10 November 2026 for `gpt-6-luna` on the user's plan: subscription usage with no cost (null) and a window settlement. Whether it draws on Codex's pool, and the ChatGPT usage page entry, are unverified. The API grant debit order still needs a live check. |
 | P0.1 Source/runtime | **partly established** | Latency is in the committed fixtures; the loader and test-runner findings † are observed, not committed. The workflow baseline was recorded in Task 0.1. |
 | P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
 | P0.3, P0.4 API grants and key binding | unverified | Not probed. |
@@ -146,7 +146,7 @@ Open P0.8 item: the live event stream flagged `version_changed` on every session
 
 ## Live checks still open
 
-1. **OpenCode with ChatGPT** needs quota. The user's Codex weekly window is exhausted until about 2026-11-10, so no Codex or ChatGPT calls were made. Check the ChatGPT usage page for an OpenCode entry and its credits setting, and read the Codex rate limits before and after one request.
+1. **OpenCode with ChatGPT:** partly observed on 10 November 2026 ([report](smart-routing-qualification.md#chatgpt-attempts-5-and-6)). Sign in with ChatGPT through an isolated server works end to end for `gpt-6-luna`: one request, tokens recorded, window settlement, no dollar charge. `gpt-5.5`, listed by OpenCode, was refused with 400 `model_not_found`, so a listed model is not an entitled one. Still open: the ChatGPT usage page entry and its credits setting, whether the route shares Codex's pool (the Codex rate limits before and after one request; there is no reader), and `native.rateLimit`, which this route does not report.
 2. **Reference route billing.** Confirm in claude.ai usage that one request through the Claude Agent provider raised the plan meter and left extra usage unchanged. The `rate_limit_event` fields (`rateLimitType`, `overageStatus`) are the signals.
 3. **API grants.** Before any call, confirm purchased balance is zero and auto-reload is off. Make one tiny call with a key from the linked organization and check each vendor's billing page for the grant balance and expiry.
 4. **Plan tier.** Grant and sign-in eligibility depend on the exact plans, which should be recorded per account.

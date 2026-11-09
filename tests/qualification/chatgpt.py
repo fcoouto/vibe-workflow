@@ -10,14 +10,17 @@ harness writes only the URL, mode and instructions to a state file and to stdout
 Codex rate limits are NOT read: the repository has no standalone reader of `account/rateLimits/read` (only a
 fixture and a host bridge that receives limits from the Codex app), so the before/after window is unobserved here.
 """
+import base64
+import datetime
 import json
 import math
 import os
 import re
 import time
 
-from tests.qualification import probe_stages
-from tests.qualification.safety import Blocker, Refused, check_route, parse_route
+from tests.qualification import probe_stages, sanitize
+from tests.qualification.safety import MAX_CAPS, PROMPT_TEXT, Blocker, Refused, check_route, parse_route
+from tests.qualification.user_dirs import isolated_store
 
 PURPOSE = "chatgpt"
 INTEGRATION = "openai"
@@ -37,8 +40,20 @@ HINTS = ("nano", "mini", "small")
 AUTO_RULE = ("openai provider only; chat (type absent or chat, text in and out when listed, enabled, not deprecated, "
              "no image/embedding/audio/transcription/tts/realtime/moderation/search-preview/deep-research/computer-use name); at least two variants "
              "with one in the known order; cheapest untiered input+output catalog cost per million (missing or zero = "
-             "unknown, last); then nano, mini, small in the id; then the id; lowest variant; refused when the pick has "
-             "neither a cost nor a hint")
+             "unknown, then the recorded public price, last); versioned gpt ids only when the Codex-with-ChatGPT rule "
+             "allows them (above 5.5, not gpt-5.6); then nano, mini, small in the id; then the id; lowest variant; "
+             "refused when the pick has neither a cost nor a hint")
+# Listing is not entitlement (attempt 6: gpt-5.5 listed, then refused upstream). The token-sharing plugin lists a
+# fixed set of 18 ids (`bV` in the 2.2.6 binary, about offset 156944524) without checking the account. OpenCode's own
+# rule for the legacy Codex-with-ChatGPT sign-ins (`opencode.provider.openai`, about offset 157035620) enables only
+# `gpt-N.M` above 5.5 and never the exact id `gpt-5.6`: `if(IH.has(q)||!A||!(M>5||M===5&&P>5)){x.enabled=!1;...}`.
+UNSUPPORTED_TEXT = "not supported when using Codex with a ChatGPT account"
+# Public catalog prices (models.dev, read 2026-11-10; input + output USD per million tokens): the ChatGPT listing has
+# no costs, so `auto` ranks by these; ids without an entry (the `-fast` twins) sort last.
+PUBLIC_COST_DATE = "2026-11-10"  # recorded with every auto selection; older than 30 days: a warning to refresh it
+PUBLIC_COST = {"gpt-6-luna": 0.6, "gpt-5.6-luna": 1.4, "gpt-6.1-terra": 6, "gpt-6-sol": 12, "gpt-6.1-sol": 12,
+               "gpt-5.6-terra": 14, "gpt-5.6-sol": 24, "gpt-5.5": 35, "gpt-6-astra": 60}
+MAX_CANDIDATES = 3
 CODEX_WINDOW = "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)"
 
 
@@ -84,9 +99,44 @@ def sign_in_error(body):
     """`(error fields, key names)` of a sign-in attempt's final status: short plain strings of `ERROR_FIELDS`, already
     redacted, never a URL; every other field contributes its name only."""
     body = body if isinstance(body, dict) else {}
-    error = {k: body[k][:ERROR_CAP] for k in ERROR_FIELDS
+    error = {k: sanitize.text(body[k], ERROR_CAP) for k in ERROR_FIELDS
              if isinstance(body.get(k), str) and body[k].strip() and "://" not in body[k] and body[k] != "<secret>"}
-    return error, sorted(str(k)[:40] for k in body)[:30]
+    return error, sanitize.safe_keys(body, 30)
+
+
+IDENTITY_CLAIMS = ("email", "name", "given_name", "family_name", "preferred_username", "nickname", "sub",
+                   "chatgpt_account_id", "chatgpt_user_id", "user_id", "account_id", "org_id", "organization_id")
+
+
+def _claims(token):
+    """A JWT's payload claims, decoded in memory without verification; {} for anything else."""
+    parts = token.split(".") if isinstance(token, str) else []
+    if len(parts) != 3 or not parts[1]:
+        return {}
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def identity_secrets(run, body, labels=()):
+    """The ChatGPT login's identity, as far as the server API exposes it (an attempt status that carries tokens, the
+    connection labels), added to the redactor's secrets in memory so an echo in any recorded text becomes `<secret>`.
+    Nothing is logged or stored, and no credential file is read."""
+    found = []
+    for key in ("access", "id_token", "access_token"):
+        claims = _claims((body or {}).get(key) if isinstance(body, dict) else None)
+        nested = [claims] + [v for v in claims.values() if isinstance(v, dict)]
+        for scope in nested:
+            found += [scope.get(name) for name in IDENTITY_CLAIMS]
+            found += [org.get("id") for org in scope.get("organizations") or [] if isinstance(org, dict)]
+    for label in labels:
+        if isinstance(label, str) and (sanitize.mask(label)[1] or " " in label.strip()):
+            found += [label] + [part.strip("()<>[],;") for part in label.split()]
+    for value in found:
+        if isinstance(value, str) and len(value.strip()) >= 3 and value not in run.redact.secrets:
+            run.redact.add_secret(value.strip())
 
 
 def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=time.monotonic, announce=print):
@@ -112,6 +162,7 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
     while True:
         polls += 1
         _, body, _ = run.server.request("GET", path)
+        identity_secrets(run, run.data(body))  # before redaction replaces the tokens: in memory only
         state = run.redact(run.data(body) or {}).get("status")  # anything credential-like is redacted and remembered
         if state != "pending":
             break
@@ -126,7 +177,9 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
         detail = error.get("message") or ", ".join("%s=%s" % item for item in sorted(error.items())) or "no reason given"
         raise Blocker("the ChatGPT sign-in ended with status %s: %s (fields: %s)" % (final, detail, ", ".join(keys)))
     _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
-    connections = len((run.data(info) or {}).get("connections") or [])
+    listed = (run.data(info) or {}).get("connections") or []
+    identity_secrets(run, None, [c.get("label") for c in listed if isinstance(c, dict)])
+    connections = len(listed)
     if not connections:
         raise Blocker("no ChatGPT connection is listed after the sign-in")
     run.server.request("POST", "/api/location/reload")
@@ -146,6 +199,21 @@ def catalog_cost(model):
     return min(totals) if totals and min(totals) > 0 else None
 
 
+def today():
+    return datetime.date.today()
+
+
+def codex_chatgpt_allowed(model_id):
+    """OpenCode 2.2.6's own Codex-with-ChatGPT rule (`gpt-N.M` above 5.5, never the exact id `gpt-5.6`), applied
+    only to well-formed ids: `gpt-<one-digit major>[.<one-digit minor>]` plus at most two lowercase suffixes of 2-10
+    letters (`gpt-6-luna`, `gpt-6.1-terra-fast`); anything else (`gpt-5.50`, `gpt-6x`, `gpt-10.0-a-b`) is not allowed."""
+    match = re.fullmatch(r"gpt-([1-9])(?:\.(\d))?(?:-[a-z]{2,10}){0,2}", model_id) if isinstance(model_id, str) else None
+    if not match or model_id == "gpt-5.6":
+        return False
+    major, minor = int(match.group(1)), int(match.group(2) or 0)
+    return major > 5 or (major == 5 and minor > 5)
+
+
 def exclusion(model):
     """Why an openai model is not an `auto` candidate, or None."""
     caps = model.get("capabilities") if isinstance(model.get("capabilities"), dict) else {}
@@ -162,7 +230,14 @@ def exclusion(model):
         return "variants"
     if not any(v in VARIANT_ORDER for v in variants):
         return "variant_order"
+    if re.match(r"gpt-\d", str(model.get("id"))) and not codex_chatgpt_allowed(model.get("id")):
+        return "not_codex_chatgpt"  # a versioned gpt id the Codex-with-ChatGPT rule disables
     return None
+
+
+def ranked_cost(model):
+    cost = catalog_cost(model)
+    return cost if cost is not None else PUBLIC_COST.get(model.get("id"))
 
 
 def hint(model_id):
@@ -175,12 +250,16 @@ def auto_select(listed, announce, note):
     openai = [m for m in listed if m.get("providerID") == "openai" and isinstance(m.get("id"), str)]
     excluded = {m["id"]: exclusion(m) for m in openai if exclusion(m)}
     candidates = sorted((m for m in openai if m["id"] not in excluded),
-                        key=lambda m: (catalog_cost(m) if catalog_cost(m) is not None else math.inf, hint(m["id"]), m["id"]))
+                        key=lambda m: (ranked_cost(m) if ranked_cost(m) is not None else math.inf, hint(m["id"]), m["id"]))
     ids = [m["id"] for m in candidates]
-    record = dict(mode=AUTO, rule=AUTO_RULE, candidates=ids, excluded=excluded,
+    stale = (today() - datetime.date.fromisoformat(PUBLIC_COST_DATE)).days > 30
+    if stale:
+        announce("chatgpt auto: the recorded public prices (%s) are older than 30 days; refresh PUBLIC_COST" % PUBLIC_COST_DATE)
+    record = dict(mode=AUTO, rule=AUTO_RULE, candidates=ids, excluded=excluded, public_cost_date=PUBLIC_COST_DATE,
+                  public_cost_stale=stale,
                   other_providers=sum(1 for m in listed if m.get("providerID") != "openai"),
-                  costs={m["id"]: catalog_cost(m) for m in candidates})
-    if not candidates or (catalog_cost(candidates[0]) is None and hint(ids[0]) == len(HINTS)):
+                  costs={m["id"]: ranked_cost(m) for m in candidates})
+    if not candidates or (ranked_cost(candidates[0]) is None and hint(ids[0]) == len(HINTS)):
         note(PURPOSE, "model_selection", dict(record, selected=None))
         announce("chatgpt model candidates: %s" % (", ".join(ids) or "none"))
         reason = "no candidate" if not candidates else "the cheapest candidate is ambiguous (no cost, no name hint)"
@@ -222,7 +301,7 @@ def select_model(run, announce=print):
         announce("chatgpt model selected: %s (rule: %s)" % (selection["selected"], AUTO_RULE))
         write_state(run, selection=dict(selected=selection["selected"], rule=AUTO_RULE, candidates=selection["candidates"]))
     run.note(PURPOSE, "model_selection", selection)
-    run.route, run.guard_variant = route, others[0]
+    run.route, run.guard_variant, run.chatgpt_variants = route, others[0], [str(v)[:40] for v in variants][:10]
     run.server.write_control(route=list(route))
     run.note(PURPOSE, "model", dict(listed=True, variants=len(variants),
                                     openai_models=sum(1 for m in listed if m.get("providerID") == "openai")))
@@ -242,19 +321,269 @@ def lowest_variant(listed, ref):
     return known[0]
 
 
+# Sanitized facts about what the server returned for the managed request, so one run can tell an upstream refusal,
+# an invalid variant, a wrong request shape and a harness cut apart. OpenCode 2.2.6 shapes (binary): an assistant
+# message has finish, rawFinish, cost, tokens, error and retry {attempt, at, error}; an idle record has outcome
+# (succeeded, failed, interrupted) and error; errors are `Session.StructuredError` {type, message, status?,
+# response?: {body}, retryAfterMs?}; session status events are idle, busy or retry {attempt, message, next}.
+BODY_FIELDS = ERROR_FIELDS + ("param", "type")
+CODE_FIELDS = ("code", "type", "error")  # kept only as codes (sanitize.code_value)
+EVENT_TYPES = ("session.status", "session.error", "session.idle", "message.updated")
+STATUS_TYPES = ("idle", "busy", "retry")  # SessionStatus in 2.2.6
+FINISH = ("stop", "length", "tool-calls", "content-filter", "error", "unknown")  # the assistant `finish` set in 2.2.6
+END_REASONS = ("idle", "timeout")
+OUTCOMES = ("succeeded", "failed", "interrupted")
+MESSAGE_TYPES = ("user", "assistant", "idle", "synthetic", "system", "skill", "shell", "compaction", "agent-switched",
+                 "model-switched", "location-switched")  # Session.Message.Info in 2.2.6
+# Our own blocks, not upstream refusals: the qual-post guard and the routing shim name their reason in the error.
+GUARD = re.compile(r"qualification guard \((guard_[a-z_]{1,40})\)|routing: blocked \(([a-z_]{1,40})\)")
+
+
+def body_facts(run, raw):
+    """An upstream error body: whitelisted fields of its (inner) error object (codes verbatim only when code-like,
+    texts masked), allow-listed key names, the known codes it contains, its length."""
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = None
+    inner = parsed.get("error") if isinstance(parsed, dict) and isinstance(parsed.get("error"), dict) else parsed
+    inner = run.redact(inner) if isinstance(inner, dict) else {}
+    fields = {}
+    for key in BODY_FIELDS:
+        value = sanitize.code_value(inner.get(key)) if key in CODE_FIELDS else None
+        if value is None and key not in CODE_FIELDS:
+            value = sanitize.message(inner.get(key)) if key in ERROR_FIELDS else sanitize.text(inner.get(key), 80)
+        if value:
+            fields[key] = value
+    return dict(fields=fields, keys=sanitize.safe_keys(inner), codes=[c for c in sanitize.KNOWN_CODES if c in raw],
+                json=isinstance(parsed, dict), length=len(raw))
+
+
+def structured_error(run, error):
+    """A `Session.StructuredError`: its type (a class name or code), status, retry delay, masked message record, the
+    guard or shim reason when the block was ours, allow-listed key names and the body's facts."""
+    if not isinstance(error, dict):
+        return None
+    raw = (error.get("response") or {}).get("body") if isinstance(error.get("response"), dict) else None
+    clean = run.redact(error)
+    guard = GUARD.search(error.get("message")) if isinstance(error.get("message"), str) else None
+    return dict(type=sanitize.code_value(clean.get("type"), type_name=True), message=sanitize.message(clean.get("message")),
+                status=error.get("status") if type(error.get("status")) is int else None,
+                retry_after_ms=error.get("retryAfterMs") if type(error.get("retryAfterMs")) is int else None,
+                guard=(guard.group(1) or guard.group(2)) if guard else None, keys=sanitize.safe_keys(error),
+                body=body_facts(run, raw) if isinstance(raw, str) else None)
+
+
+def integer_tokens(tokens):
+    """Integer token counts by allow-listed key (one nesting level, as `cache.read`); other names are `<key>`."""
+    flat, name = {}, lambda key: str(key) if key in sanitize.SAFE_KEYS else "<key>"  # noqa: E731
+    for key, value in (tokens or {}).items() if isinstance(tokens, dict) else ():
+        if isinstance(value, dict):
+            for inner, number in value.items():
+                if type(number) is int:
+                    flat["%s.%s" % (name(key), name(inner))] = flat.get("%s.%s" % (name(key), name(inner)), 0) + number
+        elif type(value) is int:
+            flat[name(key)] = flat.get(name(key), 0) + value
+    return flat
+
+
+def assistant_facts(run, message):
+    model = message.get("model") if isinstance(message.get("model"), dict) else {}
+    retry = message.get("retry") if isinstance(message.get("retry"), dict) else None
+    times = message.get("time") if isinstance(message.get("time"), dict) else {}
+    return dict(finish=sanitize.text(message.get("finish"), 40), raw_finish=sanitize.text(message.get("rawFinish"), 80),
+                error=structured_error(run, message.get("error")), time_completed=bool(times.get("completed")),
+                time_streamed=bool(times.get("streamed")), tokens=integer_tokens(message.get("tokens")),
+                cost_present=message.get("cost") is not None,
+                model={k: sanitize.text(model.get(k), 80) for k in ("providerID", "id", "variant")},
+                retry=dict(attempt=retry.get("attempt") if type(retry.get("attempt")) is int else None,
+                           error=structured_error(run, retry.get("error"))) if retry else None,
+                content_types=sorted({sanitize.text(str(p.get("type")), 20) for p in message.get("content") or []
+                                      if isinstance(p, dict)}), keys=sanitize.safe_keys(message))
+
+
+def event_facts(run, root):
+    found = []
+    for event in (run.events.events if run.events else []):
+        data = event.get("data") if isinstance(event, dict) and isinstance(event.get("data"), dict) else {}
+        if event.get("type") not in EVENT_TYPES or data.get("sessionID") != root:
+            continue
+        status = data.get("status") if isinstance(data.get("status"), dict) else None
+        error = data.get("error") or ((data.get("info") or {}).get("error") if isinstance(data.get("info"), dict) else None)
+        if event["type"] == "message.updated" and not error:
+            continue
+        entry = dict(type=event["type"])
+        if status:
+            entry["status"] = {k: v for k, v in (("type", status.get("type") if status.get("type") in STATUS_TYPES else "<other>"),
+                                                 ("attempt", status.get("attempt") if type(status.get("attempt")) is int else None),
+                                                 ("message", sanitize.message(status.get("message")))) if v is not None}
+        if error:
+            entry["error"] = structured_error(run, error)
+        found.append(entry)
+    return found[:30]
+
+
+def session_facts(run, root, began, body, waited, wait_ms):
+    """What the server returned for the managed session: counts, kinds, allow-listed key names, codes and masked
+    short texts only. If anything identifying is still found, or anything fails while reading or sanitizing (an
+    unexpected shape), the whole block is withheld (fail closed) and the run continues."""
+    try:
+        return _session_facts(run, root, began, body, waited, wait_ms)
+    except Exception as error:  # noqa: BLE001 - the type name only; the run must still settle and clean up
+        return dict(facts_withheld=["facts_error:%s" % type(error).__name__])
+
+
+def _session_facts(run, root, began, body, waited, wait_ms):
+    status, session, _ = run.server.request("GET", "/api/session/%s" % root)
+    info = run.data(session) if status == 200 and isinstance(run.data(session), dict) else {}
+    http, page, _ = run.server.request("GET", "/api/session/%s/message" % root, query={"order": "asc"})
+    try:
+        messages = run.messages(root)
+    except Blocker:
+        messages = []
+    counts = {}
+    for message in messages:
+        kind = message.get("type") if isinstance(message, dict) and message.get("type") in MESSAGE_TYPES else "<other>"
+        counts[kind] = counts.get(kind, 0) + 1
+    recent = [m for m in messages if ((m.get("time") or {}).get("created") or 0) >= began]
+    facts = dict(session=dict(http=status, keys=sanitize.safe_keys(info),
+                              outcome=info.get("outcome") if info.get("outcome") in ("succeeded", "failed", "interrupted") else None),
+                 messages_http=http, messages_keys=sanitize.safe_keys(page),
+                 messages_by_type=counts, user_message=any(m.get("type") == "user" for m in messages),
+                 assistant=[assistant_facts(run, m) for m in messages if m.get("type") == "assistant"][:5],
+                 idle=[dict(outcome=m.get("outcome") if m.get("outcome") in ("succeeded", "failed", "interrupted") else None,
+                            error_type=(structured_error(run, m.get("error")) or {}).get("type"),
+                            guard=(structured_error(run, m.get("error")) or {}).get("guard"))
+                       for m in recent if m.get("type") == "idle"][:5],
+                 events=event_facts(run, root), request_body_keys=sanitize.safe_keys(body), variant=sanitize.text(run.route[2], 40),
+                 variants_listed=[sanitize.text(v, 40) for v in getattr(run, "chatgpt_variants", None) or []],
+                 wait=dict(ms=wait_ms, reason=sanitize.text(waited)))
+    leaked = sorted(set(sanitize.leaks(json.dumps(facts)) + ["secret" for _ in run.redact.leaks(json.dumps(facts))]))
+    return dict(facts_withheld=leaked) if leaked else facts
+
+
+def errors_of(facts):
+    """Every structured error recorded in the facts (assistant, retry and event errors)."""
+    return [a["error"] for a in facts.get("assistant", []) if a["error"]] + \
+        [a["retry"]["error"] for a in facts.get("assistant", []) if a["retry"] and a["retry"]["error"]] + \
+        [e["error"] for e in facts.get("events", []) if e.get("error")]
+
+
+def guard_reasons(facts, hooks):
+    """Our own blocks: `guard_*` decisions logged by qual-post in this window and guard or shim reasons in errors."""
+    found = {r["decision"] for r in hooks if str(r.get("decision", "")).startswith("guard_")}
+    found |= {e["guard"] for e in errors_of(facts) if e.get("guard")}
+    found |= {i["guard"] for i in facts.get("idle", []) if i.get("guard")}
+    return sorted(found)
+
+
+def upstream_code(facts):
+    """The most specific upstream refusal recorded (our own guard and shim blocks excluded): a known code, the
+    error body's code or type, else the error's type."""
+    errors = [e for e in errors_of(facts) if not e.get("guard")]
+    for error in errors:
+        codes = (error.get("body") or {}).get("codes") or (error.get("message") or {}).get("codes")
+        if codes:
+            return codes[0]
+    for error in errors:
+        fields = (error.get("body") or {}).get("fields") or {}
+        if fields.get("code") or fields.get("type"):
+            return fields.get("code") or fields.get("type")
+    failed = [i for i in facts.get("idle", []) if i["outcome"] == "failed" and not i.get("guard")]
+    return next((e.get("type") for e in errors if e.get("type")), None) or ("idle_failed" if failed and errors else None)
+
+
+def outcome_summary(run, root, began, mark, wait_s, end_reason):
+    """`request_outcome_summary`: why there was (no) reply, from integers and fixed enumerations only (no string from
+    the server), so it is recorded even when the facts are withheld."""
+    try:
+        messages = [m for m in run.messages(root) if isinstance(m, dict)]
+    except Exception:  # noqa: BLE001 - the summary must never fail the run
+        messages = []
+    assistant = [m for m in messages if m.get("type") == "assistant"]
+    errors = [m["error"] for m in assistant if isinstance(m.get("error"), dict)]
+    idle = [m for m in messages if m.get("type") == "idle" and ((m.get("time") or {}).get("created") or 0) >= began]
+    statuses = [((e.get("data") or {}).get("status") or {}).get("type") for e in (run.events.events if run.events else [])
+                if isinstance(e, dict) and e.get("type") == "session.status" and (e.get("data") or {}).get("sessionID") == root]
+    known = lambda value, allowed: value if value in allowed else "<other>"  # noqa: E731
+    return dict(transmitted_count=sum(1 for r in run.server.hooks()[mark:] if r.get("decision") == "transmit"),
+                assistant_messages=len(assistant),
+                assistant_with_tokens=sum(1 for m in assistant if sum(integer_tokens(m.get("tokens")).values()) > 0),
+                assistant_with_error=len(errors), finish=[known(m.get("finish"), FINISH) for m in assistant if m.get("finish")],
+                error_type=[known(e.get("type"), sanitize.KNOWN_CODES + tuple(sanitize.ERROR_CLASSES)) for e in errors],
+                session_status=known(statuses[-1], STATUS_TYPES) if statuses else None,
+                idle_outcome=known(idle[-1].get("outcome"), OUTCOMES) if idle else None,
+                wait_seconds=round(wait_s, 1), end_reason=known(end_reason, END_REASONS))
+
+
+def remember_own_ids(run, attempt):
+    """This run's own session and message ids (the derived ids, every session the isolated server lists, the root's
+    messages), kept in memory on `run.own_ids` for the user-directory names check; never recorded."""
+    found = {attempt["session"], attempt["message"]}
+    try:
+        _, listing, _ = run.server.request("GET", "/api/session")
+        found |= {s["id"] for s in (run.data(listing) or []) if isinstance(s, dict) and isinstance(s.get("id"), str)}
+        found |= {m["id"] for m in run.messages(attempt["session"]) if isinstance(m, dict) and isinstance(m.get("id"), str)}
+    except Exception:  # noqa: BLE001 - the derived ids are always known; the rest is best effort
+        pass
+    run.own_ids = set(getattr(run, "own_ids", set())) | {i for i in found if isinstance(i, str) and len(i) >= 8}
+
+
+def unsupported_for_account(facts):
+    """OpenAI's refusal of a listed model for this ChatGPT account: `model_not_found` with the Codex text."""
+    for error in errors_of(facts) if "facts_withheld" not in facts else []:
+        body = error.get("body") or {}
+        fields = body.get("fields") or {}
+        texts = [(error.get("message") or {}).get("text") or "", ((fields.get("message") or {}).get("text") or "")]
+        code = "model_not_found" in (body.get("codes") or []) or fields.get("code") == "model_not_found"
+        if error.get("status") == 400 and code and any(UNSUPPORTED_TEXT in text for text in texts):
+            return True
+    return False
+
+
+def parse_models(ref):
+    """`--chatgpt-model`: `auto`, one `openai/MODEL[#VARIANT]`, or up to 3 in order (comma-separated, each once)."""
+    if ref == AUTO:
+        return [AUTO]
+    parts = (ref or "").split(",")
+    if not ref or len(parts) > MAX_CANDIDATES or len(set(parts)) != len(parts):
+        raise Refused("--chatgpt-model is auto, one openai/MODEL[#VARIANT], or up to %d of them in order" % MAX_CANDIDATES)
+    for part in parts:
+        if part == AUTO or parse_route(part if "#" in part else part + "#lowest")[0] != "openai":
+            raise Refused("the chatgpt run allows only openai models (auto alone)")
+    return parts
+
+
 def request(run):
     """One tiny prompt through the full managed handshake; accounting, `record complete`, a clean `status`."""
     s, failures = PURPOSE, []
     if run.ledger.remaining(PURPOSE) < 1:
         raise Refused("the chatgpt purpose has no call left")
-    a = probe_stages.managed(run, s, run.run_id + "-gpt")
+    index = getattr(run, "chatgpt_attempt", 0)  # each fallback attempt is its own routing attempt (own derived ids)
+    a = probe_stages.managed(run, s, run.run_id + ("-gpt" if not index else "-gpt%d" % (index + 1)))
     probe_stages.attach(run, a)
     root = a["session"]
     run.create_session(root, title="qual chatgpt")  # titled: OpenCode sends no title request
     mark, began = len(run.server.hooks()), probe_stages.now_ms()
     token = run.expect(s, "chatgpt: one managed request", 1)
-    run.prompt(root, a["message"])
-    run.wait_idle(root, began)
+    body = {"text": PROMPT_TEXT, "id": a["message"]}  # exactly what is sent; its key names are recorded
+    run.server.request("POST", "/api/session/%s/prompt" % root, body)
+    started = time.monotonic()
+    try:
+        run.wait_idle(root, began)
+    except Blocker as error:
+        run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "timeout"))
+        run.note(s, "isolated_store", isolated_store(run.base))
+        remember_own_ids(run, a)
+        run.note(s, "session_facts", session_facts(run, root, began, body, "timeout: %s" % error,
+                                                    round((time.monotonic() - started) * 1000)))
+        raise
+    run.note(s, "request_outcome_summary", outcome_summary(run, root, began, mark, time.monotonic() - started, "idle"))
+    run.note(s, "isolated_store", isolated_store(run.base))  # the isolated server wrote its own store where pinned
+    remember_own_ids(run, a)
+    facts = session_facts(run, root, began, body, "idle record after the prompt and the session not active",
+                          round((time.monotonic() - started) * 1000))
+    run.note(s, "session_facts", facts)
     sent = run.done(token)
     transmitted = [r for r in run.server.hooks()[mark:] if r.get("decision") == "transmit"]
     status, answer = probe_stages.ask_descendants(run, a)
@@ -270,7 +599,17 @@ def request(run):
                     unknown=sorted(result["unknown"]), title=(result.get("title") or {}).get("state"),
                     descendants=dict(http=status, complete=(answer or {}).get("complete")), settlement=settlement,
                     detached=detached)
-    for condition, reason in ((sent == 1 and observed["kinds"] == ["primary"], "not_one_primary_request"),
+    failed = sent == 1 and observed["kinds"] != ["primary"]
+    guarded = guard_reasons(facts, run.server.hooks()[mark:]) if failed else []
+    upstream = upstream_code(facts) if failed else None
+    unsupported = bool(upstream) and unsupported_for_account(facts)
+    if guarded:  # our own guard or the shim blocked it (for example a retry): never reported as an upstream refusal
+        failures.append("request_blocked_by_guard")
+        run.note(s, "guard_block", guarded)
+    if upstream:  # transmitted, then refused or failed upstream: reported apart from a missing or extra request
+        failures.append("model_not_supported_for_account" if unsupported else "request_failed_upstream")
+        run.note(s, "upstream_error", upstream)
+    for condition, reason in ((upstream or guarded or not failed, "not_one_primary_request"),
                               (all(c is None for c in observed["costs"]), "cost_not_null"),
                               (settlement == "window" and detached, "not_settled"), (clean, "status_not_clean")):
         if not condition:
@@ -305,11 +644,18 @@ def run(run_, announce=print, sleep=time.sleep):
     `--chatgpt-methods`, only the zero-call method listing)."""
     if getattr(run_, "chatgpt_methods", False):
         return diagnose(run_, sleep=sleep)
+    candidates = parse_models(run_.chatgpt_model)
     run_.start(PURPOSE)
     connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
+    run_.chatgpt_model = candidates[0]
     select_model(run_, announce=announce)
-    if run_.ledger.remaining(PURPOSE) < 3:  # two probe exposures plus the request
-        raise Refused("the chatgpt purpose needs 3 calls left (2 probe exposures and 1 request)")
+    check_candidates(run_, candidates)  # every candidate and its variant is listed, before anything is reserved
+    remaining, needed = run_.ledger.remaining(PURPOSE), len(candidates) + 2
+    if remaining < needed:  # two probe exposures (normally 0 sent) plus one request per candidate
+        raise Refused("the chatgpt purpose has %d remain and %d needed (2 guard/pending probe exposures, normally 0 "
+                      "sent, and %d request(s)); raising the cap needs the user's approval, recorded with --set-cap "
+                      "chatgpt <N> --reason ... --approval BY AT SCOPE (at most %d)"
+                      % (remaining, needed, len(candidates), MAX_CAPS[PURPOSE]))
     answer, _ = run_.routing("set", authority_required=True)
     status, health, _ = run_.server.rpc("health", {})
     run_.note(PURPOSE, "setup", dict(authority_required=answer.get("state"), health=(health or {}).get("state")))
@@ -318,4 +664,41 @@ def run(run_, announce=print, sleep=time.sleep):
     failures = run_.probes(PURPOSE)
     if failures:
         raise Blocker("the recorder/shim/recorder chain is not proven: %s" % ", ".join(failures))
-    request(run_)
+    attempts(run_, candidates, announce)
+
+
+def check_candidates(run, candidates):
+    """Every fallback candidate (and its variant, or a lowest variant in the known order) must be listed by the
+    ChatGPT login: refused before the first reservation and request otherwise."""
+    if candidates == [AUTO]:
+        return
+    _, models, _ = run.server.request("GET", "/api/model")
+    listed = [m for m in (run.data(models) or []) if isinstance(m, dict)]
+    for ref in candidates:
+        check_route(PURPOSE, parse_route(ref if "#" in ref else ref + "#" + lowest_variant(listed, ref)), listed)
+
+
+KEPT_KEYS = ("setup", "oauth", "offered_methods", "server")  # run-level notes; everything else belongs to an attempt
+
+
+def attempts(run, candidates, announce):
+    """One request per candidate in order: each with its own reservation, session and guard route (only the active
+    model is allowed); the next candidate only after `model_not_supported_for_account`, any other outcome stops."""
+    stage, done, finished = run.results["stages"].setdefault(PURPOSE, {}), [], False
+    try:
+        for index, ref in enumerate(candidates):
+            if index:
+                run.chatgpt_model = ref
+                select_model(run, announce=announce)  # the guard now allows only this model; the previous one is blocked
+            run.chatgpt_attempt = index
+            request(run)
+            record = {key: stage.pop(key) for key in list(stage) if key not in KEPT_KEYS}
+            done.append(dict(record, model="%s/%s#%s" % tuple(run.route)))
+            failures = record.get("failures", [])
+            if "model_not_supported_for_account" not in failures or "request_blocked_by_guard" in failures:
+                break  # anything but a clean account refusal stops, a guard block included
+        finished = True
+    finally:  # earlier attempts' records survive a later failure (that attempt's notes stay at the top level)
+        if finished and done:
+            stage.update({k: v for k, v in done[-1].items() if k != "model"})
+        stage["attempts"] = done
