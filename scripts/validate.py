@@ -94,6 +94,31 @@ def validate_codex_hooks(root, manifest):
             raise ValueError("Use the bounded Codex runtime command")
 
 
+def package_export(root, deadline=None):
+    """Measure what scripts/package.py exports from root against the Codex bundle scan's limits."""
+    from runtime import package_manifest as limits
+    usage = limits.export_usage(root, deadline=deadline)
+    if usage["excluded"]:
+        raise ValueError(f"Package export contains development-only paths: {usage['excluded'][0]}")
+    if usage["bytes"] >= limits.PACKAGE_SCAN_MAX_BYTES:
+        raise ValueError(f"Package export has {usage['bytes']} bytes; the bundle scan reads fewer than "
+                         f"{limits.PACKAGE_SCAN_MAX_BYTES}")
+    if usage["scan_paths"] > limits.PACKAGE_SCAN_MAX_PATHS:
+        raise ValueError(f"Package export needs {usage['scan_paths']} scan paths; limit is {limits.PACKAGE_SCAN_MAX_PATHS}")
+    if usage["largest_bytes"] > limits.PACKAGE_SCAN_MAX_FILE:
+        raise ValueError(f"{usage['largest_file']} has {usage['largest_bytes']} bytes; "
+                         f"the bundle scan reads at most {limits.PACKAGE_SCAN_MAX_FILE} per file")
+    warnings = []
+    if usage["bytes"] * 4 >= limits.PACKAGE_SCAN_MAX_BYTES * 3:
+        warnings.append(f"Package export uses {usage['bytes']} of {limits.PACKAGE_SCAN_MAX_BYTES} bundle scan bytes "
+                        f"(at least 75%); largest file: {usage['largest_file']}")
+    return {"files": usage["files"], "directories": usage["directories"], "bytes": usage["bytes"],
+            "scan_paths": usage["scan_paths"], "largest_file": usage["largest_file"],
+            "largest_bytes": usage["largest_bytes"], "max_bytes": limits.PACKAGE_SCAN_MAX_BYTES,
+            "max_paths": limits.PACKAGE_SCAN_MAX_PATHS, "max_file_bytes": limits.PACKAGE_SCAN_MAX_FILE,
+            "warnings": warnings}
+
+
 def validate(root=ROOT):
     root = root.resolve(strict=True)
     manifest = read_json(root / ".codex-plugin/plugin.json")
@@ -206,13 +231,17 @@ def validate(root=ROOT):
     entries = [item for item in market["plugins"] if item["name"] == manifest["name"]]
     if len(entries) != 1 or entries[0]["source"] != {"source": "local", "path": "./"}:
         raise ValueError("Local marketplace must reference this package root once")
+    export = package_export(root)
     return {"package": manifest["name"], "validation": "passed", "skill_words": counts,
-            "client_execution": "not_checked"}
+            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
 
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(validate(), indent=2))
+        report = validate()
+        for warning in report["warnings"]:
+            print(f"Validation warning: {warning}", file=sys.stderr)
+        print(json.dumps(report, indent=2))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Validation failed: {error}", file=sys.stderr)
         sys.exit(1)

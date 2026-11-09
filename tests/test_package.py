@@ -371,8 +371,8 @@ class ExportBudgetTests(unittest.TestCase):
         write_tree(self.root, (("a", b"x" * 60), ("d/b", b"x" * 15)))
         self.assertEqual(validate.package_export(self.root)["warnings"], [])
         cases = (({"PACKAGE_SCAN_MAX_BYTES": 75}, "bytes"), ({"PACKAGE_SCAN_MAX_FILE": 59}, "file"),
-                 # Root, a, d and d/b: the scan charges each entry when listed and when visited.
-                 ({"PACKAGE_SCAN_MAX_PATHS": 6}, "paths"))
+                 # Root once; a, d and d/b when listed and visited; a and d/b again when read: 9 paths.
+                 ({"PACKAGE_SCAN_MAX_PATHS": 8}, "paths"))
         for limits, label in cases:
             with self.subTest(label), patch.multiple(package_manifest, **limits), self.assertRaises(ValueError):
                 validate.package_export(self.root)
@@ -380,8 +380,12 @@ class ExportBudgetTests(unittest.TestCase):
             self.assertEqual(len(validate.package_export(self.root)["warnings"]), 1)
         with patch.object(package_manifest, "PACKAGE_SCAN_MAX_BYTES", 101):
             self.assertEqual(validate.package_export(self.root)["warnings"], [])
-        write_tree(self.root, (("tests/t.py", b""),))
-        with self.assertRaisesRegex(ValueError, "development-only"):
+        before = validate.package_export(self.root)
+        write_tree(self.root, (("tests/t.py", b"x"), ("CLAUDE.md", b"x"), ("docs/CLAUDE.md", b"x")))
+        after = validate.package_export(self.root)
+        self.assertEqual((after["files"], after["bytes"]), (before["files"] + 1, before["bytes"] + 1))
+        with patch.object(package_manifest, "export_members", return_value=frozenset({"a", "tests", "tests/t.py"})), \
+                self.assertRaisesRegex(ValueError, "development-only paths: tests/t.py"):
             validate.package_export(self.root)
 
 
