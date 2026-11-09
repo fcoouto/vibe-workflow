@@ -34,10 +34,12 @@ Each entry: `id`, `name`, `why` (one sentence of value shown to the user), `tier
 | Tier | Items | Gate behavior |
 |---|---|---|
 | **Harness (mandatory, gates onboarding)** | Python 3.11+, Git, GitHub CLI; the `vibe-workflow` plugin at the expected version with hooks trusted (in every client it supports); Superpowers, Ponytail, Caveman, RTK, Context7, Graphify in every installed agent client that officially supports them | Onboarding cannot finish while any is missing; it prepares them first. |
-| **Foundation (mandatory, machine)** | Node.js LTS, npm, pnpm, ripgrep/fd/jq, Docker + Compose, package manager | Prepared by `prepare-my-workspace`. Gates onboarding only when the project needs it (e.g. a Node project without Node). |
+| **Foundation (mandatory, machine)** | Node.js LTS, npm, pnpm, ripgrep/fd/jq, Docker + Compose, package manager | Always prepared by `prepare-my-workspace`, as the Toolkit requires. Gates onboarding only when the project or a selected workflow needs it (e.g. a Node project without Node). Always reported, never silent. |
 | **Optional extras** | Toolkit extras, browser tools, Sentry… | Never gate; offered with their value when a project needs them. |
 
 A tool with no official support for a client is `not supported (reason)`, never improvised.
+
+**Docker is foundation, not harness (user decision, 2026-11-10).** The Toolkit lists Docker and Compose as mandatory machine foundation, but none of its workflows, prompts, tool guides or templates use it; only the optional Harness2 benchmark lab does. `vibe-workflow` itself needs only Python, Git and the agent plugins. Docker is therefore never an onboarding blocker: preparation installs it, and onboarding requires it only when the project or a selected workflow uses containers.
 
 ## 4. Readiness command (new code, read-only)
 
@@ -102,7 +104,7 @@ Each slice: short design note, implementer worker, independent review, affected 
 ## 9. Decisions needed from the user
 
 1. **Consent for mandatory items.** Proposed: an onboarding or preparation request authorizes installing and configuring harness- and foundation-tier items, announced before acting; the agent still stops for purchases, licensing (e.g. Docker Desktop), authentication-mode changes, sign-ins and trust approvals. Optional extras need a choice.
-2. **Gate scope.** Proposed: only the harness tier blocks onboarding; foundation items gate only when the project needs them.
+2. **Gate scope.** **Decided 2026-11-10:** only the harness tier blocks onboarding; foundation items (Docker included) gate only when the project or a selected workflow needs them, and are always reported.
 3. **OpenCode as a full plugin client (part B).** Until decided, the readiness report lists "vibe-workflow startup/enrollment: not available in OpenCode" as a known gap.
 4. **AGENTS.md wording.** "Keep environment preparation, project enrollment, and routine development distinct" stays true for procedures; add that onboarding must check workspace readiness first and hand off to preparation.
 
