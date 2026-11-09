@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.1.34
+
+- **Smaller installs.** Releases on the Codex Git marketplace now hold marketplace files at the root and the plugin under `plugins/vibe-workflow/`, so an install no longer copies the clone's `.git` or `tests/`: about 6.4 MB instead of 17 MB. Run `codex plugin marketplace upgrade vibe-workflow-local` and approve the changed hooks; Codex refreshes the installed copy in place.
+- For local testing, `python3 -B scripts/package.py` exports a validated package of tracked files, without `tests/`, to `~/.cache/vibe-workflow/dev-package`. Install from that folder, not from a checkout: clients copied ignored files and Git history from a checkout. `--prune-caches` removes cached copies no client uses. Releases follow [Publish a release](release.md).
+- `prepare-my-workspace` can report plugin version drift between Codex and Claude Code and upgrade both clients; startup adds a one-line warning when an installed client lags the recorded version.
+- A Workstreams thread routes `DONE` through the PR merge gate. Project policy loading and onboarding policy discovery are more explicit, and `AGENTS.md` points to the memory vault rules.
+- OpenCode sessions get Thread Naming titles for ordinary native work.
+- Smart Routing for OpenCode subscriptions gains settings, profiles and a deterministic ranker, admission records, a single routing command, the OpenCode adapter and pre-transmission shim, single-use dispatch authority with fresh gates, lifecycle settlement, and usage accounting with reconcile and recovery. It is not cut over: the current selectors keep dispatching until the documented replay and canary criteria pass.
+- Tests can run in parallel shards with `python3 -B scripts/test_sharded.py`; oversized test files were split and wall-clock dependence removed.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.33
 
 - A Workstreams thread is `DONE` only after every PR it opened or took over is observed merged on the remote; until then it shows `WAITING`. Threads whose scope excludes publication need no extra step, and other editable threads record an explicit no-PR decision. Runtime verification still enforces required publications only.
