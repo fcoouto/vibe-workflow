@@ -30,7 +30,7 @@ Hooks supplement these instructions. Their presence or silence does not establis
 ## Verification and delivery
 
 - Validate with `python3 -B scripts/validate.py`.
-- Run the full suite with `python3 -B -m unittest discover -s tests` when runtime, hook or policy behavior changes; it takes many minutes.
+- Run the full suite with `python3 -B -m unittest discover -s tests` when runtime, hook or policy behavior changes; it takes about two hours. `python3 -B scripts/test_sharded.py` runs the same modules in parallel shards in about a third of that time and lists failing tests; rerun a failure alone before judging it, since timing-sensitive tests can fail on an overloaded machine.
 - Publish completed task changes by committing, pushing a task branch and opening a draft PR. Use `main` as the integration branch and PR destination. Merge only completed, independently reviewed slices against current `main`, in PRs marked `[READY]`, after local checks pass; the repository has no CI or branch protection. Preserve unfinished work separately and retain newer changes when reconciling older branches.
 - Create release archives only when requested.
 - Report package validation and observed client execution separately.
