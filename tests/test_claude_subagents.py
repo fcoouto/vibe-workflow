@@ -169,10 +169,34 @@ class SubagentChainTests(unittest.TestCase):
 
     def test_the_registered_hooks_record_the_chain_silently(self):
         self.assertIsNone(self.run_hook("SubagentStart", start()))
-        spawned = self.run_hook("PostToolUse", spawn())
-        self.assertNotIn("PRIVATE", json.dumps(spawned or {}))
+        secret = dict(spawn(), tool_input=dict(spawn()["tool_input"], prompt=MARKER + "\nPRIVATE_PROMPT_BODY"))
+        spawned = self.run_hook("PostToolUse", secret)
+        self.assertNotIn("PRIVATE_PROMPT_BODY", json.dumps(spawned or {}))
         self.assertIsNone(self.run_hook("SubagentStop", stop()))
         self.assertEqual(self.collect()["receipt"]["reviewer_id"], AGENT)
+        # Only the marker line and a digest of the prompt are retained, never its body.
+        self.assertNotIn(b"PRIVATE_PROMPT_BODY", subagents._path(self.scope, SESSION).read_bytes())
+
+    def test_contention_waits_briefly_and_a_timeout_reports_a_dropped_event(self):
+        import fcntl
+        path = subagents._path(self.scope, SESSION)
+        held = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(held) if held is not None else None)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with patch.object(subagents, "LOCK_TIMEOUT", 0.2):
+            self.assertFalse(subagents.record(self.scope, start()))
+        self.assertIsNone(subagents.chain(self.scope, SESSION, AGENT))
+        fcntl.flock(held, fcntl.LOCK_UN)
+        self.assertTrue(subagents.record(self.scope, start()))
+
+    def test_parallel_writers_are_all_recorded_not_dropped(self):
+        from concurrent.futures import ThreadPoolExecutor
+        agents = [f"parallel-{index}" for index in range(12)]
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            results = list(pool.map(lambda agent: subagents.record(self.scope, start(agent=agent)), agents))
+        self.assertTrue(all(results), results)
+        data = json.loads(subagents._path(self.scope, SESSION).read_bytes())
+        self.assertEqual(set(agents), set(data["agents"]))
 
     def test_bad_subagent_input_is_silent_and_records_nothing(self):
         for payload in (dict(start(), agent_id=5), dict(stop(), last_assistant_message=None), dict(start(), session_id="")):

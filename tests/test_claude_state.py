@@ -172,6 +172,32 @@ class ClaudeStateTests(unittest.TestCase):
         result = self.cli(["delivery", "status", "--client", "claude-code", "--session", "main"], expected=1)
         self.assertIn("Invalid task, evidence", result["error"])
 
+    def test_a_write_into_the_checkout_is_scoped_and_denied_even_from_a_session_elsewhere(self):
+        import io
+        import json
+        import tempfile
+        from unittest.mock import patch
+        from tests.fixture_canonical_birth import test_acquisition
+        from scripts import workflow
+        self.start()
+        self.move("REVIEW")
+        seen = []
+        elsewhere = tempfile.mkdtemp(prefix="claude-elsewhere-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(elsewhere, ignore_errors=True))
+        payload = dict(hook_event_name="PreToolUse", session_id="main", cwd=elsewhere, prompt_id="p", tool_use_id="c1",
+                       tool_name="Write", tool_input=dict(file_path=str(self.repo / "a.txt"), content="x"))
+
+        def acquire(event, *args, **kwargs):
+            seen.append(event.cwd)
+            return test_acquisition(self.scope)
+        output = io.StringIO()
+        with patch("sys.argv", ["workflow.py", "claude-code", "PreToolUse"]), \
+                patch("sys.stdin", type("In", (), {"buffer": io.BytesIO(json.dumps(payload).encode())})()), \
+                patch("sys.stdout", output), patch("runtime.startup.acquire_project_entry", side_effect=acquire):
+            self.assertEqual(workflow.main(), 0)
+        self.assertEqual(seen, [self.repo])
+        self.assertEqual(json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_managed_startup_orientation_names_the_claude_session_within_the_word_limit(self):
         from runtime import startup
         from tests.fixture_canonical_birth import test_acquisition

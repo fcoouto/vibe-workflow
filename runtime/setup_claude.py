@@ -9,8 +9,11 @@ from pathlib import Path
 
 from runtime import onboarding as d3, startup
 
-# Claude loads only these top-level entries; tests, docs and assets are never loaded, so they are not hashed.
-LOADED = frozenset({'.claude-plugin', 'hooks', 'runtime', 'scripts', 'clients', 'policies', 'skills'})
+# Claude auto-loads plugin components by name (agents/, commands/, .mcp.json, settings.json, bin/ and more), so
+# everything is hashed except these top-level entries, which Claude never loads. A new component changes the digest.
+UNLOADED = frozenset({'docs', 'assets', 'tests', '.agents', '.codex-plugin', '.git', '.gitignore',
+                      'README.md', 'AGENTS.md', 'LICENSE'})
+CONFIGURATION = frozenset({'package_root', 'claude_config', 'plugin_name', 'roots', 'digest', 'hook_owner'})
 
 
 def settings_paths(config, root, budget):
@@ -64,7 +67,7 @@ def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runti
         sha256=hashlib.sha256(so._read(source, budget)).hexdigest())
     scan = bundle_budget if bundle_budget is not None else budget
     scan['paths'] = budget['paths']
-    bundle, runtime_digest = so._package_scan(package, scan, runtime_sources=runtime_sources, label=b'claude-plugin-bundle-v1', include=LOADED)
+    bundle, runtime_digest = so._package_scan(package, scan, runtime_sources=runtime_sources, label=b'claude-plugin-bundle-v1', exclude=UNLOADED)
     budget['paths'] = scan['paths']
     material = dict(files=observed, bundle=bundle)
     result = dict(digest=d3._digest(material), hook_owner=hook_owner, material=material)
@@ -126,6 +129,8 @@ def collect_content(observed, identity, transaction_id, verified_assessment, *, 
             values.get('enabledPlugins', {}).values()), 'Hooks or this plugin are disabled in the observed configuration')
         d3._require(row['scope'] != 'managed' or not values,
             'Managed hook or plugin policy is outside this personal setup source')
+        d3._require(row['scope'] not in ('project', 'local') or 'hooks' not in values,
+            'Project hooks could have produced the observed hook events')
     config.update(digest=current['digest'], hook_owner=current['hook_owner'])
     content = dict(version=2, kind='owner-observed-setup', transaction_id=transaction_id, identity=identity,
         native=dict(native), configuration=config, runs=[], assessment=assessment, predecessor=None,
@@ -137,10 +142,12 @@ def collect_content(observed, identity, transaction_id, verified_assessment, *, 
 
 def check_receipt(content):
     """Per-client retained-observation rules: a Claude receipt is exactly its client's reported events."""
-    client, source = content['identity']['client'], content.get('source', {})
+    client, source, keys = content['identity']['client'], content.get('source', {}), set(content['configuration'])
     if client != 'claude-code':
-        d3._require('claude_observation' not in source, 'Unsupported retained observation family')
+        d3._require('claude_observation' not in source and not keys & {'claude_config', 'plugin_name'},
+            'Unsupported retained observation family')
         return
+    d3._require(keys == CONFIGURATION, 'Claude setup configuration has unexpected fields')
     d3._require(content['version'] == 2 and 'claude_observation' in source and not {'native_origin', 'native_capture',
         'capture_reference', 'command_origin', 'command_origins', 'source_capture', 'native_safety', 'managed'} & set(source),
         'Claude setup needs its observed client events')
@@ -149,5 +156,5 @@ def check_receipt(content):
         claude_setup.verify_facts(source['claude_observation'], source['observations'], source['bootstrap'])
     except startup.StartupError:
         raise
-    except (KeyError, TypeError):
+    except LookupError:
         raise startup.StartupError('Invalid retained Claude Code observation') from None

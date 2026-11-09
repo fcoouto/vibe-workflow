@@ -75,16 +75,16 @@ def _strings(value, field, choices=None):
     return value
 
 
-def _request(request, required=(), optional=(), *, limit=MAX_INPUT):
+def _request(request, required=(), optional=(), *, limit=MAX_INPUT, codex_only=False):
     _bounded(request, limit)
     state._fields(request, (*IDENTITY, *required), optional)
-    state._identity(request, allow_claude=request.get('client') == 'claude-code')
+    state._identity(request, allow_claude=request.get('client') == 'claude-code' and not codex_only)
     state._integer(request['expected_revision'], 'expected_revision', 1)
 
 
 def _task(db, scope, request, revision=True, *, allow_cancelled=False):
     _require(db is not None, 'Task state has not been initialized')
-    state._require_claude_scope(scope, request['client']); task = state._task(db, state._scope_id(scope), request['client'], request['session_id'])
+    task = state._task(db, state._scope_id(scope), request['client'], request['session_id'])
     _require(task is not None and all(task[k] == request[k] for k in IDENTITY[:4]), 'Evidence task binding changed')
     state._compatible(scope, task)
     state._assert_open(task)
@@ -5206,7 +5206,7 @@ def cleanup_evidence(scope, request):
 def plan_evidence(scope, request):
     _request(request, ('plan',), ('change_decision_ref',))
     plan = _plan(deepcopy(request['plan']))
-    _require(plan['version'] == 1 or state._scope_version(scope) == 3, 'Linked plans require canonical schema 3'); _require(plan['version'] == 1 or request['client'] == 'codex', 'Linked evidence plans are Codex-only')
+    _require(plan['version'] == 1 or state._scope_version(scope) == 3 and request['client'] == 'codex', 'Linked plans require canonical schema 3 and a Codex client')
     with state._database(scope) as db:
         task = _task(db, scope, request)
         if plan['version'] == 2:
@@ -5690,7 +5690,7 @@ def _review_response(scope, db, request, record, admitted=False):
 
 def prepare_review(scope, request):
     """The sole native review admission path: one D5 round and one D6 launch permit."""
-    from runtime import delegation; _require(isinstance(request, dict) and request.get('client') == 'codex', 'Claude Code review needs a registered subagent observation source')
+    from runtime import delegation
     return delegation._prepare_native(scope, request, role='review')
 
 
@@ -5779,7 +5779,7 @@ def _review_quality_matches(scope, attempt, record, collected=None, *, context=N
 
 
 def collect_review(scope, request):
-    _request(request, ('attempt_id', 'parent_turn_id', 'spawn_item_id')); _require(request['client'] == 'codex', 'Claude Code review needs a registered subagent observation source')
+    _request(request, ('attempt_id', 'parent_turn_id', 'spawn_item_id'), codex_only=True)
     for key in ('attempt_id', 'parent_turn_id', 'spawn_item_id'):
         state._text(request[key], key)
     with state._database(scope) as db:
@@ -5827,7 +5827,7 @@ def collect_review(scope, request):
 
 
 def assess_review(scope, request):
-    _request(request, ('attempt_id', 'assessment')); _require(request['client'] == 'codex', 'Claude Code review needs a registered subagent observation source')
+    _request(request, ('attempt_id', 'assessment'), codex_only=True)
     with state._database(scope) as db:
         task = _task(db, scope, request)
         attempt = deepcopy(next((a for a in task.get('evidence', {}).get('attempts', []) if a['id'] == request['attempt_id']), None))

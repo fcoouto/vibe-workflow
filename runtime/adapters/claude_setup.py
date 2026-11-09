@@ -81,6 +81,8 @@ def observe_stream(raw, *, package, checkout, authority):
             raise StartupError("Too many hook results in the observed run")
         if row["hook_event"] == "SessionStart":
             hooks[-1]["_stdout"] = stdout
+    if sum(1 for hook in hooks if hook["event"] == "SessionStart") != 1:
+        raise StartupError("The observed run must show exactly one SessionStart hook")
     facts = dict(init=dict(claude_version=version, session_id=_text(init.get("session_id"), 128), cwd=str(checkout),
                            plugin=dict(name=manifest["name"], path=str(package), version=manifest["version"],
                                        source=_text(loaded[0].get("source"), 256)),
@@ -113,10 +115,26 @@ def case_proof(facts, case):
 
 
 def verify_facts(facts, observations, bootstrap):
-    """Receipt-time check that every retained proof is exactly the digest of its retained facts."""
-    if (not isinstance(facts, dict) or set(facts) != {"init", "hooks", "cases"} or len(facts["hooks"]) > MAX_HOOKS
-            or not isinstance(facts["cases"], dict)):
+    """Receipt-time integrity check: each proof is the digest of its retained facts, and the facts are shaped.
+
+    This shows the retained facts are self-consistent and well-formed; it does not authenticate them.
+    """
+    try:
+        _verify_facts(facts, observations, bootstrap)
+    except (LookupError, TypeError, AttributeError):
+        raise StartupError("Invalid retained Claude Code observation") from None
+
+
+def _verify_facts(facts, observations, bootstrap):
+    if (not isinstance(facts, dict) or set(facts) != {"init", "hooks", "cases"} or not isinstance(facts["hooks"], list)
+            or len(facts["hooks"]) > MAX_HOOKS or not isinstance(facts["cases"], dict) or set(facts["cases"]) - {"startup-context"}):
         raise StartupError("Invalid retained Claude Code observation")
+    for case, observed in facts["cases"].items():
+        index = observed["hook_index"]
+        if (type(index) is not int or not 0 <= index < len(facts["hooks"]) or facts["hooks"][index]["event"] != "SessionStart"
+                or facts["hooks"][index]["exit_code"] != 0 or observed["names_policy_index"] is not True
+                or observed["names_authority"] is not True or not isinstance(observed["context_sha256"], str)):
+            raise StartupError("A retained behavior does not point at a successful SessionStart hook")
     for case, proofs in observations.items():
         if case not in facts["cases"] or proofs != [case_proof(facts, case)]:
             raise StartupError("A retained behavior is not the observed Claude Code fact")
@@ -124,9 +142,10 @@ def verify_facts(facts, observations, bootstrap):
         raise StartupError("Retained bootstrap evidence is not the observed Claude Code fact")
 
 
-def issue_witness(*, binding, executable, package, facts):
-    """Only this adapter issues a genuine Claude setup witness, from facts it observed."""
+def issue_witness(*, binding, executable, package, raw, checkout, authority):
+    """Only this adapter issues a genuine Claude setup witness, and only from a raw stream it parses itself."""
     from runtime.doctor import NativeSetupWitness, _NATIVE_WITNESS_ISSUER
+    facts = observe_stream(raw, package=package, checkout=checkout, authority=authority)
     observations = {case: [case_proof(facts, case)] for case in facts["cases"]}
     content = dict(binding=binding,
                    native=dict(surface=SURFACE, version=facts["init"]["claude_version"], executable=str(executable)),
@@ -154,5 +173,5 @@ def observe(executable, package, checkout, authority, binding):
     raw = run_observation(executable, package, checkout)
     if time.monotonic() > deadline:
         raise StartupError("The Claude Code observation exceeded its deadline")
-    facts = observe_stream(raw, package=package, checkout=checkout, authority=authority)
-    return issue_witness(binding=binding, executable=executable, package=package, facts=facts), raw
+    return issue_witness(binding=binding, executable=executable, package=package, raw=raw,
+                         checkout=checkout, authority=authority), raw

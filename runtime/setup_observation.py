@@ -153,7 +153,7 @@ def plugin_content_hash(root, budget):
     return _package_scan(root,budget)[0]
 
 
-def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bundle-v1', include=None):
+def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bundle-v1', exclude=None):
     root = Path(root)
     sources = list(runtime_sources) if runtime_sources is not None else None
     selected = set(sources) if sources is not None else set()
@@ -166,8 +166,8 @@ def _package_scan(root, budget, *, runtime_sources=None, label=b'codex-plugin-bu
         path = pending.pop()
         if path != root and (path.name in ('__pycache__', '.venv') or path.name.endswith(('.pyc', '.egg-info'))):
             continue
-        if include is not None and path.parent == root and path.name not in include:
-            continue  # only the top-level entries the client actually loads
+        if exclude is not None and path.parent == root and path.name in exclude:
+            continue  # top-level entries the client never loads
         budget['paths'] += 1
         relative = os.fsencode(str(path.relative_to(root))) if path != root else b''
         digest.update(len(relative).to_bytes(8, 'little')); digest.update(relative)
@@ -255,7 +255,9 @@ def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runti
     """Compare captured local inputs; never query native processes or reconstruct precedence."""
     budget = budget if budget is not None else _budget()
     if 'claude_config' in config:
-        from runtime import setup_claude; return setup_claude.current_configuration(config, cwd, budget, bundle_budget=bundle_budget, runtime_sources=runtime_sources)
+        from runtime import setup_claude
+        return setup_claude.current_configuration(config, cwd, budget, bundle_budget=bundle_budget,
+                                                  runtime_sources=runtime_sources)
     observed = []
     for item in _configuration_files(config, cwd):
         raw = _read(Path(item['path']), budget, absent=True)
@@ -379,7 +381,9 @@ def _collect_content(observed, accepted_identity, transaction_id, verified_asses
     from runtime.state import _accepted_identity, _runtime_sources, PACKAGE
     identity = _accepted_identity(accepted_identity)
     if identity['client'] == 'claude-code':
-        from runtime import setup_claude; return setup_claude.collect_content(observed, identity, transaction_id, verified_assessment, predecessor=predecessor)
+        from runtime import setup_claude
+        return setup_claude.collect_content(observed, identity, transaction_id, verified_assessment,
+                                            predecessor=predecessor)
     d3._require(identity['client'] == 'codex', 'Only the Codex local setup source is supported')
     binding = observed['binding']
     d3._object(binding, ('accepted_scope_digest','attempt_ref','transaction_id'))
@@ -556,8 +560,10 @@ def receipt_shape(content):
                 'Verified behavior lost its genuine frontend observation')
     else:
         d3._require('predecessor' not in content and 'source' not in content, 'Original setup history cannot be rewritten')
-    d3._require(content['native']['surface'] == {'codex': 'codex-cli', 'claude-code': 'claude-code-cli'}.get(content['identity']['client']), 'Unsupported original setup scope')
-    from runtime import setup_claude; setup_claude.check_receipt(content)
+    surface = {'codex': 'codex-cli', 'claude-code': 'claude-code-cli'}.get(content['identity']['client'])
+    d3._require(content['native']['surface'] == surface, 'Unsupported original setup scope')
+    from runtime import setup_claude
+    setup_claude.check_receipt(content)
     startup._canonical_text(content['transaction_id'], 128)
     startup._canonical_hash(content['configuration']['digest']); startup._canonical_hook(content['configuration']['hook_owner'])
 
@@ -718,7 +724,8 @@ def setup_capture_projection(decision, *, process):
 
 def collect_retained_setup(reference, identity, new_transaction, assessment, *, witness=None, readiness=None):
     """Publish an exact successor, preserving the actual native capture transaction."""
-    d3._require(startup._canonical_plain(identity).get('client') != 'claude-code' or (witness is None and readiness is None), 'Claude managed behavior and review-readiness sources are not available yet')
+    d3._require(startup._canonical_plain(identity).get('client') != 'claude-code',
+        'Claude successor setup sources need a managed behavior source, which is not available yet')
     native_origin = '#native-observation:' in reference['reference']
     readiness_facts = None
     if readiness is not None:
@@ -1422,12 +1429,16 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
         final = changes._scoped_entries(journal['manifest']['enrollment']['record']).get(key)
         d3._require(final is not None and final[2]['activation'] == activation, 'Setup receipt was replayed into another activation')
         config = content['configuration']
-        home = Path(os.environ.get('CODEX_HOME', str(Path.home()/'.codex')) if client == 'codex' else os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude').resolve()
-        d3._require(str(home) == config['codex_home' if client == 'codex' else 'claude_config'] and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
+        origin = (os.environ.get('CODEX_HOME', str(Path.home()/'.codex')) if client == 'codex'
+            else os.environ.get('CLAUDE_CONFIG_DIR') or Path.home()/'.claude')
+        d3._require(str(Path(origin).resolve()) == config['codex_home' if client == 'codex' else 'claude_config']
+            and config['package_root'] == facts['installed']['package_root'], 'Required local configuration origin is unavailable')
         # Native bundle bytes have their own 8 MiB cap; time and path limits stay shared.
         scan = _budget(budget.get('deadline'))
         current = current_configuration(config, Path(cwd or root), budget, bundle_budget=scan)
-        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner'], **({} if client == 'codex' else dict(surface=content['native']['surface'], version=content['native']['version']))),
+        # A non-Codex current observation also names its surface and version; startup compares the surface.
+        named = {} if client == 'codex' else dict(surface=content['native']['surface'], version=content['native']['version'])
+        result = dict(current=dict(client=client, configuration_digest=current['digest'], hook_owner=current['hook_owner'], **named),
             receipt=binding['receipt'], binding=binding, provenance=dict(kind='trusted-coordinator', **binding['receipt']))
         if content['version'] == 2:
             verified, complete = _coverage(content)

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -23,6 +24,7 @@ MAX_AGENTS = 32
 MAX_REPORT = 64 * 1024
 MAX_FIELD = 4096
 MAX_FILE = 4 * 1024 * 1024
+LOCK_TIMEOUT = 2.0  # well inside the 5 s hook budget
 MARKER = re.compile(r"(?:worker|review)_[A-Za-z0-9_]{1,56}")
 REPORT_FIELDS = {"version", "attempt_id", "assignment_digest", "candidate_digest", "coverage", "findings", "limitations"}
 
@@ -89,13 +91,32 @@ def _set(entry, section, fields):
             current.setdefault(key, value)
 
 
+def _lock(descriptor):
+    """Wait briefly for the spool lock; parallel subagent hooks are separate processes and do collide."""
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+
+
 def _marker(prompt):
     first = prompt.strip().splitlines()[0].strip() if prompt.strip() else ""
     return first if MARKER.fullmatch(first) else None
 
 
 def record(scope, payload):
-    """Record one documented hook event; returns whether it was a subagent observation."""
+    """Record one documented hook event.
+
+    Returns True when the event was recorded, and False when it is unrelated or the spool stayed locked past
+    the timeout. A dropped event leaves its chain partial, which is never evidence. The spool is private to
+    the current user but writable by any process of that user, including a hostile subagent with a shell, so
+    it is integrity-checked workflow state, not a security boundary; entries are not pruned.
+    """
     event, tool = payload.get("hook_event_name"), payload.get("tool_name")
     if event == "PostToolUse" and tool == "Agent":
         kind = "spawn"
@@ -109,7 +130,8 @@ def record(scope, payload):
     lock = os.open(path.with_suffix(".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         state._private(path.with_suffix(".lock"))
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not _lock(lock):
+            return False
         data = _load(path) or dict(version=1, agents={})
         if kind == "spawn":
             response = payload.get("tool_response")
@@ -142,12 +164,10 @@ def record(scope, payload):
             if len(data["agents"]) >= MAX_AGENTS:
                 data["overflow"] = True
                 _store(path, data)
-                return True
+                return False
             entry = data["agents"].setdefault(agent, {})
         _set(entry, section, fields)
         _store(path, data)
-        return True
-    except BlockingIOError:
         return True
     finally:
         os.close(lock)

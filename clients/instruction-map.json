@@ -2,7 +2,7 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "a46a6682bd054acd64a50da9d0c01a1ff7a24148ccb5fd89733c94cc62f11e90",
+      "sha256": "c284e67a5a0d72ef97103d974941124138d7c20884bf58f4c7aa881fb886b092",
       "ranges": [
         [
           1,
@@ -633,7 +633,7 @@
       ]
     },
     "skills/onboard-my-project/references/qualification.md": {
-      "sha256": "cd967d9629cfdb83239c7ed2da3db8dd54c70a0c8fa8835e9f0c9a7efb1fe79e",
+      "sha256": "4b998790dfed2f128c53c3e8a2af31892706ad37d7e016ce45e5db144405bc4f",
       "ranges": [
         [
           1,
@@ -641,7 +641,7 @@
         ],
         [
           29,
-          47
+          49
         ]
       ]
     },

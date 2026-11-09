@@ -38,6 +38,26 @@ def native_string(payload, field, optional=False):
     return hook_events.native_string(payload, field, "claude-code", optional)
 
 
+def target_directory(cwd, tool_input):
+    """Where a guarded write really lands: its own directory when that is outside the session `cwd`.
+
+    Claude's edit tools take absolute paths and the session `cwd` follows `cd` and worktrees, so deciding
+    from `cwd` alone would leave an edit into an enrolled checkout unguarded. An unreadable path keeps `cwd`.
+    """
+    if not isinstance(tool_input, dict):
+        return cwd
+    raw = tool_input.get("file_path", tool_input.get("notebook_path"))
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 4096 or any(not char.isprintable() for char in raw):
+        return cwd
+    target = Path(os.path.realpath(raw if os.path.isabs(raw) else cwd / raw))
+    if target.is_relative_to(os.path.realpath(cwd)):
+        return cwd
+    directory = target.parent
+    while not directory.is_dir() and directory != directory.parent:
+        directory = directory.parent
+    return directory
+
+
 def normalize_runtime(payload) -> RuntimeEvent:
     """Map one Claude hook payload; `prompt_id` is the only turn identity Claude exposes."""
     if not isinstance(payload, dict):
@@ -69,6 +89,8 @@ def normalize_runtime(payload) -> RuntimeEvent:
         if type(payload["stop_hook_active"]) is not bool:
             raise StartupError("Invalid claude-code stop_hook_active")
         active = payload["stop_hook_active"]
+    if tool in GUARDED_TOOLS["claude-code"]:
+        cwd = target_directory(cwd, payload.get("tool_input"))
     parent_session = None
     if tool in GUARDED_TOOLS["claude-code"] and "agent_id" in payload:
         # Subagent tool hooks carry the root session and the concrete subagent separately.

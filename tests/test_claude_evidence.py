@@ -93,6 +93,8 @@ class ClaudeEvidenceTests(unittest.TestCase):
         return self.api.verify_completion(self.scope, self.request(purpose="completion"))
 
     def test_a_review_free_plan_completes_and_status_reports_done(self):
+        # Completion reads shared history that holds Claude check rows, so it needs the `delegation._ledger`
+        # identity relaxation; without it the history reads as corrupt.
         self.plan()
         self.checked()
         result = self.verify()
@@ -116,20 +118,26 @@ class ClaudeEvidenceTests(unittest.TestCase):
         self.assertNotEqual(self.status()["task"]["state"], "DONE")
         self.assertTrue(any("review" in str(blocker).lower() for blocker in result["blockers"]), result["blockers"])
 
-    def test_review_controls_and_linked_plans_refuse_for_claude_with_their_reason(self):
+    def test_review_and_worker_controls_and_linked_plans_refuse_for_claude(self):
         self.plan(review=True)
-        with self.assertRaisesRegex(Exception, "subagent observation source"):
-            self.api.prepare_review(self.scope, self.request(role="review"))
-        with self.assertRaisesRegex(Exception, "subagent observation source"):
-            self.api.collect_review(self.scope, self.request(attempt_id="a", parent_turn_id="t", spawn_item_id="s"))
-        with self.assertRaisesRegex(Exception, "subagent observation source"):
-            self.api.assess_review(self.scope, self.request(attempt_id="a", assessment={}))
-        with patch.object(self.api, "_plan", return_value=dict(version=2)), self.assertRaisesRegex(Exception, "Codex-only"):
+        prepare = dict(dispatch_id="d", job_id="j", selection={}, control_observation={}, discovery_expectation={},
+                       guidance={}, resource_units=1, coverage={}, criteria=[], assignment={})
+        for call, request in ((self.api.prepare_review, prepare),
+                              (self.api.collect_review, dict(attempt_id="a", parent_turn_id="t", spawn_item_id="s")),
+                              (self.api.assess_review, dict(attempt_id="a", assessment={}))):
+            with self.subTest(call.__name__), self.assertRaisesRegex(Exception, "Unsupported task client"):
+                call(self.scope, self.request(**request))
+        with patch.object(self.api, "_plan", return_value=dict(version=2)), \
+                self.assertRaisesRegex(Exception, "Codex client"):
             self.api.plan_evidence(self.scope, self.request(plan={}))
 
     def test_a_codex_request_cannot_touch_a_claude_scope(self):
-        with self.assertRaises(Exception):
-            self.api.plan_evidence(self.scope, dict(self.request(plan={}), client="codex"))
+        # A valid plan, so the refusal can only come from the client binding.
+        valid = self.plan()["task"]["evidence"]
+        self.assertIsNotNone(valid)
+        request = dict(self.request(plan=self.api._load_plan(self.scope, self.identity)), client="codex")
+        with self.assertRaisesRegex(Exception, "binding changed"):
+            self.api.plan_evidence(self.scope, request)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ class ClaudeNormalizeTests(unittest.TestCase):
 
     def test_identity_comes_from_prompt_and_tool_use_ids_and_leaks_no_payload(self):
         event = self.normalize(prompt_id="prompt-1", tool_use_id="call-1", transcript_path="/private/t.jsonl",
-                               tool_input={"file_path": "/private/a", "old_string": "PRIVATE"})
+                               tool_input={"file_path": "/tmp/a", "old_string": "PRIVATE"})
         self.assertEqual((event.kind, event.client, event.session_id), ("PreToolUse", "claude-code", "session-1"))
         self.assertEqual(event.cwd, Path("/tmp"))
         self.assertEqual((event.turn_id, event.tool_call_id, event.tool_name), ("prompt-1", "call-1", "Edit"))
@@ -91,6 +91,49 @@ class ClaudeNormalizeTests(unittest.TestCase):
         self.assertEqual((read.session_id, read.hook_parent_session_id), ("session-1", None))
         with self.assertRaises(StartupError):
             self.normalize(agent_id="session-1")
+
+
+class WriteTargetScopeTests(unittest.TestCase):
+    """A guarded write is judged where it lands, not where the session happens to be."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        self.base = Path(tempfile.mkdtemp(prefix="claude-target-")).resolve()
+        self.addCleanup(lambda: shutil.rmtree(self.base, ignore_errors=True))
+        self.repo, self.other = self.base / "repo", self.base / "other"
+        (self.repo / "src").mkdir(parents=True)
+        self.other.mkdir()
+
+    def event(self, cwd, tool="Edit", kind="PreToolUse", **tool_input):
+        payload = {"hook_event_name": kind, "session_id": "s", "cwd": str(cwd), "tool_name": tool, "tool_input": tool_input}
+        return claude_code.normalize_runtime(payload)
+
+    def test_a_target_inside_the_session_cwd_keeps_the_cwd(self):
+        self.assertEqual(self.event(self.repo, file_path=str(self.repo / "src/a.py")).cwd, self.repo)
+        self.assertEqual(self.event(self.repo, file_path="src/new/deeper.py").cwd, self.repo)
+
+    def test_a_target_in_another_checkout_is_decided_there(self):
+        # The session sits in an unrelated directory but edits a file in the enrolled checkout.
+        for kind in ("PreToolUse", "PostToolUse"):
+            self.assertEqual(self.event(self.other, kind=kind, file_path=str(self.repo / "src/a.py")).cwd, self.repo / "src")
+        self.assertEqual(self.event(self.other, tool="Write", file_path=str(self.repo / "src/missing/a.py")).cwd, self.repo / "src")
+        self.assertEqual(self.event(self.other, tool="NotebookEdit", notebook_path=str(self.repo / "n.ipynb")).cwd, self.repo)
+
+    def test_a_symlink_cannot_hide_the_real_destination(self):
+        (self.repo / "link").symlink_to(self.other)
+        self.assertEqual(self.event(self.repo, file_path=str(self.repo / "link/x.py")).cwd, self.other)
+
+    def test_relative_escapes_resolve_before_the_scope_is_chosen(self):
+        self.assertEqual(self.event(self.repo / "src", file_path="../../other/x.py").cwd, self.other)
+
+    def test_an_unreadable_path_keeps_the_cwd_and_other_tools_are_untouched(self):
+        for tool_input in ({}, {"file_path": ""}, {"file_path": 5}, {"file_path": "bad\x00"}, {"file_path": "x" * 5000}, "text"):
+            payload = {"hook_event_name": "PreToolUse", "session_id": "s", "cwd": str(self.other), "tool_name": "Edit",
+                       "tool_input": tool_input}
+            self.assertEqual(claude_code.normalize_runtime(payload).cwd, self.other, tool_input)
+        bash = self.event(self.other, tool="Bash", file_path=str(self.repo / "a.py"))
+        self.assertEqual(bash.cwd, self.other)
 
 
 class ClaudeRenderTests(unittest.TestCase):

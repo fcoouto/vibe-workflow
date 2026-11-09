@@ -102,12 +102,38 @@ class StreamObservationTests(unittest.TestCase):
             with self.assertRaises(startup.StartupError):
                 claude_setup.verify_facts(facts, bad, bootstrap)
 
+    def test_exactly_one_session_start_hook_must_be_observed(self):
+        extra = ({"type": "system", "subtype": "hook_response", "hook_name": "SessionStart:startup",
+                  "hook_event": "SessionStart", "stdout": "", "stderr": "", "exit_code": 0, "outcome": "success"},)
+        with self.assertRaisesRegex(startup.StartupError, "exactly one SessionStart"):
+            self.observe(stream(PACKAGE, self.checkout, self.authority, extra=extra))
+
+    def test_forged_case_pointers_fail_closed_instead_of_raising_index_errors(self):
+        facts = self.good()
+        for label, hook_index in (("stop-hook", 1), ("out-of-range", 99), ("negative", -1), ("not-int", "0"), ("bool", True)):
+            forged = copy.deepcopy(facts)
+            forged["cases"]["startup-context"]["hook_index"] = hook_index
+            observations = {"startup-context": [self.safe_proof(forged)]}
+            with self.subTest(label), self.assertRaises(startup.StartupError):
+                claude_setup.verify_facts(forged, observations, [claude_setup.case_proof(forged, "init")])
+        forged = copy.deepcopy(facts)
+        forged["cases"]["unobserved-case"] = dict(forged["cases"]["startup-context"])
+        with self.assertRaises(startup.StartupError):
+            claude_setup.verify_facts(forged, {}, [claude_setup.case_proof(forged, "init")])
+
+    def safe_proof(self, facts):
+        try:
+            return claude_setup.case_proof(facts, "startup-context")
+        except (LookupError, TypeError):
+            return dict(reference="claude-observation:session-1#startup-context", sha256="0" * 64)
+
     def test_only_the_adapter_issues_a_witness(self):
         from runtime import doctor
         facts = self.good()
         witness = claude_setup.issue_witness(binding=dict(accepted_scope_digest="a" * 64,
             attempt_ref=dict(reference="fixture:attempt", sha256="b" * 64), transaction_id="t"),
-            executable=sys.executable, package=PACKAGE, facts=facts)
+            executable=sys.executable, package=PACKAGE, raw=stream(PACKAGE, self.checkout, self.authority),
+            checkout=self.checkout, authority=self.authority)
         content = doctor._native_witness_content(witness)
         self.assertEqual(content["native"]["surface"], "claude-code-cli")
         self.assertEqual(set(content["observations"]), {"startup-context"})
@@ -116,29 +142,45 @@ class StreamObservationTests(unittest.TestCase):
 
 
 class BundleScopeTests(unittest.TestCase):
-    def test_only_the_content_claude_loads_changes_the_configuration_digest(self):
+    def package(self):
         import shutil
         base = Path(tempfile.mkdtemp(prefix="claude-bundle-")).resolve()
         self.addCleanup(lambda: shutil.rmtree(base, ignore_errors=True))
         package, checkout, config_dir = base / "package", base / "checkout", base / "config"
-        for directory in (".claude-plugin", "hooks", "clients", "docs", "tests", "assets"):
+        for directory in (".claude-plugin", "hooks", "clients", "docs", "tests", "assets", ".agents", ".codex-plugin"):
             (package / directory).mkdir(parents=True)
-        for relative in (".claude-plugin/plugin.json", "hooks/claude-code.json", "clients/a.md", "docs/a.md",
-                         "tests/t.py", "assets/a.bin"):
+        for relative in (".claude-plugin/plugin.json", "hooks/claude-code.json", "clients/a.md", "docs/a.md", "tests/t.py",
+                         "assets/a.bin", ".agents/m.json", ".codex-plugin/plugin.json", "README.md", "AGENTS.md", "LICENSE"):
             (package / relative).write_text("{}" if relative.endswith("json") else "x")
         checkout.mkdir()
         config_dir.mkdir()
         config = dict(package_root=str(package), claude_config=str(config_dir), plugin_name="p",
                       roots=[str(checkout), str(checkout)])
-        digest = lambda: setup.current_configuration(config, checkout)["digest"]
+        return package, (lambda: setup.current_configuration(config, checkout)["digest"])
+
+    def test_content_claude_never_loads_does_not_change_the_configuration_digest(self):
+        package, digest = self.package()
         original = digest()
-        for ignored in ("docs/a.md", "tests/t.py", "assets/a.bin"):
+        for ignored in ("docs/a.md", "tests/t.py", "assets/a.bin", ".agents/m.json", ".codex-plugin/plugin.json",
+                        "README.md", "AGENTS.md", "LICENSE"):
             (package / ignored).write_text("changed " + ignored)
             self.assertEqual(digest(), original, ignored)
+
+    def test_every_other_entry_including_auto_loaded_components_changes_it(self):
+        # Claude auto-loads these by name, so a new one must drift the qualification, never pass unnoticed.
+        package, digest = self.package()
+        for new in ("agents/a.md", "commands/c.md", ".mcp.json", ".lsp.json", "settings.json", "bin/tool",
+                    "output-styles/s.md", "workflows/w.md", "themes/t.json", "monitors/m.json", "skills/x/SKILL.md",
+                    "scripts/workflow.py", "runtime/x.py", "unknown-component/file"):
+            before = digest()
+            target = package / new
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("new")
+            self.assertNotEqual(digest(), before, new)
         for loaded in ("clients/a.md", "hooks/claude-code.json"):
+            before = digest()
             (package / loaded).write_text("changed " + loaded)
-            self.assertNotEqual(digest(), original, loaded)
-            original = digest()
+            self.assertNotEqual(digest(), before, loaded)
 
 
 class ClaudeQualificationTests(unittest.TestCase):
@@ -160,13 +202,14 @@ class ClaudeQualificationTests(unittest.TestCase):
     def witness(self, journal=None, **kwargs):
         journal = journal or self.journal
         authority = self.acquired.authority_path
-        facts = claude_setup.observe_stream(stream(PACKAGE, self.fixture.repo, authority, **kwargs),
-                                            package=PACKAGE, checkout=self.fixture.repo, authority=authority)
+        raw = stream(PACKAGE, self.fixture.repo, authority, **kwargs)
+        facts = claude_setup.observe_stream(raw, package=PACKAGE, checkout=self.fixture.repo, authority=authority)
         binding = dict(accepted_scope_digest=startup._canonical_digest(self.identity),
                        attempt_ref=dict(reference="fixture:approved-claude-observation", sha256="c" * 64),
                        transaction_id=journal["transaction_id"])
         self.attempt_ref = binding["attempt_ref"]
-        return claude_setup.issue_witness(binding=binding, executable=sys.executable, package=PACKAGE, facts=facts), facts
+        return claude_setup.issue_witness(binding=binding, executable=sys.executable, package=PACKAGE, raw=raw,
+                                          checkout=self.fixture.repo, authority=authority), facts
 
     def assessment(self, witness_facts):
         proof = claude_setup.case_proof(witness_facts, "startup-context")
@@ -274,6 +317,33 @@ class ClaudeQualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(startup.StartupError, "Managed"):
                 self.collect()
 
+    def test_project_hooks_could_have_produced_the_observed_events_so_they_block_collection(self):
+        (self.fixture.repo / ".claude").mkdir(exist_ok=True)
+        for name in ("settings.json", "settings.local.json"):
+            path = self.fixture.repo / ".claude" / name
+            path.write_text(json.dumps({"hooks": {"SessionStart": []}}))
+            with self.subTest(name), self.assertRaisesRegex(startup.StartupError, "Project hooks"):
+                self.collect()
+            path.unlink()
+
+    def test_configuration_fields_must_match_the_receipts_client(self):
+        from runtime import setup_claude
+        content = startup._canonical_plain(self.collect().content)
+        setup.receipt_shape(content)
+        for field in ("codex_home", "plugin_id"):
+            changed = copy.deepcopy(content)
+            changed["configuration"][field] = "x"
+            with self.subTest(field), self.assertRaisesRegex(startup.StartupError, "unexpected fields"):
+                setup_claude.check_receipt(changed)
+        # A Codex-shaped receipt may not carry Claude fields, which would select the weaker Claude observer.
+        codex_like = dict(identity=dict(client="codex"), source={}, configuration=dict(codex_home="x", digest="d"))
+        setup_claude.check_receipt(codex_like)
+        for field in ("claude_config", "plugin_name"):
+            tampered = copy.deepcopy(codex_like)
+            tampered["configuration"][field] = "x"
+            with self.subTest(field), self.assertRaises(startup.StartupError):
+                setup_claude.check_receipt(tampered)
+
     def test_receipts_are_refused_when_their_facts_or_surface_do_not_hold(self):
         content = startup._canonical_plain(self.collect().content)
         setup.receipt_shape(content)
@@ -290,9 +360,11 @@ class ClaudeQualificationTests(unittest.TestCase):
     def test_claude_successors_wait_for_a_managed_behavior_source(self):
         issued = self.collect()
         reference = dict(reference=str(self.fixture.directory / "transaction.json") + "#setup:" + "a" * 64, sha256="b" * 64)
-        with self.assertRaisesRegex(startup.StartupError, "not available yet"):
-            setup.collect_retained_setup(reference, self.identity, "next", self.assessment(
-                startup._canonical_plain(issued.content)["source"]["claude_observation"]), witness=object())
+        facts = startup._canonical_plain(issued.content)["source"]["claude_observation"]
+        # An assessment-only successor is refused explicitly too, not by an incidental later check.
+        for options in (dict(witness=object()), dict(readiness=object()), {}):
+            with self.subTest(options=list(options)), self.assertRaisesRegex(startup.StartupError, "not available yet"):
+                setup.collect_retained_setup(reference, self.identity, "next", self.assessment(facts), **options)
         with self.assertRaisesRegex(startup.StartupError, "managed behavior source"):
             setup.collect_setup(self.witness()[0], self.identity, self.journal["transaction_id"],
                                 self.assessment(self.witness()[1]), predecessor=reference)
