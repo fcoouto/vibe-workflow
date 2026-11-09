@@ -518,6 +518,79 @@ class ChatGPTMethodTests(StageHarness):
         self.assertNotIn("cred_", json.dumps(run.results))
 
 
+UPSTREAM = dict(type="APIError", status=403, retryAfterMs=1500,
+                message="Not eligible (subscription_sharing_user_not_eligible), see https://help.openai.com/x?t=tok-not-real",
+                response=dict(body=json.dumps(dict(error=dict(code="subscription_sharing_user_not_eligible", type="invalid_request",
+                                                              message="plan not eligible", access_token="tok-not-real",
+                                                              param="reasoning.effort")))))
+
+
+class ChatGPTRequestFactsTests(StageHarness):
+    connect = ChatGPTTests.connect
+
+    def requested(self, **knobs):
+        run, ledger, server, *_ = self.connect(**knobs)
+        run.redact.add_secret("tok-not-real")
+        chatgpt.select_model(run)
+        chatgpt.request(run)
+        result = run.results["stages"]["chatgpt"]
+        text = json.dumps(run.output(run.results))
+        for secret in ("tok-not-real", "ref-not-real", "https://"):
+            self.assertNotIn(secret, text)
+        return run, ledger, server, result
+
+    def test_an_upstream_error_is_recorded_and_classified(self):
+        run, ledger, server, result = self.requested(upstream_error=UPSTREAM,
+                                                     upstream_retry=dict(attempt=2, at=1, error=dict(type="RateLimit", message="slow")))
+        self.assertIn("request_failed_upstream", result["failures"])
+        self.assertNotIn("not_one_primary_request", result["failures"])
+        self.assertEqual(result["upstream_error"], "subscription_sharing_user_not_eligible")
+        facts = result["session_facts"]
+        self.assertEqual(facts["messages_by_type"], dict(user=1, assistant=1, idle=1))
+        self.assertTrue(facts["user_message"])
+        assistant = facts["assistant"][0]
+        self.assertEqual((assistant["finish"], assistant["time_completed"], assistant["tokens"], assistant["cost_present"]),
+                         ("error", False, {}, False))
+        self.assertEqual(assistant["model"], dict(providerID="openai", id="gpt-test-mini", variant="low"))
+        error = assistant["error"]
+        self.assertEqual((error["type"], error["status"], error["retry_after_ms"]), ("APIError", 403, 1500))
+        self.assertIn("<url>", error["message"])
+        self.assertEqual(error["body"]["fields"], dict(code="subscription_sharing_user_not_eligible", type="invalid_request",
+                                                       message="plan not eligible", param="reasoning.effort"))
+        self.assertIn("subscription_sharing_user_not_eligible", error["body"]["codes"])
+        self.assertIn("access_token", error["body"]["keys"])
+        self.assertEqual(assistant["retry"]["attempt"], 2)
+        self.assertEqual(facts["idle"], [dict(outcome="failed", error_type="APIError")])
+        self.assertEqual([e["type"] for e in facts["events"]], ["session.status", "session.error", "session.status"])
+        self.assertEqual(facts["events"][0]["status"], dict(type="retry", attempt=1))
+        self.assertEqual(facts["request_body_keys"], ["id", "text"])
+        self.assertEqual((facts["variant"], facts["variants_listed"]), ("low", ["low", "medium"]))
+        self.assertEqual(facts["wait"]["reason"], "idle record after the prompt and the session not active")
+        self.assertEqual((facts["session"]["http"], facts["messages_http"]), (200, 200))
+        self.assertEqual(ledger.summary()["chatgpt"]["spent"], 1)
+
+    def test_a_normal_reply_records_the_same_facts_and_passes(self):
+        run, ledger, server, result = self.requested()
+        self.assertTrue(result["pass"], result)
+        assistant = result["session_facts"]["assistant"][0]
+        self.assertEqual((assistant["finish"], assistant["time_completed"], assistant["error"]), ("stop", True, None))
+        self.assertTrue(assistant["tokens"] and all(type(v) is int for v in assistant["tokens"].values()))
+        self.assertNotIn("upstream_error", result)
+
+    def test_a_wait_that_never_ends_still_records_the_facts(self):
+        run, ledger, server, *_ = self.connect()
+        chatgpt.select_model(run)
+
+        def stuck(session, after_ms, timeout=120):
+            raise safety.Blocker("session did not become idle")
+        run.wait_idle = stuck
+        with self.assertRaises(safety.Blocker):
+            chatgpt.request(run)
+        facts = run.results["stages"]["chatgpt"]["session_facts"]
+        self.assertEqual(facts["wait"]["reason"], "timeout: session did not become idle")
+        self.assertEqual(facts["messages_by_type"]["user"], 1)
+
+
 class ChatGPTAutoTests(StageHarness):
     connect = ChatGPTTests.connect
 

@@ -39,7 +39,9 @@ class ProbeServer(FakeOpenCode):
                                dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
                                dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")]
         self.integration_pending, self.integration_gets, self.oauth_started = 0, 0, []
-        self.oauth_extra = {}  # extra fields of the attempt's final status (refusal codes, unknown shapes)
+        self.oauth_extra = {}
+        # The upstream answer to a transmitted request: None (a normal reply) or a `Session.StructuredError`.
+        self.upstream_error, self.upstream_retry = None, None  # extra fields of the attempt's final status (refusal codes, unknown shapes)
         # What `GET /api/model` lists for the openai provider once the ChatGPT login is connected.
         self.openai_models = [dict(id="gpt-test-mini", providerID="openai", variants=["low", "medium"])]
 
@@ -184,10 +186,32 @@ class ProbeServer(FakeOpenCode):
             return 200, dict(data=self.sessions[session]["record"]), 1.0
         if method == "POST" and len(parts) == 4 and parts[3] == "command":
             return self._command(parts[2], body["name"], now)
+        if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.upstream_error is not None:
+            return self._failed_prompt(parts[2], body, now)
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and (
                 TOOL_PROMPT_MARK in body["text"] or EDIT_PROMPT_MARK in body["text"]):
             return self._scripted_prompt(parts[2], body, now)
         return super().request(method, path, body, query, timeout)
+
+    def _failed_prompt(self, sid, body, now):
+        """The request is transmitted, then the upstream answers with an error: no tokens, no completion time."""
+        state = self.sessions[sid]
+        state["messages"].append(dict(id=body.get("id") or self._id("msg"), type="user", time=dict(created=now)))
+        state["prompted"] = True
+        self._request_hook(sid, "primary")
+        model = state["record"]["model"]
+        assistant = dict(id=self._id("msg"), type="assistant", agent="build", finish="error", rawFinish="error",
+                         model=model, content=[], error=dict(self.upstream_error), time=dict(created=now))
+        if self.upstream_retry:
+            assistant["retry"] = dict(self.upstream_retry)
+        state["messages"].append(assistant)
+        state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", error=dict(self.upstream_error),
+                                      time=dict(created=now + 2)))
+        self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(
+            type="retry", attempt=1, message="retrying", next=now + 1000))))
+        self.events.append(dict(type="session.error", data=dict(sessionID=sid, error=dict(self.upstream_error))))
+        self.events.append(dict(type="session.status", data=dict(sessionID=sid, status=dict(type="idle"))))
+        return 200, dict(data=state["messages"][0]), 1.0
 
     def _scripted_prompt(self, sid, body, now):
         state = self.sessions[sid]
