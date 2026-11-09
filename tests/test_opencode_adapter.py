@@ -5,6 +5,7 @@ import copy
 import json
 from pathlib import Path
 import re
+import time
 import unittest
 from unittest.mock import patch
 
@@ -572,27 +573,62 @@ def permission(action, resources, effect="allow"):
 class ManagedDenies(unittest.TestCase):
     """S3.3d: image generation and model edits of OpenCode configuration (clients/opencode.md)."""
 
+    ROOTS = opencode.config_roots(CONFIG_PATHS["env"], CONFIG_PATHS["home"])
+
+    def protected(self, resource, directory=None, extra=()):
+        return opencode.protected_path(resource, extra, directory, self.ROOTS)
+
+    def test_config_roots(self):
+        self.assertEqual(self.ROOTS, [tuple(root) for root in CONFIG_PATHS["roots"]])
+        self.assertEqual(opencode.config_roots({}, None),
+                         [("etc", "opencode"), ("library", "application support", "opencode"), ("c", "programdata", "opencode")])
+        # Relative or unreadable values are not roots; they never loosen the built-in ones.
+        self.assertEqual(opencode.config_roots({"XDG_CONFIG_HOME": "rel", "OPENCODE_CONFIG_DIR": "/"}, ""),
+                         opencode.config_roots({}, None))
+
     def test_config_path_table(self):
-        for resource in CONFIG_PATHS["deny"]:
-            self.assertTrue(opencode.protected_path(resource), resource)
-        for resource in CONFIG_PATHS["allow"]:
-            self.assertFalse(opencode.protected_path(resource), resource)
-        for resource in CONFIG_PATHS["unparseable"] + [None, 5, ["a"], {"path": "a"}, "x" * 5000]:
-            self.assertTrue(opencode.protected_path(resource), repr(resource)[:40])
+        for directory in [CONFIG_PATHS["directory"]] + CONFIG_PATHS["unknown_directories"]:
+            known = directory == CONFIG_PATHS["directory"]
+            for resource in CONFIG_PATHS["deny"]:
+                self.assertTrue(self.protected(resource, directory), (directory, resource))
+            for resource in CONFIG_PATHS["deny_without_directory"]:
+                self.assertEqual(self.protected(resource, directory), not known, (directory, resource))
+            for resource in CONFIG_PATHS["allow"]:
+                self.assertFalse(self.protected(resource, directory), (directory, resource))
+            for resource in CONFIG_PATHS["unparseable"] + [None, 5, ["a"], {"path": "a"}, "x" * 5000]:
+                self.assertTrue(self.protected(resource, directory), repr(resource)[:40])
+
+    def test_session_directory_inside_a_config_directory(self):
+        for case in CONFIG_PATHS["config_directories"]:
+            for resource in case.get("deny", []):
+                self.assertTrue(self.protected(resource, case["directory"]), (case["directory"], resource))
+            for resource in case.get("allow", []):
+                self.assertFalse(self.protected(resource, case["directory"]), (case["directory"], resource))
 
     def test_extra_paths_add_and_never_loosen(self):
         extra = opencode.extra_paths([".cursor", "Tools\\Agents", "/rules/"])
         self.assertEqual(extra, [(".cursor",), ("tools", "agents"), ("rules",)])
-        for resource in ("a/.cursor/x", ".CURSOR", "x/tools/agents/y.md", "rules/z", "/abs/rules/z"):
-            self.assertTrue(opencode.protected_path(resource, extra), resource)
-        for resource in ("tools/x.md", "agents.md", "x/tools/y/agents/z"):
-            self.assertFalse(opencode.protected_path(resource, extra), resource)
-        for resource in CONFIG_PATHS["deny"]:
-            self.assertTrue(opencode.protected_path(resource, extra), resource)
+        for directory in (None, "/repo"):
+            for resource in ("a/.cursor/x", ".CURSOR", "x/tools/agents/y.md", "rules/z", "/abs/rules/z"):
+                self.assertTrue(self.protected(resource, directory, extra), resource)
+            for resource in ("tools/x.md", "agents.md", "x/tools/y/agents/z"):
+                self.assertFalse(self.protected(resource, directory, extra), resource)
+            for resource in CONFIG_PATHS["deny"]:
+                self.assertTrue(self.protected(resource, directory, extra), resource)
         self.assertEqual(opencode.extra_paths(None), [])
         self.assertEqual(opencode.extra_paths([]), [])
-        for bad in ("a", [""], [".."], ["a/../b"], [5], ["x" * 300], ["a"] * 65, ["a\u0000"], {"a": 1}, ["."]):
+        self.assertEqual(len(opencode.extra_paths(["a"] * 32)), 32)
+        self.assertEqual(opencode.extra_paths(["/".join("abcdefghijklmnop")]), [tuple("abcdefghijklmnop")])
+        for bad in ("a", [""], [".."], ["a/../b"], [5], ["x" * 300], ["a"] * 33, ["/".join("abcdefghijklmnopq")],
+                    ["a\u0000"], {"a": 1}, ["."]):
             self.assertIsNone(opencode.extra_paths(bad), repr(bad)[:40])
+
+    def test_pathological_inputs_stay_fast(self):
+        extra = opencode.extra_paths(["/".join(["a"] * 15 + [f"z{index}"]) for index in range(32)])
+        resources = ["/".join(["a"] * 2047 + ["b"])] * 256
+        began = time.monotonic()
+        self.assertIsNone(opencode.managed_denial("patch", resources, extra, "/repo", self.ROOTS))
+        self.assertLess(time.monotonic() - began, 2.0)
 
     def test_managed_denial_by_action(self):
         self.assertEqual(opencode.managed_denial("experimental_image_generate", ["openai/gpt-image-1"]), "image_generation")

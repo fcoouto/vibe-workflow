@@ -8,7 +8,8 @@ import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import plugin, {
-  createRoutingPlugin, credentialEnvName, derivedSession, extraPaths, managedDenial, protectedPath, routeFacts, spawnModel,
+  configRoots, createRoutingPlugin, credentialEnvName, derivedSession, extraPaths, managedDenial, protectedPath, routeFacts,
+  spawnModel,
   CONTRACT_VERSION,
 } from "../../runtime/adapters/opencode_plugin.ts"
 
@@ -133,12 +134,15 @@ const created = (sessionID: string, parentID?: string) =>
 
 async function start(control: Record<string, unknown> = {}, sessions = {}, config: Record<string, unknown> = {}) {
   const fake = child(control)
-  const { noEvents, options, ...settings } = config
+  const { noEvents, options, location, ...settings } = config
   const { ctx, hooks, lookups, state, emit } = fakeCtx(sessions, (options ?? {}) as Record<string, unknown>)
   if (noEvents) delete (ctx as any).event  // a host without an event stream
+  if (location === null) delete (ctx as any).location  // a host that does not say where the instance is
+  else if (location !== undefined) (ctx as any).location = { directory: location }
   const refusals: string[] = []  // attach's internal refusal reasons, seen only through the test hook
+  // A fixed environment, so the host's own OPENCODE_CONFIG_DIR or XDG_CONFIG_HOME never changes a result.
   const instance = createRoutingPlugin({ argv: fake.argv, timeoutMs: TIMEOUT, spawnGraceMs: GRACE,
-    onRefusal: (reason: string) => refusals.push(reason), ...settings })
+    onRefusal: (reason: string) => refusals.push(reason), environment: { env: {}, home: "/home/test" }, ...settings })
   const cleanup = await instance.setup(ctx)
   const rpc = (method: string, input: unknown = {}) => state.handlers[method](input, { signal: new AbortController().signal })
   // The launcher's attach: the child is told to answer the verification normally, then the test's modes come back.
@@ -1321,29 +1325,53 @@ test("S3.3d: image generation is denied for managed sessions by action and by to
   } finally { t.stop() }
 })
 
-test("S3.3d: managed edits of every config path spelling are denied; ordinary edits pass (table)", async () => {
-  const t = await start()
-  try {
-    await t.attach()
-    for (const action of ["edit", "write", "patch"]) {
-      for (const resource of CONFIG_PATHS.deny) {
-        assert.equal((await evaluated(t, permissionEvent(MANAGED, action, [resource]))).effect, "deny", `${action} ${resource}`)
-        // A patch lists every file it touches; one config path among ordinary ones denies the whole patch.
-        assert.equal((await evaluated(t, permissionEvent(MANAGED, action, ["src/x.ts", resource]))).effect, "deny", resource)
+const TABLE_ENVIRONMENT = { env: CONFIG_PATHS.env, home: CONFIG_PATHS.home }
+
+test("S3.3d: managed edits of every config path spelling are denied; ordinary edits pass (table, both directory modes)", async () => {
+  for (const location of [CONFIG_PATHS.directory, null, "relative/dir"]) {
+    const known = location === CONFIG_PATHS.directory
+    const t = await start({}, {}, { location, environment: TABLE_ENVIRONMENT })
+    try {
+      await t.attach()
+      for (const action of ["edit", "write", "patch"]) {
+        for (const resource of CONFIG_PATHS.deny) {
+          assert.equal((await evaluated(t, permissionEvent(MANAGED, action, [resource]))).effect, "deny", `${location} ${action} ${resource}`)
+          // A patch lists every file it touches; one config path among ordinary ones denies the whole patch.
+          assert.equal((await evaluated(t, permissionEvent(MANAGED, action, ["src/x.ts", resource]))).effect, "deny", resource)
+        }
+        for (const resource of CONFIG_PATHS.deny_without_directory) {
+          const event = await evaluated(t, permissionEvent(MANAGED, action, [resource]))
+          assert.equal(event.effect, known ? "allow" : "deny", `${location} ${action} ${resource}`)
+        }
+        for (const resource of CONFIG_PATHS.allow) {
+          const event = await evaluated(t, permissionEvent(MANAGED, action, [resource]))
+          assert.equal(event.effect, "allow", `${location} ${action} ${resource}`)
+          assert.equal(event.message, undefined)
+        }
+        assert.equal((await evaluated(t, permissionEvent(MANAGED, action, CONFIG_PATHS.allow))).effect, "allow")
       }
-      for (const resource of CONFIG_PATHS.allow) {
-        const event = await evaluated(t, permissionEvent(MANAGED, action, [resource]))
-        assert.equal(event.effect, "allow", `${action} ${resource}`)
-        assert.equal(event.message, undefined)
+      // Reading config and other actions on config paths are not this rule's business.
+      for (const action of ["read", "external_directory", "glob"]) {
+        assert.equal((await evaluated(t, permissionEvent(MANAGED, action, [".opencode/command/x.md"]))).effect, "allow")
       }
-      assert.equal((await evaluated(t, permissionEvent(MANAGED, action, CONFIG_PATHS.allow))).effect, "allow")
-    }
-    // Reading config and other actions on config paths are not this rule's business.
-    for (const action of ["read", "external_directory", "glob"]) {
-      assert.equal((await evaluated(t, permissionEvent(MANAGED, action, [".opencode/command/x.md"]))).effect, "allow")
-    }
-    assert.equal(t.fake.requests().length, 0)
-  } finally { t.stop() }
+      assert.equal(t.fake.requests().length, 0)
+    } finally { t.stop() }
+  }
+})
+
+test("S3.3d: an instance whose directory is a config directory denies its agent, command and mode edits", async () => {
+  for (const item of CONFIG_PATHS.config_directories) {
+    const t = await start({}, {}, { location: item.directory, environment: TABLE_ENVIRONMENT })
+    try {
+      await t.attach()
+      for (const resource of item.deny ?? []) {
+        assert.equal((await evaluated(t, permissionEvent(MANAGED, "edit", [resource]))).effect, "deny", `${item.directory} ${resource}`)
+      }
+      for (const resource of item.allow ?? []) {
+        assert.equal((await evaluated(t, permissionEvent(MANAGED, "edit", [resource]))).effect, "allow", `${item.directory} ${resource}`)
+      }
+    } finally { t.stop() }
+  }
 })
 
 test("S3.3d: missing or odd edit resources deny for managed sessions only", async () => {
@@ -1425,6 +1453,33 @@ test("S3.3d: health lists the denials the shim applies to managed sessions", asy
   const t = await start()
   try {
     assert.deepEqual((await t.rpc("health")).managed_denies, ["config_edit", "image_generation"])
+  } finally { t.stop() }
+})
+
+test("S3.3d: an invalid protected_paths option makes health not ready, without asking the child, and still denies edits", async () => {
+  for (const bad of [[".."], "a", Array(33).fill("a"), ["a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q"]]) {
+    const t = await start({}, {}, { options: { protected_paths: bad } })
+    try {
+      assert.deepEqual(await t.rpc("health"), { state: "not_ready", reason: "protected_paths_invalid", version: 1 })
+      assert.equal(t.fake.requests("status").length, 0)
+      await t.attach()
+      assert.equal((await evaluated(t, permissionEvent(MANAGED, "edit", ["src/x.ts"]))).effect, "deny")
+    } finally { t.stop() }
+  }
+  const ok = await start({}, {}, { options: { protected_paths: Array.from({ length: 32 }, (_, i) => `a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p${i}`) } })
+  try { assert.equal((await ok.rpc("health")).state, "ok") } finally { ok.stop() }
+})
+
+test("S3.3d: the largest protected_paths option and a 256-file patch of deep paths stay fast", async () => {
+  const options = { protected_paths: Array.from({ length: 32 }, (_, i) => [...Array(15).fill("a"), `z${i}`].join("/")) }
+  const t = await start({}, {}, { options, location: CONFIG_PATHS.directory, environment: TABLE_ENVIRONMENT })
+  try {
+    await t.attach()
+    const resources = Array(256).fill([...Array(2047).fill("a"), "b"].join("/"))
+    const began = performance.now()
+    assert.equal((await evaluated(t, permissionEvent(MANAGED, "patch", resources))).effect, "allow")
+    assert.equal((await evaluated(t, permissionEvent(MANAGED, "patch", [...resources, "x"]))).effect, "deny")  // over 256 files
+    assert.ok(performance.now() - began < 500, `took ${performance.now() - began} ms`)
   } finally { t.stop() }
 })
 
@@ -1942,9 +1997,11 @@ test("TS extraction agrees with the Python adapter on the parity cases", { skip:
   for (const item of cases.spawns) assert.deepEqual(spawnModel(item.model), item.requested, item.model)
   for (const item of cases.sessions) assert.equal(derivedSession(item.id), item.derived, item.id)
   const configured = extraPaths([".cursor", "Tools\\Agents"])
+  for (const item of cases.roots) assert.deepEqual(configRoots(item.env, item.home), item.roots, JSON.stringify(item.env))
   for (const item of cases.paths) {
-    assert.equal(protectedPath(item.resource), item.protected, JSON.stringify(item.resource)?.slice(0, 60))
-    assert.equal(protectedPath(item.resource, configured), item.configured, JSON.stringify(item.resource)?.slice(0, 60))
+    const where = `${JSON.stringify(item.resource)?.slice(0, 60)} in ${item.directory}`
+    assert.equal(protectedPath(item.resource, [], item.directory, cases.table_roots), item.protected, where)
+    assert.equal(protectedPath(item.resource, configured, item.directory, cases.table_roots), item.configured, where)
   }
   for (const item of cases.extras) assert.deepEqual(extraPaths(item.option), item.paths, JSON.stringify(item.option))
   for (const item of cases.denials) {
