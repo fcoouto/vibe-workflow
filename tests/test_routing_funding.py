@@ -152,7 +152,7 @@ class SharedOrganizationTests(Funded):
     def test_blocked_organization_cannot_hide_behind_an_unlabelled_pool(self):
         self.fund()
         with self.ledger.transaction() as data:
-            data['organizations']['org']['blocked'] = True
+            data['organizations']['org']['legacy_block'] = True  # derived block (S3.6a)
         pools = dict(labelled=funded_pool('org'), bare=dict(billing_class='api_grant', windows=[window()]))
         for pool in ('labelled', 'bare'):
             result = self.admit('a-' + pool, [route('r', pool, 'api_grant', 'acct', {'credit': M})], pools)
@@ -216,9 +216,11 @@ class SharedOrganizationTests(Funded):
         self.ledger.close_attempt('a', 'uncertain')
         self.assertEqual(self.ledger.credit_headroom('org'), 3_800_000)
         self.assertIn('a', budget.Ledger.open_holds(self.ledger.snapshot()))
-        self.ledger.close_attempt('a', 'complete')
-        self.assertEqual(self.ledger.credit_headroom('org'), 9_800_000)
-        self.assertEqual(budget.Ledger.open_holds(self.ledger.snapshot()), {})
+        # S3.6a: a dollar hold never closes without settlement; an uncertain one keeps everything until S3.6b.
+        with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
+            self.ledger.close_attempt('a', 'complete')
+        self.assertEqual(self.ledger.credit_headroom('org'), 3_800_000)
+        self.assertIn('a', budget.Ledger.open_holds(self.ledger.snapshot()))
 
     def test_gateway_needs_its_own_organization(self):
         self.fund('grant-org', balance=10 * M)
@@ -308,7 +310,11 @@ class OptionalOrganizationTests(Funded):
         self.assertEqual((result['route'], result['pressure']['e']), ('s', None))  # no API route, no expiry pressure
         with self.assertRaisesRegex(budget.BudgetError, 'organization_disabled'):
             self.begin('run', M, organization=budget.PERSONAL)
-        self.ledger.close_attempt('a', 'complete')
+        # S3.6a: a dispatched dollar hold closes only through settlement (here a measured zero cost).
+        usage = dict(source='provider_receipt', requests=[dict(kind='primary', model='m', cost_usd_micros=0, tokens=dict(
+            input=0, output=0, reasoning=0, cache_read=0, cache_write=0))])
+        self.assertEqual(routing.record_event(self.ledger, dict(event_id='c', attempt_id='a', kind='complete',
+                                                                usage=usage), NOW)['outcome'], 'complete')
         self.ledger.enable_organization(budget.PERSONAL, policy(), 1)
         self.assertEqual(self.admit('c', routes[:1], pools)['status'], 'admitted')
 

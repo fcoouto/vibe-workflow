@@ -3,6 +3,7 @@
 Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
 """
 from contextlib import closing
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -131,6 +132,32 @@ class Accounting(DispatchBase):
     def credit(self):
         with self.open_ledger() as ledger:
             return ledger.credit_headroom('personal')
+
+    def reasons(self, organization='personal'):
+        """The derived admission block (round 3): never a stored flag."""
+        return sorted(budget.Ledger.block_reasons(self.snapshot(), organization))
+
+    def admission_refused(self, organization='personal'):
+        data = self.snapshot()
+        revision = data['organizations'][organization]['revision']
+        try:
+            budget.Ledger._admission_checks(data, organization, revision, now())
+        except budget.BudgetError as error:
+            self.assertEqual(str(error), 'manual_recovery_required')
+            return True
+        return False
+
+    def start_run(self, run, organization='personal'):
+        """An S1 run call already in flight (begun and dispatched while the organization was admissible)."""
+        with self.open_ledger() as ledger:
+            revision = ledger.snapshot()['organizations'][organization]['revision']
+            ledger.begin(organization, 'task-' + run, run, 'digest', M, revision, now(),
+                         dict(account='na-' + run, task='task-' + run, windows=[]))
+            ledger.dispatch(run, 'count', revision, now())
+
+    def finish_run(self, run, actual):
+        with self.open_ledger() as ledger:
+            ledger.complete(run, 'count', actual)
 
     def hold(self, attempt):
         return self.snapshot()['holds'][attempt]
@@ -354,6 +381,17 @@ class SettlementTests(Accounting):
         self.assertEqual(result['settlement']['charged'], 3 * M)
         self.assertEqual(self.settled(), 3 * M)
 
+    def test_a_replayed_observed_event_is_reauthorized_before_deduplication(self):
+        """Round 3: a replay with a wrong token or a closed anchor gets that answer, never `duplicate: true`."""
+        self.funded('a1', root='root')
+        self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1')['state'], 'recorded')
+        self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1', token='x' * 43),
+                         dict(v=1, state='blocked', reason='authority_invalid'))
+        self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1')['duplicate'], True)
+        self.call(complete('a1', 'c1', usage=usage(M)))
+        self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1'),
+                         dict(v=1, state='blocked', reason='attempt_closed'))
+
     def test_observed_usage_must_join_an_open_hold_with_its_authority(self):
         """Review S4 and round-2 S-A: `observed` joins only an open hold whose dispatch authority it carries."""
         self.funded('a1', root='root')
@@ -406,9 +444,9 @@ class OverrunTests(Accounting):
         self.assertEqual(budget.Ledger._total(data, 'personal'), 6 * M)
         self.assertEqual(budget.Ledger._credit_raw(data, 'personal'), 2 * M)
         self.assertEqual(budget.Ledger._headroom(data, 'personal'), 0)
-        self.assertTrue(data['organizations']['personal']['blocked'])
+        self.assertEqual(sorted(budget.Ledger.block_reasons(data, 'personal')), ['overrun'])
         self.assertEqual(self.admit('a2')['state'], 'pending')
-        self.assertFalse(data['organizations']['other']['blocked'])
+        self.assertEqual(budget.Ledger.block_reasons(data, 'other'), set())
         self.assertEqual(self.other_admits('o1')['state'], 'admitted')
 
     def test_dismissing_drops_the_excess_and_unblocks(self):
@@ -417,7 +455,8 @@ class OverrunTests(Accounting):
         result = self.resolve('a1', 'dismiss')
         self.assertEqual((result['state'], result['outcome']), ('recorded', 'overrun_dismissed'))
         data = self.snapshot()
-        self.assertFalse(data['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), [])
+        self.assertFalse(self.admission_refused())
         self.assertEqual(budget.Ledger._total(data, 'personal'), 6 * M)
         self.assertEqual(self.credit(), 2 * M)
         self.assertEqual(self.resolve('a1', 'dismiss'), dict(result, duplicate=True))
@@ -431,7 +470,7 @@ class OverrunTests(Accounting):
         self.assertEqual((result['outcome'], result['settlement']['charged']), ('overrun_confirmed', 7 * M))
         data = self.snapshot()
         self.assertEqual(data['organizations']['personal']['settled']['total'], 7 * M)
-        self.assertFalse(data['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), [])
         self.assertEqual(self.credit(), M)
         s = self.hold('a1')['settlement']
         self.assertEqual(s['charged'] - s['overrun'] + s['released'], s['reserved'])
@@ -442,17 +481,20 @@ class OverrunTests(Accounting):
         self.call(complete('a1', 'c1', usage=usage(2 * M)))
         self.call(complete('a2', 'c2', usage=usage(2 * M)))
         self.resolve('a1', 'dismiss')
-        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), ['overrun'])
+        self.assertTrue(self.admission_refused())
         self.resolve('a2', 'dismiss', 'r2')
-        self.assertFalse(self.snapshot()['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), [])
+        self.assertFalse(self.admission_refused())
 
     def test_a_block_the_overrun_did_not_set_is_never_cleared(self):
         self.funded('a1')
         with self.open_ledger() as ledger, ledger.transaction() as data:
-            data['organizations']['personal']['blocked'] = True  # an S1 run overrun, for example
+            data['organizations']['personal']['legacy_block'] = True  # a block from before v4
         self.call(complete('a1', 'c1', usage=usage(7 * M)))
         self.resolve('a1', 'dismiss')
-        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), ['legacy'])
+        self.assertTrue(self.admission_refused())
 
     def test_only_a_pending_overrun_is_resolved_and_only_by_the_operator_op(self):
         self.funded('a1')
@@ -492,14 +534,19 @@ class ResolveCostUnknownTests(Accounting):
     def test_without_receipts_the_full_reservation_is_charged(self):
         self.unknown('a1')
         result = self.resolve('a1', 0)
-        self.assertEqual({k: result['settlement'][k] for k in ('charged', 'released', 'cost', 'cost_source')},
-                         dict(charged=6 * M, released=0, cost=0, cost_source='operator'))
+        self.assertEqual({k: result['settlement'].get(k) for k in ('charged', 'released', 'cost', 'cost_source')},
+                         dict(charged=6 * M, released=0, cost=0, cost_source=None))
+        self.assertEqual(result['settlement']['resolution'],
+                         dict(basis='reservation_floor', receipts=0, receipts_digest=None))
         self.assertEqual(self.settled(), 6 * M)
 
     def test_a_receipt_backed_cost_releases_the_padding(self):
         self.unknown('a1')
-        result = self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt')
+        result = self.resolve('a1', 2 * M, receipts=['req-2', 'req-1'], source='provider_receipt')
         self.assertEqual((result['settlement']['charged'], result['settlement']['released']), (2 * M, 4 * M))
+        digest = hashlib.sha256(json.dumps(['req-1', 'req-2'], separators=(',', ':')).encode()).hexdigest()[:32]
+        self.assertEqual(result['settlement']['resolution'], dict(basis='receipts', receipts=2, receipts_digest=digest))
+        self.assertEqual(self.hold('a1')['settlement']['resolution'], result['settlement']['resolution'])
         self.assertEqual(self.settled(), 2 * M)
 
     def test_a_resolved_cost_above_the_reservation_is_an_overrun(self):
@@ -507,7 +554,7 @@ class ResolveCostUnknownTests(Accounting):
         result = self.resolve('a1', 9 * M)
         self.assertEqual((result['outcome'], result['settlement']['charged'], result['settlement']['overrun']),
                          ('overrun', 6 * M, 3 * M))
-        self.assertTrue(self.snapshot()['organizations']['personal']['blocked'])
+        self.assertEqual(self.reasons(), ['overrun'])
 
     def test_resolution_and_a_late_complete_never_double_charge(self):
         self.unknown('a1')
@@ -539,8 +586,8 @@ class ResolveCostUnknownTests(Accounting):
         before = self.credit()
         result = self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt')
         self.assertEqual((result['state'], result['duplicate'], result['outcome']), ('recorded', False, 'complete'))
-        self.assertEqual({k: result['settlement'][k] for k in ('charged', 'released', 'cost_source')},
-                         dict(charged=2 * M, released=4 * M, cost_source='operator'))
+        self.assertEqual({k: result['settlement'].get(k) for k in ('charged', 'released', 'cost_source')},
+                         dict(charged=2 * M, released=4 * M, cost_source=None))
         self.assertEqual(self.credit(), before + 4 * M)
         self.assertEqual(self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt'),
                          dict(result, duplicate=True))
@@ -561,6 +608,201 @@ class ResolveCostUnknownTests(Accounting):
                 self.assertEqual(self.resolve('a1', bad), dict(v=1, state='blocked', reason='invalid_request'))
 
 
+class BlockReasonTests(Accounting):
+    """Round 3: the admission block is DERIVED from its sources (pending overruns, over-bound S1 calls, a migrated
+    legacy block) and never stored; resolving one source can never clear another."""
+    def overrun(self, attempt, event_id):
+        result = self.call(complete(attempt, event_id, usage=usage(9 * M)))
+        self.assertEqual(result['outcome'], 'overrun', result)
+
+    def resolve(self, attempt, decision, event_id):
+        return self.call(dict(v=1, op='resolve_overrun', attempt_id=attempt, decision=decision, event_id=event_id))
+
+    def over_bound(self, run):
+        with self.assertRaisesRegex(budget.BudgetError, 'cost_exceeds_bound'):
+            self.finish_run(run, 2 * M)
+
+    def test_b1_overrun_then_over_bound_then_resolve_stays_blocked(self):
+        self.funded('a1')
+        self.start_run('s1')
+        self.overrun('a1', 'c1')
+        self.over_bound('s1')
+        self.assertEqual(self.reasons(), ['over_bound', 'overrun'])
+        self.resolve('a1', 'dismiss', 'r1')
+        self.assertEqual(self.reasons(), ['over_bound'])
+        self.assertTrue(self.admission_refused())
+        self.assertEqual(self.admit('a2')['state'], 'pending')
+
+    def test_b1_over_bound_then_overrun_then_resolve_stays_blocked(self):
+        self.funded('a1')
+        self.start_run('s1')
+        self.over_bound('s1')
+        self.overrun('a1', 'c1')
+        self.resolve('a1', 'confirm', 'r1')
+        self.assertEqual(self.reasons(), ['over_bound'])
+        self.assertTrue(self.admission_refused())
+
+    def test_case_c_a_later_lower_report_never_settles_an_over_bound_call(self):
+        self.start_run('s1')
+        self.over_bound('s1')
+        for actual in (M // 2, M, 0):
+            with self.assertRaisesRegex(budget.BudgetError, 'over_bound_unresolved'):
+                self.finish_run('s1', actual)
+        call = self.snapshot()['runs']['s1']['calls']['count']
+        self.assertEqual((call['state'], call['over_bound'], call['cost']), ('unresolved', 2 * M, None))
+        self.assertEqual(self.reasons(), ['over_bound'])
+
+    def test_over_bound_is_sticky_against_every_client_event(self):
+        self.start_run('s1')
+        self.over_bound('s1')
+        with self.open_ledger() as ledger:
+            for attempt in (lambda: ledger.close_run('s1'), lambda: ledger.reject_unsent('s1', 'count'),
+                            lambda: ledger.uncertain('s1', 'count'), lambda: ledger.complete('s1', 'count', 1)):
+                with self.assertRaises(budget.BudgetError):
+                    attempt()
+        for kind in ('complete', 'not_dispatched', 'uncertain', 'dispatched'):
+            self.assertEqual(self.call(record('s1', kind))['state'], 'blocked')
+        self.assertEqual(self.reasons(), ['over_bound'])
+
+    def test_resolve_overrun_changes_only_that_holds_overrun_state(self):
+        for attempt in ('a1', 'a2'):
+            self.funded(attempt)
+        self.overrun('a1', 'c1')
+        self.overrun('a2', 'c2')
+        before = self.snapshot()
+        self.resolve('a1', 'dismiss', 'r1')
+        after = self.snapshot()
+        before['holds']['a1']['settlement']['overrun_state'] = 'dismissed'
+        self.assertEqual(after, before)  # nothing else moved: no flag, no other hold, no organization field
+        self.resolve('a2', 'confirm', 'r2')
+        confirmed = self.snapshot()
+        self.assertEqual({k: v for k, v in confirmed['organizations']['personal'].items() if k != 'settled'},
+                         {k: v for k, v in after['organizations']['personal'].items() if k != 'settled'})
+        self.assertEqual(confirmed['holds']['a1'], after['holds']['a1'])
+
+    def test_no_code_path_stores_a_block_flag(self):
+        self.funded('a1')
+        self.start_run('s1')
+        self.overrun('a1', 'c1')
+        self.over_bound('s1')
+        org = self.snapshot()['organizations']['personal']
+        self.assertNotIn('blocked', org)
+        self.assertNotIn('overrun_block', org)
+
+    def test_status_lists_blocked_organizations_and_pending_ids(self):
+        self.funded('a1')
+        self.funded('u1')
+        self.start_run('s1')
+        self.overrun('a1', 'c1')
+        self.over_bound('s1')
+        self.call(complete('u1', 'cu'))
+        ledger = self.call(dict(v=1, op='status'))['ledger']
+        self.assertEqual(ledger['blocked_organizations'], [dict(id='personal', reasons=dict(
+            over_bound=dict(ids=['s1'], more=0), overrun=dict(ids=['a1'], more=0)))])
+        self.assertEqual(ledger['cost_unknown'], dict(ids=['u1'], more=0))
+        self.assertIs(ledger['overrun_backlog'], False)
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            for i in range(18):
+                data['holds']['copy%02d' % i] = dict(data['holds']['a1'])
+            data['organizations']['personal']['legacy_block'] = True
+        listed = self.call(dict(v=1, op='status'))['ledger']['blocked_organizations'][0]['reasons']
+        self.assertEqual((len(listed['overrun']['ids']), listed['overrun']['more']), (16, 3))
+        self.assertEqual(listed['legacy'], dict(ids=[], more=0))
+
+    def test_a_hold_table_full_of_pending_overruns_is_an_overrun_backlog(self):
+        self.funded('a1')
+        self.overrun('a1', 'c1')
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            for i in range(budget.MAX_HOLDS - len(data['holds'])):
+                data['holds']['copy%03d' % i] = dict(data['holds']['a1'])
+        result = self.call(prepare('s1', observations=observations(account='acct-s1'),
+                                   constraints=dict(allowed_strategy_ids=['s-sub'])))
+        self.assertEqual((result['state'], result['reason']), ('pending', 'overrun_backlog'))
+        self.assertIs(self.call(dict(v=1, op='status'))['ledger']['overrun_backlog'], True)
+
+    def test_close_attempt_complete_refuses_a_dollar_hold(self):
+        self.funded('a1')
+        self.admit_sub('s1')
+        self.send('s1', sub=True)
+        with self.open_ledger() as ledger:
+            with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
+                ledger.close_attempt('a1', 'complete')
+            ledger.close_attempt('s1', 'complete')  # a subscription hold is unchanged
+        self.assertEqual((self.hold('a1')['closed'], self.hold('s1')['closed']), (False, True))
+
+
+class BlockPropertyTests(Accounting):
+    """Random interleavings over two organizations: admission is refused iff the derived reason set is non-empty,
+    in any order, and one organization's events never change the other's reasons."""
+    def setUp(self):
+        super().setUp()
+        with self.open_ledger() as ledger:
+            ledger.enable_organization('other', self.POLICY, 0)
+            ledger.observe('other', self.BALANCE, now(), issued=self.BALANCE)
+
+    def hold(self, ledger, attempt, organization):
+        revision = ledger.snapshot()['organizations'][organization]['revision']
+        moment = now()
+        ledger.admit(attempt, lambda data: dict(record=dict(attempt_id=attempt, task='t-' + attempt, bucket=[],
+                                                            shares={}), vector={'org:' + organization: M},
+                                                account='acct-' + attempt, now=moment, revision=revision))
+        ledger.mark_dispatched(attempt)
+
+    def test_random_interleavings_keep_the_block_derived(self):
+        rng = random.Random(3603)
+        orgs = ('personal', 'other')
+        holds = {org: [] for org in orgs}
+        runs = {org: [] for org in orgs}
+        with self.open_ledger() as ledger:
+            for org in orgs:
+                for i in range(5):
+                    self.hold(ledger, '%s-h%d' % (org, i), org)
+                    holds[org].append('%s-h%d' % (org, i))
+        for org in orgs:
+            for i in range(3):
+                self.start_run('%s-r%d' % (org, i), org)
+                runs[org].append('%s-r%d' % (org, i))
+        expected = {org: dict(overrun=set(), over_bound=set(), legacy=False) for org in orgs}
+        for step in range(120):
+            org = rng.choice(orgs)
+            action = rng.choice(['overrun', 'over_bound', 'in_bound', 'legacy', 'confirm', 'dismiss', 'admit'])
+            with self.open_ledger() as ledger:
+                if action == 'overrun' and holds[org]:
+                    attempt = holds[org].pop()
+                    routing.record_event(ledger, dict(event_id='e%d' % step, attempt_id=attempt, kind='complete',
+                                                      usage=usage(3 * M)), now())
+                    expected[org]['overrun'].add(attempt)
+                elif action == 'over_bound' and runs[org]:
+                    run = runs[org].pop()
+                    with self.assertRaisesRegex(budget.BudgetError, 'cost_exceeds_bound'):
+                        ledger.complete(run, 'count', 2 * M)
+                    expected[org]['over_bound'].add(run)
+                elif action == 'in_bound' and expected[org]['over_bound']:
+                    with self.assertRaisesRegex(budget.BudgetError, 'over_bound_unresolved'):
+                        ledger.complete(sorted(expected[org]['over_bound'])[0], 'count', 1)
+                elif action == 'legacy' and not expected[org]['legacy'] and rng.random() < 0.2:
+                    with ledger.transaction() as data:
+                        data['organizations'][org]['legacy_block'] = True
+                    expected[org]['legacy'] = True
+                elif action in ('confirm', 'dismiss') and expected[org]['overrun']:
+                    attempt = sorted(expected[org]['overrun'])[0]
+                    result = routing.record_event(ledger, routing.overrun_event(dict(
+                        event_id='r%d' % step, attempt_id=attempt, decision=action)), now())
+                    self.assertEqual(result['state'], 'recorded', result)
+                    expected[org]['overrun'].discard(attempt)
+            data = self.snapshot()
+            for name in orgs:
+                want = {reason for reason, present in (('overrun', expected[name]['overrun']),
+                                                       ('over_bound', expected[name]['over_bound']),
+                                                       ('legacy', expected[name]['legacy'])) if present}
+                self.assertEqual(budget.Ledger.block_reasons(data, name), want, (step, action, name))
+                self.assertEqual(self.admission_refused(name), bool(want), (step, action, name))
+            if action == 'admit' and not self.admission_refused(org):
+                with self.open_ledger() as ledger:
+                    self.hold(ledger, 'new%d' % step, org)
+                    holds[org].append('new%d' % step)
+
+
 class ProjectPinTests(Accounting):
     def test_a_pinned_service_refuses_settle_without_a_workflow(self):
         pinned = command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout')
@@ -570,6 +812,30 @@ class ProjectPinTests(Accounting):
 
 
 class VersionTests(Accounting):
+    def seed_v3(self, blocked):
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data['version'] = 3
+            data['organizations']['personal']['blocked'] = blocked
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+
+    def test_a_v3_blocked_organization_becomes_a_legacy_block_and_keeps_blocking(self):
+        self.seed_v3(True)
+        org = self.snapshot()['organizations']['personal']
+        self.assertNotIn('blocked', org)
+        self.assertIs(org['legacy_block'], True)
+        self.assertEqual(self.reasons(), ['legacy'])
+        self.assertTrue(self.admission_refused())
+        self.assertEqual(self.admit('a1')['state'], 'pending')
+
+    def test_a_v3_unblocked_organization_has_no_reasons(self):
+        self.seed_v3(False)
+        org = self.snapshot()['organizations']['personal']
+        self.assertNotIn('blocked', org)
+        self.assertNotIn('legacy_block', org)
+        self.assertEqual(self.reasons(), [])
+        self.assertEqual(self.admit('a1')['state'], 'admitted')
+
     def test_migration_backfills_the_root_of_holds_admitted_before_v4(self):
         self.funded('a1', root='root')
         expected = self.hold('a1')['root']
@@ -895,6 +1161,14 @@ class BoundsTests(Accounting):
         self.assertEqual(count, budget.MAX_EVENTS)
         with self.open_ledger() as ledger:
             self.assertIsNotNone(ledger.lookup_event('needed-2', now()))
+
+    def test_a_maximal_settlement_fits_its_allowance(self):
+        big = budget.MAX_INTEGER
+        settlement = dict(reserved=big, charged=big, released=big, overrun=big, cost=big,
+                          cost_source='host_message_totals', overrun_state='unconfirmed',
+                          resolution=dict(basis='reservation_floor', receipts=32, receipts_digest='f' * 32))
+        self.assertLessEqual(len(json.dumps(dict(settlement=settlement), separators=(',', ':'))) - 2,
+                             budget.SETTLEMENT_HOLD_BYTES)
 
     def test_an_open_hold_keeps_at_most_three_idempotency_records(self):
         self.funded('open', root='root')

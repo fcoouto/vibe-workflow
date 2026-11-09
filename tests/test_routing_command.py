@@ -645,7 +645,7 @@ class FundingCheckTests(Base):
             ledger.observe('personal', 1 * M, POLICY['stop_at'] + 5)
         self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'funding_unverified')  # past the cycle boundary
         with self.open_ledger() as ledger, ledger.transaction() as data:
-            data['organizations']['personal']['blocked'] = True
+            data['organizations']['personal']['legacy_block'] = True  # derived block (S3.6a)
         self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'organization_unavailable')
 
 
