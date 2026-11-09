@@ -945,10 +945,7 @@ def main(argv=None):
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
         if args.chatgpt:
-            ref = args.chatgpt_model or ""  # without #VARIANT the lowest listed variant; `auto`: chatgpt.AUTO_RULE
-            route = ("openai",) if ref == chatgpt.AUTO else safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
-            if route[0] != "openai":
-                raise Refused("the chatgpt run allows only an openai model")
+            chatgpt.parse_models(args.chatgpt_model)  # auto, one model, or up to 3 in order (fallback on refusal)
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
         purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None

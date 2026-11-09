@@ -126,11 +126,11 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   - **`~/.local/share/opencode`, counted as `concurrent_session_churn` by store (never file names):**
     - added or rewritten files, and added directories, inside `log/`, `snapshot/`, `worktree/`, `repos/`, `storage/`, `shell/` and `tool-output/`;
     - a recognized store directory created during the run;
-    - the database files, and deletions of single files or subdirectories inside `log/`, `snapshot/`, `worktree/`, `repos/` and `storage/`.
+    - the database files, and deletions of single files or subdirectories inside the stores: in `shell/`, `tool-output/`, `log/` and `snapshot/` they are counted as `pruned`, OpenCode's own retention.
 
-    `shell/` and `tool-output/` accept only added or rewritten plain files with a single link.
+    Added or rewritten files in `shell/` and `tool-output/` must be plain files with a single link. Each failing entry is recorded with a reason code in `unexpected_reasons` (for example `deleted_db`, `deleted_store`, `deleted_snapshot_tree`, `sensitive_name`, `outside_stores`, `not_plain_single_link`, `symlink_or_dot_segment`, `own_id`).
   - **`~/.local/share/opencode`, fails the run:**
-    - deleting `opencode.db`, a store directory, a whole `snapshot/<hash>/` tree, or anything in `shell/` or `tool-output/`;
+    - deleting `opencode.db`, a store directory or a whole `snapshot/<hash>/` tree;
     - any other file or directory directly in the data directory, such as `auth.json`, `mcp-auth.json` or any `*.json`;
     - symlinks, and names with `.`, `..` or empty segments;
     - names with a part `auth`, `token(s)`, `credential(s)`, `config`, `settings`, `keychain`, `secret(s)`, `key(s)`, `apikey`, `pem` or `env`. Parts are split on `-`, `_` and `.`, so `author` or `monkey` don't count. Inside repository checkouts and package trees (`worktree/`, `repos/`, `node_modules/`, `npm/`), only the exact sensitive files fail: `auth.json`, `mcp-auth.json`, `.env*`, `*.pem` and `*.key`;
@@ -154,6 +154,29 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   - `error_type` from the known codes and error classes, else `<other>`;
   - `session_status`, `idle_outcome`, `wait_seconds`, and `end_reason` (`idle` or `timeout`).
 - **Budget:** the run needs 3 `chatgpt` calls remaining (2 probe exposures, normally 0 sent, and 1 request). With 2 of 4 spent it refuses, and the message states what remains, what is needed, and that a raise needs the user's approval through `--set-cap`. On 10 November 2026 at about 00:05 CET the user approved raising the `chatgpt` maximum from 4 to 6 (the code constant now records it). The cap itself rises only through the recorded `--set-cap chatgpt 6` line, which the coordinator runs after the merge.
+  - **Attempts 5 and 6** (10 November 2026; attempt 6 at 00:22 CET with harness `adb61ff`, `--chatgpt-model openai/gpt-5.5`, lowest variant `none`). <a id="chatgpt-attempts-5-and-6"></a>
+    - **Observed:**
+      - the sign-in through `chatgpt-token-sharing` completed, and 18 `openai` models were listed without cost metadata;
+      - the full managed handshake ran (`health` ok, `dispatch`, `attach`, guard and shim proof), and one primary request was transmitted;
+      - OpenAI refused it with HTTP 400 `model_not_found` (type `invalid_request_error`): "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account." The assistant message had `finish: error`, there were no tokens, and the wait was 1.5 s;
+      - `native.rateLimit` was absent, `status` clean, `isolated_store` ok, and `descendants` complete;
+      - the results were written in full;
+      - the ledger stands at chatgpt **3 of 6**.
+    - **Unobserved:** a successful ChatGPT request, `native.rateLimit`, and the Codex window.
+    - **False blocker:** the run also raised a false "`.local/share/opencode` changed" blocker. The unexpected entries were four `shell/<project>/sh_*.out` files that OpenCode itself had pruned; deletions inside `shell/` had been made failing in the third review. Such pruning is now counted as `pruned` churn (below).
+  - **Lesson: a listed model is not an entitled model.**
+    - The token-sharing plugin lists the fixed set `bV` (18 ids, 2.2.6 binary about offset 156944524) without consulting the account.
+    - The refusal text is not in the binary, so it comes from OpenAI.
+    - OpenCode's own rule for its legacy Codex-with-ChatGPT sign-ins (`opencode.provider.openai`, about offset 157035620: `if(IH.has(q)||!A||!(M>5||M===5&&P>5)){x.enabled=!1;...}` with `IH = {"gpt-5.6"}`) enables only `gpt-N.M` above 5.5, and never the exact id `gpt-5.6`.
+    - **Of the 18 listed ids, that rule allows 16** (all except `gpt-5.5` and `gpt-5.5-fast`). That matches the refusal, but whether the token-sharing route applies the same rule cannot be proven offline (medium confidence).
+    - **Public prices** (models.dev, read 2026-11-10, input + output per million tokens): `gpt-6-luna` 0.6, `gpt-5.6-luna` 1.4, `gpt-6.1-terra` 6, `gpt-6-sol` and `gpt-6.1-sol` 12, `gpt-5.6-terra` 14, `gpt-5.6-sol` 24, `gpt-5.5` 35, `gpt-6-astra` 60. The `-fast` twins have no entry, which fits a priority tier of the same model but is not evidence.
+    - **The user reports that GPT-6 Luna works on their account.**
+    - **Recommended order:** `openai/gpt-6-luna`, `openai/gpt-5.6-luna`, `openai/gpt-6.1-terra`, each with its lowest listed variant. `none` is OpenCode's normal "no reasoning" effort, and the refusal was about the model, not the variant.
+  - **Changed for attempt 7:**
+    - `auto` excludes versioned `gpt` ids that the Codex-with-ChatGPT rule disables (`not_codex_chatgpt`) and ranks by the recorded public prices.
+    - The refusal is classified as `model_not_supported_for_account`: `model_not_found` with that text, apart from `request_failed_upstream`.
+    - `--chatgpt-model A,B,C` (at most 3 openai models, each listed) tries the candidates in order within the same sign-in. It moves on only after `model_not_supported_for_account`; any other outcome (success, another error, a guard block, a timeout) stops. Each attempt has its own write-ahead reservation of 1 call, its own new session and derived ids, and the guard route switched to that model alone. The budget check requires `remaining >= candidates + 2`. The results keep each attempt under `attempts`, and the last one also at the top level.
+    - The user-directory rules count OpenCode's own pruning of `shell/`, `tool-output/`, `log/` and `snapshot/` entries as `pruned` churn, and give each failing entry a reason code (`unexpected_reasons`).
 - **Recorded for the next run (added after attempt 3, before any further run).** After the managed request goes idle, and also when the wait fails, the results get sanitized `session_facts`:
   - **Messages:** the session's messages counted by type, and whether the user message exists.
   - **Each assistant message:**

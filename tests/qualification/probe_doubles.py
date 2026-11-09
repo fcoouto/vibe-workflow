@@ -81,9 +81,13 @@ class ProbeServer(FakeOpenCode):
             return 200, dict(state="ok" if ledger == "ready" else "not_ready",
                              managed_denies=["config_edit", "image_generation"]), 1.0
         if method == "attach":
+            facts = dict(self.request_facts, funding_pool=payload["funding_pool"])
+            ref = payload.get("model") or ""
+            if "/" in ref and "#" in ref:  # the attempt's own route, as the shim receives it
+                provider, rest = ref.split("/", 1)
+                facts.update(provider=provider, model=rest.split("#")[0], variant=rest.split("#")[1])
             answer = self.routing("check", attempt_id=payload["attempt_id"], session_id=payload["session_id"],
-                                  authority=payload["authority"],
-                                  request=dict(self.request_facts, funding_pool=payload["funding_pool"]))[0]
+                                  authority=payload["authority"], request=facts)[0]
             if answer.get("state") == "allow" and answer.get("authority") == "verified":
                 self.roots[payload["session_id"]] = dict(attempt=payload["attempt_id"], token=payload["authority"],
                                                          watched=False, recorded={})

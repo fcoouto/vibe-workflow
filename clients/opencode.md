@@ -19,6 +19,8 @@ Missing data stays unknown (`None`), never guessed. Field names carry units: tim
 
 Route identity is the provider, model alias, requested variant and catalog family. The resolved model is always `unknown`, because OpenCode stores only the requested alias. The harness is `claude-agent-sdk via opencode` for the Claude Agent provider; other providers are named by provider.
 
+**A listed model is not an entitled model.** After OpenCode 2.2.6's "Sign in with ChatGPT", the `openai` provider lists a fixed set of 18 ids without checking the account. OpenAI then refused a listed one (`gpt-5.5`) with HTTP 400 `model_not_found`: "not supported when using Codex with a ChatGPT account" (observed 10 November 2026; [live report](../docs/smart-routing-qualification.md#chatgpt-attempts-5-and-6)). The ChatGPT route supports only a subset; OpenCode's own rule for its legacy Codex sign-ins enables `gpt-N.M` above 5.5 only. A route admitted from the listing alone can still fail upstream; treat that refusal as a route failure, not as a reason to retry other routes blindly.
+
 ## What can be enforced
 
 The [capability matrix](../docs/smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08) owns which paths can be blocked before sending, which cannot, and the user's decisions about them. `probe` applies those facts to observed capabilities and returns:

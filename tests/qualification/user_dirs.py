@@ -44,27 +44,47 @@ def _named(policy, segments, is_dir):
     return any(_strict_word(policy, segment) for segment in segments)
 
 
-def _data_ok(name, segments, kind, session, named):
+PRUNED_STORES = ("shell", "tool-output", "log", "snapshot")  # OpenCode's own retention deletes old entries there
+
+
+def _data_check(name, segments, kind, session, named):
+    """`(ok, churn key, reason code)` for one changed name in the data directory."""
     store, nested = segments[0], segments[1:]
     if not nested:  # directly in the data directory: the database files and recognized store directories only
         if name.endswith("/"):
-            return store in DATA_STORES and kind == "added"  # a store created during the run is counted
-        return bool(DATA_DB.fullmatch(store)) and not (kind == "removed" and store == "opencode.db")
-    if store not in DATA_STORES or named:
-        return False
-    if kind == "removed" and store == "snapshot" and len(nested) == 1 and name.endswith("/"):
-        return False  # a whole snapshot tree deleted
-    if store in ("shell", "tool-output"):
-        return name in session
-    return True
+            if store not in DATA_STORES:
+                return False, None, "outside_stores"
+            return (True, store, None) if kind == "added" else (False, None, "deleted_store")  # created: counted
+        if not DATA_DB.fullmatch(store):
+            return False, None, "outside_stores"
+        return (False, None, "deleted_db") if kind == "removed" and store == "opencode.db" else (True, "db", None)
+    if store not in DATA_STORES:
+        return False, None, "outside_stores"
+    if named:
+        return False, None, "sensitive_name"
+    if kind == "removed":
+        if store == "snapshot" and len(nested) == 1 and name.endswith("/"):
+            return False, None, "deleted_snapshot_tree"
+        return True, "pruned" if store in PRUNED_STORES else store, None
+    if store in ("shell", "tool-output") and name not in session:
+        return False, None, "not_plain_single_link"
+    return True, store, None
 
 
-def classify_user_dir(policy, before, after, root, own_ids=()):
-    """`(unexpected names, {store: count})` for one user OpenCode directory under its policy (see the module doc)."""
+def classify_user_dir(policy, before, after, root, own_ids=(), reasons=None):
+    """`(unexpected names, {store: count})` for one user OpenCode directory under its policy (see the module doc);
+    `reasons` (a dict) receives a count per reason code of what failed."""
+    reasons = {} if reasons is None else reasons
+
+    def fail(name, reason):
+        reasons[reason] = reasons.get(reason, 0) + 1
+        unexpected.append(name)
     diff = compare_snapshots(before, after)
     if policy == "strict":
         unexpected, churn = classify_changes(diff)
         unexpected = [OWN_ID_NAME if _own(n, own_ids) and n in diff["added"] else n for n in unexpected]
+        if unexpected:
+            reasons["strict_dir"] = len(unexpected)
         return unexpected, ({"desktop": len(churn)} if churn else {})
     session = set(session_output(diff, before, after, root))  # also files of a shell/ or tool-output/ created now
     unexpected, churn = [], {}
@@ -74,18 +94,20 @@ def classify_user_dir(policy, before, after, root, own_ids=()):
             linked = any(str(side.get(name, "")).startswith(SYMLINK) for side in (before, after))
             bad = any(s in ("", ".", "..") for s in segments) or linked
             if kind == "added" and _own(name, own_ids):
-                unexpected.append(OWN_ID_NAME)
+                fail(OWN_ID_NAME, "own_id")
+                continue
+            if bad:
+                fail(name, "symlink_or_dot_segment")
                 continue
             named = _named(policy, segments, name.endswith("/"))
             if policy == "data":
-                ok = not bad and _data_ok(name, segments, kind, session, named)
-                key = segments[0] if len(segments) > 1 or name.endswith("/") else "db"
+                ok, key, reason = _data_check(name, segments, kind, session, named)
             else:
-                ok, key = not bad and not named, policy
+                ok, key, reason = not named, policy, "sensitive_name"
             if ok:
                 churn[key] = churn.get(key, 0) + 1
             else:
-                unexpected.append(name)
+                fail(name, reason)
     return sorted(unexpected), churn
 
 
@@ -96,8 +118,10 @@ def _own(name, own_ids):
 def user_dir_entry(name, before, after, root, own_ids=()):
     """The results entry for one user OpenCode directory: masked unexpected names (at most 50; names carrying this
     run's ids are replaced), counts of concurrent-session churn by store (never file names)."""
-    unexpected, churn = classify_user_dir(USER_DIR_POLICY.get(name, "strict"), before, after, root, own_ids)
+    reasons = {}
+    unexpected, churn = classify_user_dir(USER_DIR_POLICY.get(name, "strict"), before, after, root, own_ids, reasons)
     return dict(unexpected=[sanitize.text(n) for n in unexpected][:50], unexpected_count=len(unexpected),
+                unexpected_reasons=reasons,
                 concurrent_session_churn=churn, desktop_churn_count=churn.get("desktop", 0),
                 session_output_count=churn.get("shell", 0) + churn.get("tool-output", 0)), unexpected
 

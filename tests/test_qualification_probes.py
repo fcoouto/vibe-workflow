@@ -648,18 +648,20 @@ class ChatGPTAutoTests(StageHarness):
     def test_selection_table(self):
         table = [  # (listed, expected pick)
             ([gpt("o4-mini-deep-research", cost=(0, 0)), gpt("o4-mini-high", cost=(0, 0))], "o4-mini-high"),
-            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-5-mini", cost=(1, 1))], "gpt-5-mini"),
-            ([gpt("gpt-5", cost=(1.25, 10)), gpt("gpt-5-mini", cost=(0.25, 2)), gpt("gpt-5-nano", cost=(0.05, 0.4))],
-             "gpt-5-nano"),
-            ([gpt("gpt-5.1-codex", cost=(0, 0)), gpt("gpt-5.1-codex-mini", cost=(0, 0))], "gpt-5.1-codex-mini"),
-            ([gpt("gpt-5-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+            # versioned gpt ids must pass the Codex-with-ChatGPT rule (above 5.5, attempt 6): gpt-6 stands in for them
+            ([gpt("computer-use-preview", cost=(0.1, 0.1)), gpt("gpt-6-mini", cost=(1, 1))], "gpt-6-mini"),
+            ([gpt("gpt-6", cost=(1.25, 10)), gpt("gpt-6-mini", cost=(0.25, 2)), gpt("gpt-6-nano", cost=(0.05, 0.4))],
+             "gpt-6-nano"),
+            ([gpt("gpt-6.1-codex", cost=(0, 0)), gpt("gpt-6.1-codex-mini", cost=(0, 0))], "gpt-6.1-codex-mini"),
+            ([gpt("gpt-6-nano"), gpt("gpt-expensive", cost=(50, 200))], "gpt-expensive"),  # a known cost always wins
+            ([gpt("gpt-5.5", cost=(0, 0)), gpt("gpt-6-luna"), gpt("gpt-6-sol")], "gpt-6-luna"),  # public price ranks
         ]
         for listed, expected in table:
             with self.subTest(expected=expected):
                 run, server, route, printed = self.select(listed)
                 self.assertEqual(route[1], expected)
         excluded = run.results["stages"]["chatgpt"]["model_selection"]["excluded"]
-        self.assertEqual(excluded, {})
+        self.assertEqual(excluded, {"gpt-5.5": "not_codex_chatgpt"})
         run, server, route, printed = self.select(table[0][0] + table[1][0])
         self.assertEqual(run.results["stages"]["chatgpt"]["model_selection"]["excluded"],
                          {"o4-mini-deep-research": "name", "computer-use-preview": "name"})
