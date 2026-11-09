@@ -50,6 +50,8 @@ Provenance is the chain `tool_use_id → agentId → agent_id`, correlated by `p
 
 ## S4: evidence and completion for Claude
 
+*Status: implemented at package level on scopes without a capability projection. A real stage-1 scope still refuses these operations until their capabilities are verified; see the validation record.*
+
 Lift `state._validate_task`'s refusal of `evidence`, `delegation` and `retirement` fields for Claude, remove the `_identity` gates (`evidence.py:81,1404,2108`), generalize `revalidate_ready` and the three `client == 'codex'` checks (`evidence.py:6511,6534,6860`), and let `task_status` return `DONE`. Checks (`run_check`) and reservations are already client-neutral in logic. Until N1 exists, plans that require review stay unsatisfiable, which fails closed. **Tests:** reuse the Claude-born canonical fixture for plan, check, verify and stale-evidence rejection.
 
 ## M3, N7, M5

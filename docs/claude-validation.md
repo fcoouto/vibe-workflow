@@ -55,3 +55,14 @@ Claude Code 2.1.311, `haiku`, a Claude-born canonical checkout activated by a re
 - Setup artifact: a test that patched `MANAGED_DIRECTORIES` to empty produced a different configuration digest than the real hook subprocess. Real use is consistent because collection and reading see the same paths.
 
 Not observed: D6 ledger integration, background versus synchronous completion ordering beyond this run, Desktop and Cowork, older Claude versions.
+
+## What S1, S3 and S4 do and do not establish (9 November 2026)
+
+Their tests run on Claude-born canonical scopes whose synthetic trusted-owner qualification carries no capability projection, so admission is ordinary, as for Codex fixtures. That shows package behavior only. For a real scope activated by the stage-1 receipt (only `startup-context` verified) the retained admission check was run directly and refused every managed operation:
+
+| Operation | Needs | Result |
+| --- | --- | --- |
+| `task-start`, `task-patch` | `pre-tool-enforcement` | refused: pending capability needs an exact qualification attempt |
+| `check-run`, `verify-completion` | `review-readiness` | refused: pending capability needs an exact qualification attempt |
+
+So a real Claude project cannot yet use the guard, task controls, checks or completion without an admitted qualification attempt. Closing this needs N4 stage 2 (managed pre-tool, post-tool and stop behavior) and review readiness, which in turn need the D6 integration. Native hook execution of the guard, post-tool and stop handlers under a bound task remains unobserved.
