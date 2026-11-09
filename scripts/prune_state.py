@@ -55,8 +55,15 @@ A --yes run that changes something creates a private run directory (default
 <root parent>/vcw-transactions-prune-<UTC timestamp>) with manifest.json, listing every deleted
 lock and moved marker, and quarantined/ holding the moved markers.
 
-Undo: for every "quarantine-marker" action with status "moved" or "moved-unverified", move
-quarantined_path back to original_path:  mv -n <run dir>/quarantined/NAME <root>/NAME
+Markers are moved without ever replacing a file: a hard link into quarantined/, then the original
+name is renamed into quarantined/ as well; nothing in the root is unlinked by name. --yes holds an
+exclusive lock on the root directory, so a second prune refuses ("another prune is running").
+
+Undo: for every "quarantine-marker" action with status "moved", move quarantined_path back to
+original_path:  mv -n <run dir>/quarantined/NAME <root>/NAME
+With status "moved-unverified" (the root name changed at the last moment), move spare_path back
+instead and keep quarantined_path for review. If a run stops and the manifest state is still
+"planned", its planned list names every intended marker; move those found in quarantined/ back.
 Deleted lock files need no undo: production recreates empty lock files when it needs them."""
 
 class Refusal(Exception):
@@ -192,6 +199,8 @@ def _plan_dir_reason(marker):
         return None
     except PermissionError:
         return "plan_dir not accessible"
+    except OSError:  # ELOOP, ENAMETOOLONG, EIO...: unknown is never proof of absence.
+        return "plan_dir unreadable"
     return "plan_dir exists"
 
 def _take(dir_fd, name, expected=None, prefix=""):
@@ -289,12 +298,19 @@ def write_manifest(run_fd, body):
     raw = json.dumps(body, indent=2, sort_keys=True).encode()
     temporary = f".manifest-{os.getpid()}-{time.monotonic_ns()}.tmp"
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=run_fd)
-    with os.fdopen(fd, "wb") as stream:
-        os.fchmod(fd, 0o600)
-        stream.write(raw)
-        stream.flush()
-        os.fsync(fd)
-    os.rename(temporary, MANIFEST, src_dir_fd=run_fd, dst_dir_fd=run_fd)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            os.fchmod(fd, 0o600)
+            stream.write(raw)
+            stream.flush()
+            os.fsync(fd)
+        os.rename(temporary, MANIFEST, src_dir_fd=run_fd, dst_dir_fd=run_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=run_fd)
+        except FileNotFoundError:
+            pass
+        raise
     os.fsync(run_fd)
 
 def scan(dir_fd, root, min_age_days, now=None):
@@ -323,15 +339,57 @@ def _move_marker(dir_fd, entry, now, min_age_days, quarantine_fd, quarantine_pat
             return "changed", None
         if _exists(quarantine_fd, entry.name):
             return "quarantine name taken", None
-        os.rename(entry.name, entry.name, src_dir_fd=dir_fd, dst_dir_fd=quarantine_fd)
-        moved = _lstat(quarantine_fd, entry.name)
-        verified = (moved.st_dev, moved.st_ino) == entry.ident[:2]
-        return None, dict(action="quarantine-marker", name=entry.name, status="moved" if verified else "moved-unverified",
-                          original_path=os.path.join(root, entry.name),
-                          quarantined_path=os.path.join(quarantine_path, entry.name),
-                          size=current.size, mtime_ns=current.ident[3], **current.data)
+        reason, status = _quarantine(dir_fd, quarantine_fd, entry.name, entry.ident[:2])
+        if reason is not None:
+            return reason, None
+        action = dict(action="quarantine-marker", name=entry.name, status=status,
+                      original_path=os.path.join(root, entry.name),
+                      quarantined_path=os.path.join(quarantine_path, entry.name),
+                      size=current.size, mtime_ns=current.ident[3], **current.data)
+        if status == "moved-unverified":
+            action["spare_path"] = os.path.join(quarantine_path, _spare(entry.name))
+        return None, action
     finally:
         os.close(lock_fd)
+
+def _inode(dir_fd, name):
+    try:
+        info = _lstat(dir_fd, name)
+    except FileNotFoundError:
+        return None
+    return info.st_dev, info.st_ino
+
+def _spare(name):
+    return f".{name}.original"
+
+def _quarantine(dir_fd, quarantine_fd, name, inode):
+    """Move a marker into quarantine without replacing or deleting any file; return (reason kept, status).
+
+    The hard link fails with EEXIST instead of replacing a quarantined file. The original name is then
+    renamed to a private spare name, never unlinked, so a marker swapped in at the last moment is kept.
+    """
+    try:
+        os.link(name, name, src_dir_fd=dir_fd, dst_dir_fd=quarantine_fd, follow_symlinks=False)
+    except FileExistsError:
+        return "quarantine name taken at link", None
+    except OSError as error:
+        if error.errno in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV, errno.EMLINK):
+            return "no-replace move unsupported", None  # Never fall back to a replacing rename.
+        raise
+    if _inode(quarantine_fd, name) != inode:
+        if _inode(dir_fd, name) == _inode(quarantine_fd, name):
+            os.unlink(name, dir_fd=quarantine_fd)  # Our extra link only; the root keeps the file.
+            return "changed", None
+        return "changed; a link to it remains in quarantine", None
+    spare = _spare(name)
+    if _exists(quarantine_fd, spare):
+        os.unlink(name, dir_fd=quarantine_fd)
+        return "quarantine name taken", None
+    os.rename(name, spare, src_dir_fd=dir_fd, dst_dir_fd=quarantine_fd)
+    if _inode(quarantine_fd, spare) == inode:
+        os.unlink(spare, dir_fd=quarantine_fd)  # The same inode stays under quarantined/<name>.
+        return None, "moved"
+    return None, "moved-unverified"  # The root name changed; both files are kept in quarantine.
 
 def _delete_lock(dir_fd, entry, now, min_age_days):
     current = _classify_lock(dir_fd, entry.name, now, min_age_days, probe=False)
@@ -374,6 +432,11 @@ def apply(dir_fd, report, min_age_days, root, quarantine=None, now=None, done=No
             skipped.append((entry, reason))
     if done:
         os.fsync(dir_fd)
+        if quarantine and any(a["action"] == "quarantine-marker" for a in done):
+            try:
+                os.fsync(quarantine[0])
+            except OSError:
+                pass  # Best effort: the moves themselves already happened.
     return done, skipped
 
 def render(report, markers, max_delete):
@@ -432,6 +495,11 @@ def main(argv=None):
     dir_fd = run_fd = quarantine_fd = None
     try:
         dir_fd = open_root(root)
+        if args.yes:
+            try:
+                fcntl.flock(dir_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Held until the root fd closes.
+            except BlockingIOError:
+                raise Refusal("Another prune is running on this root.") from None
         report = scan(dir_fd, root, args.min_age_days)
         print(render(report, args.markers, args.max_delete))
         if not args.yes:
@@ -465,13 +533,15 @@ def _execute(args, root, dir_fd, report, run_path, run_fd, quarantine_fd, marker
     body = dict(schema_version=1, tool="scripts/prune_state.py", root=str(root), run_dir=str(run_path),
                 quarantine_dir=quarantine_path, started=datetime.now(timezone.utc).isoformat(),
                 min_age_days=args.min_age_days, state="planned", actions=[], skipped=[],
-                undo="For each quarantine-marker action with status moved or moved-unverified, "
-                     "move quarantined_path back to original_path (mv -n). Deleted locks need no undo.",
+                undo="For each quarantine-marker action with status moved, move quarantined_path back to "
+                     "original_path (mv -n); with status moved-unverified, move spare_path back instead and keep "
+                     "quarantined_path. Deleted locks need no undo.",
                 planned=[dict(action="quarantine-marker", name=e.name, size=e.size, **e.data) for e in markers]
                 + [dict(action="unlink-lock", name=e.name) for e in report.select("lock", eligible=True)])
-    write_manifest(run_fd, body)
-    done, skipped = [], []
+    done, skipped, written = [], [], None
     try:
+        write_manifest(run_fd, body)  # The plan is on disk before anything changes.
+        written = "planned"
         apply(dir_fd, report, args.min_age_days, str(root), (quarantine_fd, quarantine_path) if args.markers else None,
               done=done, skipped=skipped)
         body["state"] = "complete"
@@ -481,15 +551,29 @@ def _execute(args, root, dir_fd, report, run_path, run_fd, quarantine_fd, marker
     finally:
         body["actions"] = done
         body["skipped"] = [dict(name=entry.name, reason=reason) for entry, reason in skipped]
-        write_manifest(run_fd, body)
-        deleted = sum(a["action"] == "unlink-lock" for a in done)
-        reasons = "".join(f"\n  {reason}: {count}" for reason, count in sorted(Counter(r for _, r in skipped).items()))
-        print(f"\nDeleted locks: {deleted}\nQuarantined markers: {len(done) - deleted}\n"
-              f"Skipped at re-verification: {len(skipped)}{reasons}\nRun directory: {run_path}\n"
-              f"Manifest (every action, state {body['state']}): {run_path / MANIFEST}")
-        if len(done) > deleted:
-            print("Undo marker moves: see --help (mv -n <run dir>/quarantined/NAME <root>/NAME).")
+        try:
+            if written:
+                write_manifest(run_fd, body)
+                written = body["state"]
+        finally:
+            _summary(run_path, done, skipped, written)
     return 0
+
+def _summary(run_path, done, skipped, written):
+    deleted = sum(a["action"] == "unlink-lock" for a in done)
+    reasons = "".join(f"\n  {reason}: {count}" for reason, count in sorted(Counter(r for _, r in skipped).items()))
+    print(f"\nDeleted locks: {deleted}\nQuarantined markers: {len(done) - deleted}\n"
+          f"Skipped at re-verification: {len(skipped)}{reasons}\nRun directory: {run_path}")
+    if written is None:
+        print(f"Manifest could not be written; nothing was changed: {run_path / MANIFEST}")
+    elif written == "planned":
+        print(f"Manifest write failed; its state may remain 'planned': {run_path / MANIFEST}\n"
+              f"Its planned list names every intended marker; moved ones are in {run_path / QUARANTINE}. "
+              "Recover them by hand (see --help).")
+    else:
+        print(f"Manifest (every action, state {written}): {run_path / MANIFEST}")
+    if len(done) > deleted:
+        print("Undo marker moves: see --help (mv -n <run dir>/quarantined/NAME <root>/NAME).")
 
 if __name__ == "__main__":
     try:

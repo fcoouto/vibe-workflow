@@ -262,7 +262,9 @@ class PruneStateTest(unittest.TestCase):
             self.assertEqual(action["sha256"], hashlib.sha256(moved.read_bytes()).hexdigest())
             self.assertEqual(action["content"], json.loads(raw))
             self.assertEqual(action["plan_dir"], str(self.fx.missing_plan))
+        self.assertEqual(set(os.listdir(self.run_dir / "quarantined")), ELIGIBLE_MARKERS)  # No spare links left.
         for action in moves:
+            self.assertEqual(os.lstat(action["quarantined_path"]).st_nlink, 1)
             os.rename(action["quarantined_path"], action["original_path"])
         deleted = {a["name"] for a in manifest["actions"] if a["action"] == "unlink-lock"}
         self.assertEqual(deleted, ELIGIBLE_LOCKS)
@@ -468,13 +470,126 @@ class PruneStateTest(unittest.TestCase):
 
     def test_error_during_apply_records_a_stopped_manifest(self):
         self.fx.build()
-        with mock.patch("os.unlink", side_effect=PermissionError("denied")):
+        with mock.patch.object(prune_state, "_delete_lock", side_effect=PermissionError("denied")):
             with self.assertRaises(PermissionError):
                 self.run_main("--yes", "--markers")
         manifest = self.manifest()
         self.assertEqual(manifest["state"], "stopped")
         self.assertEqual({a["name"] for a in manifest["actions"]}, ELIGIBLE_MARKERS)
         self.assertEqual(len(manifest["planned"]), 6)
+
+
+    def quarantine_with_collision(self):
+        self.fx.build()
+        fd, report = self.scan()
+        os.mkdir(self.run_dir, 0o700)
+        os.mkdir(self.run_dir / "quarantined", 0o700)
+        name = h(10) + ".command.json"
+        self.fx.write(self.run_dir / "quarantined" / name, b"pre-placed")
+        before = (self.fx.root / name).read_bytes()
+        return fd, report, name, before
+
+    def assert_collision_kept(self, name, before, skipped, reason):
+        self.assertEqual({e.name: r for e, r in skipped}.get(name), reason)
+        self.assertEqual((self.fx.root / name).read_bytes(), before)
+        self.assertEqual(os.lstat(self.fx.root / name).st_nlink, 1)
+        self.assertEqual((self.run_dir / "quarantined" / name).read_bytes(), b"pre-placed")
+
+    def test_quarantine_collision_keeps_marker_and_existing_file(self):
+        fd, report, name, before = self.quarantine_with_collision()
+        _, skipped = prune_state.apply(fd, report, 7, str(self.fx.root), self.quarantine())
+        self.assert_collision_kept(name, before, skipped, "quarantine name taken")
+
+    def test_move_never_replaces_a_quarantined_file(self):
+        fd, report, name, before = self.quarantine_with_collision()
+        quarantine = self.quarantine()
+        real = prune_state._exists
+        with mock.patch.object(prune_state, "_exists", lambda d, n: False if d == quarantine[0] else real(d, n)):
+            _, skipped = prune_state.apply(fd, report, 7, str(self.fx.root), quarantine)
+        self.assert_collision_kept(name, before, skipped, "quarantine name taken at link")
+
+    def test_marker_reappearing_before_unlink_keeps_the_lock(self):
+        self.fx.build()
+        fd, report = self.scan()
+        self.fx.marker(h(1) + ".command.json", self.fx.missing_plan)
+        done, skipped = prune_state.apply(fd, report, 7, str(self.fx.root))
+        self.assertEqual({e.name: r for e, r in skipped}, {h(1) + ".lock": "marker present"})
+        self.assertTrue((self.fx.root / (h(1) + ".lock")).exists())
+        self.assertEqual(len(done), 2)
+
+    def test_interrupted_run_leaves_a_planned_manifest_for_hand_recovery(self):
+        self.fx.build()
+        before = self.fx.snapshot()
+        real_link, real_rename, calls = os.link, os.rename, dict(link=0, manifest=0)
+
+        def link(*args, **kwargs):
+            calls["link"] += 1
+            if calls["link"] > 1:
+                raise OSError(5, "simulated crash after the first move")
+            return real_link(*args, **kwargs)
+
+        def rename(src, dst, **kwargs):
+            if dst == "manifest.json":
+                calls["manifest"] += 1
+                if calls["manifest"] > 1:
+                    raise OSError(28, "simulated full disk")
+            return real_rename(src, dst, **kwargs)
+
+        out = io.StringIO()
+        with mock.patch("os.link", link), mock.patch("os.rename", rename), contextlib.redirect_stdout(out):
+            with self.assertRaises(OSError):
+                prune_state.main(["--root", str(self.fx.root), "--run-dir", str(self.run_dir), "--yes", "--markers"])
+        manifest = self.manifest()
+        self.assertEqual(manifest["state"], "planned")
+        planned = {p["name"]: p for p in manifest["planned"] if p["action"] == "quarantine-marker"}
+        self.assertEqual(set(planned), ELIGIBLE_MARKERS)
+        for name, entry in planned.items():
+            self.assertEqual(entry["content"], json.loads(before[name][0]))
+        moved = os.listdir(self.run_dir / "quarantined")
+        self.assertEqual(len(moved), 1)
+        self.assertIn(moved[0], planned)
+        self.assertEqual([n for n in os.listdir(self.run_dir) if n.startswith(".manifest-")], [])
+        self.assertIn("may remain 'planned'", out.getvalue())
+        self.assertIn(f"Run directory: {self.run_dir}", out.getvalue())
+        for name in planned:  # Hand recovery from the planned list.
+            if (self.run_dir / "quarantined" / name).exists():
+                os.rename(self.run_dir / "quarantined" / name, self.fx.root / name)
+        self.assertEqual(self.fx.snapshot(), before)
+
+    def test_failed_manifest_write_removes_its_temporary_file(self):
+        self.fx.file(h(1) + ".lock")
+        os.mkdir(self.run_dir, 0o700)
+        fd = os.open(self.run_dir, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        with mock.patch("os.fsync", side_effect=OSError(5, "simulated I/O error")):
+            with self.assertRaises(OSError):
+                prune_state.write_manifest(fd, {})
+        self.assertEqual(os.listdir(self.run_dir), [])
+
+    def test_second_prune_on_the_same_root_refuses(self):
+        self.fx.build()
+        before = self.fx.snapshot()
+        guard = os.open(self.fx.root, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, guard)
+        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)  # Stands in for a running prune.
+        result = self.run_cli("--yes", "--run-dir", str(self.run_dir))
+        self.assertEqual(result.returncode, 2, result.stdout)
+        self.assertIn("Another prune is running", result.stderr)
+        self.assertEqual(self.run_cli().returncode, 0)  # A dry run takes no guard.
+        self.assertEqual(self.fx.snapshot(), before)
+        self.assertFalse(self.run_dir.exists())
+
+    def test_unreadable_plan_dir_keeps_the_marker_and_continues(self):
+        os.symlink("loop", Path(self.temp) / "loop")
+        for number, plan in ((50, Path(self.temp) / ("x" * 300) / "plan"), (51, Path(self.temp) / "loop/plan")):
+            self.fx.marker(h(number) + ".command.json", plan)
+            self.fx.file(h(number) + ".lock")
+        self.fx.file(h(1) + ".lock")
+        code, out, _ = self.run_main("--yes", "--markers")
+        self.assertEqual(code, 0)
+        self.assertIn("kept (plan_dir unreadable): 2", out)
+        self.assertIn("Deleted locks: 1", out)
+        self.assertEqual(len(self.fx.names()), 4)
 
 
 if __name__ == "__main__":
