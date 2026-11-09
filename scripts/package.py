@@ -16,6 +16,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 DEFAULT_OUTPUT = Path("~/.cache/vibe-workflow/dev-package")
+RELEASE_OUTPUT = Path("~/.cache/vibe-workflow/release-package")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 # Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
 EXCLUDED = ("tests/", "scripts/test_sharded.py")
@@ -29,8 +30,12 @@ def manifest(root):
     return read_json(root / ".codex-plugin/plugin.json")
 
 
-def git(root, *args):
-    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True).stdout
+def git(root, *args, env=None):
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, env=env).stdout
+
+
+def tracked_changes(root):
+    return bool(git(root, "status", "--porcelain", "--untracked-files=no"))
 
 
 def tracked_files(root):
@@ -58,10 +63,34 @@ def is_build(output, name):
     # A manifest alone also matches checkouts and client caches; only builds have the marker.
     try:
         recorded = marker(output).read_text(encoding="utf-8")
+        plugin = output / "plugins" / name if (output / "plugins").is_dir() else output
         return (recorded == str(output.resolve()) and not (output / ".git").exists()
-                and read_json(output / ".codex-plugin/plugin.json").get("name") == name)
+                and read_json(plugin / ".codex-plugin/plugin.json").get("name") == name)
     except (OSError, ValueError, AttributeError):
         return False
+
+
+def release_layout(staging, name):
+    """Move the plugin below plugins/<name> so a clone's .git stays outside the installed copy."""
+    plugin = staging / "plugins" / name
+    plugin.mkdir(parents=True)
+    for item in list(staging.iterdir()):
+        if item.name != "plugins":
+            item.rename(plugin / item.name)
+    source = f"./plugins/{name}"
+    codex = read_json(plugin / ".agents/plugins/marketplace.json")
+    claude = read_json(plugin / ".claude-plugin/marketplace.json")
+    for entry in codex["plugins"]:
+        if entry["name"] == name:
+            entry["source"]["path"] = source
+    for entry in claude["plugins"]:
+        if entry["name"] == name:
+            entry["source"] = source
+    for path, value in ((".agents/plugins/marketplace.json", codex), (".claude-plugin/marketplace.json", claude)):
+        (staging / path).parent.mkdir(parents=True, exist_ok=True)
+        (staging / path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    shutil.copy2(plugin / "LICENSE", staging / "LICENSE")
+    return plugin
 
 
 def check_output(root, output, name):
@@ -82,12 +111,14 @@ def remove(path):
         path.unlink()
 
 
-def build(root, output):
+def build(root, output, release=False):
     """Replace output with a validated copy of root's tracked files; remove older builds."""
     from scripts.validate import validate
 
     root = root.resolve(strict=True)
     name = manifest(root)["name"]
+    if release and tracked_changes(root):
+        raise ValueError("A release needs a clean checkout; commit or stash tracked changes")
     output = Path(output).expanduser().absolute()
     check_output(root, output, name)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +139,8 @@ def build(root, output):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(root / relative, target)
             report = validate(staging)
+            if release:
+                release_layout(staging, name)
             if output.exists():
                 previous = Path(tempfile.mkdtemp(prefix=f".{output.name}.old-", dir=output.parent))
                 output.rename(previous / "build")
@@ -132,12 +165,28 @@ def build(root, output):
         os.close(lock)
     untracked = [item for item in git(root, "ls-files", "-z", "--others", "--exclude-standard")
                  .decode("utf-8").split("\0") if item]
+    plugin = output / "plugins" / name if release else output
     return {"package": name, "version": manifest(root)["version"], "output": str(output),
-            "files": len(files), "bytes": sum((output / relative).stat().st_size for relative in files),
+            "plugin_root": str(plugin), "release": release,
+            "files": len(files), "bytes": sum((plugin / relative).stat().st_size for relative in files),
             "commit": git(root, "rev-parse", "HEAD").decode().strip(),
-            "tracked_changes": bool(git(root, "status", "--porcelain", "--untracked-files=no")),
+            "tracked_changes": tracked_changes(root),
             "untracked_excluded": len(untracked), "removed_builds": removed,
             "validation": report["validation"], "client_execution": "not_checked"}
+
+
+def release_commit(repository, tree, parent, message):
+    """Write tree as one commit on parent in repository; no ref, index or working tree changes."""
+    try:
+        parent = git(repository, "rev-parse", "--verify", "--quiet", f"{parent}^{{commit}}").decode().strip()
+    except subprocess.CalledProcessError:
+        raise ValueError(f"Unknown release parent: {parent}") from None
+    with tempfile.TemporaryDirectory(prefix="vibe-release-index-") as temporary:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+        # Force: tracked files may match the package's own ignore patterns.
+        git(repository, f"--work-tree={tree}", "add", "--all", "--force", ".", env=env)
+        written = git(repository, "write-tree", env=env).decode().strip()
+    return git(repository, "commit-tree", written, "-p", parent, "-m", message).decode().strip()
 
 
 def cached_versions(directory, manifest_path, name):
@@ -200,15 +249,28 @@ def prune(root, home, dry_run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
-                        help=f"package directory outside the checkout (default: {DEFAULT_OUTPUT})")
+    parser.add_argument("--output", type=Path,
+                        help=f"package directory outside the checkout (default: {DEFAULT_OUTPUT}, "
+                             f"or {RELEASE_OUTPUT} with --release)")
+    parser.add_argument("--release", action="store_true",
+                        help="build the Git release layout from a clean checkout: marketplace files at the root, "
+                             "the plugin under plugins/<name>")
+    parser.add_argument("--commit-onto", metavar="REF",
+                        help="with --release, write the build as one commit on REF and print it; moves no ref")
     parser.add_argument("--prune-caches", action="store_true",
                         help="also remove unused cached copies from Claude Code and Codex")
     parser.add_argument("--dry-run", action="store_true", help="with --prune-caches, list without removing")
     args = parser.parse_args()
     if args.dry_run and not args.prune_caches:
         parser.error("--dry-run applies only with --prune-caches")
-    report = build(ROOT, args.output)
+    if args.commit_onto and not args.release:
+        parser.error("--commit-onto applies only with --release")
+    output = args.output or (RELEASE_OUTPUT if args.release else DEFAULT_OUTPUT)
+    report = build(ROOT, output, release=args.release)
+    if args.commit_onto:
+        report["release_commit"] = release_commit(
+            ROOT, Path(report["output"]), args.commit_onto,
+            f"release {report['version']} from {report['commit'][:12]}")
     if args.prune_caches:
         report["pruned_caches"] = prune(ROOT, Path.home(), args.dry_run)
     print(json.dumps(report, indent=2))
