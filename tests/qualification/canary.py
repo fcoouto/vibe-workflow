@@ -1,30 +1,47 @@
 """Bounded pilot canary (docs/smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary).
 
 Pure decisions over an injectable environment, so every refusal and abort path is unit-tested without a server:
-`check_project` (the one-project allowlist), `preconditions` (refuse to start), `plan_assignments` (up to 20 explicit
-subscription admissions across three roles and two complexity bands) and `PilotDriver` (sequential admissions with
-the durable `pilot` call cap, a 24-hour limit, and an abort that runs the Smart Routing OFF kill switch).
+`check_project` (the one-project allowlist), `check_canary_state` and `initialize_state` (the dedicated canary
+routing state; never the production settings or ledger), `preflight` (refusals before any write), `preconditions`
+(refusals once the server and probes ran), `plan_assignments` (up to 20 explicit subscription admissions across three
+roles and two complexity bands) and `PilotDriver` (sequential admissions with the durable `pilot` call cap, a 24-hour
+limit, working-tree checks, and a catch-all abort that recovers by phase and runs the Smart Routing OFF kill switch).
 
 The environment (`opencode_live.CanaryEnv` in a live run, a fake in tests) provides: `status()`, `health()`,
 `prepare(body)`, `dispatch(attempt)`, `attach(session, attempt, token)`, `detach(...)`, `launch(session, message,
-allow_title)`, `account(session)`, `record(event)` and `kill_switch()`.
+allow_title)`, `account(session)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally `quiesce()`.
 """
 import os
 from pathlib import Path
+import stat
 import time
 
-from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, MODEL, PROVIDER, Refused, VARIANT,
-                                        summarize_ms)
+from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, MODEL, PROTECTED, PROVIDER, Refused, VARIANT,
+                                        inside_git_worktree, summarize_ms)
 
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
 MAX_DURATION_S = 24 * 3600
+REPO_CHECK_EVERY = 5
 DEFAULT_CAPS = dict(total=4, per_account=2)
-POOL = "sub"
+# Distinct ids for the pilot, so nothing it admits can be mistaken for another route's or another ledger's holds.
+POOL = "pilot-sub"
+ACCOUNT = "anthropic:pilot-canary"
+DEFAULT_STATE = Path.home() / ".local/state/vibe-workflow-qualification/canary"
+PRODUCTION_STATE_ROOT = ".local/state/vibe-workflow"
+RESET_ADVICE = ("The canary routing state is not clean. It belongs to the pilot only: after confirming no harness run is "
+                "alive, the operator may reset it by deleting the canary directory; the production state is untouched.")
 CHOICE = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME, funding="subscription")
 # Profile role -> explicit assignment role; `researcher` is explicit on a worker job (routing_settings.EXPLICIT_ROLES).
 ROLES = (("implementer", "worker", None), ("reviewer", "review", "reviewer"), ("researcher", "worker", "researcher"))
 BANDS = ("low", "medium")
+# How far an admission got, in order; recovery after an abort depends on it.
+PHASES = ("planned", "preparing", "admitted", "dispatching", "dispatched", "attached", "launching", "launched",
+          "recorded", "completed")
+
+
+def request(pool=POOL):
+    return dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness=HARNESS_NAME, kind="primary", funding_pool=pool)
 
 
 def check_project(project):
@@ -35,6 +52,64 @@ def check_project(project):
     if resolved != os.path.realpath(ALLOWLIST) or not (Path(resolved) / ".git").exists():
         raise Refused("canary mode runs only in the allowlisted project")
     return resolved
+
+
+def _production_paths():
+    from scripts import routing as command
+    return command.default_settings(), command.default_ledger()
+
+
+def check_canary_state(path, home=None, production=None, isolated=None):
+    """The dedicated canary routing state: `{dir, settings, ledger}`, or `Refused`.
+
+    It must be an absolute directory (existing or not yet created) whose parent is owner-only, itself owner-only
+    when it exists, outside every git worktree, OpenCode's user directories, the production routing state root and
+    the run's isolated dir, and its settings and ledger must differ from the production defaults."""
+    if not path or not Path(path).is_absolute():
+        raise Refused("the canary state directory must be absolute")
+    directory = Path(path)
+    home = Path(home or Path.home()).resolve()
+    resolved = directory.parent.resolve() / directory.name
+    owner = lambda p: not p.is_symlink() and p.stat().st_uid == os.getuid() and stat.S_IMODE(p.stat().st_mode) == 0o700  # noqa: E731
+    if not directory.parent.is_dir() or not owner(directory.parent):
+        raise Refused("the canary state's parent directory must exist and be owner-only")
+    if directory.exists() and (not directory.is_dir() or not owner(directory)):
+        raise Refused("the canary state directory must be owner-only")
+    if inside_git_worktree(resolved):
+        raise Refused("the canary state must not be inside a git worktree")
+    for guarded in (*PROTECTED, PRODUCTION_STATE_ROOT):
+        root = home / guarded
+        if resolved == root or root in resolved.parents:
+            raise Refused("the canary state must be outside OpenCode's and the production routing state directories")
+    if isolated is not None and (resolved == Path(isolated) or Path(isolated) in resolved.parents):
+        raise Refused("the canary state must be outside the isolated run directory")
+    settings, ledger = resolved / "settings.json", resolved / "ledger.sqlite3"
+    for mine, theirs in zip((settings, ledger), production or _production_paths()):
+        if mine == Path(theirs).parent.resolve() / Path(theirs).name or resolved == Path(theirs).parent.resolve():
+            raise Refused("the canary state must not be the production routing state")
+    return dict(dir=resolved, settings=settings, ledger=ledger)
+
+
+def initialize_state(routing):
+    """Create the canary routing state on first use; never touch an existing one.
+
+    `set authority_required=true` is the only `set` form that creates a ledger; the flag is one-way and applies to
+    this canary ledger only. Smart Routing ON and API Usage off are written explicitly; no organization is created."""
+    pins = dict(zip(routing.argv[::2], routing.argv[1::2]))
+    settings, ledger = Path(pins["--settings"]), Path(pins["--ledger"])
+    if ledger.exists():
+        return dict(created=False)
+    settings.parent.mkdir(mode=0o700, exist_ok=True)
+    answer, _ = routing("set", authority_required=True)
+    if answer.get("state") != "updated":
+        raise Refused("could not initialize the canary ledger: %s" % answer.get("reason"))
+    status, _ = routing("status")
+    answer, _ = routing("set", expected_revision=status.get("settings_revision"),
+                        change=dict(smart_routing=True, api_usage_enabled=False))
+    if answer.get("state") != "updated":
+        raise Refused("could not write the canary settings: %s" % answer.get("reason"))
+    return dict(created=True, authority_required="one-way flag set on the canary ledger only; the production routing "
+                                                 "state is untouched", settings=dict(smart_routing=True, api_usage_enabled=False))
 
 
 def anomalies(status):
@@ -78,13 +153,23 @@ def anomalies(status):
     return reasons
 
 
-def preconditions(status, health, probes):
-    """Every reason to refuse the pilot; empty means it may start. `probes['chain']` is the plugin-chain verdict."""
+def preflight(status):
+    """Every refusal decidable before any write to the project or any server start. `routing.health` answers `ok`
+    exactly when the settings are readable and the ledger is ready, which `anomalies` already requires; the RPC itself
+    and the probes are checked by `preconditions` once the server runs."""
     reasons = anomalies(status)
     if reasons == ["status_unavailable"]:
         return reasons
     if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
         reasons.append("open_attempts")
+    return reasons
+
+
+def preconditions(status, health, probes):
+    """Every reason to refuse the pilot once the server runs; empty means it may start."""
+    reasons = preflight(status)
+    if reasons == ["status_unavailable"]:
+        return reasons
     if (health or {}).get("state") != "ok":
         reasons.append("routing_unhealthy")
     if (probes or {}).get("chain") != []:
@@ -92,7 +177,7 @@ def preconditions(status, health, probes):
     return reasons
 
 
-def plan_assignments(n, tag, now=None):
+def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT):
     """`n` (1-20) explicit subscription admissions cycling three roles and two complexity bands."""
     if type(n) is not int or not 1 <= n <= PILOT_MAX:
         raise Refused("the pilot runs 1 to %d admissions" % PILOT_MAX)
@@ -109,10 +194,10 @@ def plan_assignments(n, tag, now=None):
                    profile=dict(task_family="code", complexity_band=band, risk_band="medium", review_policy="independent",
                                 context_tokens=100, tools=["read"], uncertainty="low"))
         observations = dict(now=now, routes=[dict(route="sub", strategy_id="s-sub", provider=PROVIDER, model=MODEL, effort=VARIANT,
-                                                  harness=HARNESS_NAME, account="anthropic:pilot",
-                                                  billing_class="included_subscription", pool=POOL, demand={"5h": 10},
+                                                  harness=HARNESS_NAME, account=account,
+                                                  billing_class="included_subscription", pool=pool, demand={"5h": 10},
                                                   capable=True, permitted=True, binding_enforceable=True)],
-                            pools={POOL: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None,
+                            pools={pool: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None,
                                                             rolling=True, fresh=True)])})
         plan.append(dict(label=dict(role=role, band=band, index=index + 1),
                          body=dict(assignment=assignment, job=job, observations=observations)))
@@ -128,37 +213,88 @@ class Abort(Exception):
 
 class PilotDriver:
     """Runs the pilot admissions one at a time (never more than one open), each with a write-ahead reservation in
-    the durable `pilot` purpose. Any abort condition stops launching and runs the kill switch once."""
+    the durable `pilot` purpose. Any abort condition, and any exception or signal, stops launching, recovers the
+    current admission by phase, and runs the kill switch once."""
 
     def __init__(self, env, ledger, n=PILOT_MAX, run="pilot", clock=time.monotonic, max_duration=MAX_DURATION_S,
                  tag=None, now=None):
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
         self.plan = plan_assignments(n, tag or run, now)
-        self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None,
+        self.current = None
+        self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[],
                             latency=dict(prepare=[], dispatch=[], check=[], record=[]), blocked_titles=0)
-
-    def abort(self, reason, index, detail=None):
-        switched = self.env.kill_switch()
-        self.results["abort"] = dict(reason=reason, admission=index, detail=detail, kill_switch=switched,
-                                     kill_switch_ok=(switched or {}).get("state") == "updated")
 
     def run(self):
         started = self.clock()
-        for item in self.plan:
-            index = item["label"]["index"]
-            try:
+        try:
+            for item in self.plan:
+                index = item["label"]["index"]
+                self.current = dict(index=index, attempt=item["body"]["assignment"]["attempt_id"], phase="planned",
+                                    ref=None, settled=False)
                 if self.clock() - started > self.max_duration:
                     raise Abort("max_duration")
                 self.admit(item, first=index == 1)
-            except Abort as stop:
-                self.abort(stop.reason, index, stop.detail)
-                break
+                if index % REPO_CHECK_EVERY == 0:
+                    self.repo_check(index)
+            self.current = None
+            self.repo_check("end")
+        except Abort as stop:
+            self.abort(stop.reason, stop.detail)
+        except BaseException as error:  # noqa: BLE001 - every exception and signal ends the pilot the same way
+            interrupted = isinstance(error, KeyboardInterrupt) or type(error).__name__ == "Interrupted"
+            self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__)
         latency = self.results["latency"]
         self.results["latency_summary"] = {key: summarize_ms(values) for key, values in latency.items()}
         return self.results
 
+    def repo_check(self, at):
+        changes = self.env.repo_changes()
+        self.results["repo"].append(dict(at=at, **changes))
+        if changes.get("new"):
+            raise Abort("repo_changed", changes["new"])
+
+    def phase(self, name):
+        self.current["phase"] = name
+
+    def recover(self):
+        """What the current admission's hold needs after an abort, by how far it got."""
+        current = self.current
+        if current is None:
+            return "none"
+        phase = PHASES.index(current["phase"])
+        if current["ref"] is not None and not current["settled"] and phase < PHASES.index("launching"):
+            self.ledger.settle(current["ref"], 0, "aborted before any launch")  # nothing could have been sent
+            current["settled"] = True
+        attempt = current["attempt"]
+        if current["phase"] in ("preparing", "admitted", "dispatching"):
+            # Admitted (or maybe) and never dispatched to the host: `not_dispatched` releases it; refused if not admitted.
+            answer, _ = self.env.record(dict(event_id=attempt + "-not-dispatched", attempt_id=attempt, kind="not_dispatched"))
+            return "not_dispatched" if answer.get("state") == "recorded" else "not_dispatched_refused:%s" % answer.get("reason")
+        if current["phase"] in ("dispatched", "attached"):
+            return "left_dispatched"  # dispatched, nothing launched: no proof of non-launch exists, so it stays counted
+        if current["phase"] in ("launching", "launched"):
+            answer, _ = self.env.record(dict(event_id=attempt + "-uncertain", attempt_id=attempt, kind="uncertain"))
+            return "uncertain" if answer.get("state") == "recorded" else "uncertain_refused:%s" % answer.get("reason")
+        return "none"
+
+    def abort(self, reason, detail=None):
+        if callable(getattr(self.env, "quiesce", None)):
+            self.env.quiesce()  # no further signal interrupts the recovery
+        try:
+            recovery = self.recover()
+        except BaseException as error:  # noqa: BLE001
+            recovery = "error:%s" % type(error).__name__
+        try:
+            switched = self.env.kill_switch()
+        except BaseException as error:  # noqa: BLE001
+            switched = dict(state="error", reason=type(error).__name__)
+        current = self.current or {}
+        self.results["abort"] = dict(reason=reason, admission=current.get("index"), phase=current.get("phase"), detail=detail,
+                                     recovery=recovery, kill_switch=switched,
+                                     kill_switch_ok=(switched or {}).get("state") == "updated")
+
     def admit(self, item, first):
-        env, label = self.env, item["label"]
+        env, label, current = self.env, item["label"], self.current
         status = env.status()
         if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
             raise Abort("concurrency")
@@ -169,34 +305,36 @@ class PilotDriver:
             raise Abort("status_anomaly", problems)
         allowed = 2 if first else 1  # the first admission may carry the one observed title request
         try:
-            ref = self.ledger.reserve("pilot", "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
-                                      allowed, run=self.run_id)
+            current["ref"] = self.ledger.reserve("pilot", "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
+                                                 allowed, run=self.run_id)
         except BudgetExceeded:
             raise Abort("cap_breach") from None
-        attempt = item["body"]["assignment"]["attempt_id"]
+        attempt = current["attempt"]
+        self.phase("preparing")
         answer, prepare_ms = env.prepare(item["body"])
         if answer.get("state") != "admitted" or (answer.get("admission") or {}).get("billing_class") != "included_subscription":
-            self.ledger.settle(ref, 0, "not admitted")
             raise Abort("admission_refused", answer.get("reason"))
+        self.phase("admitted")
         if (env.health() or {}).get("state") != "ok":
-            self.ledger.settle(ref, 0, "routing unhealthy")
             raise Abort("routing_unhealthy")
+        self.phase("dispatching")
         answer, dispatch_ms = env.dispatch(attempt)
         if answer.get("state") != "dispatched":
-            self.ledger.settle(ref, 0, "not dispatched")
             raise Abort("dispatch_refused", answer.get("reason"))
-        token, session, message = answer.get("authority"), answer.get("session_id"), answer.get("message_id")
+        self.phase("dispatched")
+        token, session, message = answer["authority"], answer["session_id"], answer["message_id"]
         if not env.attach(session, attempt, token):
-            self.ledger.settle(ref, 0, "attach refused before any session existed")
-            env.record(dict(event_id=attempt + "-uncertain", attempt_id=attempt, kind="uncertain"))
             raise Abort("recovery_error", "attach")
+        self.phase("attached")
+        self.phase("launching")
         launched = env.launch(session, message, allow_title=first)
         if not launched.get("idle"):
-            env.record(dict(event_id=attempt + "-uncertain", attempt_id=attempt, kind="uncertain"))
             raise Abort("unresolved_launch")  # the reservation stays open: its exposure counts in full
+        self.phase("launched")
         sent = launched["transmitted"]
+        current["settled"] = True
         try:
-            self.ledger.settle(ref, sum(sent.values()))
+            self.ledger.settle(current["ref"], sum(sent.values()))
         except BudgetExceeded:
             raise Abort("cap_breach") from None
         if launched.get("off_route"):
@@ -214,6 +352,7 @@ class PilotDriver:
         settlement = answer.get("settlement") or {}
         if answer.get("state") != "recorded":
             raise Abort("recovery_error", "record complete: %s" % answer.get("reason"))
+        self.phase("recorded")
         if settlement.get("kind") != "window" or settlement.get("charged"):
             raise Abort("funding_violation", settlement.get("kind"))
         if not env.detach(session, attempt, token):
@@ -221,6 +360,7 @@ class PilotDriver:
         after = anomalies(env.status())
         if after:
             raise Abort("status_anomaly", after)
+        self.phase("completed")
         self.results["completed"] += 1
         self.results["settlements"][settlement["kind"]] = self.results["settlements"].get(settlement["kind"], 0) + 1
         latency = self.results["latency"]

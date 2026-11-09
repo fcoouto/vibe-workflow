@@ -3,6 +3,7 @@ version refusals, the durable write-ahead call ledger, the recorder plugin sourc
 user-directory snapshots, leftover-process detection and redaction. Unit-tested in
 tests/test_qualification_harness.py."""
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,7 +40,8 @@ USER_OPENCODE_DIRS = (".config/opencode", ".local/share/opencode", ".local/state
 DESKTOP_CHURN = re.compile(r"^(?:.*/)?(?:opencode\.db(?:-wal|-shm|-journal)?|[^/]*\.log(?:\.\d+)?)$|^log/")
 DERIVED_SESSION = re.compile(r"ses_[0-9a-f]{32}")
 DERIVED_MESSAGE = re.compile(r"msg_[0-9a-f]{32}")
-ID_TOKEN = re.compile(r"\b(ses|msg|prt|evt|cred|per|toolu|call|prj|loc)_[A-Za-z0-9]{6,}\b")
+# An id body has a digit or is at least 20 characters, so field names such as `call_ledger` are never taken for ids.
+ID_TOKEN = re.compile(r"\b(ses|msg|prt|evt|cred|per|toolu|call|prj|loc)_(?=[A-Za-z0-9]*[0-9]|[A-Za-z0-9]{20})[A-Za-z0-9]{6,}\b")
 PROBE_ENV = "QUAL_PROBE_TOKEN"
 
 
@@ -165,16 +167,21 @@ class CallLedger:
 
     @staticmethod
     def _parse(text):
+        """Every record is validated here, so a malformed line is `Refused`, never a KeyError later."""
         records = []
+        integer = lambda value: type(value) is int and value >= 0  # noqa: E731
         for line in text.splitlines():
             try:
                 record = json.loads(line)
             except ValueError:
                 raise Refused("the call ledger is damaged") from None
             if type(record) is not dict or record.get("v") != 1 or record.get("kind") not in ("seed", "reserve", "settle") \
-                    or type(record.get("calls")) is not int or record["calls"] < 0:
+                    or not integer(record.get("calls")) or not integer(record.get("seq")) \
+                    or record.get("purpose") not in CAPS or (record["kind"] == "settle" and not integer(record.get("ref"))):
                 raise Refused("the call ledger is damaged")
             records.append(record)
+        if len({record["seq"] for record in records}) != len(records):
+            raise Refused("the call ledger is damaged")
         return records
 
     def _read(self, handle):
@@ -219,7 +226,7 @@ class CallLedger:
                 raise BudgetExceeded("%s: %d more calls exceed the remaining %d of %d" % (purpose, calls, totals["remaining"],
                                                                                          totals["cap"]))
             return self._append(handle, records, dict(kind="reserve", purpose=purpose, label=str(label)[:120],
-                                                      calls=calls, run=run))
+                                                      calls=calls, run=run, pid=os.getpid()))
 
     def settle(self, ref, actual, note=None):
         """Record what a reservation actually sent. More than reserved is recorded, then raises."""
@@ -236,6 +243,30 @@ class CallLedger:
         if actual > reserved[ref]["calls"] or totals["spent"] > totals["cap"]:
             raise BudgetExceeded("%s: %d sent against %d reserved" % (purpose, actual, reserved[ref]["calls"]))
         return totals
+
+    def settle_dead(self, ref, processes):
+        """Settle a reservation whose run died, at its full reserved count (never under-counting).
+
+        Refuses when the reservation is unknown or settled, when its recorded pid is still alive, or when any
+        harness run appears in `processes` (`ps -axo pid=,command=` output), because that run might still send."""
+        own = os.getpid()
+        for line in (processes or "").splitlines():
+            parts = line.split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) != own and "opencode_live.py" in parts[1] \
+                    and "--settle-dead" not in parts[1]:
+                raise Refused("a harness run is still alive; stop it before settling a dead reservation")
+        with self._locked(True) as handle:
+            records = self._read(handle)
+            _, reserved, settled = self._totals(records)
+            if ref not in reserved or ref in settled:
+                raise Refused("unknown or already settled reservation")
+            pid = reserved[ref].get("pid")
+            if type(pid) is int and _alive(pid):
+                raise Refused("the reserving process is still alive")
+            purpose, calls = reserved[ref]["purpose"], reserved[ref]["calls"]
+            self._append(handle, records, dict(kind="settle", ref=ref, purpose=purpose, calls=calls,
+                                               note="dead run: settled at the reserved count"))
+            return self._totals(self._read(handle))[0][purpose]
 
     def remaining(self, purpose):
         return self.summary()[purpose]["remaining"]
@@ -261,6 +292,16 @@ class CallLedger:
         return {"_meta": {"caps": CAPS, "counting": COUNTING, "generated_from": "the durable call ledger (--export-call-ledger)",
                           "write_ahead": "an unsettled reservation counts in full"},
                 "totals": totals, "entries": entries}
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 # ---------------------------------------------------------------- recorder plugins
@@ -322,7 +363,7 @@ def recorder_source(phase):
             .replace("__VARIANT__", VARIANT).replace("__ROUTE__", ROUTE).replace("__PROBE__", PROBE_ENV))
 
 
-def verify_plugin_chain(plugins, guard, pending, guard_outcome, pending_reason):
+def verify_plugin_chain(plugins, guard, pending, guard_outcome, guard_reason, pending_reason):
     """Reasons the recorder/shim/recorder chain cannot be trusted (empty when it can).
 
     `plugins` is the server's plugin id list (presence only: its order is not documented). Order is proven by
@@ -344,6 +385,8 @@ def verify_plugin_chain(plugins, guard, pending, guard_outcome, pending_reason):
         reasons.append("recorders_out_of_order")
     if guard_outcome != "failed":
         reasons.append("guard_probe_outcome")
+    if guard_reason != "guard_variant":
+        reasons.append("guard_probe_reason")  # the session failed for another reason (a provider rejection, say)
     if not any(r.get("phase") == "pre" for r in pending):
         reasons.append("pending_probe_not_seen")
     if any(r.get("phase") == "post" for r in pending):
@@ -401,6 +444,58 @@ def leftover_processes(ps_output, pgid, needles):
         if (pgid is not None and group == str(pgid)) or any(needle and needle in command for needle in needles):
             found.append(pid)
     return found
+
+
+# ---------------------------------------------------------------- the project working tree (canary mode)
+
+MAX_REPO_FILES = 5000
+
+
+def _git(project, *args, run=subprocess.run):
+    done = run(["git", "-C", str(project), *args], capture_output=True, timeout=60)
+    return done.returncode, done.stdout
+
+
+def repo_snapshot(project, run=subprocess.run):
+    """HEAD, the paths `git status` reports (untracked files listed one by one) and a content hash of every file
+    `git ls-files -m -o --exclude-standard` lists. Names and hashes only; nothing is read into the results."""
+    code, head = _git(project, "rev-parse", "HEAD", run=run)
+    code_status, status = _git(project, "status", "--porcelain=v1", "-z", "--untracked-files=all", run=run)
+    code_files, listed = _git(project, "ls-files", "-m", "-o", "--exclude-standard", "-z", run=run)
+    if code_status or code_files:
+        raise Refused("git cannot read the project working tree")
+    entries, dirty = status.split(b"\0"), set()
+    index = 0
+    while index < len(entries):
+        entry = entries[index].decode("utf-8", "surrogateescape")
+        if len(entry) > 3:
+            dirty.add(entry[3:])
+            if entry[0] in "RC":
+                index += 1  # a rename or copy is followed by its source path
+        index += 1
+    files = sorted({name.decode("utf-8", "surrogateescape") for name in listed.split(b"\0") if name} | dirty)
+    if len(files) > MAX_REPO_FILES:
+        raise Refused("too many changed files to snapshot the working tree")
+    hashes = {}
+    for name in files:
+        path = Path(project) / name
+        try:
+            hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else "absent"
+        except OSError:
+            hashes[name] = "unreadable"
+    return dict(head=head.decode().strip() if code == 0 else None, dirty=sorted(dirty), hashes=hashes,
+                status_digest=hashlib.sha256(status).hexdigest())
+
+
+def repo_changes(start, now):
+    """Changes since `start`: `new` (paths not dirty at start: these abort the pilot), `dirty_changed` (paths that
+    were already dirty, which other sessions may be editing: reported only) and whether HEAD moved."""
+    paths = set(start["hashes"]) | set(now["hashes"]) | set(start["dirty"]) | set(now["dirty"])
+    changed = {path for path in paths if start["hashes"].get(path) != now["hashes"].get(path)
+               or (path in start["dirty"]) != (path in now["dirty"])}
+    was_dirty = set(start["dirty"])
+    return dict(new=sorted(changed - was_dirty), dirty_changed=sorted(changed & was_dirty),
+                head_changed=start["head"] != now["head"])
 
 
 # ---------------------------------------------------------------- output

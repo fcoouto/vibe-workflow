@@ -2,7 +2,8 @@
 
 Qualification mode: the server's project, config and routing stores all live in the isolated directory.
 Canary mode: the server's location is a dedicated, git-excluded subdirectory of the allowlisted project (see
-`ProjectConfig`), and routing uses the production default settings and ledger with `--project` pinned.
+`ProjectConfig`), and routing (the shim's child and the launcher) uses the dedicated canary settings and ledger
+(canary.check_canary_state; never the production defaults) with `--project` pinned.
 """
 import base64
 import http.client
@@ -91,7 +92,7 @@ class ProjectConfig:
 class Server:
     """One `opencode serve` on a random localhost port with its own XDG dirs."""
 
-    def __init__(self, base, canary_project=None):
+    def __init__(self, base, canary_project=None, settings=None, ledger=None):
         self.base = base
         self.canary = canary_project is not None
         self.project_config = ProjectConfig(canary_project) if self.canary else None
@@ -102,9 +103,9 @@ class Server:
         self.directory = None
         self.log = base / "hooks.jsonl"
         self.control_path = base / "control.json"
-        # Qualification pins temporary routing stores; canary uses the production defaults (None).
-        self.settings = None if self.canary else base / "routing" / "settings.json"
-        self.ledger = None if self.canary else base / "usage" / "organizations.sqlite3"
+        # Qualification pins temporary stores in the run dir; canary pins the dedicated canary state.
+        self.settings = settings or base / "routing" / "settings.json"
+        self.ledger = ledger or base / "usage" / "organizations.sqlite3"
         self.control = dict(budget=0, hold=[], title_session=None)
 
     def write_control(self, **change):
@@ -115,9 +116,7 @@ class Server:
 
     def config(self):
         recorder = dict(log=str(self.log), control=str(self.control_path))
-        shim = {"python": "python3"}
-        if not self.canary:
-            shim.update(settings=str(self.settings), ledger=str(self.ledger))
+        shim = {"python": "python3", "settings": str(self.settings), "ledger": str(self.ledger)}
         return {
             "$schema": "https://opencode.ai/config.json",
             "model": "%s/%s" % (PROVIDER, MODEL),
@@ -260,7 +259,7 @@ class EventStream(threading.Thread):
 class Routing:
     """`scripts/routing.py`: one-shot calls, or one persistent `--serve` child for the launcher's own latency.
 
-    Qualification pins the temporary stores. Canary passes no pins (production defaults) and `--project`."""
+    Both modes pin the stores: the run dir's temporary ones, or the dedicated canary state with `--project`."""
 
     def __init__(self, settings=None, ledger=None, project=None):
         self.argv = []

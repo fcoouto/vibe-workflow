@@ -251,7 +251,8 @@ class PluginChainTests(unittest.TestCase):
 
     def good(self):
         return dict(plugins=self.PLUGINS, guard=[self.record("pre", 1.0), self.record("post", 2.0, "guard_variant")],
-                    pending=[self.record("pre", 3.0)], guard_outcome="failed", pending_reason="attach_required")
+                    pending=[self.record("pre", 3.0)], guard_outcome="failed", guard_reason="guard_variant",
+                    pending_reason="attach_required")
 
     def test_a_correct_chain_passes(self):
         self.assertEqual(safety.verify_plugin_chain(**self.good()), [])
@@ -265,6 +266,8 @@ class PluginChainTests(unittest.TestCase):
             "guard_variant_not_enforced": dict(guard=[self.record("pre", 1.0), self.record("post", 2.0, "guard_budget")]),
             "recorders_out_of_order": dict(guard=[self.record("pre", 3.0), self.record("post", 2.0, "guard_variant")]),
             "guard_probe_outcome": dict(guard_outcome="succeeded"),
+            # A provider-side rejection also fails the session, but it is not the guard's refusal.
+            "guard_probe_reason": dict(guard_reason=None),
             "pending_probe_not_seen": dict(pending=[]),
             "shim_not_between_recorders": dict(pending=[self.record("pre", 3.0), self.record("post", 4.0, "guard_budget")]),
             "shim_did_not_block": dict(pending_reason="guard_budget"),
@@ -397,6 +400,7 @@ class MainRefusalTests(Temp):
         self.assertEqual(live.main(["--isolated-dir", str(self.private(self.tmp / "loose", 0o755)), "--call-ledger", str(ledger)]), 2)
         self.assertEqual(live.main(base + ["--out", str(target / "r.json")]), 2)  # output inside the dir that is deleted
         self.assertEqual(live.main(base + ["--canary", "--project", str(self.tmp)]), 2)
+        self.assertEqual(live.main(base + ["--canary", "--project", canary.ALLOWLIST, "--canary-state", str(target)]), 2)
         self.assertEqual(list(target.iterdir()), [])
 
 
@@ -430,7 +434,13 @@ class Fake:
         self.off_route = 0
         self.settlement = dict(kind="window", released={"5h": 10}, observed_units={})
         self.fail = {}
+        self.raises = {}
+        self.repo = dict(new=[], dirty_changed=[], head_changed=False)
         self.__dict__.update(change)
+
+    def _raise(self, name):
+        if name in self.raises:
+            raise self.raises[name]
 
     def status(self):
         self.calls.append("status")
@@ -446,14 +456,17 @@ class Fake:
 
     def prepare(self, body):
         self.calls.append("prepare")
+        self._raise("prepare")
         return dict(state=self.fail.get("prepare", "admitted"), admission=dict(billing_class="included_subscription")), 5.0
 
     def dispatch(self, attempt):
         self.calls.append("dispatch")
+        self._raise("dispatch")
         return dict(state="dispatched", authority="t" * 43, session_id="ses_" + "a" * 32, message_id="msg_" + "b" * 32), 7.0
 
     def attach(self, session, attempt, token):
         self.calls.append("attach")
+        self._raise("attach")
         return self.fail.get("attach", True)
 
     def detach(self, session, attempt, token):
@@ -462,6 +475,7 @@ class Fake:
 
     def launch(self, session, message, allow_title):
         self.calls.append("launch")
+        self._raise("launch")
         if self.fail.get("launch") == "timeout":
             return dict(idle=False)
         transmit = dict(self.transmit, title=1 if allow_title else 0) if self.transmit.get("title") is None else dict(self.transmit)
@@ -469,6 +483,7 @@ class Fake:
 
     def account(self, session):
         self.calls.append("account")
+        self._raise("account")
         if "account" in self.fail:
             raise ValueError("refused")
         return dict(usage=dict(source="host_message_totals", requests=[dict(kind="primary")]), unknown=[])
@@ -477,11 +492,13 @@ class Fake:
         self.calls.append("record:" + event["kind"])
         return dict(state="recorded", outcome="complete", settlement=dict(self.settlement)), 4.0
 
-    def open_attempts_during(self):
-        return 0
+    def repo_changes(self):
+        self.calls.append("repo")
+        return dict(self.repo)
 
     def kill_switch(self):
         self.calls.append("kill_switch")
+        self._raise("kill_switch")
         self.settings["smart_routing"] = False
         return dict(state="updated")
 
@@ -603,9 +620,18 @@ class PilotDriverTests(Temp):
         self.assert_aborts(fake, "concurrency")
 
     def test_recovery_errors_abort(self):
-        self.assert_aborts(Fake(fail=dict(attach=False)), "recovery_error")
-        self.assert_aborts(Fake(fail=dict(account=True)), "recovery_error")
-        self.assert_aborts(Fake(fail=dict(prepare="pending")), "admission_refused")
+        fake = Fake(fail=dict(attach=False))
+        result, ledger = self.assert_aborts(fake, "recovery_error")
+        # Refused before sending: nothing is recorded uncertain; the dispatched hold is left and reported.
+        self.assertNotIn("record:uncertain", fake.calls)
+        self.assertEqual(result["abort"]["recovery"], "left_dispatched")
+        self.assertEqual(ledger.summary()["pilot"], dict(cap=24, spent=0, remaining=24, open_reservations=0))
+        fake = Fake(fail=dict(account=True))
+        result, _ = self.assert_aborts(fake, "recovery_error")
+        self.assertEqual(result["abort"]["recovery"], "uncertain")
+        fake = Fake(fail=dict(prepare="pending"))
+        result, _ = self.assert_aborts(fake, "admission_refused")
+        self.assertEqual(result["abort"]["recovery"], "not_dispatched")
 
     def test_max_duration_aborts(self):
         clock = iter([0.0, 0.0, 24 * 3600 + 1.0] + [24 * 3600 + 2.0] * 50)
@@ -619,9 +645,336 @@ class PilotDriverTests(Temp):
         self.assertEqual(result["abort"]["kill_switch"], dict(state="blocked", reason="x"))
         self.assertFalse(result["abort"]["kill_switch_ok"])
 
+    def test_every_exception_aborts_with_the_right_recovery(self):
+        cases = [("prepare", OSError("http"), "not_dispatched", 0), ("dispatch", KeyError("state"), "not_dispatched", 0),
+                 ("attach", live.Interrupted("signal 15"), "left_dispatched", 0), ("launch", KeyError("x"), "uncertain", 1),
+                 ("account", safety.Refused("x"), "uncertain", 0), ("launch", live.Interrupted("signal 2"), "uncertain", 1)]
+        for method, error, recovery, still_open in cases:
+            with self.subTest(method=method, error=type(error).__name__):
+                fake = Fake(raises={method: error})
+                expected = "interrupted" if isinstance(error, live.Interrupted) else \
+                    "recovery_error" if method == "account" else "unexpected_error"  # accounting refusals are classified
+                result, ledger = self.assert_aborts(fake, expected)
+                self.assertEqual(result["abort"]["recovery"], recovery)
+                self.assertIn(type(error).__name__, result["abort"]["detail"])
+                self.assertEqual("record:uncertain" in fake.calls, recovery == "uncertain")
+                self.assertEqual("record:not_dispatched" in fake.calls, recovery == "not_dispatched")
+                # A launch interrupted mid-way keeps its reservation open (counted in full); before any launch it is released.
+                self.assertEqual(ledger.summary()["pilot"]["open_reservations"], still_open)
+
+    def test_a_ledger_refusal_mid_admission_aborts(self):
+        fake = Fake()
+        driver, ledger = self.driver(fake)
+
+        def refuse(*args, **kwargs):
+            raise safety.Refused("the call ledger is damaged")
+        ledger.settle = refuse
+        result = driver.run()
+        self.assertEqual((result["abort"]["reason"], result["abort"]["recovery"]), ("unexpected_error", "uncertain"))
+        self.assertIn("kill_switch", fake.calls)
+
+    def test_a_failing_kill_switch_is_recorded_not_raised(self):
+        fake = Fake(off_route=1, raises=dict(kill_switch=OSError("down")))
+        driver, _ = self.driver(fake)
+        result = driver.run()
+        self.assertEqual(result["abort"]["kill_switch"], dict(state="error", reason="OSError"))
+        self.assertFalse(result["abort"]["kill_switch_ok"])
+
+    def test_repo_changes_outside_dirty_paths_abort(self):
+        fake = Fake(repo=dict(new=["runtime/x.py"], dirty_changed=[], head_changed=False))
+        result, _ = self.assert_aborts(fake, "repo_changed", n=5)
+        self.assertEqual(fake.calls.count("record:complete"), 5)  # checked after every 5 admissions
+        self.assertEqual(result["abort"]["detail"], ["runtime/x.py"])
+
+    def test_changes_to_already_dirty_paths_are_reported_only(self):
+        fake = Fake(repo=dict(new=[], dirty_changed=["README.md"], head_changed=True))
+        driver, _ = self.driver(fake, n=6)
+        result = driver.run()
+        self.assertIsNone(result["abort"])
+        self.assertEqual(fake.calls.count("repo"), 2)  # after admission 5 and at the end
+        self.assertEqual(result["repo"][-1], dict(at="end", new=[], dirty_changed=["README.md"], head_changed=True))
+
     def test_n_is_bounded(self):
         with self.assertRaises(safety.Refused):
             self.driver(Fake(), n=21)
+
+
+class LedgerStrictnessTests(Temp):
+    def ledger(self):
+        return safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+
+    def test_malformed_records_are_refused_not_key_errors(self):
+        bad = [dict(v=1, kind="reserve", purpose="qualification", calls=1),            # no seq
+               dict(v=1, seq=9, kind="reserve", purpose="other", calls=1),             # unknown purpose
+               dict(v=1, seq=9, kind="settle", purpose="qualification", calls=0),      # no ref
+               dict(v=1, seq=9, kind="seed", calls=1),                                 # no purpose
+               dict(v=1, seq="9", kind="reserve", purpose="pilot", calls=1)]           # seq not an integer
+        for record in bad:
+            with self.subTest(record=record):
+                ledger = safety.CallLedger.initialize(self.private(self.tmp / ("s%d" % bad.index(record))) / "c.jsonl")
+                with ledger.path.open("a") as handle:
+                    handle.write(json.dumps(record) + "\n")
+                with self.assertRaises(safety.Refused):
+                    ledger.summary()
+
+    def test_settle_dead_counts_the_reserved_calls_and_refuses_live_runs(self):
+        ledger = self.ledger()
+        ref = ledger.reserve("qualification", "dead run", 2, run="r1")
+        records = [json.loads(line) for line in ledger.path.read_text().splitlines()]
+        self.assertEqual(records[-1]["pid"], os.getpid())
+        with self.assertRaises(safety.Refused):
+            ledger.settle_dead(ref, processes="")  # its pid (this test) is alive
+        child = subprocess.Popen(["true"])
+        child.wait()
+        with ledger.path.open("a") as handle:  # a reservation written by a process that has exited
+            handle.write(json.dumps(dict(v=1, seq=99, kind="reserve", purpose="qualification", calls=1, label="x",
+                                         run="r2", pid=child.pid)) + "\n")
+        with self.assertRaises(safety.Refused):
+            ledger.settle_dead(99, processes=" 4242 python3 -B tests/qualification/opencode_live.py --through 4\n")
+        totals = ledger.settle_dead(99, processes="")
+        self.assertEqual(totals["spent"], 5 + 2 + 1)  # never under-counts: settled at the reserved count
+        with self.assertRaises(safety.Refused):
+            ledger.settle_dead(99, processes="")  # already settled
+        with self.assertRaises(safety.Refused):
+            ledger.settle_dead(1, processes="")  # a seed, not a reservation
+
+
+class RedactorKeyTests(unittest.TestCase):
+    def test_field_names_are_not_ids(self):
+        redact = safety.Redactor()
+        clean = redact({"call_ledger": {"qualification": 1}, "msg_count": 2, "ses_" + "abcdef" * 5 + "ab": "msg_" + "a" * 32})
+        self.assertIn("call_ledger", clean)
+        self.assertIn("msg_count", clean)
+        self.assertEqual(sorted(clean), ["<ses#1>", "call_ledger", "msg_count"])  # long ids are still ids
+        self.assertEqual(clean["<ses#1>"], "<msg#1>")
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class RepoSnapshotTests(Temp):
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.private(self.tmp / "repo")
+        self.git("init", "-q")
+        self.git("config", "user.email", "t@example.invalid")
+        self.git("config", "user.name", "t")
+        (self.repo / "clean.txt").write_text("a")
+        (self.repo / "dirty.txt").write_text("a")
+        self.git("add", ".")
+        self.git("commit", "-qm", "init")
+        (self.repo / "dirty.txt").write_text("b")
+        (self.repo / "untracked.txt").write_text("u")
+
+    def test_changes_are_split_by_whether_the_path_was_dirty_at_start(self):
+        start = safety.repo_snapshot(self.repo)
+        self.assertEqual(sorted(start["dirty"]), ["dirty.txt", "untracked.txt"])
+        self.assertEqual(safety.repo_changes(start, safety.repo_snapshot(self.repo)), dict(new=[], dirty_changed=[], head_changed=False))
+        (self.repo / "dirty.txt").write_text("c")
+        (self.repo / "untracked.txt").write_text("v")
+        (self.repo / "clean.txt").write_text("changed")
+        (self.repo / "added.txt").write_text("n")
+        changes = safety.repo_changes(start, safety.repo_snapshot(self.repo))
+        self.assertEqual(changes["new"], ["added.txt", "clean.txt"])
+        self.assertEqual(changes["dirty_changed"], ["dirty.txt", "untracked.txt"])
+        self.git("add", ".")
+        self.git("commit", "-qm", "two")
+        self.assertTrue(safety.repo_changes(start, safety.repo_snapshot(self.repo))["head_changed"])
+
+    def test_the_canary_config_directory_is_not_a_change(self):
+        start = safety.repo_snapshot(self.repo)
+        from tests.qualification import server
+        (self.repo / ".git" / "info").mkdir(exist_ok=True)
+        config = server.ProjectConfig(self.repo)
+        config.create({"plugins": []})
+        self.assertEqual(safety.repo_changes(start, safety.repo_snapshot(self.repo))["new"], [])
+        self.assertTrue(config.remove())
+
+
+class CanaryStateTests(Temp):
+    def state(self):
+        return self.private(self.tmp / "q") / "canary"
+
+    def test_refusals(self):
+        canary.check_canary_state(self.state(), home=self.home)  # a fresh dir under an owner-only parent is fine
+        production = (self.tmp / "prod" / "settings.json", self.tmp / "prod" / "organizations.sqlite3")
+        repo = self.private(self.tmp / "repo")
+        (repo / ".git").mkdir()
+        loose = self.private(self.tmp / "loose", 0o755)
+        cases = [self.tmp / "prod", repo / "canary", loose / "canary", self.home / ".local/state/vibe-workflow/x",
+                 self.home / ".config/opencode/canary", Path("relative")]
+        for case in cases:
+            with self.subTest(case=str(case)):
+                with self.assertRaises(safety.Refused):
+                    canary.check_canary_state(case, home=self.home, production=production)
+
+    def test_production_defaults_are_refused(self):
+        from scripts import routing as command
+        with self.assertRaises(safety.Refused):
+            canary.check_canary_state(command.default_settings().parent, home=Path.home())
+
+    def test_initialize_then_kill_switch_on_the_real_command(self):
+        from tests.qualification import server
+        state = self.state()
+        paths = canary.check_canary_state(state, home=self.home)
+        routing_cmd = server.Routing(paths["settings"], paths["ledger"])
+        record = canary.initialize_state(routing_cmd)
+        self.assertEqual(record["created"], True)
+        self.assertIn("canary ledger only", record["authority_required"])
+        status = routing_cmd("status")[0]
+        self.assertEqual(canary.preflight(dict(status, project_pinned=True)), [])
+        self.assertEqual(canary.initialize_state(routing_cmd)["created"], False)  # never re-initialized
+        env = live.CanaryEnv(types_namespace(routing=routing_cmd))
+        self.assertEqual(env.kill_switch()["state"], "updated")
+        status = routing_cmd("status")[0]
+        self.assertFalse(status["settings"]["smart_routing"])
+        self.assertIn("smart_routing_off", canary.preflight(dict(status, project_pinned=True)))
+        routing_cmd.stop()
+
+    def test_an_unclean_canary_ledger_is_refused_with_reset_advice(self):
+        from tests.qualification import server
+        paths = canary.check_canary_state(self.state(), home=self.home)
+        routing_cmd = server.Routing(paths["settings"], paths["ledger"])
+        canary.initialize_state(routing_cmd)
+        self.assertEqual(routing_cmd("prepare", **canary.plan_assignments(1, "left")[0]["body"])[0]["state"], "admitted")
+        refusals = canary.preflight(dict(routing_cmd("status")[0], project_pinned=True))
+        self.assertIn("open_attempts", refusals)
+        self.assertIn("deleting the canary directory", canary.RESET_ADVICE)
+
+
+def types_namespace(**values):
+    import types
+    return types.SimpleNamespace(**values)
+
+
+class CanaryEnvTests(unittest.TestCase):
+    class Server:
+        def __init__(self):
+            self.log, self.rpcs, self.created = [], [], []
+
+        def hooks(self):
+            return list(self.log)
+
+        def rpc(self, method, payload):
+            self.rpcs.append((method, sorted(payload)))
+            return 200, dict(state={"attach": "attached", "detach": "detached"}.get(method, "ok")), 1.0
+
+        def write_control(self, **change):
+            pass
+
+    def run_double(self):
+        server = self.Server()
+        run = types_namespace(server=server, data=live.Run.data, outcome=lambda messages, began: dict(outcome="succeeded"),
+                              gate=lambda permitted: None)
+
+        def create_session(session_id=None, **kwargs):
+            server.created.append(session_id)
+            return 200, dict(data=dict(id=session_id)), 1.0
+
+        def prompt(session, message_id=None):
+            base = dict(session=session, model="haiku", provider="claude-agent", variant="low", hook="model.request")
+            server.log += [dict(base, phase="pre", kind="primary", t=1.0), dict(base, phase="post", kind="primary", t=1.4, decision="transmit"),
+                           dict(base, phase="pre", kind="title", t=2.0), dict(base, phase="post", kind="title", t=2.1, decision="guard_title"),
+                           dict(base, phase="pre", kind="primary", t=3.0, model="sonnet", session="ses_other")]
+            return 200, {}, 1.0
+        run.create_session, run.prompt = create_session, prompt
+        run.wait_idle = lambda session, began: []
+        return run, server
+
+    def test_launch_counts_what_qual_post_transmitted(self):
+        run, server = self.run_double()
+        env = live.CanaryEnv(run)
+        result = env.launch("ses_" + "a" * 32, "msg_" + "b" * 32, allow_title=False)
+        self.assertEqual(result["transmitted"], dict(primary=1, title=0, other=0))
+        self.assertEqual((result["off_route"], result["blocked_titles"], result["check_ms"]), (1, 1, 0.4))
+        self.assertTrue(env.attach("ses_x", "a", "t" * 43))
+        self.assertTrue(env.detach("ses_x", "a", "t" * 43))
+        self.assertEqual([m for m, _ in server.rpcs], ["attach", "detach"])
+
+    def test_a_session_the_server_would_not_create_is_not_launched(self):
+        run, server = self.run_double()
+        run.create_session = lambda session_id=None, **kwargs: (200, dict(data=dict(id="ses_other")), 1.0)
+        self.assertEqual(live.CanaryEnv(run).launch("ses_x", "msg_x", False), dict(idle=False))
+        self.assertEqual(server.log, [])
+
+
+class SequencingTests(Temp):
+    """Nothing may be sent before the plugin-chain probes pass, and canary refusals write nothing."""
+
+    def quiet(self, run):
+        run.snapshot_user_dirs = lambda: {}
+        run.report_only_home = lambda: {}
+        run.compare_user_dirs = lambda before, home: None
+        return run
+
+    def test_qualification_stops_in_stage_zero_when_the_chain_is_not_proven(self):
+        base = self.private(self.tmp / "q")
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        run = self.quiet(live.Run(base, ledger, through=4))
+        order = []
+        run.start = lambda stage: order.append("start")
+        run.server.rpc = lambda method, payload: (200, dict(state="not_ready" if "set" not in order else "ok"), 1.0)
+
+        class FakeRouting:
+            argv = []
+
+            def __call__(self, op, **body):
+                order.append(op)
+                return dict(set=dict(state="updated"), prepare=dict(state="admitted", admission={}),
+                            status=dict(state="ok", ledger=dict(authority_required=True, unstamped_open_holds=0)))[op], 1.0
+
+            def stop(self):
+                pass
+        run.routing = FakeRouting()
+        run.probes = lambda stage: order.append("probes") or ["guard_probe_reason"]
+        run.stage1 = lambda: order.append("stage1")
+        run.prompt = lambda *args, **kwargs: order.append("prompt")
+        results = run.run()
+        self.assertEqual(order, ["start", "set", "prepare", "status", "probes"])
+        self.assertIn("guard_probe_reason", results["blockers"][0])
+        self.assertTrue(results["cleanup"]["verified_by_harness"])
+        self.assertEqual(ledger.summary()["qualification"]["spent"], 5)
+
+    def canary_run(self, prepare_left=False, probes=()):
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        exclude = project / ".git" / "info" / "exclude"
+        before = exclude.read_bytes()
+        state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        run = self.quiet(live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state))
+        if prepare_left:
+            canary.initialize_state(run.routing)
+            run.routing("prepare", **canary.plan_assignments(1, "left")[0]["body"])
+        order = []
+        real_start = run.start
+        run.start = lambda stage: order.append("start")
+        run.server.rpc = lambda method, payload: (200, dict(state="ok"), 1.0)
+        run.probes = lambda stage: order.append("probes") or list(probes)
+        built = []
+        original = canary.PilotDriver
+        canary.PilotDriver = lambda *args, **kwargs: built.append(1) or original(*args, **kwargs)
+        try:
+            results = run.run()
+        finally:
+            canary.PilotDriver = original
+        del real_start
+        return results, order, built, project, exclude, before
+
+    def test_a_canary_refusal_writes_nothing_to_the_repo_and_starts_no_server(self):
+        results, order, built, project, exclude, before = self.canary_run(prepare_left=True)
+        self.assertEqual(order, [])
+        self.assertEqual(built, [])
+        self.assertIn("open_attempts", results["blockers"][0])
+        self.assertFalse((project / ".vibe-qual-canary").exists())
+        self.assertEqual(exclude.read_bytes(), before)
+
+    def test_failed_probes_stop_the_canary_before_any_admission(self):
+        results, order, built, *_ = self.canary_run(probes=["guard_probe_reason"])
+        self.assertEqual(order, ["start", "probes"])
+        self.assertEqual(built, [])
+        self.assertIn("guard_probe_failed", results["blockers"][0])
 
 
 if __name__ == "__main__":

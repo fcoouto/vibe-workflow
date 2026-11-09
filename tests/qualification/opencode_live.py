@@ -13,7 +13,8 @@ Qualification stages (`--through N`, temporary routing stores pinned in the isol
   4  lost acknowledgment (no model call)
 
 Canary mode (`--canary --project <allowlisted checkout>`): the bounded pilot of docs/smart-routing-validation.md,
-on the production routing settings and ledger with `--project` pinned; see tests/qualification/canary.py.
+on a dedicated canary routing state (`--canary-state`, never the production settings or ledger) with `--project`
+pinned; see tests/qualification/canary.py. A dead run's reservation is settled with `--settle-dead SEQ`.
 
 Safety rules it enforces itself (tests/test_qualification_harness.py covers the pure parts):
 - `--isolated-dir` must be an empty, owner-only directory outside OpenCode's user directories, ~/Library/Application
@@ -55,9 +56,10 @@ from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_M
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
                                         check_opencode_version, classify_changes, compare_snapshots, id_shape,
-                                        latency_pairs, on_route, snapshot_tree, summarize_ms, verify_plugin_chain)
+                                        latency_pairs, on_route, repo_changes, repo_snapshot, snapshot_tree,
+                                        summarize_ms, verify_plugin_chain)
 from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
-                                        server_environment, status_view)
+                                        processes, server_environment, status_view)
 
 POOL = "sub"
 REQUEST = dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness="claude-agent-sdk via opencode", kind="primary",
@@ -77,14 +79,24 @@ def _interrupt(signum, _frame):
 
 
 class Run:
-    def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False):
+    def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
+                 canary_state=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
         self.canary_project = canary_project
         self.purpose = "pilot" if canary_project else "qualification"
         self.run_id = "%s-%s" % (self.purpose, uuid.uuid4().hex[:8])
         self.admissions = admissions
-        self.server = Server(base, canary_project)
-        self.routing = Routing(project=canary_project) if canary_project else Routing(self.server.settings, self.server.ledger)
+        if canary_project and not canary_state:
+            raise Refused("canary mode needs the dedicated canary state")
+        self.canary_state = canary_state
+        if canary_project:
+            self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
+            self.routing = Routing(canary_state["settings"], canary_state["ledger"], project=canary_project)
+        else:
+            self.server = Server(base)
+            self.routing = Routing(self.server.settings, self.server.ledger)
+        self.pool, self.account = (canary.POOL, canary.ACCOUNT) if canary_project else ("sub", "anthropic:qual")
+        self.repo_start = None
         self.results = dict(mode=self.purpose, stages={}, ledger=[], blockers=[], deviations=[])
         self.redact = Redactor(paths=[str(base), os.path.realpath(base), str(base).replace("/private/", "/", 1), str(ROOT),
                                       str(Path.home())], names=[os.environ.get("USER", "")])
@@ -287,7 +299,7 @@ class Run:
         guard_sent = self.done(token)
         guard = self.records(mark, session=guard_session, hook="model.request")
         # Pending probe: the derived session of an admitted, undispatched attempt; the shim must refuse it.
-        probe = canary.plan_assignments(1, self.run_id + "-probe")[0]["body"]
+        probe = canary.plan_assignments(1, self.run_id + "-probe", pool=self.pool, account=self.account)[0]["body"]
         answer, _ = self.routing("prepare", **probe)
         attempt = probe["assignment"]["attempt_id"]
         ids_ = self.routing.admission_ids(attempt) if answer.get("state") == "admitted" else None
@@ -303,12 +315,14 @@ class Run:
             pending_outcome = self.outcome(pending_messages, began)
         released, _ = self.routing("record", event=dict(event_id=attempt + "-not-dispatched", attempt_id=attempt,
                                                         kind="not_dispatched"))
-        chain = verify_plugin_chain(ids, guard, pending, self.outcome(guard_messages, 0)["outcome"], pending_outcome["reason"])
+        guard_outcome = self.outcome(guard_messages, 0)
+        chain = verify_plugin_chain(ids, guard, pending, guard_outcome["outcome"], guard_outcome["reason"], pending_outcome["reason"])
         if guard_sent or pending_sent:
             chain.append("probe_transmitted")
         self.note(stage, "plugin_chain", dict(
             plugins_http=status, present=chain_ids, api_order_documented=False,
             guard_probe=[dict(phase=r["phase"], decision=r.get("decision"), variant=r.get("variant")) for r in guard],
+            guard_probe_reason=guard_outcome["reason"],
             pending_probe=dict(prepare=answer.get("state"), records=[r["phase"] for r in pending], **pending_outcome,
                                released=released.get("state")),
             sent=guard_sent + pending_sent, failures=chain))
@@ -325,7 +339,7 @@ class Run:
             self.results["deviations"].append("stage 0: health before any ledger was not not_ready")
         answer, ms = self.routing("set", authority_required=True)
         self.note(s, "set_authority_required", dict(answer=answer, ms=ms))
-        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1")[0]["body"])
+        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1", pool=self.pool, account=self.account)[0]["body"])
         self.attempt = "qual-a1-01"
         self.note(s, "prepare", dict(state=answer.get("state"), reason=answer.get("reason"), ms=ms,
                                      billing_class=(answer.get("admission") or {}).get("billing_class")))
@@ -595,7 +609,7 @@ class Run:
     # ------------------------------------------------------------ stage 4 (lost acknowledgment)
     def stage4(self):
         s = "4"
-        body = canary.plan_assignments(1, "qual-a2")[0]["body"]
+        body = canary.plan_assignments(1, "qual-a2", pool=self.pool, account=self.account)[0]["body"]
         attempt = body["assignment"]["attempt_id"]
         answer, _ = self.routing("prepare", **body)
         if answer.get("state") != "admitted":
@@ -633,15 +647,21 @@ class Run:
 
     # ------------------------------------------------------------ canary
     def canary_run(self):
+        """The pilot on the dedicated canary state. Order matters (D3): every refusal decidable without a server is
+        checked before anything is written to the project or a server starts; health and the probes follow the
+        start, and no admission begins unless they pass."""
         s = "pilot"
-        before = self.routing.served("status")[0]
-        early = canary.anomalies(before)
+        self.note(s, "canary_state", canary.initialize_state(self.routing))
+        before = self.routing("status")[0]
         self.note(s, "status_at_start", status_view(before))
-        if early:
-            raise Refused("canary refused before any write: %s" % ", ".join(early))
-        if self.ledger.remaining("pilot") < 4:
+        refusals = canary.preflight(before)
+        if refusals:
+            raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.RESET_ADVICE))
+        if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
-        self.start(s)
+        self.repo_start = repo_snapshot(self.canary_project)
+        self.note(s, "repo_at_start", dict(dirty_paths=len(self.repo_start["dirty"]), head_known=self.repo_start["head"] is not None))
+        self.start(s)  # creates the git-excluded project config and starts the server
         health = self.server.rpc("health", {})[1] or {}
         chain = self.probes(s)
         status = self.routing.served("status")[0]
@@ -772,13 +792,13 @@ class CanaryEnv:
         return self.run.routing.served("prepare", **body)
 
     def dispatch(self, attempt):
-        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=REQUEST)
+        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=canary.request())
         self.run.redact.add_secret(answer.get("authority"))
         return answer, ms
 
     def attach(self, session, attempt, token):
         status, body, _ = self.run.server.rpc("attach", dict(session_id=session, attempt_id=attempt, authority=token,
-                                                             funding_pool=POOL, model=ROUTE))
+                                                             funding_pool=canary.POOL, model=ROUTE))
         return status == 200 and (body or {}).get("state") == "attached"
 
     def detach(self, session, attempt, token):
@@ -819,6 +839,14 @@ class CanaryEnv:
     def record(self, event):
         return self.run.routing.served("record", event=event)
 
+    def repo_changes(self):
+        """Working-tree changes since the pilot started (D5): new dirty paths abort, already-dirty ones are reported."""
+        return repo_changes(self.run.repo_start, repo_snapshot(self.run.canary_project))
+
+    def quiesce(self):
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, signal.SIG_IGN)
+
     def kill_switch(self):
         status = self.status()
         answer, _ = self.run.routing.served("set", expected_revision=status.get("settings_revision"),
@@ -835,6 +863,10 @@ def main(argv=None):
     parser.add_argument("--through", type=int, default=4, help="last qualification stage to run")
     parser.add_argument("--canary", action="store_true", help="run the bounded pilot canary instead")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
+    parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
+                        help="canary: the dedicated routing state directory (never the production one)")
+    parser.add_argument("--settle-dead", type=int, metavar="SEQ",
+                        help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
     parser.add_argument("--admissions", type=int, default=canary.PILOT_MAX, help="canary: admissions (1-20)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
@@ -843,6 +875,10 @@ def main(argv=None):
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))
+            return 0
+        if args.settle_dead is not None:
+            totals = CallLedger(args.call_ledger or "").settle_dead(args.settle_dead, processes())
+            print(json.dumps(totals, indent=2))
             return 0
         if args.export_call_ledger:
             exported = CallLedger(args.call_ledger or "").export()
@@ -855,13 +891,15 @@ def main(argv=None):
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
         project = canary.check_project(args.project) if args.canary else None
+        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
         if args.canary:
             canary.plan_assignments(args.admissions, "check")
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
-    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep)
+    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep,
+              canary_state=state)
     results = run.run()
     clean = run.output(results)
     text = json.dumps(clean, indent=2, sort_keys=True)
