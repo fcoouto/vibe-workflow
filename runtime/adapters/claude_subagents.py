@@ -196,6 +196,11 @@ def agent_for_spawn(scope, session_id, prompt_id, tool_use_id):
     return found[0] if len(found) == 1 else None
 
 
+def model_matches(requested, resolved):
+    """A requested alias must appear in the model Claude resolved; no alias means the parent's model was inherited."""
+    return requested is None or isinstance(resolved, str) and requested.lower() in resolved.lower()
+
+
 def _chain_for(scope, session_id, agent_id, marker):
     verified = chain(scope, session_id, agent_id)
     if verified is None:
@@ -222,7 +227,7 @@ def collect_review(scope, *, session_id, agent_id, marker, attempt_id, assignmen
     """The receipt and report contract `collect_native_review` returns, from a complete recorded chain."""
     verified = _chain_for(scope, session_id, agent_id, marker)
     spawn, stop = verified["spawn"], verified["stop"]
-    if spawn["requested_model"] != requested_model:
+    if spawn["requested_model"] != requested_model or not model_matches(requested_model, spawn["resolved_model"]):
         raise StartupError("The reviewer was spawned with a different model than the prepared assignment")
     try:
         report = json_object(stop["message"].strip().encode("utf-8"), limit=MAX_REPORT)

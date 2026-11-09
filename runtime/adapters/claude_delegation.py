@@ -75,7 +75,8 @@ def observe_native_review_assignment(scope, attempt_id, parent_turn_id, spawn_it
                                     marker=binding["task_name"], native_version=binding["native_version"])
     verified = subagents.chain(scope, binding["parent_session_id"], agent)
     result = verified["stop"]["message"]
-    if seen["spawn_requested_model"] != binding["requested_model"] or seen["turn_status"] != "completed":
+    if (seen["spawn_requested_model"] != binding["requested_model"] or seen["turn_status"] != "completed"
+            or not subagents.model_matches(binding["requested_model"], seen["spawn_observed_model"])):
         raise StartupError("The observed subagent differs from the prepared assignment")
     receipt = dict(version=2, mechanism=MECHANISM, attempt_id=attempt_id, task_name=binding["task_name"], agent_path=None,
                    native_version=binding["native_version"], client_surface=SURFACE, originator="claude-code",

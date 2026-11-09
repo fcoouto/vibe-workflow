@@ -115,7 +115,8 @@ class ClaudeDelegationTests(unittest.TestCase):
         self.delegation_plan()
         return self.prepare()
 
-    def hooks(self, prepared, *, marker=None, model="sonnet", message=None, tool=TOOL, prompt=PROMPT, agent=AGENT):
+    def hooks(self, prepared, *, marker=None, model="sonnet", resolved="claude-sonnet-5-5", message=None, tool=TOOL, prompt=PROMPT,
+              agent=AGENT, stop=True):
         binding = self.delegation.prepared_native_review_assignment(self.scope, prepared["attempt_id"])
         report = message if message is not None else json.dumps(dict(version=1, attempt_id=prepared["attempt_id"],
             assignment_digest=prepared["assignment_digest"], candidate_digest=prepared["candidate_digest"],
@@ -124,10 +125,10 @@ class ClaudeDelegationTests(unittest.TestCase):
                   dict(hook_event_name="PostToolUse", session_id="parent", prompt_id=prompt, tool_name="Agent", tool_use_id=tool,
                        tool_input=dict(description="Review", prompt=(marker or binding["task_name"]) + "\n" + prepared["prompt"][:200],
                                        subagent_type="general-purpose", model=model),
-                       tool_response=dict(isAsync=True, status="async_launched", agentId=agent, resolvedModel="claude-sonnet-5-5")),
+                       tool_response=dict(isAsync=True, status="async_launched", agentId=agent, resolvedModel=resolved)),
                   dict(hook_event_name="SubagentStop", session_id="parent", prompt_id=prompt, agent_id=agent, agent_type="general-purpose",
                        stop_hook_active=False, agent_transcript_path="/x/a.jsonl", last_assistant_message=report)]
-        for event in events:
+        for event in events if stop else events[:2]:
             self.assertTrue(subagents.record(self.scope, event))
         return binding
 
@@ -281,9 +282,29 @@ class ClaudeDelegationTests(unittest.TestCase):
         result = self.api.verify_completion(self.scope, self.request(purpose="completion"))
         self.assertFalse(result["verified"], result)
 
-    def test_the_cli_allows_only_review_side_delegation_actions_for_claude(self):
-        from scripts import workflow
-        self.assertEqual(set(workflow.CLAUDE_DELEGATION), {"plan", "prepare", "observe", "reconcile", "status", "guidance"})
+    def test_the_resolved_model_must_correspond_to_the_requested_alias(self):
+        # CLAUDE_CODE_SUBAGENT_MODEL and similar overrides can make Claude run another model than the alias asked for.
+        prepared = self.ready()
+        self.hooks(prepared, resolved="claude-haiku-5-5")
+        observed = self.delegation.observe_assignment(self.scope, self.call(prepared))
+        self.assertEqual(observed["status"], "uncertain", observed)
+        with self.assertRaisesRegex(Exception, "unavailable|not exactly observed"):
+            self.api.collect_review(self.scope, self.call(prepared))
+
+    def test_a_chain_without_its_stop_event_is_not_a_review(self):
+        prepared = self.ready()
+        self.hooks(prepared, stop=False)
+        self.assertEqual(self.delegation.observe_assignment(self.scope, self.call(prepared))["status"], "uncertain")
+
+    def test_codex_only_fields_and_a_non_string_route_are_refused_for_claude(self):
+        self.evidence_plan()
+        with self.assertRaisesRegex(Exception, "supported existing native route"):
+            self.delegation_plan(mechanism=["claude-code-subagent-hook"])
+        self.record_guidance()
+        self.delegation_plan()
+        for field, value in (("workstream_context_id", "WS1.1"), ("visibility", {}), ("continuation_limits", {})):
+            with self.subTest(field), self.assertRaisesRegex(Exception, "Invalid task control fields"):
+                self.prepare(**{field: value})
 
 
 if __name__ == "__main__":

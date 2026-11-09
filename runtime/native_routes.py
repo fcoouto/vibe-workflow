@@ -27,7 +27,7 @@ def by_surface(surface):
 
 def supported(route, scope):
     """The route spec when this plan route is the one existing native route of the scope's client."""
-    spec = ROUTES.get(route["mechanism"])
+    spec = ROUTES.get(route["mechanism"]) if isinstance(route["mechanism"], str) else None
     return spec if spec and route["client_surface"] in spec["surfaces"] and spec["client"] == getattr(scope, "client", "codex") else None
 
 

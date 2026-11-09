@@ -2055,7 +2055,7 @@ def _prepare_native(scope, request, *, role):
     """Reserve before native spawn, returning launch admission only on a new committed row."""
     evidence._request(request, ('dispatch_id', 'job_id', 'selection', 'control_observation',
         'discovery_expectation', 'guidance', 'resource_units', *(('brief',) if role == 'worker' else
-        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', 'workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility'), codex_only=role == 'worker')
+        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', *(('workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility') if request.get('client') == 'codex' else ())), codex_only=role == 'worker')
     request = json_object(evidence._raw(request))
     if 'visibility' in request:
         from runtime.worker_visibility import optional_declaration

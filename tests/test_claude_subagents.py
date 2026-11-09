@@ -84,6 +84,17 @@ class SubagentChainTests(unittest.TestCase):
         with self.assertRaisesRegex(StartupError, "different model"):
             self.collect(requested_model="opus")
 
+    def test_a_resolved_model_that_does_not_contain_the_alias_is_refused(self):
+        self.assertTrue(subagents.model_matches("haiku", "claude-haiku-5-5"))
+        self.assertTrue(subagents.model_matches(None, None))
+        self.assertFalse(subagents.model_matches("haiku", "claude-sonnet-5-5"))
+        self.assertFalse(subagents.model_matches("haiku", None))
+        payload = spawn()
+        payload["tool_response"]["resolvedModel"] = "claude-sonnet-5-5"
+        self.record(start(), payload, stop())
+        with self.assertRaisesRegex(StartupError, "different model"):
+            self.collect()
+
     def test_the_spawning_agent_call_identifies_exactly_one_agent(self):
         self.record(start(), spawn(), stop())
         self.assertEqual(subagents.agent_for_spawn(self.scope, SESSION, "prompt-1", "toolu_spawn"), AGENT)
