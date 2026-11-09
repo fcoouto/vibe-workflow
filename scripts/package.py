@@ -3,6 +3,7 @@
 
 import argparse
 import fcntl
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 
@@ -55,6 +57,27 @@ def tracked_files(root):
     return files
 
 
+def committed_files(root, commit, staging):
+    """Write commit's tracked files, minus EXCLUDED, into staging; the working tree is not read."""
+    excludes = [f":(exclude){item.rstrip('/')}" for item in EXCLUDED]
+    files = []
+    with tarfile.open(fileobj=io.BytesIO(git(root, "archive", "--format=tar", commit, "--", ".", *excludes))) as archive:
+        for member in archive:
+            path = Path(member.name)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"Unsafe path in release archive: {member.name}")
+            if member.isdir():
+                (staging / path).mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                (staging / path).parent.mkdir(parents=True, exist_ok=True)
+                (staging / path).write_bytes(archive.extractfile(member).read())
+                (staging / path).chmod(0o755 if member.mode & 0o111 else 0o644)
+                files.append(path.as_posix())
+            elif member.type != tarfile.XGLTYPE:
+                raise ValueError(f"Tracked symlinks cannot be packaged: {member.name}")
+    return files
+
+
 def marker(output):
     return output.parent / f".{output.name}.build"
 
@@ -80,12 +103,11 @@ def release_layout(staging, name):
     source = f"./plugins/{name}"
     codex = read_json(plugin / ".agents/plugins/marketplace.json")
     claude = read_json(plugin / ".claude-plugin/marketplace.json")
-    for entry in codex["plugins"]:
-        if entry["name"] == name:
-            entry["source"]["path"] = source
-    for entry in claude["plugins"]:
-        if entry["name"] == name:
-            entry["source"] = source
+    # Any other entry would keep "./" and install the whole release root.
+    if [entry["name"] for entry in codex["plugins"]] != [name] or [entry["name"] for entry in claude["plugins"]] != [name]:
+        raise ValueError(f"Each marketplace must list only {name}")
+    codex["plugins"][0]["source"]["path"] = source
+    claude["plugins"][0]["source"] = source
     for path, value in ((".agents/plugins/marketplace.json", codex), (".claude-plugin/marketplace.json", claude)):
         (staging / path).parent.mkdir(parents=True, exist_ok=True)
         (staging / path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -111,12 +133,16 @@ def remove(path):
         path.unlink()
 
 
-def build(root, output, release=False):
-    """Replace output with a validated copy of root's tracked files; remove older builds."""
+def build(root, output, release=False, commit_onto=None):
+    """Replace output with a validated copy of root's tracked files; remove older builds.
+
+    A release copies the committed tree of HEAD, pinned once, and can write it as one commit on commit_onto.
+    """
     from scripts.validate import validate
 
     root = root.resolve(strict=True)
     name = manifest(root)["name"]
+    head = git(root, "rev-parse", "HEAD").decode().strip()
     if release and tracked_changes(root):
         raise ValueError("A release needs a clean checkout; commit or stash tracked changes")
     output = Path(output).expanduser().absolute()
@@ -133,11 +159,14 @@ def build(root, output, release=False):
                 removed += 1
         staging = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=output.parent))
         try:
-            files = tracked_files(root)
-            for relative in files:
-                target = staging / relative
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(root / relative, target)
+            if release:
+                files = committed_files(root, head, staging)
+            else:
+                files = tracked_files(root)
+                for relative in files:
+                    target = staging / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(root / relative, target)
             report = validate(staging)
             if release:
                 release_layout(staging, name)
@@ -158,6 +187,10 @@ def build(root, output, release=False):
             record = os.open(marker(output), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
             with os.fdopen(record, "w", encoding="utf-8") as handle:
                 handle.write(str(output))
+            # Still under the lock, so another build cannot swap the output first.
+            committed = (release_commit(root, output, commit_onto,
+                                        f"release {manifest(root)['version']} from {head[:12]}")
+                         if commit_onto else None)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
@@ -169,24 +202,29 @@ def build(root, output, release=False):
     return {"package": name, "version": manifest(root)["version"], "output": str(output),
             "plugin_root": str(plugin), "release": release,
             "files": len(files), "bytes": sum((plugin / relative).stat().st_size for relative in files),
-            "commit": git(root, "rev-parse", "HEAD").decode().strip(),
-            "tracked_changes": tracked_changes(root),
+            "commit": head, "tracked_changes": tracked_changes(root),
             "untracked_excluded": len(untracked), "removed_builds": removed,
-            "validation": report["validation"], "client_execution": "not_checked"}
+            "validation": report["validation"], "client_execution": "not_checked",
+            **({"release_commit": committed} if commit_onto else {})}
 
 
 def release_commit(repository, tree, parent, message):
     """Write tree as one commit on parent in repository; no ref, index or working tree changes."""
+    base = {key: value for key, value in os.environ.items()
+            if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")}
     try:
-        parent = git(repository, "rev-parse", "--verify", "--quiet", f"{parent}^{{commit}}").decode().strip()
+        parent = git(repository, "rev-parse", "--verify", "--quiet", f"{parent}^{{commit}}", env=base).decode().strip()
     except subprocess.CalledProcessError:
         raise ValueError(f"Unknown release parent: {parent}") from None
     with tempfile.TemporaryDirectory(prefix="vibe-release-index-") as temporary:
-        env = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+        env = dict(base, GIT_INDEX_FILE=str(Path(temporary) / "index"))
         # Force: tracked files may match the package's own ignore patterns.
         git(repository, f"--work-tree={tree}", "add", "--all", "--force", ".", env=env)
         written = git(repository, "write-tree", env=env).decode().strip()
-    return git(repository, "commit-tree", written, "-p", parent, "-m", message).decode().strip()
+    try:
+        return git(repository, "commit-tree", written, "-p", parent, "-m", message, env=base).decode().strip()
+    except subprocess.CalledProcessError as error:
+        raise ValueError(f"Could not write the release commit: {error.stderr.decode(errors='replace').strip()}") from None
 
 
 def cached_versions(directory, manifest_path, name):
@@ -266,11 +304,7 @@ def main():
     if args.commit_onto and not args.release:
         parser.error("--commit-onto applies only with --release")
     output = args.output or (RELEASE_OUTPUT if args.release else DEFAULT_OUTPUT)
-    report = build(ROOT, output, release=args.release)
-    if args.commit_onto:
-        report["release_commit"] = release_commit(
-            ROOT, Path(report["output"]), args.commit_onto,
-            f"release {report['version']} from {report['commit'][:12]}")
+    report = build(ROOT, output, release=args.release, commit_onto=args.commit_onto)
     if args.prune_caches:
         report["pruned_caches"] = prune(ROOT, Path.home(), args.dry_run)
     print(json.dumps(report, indent=2))
@@ -279,6 +313,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+    except subprocess.CalledProcessError as error:
+        print(f"Packaging failed: {error}: {(error.stderr or b'').decode(errors='replace').strip()}", file=sys.stderr)
+        sys.exit(1)
+    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
         print(f"Packaging failed: {error}", file=sys.stderr)
         sys.exit(1)

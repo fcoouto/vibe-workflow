@@ -139,6 +139,33 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(package, "tracked_changes", return_value=False):
             self.assertEqual(package.build(PACKAGE, self.output, release=True)["removed_builds"], 1)
 
+    def test_release_builds_the_committed_tree_not_the_working_tree(self):
+        repo = self.base / "repo"
+        repo.mkdir()
+        archive = subprocess.run(["git", "-C", str(PACKAGE), "archive", "HEAD"], check=True, capture_output=True).stdout
+        subprocess.run(["tar", "-x", "-C", str(repo)], input=archive, check=True)
+        identity = ("-c", "user.name=t", "-c", "user.email=t@example.com")
+        for args in (("init", "-q"), ("add", "--all"), (*identity, "commit", "-q", "-m", "snapshot")):
+            subprocess.run(["git", "-C", str(repo), *args], check=True)
+        (repo / "README.md").write_text("edited after the clean check", encoding="utf-8")
+        with patch.object(package, "tracked_changes", return_value=False):
+            report = package.build(repo, self.output, release=True)
+        plugin = self.output / "plugins" / self.name
+        self.assertEqual((plugin / "README.md").read_bytes(), (PACKAGE / "README.md").read_bytes())
+        self.assertEqual(report["commit"], package.git(repo, "rev-parse", "HEAD").decode().strip())
+        self.assertFalse((plugin / "tests").exists())
+        self.assertEqual(os.access(plugin / "scripts/validate.py", os.X_OK), os.access(PACKAGE / "scripts/validate.py", os.X_OK))
+
+    def test_release_layout_requires_one_entry_per_marketplace(self):
+        staging = self.base / "staging"
+        for path, value in ((".agents/plugins/marketplace.json", {"plugins": [{"name": "other", "source": {"path": "./"}}]}),
+                            (".claude-plugin/marketplace.json", {"plugins": [{"name": self.name, "source": "./"}]})):
+            (staging / path).parent.mkdir(parents=True, exist_ok=True)
+            (staging / path).write_text(json.dumps(value), encoding="utf-8")
+        (staging / "LICENSE").write_text("license", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            package.release_layout(staging, self.name)
+
     def test_release_refuses_uncommitted_changes(self):
         with patch.object(package, "tracked_changes", return_value=True), self.assertRaises(ValueError):
             package.build(PACKAGE, self.output, release=True)
@@ -157,13 +184,16 @@ class ReleaseTests(unittest.TestCase):
         (tree / "plugins/x/.gitignore").write_text("*.txt\n", encoding="utf-8")
         (tree / "plugins/x/kept.txt").write_text("tracked though ignored", encoding="utf-8")
         (tree / "LICENSE").write_text("license", encoding="utf-8")
-        commit = package.release_commit(repo, tree, "HEAD", "release 1.2.3")
+        identity = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_DIR": str(self.base)}
+        with patch.dict(os.environ, identity):
+            commit = package.release_commit(repo, tree, "HEAD", "release 1.2.3")
         self.assertEqual(package.git(repo, "rev-parse", f"{commit}^").decode().strip(),
                          before[("rev-parse", "HEAD")].decode().strip())
         self.assertEqual(package.git(repo, "ls-tree", "-r", "--name-only", commit).decode().split(),
                          ["LICENSE", "plugins/x/.gitignore", "plugins/x/kept.txt"])
         self.assertEqual({args: package.git(repo, *args) for args in before}, before)
-        with self.assertRaises(ValueError):
+        with patch.dict(os.environ, identity), self.assertRaises(ValueError):
             package.release_commit(repo, tree, "no-such-branch", "release 1.2.3")
 
 
