@@ -14,8 +14,7 @@ sys.path.insert(0, str(ROOT))
 # Long files cost agents context to read. Files that were already over the limit
 # when this check was added keep their size at that time as a ceiling until they are
 # split. Lower an entry when a file shrinks and remove it once the file is under the
-# limit; do not add entries or raise them. tests/test_opencode_accounting.py is
-# temporary: split it once the PR that edits it has landed.
+# limit; do not add entries or raise them.
 MAX_PYTHON_LINES = 1000
 SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
@@ -30,7 +29,6 @@ OVERSIZED_PYTHON = {
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
     "runtime/usage_budget.py": 1616,
-    "tests/test_opencode_accounting.py": 1191,
 }
 
 
