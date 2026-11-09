@@ -887,6 +887,9 @@ class CapacityTests(Funded):
         for call in run['calls'].values():
             call.update(maximum=budget.MAX_INTEGER, cost=budget.MAX_INTEGER, provision=budget.MAX_INTEGER,
                         incomplete=incomplete)
+        # An over-bound marker (S3.6a) on at most one call per run: a count call that is over-bound never gets a
+        # generation call, and a generation call follows only a completed count. `cost` stays at its bound too.
+        run['calls']['count']['over_bound'] = budget.MAX_INTEGER
         data['organizations'][organization]['revision'] = budget.MAX_INTEGER
         # S3.6 settlement: per-cycle settled charges, per-task charges and the settlement each closed hold carries.
         data['organizations'][organization]['settled'] = dict(total=budget.MAX_INTEGER, cycles={

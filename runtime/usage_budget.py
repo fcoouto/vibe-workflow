@@ -18,8 +18,9 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.67M, 88.9%
-# with S3.6a's settlement fields (352 per hold) and a legacy block (10.53M, 87.8% after S3.5's binding allowance). S3.6a's event and root tables
+# identifiers, every native task finished, every call with a maximal `incomplete` record and one `over_bound` marker
+# per run): 10,698,684, 89.16% with S3.6a's settlement fields (352 per hold) and a legacy block (10.53M, 87.8% after
+# S3.5's binding allowance). The margin to the 90% test ceiling is thin: avoid further per-hold or per-call fields. S3.6a's event and root tables
 # are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
@@ -61,7 +62,10 @@ DEFAULT_MARGIN_BP = 2000
 DEFAULT_CAPS = dict(total=4, per_account=2)
 POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit'
 # S3.6a accounting. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
-# Settled charges stay in R (like S1 run costs) until S3.6b reconciles them against observed balances. Only the
+# Settled charges stay in R (like S1 run costs). Retiring one needs evidence that the observed balance reflects it
+# (spec 8): an observation carrying a provider usage watermark. No observation shape carries one yet (`observe`,
+# usage_routing's `observe`, usage_admission.Grant: balance, observed_at, source only), so none is retired and a
+# charge counts twice against a balance that already reflects it: headroom errs low (S3.6b-2 deferral). Only the
 # current cycle's entry feeds a cycle cap, so older cycle entries fold into `total` at the bound; per-task charges
 # feed task limits and are evicted oldest first, never while their task holds an open claim (MAX_HOLDS < bound).
 MAX_SETTLED_CYCLES = 16
@@ -473,9 +477,9 @@ class Ledger:
     @staticmethod
     def block_reasons(data, organization):
         """Why `organization` is admission-blocked (`manual_recovery_required`), DERIVED from the records that cause
-        it, never stored: `overrun` (closed holds whose excess is unconfirmed), `over_bound` (S1 run calls whose
-        reported cost exceeded their maximum; sticky until S3.6b reconciliation) and `legacy` (a block migrated from
-        before v4; sticky). Clearing one source can never clear another."""
+        it, never stored: `overrun` (closed holds whose excess is unconfirmed; `resolve_overrun`), `over_bound` (S1
+        run calls whose reported cost exceeded their maximum; `resolve_block`) and `legacy` (a block migrated from
+        before v4; `resolve_block` with the current `legacy_marker`). Clearing one source can never clear another."""
         reasons = set()
         if Ledger.pending_overruns(data, organization):
             reasons.add('overrun')
@@ -484,6 +488,37 @@ class Ledger:
         if (data['organizations'].get(organization) or {}).get('legacy_block'):
             reasons.add('legacy')
         return reasons
+
+    @staticmethod
+    def unresolved_items(data, organization):
+        """What the operator reviews before clearing a legacy block (S3.6b-2), as sorted rows: the organization's open
+        holds, its closed holds with an unconfirmed overrun, and its open S1 run calls that are reserved, in flight,
+        unresolved or over-bound."""
+        items = []
+        for attempt, hold in data['holds'].items():
+            if hold.get('organization') != organization:
+                continue
+            if not hold['closed']:
+                items.append(['hold', attempt, hold['state'], hold['amount']])
+            elif Ledger._unconfirmed(hold):
+                items.append(['overrun', attempt, hold['settlement']['overrun']])
+        for run_id, run in data['runs'].items():
+            if run['organization'] == organization and not run['closed']:
+                for phase, call in run['calls'].items():
+                    if call['state'] in ('reserved', 'dispatching', 'unresolved') or 'over_bound' in call:
+                        items.append(['run', run_id, phase, call['state'], call['maximum'], call.get('over_bound')])
+        return sorted(items, key=json.dumps)
+
+    @staticmethod
+    def legacy_marker(data, organization):
+        """The handshake value `resolve_block` needs to clear a legacy block: a digest of the ledger identity, the
+        organization, its policy revision and `unresolved_items`, shown only by `status`. Any change to what the
+        operator reviewed makes it stale, so a block is never cleared blind or against a listing that moved."""
+        org = data['organizations'][organization]
+        payload = [data['identity'], organization, org['revision'], bool(org.get('legacy_block')),
+                   Ledger.unresolved_items(data, organization)]
+        raw = json.dumps(payload, separators=(',', ':'), ensure_ascii=True).encode()
+        return 'lb_' + hashlib.sha256(raw).hexdigest()[:32]
 
     @staticmethod
     def over_bound_runs(data, organization):
@@ -995,7 +1030,8 @@ class Ledger:
     def mark_uncertain(self, attempt_id):
         """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
 
-        S3.4 accepts no proof of non-launch: an uncertain hold stays counted until S3.6b reconciliation."""
+        No proof of non-launch is accepted: an uncertain dollar hold stays counted until the operator's
+        `reconcile_uncertain` settles it from receipts or charges its full reservation (S3.6b-2)."""
         with self.transaction() as data:
             self._hold(data, attempt_id, ('admitted', 'dispatched'))['state'] = 'uncertain'
 
@@ -1057,6 +1093,66 @@ class Ledger:
                 return None
             known = self._event(data, event_id, now)
             return None if known is None else json.loads(known[1])
+
+    def resolve_block(self, event, digest, now):
+        """S3.6b-2 operator recovery of ONE derived block source in one write transaction, idempotent by event id
+        exactly like `record_event` (`event` from `runtime.routing.block_event`, `digest` its canonical SHA-256).
+
+        `over_bound` closes the listed S1 run calls (every id must be an over-bound run of the organization, else
+        `block_not_pending` and nothing changes): `confirm` charges the reported cost (the excess enters R as the
+        call's cost), `dismiss` keeps the maximum the books already held. The run closes either way: its pre-send
+        bound failed, so it never continues to another call. `legacy` removes `legacy_block` only when `marker` is
+        the current `legacy_marker` (`marker_stale` otherwise). Nothing else changes, so other reasons keep the
+        organization blocked. The audit is the event row (no field is added to the record)."""
+        integer(now)
+        with self.transaction() as data:
+            _create_tables(self.db)
+            known = self._event(data, event['event_id'], now)
+            if known is not None:
+                require(known[0] == digest, 'event_conflict')
+                return dict(json.loads(known[1])['outcome'], duplicate=True)
+            outcome = self._resolve_block(data, event)
+            body = dict(attempt_id=ORG + event['organization'], kind=event['kind'], recorded_at=now,
+                        outcome=dict(outcome))
+            self._store_event(data, event['event_id'], digest, body, now, effect=True)
+            return outcome
+
+    def _resolve_block(self, data, event):
+        organization, reason, decision = event['organization'], event['reason'], event['decision']
+        require(organization in data['organizations'], 'organization_unconfigured')
+        org = data['organizations'][organization]
+        ids, charged, dropped = [], 0, 0
+        if reason == 'legacy':
+            require(decision == 'confirm', 'invalid_request')
+            require(org.get('legacy_block'), 'block_not_pending')
+            require(hmac.compare_digest(str(event['marker']).encode(), self.legacy_marker(data, organization).encode()),
+                    'marker_stale')
+            del org['legacy_block']
+        else:
+            require(reason == 'over_bound' and decision in ('confirm', 'dismiss'), 'invalid_request')
+            ids = sorted(event['ids'])
+            pending = []
+            for run_id in ids:  # all or nothing: every id is checked before anything changes
+                run = data['runs'].get(run_id)
+                require(run is not None and run['organization'] == organization, 'block_not_pending')
+                calls = [call for call in run['calls'].values() if 'over_bound' in call]
+                require(calls, 'block_not_pending')
+                pending.append((run_id, calls))
+            for run_id, calls in pending:
+                for call in calls:
+                    actual = call.pop('over_bound')
+                    excess = max(0, actual - call['maximum'])
+                    if decision == 'confirm':
+                        charged += excess
+                    else:
+                        dropped += excess
+                    call.update(cost=actual if decision == 'confirm' else call['maximum'], state='completed')
+                    call.pop('provision', None)
+                self._close_run(data, run_id)
+        return dict(state='recorded', duplicate=False, outcome='block_resolved', organization=organization,
+                    reason=reason, decision=decision, resolved=dict(ids=ids, count=len(ids) or 1),
+                    charged=min(MAX_INTEGER, charged), dropped=min(MAX_INTEGER, dropped),
+                    remaining_reasons=sorted(self.block_reasons(data, organization)))
 
     def _has_tables(self):
         return self.db.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('events','roots')"
@@ -1200,11 +1296,23 @@ class Ledger:
             # receipt-backed; a cost above the reservation is an overrun either way.
             require(state == 'cost_unknown', 'hold_state_forbidden')
             cost, receipts = event['cost_usd_micros'], event.get('receipts') or []
+            # A receipt-backed zero would release the whole reservation with no spend at all (S3.6b-2 review).
+            require(cost > 0 or not receipts, 'evidence_invalid')
             charge = cost if receipts else max(cost, hold['amount'])
-            digest = hashlib.sha256(json.dumps(sorted(receipts), separators=(',', ':')).encode()).hexdigest()[:32]
-            resolution = dict(basis='receipts' if receipts else 'reservation_floor', receipts=len(receipts),
-                              receipts_digest=digest if receipts else None)
-            return self._settle_cost(data, attempt, hold, cost, charge, None, resolution)
+            return self._settle_cost(data, attempt, hold, cost, charge, None, self._resolution(receipts))
+        elif kind == 'reconcile_uncertain':
+            # S3.6b-2 operator reconciliation of an uncertain DOLLAR hold. Provider receipts settle it like a measured
+            # completion (charged as reported, the unspent rest released on the operator's word, an overrun above the
+            # reservation); `charge_reservation` charges the full reservation. A zero cost is refused (`evidence_invalid`):
+            # it would release the whole hold without spend, i.e. the refused no-spend proof.
+            require(state == 'uncertain' and hold['amount'] > 0, 'hold_state_forbidden')
+            evidence = event['evidence']
+            require(evidence['kind'] in ('receipts', 'charge_reservation'), 'evidence_unsupported')
+            if evidence['kind'] == 'receipts':
+                cost = evidence['cost_usd_micros']
+                require(cost > 0, 'evidence_invalid')
+                return self._settle_cost(data, attempt, hold, cost, cost, None, self._resolution(evidence['receipts']))
+            return self._settle_cost(data, attempt, hold, None, hold['amount'], None, self._resolution([]))
         elif kind == 'resolve_overrun':
             return self._resolve_overrun(data, hold, event['decision'])
         else:
@@ -1263,6 +1371,14 @@ class Ledger:
         self._charge(data, hold, settlement['charged'])
         return dict(state='recorded', duplicate=False, outcome='overrun' if overrun else 'complete',
                     settlement=dict(settlement, kind='usd_micros', remaining=0))
+
+    @staticmethod
+    def _resolution(receipts):
+        """The audit an operator settlement stores instead of a cost source: the basis, the receipt count and the
+        first 32 hex characters of the SHA-256 of the sorted receipt ids (the ids themselves are never stored)."""
+        digest = hashlib.sha256(json.dumps(sorted(receipts), separators=(',', ':')).encode()).hexdigest()[:32]
+        return dict(basis='receipts' if receipts else 'reservation_floor', receipts=len(receipts),
+                    receipts_digest=digest if receipts else None)
 
     def _resolve_overrun(self, data, hold, decision):
         """Operator decision on an unconfirmed overrun excess: `confirm` charges it as settled, `dismiss` drops it.
