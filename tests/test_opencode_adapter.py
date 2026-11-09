@@ -451,6 +451,21 @@ class Messages(unittest.TestCase):
         for bad in ({"id": SECRET}, {"time": SECRET}, {"tokens": {"input": True}}):
             assert_error_hides(self, opencode.normalize_message, dict(raw, **bad))
 
+    def test_synthetic_with_a_tool_part_model_or_cost_stays_unknown(self):
+        # Its tool parts (a child link) and model are not read, so such a record is not classified as synthetic.
+        raw = {"id": "msg_x3", "type": "synthetic", "time": {"created": 1794170447818}}
+        spawn = {"type": "tool", "id": "toolu_1", "name": "subagent", "state": {"status": "completed",
+                                                                               "metadata": {"sessionID": "ses_x9"}}}
+        for extra in ({"content": [spawn]}, {"content": [{"type": "text", "text": SECRET}, spawn]},
+                      {"model": {"id": "haiku", "providerID": "claude-agent"}}, {"cost": 0.01},
+                      {"content": SECRET}, {"content": [SECRET]}):
+            result = opencode.normalize_message(dict(raw, **extra))
+            self.assertEqual((result["kind"], result["type"], result["message_id"]), ("unknown", "synthetic", "msg_x3"))
+            self.assertNotIn(SECRET, json.dumps(result))
+        for plain in ({}, {"content": []}, {"content": [{"type": "text", "text": SECRET}]}, {"cost": 0},
+                      {"model": None}):
+            self.assertEqual(opencode.normalize_message(dict(raw, **plain))["kind"], "synthetic")
+
 
 class HostileInput(unittest.TestCase):
     def test_wrong_top_level_types(self):

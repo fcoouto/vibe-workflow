@@ -583,8 +583,32 @@ class Consistency(unittest.TestCase):
             "in_progress": 0, "unknown_records": 0, "missing_model": 0, "complete": True, "title": "known",
             "title_reason": None, "negative_classes": [], "rate_limit_messages": 1, "children_referenced": 0,
             "children_included": 0, "children_unaccounted": 0, "spawns_without_session": 0,
-            "tool_calls_dropped": 0, "lineage_unaccounted": 0})
-        self.assertIsNone(accounting.consistency_report(state(lineage=None))["lineage_unaccounted"])
+            "tool_calls_dropped": 0, "lineage_unaccounted": 0, "lineage_conflicts": 0, "lineage_loops": 0})
+        unchecked = accounting.consistency_report(state(lineage=None))
+        self.assertEqual((unchecked["lineage_unaccounted"], unchecked["lineage_conflicts"], unchecked["lineage_loops"]),
+                         (None, None, None))
+
+    def test_report_counts_lineage_problems_without_raising(self):
+        child = linked("ses_l1", C_ID)
+        lineage = [{"session_id": "ses_l1", "parent_session_id": "ses_other"},  # contradicts the child's link
+                   {"session_id": "ses_l2", "parent_session_id": C_ID},
+                   {"session_id": "ses_l2", "parent_session_id": "ses_other"},  # two parents
+                   {"session_id": "ses_c1", "parent_session_id": "ses_c2"},
+                   {"session_id": "ses_c2", "parent_session_id": "ses_c1"},  # a loop
+                   {"session_id": "ses_l3", "parent_session_id": "ses_l1"}]
+        report = accounting.consistency_report(state(children=[child], lineage=lineage))
+        self.assertEqual((report["lineage_conflicts"], report["lineage_loops"], report["lineage_unaccounted"]),
+                         (2, 1, 2))
+        rooted = [{"session_id": C_ID, "parent_session_id": "ses_l1"}]
+        self.assertEqual(accounting.consistency_report(state(children=[child], lineage=rooted))["lineage_loops"], 1)
+        tool_linked = [{"session_id": CHILD_ID, "parent_session_id": D_ID}]
+        report = accounting.consistency_report(state(D_MESSAGES, D_TOTAL, D_ID, children=[CHILD], lineage=tool_linked))
+        self.assertEqual((report["lineage_conflicts"], report["lineage_loops"], report["lineage_unaccounted"]),
+                         (0, 0, 0))
+        for name, bad in (("conflict", lineage[:1]), ("two parents", lineage[1:3]), ("loop", lineage[3:5])):
+            with self.subTest(name):
+                self.assertEqual(assert_fixed_error(self, accounting.usage_from_messages, C_MESSAGES, C_TOTAL,
+                                                    session_id=C_ID, children=[child], lineage=bad), "invalid lineage")
         self.assertEqual(accounting.consistency_report(state(D_MESSAGES, D_TOTAL, D_ID))["children_unaccounted"], 1)
 
     def test_report_counts_problems_without_raising_or_echoing(self):
