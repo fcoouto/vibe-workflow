@@ -1287,10 +1287,10 @@ def acquire_canonical_project(event, package, *, authority_path=None, qualifier=
         config = entry["configuration"] if entry else None
         qualification_startup = managed is None
         if qualification_startup:
-            managed = bool(event.client == "codex" and config and config["runtime"]
+            managed = bool(event.client in ("codex", "claude-code") and config and config["runtime"]
                            and entry["activation"]["status"] == "active"
                            and entry["activation"]["qualification_binding"] is not None)
-        if managed and qualifier is None and event.client == 'codex':
+        if managed and qualifier is None and event.client in ('codex', 'claude-code'):
             from runtime.setup_observation import read_qualification
             qualifier = lambda record, facts: read_qualification(record, facts, cwd=event.cwd, budget=budget)
         if config:

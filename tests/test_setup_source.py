@@ -19,7 +19,7 @@ from tests import test_unenrolled_checkout as unenrolled
 
 
 class OtherClientQualificationTests(unittest.TestCase):
-    def test_non_codex_scoped_qualification_preserves_original_five_field_observation(self):
+    def test_claude_scoped_qualification_needs_a_retained_owner_receipt_not_a_supplied_observation(self):
         birth=CanonicalBirthFixture('runTest');self.addCleanup(birth.doCleanups)
         fixture,acquired,qualification=birth.accepted_birth()
         captured=[]
@@ -52,14 +52,11 @@ class OtherClientQualificationTests(unittest.TestCase):
             requirements=[dict(id=name,evidence=[proof]) for name in rule['requirements']],
             general_review=[proof],security_review=[proof],scope_observations=facts)])
         before=copy.deepcopy(observation)
+        # Claude now follows the Codex rule: a coordinator-supplied observation is never qualification.
         for published in (False,True):
             with self.subTest(published=published):
-                result=changes._scoped_qualification(journal,observation,record,published=published)
-                self.assertEqual([scope.client for scope in result],['claude-code'] if published else [])
-                changed=copy.deepcopy(observation)
-                changed['qualification'][0]['scope_observations']['observation']['qualification']['current']['surface']='another-surface'
-                with self.assertRaisesRegex(changes.Pending,'qualification_changed'):
-                    changes._scoped_qualification(journal,changed,record,published=published)
+                with self.assertRaisesRegex(changes.Pending,'retained owner setup qualification is unavailable'):
+                    changes._scoped_qualification(journal,observation,record,published=published)
         self.assertEqual(observation,before)
         self.assertEqual(set(qualification['current']),{'client','surface','version','configuration_digest','hook_owner'})
 

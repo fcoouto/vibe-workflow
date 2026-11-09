@@ -34,3 +34,13 @@ Adding license-holder author metadata resolved the initial strict-validation war
 Claude Desktop is not installed here. Desktop Code, Cowork, desktop UI behavior and model policy compliance remain untested. Native startup success does not qualify those surfaces or later enforcement features.
 
 Sources: [Claude hooks](https://code.claude.com/docs/en/hooks), [Claude plugin manifest](https://code.claude.com/docs/en/plugins-reference).
+
+## D8 qualification, stage 1 (9 November 2026)
+
+Claude Code 2.1.311, `haiku`, a Claude-born canonical disposable checkout, real `HOME`. One capped run (about $0.003) was observed with `--output-format stream-json --include-hook-events`:
+
+- The `init` event listed `vibe-workflow` 0.1.33 from the package path (`vibe-workflow@inline`) and the client version.
+- `SessionStart:startup` returned the real startup context (710 bytes) naming the policy index and the checkout's authority. `UserPromptSubmit`, `PostToolUse:Read` and `Stop` also ran and exited 0.
+- That stream was collected into a retained receipt, persisted through D4's owner path and read back as an `active` qualification-only scope with only `startup-context` verified.
+
+Not observed: pre-tool, post-tool and stop behavior under an enrolled bound task, Desktop and Cowork, older Claude versions, and more than one run. The PostToolUse and Stop diagnostics in that run came from a synthetic-qualified fixture state, not from the qualified scope. Package tests use synthetic streams shaped like the recording and do not spend usage.

@@ -23,6 +23,10 @@ The package also registers `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and
 
 Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Stop` does not run then. Evidence and delegation follow in later slices; until then Claude task records cannot reach `DONE`, and only `task start`, `update`, `status` and `title` accept `client: "claude-code"`.
 
+## Qualification
+
+A managed Claude scope needs a retained setup receipt, as on Codex; a coordinator-supplied observation is never enough. The [Claude setup source](../skills/onboard-my-project/references/qualification.md#claude-code-setup-source) verifies startup context from the client's own hook event stream. The resulting scope is qualification-only: pre-tool, post-tool and stop behavior stay pending, so ordinary managed work in a real project remains unavailable until a managed behavior source exists.
+
 ## Titles and doctor
 
 Claude accepts a title only in hook output, so [title synchronization](workstreams-titles.md#claude-code-delivery) stages a change and delivers it on the next `SessionStart` (startup, resume, fork) or `UserPromptSubmit`. A final `DONE` title appears one prompt late.
