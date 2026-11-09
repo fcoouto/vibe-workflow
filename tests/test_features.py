@@ -173,6 +173,17 @@ class ResolveTests(PackageFeatures):
         os.mkfifo(self.root / ".vibe-workflow/settings.json")
         self.assertEqual(self.feature(self.resolve(), "workstreams")["reason"], "invalid_settings")
 
+    def test_invalid_settings_change_the_fingerprint(self):
+        first = self.resolve()["fingerprint"]
+        self.settings("{not json")
+        self.assertNotEqual(self.resolve()["fingerprint"], first)
+
+    def test_hand_written_value_outside_the_allowed_scopes_is_invalid(self):
+        path = self.package / "features/workstreams.json"
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), scopes=[])), encoding="utf-8")
+        self.settings({"schema_version": 1, "revision": 1, "features": {"workstreams": {"enabled": True}}})
+        self.assertEqual(self.feature(self.resolve(), "workstreams")["reason"], "invalid_settings")
+
     def test_errors_never_echo_supplied_values(self):
         self.settings({"schema_version": "SECRET-MARKER", "revision": 1, "features": {}})
         self.assertNotIn("SECRET-MARKER", json.dumps(self.resolve()))
@@ -253,7 +264,14 @@ class WriteTests(PackageFeatures):
                 (self.root / ".gitignore").write_text(rules, encoding="utf-8")
                 with self.assertRaises(ValueError):
                     features.change(self.root, "workstreams", enabled=True, package=self.package)
-                self.assertFalse((self.root / ".vibe-workflow/private/backups").exists())
+                self.assertFalse(list((self.root / ".vibe-workflow/private").glob("backups/*/*")))
+        (self.root / ".gitignore").write_text("/.vibe-workflow/private/settings.lock\n/.vibe-workflow/private/.stage-*\n"
+                                             "/.vibe-workflow/private/backups/*/record.json\n"
+                                             "/.vibe-workflow/private/backups/*/file-0\n", encoding="utf-8")
+        (self.root / "AGENTS.md").write_text(BLOCK.format(mark="x"), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            features.migrate(self.root, "apply")
+        self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=all", ".vibe-workflow"), "")
 
     def test_refuses_a_linked_private_folder(self):
         outside = self.base / "outside"
@@ -381,6 +399,14 @@ class LegacyWorkstreamsTests(Checkout):
         for name in ("../../x", "backups/../../x"):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 features.undo(self.root, name)
+        record = folder / "record.json"
+        value = json.loads(record.read_text())
+        outside = self.base / "preimage"
+        outside.write_text("x", encoding="utf-8")
+        value["files"]["AGENTS.md"]["copy"] = str(outside)
+        record.write_text(json.dumps(value), encoding="utf-8")
+        with self.assertRaises(ValueError):
+            features.undo(self.root, backup)
 
     def test_crlf_block_migrates(self):
         self.agents(BLOCK.format(mark="x").replace("\n", "\r\n") + "Keep\r\n")

@@ -22,8 +22,9 @@ MAX_BYTES = 256 * 1024
 MAX_FILE = 1024 * 1024
 MAX_REVISION = 2**53 - 1
 BACKUP = re.compile(r"backups/[0-9]{8}T[0-9]{6}Z-[a-z_.]+-[A-Za-z0-9_]+")
-# Every kind of file written under private/; each must be ignored by Git before the first write.
-PROBES = ("settings.lock", ".stage-probe", "backups/probe/record.json", "backups/probe/file-0")
+COPY = re.compile(r"file-[0-9]+")
+# Files written under private/ before backups; backup files are checked by their exact paths.
+PROBES = ("settings.lock", ".stage-probe")
 
 
 class SettingsError(ValueError):
@@ -117,12 +118,15 @@ def _git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=10)
 
 
-def check_ignored(root):
-    """Refuse unless every private file kind is ignored and nothing private is tracked; return warnings."""
-    probes = [f"{DIRECTORY}/{PRIVATE}/{probe}" for probe in PROBES]
-    result = _git(root, "check-ignore", "--no-index", *probes)
-    if result.returncode not in (0, 1) or set(result.stdout.split()) != set(probes):
+def _require_ignored(root, relatives):
+    result = _git(root, "check-ignore", "--no-index", *relatives)
+    if result.returncode not in (0, 1) or set(result.stdout.splitlines()) != set(relatives):
         raise SettingsError(f"Add /{DIRECTORY}/{PRIVATE}/ to .git/info/exclude before writing settings")
+
+
+def check_ignored(root):
+    """Refuse unless private files are ignored and nothing private is tracked; return warnings."""
+    _require_ignored(root, [f"{DIRECTORY}/{PRIVATE}/{probe}" for probe in PROBES])
     if _git(root, "ls-files", "--", f"{DIRECTORY}/{PRIVATE}").stdout.strip():
         raise SettingsError(f"{DIRECTORY}/{PRIVATE}/ is tracked by Git; untrack it before writing settings")
     if _git(root, "ls-files", "--", f"{DIRECTORY}/project.json").stdout.strip():
@@ -196,25 +200,30 @@ def _stage(directory, data, mode):
     return staged
 
 
+def _fsync(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _replace(root, relative, before, data, directory, limit):
     """Replace relative with data (None deletes) only if it still holds before; atomic and durable."""
     target = Path(root) / relative
-    staged = None if data is None else _stage(directory, data, (target.stat().st_mode & 0o777) if target.exists() else 0o644)
+    first, identity = snapshot(target, limit)
+    staged = None if data is None else _stage(directory, data, (target.stat().st_mode & 0o777) if first is not None else 0o644)
     try:
-        current, _ = snapshot(target, limit)
-        # Git and hand edits do not take the lock: recheck content right before replacing.
-        if digest(current) != before:
+        current, now = snapshot(target, limit)
+        # Git and hand edits do not take the lock: recheck content and file identity right before replacing.
+        if digest(first) != before or digest(current) != before or now != identity:
             raise SettingsError(f"{relative} changed during the update; nothing more was written")
         if staged is None:
             target.unlink(missing_ok=True)
         else:
             os.replace(staged, target)
             staged = None
-        parent = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent)
-        finally:
-            os.close(parent)
+        _fsync(target.parent)
     finally:
         if staged is not None:
             Path(staged).unlink(missing_ok=True)
@@ -225,16 +234,24 @@ def apply(root, directory, feature, changes):
     backups = owned_directory(directory / "backups")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     folder = owned_directory(tempfile.mkdtemp(prefix=f"{stamp}-{feature}-", dir=backups))
+    names = [f"file-{index}" for index in range(len(changes))]
+    inside = Path(DIRECTORY) / PRIVATE / folder.relative_to(directory)
+    try:
+        _require_ignored(root, [str(inside / name) for name in names + ["record.json"]])
+    except SettingsError:
+        folder.rmdir()
+        raise
     files = {}
-    for index, (relative, (before, after)) in enumerate(changes.items()):
-        name = f"file-{index}"
+    for name, (relative, (before, after)) in zip(names, changes.items()):
         if before is not None:
             (folder / name).write_bytes(before)
+            _fsync(folder / name)
         files[relative] = dict(copy=name, before=digest(before), after=digest(after))
     record = folder / "record.json"
     record.write_text(json.dumps(dict(version=1, feature=feature, files=files), indent=2) + "\n", encoding="utf-8")
-    with open(record, "rb") as handle:
-        os.fsync(handle.fileno())
+    _fsync(record)
+    _fsync(folder)
+    _fsync(backups)
     for relative, (before, after) in changes.items():
         _replace(root, relative, digest(before), after, directory, MAX_FILE)
     return str(folder.relative_to(directory))
@@ -262,7 +279,7 @@ def undo(root, backup):
         record = parse_object(read_bytes(folder / "record.json") or b"", "Backup record")
         restored, kept = [], []
         for relative, entry in record["files"].items():
-            if relative not in (SETTINGS, "AGENTS.md"):
+            if relative not in (SETTINGS, "AGENTS.md") or not COPY.fullmatch(str(entry.get("copy"))):
                 raise SettingsError(f"Backup {backup} names an unsupported file")
             before = None if entry["before"] == "absent" else read_bytes(folder / entry["copy"], MAX_FILE)
             if digest(before) != entry["before"]:

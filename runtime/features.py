@@ -145,8 +145,14 @@ def resolve(cwd, package=PACKAGE):
     errors, entries, broken = [], {}, {}
     try:
         settings, raw = settings_store.read(root)
+        settings_input = settings_store.digest(raw)
     except SettingsError as error:
         settings, raw = None, None
+        settings_input = "invalid:" + str(error)
+        try:
+            settings_input += ":" + settings_store.digest(settings_store.read_bytes(settings_store.path(root)))
+        except SettingsError:
+            pass
         errors.append(str(error))
         broken = {name: str(error) for name in loaded}
     for name, entry in (settings or {}).get("features", {}).items():
@@ -155,6 +161,10 @@ def resolve(cwd, package=PACKAGE):
             continue
         if loaded[name]["control"] != "settings":
             entries[name] = entry
+            continue
+        if "project" not in loaded[name]["scopes"]:
+            errors.append(f"{name}: not settable in project settings")
+            broken[name] = "not settable in project settings"
             continue
         try:
             entries[name] = _entry(loaded[name], entry)
@@ -179,9 +189,9 @@ def resolve(cwd, package=PACKAGE):
                                                  for item in manifest["requires"]):
                 report[name] = dict(report[name], effective=False, reason="prerequisite_missing")
                 changed = True
-    inputs = dict(settings=settings_store.digest(raw), legacy=legacy, manifests=manifest_digest)
+    inputs = dict(settings=settings_input, legacy=legacy, manifests=manifest_digest)
     return dict(ok=not errors, checkout=str(root), settings=settings_store.SETTINGS,
-                revision=settings["revision"] if settings else 0, settings_digest=inputs["settings"],
+                revision=settings["revision"] if settings else 0, settings_digest=settings_store.digest(raw),
                 fingerprint="sha256:" + hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest(),
                 errors=errors, warnings=[], features=report)
 
