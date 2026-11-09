@@ -420,6 +420,40 @@ def gpt(model_id, variants=("low", "medium"), cost=None, provider="openai", **ex
     return entry
 
 
+class ChatGPTMethodTests(StageHarness):
+    connect = ChatGPTTests.connect
+
+    def test_the_sign_in_waits_for_the_integration_to_register(self):
+        run, ledger, server, announced, state_file, outcome = self.connect(integration_pending=3)
+        self.assertEqual(outcome["status"], "complete")
+        self.assertEqual(outcome["offered_methods"], ["chatgpt-browser", "chatgpt-headless", "chatgpt-token-sharing"])
+
+    def test_a_missing_method_blocks_and_records_what_was_offered(self):
+        with self.assertRaises(safety.Blocker) as caught:
+            self.connect(openai_methods=[dict(id="chatgpt-browser", type="oauth", label="Codex browser (legacy)")])
+        self.assertIn("offered: chatgpt-browser (oauth)", str(caught.exception))
+
+    def test_an_integration_that_never_registers_blocks_with_its_last_status(self):
+        with self.assertRaises(safety.Blocker) as caught:
+            self.connect(integration_pending=10 ** 6)
+        self.assertIn("HTTP 404", str(caught.exception))
+
+    def test_the_methods_diagnostic_lists_without_signing_in_or_reserving(self):
+        run, ledger, server = self.probe_run(purpose="chatgpt", model=None, integration_pending=2)
+        run.chatgpt_methods = True
+        chatgpt.run(run, sleep=lambda s: None)
+        found = run.results["stages"]["chatgpt"]["methods"]
+        self.assertEqual(found["openai"]["methods"], [dict(id="chatgpt-browser", type="oauth", label="Codex browser (legacy)"),
+                                                      dict(id="chatgpt-headless", type="oauth", label="Codex device code (legacy)"),
+                                                      dict(id="chatgpt-token-sharing", type="oauth", label="Sign in with ChatGPT")])
+        self.assertEqual([p["http"] for p in found["openai"]["polls"]], [404, 200])
+        self.assertEqual(found["integrations"]["github-copilot"], ["device (oauth)"])
+        self.assertEqual(found["integrations"]["anthropic"], ["- (key)"])
+        self.assertEqual((server.oauth_started, server.transmitted()), ([], []))
+        self.assertEqual([e for e in ledger.export()["entries"] if e["kind"] == "reserve"], [])
+        self.assertNotIn("cred_", json.dumps(run.results))
+
+
 class ChatGPTAutoTests(StageHarness):
     connect = ChatGPTTests.connect
 
@@ -598,6 +632,32 @@ class ModeRefusalTests(Temp):
                     patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
                     patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
                 self.assertEqual(live.main(base + extra), 2)
+
+    def test_the_methods_diagnostic_is_its_own_run(self):
+        ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
+        approved_ledger(ledger_path)
+        base = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger_path)]
+        captured = {}
+
+        class FakeRun:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+                self.redact = safety.Redactor()
+
+            def run(self):
+                captured["methods"] = self.chatgpt_methods
+                return dict(blockers=[])
+
+            def output(self, results):
+                return dict(results, cleanup=None, call_ledger=None)
+        with patch.object(live, "Run", FakeRun), patch.object(live, "check_opencode_version", lambda env: None), \
+                patch.object(live, "check_real_home", lambda: None):
+            self.assertEqual(live.main(base + ["--chatgpt-methods"]), 0)
+        self.assertEqual((captured["purpose"], captured["methods"]), ("chatgpt", True))
+        for extra in (["--chatgpt"], ["--stages", "s33d"], ["--canary"], ["--keep"], ["--chatgpt-model", "auto"]):
+            with self.subTest(extra=extra), patch.object(live, "Run", side_effect=AssertionError("a run would start")), \
+                    patch.object(live, "check_opencode_version", side_effect=AssertionError("opencode would start")):
+                self.assertEqual(live.main(base + ["--chatgpt-methods"] + extra), 2)
 
     def test_the_keep_warning_names_the_stored_logins(self):
         self.assertIn("ChatGPT", live.KEEP_WARNING)
