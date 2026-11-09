@@ -43,6 +43,11 @@ CODEX_WINDOW = "unobserved: the repository has no standalone Codex rate-limit re
 
 
 REGISTER_S = 60  # the openai integration's plugins register its methods shortly after start-up
+REQUEST_S = 5  # each registration poll's own timeout, so the whole wait stays near REGISTER_S
+# A refused sign-in's reason: only these short plain-string fields of the attempt's final status are kept (2.2.6's
+# `failed` status carries `message`; refusal codes such as subscription_sharing_user_not_eligible may arrive there).
+ERROR_FIELDS = ("code", "error", "error_description", "message", "reason")
+ERROR_CAP = 200
 
 
 def methods_of(info):
@@ -61,7 +66,10 @@ def wait_integration(run, integration, method_id, timeout_s=REGISTER_S, sleep=ti
     HTTP status, the sanitized methods and every change seen (status and method ids), for the record."""
     deadline, polls, last = clock() + timeout_s, [], None
     while True:
-        status, info, _ = run.server.request("GET", "/api/integration/%s" % integration)
+        try:
+            status, info, _ = run.server.request("GET", "/api/integration/%s" % integration, timeout=REQUEST_S)
+        except OSError:  # includes timeouts: the total deadline still bounds the wait
+            status, info = None, None
         methods = methods_of(run.data(info) if status == 200 else None)
         seen = (status, [m["id"] for m in methods])
         if seen != last:
@@ -70,6 +78,15 @@ def wait_integration(run, integration, method_id, timeout_s=REGISTER_S, sleep=ti
         if any(m["id"] == method_id and m["type"] == "oauth" for m in methods) or clock() >= deadline:
             return status, methods, polls
         sleep(0.5)
+
+
+def sign_in_error(body):
+    """`(error fields, key names)` of a sign-in attempt's final status: short plain strings of `ERROR_FIELDS`, already
+    redacted, never a URL; every other field contributes its name only."""
+    body = body if isinstance(body, dict) else {}
+    error = {k: body[k][:ERROR_CAP] for k in ERROR_FIELDS
+             if isinstance(body.get(k), str) and body[k].strip() and "://" not in body[k] and body[k] != "<secret>"}
+    return error, sorted(str(k)[:40] for k in body)[:30]
 
 
 def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=time.monotonic, announce=print):
@@ -103,7 +120,11 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
             raise Blocker("the ChatGPT sign-in was not completed within %d s" % timeout_s)
         sleep(poll_s)
     if state not in DONE:
-        raise Blocker("the ChatGPT sign-in ended with status %s" % (state if isinstance(state, str) else "unknown"))
+        final = state if isinstance(state, str) else "unknown"
+        error, keys = sign_in_error(run.redact(run.data(body) or {}))
+        run.note(PURPOSE, "signin", dict(status=final, error=error, keys=keys))
+        detail = error.get("message") or ", ".join("%s=%s" % item for item in sorted(error.items())) or "no reason given"
+        raise Blocker("the ChatGPT sign-in ended with status %s: %s (fields: %s)" % (final, detail, ", ".join(keys)))
     _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
     connections = len((run.data(info) or {}).get("connections") or [])
     if not connections:
@@ -264,24 +285,26 @@ def request(run):
 
 def diagnose(run, sleep=time.sleep, clock=time.monotonic):
     """`--chatgpt-methods` (0 calls): what the isolated server's integrations offer. No sign-in, no reservation, no
-    model request; only ids, types and labels are recorded."""
+    model request; only the openai integration's method ids, types and labels and the number of integrations are
+    recorded."""
+    run.results["mode"] = "chatgpt-methods"
     run.start(PURPOSE)
     http, methods, polls = wait_integration(run, INTEGRATION, METHOD_ID, sleep=sleep, clock=clock)
     _, info, _ = run.server.request("GET", "/api/integration/%s" % INTEGRATION)
     _, listing, _ = run.server.request("GET", "/api/integration")
-    integrations = {i["id"]: ["%s (%s)" % (m["id"] or "-", m["type"]) for m in methods_of(i)]
-                    for i in (run.data(listing) or []) if isinstance(i, dict) and isinstance(i.get("id"), str)}
+    listed = run.data(listing)
     connections = (run.data(info) or {}).get("connections") if http == 200 else None
     run.note(PURPOSE, "methods", dict(openai=dict(http=http, methods=methods, polls=polls,
                                                   connections=len(connections) if isinstance(connections, list) else None),
-                                      integrations=integrations))
+                                      integrations_count=len(listed) if isinstance(listed, list) else None))
     run.note(PURPOSE, "sign_in_method_listed", any(m["id"] == METHOD_ID and m["type"] == "oauth" for m in methods))
 
 
 def run(run_, announce=print, sleep=time.sleep):
+    """The whole chatgpt run: server, sign-in, model check, authority, the plugin-chain proof, one request (or, with
+    `--chatgpt-methods`, only the zero-call method listing)."""
     if getattr(run_, "chatgpt_methods", False):
         return diagnose(run_, sleep=sleep)
-    """The whole chatgpt run: server, sign-in, model check, authority, the plugin-chain proof, one request."""
     run_.start(PURPOSE)
     connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
     select_model(run_, announce=announce)

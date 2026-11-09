@@ -633,7 +633,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "5dca319cee11d21463b90658c1fea29074d4bc59809b47086c5f934eef52727b",
+      "sha256": "ce998f4143aa6ae5afe8582086d238bd7dd7e4f8982cf825ee07669c18735016",
       "ranges": [
         [
           1,
@@ -641,10 +641,10 @@
         ],
         [
           59,
-          179
+          182
         ],
         [
-          180,
+          183,
           192
         ]
       ]

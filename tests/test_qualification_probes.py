@@ -453,6 +453,8 @@ class ChatGPTMethodTests(StageHarness):
         self.assertIn("HTTP 404", str(caught.exception))
 
     def refused_sign_in(self, result, extra):
+        for name in ("iso", "state"):  # each attempt gets a fresh ledger and dir
+            shutil.rmtree(self.tmp / name, ignore_errors=True)
         with self.assertRaises(safety.Blocker) as caught:
             self.connect(oauth_result=result, oauth_extra=extra)
         run = self.connect_run

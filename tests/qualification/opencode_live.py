@@ -937,9 +937,9 @@ def main(argv=None):
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
         if sum(map(bool, (args.canary, args.stages, args.chatgpt, args.chatgpt_methods))) > 1:
-            raise Refused("--canary, --stages and --chatgpt are separate runs")
+            raise Refused("--canary, --stages, --chatgpt and --chatgpt-methods are separate runs")
         if args.keep and (args.chatgpt or args.chatgpt_methods):
-            raise Refused("--keep is refused with --chatgpt: the dir would keep OpenCode's stored ChatGPT login")
+            raise Refused("--keep is refused with --chatgpt and --chatgpt-methods: the dir would keep OpenCode's stored login")
         if args.chatgpt_model and not args.chatgpt:
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
