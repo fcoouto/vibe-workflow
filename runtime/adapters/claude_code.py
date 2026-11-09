@@ -24,6 +24,8 @@ RUNTIME_INPUT_LIMIT = 8 * 1024 * 1024
 RUNTIME_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"}
 # The prompt event carries only title presentation; `sessionTitle` applies to these start sources.
 PROMPT_EVENTS = {"UserPromptSubmit"}
+# Subagent lifecycle events are recorded as observations only; they never decide or print anything.
+SUBAGENT_EVENTS = {"SubagentStart", "SubagentStop"}
 TITLE_SOURCES = {"startup", "resume", "fork"}
 ALLOWED_ACTIONS = {"PreToolUse": {"pass", "deny", "context"},
                    "PostToolUse": {"pass", "context"}, "Stop": {"pass", "context", "continue"}}
@@ -225,6 +227,18 @@ def normalize_prompt(payload):
     cwd = Path(native_string(payload, "cwd"))
     if not cwd.is_absolute():
         raise StartupError("Prompt cwd must be absolute")
+    return SimpleNamespace(client="claude-code", session_id=session, cwd=cwd)
+
+
+def normalize_subagent(payload):
+    """Identity for a subagent lifecycle event; the final message is read only by the recorder."""
+    if payload.get("hook_event_name") not in SUBAGENT_EVENTS:
+        raise StartupError("Unsupported claude-code subagent event")
+    session = native_string(payload, "session_id")
+    native_string(payload, "agent_id")
+    cwd = Path(native_string(payload, "cwd"))
+    if not cwd.is_absolute():
+        raise StartupError("Subagent cwd must be absolute")
     return SimpleNamespace(client="claude-code", session_id=session, cwd=cwd)
 
 

@@ -27,6 +27,12 @@ Claude Code has no interrupt hook, so a user interrupt cannot pause a task; `Sto
 
 A managed Claude scope needs a retained setup receipt, as on Codex; a coordinator-supplied observation is never enough. The [Claude setup source](../skills/onboard-my-project/references/qualification.md#claude-code-setup-source) verifies startup context from the client's own hook event stream. The resulting scope is qualification-only: pre-tool, post-tool and stop behavior stay pending, so ordinary managed work in a real project remains unavailable until a managed behavior source exists.
 
+## Subagent observation
+
+Claude has no thread API and documents its transcript format as internal, so subagent provenance is recorded from hooks. `PostToolUse(Agent)` carries the request (prompt, `subagent_type`, requested `model`) and the spawn result (`agentId`, `resolvedModel`); `SubagentStart` and `SubagentStop` carry the agent identity and final message. [`claude_subagents`](../runtime/adapters/claude_subagents.py) keeps a private, bounded, immutable-per-field spool and verifies the chain `tool_use_id → agentId → agent_id` bound by `prompt_id`. The assignment marker must be the first line of the spawn prompt. A missing, partial, conflicting or inconsistent chain is never evidence, because hooks fail open.
+
+The collectors return the receipt and report that `collect_native_review` returns for Codex, with mechanism `claude-code-subagent-hook`. Claude has no turn ids (the agent id stands in) and no effort control observed. A reviewer must echo the assignment digests exactly; the digest match is the binding and is never relaxed. These collectors are not yet connected to the D6 ledger: review preparation, worker dispatch and continuation still need Claude guidance and route support, so a plan that requires review cannot complete.
+
 ## Titles and doctor
 
 Claude accepts a title only in hook output, so [title synchronization](workstreams-titles.md#claude-code-delivery) stages a change and delivers it on the next `SessionStart` (startup, resume, fork) or `UserPromptSubmit`. A final `DONE` title appears one prompt late.

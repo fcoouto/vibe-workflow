@@ -48,10 +48,10 @@ Missed by the first matrix: **M1** `PostToolUseFailure` invalidation (N, in S1);
 
 - **S0 (native probe, no code). Observed once** on Claude Code 2.1.311 with `haiku`, a disposable project and project-only settings (about $0.006): `prompt_id` was identical across main-session, subagent and Stop-continuation events, including the extra `UserPromptSubmit` the continuation produced; subagent tool hooks carry the parent's `session_id` plus their own `agent_id`; the first `Stop` has an explicit `stop_hook_active:false` and the continuation `true`; a hook `deny` blocked a write under `bypassPermissions`; a failed Bash command fired `PostToolUseFailure` with `error` and no `tool_response`. One run is not a distribution; payload sizes and the `onFailure` field on older versions were not probed.
 - **S1: adapter, manifest, validator** (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`), M1 and M2. *Package behavior implemented.*
-- **N4 qualification, then S1/S2 activation.** Qualification must exist before a managed Claude scope can be active outside test fixtures.
-- **S3 task controls** (`start`, `update`, `status`, `title`) *implemented*; **S4 evidence** pending: Claude records still reject evidence, delegation and retirement.
+- **N4 qualification** *stage 1 implemented*: a real receipt from Claude's own hook event stream activates a qualification-only scope with only `startup-context` verified. Managed successors for pre-tool, post-tool and stop behavior are not implemented.
+- **S3 task controls** (`start`, `update`, `status`, `title`) *implemented*; **S4 evidence** *implemented*: plan, check, reconcile, verify, cleanup and status work for Claude and `DONE` is revalidated; review-requiring plans stay unsatisfiable. Delegation and retirement stay refused.
 - **S5 doctor** *implemented*: version, installed and enabled state, hook locks; hook trust and execution cannot be observed, so a healthy result exits 2.
-- **N1/N2 with `SubagentStart`/`SubagentStop`**, then M3.
+- **N1/N2 observation source** *implemented*: hook-recorded spawn chains and collectors for the review receipt and worker facts. *Not implemented:* the D6 ledger integration (guidance, routes, `_prepare_native`, receipt pins, delegation CLI), then M3.
 - **N7, then M5.**
 - **S6 parent title** *implemented*. Native finding: Claude delivers and returns a hook-set title but strips the leading `U+FFFB`, so the transport delivers without it and canonicalizes observations; an exact-equality acknowledgment would have paused every title as a manual rename.
 - **D1** with every slice.
