@@ -13,8 +13,9 @@ is reported with source `estimate` and a zero cost for a request that used token
 
 Wiring (S3.6b-2 and the launcher): once the attempt's sessions are idle, the launcher re-reads the root session, its
 spawned descendant sessions (including `subagent: true` command children, linked only by `parentID`) and all their
-messages, normalizes them with the adapter and `normalize_session`, and sends `usage_from_messages(..., lineage=...)
-["usage"]` in `record complete {usage}`; `lineage` lists every session it knows of under the root.
+messages, normalizes them with the adapter and `normalize_session`, and sends `usage_from_messages(..., lineage=...,
+shim_descendants=...)["usage"]` in `record complete {usage}`; `lineage` lists every session it knows of under the root
+and `shim_descendants` is the plugin's `routing.descendants` answer, read before `record complete` and detach.
 Errors are AccountingError with a fixed reason that never includes payload text.
 """
 
@@ -35,6 +36,8 @@ MAX_SESSIONS = 64  # the root and its descendant sessions in one attempt
 MAX_LINEAGE = 1024  # sessions the launcher lists from session listing and lineage events
 SESSION_KEYS = {"session_id", "parent_session_id", "messages", "tokens", "cost", "complete"}
 LINEAGE_KEYS = {"session_id", "parent_session_id"}
+SHIM_KEYS = {"state", "root", "descendants", "truncated", "complete"}  # `routing.descendants`; `reason`, `cache` optional
+SHIM_REASON = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")  # the plugin's fixed reason codes
 MAX_RECENT = 64  # sequence numbers remembered per aggregate to tell a duplicate from a conflict
 MAX_SECONDS = 10 ** 11  # an epoch-seconds reset above this looks like milliseconds
 KINDS = {"assistant": "primary", "compaction": "compaction"}  # message types that carry a model request's tokens
@@ -45,14 +48,16 @@ COVERAGE = ("incomplete_coverage", "message_tokens_missing", "message_in_progres
             "unexpected_tokens")
 # Reasons that leave part of the attempt's spend unattributed, so every dollar cost is unknown.
 COST_BLOCKING = COVERAGE + ("title_unknown", "title_cost_inconsistent", "child_session_unaccounted",
-                            "tool_calls_dropped", "lineage_not_checked")
+                            "tool_calls_dropped", "lineage_not_checked", "shim_lineage_incomplete",
+                            "shim_lineage_not_checked")
 REASONS = ("invalid input", "invalid message", "invalid session", "invalid tokens", "invalid cost",
            "invalid rate limit", "invalid event", "invalid tracker state", "invalid previous", "too many messages",
            "too many events", "too many aggregates", "too many routes", "total too large",
            "conflicting duplicate message", "message in two sessions", "session not in the attempt",
-           "session mismatch", "invalid lineage", "too many sessions")
+           "session mismatch", "invalid lineage", "too many sessions", "invalid shim lineage")
 RATE_UNITS = {"utilization": "fraction_0_1", "resets_at": "epoch_seconds", "observed_at": "epoch_ms"}
 ZERO = dict.fromkeys(TOKEN_FIELDS, 0)
+_UNSET = object()  # `shim_descendants` not passed: the cross-check is off
 
 
 class AccountingError(ValueError):
@@ -320,7 +325,7 @@ def _api_cost(cost, tokens):
 
 def _session_state(value, root=True):
     if type(value) is not dict or not {"session_id", "messages"} <= set(value) <= (
-            SESSION_KEYS | {"children", "lineage"} if root else SESSION_KEYS):
+            SESSION_KEYS | {"children", "lineage", "shim_descendants"} if root else SESSION_KEYS):
         _fail("invalid session")
     _flag(value.get("complete", True), "invalid session")
     _name(value.get("parent_session_id"), opencode.SESSION, "invalid session")
@@ -343,8 +348,9 @@ def _part(state):
             "cost": _cost(state.get("cost")), "title": title, "title_reason": reason}
 
 
-def _attempt(root, children, funding, lineage):
-    """Account a root session and the descendant sessions its spawns created (one attempt)."""
+def _attempt(root, children, funding, lineage, shim=None):
+    """Account a root session and the descendant sessions its spawns created (one attempt). `shim`, when given, is
+    `(answer,)`: the launcher opted into the cross-check, and `answer` may be None (not supplied)."""
     if sum(len(state["messages"]) if type(state["messages"]) is list else 0 for state in [root] + children) \
             > MAX_MESSAGES:
         _fail("too many messages")
@@ -362,10 +368,15 @@ def _attempt(root, children, funding, lineage):
     unknown = set().union(*(part["scan"]["reasons"] for part in parts))
     if spawned - set(ids):
         unknown.add("child_session_unaccounted")
+    checked = lineage
+    if shim is not None:
+        crossed = _cross_check(lineage, shim[0], parts[0]["session_id"], ids[1:])
+        unknown.update(crossed["unknown"])
+        checked = None if lineage is None and not crossed["lineage"] else crossed["lineage"]
     if lineage is None:
         unknown.add("lineage_not_checked")
-    elif _lineage_check(lineage, parts[0]["session_id"], {part["session_id"]: part["parent"] for part in parts[1:]},
-                        referrers):
+    if checked is not None and _lineage_check(
+            checked, parts[0]["session_id"], {part["session_id"]: part["parent"] for part in parts[1:]}, referrers):
         unknown.add("child_session_unaccounted")
     messages, titles = [], []
     for part in parts:
@@ -519,6 +530,79 @@ def _reachable(root, links):
         _fail("session not in the attempt")  # not reachable from the root
 
 
+def _shim(answer, root):
+    """A validated `routing.descendants` answer as `(parents, vouched)`; parents may be None (recorded without a link)."""
+    if type(answer) is not dict or not SHIM_KEYS <= set(answer) <= SHIM_KEYS | {"reason", "cache"} or \
+            answer["state"] != "ok" or type(answer["descendants"]) is not list:
+        _fail("invalid shim lineage")
+    if type(answer["complete"]) is not bool or type(answer["truncated"]) is not bool:
+        _fail("invalid shim lineage")
+    reason, cache = answer.get("reason"), answer.get("cache", {})
+    if reason is not None and (type(reason) is not str or not 0 < len(reason) <= 64 or not reason[0].isalpha()
+                               or not set(reason) <= SHIM_REASON):
+        _fail("invalid shim lineage")
+    if type(cache) is not dict or not set(cache) <= {"recorded", "retired"} or \
+            any(type(count) is not int or not 0 <= count <= MAX_TOTAL for count in cache.values()):
+        _fail("invalid shim lineage")
+    if _name(answer["root"], opencode.SESSION, "invalid shim lineage", nullable=False) != root:
+        _fail("session mismatch")
+    if len(answer["descendants"]) > MAX_LINEAGE:
+        _fail("too many sessions")
+    parents = {}
+    for entry in answer["descendants"]:
+        if type(entry) is not dict or set(entry) != LINEAGE_KEYS:
+            _fail("invalid shim lineage")
+        session = _name(entry["session_id"], opencode.SESSION, "invalid shim lineage", nullable=False)
+        parent = _name(entry["parent_session_id"], opencode.SESSION, "invalid shim lineage")
+        if session == root or session == parent or parents.setdefault(session, parent) != parent:
+            _fail("invalid lineage")  # the root, a self-parent, or one session with two parents
+    return parents, answer["complete"] and not answer["truncated"]
+
+
+def _cross_check(lineage, answer, root, children):
+    listed = {} if lineage is None else _lineage(lineage)
+    merged = [{"session_id": session, "parent_session_id": parent} for session, parent in sorted(listed.items())]
+    if answer is None:
+        return {"lineage": merged, "unknown": ["shim_lineage_not_checked"], "not_included": 0}
+    recorded, vouched = _shim(answer, root)
+    for session, parent in recorded.items():
+        if parent is not None and session in listed and listed[session] != parent:
+            _fail("invalid lineage")  # the shim saw a different parent than the launcher lists
+    merged = sorted(merged + [{"session_id": session, "parent_session_id": parent}
+                              for session, parent in recorded.items() if parent is not None and session not in listed],
+                    key=lambda entry: entry["session_id"])
+    if len(merged) > MAX_LINEAGE:
+        _fail("too many sessions")
+    # Every recorded session must be accounted, whatever the listing says about it: a null shim parent cannot
+    # contradict a listed one, so only inclusion proves its spend was counted.
+    missing = len(set(recorded) - set(children))
+    unknown = (["child_session_unaccounted"] if missing else []) + ([] if vouched else ["shim_lineage_incomplete"])
+    return {"lineage": merged, "unknown": unknown, "not_included": missing}
+
+
+@_guard
+def cross_check_lineage(lineage, shim_descendants, root, children=None):
+    """Cross-check the launcher's `lineage` (`[{session_id, parent_session_id}]` or None) against the plugin's own
+    `routing.descendants` answer for `root` (or None when the launcher has none), with `children` the included
+    descendant session ids. Returns `{lineage, unknown, not_included}`:
+
+    - `lineage`: the launcher's entries plus every shim entry with a known parent it lacks, sorted by session id;
+    - `unknown`: `child_session_unaccounted` when the shim recorded a descendant that is not included in `children`,
+      whether or not the launcher lists it (`not_included` counts them), `shim_lineage_incomplete` when the shim could not vouch for its set (`complete: false`
+      or `truncated`), and `shim_lineage_not_checked` when no answer was supplied.
+
+    A shim parent that contradicts the listing, the root among the descendants, a self-parent or a session with two
+    parents is `invalid lineage`; a malformed answer is `invalid shim lineage`, another root `session mismatch`.
+    Pure: inputs are never mutated and errors never echo them.
+    """
+    root = _session(root)
+    if children is None:
+        children = []
+    if type(children) is not list or len(children) > MAX_SESSIONS:
+        _fail("invalid session")
+    return _cross_check(lineage, shim_descendants, root, [_session(child) for child in children])
+
+
 def _title(part):
     title = part["title"]
     return {"state": "unknown" if title is None else "known" if any(title.values()) else "zero", "tokens": title,
@@ -527,7 +611,7 @@ def _title(part):
 
 @_guard
 def usage_from_messages(messages, session_total=None, *, session_id, funding="subscription", complete=True,
-                        session_cost=None, children=None, lineage=None):
+                        session_cost=None, children=None, lineage=None, shim_descendants=_UNSET):
     """Account one attempt from its re-read, normalized root session and the descendant sessions it spawned.
 
     `children` lists descendant session states `{session_id, parent_session_id?, messages, tokens?, cost?,
@@ -542,6 +626,11 @@ def usage_from_messages(messages, session_total=None, *, session_id, funding="su
     reaches an included session but that is not included adds `child_session_unaccounted`; without `lineage` the
     result carries `lineage_not_checked`, so an API route's cost is unknown rather than silently complete.
 
+    `shim_descendants` is the plugin's `routing.descendants` answer for the root (S3.3c), or None when the launcher
+    could not get one; see `cross_check_lineage`. Its flags make an API route's cost unknown and are only flags on
+    subscription routes. Omitting the argument keeps the launcher-trusting behaviour above, which API-funded managed
+    attempts must not rely on.
+
     Returns `{session_id, funding, usage, totals, title, sessions, message_ids, unknown, grouped, reported_cost,
     rate_limit}`; `usage` is the S3.6a `record` usage object or None when nothing was requested. One request per
     assistant (`primary`) or compaction message with its message id as `receipt`, in creation order, plus one `title`
@@ -553,16 +642,19 @@ def usage_from_messages(messages, session_total=None, *, session_id, funding="su
     `cost` as ceiling micro-units, the title's as the session cost minus its messages'. A zero or missing cost for a
     request that used tokens, a missing session cost for a title, or any unattributed tokens make every cost null.
     """
-    root, kids = _session_state({"session_id": session_id, "messages": messages, "tokens": session_total,
-                                 "cost": session_cost, "complete": complete, "children": children or [],
-                                 "lineage": lineage})
+    state = {"session_id": session_id, "messages": messages, "tokens": session_total, "cost": session_cost,
+             "complete": complete, "children": children or [], "lineage": lineage}
+    if shim_descendants is not _UNSET:
+        state["shim_descendants"] = shim_descendants
+    root, kids = _session_state(state)
     return _usage(root, kids, funding)
 
 
 def _usage(root, children, funding):
     if funding not in FUNDING:
         _fail("invalid input")
-    parts, requests, usd, unknown, grouped = _attempt(root, children, funding, root.get("lineage"))
+    shim = (root["shim_descendants"],) if "shim_descendants" in root else None
+    parts, requests, usd, unknown, grouped = _attempt(root, children, funding, root.get("lineage"), shim)
     counted, messages_total, sessions = dict(ZERO), dict(ZERO), []
     for part in parts:
         part_counted = part["scan"]["messages_total"] if part["title"] is None else \
