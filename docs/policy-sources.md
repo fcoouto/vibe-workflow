@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing OpenCode usage accounting (S3.6b-1) — 9 November 2026
+
+Task S3.6b-1 of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds a pure module that turns re-read OpenCode session state into the S3.6a `usage` report and detects event-stream gaps. It changes no ledger, command or client registration and makes no model or OpenCode call.
+
+| Contract | Source |
+| --- | --- |
+| [OpenCode usage accounting and resync](../clients/opencode.md#usage-accounting-and-resync) and `runtime/opencode_accounting.py` | Usage from stored message and session token totals only (never `session.usage.updated`); one request per assistant or compaction message with its id as receipt, grouped by route above the 32-request report limit; title tokens as session total minus messages per class, unknown when negative, incomplete, still growing or inconsistent; subscription costs `null` with the provider's figure kept only as a labelled estimate; API costs as ceiling micro-units, all `null` when any cost or token class is unknown; tokens, USD and quota fractions never added; `durable.seq` continuity per aggregate with first-problem reasons and the last in-order seq; totals recomputed from re-read state with deltas and regressions reported, never accumulated; `native.rateLimit` as an observation with explicit units, percentages and millisecond resets refused; bounded inputs, integer-only tokens, no bool-as-int, NaN or infinity, fixed-reason errors and unmutated inputs | Spec §8 (reconciliation from host evidence, bounded uncertainty) and §11 (accounting units, no prompts); plan Task S3.6 (S3.6b scope) and the coordinator's 9 November 2026 split into S3.6b-1 and S3.6b-2; the merged S3.6a `record` usage contract; [capability matrix](smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08) P0.5 and P0.8 rows (title requests create no message, durable sequence numbers, no replay, resync by re-reading); recorded fixtures `p0-8-lineage-aux.json`, `p0-5-model-variant-messages.json` and `p0-hook-event-excerpt.json` normalized by the S3.2 adapter; `tests/test_opencode_accounting.py` |
+
 ## Smart Routing accounting core (S3.6a) — 9 November 2026
 
 Task S3.6a of the [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) adds lifecycle event deduplication, completion settlement, root-task settlement and retention to the routing ledger and command. It makes no model or OpenCode call and changes no client file; S3.6b owns host token accounting, event-gap resync and evidence-based reconciliation.
