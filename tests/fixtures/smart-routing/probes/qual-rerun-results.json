@@ -1,0 +1,972 @@
+{
+  "<call#1>": {
+    "pilot": {
+      "cap": 24,
+      "open_reservations": 0,
+      "remaining": 24,
+      "spent": 0
+    },
+    "qualification": {
+      "cap": 14,
+      "open_reservations": 0,
+      "remaining": 5,
+      "spent": 9
+    }
+  },
+  "_meta": {
+    "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
+    "date": "2026-11-09",
+    "generated_by": "tests/qualification/opencode_live.py (no post-processing)",
+    "mode": "qualification",
+    "opencode": "2.2.6",
+    "provider": "claude-agent/haiku#low",
+    "sanitized": true
+  },
+  "blockers": [],
+  "cleanup": {
+    "isolated_dir_removed": true,
+    "kept": false,
+    "processes_left": 0,
+    "project_config_removed": null,
+    "verified_by_harness": true
+  },
+  "deviations": [
+    "prompt after record complete: expected attempt_closed, observed attach_required"
+  ],
+  "hook_records": 31,
+  "hooks": [
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#2>",
+      "variant": "high"
+    },
+    {
+      "decision": "guard_variant",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#2>",
+      "variant": "high"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#3>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#4>",
+      "variant": "low"
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": true
+    },
+    {
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "title",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "effect": "ask",
+      "hook": "permission.evaluate",
+      "phase": "pre",
+      "session": "<ses#1>"
+    },
+    {
+      "effect": "deny",
+      "hook": "permission.evaluate",
+      "phase": "post",
+      "session": "<ses#1>"
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "pre",
+      "probe_present": true
+    },
+    {
+      "hook": "shell.create.before",
+      "phase": "post",
+      "probe_present": false
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "sonnet",
+      "phase": "pre",
+      "session": "<ses#5>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "decision": "guard_hold",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#1>",
+      "variant": "low"
+    },
+    {
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "pre",
+      "session": "<ses#6>",
+      "variant": "low"
+    },
+    {
+      "decision": "transmit",
+      "hook": "model.request",
+      "kind": "primary",
+      "model": "haiku",
+      "phase": "post",
+      "session": "<ses#6>",
+      "variant": "low"
+    }
+  ],
+  "latency": {
+    "shim_ms_by_hook": {
+      "model.request/primary": {
+        "max_ms": 0.632,
+        "median_ms": 0.497,
+        "n": 5,
+        "p95_ms": 0.632
+      },
+      "model.request/title": {
+        "max_ms": 3.348,
+        "median_ms": 3.348,
+        "n": 1,
+        "p95_ms": 3.348
+      },
+      "permission.evaluate/-": {
+        "max_ms": 0.223,
+        "median_ms": 0.223,
+        "n": 1,
+        "p95_ms": 0.223
+      },
+      "shell.create.before/-": {
+        "max_ms": 0.139,
+        "median_ms": 0.125,
+        "n": 6,
+        "p95_ms": 0.139
+      }
+    },
+    "unmatched_pre_records": 5
+  },
+  "ledger": [
+    {
+      "calls": 0,
+      "label": "guard probe (must be refused by qual-post)",
+      "stage": "0"
+    },
+    {
+      "calls": 0,
+      "label": "pending probe (must be refused by the shim)",
+      "stage": "0"
+    },
+    {
+      "calls": 1,
+      "label": "P0.7 (a) prompt with derived ids",
+      "stage": "1"
+    },
+    {
+      "calls": 0,
+      "label": "P0.7 (b) duplicate prompt",
+      "stage": "1"
+    },
+    {
+      "calls": 0,
+      "label": "P0.7 (e) ordering",
+      "stage": "1"
+    },
+    {
+      "calls": 2,
+      "label": "managed primary request and its one title",
+      "stage": "2"
+    },
+    {
+      "calls": 0,
+      "label": "subagent command on another model",
+      "stage": "2"
+    },
+    {
+      "calls": 0,
+      "label": "prompt, session not attached",
+      "stage": "2"
+    },
+    {
+      "calls": 0,
+      "label": "prompt after a wrong-token attach",
+      "stage": "2"
+    },
+    {
+      "calls": 0,
+      "label": "prompt after record complete",
+      "stage": "2"
+    },
+    {
+      "calls": 1,
+      "label": "interactive session, routing child killed",
+      "stage": "2"
+    }
+  ],
+  "mode": "qualification",
+  "off_route_requests": 2,
+  "stages": {
+    "0": {
+      "claude_agent_connect_http": 204,
+      "haiku_listed": {
+        "listed": true,
+        "low_variant": true
+      },
+      "health_after_prepare": {
+        "body": {
+          "child": "up",
+          "respawn_ms": null,
+          "state": "ok",
+          "version": 1
+        },
+        "http": 200,
+        "ms": 16.68
+      },
+      "health_before_ledger": {
+        "body": {
+          "reason": "ledger_absent",
+          "state": "not_ready",
+          "version": 1
+        },
+        "http": 200,
+        "ms": 58.15
+      },
+      "plugin_chain": {
+        "api_order_documented": false,
+        "failures": [],
+        "guard_probe": [
+          {
+            "decision": null,
+            "phase": "pre",
+            "variant": "high"
+          },
+          {
+            "decision": "guard_variant",
+            "phase": "post",
+            "variant": "high"
+          }
+        ],
+        "pending_probe": {
+          "outcome": "failed",
+          "prepare": "admitted",
+          "reason": "attach_required",
+          "records": [
+            "pre"
+          ],
+          "released": "recorded"
+        },
+        "plugins_http": 200,
+        "present": [
+          "qual-pre",
+          "vibe-workflow.routing",
+          "qual-post"
+        ],
+        "sent": 0
+      },
+      "prepare": {
+        "billing_class": "included_subscription",
+        "ms": 80.55,
+        "reason": null,
+        "state": "admitted"
+      },
+      "server": {
+        "location": "isolated project",
+        "port": "<random>",
+        "version": "2.2.6"
+      },
+      "set_authority_required": {
+        "answer": {
+          "authority_required": true,
+          "state": "updated",
+          "v": 1
+        },
+        "ms": 78.3
+      },
+      "status": {
+        "ms": 75.42,
+        "view": {
+          "ledger": {
+            "authority_required": true,
+            "blocked_organizations": [],
+            "cost_unknown": {
+              "ids": [],
+              "more": 0
+            },
+            "holds": {
+              "admitted": 1
+            },
+            "open_attempts": 1,
+            "overrun_backlog": false,
+            "reconcile_hint": null,
+            "state": "ready",
+            "unbound_open_holds": 1,
+            "uncertain_dollar": {
+              "ids": [],
+              "more": 0
+            },
+            "unstamped_open_holds": 0
+          },
+          "settings_state": "ok",
+          "state": "ok"
+        }
+      }
+    },
+    "1": {
+      "a_create_derived_session": {
+        "accepted_same_id": true,
+        "http": 200,
+        "ms": 3.71
+      },
+      "a_prompt": {
+        "assistant_messages": 1,
+        "http": 200,
+        "kinds": [
+          "primary"
+        ],
+        "message_types": [
+          "user",
+          "assistant",
+          "idle"
+        ],
+        "model_request_invocations": 1,
+        "ms": 2.29,
+        "outcome": "succeeded",
+        "reason": null,
+        "response_id_is_derived": true,
+        "transmitted": 1,
+        "user_message_ids_derived": [
+          true
+        ]
+      },
+      "b_duplicate": {
+        "added_types": [
+          "idle"
+        ],
+        "http": 200,
+        "model_request_invocations": 0,
+        "ms": 1.55,
+        "returned_original_id": true,
+        "transmitted": 0
+      },
+      "c_read_back": {
+        "http": 200,
+        "ms": 0.87,
+        "same_id": true,
+        "type": "user"
+      },
+      "d_own_id_shapes": {
+        "messages": [
+          {
+            "body_length": 26,
+            "classes": [
+              "digit",
+              "lower",
+              "upper"
+            ],
+            "derived_shape": false,
+            "lower_hex_only": false,
+            "prefix": "msg"
+          }
+        ],
+        "session": {
+          "body_length": 26,
+          "classes": [
+            "digit",
+            "lower",
+            "upper"
+          ],
+          "derived_shape": false,
+          "lower_hex_only": false,
+          "prefix": "ses"
+        }
+      },
+      "e_ordering": {
+        "derived_positions_high_then_low": [
+          1,
+          3
+        ],
+        "lexicographic_order": false,
+        "listed": [
+          "server",
+          "derived",
+          "server",
+          "derived",
+          "server"
+        ],
+        "model_request_invocations": 0,
+        "transmitted": 0
+      }
+    },
+    "2": {
+      "attach": {
+        "http": 200,
+        "ms": 1.47,
+        "state": "attached"
+      },
+      "attach_wrong_token": {
+        "http": 500,
+        "ms": 1.83
+      },
+      "detach": {
+        "http": 200,
+        "state": "detached"
+      },
+      "detach_wrong_token": {
+        "http": 500
+      },
+      "dispatch": {
+        "message_derived": true,
+        "ms": 76.3,
+        "session_derived": true,
+        "state": "dispatched",
+        "token_length": 43
+      },
+      "dispatch_repeated": {
+        "has_authority": false,
+        "state": "already_dispatched"
+      },
+      "health_after_kill": {
+        "child": "respawned",
+        "http": 200,
+        "state": "ok"
+      },
+      "interactive_child_killed": {
+        "outcome": "succeeded",
+        "reason": null,
+        "shim_ms": [
+          0.153
+        ],
+        "transmitted": 1
+      },
+      "managed_request": {
+        "assistant_messages": 1,
+        "http": 200,
+        "outcome": "succeeded",
+        "primary_transmitted": 1,
+        "reason": null,
+        "sent": 2,
+        "title_transmitted": 1
+      },
+      "prompt_after_wrong_token": {
+        "assistant_messages": 0,
+        "http": 200,
+        "kinds": [
+          "primary"
+        ],
+        "outcome": "failed",
+        "pass": true,
+        "pre_invocations": 1,
+        "reason": "attach_required",
+        "sent": 0
+      },
+      "prompt_closed_attempt": {
+        "assistant_messages": 0,
+        "http": 200,
+        "kinds": [
+          "primary"
+        ],
+        "outcome": "failed",
+        "pass": false,
+        "pre_invocations": 1,
+        "reason": "attach_required",
+        "sent": 0
+      },
+      "prompt_without_attachment": {
+        "assistant_messages": 0,
+        "http": 200,
+        "kinds": [
+          "primary"
+        ],
+        "outcome": "failed",
+        "pass": true,
+        "pre_invocations": 1,
+        "reason": "attach_required",
+        "sent": 0
+      },
+      "routing_child_killed": 1,
+      "shell_env_attached": [
+        {
+          "phase": "pre",
+          "probe_present": true
+        },
+        {
+          "phase": "post",
+          "probe_present": false
+        }
+      ],
+      "subagent_other_model": {
+        "child_outcomes": [
+          {
+            "outcome": "failed",
+            "reason": "route_mismatch"
+          }
+        ],
+        "children": 1,
+        "tool_hook": 0,
+        "transmitted": 0
+      },
+      "webfetch_permission": {
+        "hook": [
+          {
+            "effect": "ask",
+            "phase": "pre"
+          },
+          {
+            "effect": "deny",
+            "phase": "post"
+          }
+        ],
+        "http": 200,
+        "listener_hits": 0
+      }
+    },
+    "3": {
+      "consistency_report": {
+        "by_type": {
+          "assistant": 1,
+          "idle": 4,
+          "synthetic": 1,
+          "user": 3
+        },
+        "children_included": 1,
+        "children_referenced": 0,
+        "children_unaccounted": 0,
+        "complete": true,
+        "conflicting_duplicates": 0,
+        "countable": 1,
+        "duplicates": 0,
+        "in_progress": 0,
+        "lineage_conflicts": 0,
+        "lineage_loops": 0,
+        "lineage_unaccounted": 0,
+        "messages": 9,
+        "missing_model": 0,
+        "missing_tokens": 0,
+        "negative_classes": [],
+        "rate_limit_messages": 1,
+        "session_id": "<ses#1>",
+        "spawns_without_session": 0,
+        "title": "known",
+        "title_reason": null,
+        "tool_calls_dropped": 0,
+        "unknown_records": 0
+      },
+      "events": {
+        "counts": {
+          "duplicates": 0,
+          "durable": 76,
+          "volatile_ignored": 5
+        },
+        "normalize_failures": 0,
+        "resync_needed": [
+          "version_changed",
+          "version_changed",
+          "version_changed",
+          "version_changed",
+          "version_changed"
+        ],
+        "session_events": 81
+      },
+      "reconcile_with_state": {
+        "messages_added": 0,
+        "messages_missing": 0,
+        "regressed": [],
+        "tokens_delta": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 0,
+          "output": 0,
+          "reasoning": 0
+        },
+        "usd_micros_delta": null
+      },
+      "record_complete": {
+        "ms": 75.5,
+        "outcome": "complete",
+        "reason": null,
+        "settlement": {
+          "kind": "window",
+          "observed_units": {},
+          "released": {
+            "win:sub/5h": 12
+          }
+        },
+        "state": "recorded"
+      },
+      "reread": {
+        "children": 1,
+        "lineage_entries": 8,
+        "message_pages": 2,
+        "message_types": [
+          "user",
+          "assistant",
+          "idle",
+          "synthetic",
+          "idle",
+          "user",
+          "idle",
+          "user",
+          "idle"
+        ],
+        "session_tokens": {
+          "cache_read": 4904,
+          "cache_write": 692,
+          "input": 4,
+          "output": 8,
+          "reasoning": 0
+        }
+      },
+      "status_after_complete": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {},
+          "open_attempts": 0,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 0,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      },
+      "title_tokens": {
+        "reason": null,
+        "tokens": {
+          "cache_read": 823,
+          "cache_write": 346,
+          "input": 2,
+          "output": 4,
+          "reasoning": 0
+        }
+      },
+      "usage_from_messages": {
+        "requests": [
+          {
+            "cost_usd_micros": null,
+            "kind": "primary",
+            "tokens": {
+              "cache_read": 4081,
+              "cache_write": 346,
+              "input": 2,
+              "output": 4,
+              "reasoning": 0
+            }
+          },
+          {
+            "cost_usd_micros": null,
+            "kind": "title",
+            "tokens": {
+              "cache_read": 823,
+              "cache_write": 346,
+              "input": 2,
+              "output": 4,
+              "reasoning": 0
+            }
+          }
+        ],
+        "source": "host_message_totals",
+        "title": {
+          "reason": null,
+          "state": "known",
+          "tokens": {
+            "cache_read": 823,
+            "cache_write": 346,
+            "input": 2,
+            "output": 4,
+            "reasoning": 0
+          }
+        },
+        "unknown": []
+      }
+    },
+    "4": {
+      "check_after_uncertain": {
+        "reason": "attempt_uncertain",
+        "state": "blocked"
+      },
+      "check_session_dispatched": {
+        "reason": "authority_required",
+        "state": "blocked"
+      },
+      "complete_on_uncertain": {
+        "reason": "reconciliation_required",
+        "state": "blocked"
+      },
+      "host_read": {
+        "message_http": 404,
+        "session_http": 404
+      },
+      "lost_launcher": {
+        "dispatch_state": "dispatched",
+        "launcher_exit": -9
+      },
+      "reconcile_uncertain_subscription": {
+        "reason": "hold_state_forbidden",
+        "state": "blocked"
+      },
+      "record_uncertain": {
+        "reason": null,
+        "state": "recorded"
+      },
+      "status_after_lost_launcher": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {
+            "dispatched": 1
+          },
+          "open_attempts": 1,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 1,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      },
+      "status_after_uncertain": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {
+            "uncertain": 1
+          },
+          "open_attempts": 1,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 1,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      },
+      "status_final": {
+        "ledger": {
+          "authority_required": true,
+          "blocked_organizations": [],
+          "cost_unknown": {
+            "ids": [],
+            "more": 0
+          },
+          "holds": {
+            "uncertain": 1
+          },
+          "open_attempts": 1,
+          "overrun_backlog": false,
+          "reconcile_hint": null,
+          "state": "ready",
+          "unbound_open_holds": 1,
+          "uncertain_dollar": {
+            "ids": [],
+            "more": 0
+          },
+          "unstamped_open_holds": 0
+        },
+        "settings_state": "ok",
+        "state": "ok"
+      }
+    }
+  },
+  "user_dirs": {
+    "home_report_only": {
+      ".claude": {
+        "added": 5,
+        "changed": 3,
+        "removed": 1
+      },
+      ".claude.json": {
+        "added": 0,
+        "changed": 1,
+        "removed": 0
+      },
+      ".opencode": {
+        "added": 0,
+        "changed": 0,
+        "removed": 0
+      }
+    },
+    "opencode": {
+      ".cache/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".config/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/share/opencode": {
+        "desktop_churn_count": 2,
+        "unexpected": [],
+        "unexpected_count": 0
+      },
+      ".local/state/opencode": {
+        "desktop_churn_count": 0,
+        "unexpected": [],
+        "unexpected_count": 0
+      }
+    }
+  }
+}

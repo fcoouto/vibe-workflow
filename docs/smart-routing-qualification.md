@@ -1,6 +1,81 @@
 # Smart Routing live qualification on OpenCode 2.2.6 (9 November 2026)
 
-**Outcome: stopped in stage 3 on a blocker.** Stages 0–2 matched the contract. Stage 3 (P0.8 accounting) could not account a managed attempt in which the managed session ran a `subagent: true` command (see [Blocker](#blocker)). The rest of stage 3, two stage-2 checks that run after completion, and stage 4 did **not run**. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
+**Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
+
+## Re-run: stages 0–4 (harness 3f87159)
+
+- **Run.** Qualification mode with `--through 4`. Model `claude-agent/haiku#low` only. Calls went through the durable call ledger under purpose `qualification`; canary mode and the `pilot` purpose were not used.
+- **Evidence.** [`qual-rerun-results.json`](../tests/fixtures/smart-routing/probes/qual-rerun-results.json) is the harness's output, committed unchanged. One defect in that output: the redactor's id pattern matched the key `call_ledger` and renamed it `<call#1>`, and the value came out `null`. The durable ledger is recorded in [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json), which is exported from that file. The round-1 `qual-results.json` is kept unchanged, because tests from #146 read it.
+- **Cleanup, verified by the harness itself.**
+  - 0 processes left; the isolated directory was removed.
+  - The user's OpenCode config, data, state and cache directories showed 0 unexpected changes. There were 2 desktop-app churn entries in `~/.local/share/opencode`: the running desktop app's own database and log files.
+  - Report-only: `~/.claude` had 5 entries added, 3 changed and 1 removed (Claude CLI session state), and `~/.claude.json` changed.
+- **Count basis.** Calls are counted as OpenCode `model.request` hooks, not upstream API calls.
+
+| Stage / check | Expected | Observed | Result |
+|---|---|---|---|
+| 0 plugins and order | three plugins; `qual-pre` → shim → `qual-post` | All three listed. Guard probe (`haiku#high`, interactive): `qual-pre` saw it, then `qual-post` refused it with `guard_variant`. Pending probe (an admitted, undispatched derived session): `qual-pre` saw it and the shim refused it with `attach_required`, so `qual-post` never saw it; the probe was released with `not_dispatched`. 0 sent. | pass |
+| 0 health, `authority_required`, `prepare`, `status` | `not_ready` → `ok`; stamped | `not_ready`/`ledger_absent` (58 ms with the child's start-up), then `ok` (17 ms); `authority_required: true`; admitted `included_subscription`; `unstamped_open_holds: 0` | pass |
+| 1a derived ids, one request | accepted, 1 request | ids kept; 1 hook call, 1 sent, outcome succeeded | pass |
+| 1b duplicate send | no request, original returned | 0 hook calls, 0 sent, original id returned; one extra `idle` record | pass (as in run 1) |
+| 1c / 1d / 1e | read back; own ids not derived-shaped; insertion order | HTTP 200 with the same id; 26-character mixed-case ids; derived ids stayed at positions 1 and 3, listing not lexicographic | pass |
+| 2 dispatch, attach, managed request | token once; attached; allowed | `dispatched` (43-character token, never printed), repeat answered `already_dispatched` with no token; a wrong-token attach got HTTP 500, the token attached; 1 primary + 1 title sent, outcome succeeded | pass |
+| 2 webfetch, shell, command subagent | denied; stripped; blocked | `ask` → `deny`, listener 0 hits; probe variable present → absent; child on `sonnet` refused with `route_mismatch`, 0 sent, no `tool.execute.before` | pass |
+| 2 detach, unattached and wrong-token prompts | refused/detached; blocked at 0 | wrong token HTTP 500, then `detached`; both prompts `attach_required`, 0 sent | pass |
+| 2 closed attempt after `record complete` | `attempt_closed`, 0 sent | **`attach_required`**, 0 sent, no assistant message | **deviation** (blocked, wrong reason) |
+| 2 interactive session, routing child killed | passes untouched | child killed (1 process); 1 sent, outcome succeeded, shim time 0.15 ms; `health` afterwards `ok`, child `respawned` | pass |
+| 3 re-read with `children` + `lineage` (#146) | usage for the attempt | 2 message pages, 1 command child included, 8 lineage entries; `consistency_report`: 0 unaccounted, 0 lineage conflicts, 0 unknown records; `synthetic` counted as its own type | pass |
+| 3 title by subtraction | one real title, remainder known | title `known`: input 2, output 4, cache read 823, cache write 346; 1 title sent | pass |
+| 3 `usage_from_messages` | subscription usage | source `host_message_totals`; one `primary` and one `title` request, every `cost_usd_micros` null, `unknown: []` | pass |
+| 3 `track_events` over the live stream | no gap | 81 session events (76 durable, 5 volatile ignored), 0 normalize failures, 0 duplicates. No `gap`, `out_of_order`, `seq_conflict`, `reset` or `joined_late`; **`version_changed` on all 5 session aggregates** | pass for gaps; finding below |
+| 3 `reconcile_with_state` | zero deltas | all token deltas 0; 0 messages added or missing; nothing regressed | pass |
+| 3 `record complete {usage}` | window settlement, no dollars | `recorded`, outcome `complete`, settlement `window`, released `win:sub/5h: 12`, `observed_units: {}` (usage carries tokens, not window units), no charge | pass |
+| 3 `status` afterwards | clean | no holds, 0 open attempts, `unstamped_open_holds: 0`; nothing `cost_unknown`, uncertain, blocked or awaiting reconciliation | pass |
+| 3 `generate` requests | record if any | none | — |
+| 4 lost acknowledgment | counted; message absent; `uncertain` keeps exposure | Launcher killed after `dispatch` (exit −9). The hold was `dispatched` and counted, and the derived message and session returned HTTP 404. A session-only check answered `authority_required`. `record uncertain` → hold `uncertain`, still open; a check answered `attempt_uncertain`; `complete` answered `reconciliation_required`. | pass |
+| 4 operator recovery for an uncertain subscription hold | none exists | `reconcile_uncertain` → `hold_state_forbidden`. **No operator path exists for an uncertain subscription hold**: it stays open and counted. Here it stayed only in the temporary ledger, which was deleted. | recorded gap |
+
+**Order evidence.** For the guard probe, `qual-pre` recorded the request and then `qual-post` recorded `guard_variant`, after it in time. For the pending probe, only `qual-pre` recorded it. Together these show the hook order `qual-pre` → shim → `qual-post`. Two requests were off the route, and neither was sent: the `haiku#high` guard probe and the `sonnet` command child.
+
+**Latency.** Shim time is measured from the `qual-pre` hook to the `qual-post` hook:
+
+| Hook | n | p50 | p95 |
+|---|---|---|---|
+| `model.request` primary | 5 | 0.50 ms | 0.63 ms |
+| `model.request` title | 1 | 3.35 ms | 3.35 ms |
+| `permission.evaluate` | 1 | 0.22 ms | 0.22 ms |
+| `shell.create.before` | 6 | 0.13 ms | 0.14 ms |
+
+Routing operations (one-shot `routing.py`, mostly interpreter start-up), each n = 1:
+
+| Operation | Time |
+|---|---|
+| `prepare` | 81 ms |
+| `dispatch` | 76 ms |
+| `record complete` | 76 ms |
+| `status` | 75 ms |
+| `set authority_required` | 78 ms |
+
+RPC round trips: `health` 17 ms warm and 58 ms with the child's start-up; `attach` 1.5 ms (it makes two child checks).
+
+**Deviations and findings**
+
+- **Closed attempt answered `attach_required`.** The request was blocked (0 sent), but with `attach_required` instead of `attempt_closed`. The earlier blocked prompts after `detach` had put the session in the shim's pending cache, which lasts 5 minutes ([contract](../clients/opencode.md#managed-and-interactive-sessions)). Within that window the shim answers from the cache without asking the ledger again, so a finished attempt shows `attach_required` until the entry expires. Nothing is loosened: the session stays blocked, and `attach` re-verifies the token through the ledger.
+- **`version_changed` on every live aggregate.** `track_events` reported it on all 5 session aggregates, so every live stream would request a resync. The resync gave zero deltas, so this errs on the safe side. Whether OpenCode's `durable.version` is a version per aggregate or per event type is not established, and the raw events were not kept.
+- **Uncertain subscription holds cannot be recovered.** No operator op applies to them (`reconcile_uncertain` covers dollar holds only), so on a production ledger such a hold would keep its concurrency place indefinitely.
+- **Output key renamed.** In the harness output the `call_ledger` key was renamed by the redactor (`<call#1>: null`); the durable ledger's export is the record.
+
+**Not covered by this run:**
+
+- MCP and Code Mode calls; subagent spawns through the tool (only the command path ran).
+- Real `webfetch` execution (only permission evaluation).
+- A plugin that fails to load.
+- Server restart, and racing launchers against the host.
+- `generate`, compaction and retry requests.
+- API-funded holds.
+- The canary and pilot.
+
+## Run 1 (stopped in stage 3)
 
 - Harness: [`tests/qualification/opencode_live.py`](../tests/qualification/opencode_live.py) acted as the managed launcher. [`opencode_inspect.py`](../tests/qualification/opencode_inspect.py) re-read the stopped run without any model call. Pure parts are tested in `tests/test_qualification_harness.py`. The harness was hardened after an independent review; see [Harness changes after review](#harness-changes-after-review-no-live-run). This report's results come from the earlier version.
 - Evidence:
@@ -98,7 +173,7 @@ RPC round trips from the launcher:
 
 ## Blocker
 
-**A managed attempt that runs a `subagent: true` command cannot be accounted.** Fixed on `main` by #146, but not yet re-observed live. That change links children through `parentID`, adds the `lineage` input and normalizes `synthetic` messages, and the harness's stage 3 now passes `children` and `lineage`.
+**A managed attempt that runs a `subagent: true` command cannot be accounted.** Fixed on `main` by #146 and observed live in the [re-run](#re-run-stages-04-harness-3f87159). That change links children through `parentID`, adds the `lineage` input and normalizes `synthetic` messages, and the harness's stage 3 now passes `children` and `lineage`.
 
 The command creates the child session directly through the server, with `parentID` set to the managed session. No subagent tool call appears in the parent's messages. [`opencode_accounting`](../runtime/opencode_accounting.py) finds children only through subagent tool parts, so it behaves as follows:
 
@@ -154,7 +229,7 @@ The harness also gained a canary mode for the bounded pilot. Its pre-registratio
 
 ## What remains
 
-1. Re-run stages 0–4 with the hardened harness now that #146 is on `main`. That takes about 4 calls; 9 remain of the qualification authorization in the durable ledger.
+1. Done: the [re-run](#re-run-stages-04-harness-3f87159) used 4 calls; 5 of the 14 qualification calls remain.
 2. Run a canary on a real project (S3.7) with `workflow`-bound preparation (`unbound_open_holds: 0`) and `--project`.
 3. Install the plugin globally (decision 3 in the matrix), which this run deliberately did not do.
 4. Run the Codex, OpenAI and ChatGPT live checks (matrix "Live checks still open"); none was made here.

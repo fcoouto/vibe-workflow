@@ -11,8 +11,8 @@
  "totals": {
   "qualification": {
    "cap": 14,
-   "spent": 5,
-   "remaining": 9,
+   "spent": 9,
+   "remaining": 5,
    "open_reservations": 0
   },
   "pilot": {
@@ -67,6 +67,94 @@
    "calls": 1,
    "note": null,
    "kind": "seed"
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "guard probe (must be refused by qual-post)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "pending probe (must be refused by the shim)",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "P0.7 (a) prompt with derived ids",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "P0.7 (b) duplicate prompt",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "P0.7 (e) ordering",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "managed primary request and its one title",
+   "reserved": 2,
+   "sent": 2,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "subagent command on another model",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "prompt, session not attached",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "prompt after a wrong-token attach",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "prompt after record complete",
+   "reserved": 1,
+   "sent": 0,
+   "settled": true
+  },
+  {
+   "kind": "reservation",
+   "purpose": "qualification",
+   "label": "interactive session, routing child killed",
+   "reserved": 1,
+   "sent": 1,
+   "settled": true
   }
  ]
 }
