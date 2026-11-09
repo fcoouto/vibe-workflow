@@ -2,6 +2,7 @@
 route allowlist per mode (guard, CLI and harness), redaction of OAuth secrets, and the `descendants`, `s33d` and
 `chatgpt` stages against a stand-in OpenCode server with the real scripts/routing.py on temporary stores."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -778,6 +779,94 @@ class WatchedHomeTests(Temp):
             run.compare_user_dirs(before, report)
         self.assertIn("the user's ~/.codex credentials or config changed during the run", run.results["blockers"])
         self.assertEqual(run.results["user_dirs"]["codex"][".codex"]["unexpected"], [".codex/config.toml"])
+
+
+class SessionOutputChurnTests(Temp):
+    """OpenCode's own session tool-output stores under ~/.local/share/opencode are report-only, nothing else."""
+
+    def tree(self):
+        root = self.private(self.tmp / "data")
+        for name in ("auth.json", "opencode.db", "storage/session/a.json", "shell/abc/sh_1.out", "tool-output/t1.txt",
+                     "snapshot/x"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text("x")
+        return root
+
+    @staticmethod
+    def touch(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("y")
+        stamp = path.stat().st_mtime_ns + 5_000_000_000
+        os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
+
+    def classify(self, root, before, session_output=True):
+        return safety.classify_snapshots(before, safety.snapshot_tree(root), session_output=session_output)
+
+    def test_new_and_rewritten_tool_output_is_report_only(self):
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        for name in ("shell/abc/sh_2.out", "shell/abc/sh_1.out", "shell/new/sh_3.out", "tool-output/t2.txt",
+                     "tool-output/t1.txt"):
+            self.touch(root / name)
+        unexpected, churn, session = self.classify(root, before)
+        self.assertEqual((unexpected, churn), ([], []))
+        self.assertEqual(len(session), 6)  # five files and the new shell/new/ directory
+        unexpected, _, session = self.classify(root, before, session_output=False)  # other OpenCode dirs: unchanged rule
+        self.assertEqual((len(unexpected), session), (6, []))
+
+    def test_everything_else_stays_unexpected(self):
+        for name in ("auth.json", "storage/session/a.json", "snapshot/x", "plugins.json", "shell-evil/x", "tool-output.bak",
+                     "shell", "x/shell/y", "toolOutput/t"):
+            with self.subTest(name=name):
+                shutil.rmtree(self.tmp / "data", ignore_errors=True)
+                root = self.tree()
+                before = safety.snapshot_tree(root)
+                if (root / name).is_dir():
+                    continue
+                self.touch(root / name)
+                unexpected, churn, session = self.classify(root, before)
+                self.assertIn(name, unexpected)
+                self.assertEqual(session, [])
+
+    def test_deletions_and_symlinks_stay_unexpected(self):
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        (root / "shell" / "abc" / "sh_1.out").unlink()
+        os.symlink(root / "auth.json", root / "tool-output" / "link.txt")
+        unexpected, _, session = self.classify(root, before)
+        self.assertEqual(sorted(unexpected), ["shell/abc/sh_1.out", "tool-output/link.txt"])
+        self.assertEqual(session, [])
+        shutil.rmtree(self.tmp / "data")
+        root = self.tree()
+        before = safety.snapshot_tree(root)
+        shutil.rmtree(root / "shell")
+        elsewhere = self.private(self.tmp / "elsewhere")
+        (elsewhere / "sh_9.out").write_text("z")
+        os.symlink(elsewhere, root / "shell")  # the store replaced by a symlink: never followed, never tolerated
+        unexpected, _, session = self.classify(root, before)
+        self.assertIn("shell", unexpected)
+        self.assertIn("shell/", unexpected)
+        self.assertNotIn("shell/sh_9.out", unexpected + session)
+        self.assertEqual(session, [])
+
+    def test_names_with_dot_segments_are_never_report_only(self):
+        diff = dict(added=["shell/../auth.json", "tool-output/./x", "shell//x"], removed=[], changed=[])
+        self.assertEqual(safety.session_output(diff, {}, {}), [])
+
+    def test_the_run_counts_session_output_without_names(self):
+        home = self.private(self.tmp / "home")
+        data = home / ".local" / "share" / "opencode"
+        (data / "shell" / "abc").mkdir(parents=True)
+        run = live.Run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
+                       purpose="chatgpt", chatgpt_model="openai/gpt-test-mini#low")
+        with patch.dict("os.environ", HOME=str(home)):
+            before, report = run.snapshot_user_dirs(), run.report_only_home()
+            self.touch(data / "shell" / "abc" / "sh_1.out")
+            run.compare_user_dirs(before, report)
+        self.assertEqual(run.results["blockers"], [])
+        entry = run.results["user_dirs"]["opencode"][".local/share/opencode"]
+        self.assertEqual((entry["unexpected_count"], entry["session_output_count"]), (0, 1))
+        self.assertNotIn("sh_1.out", json.dumps(run.results))
 
 
 class ProbeStructureTests(StageHarness):
