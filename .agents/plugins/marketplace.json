@@ -1,7 +1,7 @@
 {
   "name": "vibe-workflow-local",
   "interface": {
-    "displayName": "Vibe Coding Workflow"
+    "displayName": "Vibe Workflow"
   },
   "plugins": [
     {

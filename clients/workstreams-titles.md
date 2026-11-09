@@ -309,9 +309,7 @@ the original family/member binding.
 
 ## Update and qualification boundary
 
-The task vocabulary is a pinned runtime change. Legacy lowercase records remain
-historical; old `ready` meant completion, while new `READY` means eligible to
-begin. Do not translate old titles into task state or rewrite old records/pins.
+The task vocabulary is a pinned runtime change. 
 Reconcile affected owners with their original runtime and use the existing
 [approved runtime update](runtime.md#change-a-pinned-runtime) procedure with a fresh
 state authority. Existing ownership and unresolved assignments remain binding.

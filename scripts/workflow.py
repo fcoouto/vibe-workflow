@@ -326,8 +326,8 @@ def control_main():
 def main():
     control = len(sys.argv) > 1 and sys.argv[1] in {"task", "doctor", "onboard", "evidence", "delivery", "delegation", "upgrade", "features"}
     if sys.version_info < (3, 11):
-        print(json.dumps({"ok": False, "error": "Vibe Coding Workflow requires Python 3.11+"} if control else
-                         {"systemMessage": "Vibe Coding Workflow requires Python 3.11+ on the hook PATH."}))
+        print(json.dumps({"ok": False, "error": "Vibe Workflow requires Python 3.11+"} if control else
+                         {"systemMessage": "Vibe Workflow requires Python 3.11+ on the hook PATH."}))
         return 1 if control else 0
     if control:
         return control_main()

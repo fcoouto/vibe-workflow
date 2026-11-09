@@ -8,7 +8,7 @@ When a merge is requested, act only on the reviewed candidate after its applicab
 
 | Element | Contract |
 | --- | --- |
-| Trigger | Before declaring a candidate merge-ready or merging, including a direct commit or push to a merge target; after candidate/base changes, changed check definitions or policy, new findings, or changed repository enforcement. |
+| Trigger | When opening or updating a PR; before declaring a candidate merge-ready or merging, including a direct commit or push to a merge target; after candidate/base changes, changed check definitions or policy, new findings, or changed repository enforcement. |
 | Decision | Determine the exact candidate and target, required evidence, authorization and whether repository controls actually enforce the decision. |
 | Required action | Assemble current check/review evidence, resolve blockers, verify applicable existing checks and any selected managed gate, and recheck the candidate immediately before an authorized merge. |
 | Evidence | Record candidate/base and any queue candidate, applicable policy/check versions, authoritative check/review results, finding dispositions, gate configuration and the actual merge result. |
@@ -20,6 +20,18 @@ When a merge is requested, act only on the reviewed candidate after its applicab
 2. Apply [Tests and Builds](05-tests-and-builds.md), [Code Review](06-code-review.md) and applicable [Security Review](04-security-review.md). Required checks must explicitly succeed; cancelled, skipped, timed-out or absent results cannot manufacture success. Required findings need resolution or a permitted, recorded disposition.
 3. Confirm evidence covers the current candidate, base, relevant check definitions and accepted policy. A rebase, conflict resolution, target update, queue composition or additional edit invalidates affected evidence. Reuse unaffected evidence only with a recorded justification and authoritative candidate binding.
 4. Have the final verifier assess the evidence. A worker's success message, local readiness flag or submitted report is not sufficient proof. Report readiness separately from whether a merge was requested or performed.
+
+## PR lifecycle
+
+When agents publish through pull requests, the agent that opened or took over a PR keeps its title prefix and draft state in step with its readiness:
+
+1. Open every PR as a draft, where the host supports drafts, titled `[BLOCKED] <title>`. `[BLOCKED]` is the normal state while work, checks or review continue.
+2. When [readiness](#establish-readiness) holds for the current candidate, change the prefix to `[READY]` and mark the PR ready for review.
+3. Before pushing to a `[READY]` PR, and as soon as a base change, failed check or new finding invalidates its evidence, return it to `[BLOCKED]` and draft.
+4. If the project's recorded merge permission covers the target, or the user explicitly asks for this merge, merge a `[READY]` PR as described in [Perform and confirm](#perform-and-confirm). Otherwise stop at `[READY]` and report that it awaits the user's merge.
+5. When other work replaces a PR, by the user's decision or within its own task's scope, change its prefix to `[SUPERSEDED]`, name what replaces it in a closing comment, and close it unmerged; keep its branch. A publication that selected managed delivery requires still needs the user's scope decision.
+
+The prefix belongs to the agent; never ask a person to change it. When agents may not merge, merging a `[READY]` PR is the person's step. Re-read the title before changing the prefix and keep the rest of it. A prefix reports readiness and is never evidence of it; one set by anyone else establishes nothing. A PR without a prefix gets the one its current evidence supports when an agent next updates it. Prefixes describe PRs, not threads; thread statuses stay in the [naming contract](../clients/workstreams-naming.md#status-and-accepted-progress). Selected managed delivery marks the same two phases with its own labels and comments ([delivery](../clients/delivery.md#private-manual-delivery)).
 
 ## Selected repository enforcement
 

@@ -5,7 +5,7 @@
   "skills": "./skills/",
   "hooks": "./hooks/codex.json",
   "interface": {
-    "displayName": "Vibe Coding Workflow",
+    "displayName": "Vibe Workflow",
     "shortDescription": "The Vibe Coding Toolkit, packaged as a plugin",
     "logo": "./assets/logo.png",
     "composerIcon": "./assets/logo.png"

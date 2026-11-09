@@ -271,7 +271,7 @@
       ]
     },
     "clients/startup.md": {
-      "sha256": "cc404c2cf3d7fe1d5fc0bcac9bd5bd46ba98e09eca5da4b99b6a6dfe99435a7a",
+      "sha256": "da93375e403d6c80ec1ba1a6fce8957f978c9cc587ad4e0ea2b29c53cf132da2",
       "ranges": [
         [
           1,
@@ -293,7 +293,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "7ee67244aba9b9b869d277e9cbebcb66036b5d63b4e8470d85e8c028c947e7f0",
+      "sha256": "5325747b23270dacaff8dc41bf068ee488171f528c9ba8094b8c7d554fb96669",
       "ranges": [
         [
           1,
@@ -301,7 +301,7 @@
         ],
         [
           151,
-          201
+          209
         ]
       ]
     },
@@ -363,7 +363,7 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "7f226cf0ad6eac5b63aedef46c463852407a178e5413b443b9f60969bbc76811",
+      "sha256": "06d55e5873540e67c7cf683a92ef9e566d39d9cc75b560894cce9b4730576db3",
       "ranges": [
         [
           1,
@@ -447,11 +447,11 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "0e40359b0252a0bb0510699bc356e2660143223b9f8775ea2645f10b77b457b4",
+      "sha256": "402328adc6874075a1173526a1f1c282a7ea96305f4f6126c949e0331479763c",
       "ranges": [
         [
           1,
-          37
+          49
         ]
       ]
     },
@@ -637,7 +637,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "ce998f4143aa6ae5afe8582086d238bd7dd7e4f8982cf825ee07669c18735016",
+      "sha256": "cddd509c204826edf8201c66e53e58b32650cdad70d127f80f794ffa6701c3d7",
       "ranges": [
         [
           1,
@@ -645,11 +645,11 @@
         ],
         [
           59,
-          182
+          181
         ],
         [
-          183,
-          192
+          182,
+          194
         ]
       ]
     },
