@@ -1,6 +1,6 @@
 # Smart Routing cutover criteria
 
-- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed.
+- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed.
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
 
@@ -72,7 +72,7 @@ The user approved this pilot on 9 November 2026. It is registered here before it
 1. The replay minimum is not met. Cutover replay needs 200 recorded historical assignments; the committed fixtures are about 50 synthetic arrivals.
 2. No production launcher is wired (plan Task C.3).
 
-The pilot therefore does **not** satisfy the canary above, and cutover stays blocked. It exercises the enforced path on the production routing state within the narrow bounds below.
+The pilot therefore does **not** satisfy the canary above, and cutover stays blocked. It exercises the enforced path on a dedicated canary routing state (see the deviations) within the narrow bounds below.
 
 | Bound | Value |
 |---|---|
@@ -88,16 +88,20 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
 **Mechanism.** The harness ([`opencode_live.py --canary`](../tests/qualification/opencode_live.py)) runs as follows:
 
 1. **Setup.**
-   - It uses the production default routing settings and ledger, with `--project` pinned to the allowlisted checkout and no test inputs.
+   - It uses a dedicated canary routing state: settings and ledger pinned to an owner-only directory outside every repository and run directory (default `~/.local/state/vibe-workflow-qualification/canary/`), never the production defaults. `--project` is pinned to the allowlisted checkout, and no test inputs are used.
+   - On first use the harness creates that state: `set authority_required=true` (one-way, on the canary ledger only), Smart Routing ON, API Usage off and no organization. Pilot admissions use their own account and pool ids (`anthropic:pilot-canary`, `pilot-sub`).
    - It starts an isolated OpenCode server (its own XDG directories).
    - It loads the routing plugin only through a project-local config that it creates and later removes.
-2. **Refusals before any write.** The harness refuses to start unless all of the following hold:
-   - `routing.health` is `ok`;
-   - the plugin-chain probes pass;
+2. **Refusals before any write to the project or any server start.** Only the canary state's own creation comes first. The harness refuses unless:
    - Smart Routing is ON, API Usage is off and no organization is enabled;
    - `authority_required` is on;
-   - `status` is clean: no uncertain, `cost_unknown` or overrun holds, no blocked organization, `unstamped_open_holds: 0` and no open attempt.
-3. **Each admission**, in order:
+   - `status` is clean: no uncertain, `cost_unknown` or overrun holds, no blocked organization, nothing awaiting reconciliation, `unstamped_open_holds: 0`, no open attempt, and concurrency caps not raised;
+   - the settings are readable and the ledger is ready, which is exactly when `routing.health` answers `ok`;
+   - enough pilot budget remains.
+
+   An unclean canary state is refused with reset advice: the operator deletes the canary directory after confirming no harness run is alive.
+3. **Before any admission, once the server runs.** The `routing.health` RPC answers `ok`, and the plugin-chain probes pass; the guard probe must be refused by the guard with `guard_variant`. Otherwise the harness refuses, and removes the project config and the server.
+4. **Each admission**, in order:
    1. `prepare`;
    2. `health`;
    3. `dispatch`;
@@ -110,13 +114,26 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
    10. `detach`;
    11. check `status`.
 
+   The project working tree is checked at the start, after every 5 admissions and at the end, using HEAD, `git status --porcelain=v1 -z` and content hashes of every changed or untracked file. A change to a path that was not already dirty at the start aborts the pilot. Changes to already-dirty paths (other sessions edit this repository) and HEAD moves are reported. Any exception or signal during an admission also aborts it. The recovery depends on how far the admission got:
+   - before dispatch: `not_dispatched`;
+   - dispatched but not launched: left as is and reported, because no proof of non-launch exists;
+   - a launch may have happened: `uncertain`.
+
+   The kill switch then runs.
+
 **Deviations, recorded in advance:**
 
 - **Config location.** The project-local config lives in an excluded subdirectory (`.vibe-qual-canary/`), not at the project root. The user's running desktop OpenCode may have this project open, and a root config would load the recorder guard and the shim into it. Config discovery walks ancestors only, so a subdirectory config reaches only the isolated server.
 - **Window spend cap not measurable.** The canary's subscription bound ("10% of each window") cannot be measured on this host, because window telemetry is not observable here. The durable call cap is the proxy.
 - **Synthetic observation.** `prepare` receives one fixed, synthetic window observation (no collector exists).
 - **Admission latency is single-caller.** The pilot is sequential, so the "admission transaction with four concurrent callers" budget is measured with one caller only; it is reported as such.
-- **What the cap counts.** The call cap counts OpenCode `model.request` hooks, not upstream API calls.
+- **What the cap counts.** The call cap counts OpenCode `model.request` hooks, not upstream API calls. The two plugin-chain probes each reserve one call of exposure, which counts against the pilot cap until it is settled at the count actually sent (0 when they are refused, as designed).
+- **Dedicated canary ledger instead of the production ledger.** Reason: subscription holds have no recovery path (`reconcile_uncertain` covers dollar holds only), so an aborted pilot admission would permanently occupy production concurrency places. An aborted pilot may leave a stuck uncertain hold in the canary ledger. That is accepted: the canary directory is reset by deleting it, and the production routing state is untouched.
+- **Residual risks (not proven).**
+  - **Tool-less sessions, read from code only.** The `claude-agent` provider in OpenCode 2.2.6 starts Claude Code with no built-in tools (`tools: []`), no settings sources, hooks disabled, a strict MCP config and `permissionMode: "dontAsk"`, allowing only OpenCode's own tools. This was read from the provider code in the installed binary, not observed at run time. OpenCode's own tools are denied by the session's permission rules (deny all), but they may still be offered to the model.
+  - **The working-tree check** sees only what git reports. Ignored files, files outside the checkout, and a change that is reverted between two checks are not seen.
+  - **Concurrent editing.** A concurrent session that creates a new file aborts the pilot (conservative). A change by the model to an already-dirty path cannot be told apart from a concurrent edit.
+  - **Writes under HOME.** The claude CLI may still write its session state under HOME (`~/.claude/projects`, `~/.claude.json`), which is reported only.
 
 **Pass criteria for the pilot:**
 

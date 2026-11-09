@@ -111,6 +111,8 @@ In total 9 of the 14 authorized calls were used. The [report](smart-routing-qual
 
 RPC refusals reach the caller as HTTP 500 `rpc.internal` without the shim's reason code.
 
+Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
+
 ## Gate status (P0)
 
 | Gate | Status | Basis |

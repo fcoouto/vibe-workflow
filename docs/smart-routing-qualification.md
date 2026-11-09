@@ -75,6 +75,36 @@ RPC round trips: `health` 17 ms warm and 58 ms with the child's start-up; `attac
 - API-funded holds.
 - The canary and pilot.
 
+## Accepted deviations and follow-ups (recorded after the re-run)
+
+- **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.
+- **`version_changed` on every live aggregate (accepted, open P0.8 item).** The resync gives zero deltas. Whether `durable.version` is a version per aggregate or per event type is not established.
+- **Uncertain subscription holds (follow-up).** They have no operator recovery path. The plan's follow-up task "subscription hold reconcile" is required before cutover and before any production use of enforced routing. Until then the pilot runs on a dedicated canary ledger.
+- **Probe exposure.** The probes' reserved calls count against the cap of the purpose they run under (`pilot` in canary mode).
+
+## Settling a dead run's reservation
+
+Every send is written ahead to the durable call ledger, and an unsettled reservation counts in full. If a harness run dies (killed, crashed or interrupted before it settles), its reservation stays open, which errs on the safe side. To close it:
+
+1. Make sure no harness run is alive: `ps -axo pid,command | grep opencode_live.py` shows nothing but your `grep`. Also make sure the run's isolated server is gone; the harness removes it on any exit it can handle.
+2. Find the reservation's sequence number: the `seq` of the `reserve` record with no `settle` record whose `ref` names it, in `~/.local/state/vibe-workflow-qualification/calls.jsonl`. Read the file; never edit it.
+3. Run `python3 -B tests/qualification/opencode_live.py --call-ledger ~/.local/state/vibe-workflow-qualification/calls.jsonl --settle-dead <seq>`.
+
+   It refuses an unknown or already settled reservation, a reservation whose recorded pid is still alive, and any state in which another harness run is alive. It records the settlement at the full reserved count, so it can never under-count; a dead run is assumed to have sent everything it reserved.
+4. Regenerate the committed view with `--export-call-ledger tests/fixtures/smart-routing/probes/qual-call-ledger.json`.
+
+## Pilot harness fixes after the delta review (no live run)
+
+| Item | Change |
+|---|---|
+| D1, blocking: stuck holds in production | The pilot runs on a dedicated canary routing state. Settings and ledger are pinned to an owner-only directory outside every repository and run directory (default `~/.local/state/vibe-workflow-qualification/canary/`). Production default paths, worktrees, OpenCode's and the production state's directories and the isolated dir are refused. The harness creates the state on first use (one-way `authority_required` on the canary ledger only, Smart Routing ON, API Usage off, no organization) and refuses an unclean one with reset advice. Pilot admissions use their own account and pool ids. |
+| D2: catch-all abort | `PilotDriver.run` catches every exception and signal. Recovery depends on how far the admission got (see the pre-registration). A reservation is released at 0 only when nothing could have been sent. The kill switch's own failure is recorded, not raised, and further signals are ignored during recovery. |
+| D3: preconditions first | Every refusal decidable without a server runs before the project config, the `.git/info/exclude` edit, the server or the probes. Tests check that a refusal leaves the repository and the exclude file byte-identical and starts no server, and that no admission begins unless the probes pass. |
+| D4: guard probe reason | `verify_plugin_chain` requires the guard probe's session to fail with `guard_variant`. A provider-side rejection no longer counts. |
+| D5: tool-less sessions and working tree | Static evidence that the `claude-agent` provider in the 2.2.6 binary passes `tools: []`, `settingSources: []`, `disableAllHooks`, `strictMcpConfig`, `permissionMode: "dontAsk"` and only OpenCode's own MCP tools. There is no option to add; the harness's sessions deny every OpenCode tool. Working-tree snapshots at the start, after every 5 admissions and at the end: new dirty paths abort the pilot; already-dirty paths and HEAD moves are reported. Residual risks are in the pre-registration. |
+| D6: dead runs | `--settle-dead SEQ`; reservations now record the reserving pid. Malformed ledger records are refused as damaged instead of raising `KeyError`. |
+| D8: output defects and tests | The redactor no longer takes field names such as `call_ledger` for ids: an id needs a digit or 20 characters. Added tests for run sequencing, `CanaryEnv`, and the canary state and kill switch against the real `routing.py` on temporary stores. |
+
 ## Run 1 (stopped in stage 3)
 
 - Harness: [`tests/qualification/opencode_live.py`](../tests/qualification/opencode_live.py) acted as the managed launcher. [`opencode_inspect.py`](../tests/qualification/opencode_inspect.py) re-read the stopped run without any model call. Pure parts are tested in `tests/test_qualification_harness.py`. The harness was hardened after an independent review; see [Harness changes after review](#harness-changes-after-review-no-live-run). This report's results come from the earlier version.

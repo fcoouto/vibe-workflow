@@ -519,6 +519,12 @@ The contract (dispatch, derived ids, the shim handshake, `authority_required`, `
 - **Status.** `ledger.reconcile{reconcile_uncertain{count, ids, more}, resolve_block{over_bound{organizations[{organization, count, ids, more}], more}, legacy{organizations[{organization, marker, unresolved{count, ids, more}}], more}}}` (16 ids and 16 organizations per list) and a fixed `reconcile_hint` text, null when nothing is pending.
 - **Reflected debits (deferred).** Spec §8 removes a settled charge only with evidence that the observed balance reflects it. No observation shape carries that evidence: `Ledger.observe`, Usage Routing's `observe` (`balance`, `observed_at`, `source`, `pool`, `expiry`) and `usage_admission.Grant` have no usage cutoff, pool-window epoch or source watermark, and the ledger only ever lowers a balance. So no settled charge is retired, and a newer `observed_at` retires nothing (tested). To enable it, the provider adapter must supply, with each balance observation from a qualified source, a provider-declared `reflects_through` (the time through which all billed usage is in the balance) bound to the organization and the pool or window epoch. The ledger would also need a settlement time per charge (today charges are aggregated per total, cycle and task) and must recompute the capacity worst case for it; retirement would then run once per charge with an audit event and never touch open, uncertain or `cost_unknown` exposure.
 
+### Task S3.6c: Subscription hold reconcile (follow-up, required before C and before any production use)
+
+An uncertain subscription (window) hold has no operator recovery path today: `reconcile_uncertain` covers dollar holds only (`hold_state_forbidden`, observed in the live re-qualification). Such a hold therefore keeps its concurrency place for good.
+
+- [ ] Define and implement an operator path that settles an uncertain subscription hold, releasing its claims with the observation recorded and never charging dollars. It must be idempotent by event id and one-shot only, like the other operator ops. It is required before cutover (Task C) and before any production use of enforced routing; until then the pilot runs on a dedicated canary ledger.
+
 ### Task S3.7: Canary
 
 - [ ] Enable enforced routing for one explicitly chosen project on OpenCode within the S2.7 canary bounds; record admissions, blocks, latency and settlement against the S2.7 criteria, and abort on any bound or abort condition. Other projects and clients continue on current selectors.
