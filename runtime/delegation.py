@@ -3279,6 +3279,33 @@ def routing_job(scope, locator):
     return None if target is None else _routing_semantic(target[0], target[2], target[4])
 
 
+def routing_acceptances(scope, locator):
+    """Sorted ids of the root task's independently accepted jobs (S3.6a settlement), read-only.
+
+    A job counts only when delegation's own acceptance rule holds for it: `validate_dependencies` (strict, not
+    cooperative) accepts it as a prerequisite, so its latest assignment is settled, completed and reconciled with
+    retained evidence, and no prerequisite of it was reopened. A worker's or reviewer's report never counts."""
+    identity = (state._scope_id(scope), locator['client'], locator['session_id'], locator['task_id'])
+    with state._database(scope) as db:
+        _require(db is not None, 'Runtime task state is missing')
+        if db.execute('select 1 from tasks where scope_id=? and client=? and session_id=? and task_id=?',
+                      identity).fetchone() is None:
+            return []
+        task = state._task(db, *identity)
+        if 'delegation' not in task:
+            return []
+        plan = _task_plan(scope, task)
+        records = _ledger(scope, db, task=task)
+        accepted = []
+        for job in plan['jobs']:
+            try:
+                validate_dependencies(scope, task, plan, dict(dependencies=[job['id']]), records)
+            except state.StateError:
+                continue
+            accepted.append(job['id'])
+    return sorted(accepted)
+
+
 def routing_view(scope, locator, watch):
     """Read-only Smart Routing view of one planned job: readiness, ownership and resource authority (S3.5).
 

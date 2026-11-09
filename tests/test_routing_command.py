@@ -401,7 +401,9 @@ class RecordTests(Base):
         self.assertEqual(self.event('dispatched'), dict(v=1, state='recorded', event_id='e1', duplicate=True))
         self.assertEqual(self.event('complete', 'e2'), dict(v=1, state='recorded', event_id='e2', duplicate=False))
         self.assertEqual(self.snapshot()['holds']['a1']['closed'], True)
-        self.assertEqual(self.event('complete', 'e2'), dict(v=1, state='blocked', reason='attempt_closed'))
+        # S3.6 remembers event ids: the same event returns its original outcome; a new one is refused.
+        self.assertEqual(self.event('complete', 'e2'), dict(v=1, state='recorded', event_id='e2', duplicate=True))
+        self.assertEqual(self.event('complete', 'e3'), dict(v=1, state='blocked', reason='attempt_closed'))
 
     def test_unsupported_or_bad_events_are_blocked(self):
         self.assertEqual(self.event('usage'), dict(v=1, state='blocked', reason='record_unsupported'))
@@ -643,7 +645,7 @@ class FundingCheckTests(Base):
             ledger.observe('personal', 1 * M, POLICY['stop_at'] + 5)
         self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'funding_unverified')  # past the cycle boundary
         with self.open_ledger() as ledger, ledger.transaction() as data:
-            data['organizations']['personal']['blocked'] = True
+            data['organizations']['personal']['legacy_block'] = True  # derived block (S3.6a)
         self.assertEqual(at(POLICY['stop_at'] + 10)['reason'], 'organization_unavailable')
 
 

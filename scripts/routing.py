@@ -41,8 +41,12 @@ WRITE_WAIT = 5
 FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints', 'workflow'}),
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
               dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
-              set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}))
-EVENT_FIELDS = {'event_id', 'attempt_id', 'kind'}
+              set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
+              settle=({'root_task_id'}, {'workflow'}),
+              resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, {'receipts', 'source'}),
+              resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()))
+# Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
+EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
 ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
@@ -143,6 +147,7 @@ class Service:
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
         self._open = None
+        self._expired_at = None
 
     def close(self):
         if callable(getattr(self.workflow, 'close', None)):
@@ -230,6 +235,18 @@ class Service:
         self._open.busy_timeout(wait)
         return self._open
 
+    def _expire(self, ledger):
+        """Opportunistic retention cleanup (spec 11) before a write. Reads filter expired evidence themselves, so a
+        busy or failed cleanup never blocks the request and is retried later."""
+        moment = self.clock()
+        if self._expired_at is not None and 0 <= moment - self._expired_at < EXPIRE_INTERVAL:
+            return
+        self._expired_at = moment
+        try:
+            ledger.expire_evidence(moment)
+        except (BudgetError, sqlite3.Error):
+            pass
+
     @staticmethod
     def _identity(path, wait):
         """Read the ledger identity; a concurrent `initialize` may not have written its table yet. Busy is raised."""
@@ -303,9 +320,10 @@ class Service:
         if bound is not None and bound[0] != 'bound':
             return dict(state=bound[0], reason=bound[1], reasons=[bound[1]]) if bound[0] == 'pending' \
                 else dict(state='blocked', reason=bound[1])
+        ledger = self._ledger(True, write=True)
+        self._expire(ledger)
         result = routing.admit(dict(assignment, role=role, complexity_band=profile['complexity_band']), ranking,
-                               settings, observations, ledger=self._ledger(True, write=True),
-                               workflow=None if bound is None else bound[1])
+                               settings, observations, ledger=ledger, workflow=None if bound is None else bound[1])
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'])
@@ -370,17 +388,63 @@ class Service:
         require(_text(attempt), 'invalid_request')
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
+        self._expire(ledger)
         # Settings and clock are read inside the write transaction, which `set` also holds while it writes.
         return routing.dispatch(ledger, attempt, facts, self._settings, lambda: self._now(body), workflow=self.workflow)
 
     def _record(self, body):
         event = body['event']
-        require(type(event) is dict and set(event) == EVENT_FIELDS and all(_text(event[key]) for key in event),
-                'invalid_request')
+        reason = routing.event_error(event)
+        require(reason is None, reason)
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        result = routing.record_event(ledger, event['attempt_id'], event['kind'])
+        self._expire(ledger)
+        result = routing.record_event(ledger, event, self.clock())
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
+    def _resolve_cost_unknown(self, body):
+        """Operator recovery for a `cost_unknown` dollar hold (S3.6a): the full reservation unless receipt-backed."""
+        return self._operator(routing.resolve_event(body))
+
+    def _resolve_overrun(self, body):
+        """Operator decision on an unconfirmed overrun excess (S3.6a): confirm charges it, dismiss drops it."""
+        return self._operator(routing.overrun_event(body))
+
+    def _operator(self, event):
+        require(event is not None, 'invalid_request')
+        ledger = self._ledger(False, write=True)
+        require(ledger is not None, 'ledger_absent')
+        result = routing.record_event(ledger, event, self.clock())
+        return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
+    def _settle(self, body):
+        """Read-only root-task settlement (S3.6a). With `workflow` it covers the attempts bound to that full root
+        locator and acceptance comes only from the trusted workflow reader; without it, the attempts with no
+        workflow job whose task id is `root_task_id`, with acceptance `unavailable` and no ratio."""
+        root, locator = body['root_task_id'], body.get('workflow')
+        require(_text(root) and len(root) <= routing.MAX_ROOT_ID, 'invalid_request')
+        # A pinned service settles only roots it can check against its project, i.e. with a workflow locator.
+        require(locator is not None or self.project is None, 'project_required')
+        accepted = None
+        if locator is not None:
+            require(routing_gates.valid_root_locator(locator) and locator['task_id'] == root, 'invalid_request')
+            if self.project is not None:
+                cwd = Path(locator['cwd']).resolve()
+                require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
+        ledger = self._ledger(False)
+        require(ledger is not None, 'ledger_absent')
+        key = usage_budget.root_key(locator) if locator is not None else usage_budget.root_key(task=root)
+        report = ledger.root_report(key, self.clock())
+        if locator is not None:
+            try:
+                found = self.workflow.acceptances(dict(locator))
+            except routing_gates.ProjectMismatch:
+                raise Blocked('project_mismatch') from None
+            except Exception:  # noqa: BLE001 - unreadable canonical state: acceptance stays unknown
+                found = None
+            if type(found) is list and all(_text(item) for item in found):
+                accepted = len(set(found))
+        return routing.settle_root(report, root, accepted)
 
     def _status(self, body):
         try:
