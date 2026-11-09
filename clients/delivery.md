@@ -34,7 +34,7 @@ These controls call no provider, scan no checkout and perform no cleanup. Pendin
 
 Use `operate(scope, 'plan', request)` with the existing task identity/revision, complete revised `plan`, exact `previous_plan` artifact reference and accepted `change_decision_ref`. The revised plan's `decision_ref` must match that decision. Preserve existing publication identity, candidate, PR, companions and required obligations. The bounded revision path permits added obligations, not silent removal or replacement. It preserves the effective task policy unless an explicit accepted override changes it.
 
-An expanded scope with existing milestones must include revised accepted `milestones` in the same request. Store them before computing weighted progress; PR count never determines the meter. A previously `DONE` task reopens to `REVIEW`; preserve explicit `PAUSED`, `BLOCKED` and `WAITING` conditions. Historical plans remain managed dependencies.
+An expanded scope with existing milestones must include revised accepted `milestones` in the same request. Store them before computing weighted progress; PR count never determines the meter. A previously `DONE` task reopens to `REVIEW`; preserve explicit `PAUSED` and `WAITING` conditions. Historical plans remain managed dependencies.
 
 ## Observe an existing PR
 

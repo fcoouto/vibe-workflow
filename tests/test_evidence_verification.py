@@ -345,11 +345,11 @@ class EvidenceVerificationTests(EvidenceFixture, unittest.TestCase):
         original = self.api.capture_candidate
         def capture(scope, plan):
             candidate = original(scope, plan)
-            state.update_task(scope, self.request(state='BLOCKED', reason='Intervening decision', reference='user:hold'))
+            state.update_task(scope, self.request(state='WAITING', reason='Intervening decision', reference='user:hold'))
             return candidate
         with patch.object(self.api, 'capture_candidate', side_effect=capture), self.assertRaises(state.StateError):
             self.api.verify_completion(self.scope, request)
-        self.assertEqual(state.task_status(self.scope, 'codex', 'parent')['task']['state'], 'BLOCKED')
+        self.assertEqual(state.task_status(self.scope, 'codex', 'parent')['task']['state'], 'WAITING')
 
     def test_confirmed_security_finding_survives_edits_and_needs_scoped_fresh_review(self):
         self.plan()

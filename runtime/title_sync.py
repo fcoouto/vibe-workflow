@@ -3,7 +3,7 @@ from copy import deepcopy
 import re
 
 
-from runtime.task_statuses import ATTENTION_STATES, STATES as STATUSES
+from runtime.task_statuses import ATTENTION_STATES, RETIRED_STATES, STATES as STATUSES
 from runtime.evidence import _digest
 MAX_TITLE_BODY = 4096
 MAX_STATUS_LENGTH = max(map(len, ATTENTION_STATES))
@@ -36,10 +36,10 @@ def _parsed(title):
     if match is None:return None
     fields=match.groupdict()
     status = fields['status']
-    if len(fields['meter'].removeprefix(METER_PREFIX)) != 5 or (status is not None and status not in STATUSES):
+    if len(fields['meter'].removeprefix(METER_PREFIX)) != 5 or (status is not None and status not in STATUSES | RETIRED_STATES):
         return None
     try:
-        format_title(fields['family'], fields['member'], fields['topic'], status or 'WORKING', fields['meter'].count('▰'))
+        format_title(fields['family'], fields['member'], fields['topic'], status if status in STATUSES else 'WORKING', fields['meter'].count('▰'))
     except ValueError:
         return None
     fields['layout'] = 'status-after-meter' if match.re is TITLE else 'status-last'

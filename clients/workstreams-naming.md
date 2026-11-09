@@ -58,7 +58,6 @@ include the leading character.
 ￻▰▰▱▱▱ [W1] P · Thread naming
 ￻▰▰▰▰▰ [W1] C · Naming rules
 ￻▰▰▰▰▱ REVIEW · [W1] C · Status tags
-￻▰▰▰▱▱ BLOCKED · [W1] C · Search support
 ￻▰▰▰▱▱ WAITING · [W1] C · Client check
 ￻▰▱▱▱▱ [W2] P · Solo fix
 ```
@@ -129,18 +128,20 @@ Use these canonical task states in the existing task plan:
 | Status | Use when |
 | --- | --- |
 | `TRIAGE` | A thread has just been created and scope needs assessment. |
-| `READY` | Scope and prerequisites are clear and work can start. |
 | `WORKING` | Work is underway. This describes active task effort. |
 | `REVIEW` | A result awaits review or review is underway. |
-| `WAITING` | Work awaits an expected reply, dependency or event. |
-| `BLOCKED` | Work cannot continue without intervention. |
+| `WAITING` | Work awaits a reply, decision, dependency, event or the user's intervention. |
 | `PAUSED` | Work was deliberately put aside. |
 | `DONE` | The thread's agreed scope is complete and verified, and the PR merge gate below holds. |
 | `CANCELLED` | Work was closed without completing its agreed scope. |
 
-Show `REVIEW` when the user is asked to review a result, `WAITING` when the
-user owes an action such as a reply, approval or manual merge, and `BLOCKED`
-when the user must intervene to unblock work. Hide the label for internal
+Once triage settles the scope, work moves straight to `WORKING`, or to `REVIEW`
+when the work is a review; a thread that cannot start yet is `WAITING` for what
+it needs. Record in the task plan what a waiting thread waits for.
+
+Show `REVIEW` when the user is asked to review a result and `WAITING` when the
+user owes an action such as a reply, approval, decision, manual merge or an
+intervention to unblock work. Hide the label for internal
 review, agent-owned next steps, background dependencies and all other states.
 Decide from the actual next action and its owner. Clear the label when the user
 has acted or the next action moves to someone else, even if the task state stays
@@ -188,7 +189,7 @@ an empty meter in that case. At adoption, use the actual phase. Newly started
 implementation uses `WORKING`, not an automatic `TRIAGE` reset.
 Reserve `▰▰▰▰▰` for verified `DONE`.
 Show no numeric percentage or `% done`. Measured progress comes from accepted
-milestones. `BLOCKED`, `WAITING` and `PAUSED` retain
+milestones. `WAITING` and `PAUSED` retain
 accepted progress; `CANCELLED` retains partial progress and never implies completion.
 
 Update display titles on meaningful milestone, phase, blocker or next-action

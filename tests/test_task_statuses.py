@@ -10,18 +10,71 @@ class CanonicalTaskStatusTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
 
-    def test_new_task_triage_then_ready_then_working(self):
+    def test_seven_states_and_the_two_retired_words(self):
+        from runtime import task_statuses
+        self.assertEqual(task_statuses.STATES,
+            {'TRIAGE','WORKING','REVIEW','WAITING','PAUSED','DONE','CANCELLED'})
+        self.assertEqual(task_statuses.ATTENTION_STATES, {'REVIEW','WAITING'})
+        self.assertEqual(task_statuses.RETIRED_STATES, {'READY','BLOCKED'})
+        self.assertFalse(task_statuses.STATES & task_statuses.RETIRED_STATES)
+
+    def test_new_task_goes_from_triage_straight_to_work(self):
         self.assertEqual(self.fixture.start()['task']['state'],'TRIAGE')
-        for status in ('READY','WORKING','REVIEW','WORKING'):
+        for status in ('WORKING','REVIEW','WORKING'):
             self.assertEqual(self.fixture.update(state=status)['task']['state'],status)
+
+    def test_retired_ready_and_blocked_are_refused_without_change(self):
+        self.fixture.start()
+        before = self.fixture.status()['task']
+        for status in ('READY','BLOCKED'):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, 'retired'):
+                self.fixture.update(state=status)
+        self.assertEqual(self.fixture.status()['task'], before)
+
+    def test_retired_state_reads_only_as_history_of_an_older_runtime(self):
+        import json
+        import sqlite3
+        from copy import deepcopy
+        from runtime import state
+        self.fixture.start()
+        scope = self.fixture.scope
+        path = scope.runtime.state_dir / 'runtime.sqlite3'
+        with closing(sqlite3.connect(path)) as db:
+            original = json.loads(db.execute('SELECT data FROM tasks').fetchone()[0])
+        for retired, extra in (('READY', {}), ('BLOCKED', {}), ('BLOCKED', dict(user_attention=True)),
+                               ('BLOCKED', dict(user_attention=False))):
+            with self.subTest(state=retired, **extra):
+                raw = json.dumps(original | dict(state=retired) | extra)
+                with closing(sqlite3.connect(path)) as db, db:
+                    db.execute('UPDATE tasks SET data=?', (raw,))
+                with self.assertRaisesRegex(ValueError, 'original pinned'):
+                    self.fixture.status()
+                # A record an older runtime wrote: its own identity and pins name that runtime.
+                identity = deepcopy(original['accepted_identity'])
+                identity['configuration']['runtime_digest'] = 'f' * 64
+                pins = original['pins'] | dict(runtime_digest='f' * 64, accepted_scope_digest=state._digest(identity))
+                raw = json.dumps(original | dict(state=retired, pins=pins, accepted_identity=identity) | extra)
+                with closing(sqlite3.connect(path)) as db, db:
+                    db.execute('UPDATE tasks SET data=?', (raw,))
+                with state._database(scope) as db:
+                    # Inventories read retained records with the ordinary reader too.
+                    for historical in (True, False):
+                        task = state._task(db, state._scope_id(scope), 'codex', 'session', 'task', historical=historical)
+                        self.assertEqual((task['state'], task.get('user_attention')), (retired, extra.get('user_attention')))
+                    with self.assertRaises(ValueError):
+                        state._save(db, state._scope_id(scope), task)
+                with self.assertRaisesRegex(ValueError, 'original pinned'):
+                    self.fixture.status()
+                with closing(sqlite3.connect(path)) as db:
+                    self.assertEqual(db.execute('SELECT data FROM tasks').fetchall(), [(raw,)])
 
     def test_done_cannot_be_declared_by_task_update(self):
         self.fixture.start()
         with self.assertRaises(ValueError):self.fixture.update(state='DONE')
 
-    def test_waiting_blocked_and_paused_require_explicit_resolution(self):
+    def test_waiting_and_paused_require_explicit_resolution(self):
         self.fixture.start()
-        for status in ('WAITING','BLOCKED','PAUSED'):
+        for status in ('WAITING','PAUSED'):
             self.fixture.update(state=status)
             with self.assertRaises(ValueError): self.fixture.update(state='WORKING')
             self.assertEqual(self.fixture.update(state='WORKING',resolution_ref='user:resume')['task']['state'],'WORKING')
@@ -110,7 +163,7 @@ class CanonicalTaskStatusTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         fixture.plan()
-        for status in ('WAITING', 'BLOCKED', 'PAUSED'):
+        for status in ('WAITING', 'PAUSED'):
             state.update_task(fixture.scope, fixture.request(state=status, reason='Waiting for resolution', reference='user:hold'))
             files = {str(p):p.read_bytes() for p in fixture.scope.runtime.state_dir.rglob('*') if p.is_file()}
             with self.assertRaisesRegex(ValueError, 'Resolve the task status'):

@@ -414,7 +414,7 @@ def qualification_context(scope, package):
         f'Read {json.dumps(str(package/"skills/onboard-my-project/references/apply-and-recovery.md"))} and accepted configuration '
         f'{json.dumps(str(scope.authority_path))}. '
         'Native policy rejection evidence does not establish Toolkit startup or task guards. '
-        'Ordinary managed work, successful onboarding, READY, publication, merge and primary activation remain unavailable. '
+        'Ordinary managed work, successful onboarding, ordinary readiness, publication, merge and primary activation remain unavailable. '
         'This context creates no task or task authority; retain pending evidence and uncertain writers.')
 
 

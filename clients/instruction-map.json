@@ -64,7 +64,7 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "c44b9ad19d094ef46ce819191331af1eff40738d4d3282f40dd1a99e8b280020",
+      "sha256": "8d0cba01afed241802d1850d0b87d9f2908fe9361f9b873f5739026a25b0c4e3",
       "ranges": [
         [
           1,
@@ -86,7 +86,7 @@
       ]
     },
     "clients/evidence-completion.md": {
-      "sha256": "dc845baa7940cc4ec37e953362f095829e01162e3fa982f2b1fd28577bde9914",
+      "sha256": "5b3f847c4f40779229776bd18f3823e49187b36202db465f5a5850dbe3077199",
       "ranges": [
         [
           1,
@@ -236,7 +236,7 @@
       ]
     },
     "clients/repository-gate.md": {
-      "sha256": "3fdf60d76bb2e76b740b6228bf4a2e09c7631fb7d7b48942de4356f7e6757c33",
+      "sha256": "8b40ddf2778afbe5cd5581dc70dc6d046d343a4ad85216b9ece1cac798e0aefb",
       "ranges": [
         [
           1,
@@ -254,7 +254,7 @@
       ]
     },
     "clients/runtime.md": {
-      "sha256": "818ceecfb8b62deef9cdcd8ec21ef1743fd42a28e682df2d8d43bf1e764a4570",
+      "sha256": "6b64a48730ce7ad8fc71b18afd16a7cf17a02413b8e6f249b0f5ff61076e8e8a",
       "ranges": [
         [
           1,
@@ -262,10 +262,10 @@
         ],
         [
           44,
-          93
+          90
         ],
         [
-          94,
+          91,
           98
         ]
       ]
@@ -293,7 +293,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "5325747b23270dacaff8dc41bf068ee488171f528c9ba8094b8c7d554fb96669",
+      "sha256": "9097571a3947a417c78e2e8714bffad8fdd431047088b526572043c641f5be5f",
       "ranges": [
         [
           1,
@@ -301,7 +301,7 @@
         ],
         [
           151,
-          209
+          210
         ]
       ]
     },
@@ -337,7 +337,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "96ef4583858b0833925d09a3b8a0759268e77ef2d3d6caa3aa51820819b15d8c",
+      "sha256": "0a56982ed16d8415903482783fa58a0242200e50bc12360aaa5c08d712b7213e",
       "ranges": [
         [
           1,
@@ -349,7 +349,7 @@
         ],
         [
           281,
-          326
+          330
         ]
       ]
     },
@@ -654,7 +654,7 @@
       ]
     },
     "skills/onboard-my-project/references/qualification.md": {
-      "sha256": "dd6c84bb8401f708bc4eb6e59879e5b27b5a00802e5b42e59b98ee19c0019320",
+      "sha256": "0521e3cfe4f2170fd4ca78462d5adf61543a760f1553d4a0f41eb0d4f7760eec",
       "ranges": [
         [
           1,

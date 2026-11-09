@@ -126,6 +126,20 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIn('historical_support_unavailable', result['gaps'])
         self.assertIsNone(result['usage'])
 
+    def test_retired_status_is_accepted_only_in_a_historical_report(self):
+        for retired in ('READY', 'BLOCKED'):
+            with self.subTest(state=retired):
+                report = self.report(start=retired == 'READY')
+                report['task']['state'] = retired
+                with self.assertRaises(ValueError):
+                    self.prepare(deepcopy(report), enabled=True)
+                report['historical'] = dict(historical=True, outcome=retired, current=False,
+                    implementation_verified=False, delivery_complete=False, merge_authority=False,
+                    status='retained', compact=dict(name='a' * 32 + '.json', digest='b' * 64))
+                result = self.prepare(report, enabled=True)
+                self.assertEqual(result['task']['state'], retired)
+                self.assertFalse(result['historical']['current'])
+
     def test_historical_authority_flags_and_compact_references_are_validated(self):
         report = self.report()
         historical = dict(historical=True, outcome='TRIAGE', current=False,
