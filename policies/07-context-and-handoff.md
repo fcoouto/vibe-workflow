@@ -48,6 +48,6 @@ This optional layout adds no required artifact or status store and replaces no p
 ## Handoff and resumption
 
 Use the [lifecycle record](#lifecycle-record-and-reports) for unfinished work.
-On resume, inspect the actual checkout, files, checks and processes before trusting the handoff. Reconcile discrepancies and use [Agent Delegation](03-agent-delegation.md) before taking over uncertain worker resources. Preserve pauses and limits; continue only the authorized remainder. Keep temporary progress out of permanent memory. Durable lessons belong once in the responsible record, supported by evidence and a condition for rechecking them.
+On resume, inspect the actual checkout, branch, files, checks and processes before trusting the handoff. Edits found outside the [resolved destination](02-task-planning.md#planning-and-verification), such as on a merge target, are a discrepancy: preserve them, report it and stop editing there. Reconcile discrepancies and use [Agent Delegation](03-agent-delegation.md) before taking over uncertain worker resources. Preserve pauses and limits; continue only the authorized remainder. Keep temporary progress out of permanent memory. Durable lessons belong once in the responsible record, supported by evidence and a condition for rechecking them.
 
 Selected managed delivery also loads the [continuation protocol](../clients/workstreams-protocol.md). Reconcile writers and review readers before resuming; preserve identity, original scope, pins and remaining budgets.

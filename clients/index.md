@@ -2,7 +2,7 @@
 
 Read only the client instructions for the current task. Shared workflow requirements live in the [policy index](../policies/00-index.md).
 
-For delivery workspace preparation and task-owned publication evidence, load [delivery](delivery.md) only when that operation applies. Its current callable workspace binding does not activate a client or qualify publication/merge execution.
+For delivery workspace preparation and task-owned publication evidence, load [delivery](delivery.md) only when that operation applies, including before the first edit when the project's instructions or delivery policy select separate worktrees. Its current callable workspace binding does not activate a client or qualify publication/merge execution.
 
 | Client | Load when |
 | --- | --- |

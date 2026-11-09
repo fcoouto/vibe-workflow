@@ -24,7 +24,7 @@ planning, verification and applicable review requirements.
 | [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting completion or merge; after changes affecting evidence. |
 | [Code Review](06-code-review.md) | Before every merge; before completing nontrivial or review-required work; when requested; after changes affecting review evidence. |
 | [Context and Handoff](07-context-and-handoff.md) | At task startup or resume; when behavior, commands, configuration or material decisions change; before handoff. |
-| [Merge Readiness](08-merge-readiness.md) | Before declaring merge readiness or merging; after changes to the candidate, base, required evidence or enforcement. |
+| [Merge Readiness](08-merge-readiness.md) | Before declaring merge readiness or merging, including a direct commit or push to a merge target; after changes to the candidate, base, required evidence or enforcement. |
 | [Workflow Maintenance](09-workflow-maintenance.md) | During initial setup; after material instruction, memory or capability changes; for recurring workflow failures, authorized updates or explicitly selected behavior evaluations. |
 | [Project Onboarding](10-project-onboarding.md) | Explicit project enrollment, setup update/repair, or expansion to additional repositories or clients. |
 | [Tool Integrations](11-tool-integrations.md) | When selecting or changing integrations, using unqualified capabilities, or investigating failures that invalidate qualification. |
