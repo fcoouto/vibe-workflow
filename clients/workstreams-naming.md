@@ -135,9 +135,9 @@ Use these canonical task states in the existing task plan:
 | `DONE` | The thread's agreed scope is complete and verified, and the PR merge gate below holds. |
 | `CANCELLED` | Work was closed without completing its agreed scope. |
 
-Once triage settles the scope, work moves straight to `WORKING`; a thread that
-cannot start yet is `WAITING` for what it needs. Record what blocks a waiting
-thread as a pending condition in the task plan.
+Once triage settles the scope, work moves straight to `WORKING`, or to `REVIEW`
+when the work is a review; a thread that cannot start yet is `WAITING` for what
+it needs. Record in the task plan what a waiting thread waits for.
 
 Show `REVIEW` when the user is asked to review a result and `WAITING` when the
 user owes an action such as a reply, approval, decision, manual merge or an
