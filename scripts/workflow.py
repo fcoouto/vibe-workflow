@@ -96,7 +96,7 @@ def control_main():
             action = evidence_actions.add_parser(name, add_help=False)
             action.add_argument("--cwd", required=True)
             if name == "status":
-                action.add_argument("--client", required=True, choices=("codex",))
+                action.add_argument("--client", required=True, choices=TASK_CLIENTS)
                 action.add_argument("--session", required=True)
         review = evidence_actions.add_parser("review", add_help=False)
         review_actions = review.add_subparsers(dest="review_action", required=True)
@@ -186,7 +186,9 @@ def control_main():
             request = json_object(sys.stdin.buffer.read(MAX_INPUT + 1))
             client = request.get("client")
             # Claude task records carry no evidence, delegation or retirement, so only start and update apply.
-            supported = TASK_CLIENTS if args.command == "task" and args.action in ("start", "update", "title") else ("codex",)
+            # Review needs a native observation source, which Claude Code does not have yet.
+            supported = TASK_CLIENTS if (args.command == "task" and args.action in ("start", "update", "title")
+                                         or args.command == "evidence" and args.action != "review") else ("codex",)
             if client not in supported:
                 raise StartupError("Expected a supported native task client")
         else:

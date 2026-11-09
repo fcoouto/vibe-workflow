@@ -161,9 +161,14 @@ class ClaudeStateTests(unittest.TestCase):
         status = self.cli(["task", "status", "--client", "claude-code", "--session", "main"])
         self.assertEqual(status["task"]["state"], "WORKING")
         # The state layer keeps evidence, delegation and retirement Codex-only; the CLI must not suggest otherwise.
-        for arguments in (["task", "retire"], ["evidence", "plan"], ["delegation", "plan"]):
+        for arguments in (["task", "retire"], ["evidence", "review", "prepare"], ["delegation", "plan"]):
             result = self.cli(arguments, identity, expected=1)
             self.assertIn("supported native task client", result["error"], arguments)
+        # Evidence plan, check, verify and status are open to Claude; this empty request fails on its own fields.
+        result = self.cli(["evidence", "plan"], identity, expected=1)
+        self.assertNotIn("supported native task client", result["error"])
+        status = self.cli(["evidence", "status", "--client", "claude-code", "--session", "main"])
+        self.assertEqual(status["task"]["state"], "WORKING")
         result = self.cli(["delivery", "status", "--client", "claude-code", "--session", "main"], expected=1)
         self.assertIn("Invalid task, evidence", result["error"])
 

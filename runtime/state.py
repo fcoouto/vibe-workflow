@@ -1978,8 +1978,8 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
     if task["turn_id"] is not None:
         _text(task["turn_id"], "stored turn_id", 4096)
     _task_projection(db, scope_id, task)
-    if task["client"] == "claude-code" and any(field in task for field in ("evidence", "delegation", "retirement", "writer_stop")):
-        raise StateError("Claude Code task records do not support evidence, delegation or retirement")
+    if task["client"] == "claude-code" and any(field in task for field in ("delegation", "retirement", "writer_stop")):
+        raise StateError("Claude Code task records do not support delegation or retirement yet")
     if version == 3:
         _task_lifecycle(task)
         if _task_retired(db,scope_id,client,session,task_id):
@@ -2098,13 +2098,11 @@ def task_status(scope, client, session_id):
     if client not in {"codex", "claude-code"}:
         raise StateError("Unsupported task client")
     _require_claude_scope(scope, client)
-    if client == "codex":
-        from runtime.evidence import revalidate_ready
-        revalidate_ready(scope, client, session_id)
+    # DONE is always rechecked against the actual candidate and evidence before it is reported.
+    from runtime.evidence import revalidate_ready
+    revalidate_ready(scope, client, session_id)
     with _database(scope) as db:
         status = _status(db, scope, client, session_id)
-        if client == "claude-code" and status["task"] is not None and status["task"]["state"] == "DONE":
-            raise StateError("Claude Code task readiness is unverified by the available evidence adapter")
         if status['task'] is not None and status['task'].get('lifecycle',{}).get('safe_closed_at') is not None:
             from runtime.evidence import _closed_status
             status['historical']=_closed_status(scope,status['task'])
