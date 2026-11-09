@@ -60,12 +60,34 @@ codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref 
 
 In Codex Desktop, select **Vibe Coding Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
 
-For local plugin testing, export a clean package with `python3 -B scripts/package.py`, then run `codex plugin marketplace add ~/.cache/vibe-workflow/dev-package` in a separate Codex profile. Do not add the checkout itself: clients copy the whole folder, including ignored local files and Git history. The export holds only tracked files (stage new files first), replaces the previous build and passes package validation. `--prune-caches` also removes cached copies no client still uses; with `--dry-run` it lists them instead, while the build still runs. A project whose instructions link into a removed cached copy needs onboarding again. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
+For local plugin testing, install a clean export as described in [Development](#development), in a separate Codex profile. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
 
 For Claude Code local testing, launch `claude --plugin-dir .` from this checkout. See the [Claude Code contract](clients/claude-code.md) for loading and qualification.
 
 ## Enroll a project
 
 For an explicitly selected existing project, use [onboard-my-project](skills/onboard-my-project/SKILL.md) to prepare a private plan, apply authorized configuration, activate qualified managed behavior, or undo owned changes. Configuration completes independently of runtime creation and native qualification. Canonical operations use the verified coordinator entry; the JSON CLI is for retained schema-1 requests. See [application and recovery](skills/onboard-my-project/references/apply-and-recovery.md). Package validation and actual client execution remain separate.
+
+## Development
+
+Requires Git and Python 3.11+. There is no package manager, linter or CI.
+
+Install the plugin for both clients from a clean export of this checkout, never from the checkout itself:
+
+```text
+python3 -B scripts/package.py
+codex plugin marketplace add ~/.cache/vibe-workflow/dev-package
+codex plugin add vibe-workflow@vibe-workflow-local
+claude plugin marketplace add ~/.cache/vibe-workflow/dev-package
+claude plugin install vibe-workflow@vibe-workflow-local
+```
+
+Clients copy the whole source folder, including ignored local files and Git history, so the export holds only tracked files (stage new files first). Each run replaces the previous build and passes package validation. `--prune-caches` also removes cached copies no client still uses; with `--dry-run` it lists them instead, while the build still runs. A project whose instructions link into a removed cached copy needs onboarding again.
+
+Restart Codex afterwards. To refresh after changes, rerun `python3 -B scripts/package.py`, then reinstall (`codex plugin remove` then `add`; `claude plugin uninstall` then `install`). Codex asks to approve the changed hooks again.
+
+Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and `python3 -B -m unittest discover -s tests` (full suite; takes many minutes). Neither establishes live client behavior.
+
+Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
 
 [Development guide](AGENTS.md)
