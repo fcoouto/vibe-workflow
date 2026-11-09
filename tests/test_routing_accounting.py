@@ -516,7 +516,7 @@ class ResolveCostUnknownTests(Accounting):
                          dict(v=1, state='blocked', reason='attempt_closed'))
         self.unknown('a2')
         self.call(complete('a2', 'known', usage=usage(M)))
-        self.assertEqual(self.resolve('a2', 0, 'r2'), dict(v=1, state='blocked', reason='hold_state_forbidden'))
+        self.assertEqual(self.resolve('a2', 0, 'r2'), dict(v=1, state='blocked', reason='attempt_closed'))  # first wins
         self.assertEqual(self.settled(), 7 * M)
 
     def test_receipts_need_the_provider_receipt_source_and_bounds(self):
@@ -674,7 +674,7 @@ class RootSettlementTests(Accounting):
         self.assertEqual(self.admit('never', root='root')['state'], 'admitted')
         self.call(record('never', 'not_dispatched'))
         # The child's own receipt, observed while it runs and again in its completion, is reported once.
-        self.assertEqual(self.observe_usage('o0', 'child', usage=usage(30, receipts=['child-1']))['state'], 'recorded')
+        self.assertEqual(self.observe_usage('o0', 'child', stage='worker', usage=usage(30, receipts=['child-1']))['state'], 'recorded')
         self.assertEqual(self.observe_usage('o1', 'coordinator-1', 'parent',
                                             usage=usage(5, receipts=['parent-1']))['state'], 'recorded')
         self.call(complete('child', 'e1', usage=usage(30, receipts=['child-1'])))

@@ -1,6 +1,7 @@
 """Usage Routing accounting with transaction-bound coordinator admission."""
 from contextlib import closing, contextmanager
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
 # never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
 # (tests/test_routing_funding.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.63M, 88.6%
+# identifiers, every native task finished, every call with a maximal `incomplete` record): 10.64M, 88.7%
 # with S3.6a's settlement fields (10.53M, 87.8% after S3.5's binding allowance). S3.6a's event and root tables
 # are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
 SOFT_RECORD = 6_000_000
@@ -65,8 +66,8 @@ POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilo
 # feed task limits and are evicted oldest first, never while their task holds an open claim (MAX_HOLDS < bound).
 MAX_SETTLED_CYCLES = 16
 MAX_SETTLED_TASKS = 512
-# `settlement` a closed dollar hold carries: five integers and a source label.
-SETTLEMENT_HOLD_BYTES = 192
+# `settlement` a closed dollar hold carries: five integers, a source label and an overrun state (about 220).
+SETTLEMENT_HOLD_BYTES = 256
 COST_SOURCES = ('host_message_totals', 'provider_receipt', 'estimate')
 TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write')
 # Where an attempt's cost belongs in its root task. `rescue` is a reviewer's rework, kept apart from review.
@@ -271,6 +272,11 @@ class Ledger:
             data['version'] = 3
         if data['version'] == 3:
             data['version'] = 4
+            # Holds admitted before v4 get their accounting root now, while their admission record still exists.
+            for attempt, hold in data.get('holds', {}).items():
+                if 'root' not in hold and 'task' in hold:
+                    hold.update(zip(('root', 'stage'), Ledger._record_root(Ledger.admission(data, attempt) or {},
+                                                                           hold['task'])))
         data.setdefault('holds', {})
         data.setdefault('admissions', [])
         data.setdefault('seen_attempts', [])
@@ -433,7 +439,17 @@ class Ledger:
 
     @classmethod
     def _credit(cls, data, organization, now=None):
+        """Credit headroom; zero while an overrun excess on this organization awaits the operator (S3.6a): the
+        unconfirmed excess never enters R, so it lowers headroom by at most the headroom that remains."""
+        if cls.pending_overruns(data, organization):
+            return 0
         return max(0, cls._credit_raw(data, organization, now))
+
+    @staticmethod
+    def pending_overruns(data, organization):
+        """Attempts of `organization` whose reported excess over their reservation is still unconfirmed."""
+        return [attempt for attempt, hold in data['holds'].items() if hold.get('organization') == organization
+                and (hold.get('settlement') or {}).get('overrun_state') == 'unconfirmed']
 
     @classmethod
     def _headroom(cls, data, organization, task=None, now=None):
@@ -858,9 +874,11 @@ class Ledger:
 
     @staticmethod
     def _prune(data):
-        """Drop the oldest released holds once the table is full; open (incl. uncertain) holds are never dropped."""
+        """Drop the oldest released holds once the table is full; open (incl. uncertain) holds and closed holds with
+        an unconfirmed overrun (they await `resolve_overrun`) are never dropped."""
         if len(data['holds']) >= MAX_HOLDS:
-            for key in [k for k, hold in data['holds'].items() if hold['closed']][:MAX_HOLDS // 2]:
+            for key in [k for k, hold in data['holds'].items() if hold['closed'] and
+                        (hold.get('settlement') or {}).get('overrun_state') != 'unconfirmed'][:MAX_HOLDS // 2]:
                 del data['holds'][key]
 
     def _hold(self, data, attempt_id, states):
@@ -1034,20 +1052,25 @@ class Ledger:
         usage = event.get('usage')
         hold = data['holds'].get(attempt)
         if kind == 'observed':
-            # Report-only usage joins the root of a known ledger attempt: its own hold or `root_attempt_id`'s.
+            # Report-only usage joins the root of an OPEN ledger attempt (its own hold or `root_attempt_id`'s) and
+            # must carry that hold's dispatch authority, so it cannot be aimed at another session's or a closed root.
             stage, funding = event['stage'], event.get('funding')
-            anchor = data['holds'].get(event.get('root_attempt_id', attempt))
-            require(anchor is not None and (hold is None or 'root_attempt_id' not in event
-                                            or self._root_of(data, attempt, hold)[0] ==
-                                            self._root_of(data, event['root_attempt_id'], anchor)[0]),
-                    'unknown_attempt' if anchor is None else 'root_mismatch')
-            root = self._root_of(data, event.get('root_attempt_id', attempt), anchor)[0]
+            anchor_id = event.get('root_attempt_id', attempt)
+            anchor = data['holds'].get(anchor_id)
+            require(anchor is not None, 'unknown_attempt')
+            require(not anchor['closed'], 'attempt_closed')
+            issued = anchor.get('dispatch')
+            require(issued is not None, 'dispatch_required')
+            require(hmac.compare_digest(hashlib.sha256(event['authority'].encode()).hexdigest(), issued['authority']),
+                    'authority_invalid')
+            root = self._root_of(data, anchor_id, anchor)[0]
+            require(hold is None or self._root_of(data, attempt, hold)[0] == root, 'root_mismatch')
         else:
             require(hold is not None, 'unknown_attempt')
-            require(not hold['closed'], 'attempt_closed')
+            require(kind == 'resolve_overrun' or not hold['closed'], 'attempt_closed')
             root, stage = self._root_of(data, attempt, hold)
             stage = event.get('stage', stage)
-            funding = 'api' if hold['amount'] else 'subscription'
+            funding = 'api' if hold.get('organization') else 'subscription'
         aggregate = self._root_row(data, root, now)
         if kind == 'observed':
             outcome = dict(state='recorded', duplicate=False, outcome='observed')
@@ -1060,12 +1083,15 @@ class Ledger:
         else:
             aggregate['attempts_overflow'] += 1
         summary = None if usage is None else self._summarize(usage, [])
-        settled = outcome.get('outcome') in ('complete', 'overrun')
+        settled = outcome.get('outcome') in ('complete', 'overrun', 'overrun_confirmed')
         if not outcome['duplicate'] and (settled or kind == 'observed'):
-            # The REPORT counts each receipt once per root; money never does (a dollar hold is charged in full).
-            report = self._summarize(usage, aggregate['receipts']) if usage is not None else None
+            # The REPORT counts each receipt once per attempt (one attempt reporting it twice, e.g. observed and
+            # then completed); another attempt's same id is its own request. Money uses only the one report.
+            report = None if usage is None else self._summarize(usage, aggregate['receipts'], _digest16(attempt) + ':')
             usd = 0
-            if outcome.get('settlement', {}).get('kind') == 'usd_micros':
+            if outcome['outcome'] == 'overrun_confirmed':
+                usd = outcome['settlement']['overrun']
+            elif outcome.get('settlement', {}).get('kind') == 'usd_micros':
                 repeated = summary['cost'] - report['cost'] if report is not None else 0
                 usd = max(0, outcome['settlement']['charged'] - repeated)
             elif kind == 'observed' and funding == 'api' and report['cost'] is not None:
@@ -1102,11 +1128,14 @@ class Ledger:
             require(state == 'admitted', 'hold_state_forbidden')  # S3.4: no proof of non-launch after dispatch
             hold.update(closed=True, state='released')
         elif kind == 'resolve_cost_unknown':
-            # Operator recovery (review S2): only a `cost_unknown` hold, never below the admitted estimate.
+            # Operator recovery: only a `cost_unknown` hold. The full reservation is charged unless the cost is
+            # receipt-backed; a cost above the reservation is an overrun either way.
             require(state == 'cost_unknown', 'hold_state_forbidden')
             cost = event['cost_usd_micros']
-            return self._settle_cost(data, attempt, hold, cost, max(cost, self._admitted_estimate(
-                data, attempt, hold['amount'])), 'operator')
+            charge = cost if event.get('receipts') else max(cost, hold['amount'])
+            return self._settle_cost(data, attempt, hold, cost, charge, 'operator')
+        elif kind == 'resolve_overrun':
+            return self._resolve_overrun(data, hold, event['decision'])
         else:
             require(state != 'uncertain', 'reconciliation_required')
             require(state in ('dispatched', 'cost_unknown'), 'hold_state_forbidden')
@@ -1145,17 +1174,39 @@ class Ledger:
 
     def _settle_cost(self, data, attempt, hold, cost, charge, source):
         """Charge `charge` against a dollar hold and close it. Above the reservation it is an overrun: the pre-send
-        guard failed or was bypassed, so the whole charge counts and the organization is blocked
-        (`manual_recovery_required`), exactly as S1's run path does; nothing is topped up."""
+        guard failed or was bypassed, and the report is unverified (`record` has no caller authentication). The
+        reservation is charged (certain); the excess is kept on the hold as `overrun_state: unconfirmed`, outside
+        R and every settled total, while the organization's headroom reads zero (`_credit`) and the organization is
+        blocked (`manual_recovery_required`) until `resolve_overrun`. Nothing is topped up."""
         amount = hold['amount']
         overrun, released = max(0, charge - amount), max(0, amount - charge)
+        settlement = dict(reserved=amount, charged=min(charge, amount), released=released, overrun=overrun,
+                          cost=cost, cost_source=source)
         if overrun:
-            data['organizations'][hold['organization']]['blocked'] = True
-        settlement = dict(reserved=amount, charged=charge, released=released, overrun=overrun, cost=cost,
-                          cost_source=source)
+            settlement['overrun_state'] = 'unconfirmed'
+            org = data['organizations'][hold['organization']]
+            if not org['blocked']:
+                org.update(blocked=True, overrun_block=True)  # cleared only by resolving every pending overrun
         hold.update(amount=0, closed=True, state='released', settlement=settlement)
-        self._charge(data, hold, charge)
+        self._charge(data, hold, settlement['charged'])
         return dict(state='recorded', duplicate=False, outcome='overrun' if overrun else 'complete',
+                    settlement=dict(settlement, kind='usd_micros', remaining=0))
+
+    def _resolve_overrun(self, data, hold, decision):
+        """Operator decision on an unconfirmed overrun excess: `confirm` charges it as settled, `dismiss` drops it.
+        The organization is unblocked only when the block was set by overruns and none is still pending."""
+        settlement = hold.get('settlement') or {}
+        require(settlement.get('overrun_state') == 'unconfirmed', 'overrun_not_pending')
+        if decision == 'confirm':
+            self._charge(data, hold, settlement['overrun'])
+            settlement['charged'] = min(MAX_INTEGER, settlement['charged'] + settlement['overrun'])
+        settlement['overrun_state'] = 'confirmed' if decision == 'confirm' else 'dismissed'
+        organization = hold['organization']
+        org = data['organizations'][organization]
+        if org.get('overrun_block') and not self.pending_overruns(data, organization):
+            org['blocked'] = False
+            del org['overrun_block']
+        return dict(state='recorded', duplicate=False, outcome='overrun_' + settlement['overrun_state'],
                     settlement=dict(settlement, kind='usd_micros', remaining=0))
 
     @staticmethod
@@ -1187,18 +1238,27 @@ class Ledger:
                 del tasks[old]
 
     @staticmethod
-    def _summarize(usage, seen):
-        """Totals of one usage report, counting each receipt once against `seen` (extended in place). `cost` is
-        None when any counted request has no cost. Units stay per typed window key; nothing is added across units."""
+    def _summarize(usage, seen, prefix=''):
+        """Totals of one usage report, counting each receipt once against `seen` (keys `prefix + receipt`, extended
+        in place). A receipt repeated within the report counts once, at its highest cost (an unknown cost wins).
+        `cost` is None when any counted request has no cost. Units stay per typed window key."""
+        def price(request):
+            value = request.get('cost_usd_micros')
+            return float('inf') if value is None else value
+        best = {}
+        for request in usage['requests']:
+            receipt = request.get('receipt')
+            if receipt is not None and (receipt not in best or price(request) > price(best[receipt])):
+                best[receipt] = request
         tokens = dict.fromkeys(TOKEN_FIELDS, 0)
         units, cost, counted, duplicates = {}, 0, 0, 0
         for request in usage['requests']:
             receipt = request.get('receipt')
             if receipt is not None:
-                if receipt in seen:
+                if best[receipt] is not request or prefix + receipt in seen:
                     duplicates += 1
                     continue
-                seen.append(receipt)
+                seen.append(prefix + receipt)
             counted += 1
             for field in TOKEN_FIELDS:
                 tokens[field] = min(MAX_INTEGER, tokens[field] + request['tokens'][field])

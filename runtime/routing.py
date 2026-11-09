@@ -820,12 +820,13 @@ REQUEST_FIELDS = ('provider', 'model', 'variant', 'harness', 'kind', 'funding_po
 RECORD_KINDS = ('dispatched', 'uncertain', 'not_dispatched', 'complete')
 EVENT_KINDS = RECORD_KINDS + ('observed',)
 EVENT_REQUIRED = ('event_id', 'attempt_id', 'kind')
-EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_attempt_id', 'funding')
+EVENT_OPTIONAL = ('stage', 'request_kind', 'at', 'usage', 'root_attempt_id', 'funding', 'authority')
 MAX_USAGE_REQUESTS = 32
 MAX_USAGE_UNITS = 8  # distinct window keys in one report; one hold claims at most eight windows
 MAX_RECEIPT = 128
 MAX_ROOT_ID = routing_gates.LOCATOR_LIMITS['task_id']
-RESOLVE_KIND = 'resolve_cost_unknown'  # operator recovery; never a client lifecycle event
+RESOLVE_KIND = 'resolve_cost_unknown'  # operator recovery ops; never client lifecycle events
+OVERRUN_KIND = 'resolve_overrun'
 USAGE_REQUEST_FIELDS = ('kind', 'model', 'variant', 'tokens', 'cost_usd_micros', 'units', 'receipt')
 
 
@@ -1212,8 +1213,9 @@ def event_error(event):
 
     Bounded ids, labels and integers only (no prompt, body or secret can pass): `event_id` (128), `attempt_id`,
     `kind`; optional `stage`, `request_kind`, `at` (the client's time, informational and outside the digest),
-    `usage` (on `complete` and `observed`), and on `observed` the required `stage` and `usage` plus optional
-    `funding` and `root_attempt_id` (a ledger attempt whose root the usage joins, when `attempt_id` has no hold)."""
+    `usage` (on `complete` and `observed`), and on `observed` the required `stage`, `usage` and `authority` (the
+    anchor hold's dispatch token; never stored) plus optional `funding` and `root_attempt_id` (the open ledger
+    attempt whose root the usage joins, when `attempt_id` has no hold)."""
     if type(event) is not dict or not set(EVENT_REQUIRED) <= set(event) <= {*EVENT_REQUIRED, *EVENT_OPTIONAL}:
         return 'invalid_request'
     if not _bounded_id(event['event_id'], usage_budget.MAX_EVENT_ID) or not _text(event['attempt_id']) \
@@ -1229,26 +1231,51 @@ def event_error(event):
     if 'usage' in event and (kind not in ('complete', 'observed') or _usage_error(event['usage'])):
         return 'invalid_request'
     observed = kind == 'observed'
-    if not observed and ('funding' in event or 'root_attempt_id' in event):
+    if not observed and ('funding' in event or 'root_attempt_id' in event or 'authority' in event):
         return 'invalid_request'
     if observed and not ('stage' in event and 'usage' in event and event.get('funding', 'api') in ('api', 'subscription')
-                         and _optional(event.get('root_attempt_id'), _text)):
+                         and _optional(event.get('root_attempt_id'), _text) and _token(event.get('authority'))):
         return 'invalid_request'
     return None
 
 
+def _token(value):
+    return type(value) is str and 0 < len(value) <= MAX_AUTHORITY and value.isascii() and value.isprintable()
+
+
+def _operator_ids(value, fields):
+    return type(value) is dict and set(fields) <= set(value) and \
+        _bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID) and _text(value['attempt_id'])
+
+
 def resolve_event(value):
-    """The operator's `resolve_cost_unknown` request as a ledger event, or None when malformed."""
-    if type(value) is not dict or set(value) != {'event_id', 'attempt_id', 'cost_usd_micros'} or \
-            not _bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID) or not _text(value['attempt_id']) or \
-            not _amount(value['cost_usd_micros']):
+    """The operator's `resolve_cost_unknown` request as a ledger event, or None when malformed. `receipts` (1 to
+    32 receipt ids) and `source: provider_receipt` come together or not at all; only they let padding go."""
+    required = ('event_id', 'attempt_id', 'cost_usd_micros')
+    if not _operator_ids(value, required) or not _amount(value['cost_usd_micros']):
+        return None
+    extra = set(value) - set(required)
+    if extra not in (set(), {'receipts', 'source'}):
+        return None
+    if extra and not (value['source'] == 'provider_receipt' and type(value['receipts']) is list
+                      and 0 < len(value['receipts']) <= MAX_USAGE_REQUESTS
+                      and all(_bounded_id(item, MAX_RECEIPT) for item in value['receipts'])):
         return None
     return dict(value, kind=RESOLVE_KIND)
 
 
+def overrun_event(value):
+    """The operator's `resolve_overrun` request (`decision`: confirm or dismiss) as a ledger event, or None."""
+    fields = ('event_id', 'attempt_id', 'decision')
+    if not _operator_ids(value, fields) or set(value) != set(fields) or value['decision'] not in ('confirm', 'dismiss'):
+        return None
+    return dict(value, kind=OVERRUN_KIND)
+
+
 def event_digest(event):
-    """Canonical SHA-256 of an event without the client's `at`, so a retry with a new timestamp is a duplicate."""
-    payload = {key: value for key, value in event.items() if key != 'at'}
+    """Canonical SHA-256 of an event without the client's `at` (a retry with a new timestamp is a duplicate) and
+    without an `authority` token (never stored, not even hashed with the payload)."""
+    payload = {key: value for key, value in event.items() if key not in ('at', 'authority')}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 

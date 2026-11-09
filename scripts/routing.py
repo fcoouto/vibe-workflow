@@ -43,7 +43,8 @@ FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constra
               dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
               settle=({'root_task_id'}, {'workflow'}),
-              resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, set()))
+              resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, {'receipts', 'source'}),
+              resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()))
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -402,8 +403,14 @@ class Service:
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _resolve_cost_unknown(self, body):
-        """Operator recovery for a `cost_unknown` dollar hold (S3.6a): settle at max(cost, admitted estimate)."""
-        event = routing.resolve_event(body)
+        """Operator recovery for a `cost_unknown` dollar hold (S3.6a): the full reservation unless receipt-backed."""
+        return self._operator(routing.resolve_event(body))
+
+    def _resolve_overrun(self, body):
+        """Operator decision on an unconfirmed overrun excess (S3.6a): confirm charges it, dismiss drops it."""
+        return self._operator(routing.overrun_event(body))
+
+    def _operator(self, event):
         require(event is not None, 'invalid_request')
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
@@ -416,6 +423,8 @@ class Service:
         workflow job whose task id is `root_task_id`, with acceptance `unavailable` and no ratio."""
         root, locator = body['root_task_id'], body.get('workflow')
         require(_text(root) and len(root) <= routing.MAX_ROOT_ID, 'invalid_request')
+        # A pinned service settles only roots it can check against its project, i.e. with a workflow locator.
+        require(locator is not None or self.project is None, 'project_required')
         accepted = None
         if locator is not None:
             require(routing_gates.valid_root_locator(locator) and locator['task_id'] == root, 'invalid_request')
