@@ -64,7 +64,7 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "c44b9ad19d094ef46ce819191331af1eff40738d4d3282f40dd1a99e8b280020",
+      "sha256": "8d0cba01afed241802d1850d0b87d9f2908fe9361f9b873f5739026a25b0c4e3",
       "ranges": [
         [
           1,
@@ -254,7 +254,7 @@
       ]
     },
     "clients/runtime.md": {
-      "sha256": "818ceecfb8b62deef9cdcd8ec21ef1743fd42a28e682df2d8d43bf1e764a4570",
+      "sha256": "6d4340f61737646d466eed751a76d8293b77b4a8bf74d10bbceae3d1e73c3846",
       "ranges": [
         [
           1,
@@ -262,10 +262,10 @@
         ],
         [
           44,
-          93
+          91
         ],
         [
-          94,
+          92,
           98
         ]
       ]
@@ -337,7 +337,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "96ef4583858b0833925d09a3b8a0759268e77ef2d3d6caa3aa51820819b15d8c",
+      "sha256": "0a56982ed16d8415903482783fa58a0242200e50bc12360aaa5c08d712b7213e",
       "ranges": [
         [
           1,
@@ -349,7 +349,7 @@
         ],
         [
           281,
-          326
+          330
         ]
       ]
     },
@@ -654,7 +654,7 @@
       ]
     },
     "skills/onboard-my-project/references/qualification.md": {
-      "sha256": "dd6c84bb8401f708bc4eb6e59879e5b27b5a00802e5b42e59b98ee19c0019320",
+      "sha256": "5a1b99dcb7d16bf8ddb8a263f97ae111f5f3634d0b72ad3ccf346efaf1ab230f",
       "ranges": [
         [
           1,
