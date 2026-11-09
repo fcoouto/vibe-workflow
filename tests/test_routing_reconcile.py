@@ -417,6 +417,23 @@ class ResolveBlockTests(Reconcile):
                 self.assertEqual(self.call(request), dict(v=1, state='blocked', reason='invalid_request'))
         self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
 
+    def test_the_ledger_refuses_unvalidated_block_events_itself(self):
+        self.start_run('s1')
+        self.over_bound('s1')
+        self.set_legacy()
+        marker = self.marker()
+        before = self.snapshot()
+        for event in (dict(event_id='z1', kind='resolve_block', organization='personal', reason='legacy',
+                           decision='dismiss', marker=marker),
+                      dict(event_id='z2', kind='resolve_block', organization='personal', reason='overrun',
+                           decision='confirm', ids=['s1']),
+                      dict(event_id='z3', kind='resolve_block', organization='personal', reason='over_bound',
+                           decision='maybe', ids=['s1'])):
+            with self.subTest(event=event), self.open_ledger() as ledger:
+                self.assertEqual(routing.resolve_block(ledger, event, now()),
+                                 dict(state='blocked', reason='invalid_request'))
+        self.assertEqual(self.snapshot(), before)
+
     def test_fifteen_racing_operators_apply_one_block_resolution(self):
         self.start_run('s1')
         self.over_bound('s1')
@@ -568,8 +585,7 @@ class DerivedUnblockTests(Reconcile):
         for step in range(220):
             org = rng.choice(orgs)
             action = rng.choice(['overrun', 'over_bound', 'legacy', 'uncertain', 'receipts', 'charge', 'confirm',
-                                 'dismiss', 'block_confirm', 'block_dismiss', 'legacy_clear', 'legacy_blind',
-                                 'admit'])
+                                 'dismiss', 'block_confirm', 'block_dismiss', 'legacy_clear', 'admit'])
             with self.open_ledger() as ledger:
                 if action == 'overrun' and holds[org]:
                     attempt = holds[org].pop()
@@ -613,18 +629,20 @@ class DerivedUnblockTests(Reconcile):
                     self.assertIsNone(reason)
                     self.assertEqual(routing.resolve_block(ledger, event, now())['state'], 'recorded')
                     expected[org]['over_bound'] -= set(chosen)
-                elif action in ('legacy_clear', 'legacy_blind') and expected[org]['legacy']:
-                    marker = budget.Ledger.legacy_marker(ledger.snapshot(), org) if action == 'legacy_clear' \
-                        else 'lb_' + '%032x' % step
-                    event, reason = routing.block_event(dict(event_id='l%d' % step, organization=org,
-                                                             reason='legacy', decision='confirm', marker=marker))
-                    self.assertIsNone(reason)
-                    result = routing.resolve_block(ledger, event, now())
-                    if action == 'legacy_clear':
-                        self.assertEqual(result['state'], 'recorded', result)
-                        expected[org]['legacy'] = False
-                    else:
-                        self.assertEqual(result, dict(state='blocked', reason='marker_stale'))
+                elif action == 'legacy_clear' and expected[org]['legacy']:
+                    # A blind marker is refused first; only the current one clears the block.
+                    for marker, cleared in (('lb_' + '%032x' % step, False),
+                                            (budget.Ledger.legacy_marker(ledger.snapshot(), org), True)):
+                        event, reason = routing.block_event(dict(event_id='l%d-%d' % (step, cleared),
+                                                                 organization=org, reason='legacy',
+                                                                 decision='confirm', marker=marker))
+                        self.assertIsNone(reason)
+                        result = routing.resolve_block(ledger, event, now())
+                        if cleared:
+                            self.assertEqual(result['state'], 'recorded', result)
+                        else:
+                            self.assertEqual(result, dict(state='blocked', reason='marker_stale'))
+                    expected[org]['legacy'] = False
                 else:
                     action = 'noop' if action != 'admit' else action
             actions.add(action)
@@ -642,8 +660,7 @@ class DerivedUnblockTests(Reconcile):
                     self.ledger_hold(ledger, 'new%d' % step, org)
                     holds[org].append('new%d' % step)
         self.assertEqual(seen, {'overrun', 'over_bound', 'legacy'})
-        self.assertLessEqual({'receipts', 'charge', 'block_confirm', 'block_dismiss', 'legacy_clear',
-                              'legacy_blind'}, actions)
+        self.assertLessEqual({'receipts', 'charge', 'block_confirm', 'block_dismiss', 'legacy_clear'}, actions)
 
 
 class StatusTests(Reconcile):

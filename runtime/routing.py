@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 import secrets
 
 
@@ -1004,7 +1005,8 @@ def admission_ids(data, attempt_id):
 def reconcile_hint(ids):
     """The host read an operator can make about a lost acknowledgment. Informational only (``authoritative``
     false): an absent message can also mean a deleted or reverted message or another server or directory, so
-    nothing in S3.4 accepts its result; S3.6b reconciles. Routing makes no host call itself."""
+    nothing accepts its result as proof of non-launch; the operator's `reconcile_uncertain` settles the hold from
+    receipts or charges its full reservation (S3.6b-2). Routing makes no host call itself."""
     return dict(read='message', method='GET', authoritative=False, session_id=ids['session_id'],
                 message_id=ids['message_id'],
                 path='/api/session/%s/message/%s' % (ids['session_id'], ids['message_id']))
@@ -1272,6 +1274,71 @@ def overrun_event(value):
     return dict(value, kind=OVERRUN_KIND)
 
 
+# S3.6b-2 operator ops (never client lifecycle events; `record` refuses their kinds and fields).
+RECONCILE_KIND = 'reconcile_uncertain'
+BLOCK_KIND = 'resolve_block'
+# Evidence that settles an uncertain dollar hold. Both charge: no kind releases the hold without spend. A no-spend
+# proof (a provider usage report covering the attempt with zero cost) is refused as `evidence_unsupported`: nothing
+# offline can check an operator-typed report, the ledger keeps no uncertain-mark time, a worker can still spend after
+# the mark, and a later `observed_at` is not proof the report reflects the window (spec 8).
+EVIDENCE_KINDS = ('receipts', 'charge_reservation')
+LEGACY_MARKER = re.compile(r'lb_[0-9a-f]{32}')
+
+
+def reconcile_event(value):
+    """The operator's `reconcile_uncertain{event_id, attempt_id, evidence}` as a ledger event: (event, None), or
+    (None, reason). `evidence` is `{kind: receipts, receipts: [1 to 32 distinct receipt ids], cost_usd_micros}` or
+    `{kind: charge_reservation}`; another kind is `evidence_unsupported`, any other shape `invalid_request`."""
+    fields = ('event_id', 'attempt_id', 'evidence')
+    if not _operator_ids(value, fields) or set(value) != set(fields):
+        return None, 'invalid_request'
+    evidence = value['evidence']
+    if type(evidence) is not dict or not _text(evidence.get('kind')):
+        return None, 'invalid_request'
+    if evidence['kind'] not in EVIDENCE_KINDS:
+        return None, 'evidence_unsupported'
+    if evidence['kind'] == 'receipts':
+        items = evidence.get('receipts')
+        valid = (set(evidence) == {'kind', 'receipts', 'cost_usd_micros'} and _amount(evidence['cost_usd_micros'])
+                 and type(items) is list and 0 < len(items) <= MAX_USAGE_REQUESTS
+                 and all(_bounded_id(item, MAX_RECEIPT) for item in items) and len(set(items)) == len(items))
+    else:
+        valid = set(evidence) == {'kind'}
+    return (dict(value, kind=RECONCILE_KIND), None) if valid else (None, 'invalid_request')
+
+
+def block_event(value):
+    """The operator's `resolve_block{event_id, organization, reason, decision, ids? | marker?}` as a ledger event:
+    (event, None) or (None, 'invalid_request'). `over_bound` needs `ids` (1 to 16 distinct run ids, as `status`
+    lists them) and `decision` confirm or dismiss; `legacy` needs `decision: confirm` and the `marker` `status` shows.
+    Overruns keep their own op (`resolve_overrun`)."""
+    required = ('event_id', 'organization', 'reason', 'decision')
+    if type(value) is not dict or not set(required) <= set(value) or \
+            not _bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID) or not _text(value['organization']):
+        return None, 'invalid_request'
+    extra = set(value) - set(required)
+    if value['reason'] == 'over_bound':
+        ids = value.get('ids')
+        valid = (extra == {'ids'} and value['decision'] in ('confirm', 'dismiss') and type(ids) is list
+                 and 0 < len(ids) <= usage_budget.SUMMARY_IDS and all(_text(item) for item in ids)
+                 and len(set(ids)) == len(ids))
+    elif value['reason'] == 'legacy':
+        marker = value.get('marker')
+        valid = (extra == {'marker'} and value['decision'] == 'confirm' and type(marker) is str
+                 and LEGACY_MARKER.fullmatch(marker) is not None)
+    else:
+        valid = False
+    return (dict(value, kind=BLOCK_KIND), None) if valid else (None, 'invalid_request')
+
+
+def resolve_block(ledger, event, now):
+    """Apply one `block_event` in one ledger transaction (``Ledger.resolve_block``); refusals are fixed reasons."""
+    try:
+        return ledger.resolve_block(event, event_digest(event), now)
+    except BudgetError as error:
+        return _blocked(str(error))
+
+
 def event_digest(event):
     """Canonical SHA-256 of an event without the client's `at` (a retry with a new timestamp is a duplicate) and
     without an `authority` token (never stored, not even hashed with the payload)."""
@@ -1362,6 +1429,41 @@ def _capped(ids):
     return dict(ids=ids[:usage_budget.SUMMARY_IDS], more=max(0, len(ids) - usage_budget.SUMMARY_IDS))
 
 
+def _counted(ids):
+    return dict(count=len(ids), **_capped(ids))
+
+
+def _by_organization(entries):
+    entries = sorted(entries, key=lambda entry: entry['organization'])
+    return dict(organizations=entries[:usage_budget.SUMMARY_IDS], more=max(0, len(entries) - usage_budget.SUMMARY_IDS))
+
+
+RECONCILE_HINT = ('Operator recovery: reconcile_uncertain settles an uncertain dollar hold from provider receipts '
+                  '(charged as reported) or charge_reservation (the full reservation); nothing releases it without '
+                  'spend, so stop the worker first. resolve_block over_bound confirms or dismisses the listed run ids. '
+                  'resolve_block legacy needs the marker listed here, after reviewing the unresolved items; a stale '
+                  'marker is refused. Each op lifts only its own reason.')
+
+
+def reconcile_summary(data):
+    """What each S3.6b-2 operator op can resolve, with counts and capped ids, plus a fixed hint (None when there is
+    nothing). A legacy entry carries the `marker` `resolve_block` needs and the unresolved items it covers."""
+    uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
+                 if hold['state'] == 'uncertain' and hold.get('amount')]
+    over_bound, legacy = [], []
+    for organization, org in data['organizations'].items():
+        runs = Ledger.over_bound_runs(data, organization)
+        if runs:
+            over_bound.append(dict(organization=organization, **_counted(runs)))
+        if org.get('legacy_block'):
+            items = sorted({item[1] for item in Ledger.unresolved_items(data, organization)})
+            legacy.append(dict(organization=organization, marker=Ledger.legacy_marker(data, organization),
+                               unresolved=_counted(items)))
+    summary = dict(reconcile_uncertain=_counted(uncertain),
+                   resolve_block=dict(over_bound=_by_organization(over_bound), legacy=_by_organization(legacy)))
+    return summary, RECONCILE_HINT if uncertain or over_bound or legacy else None
+
+
 def ledger_summary(data):
     """Counts and nonsecret labels only: open holds by state and unstamped, caps and the user's organizations."""
     holds = {}
@@ -1385,10 +1487,11 @@ def ledger_summary(data):
                 reason: _capped(sources[reason](data, organization) if reason in sources else [])
                 for reason in sorted(reasons)}))
     unknown = [attempt for attempt, hold in Ledger.open_holds(data).items() if hold['state'] == 'cost_unknown']
-    # Uncertain dollar holds have no way out before S3.6b reconciliation; the operator must see them.
+    # Uncertain dollar holds leave only through the operator's `reconcile_uncertain`; the operator must see them.
     uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
                  if hold['state'] == 'uncertain' and hold.get('amount')]
-    return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)),
+    reconcile, hint = reconcile_summary(data)
+    return dict(holds=holds, open_attempts=len(Ledger.open_attempts(data)), reconcile=reconcile, reconcile_hint=hint,
                 blocked_organizations=blocked, cost_unknown=_capped(unknown), uncertain_dollar=_capped(uncertain),
                 overrun_backlog=Ledger.overrun_backlog(data),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,

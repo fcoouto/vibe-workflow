@@ -44,7 +44,9 @@ FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constra
               set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
               settle=({'root_task_id'}, {'workflow'}),
               resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, {'receipts', 'source'}),
-              resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()))
+              resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()),
+              reconcile_uncertain=({'attempt_id', 'evidence', 'event_id'}, set()),
+              resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}))
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -410,11 +412,19 @@ class Service:
         """Operator decision on an unconfirmed overrun excess (S3.6a): confirm charges it, dismiss drops it."""
         return self._operator(routing.overrun_event(body))
 
-    def _operator(self, event):
-        require(event is not None, 'invalid_request')
+    def _reconcile_uncertain(self, body):
+        """Operator reconciliation of an uncertain dollar hold (S3.6b-2): receipts or the full reservation."""
+        return self._operator(*routing.reconcile_event(body))
+
+    def _resolve_block(self, body):
+        """Operator recovery of an over-bound S1 call or a legacy block (S3.6b-2); other reasons stay."""
+        return self._operator(*routing.block_event(body), apply=routing.resolve_block)
+
+    def _operator(self, event, reason='invalid_request', apply=None):
+        require(event is not None, reason)
         ledger = self._ledger(False, write=True)
         require(ledger is not None, 'ledger_absent')
-        result = routing.record_event(ledger, event, self.clock())
+        result = (apply or routing.record_event)(ledger, event, self.clock())
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
 
     def _settle(self, body):
