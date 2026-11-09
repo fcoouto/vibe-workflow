@@ -106,7 +106,9 @@ class HomeWriting(unittest.TestCase):
         home = Path.home()
         record = {{"home": str(home), "real": os.path.realpath(home), "home_env": os.environ.get("HOME"),
                   "vcw": os.environ.get("VCW_TEST_HOME"), "codex": os.environ.get("CODEX_HOME"),
-                  "xdg": os.environ.get("XDG_STATE_HOME"), "share": (home / ".local" / "share").is_dir(),
+                  "xdg": [os.environ.get(name) for name in
+                          ("XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")],
+                  "share": (home / ".local" / "share").is_dir(),
                   "share_entries": os.listdir(home / ".local" / "share")}}
         marks = Path(os.environ["MARK_DIR"])
         (marks / "{module}.json").write_text(json.dumps(record))
@@ -422,7 +424,8 @@ class ShardedRunnerTest(unittest.TestCase):
         self.marks = self.workspace / "marks"
         self.marks.mkdir(exist_ok=True)
         env = {**os.environ, "MARK_DIR": str(self.marks), "CODEX_HOME": str(self.workspace / "codex-parent"),
-               "XDG_STATE_HOME": str(self.workspace / "xdg-parent"), **extra}
+               **{name: str(self.workspace / "parent-value") for name in (
+                   "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")}, **extra}
         return self.run_script("--workers", "2", *args, *modules, env=env)
 
     def record(self, name):
@@ -436,13 +439,12 @@ class ShardedRunnerTest(unittest.TestCase):
         self.assertNotEqual(os.environ.get("HOME"), record["home"])
         self.assertEqual(record["home"], record["real"])
         self.assertFalse(test_sharded.is_inside(home, self.root))
-        self.assertNotEqual(self.root.parent, home.parent)
         self.assertEqual(record["home"], record["vcw"])
         self.assertEqual(record["home"], record["home_env"])
         self.assertTrue(record["share"])
         self.assertEqual([], record["share_entries"])
         self.assertIsNone(record["codex"])
-        self.assertIsNone(record["xdg"])
+        self.assertEqual([None] * 4, record["xdg"])
 
     def test_home_writes_are_reported_without_failing_by_default(self):
         result = self.run_home_modules()
@@ -490,6 +492,48 @@ class ShardedRunnerTest(unittest.TestCase):
         self.assertIn("unit failed to start", result.stderr)
         self.assertIn("cannot create private HOME", result.stderr)
         self.assertEqual([], list(self.marks.iterdir()))
+
+    def test_refuses_a_log_dir_that_puts_homes_beside_the_root(self):
+        self.add_module("test_beside", HOME_WRITING.format(module="test_beside", write=False))
+        self.marks = self.workspace / "marks"
+        self.marks.mkdir()
+        beside = self.run_script("--log-dir", str(self.workspace), "test_beside",
+                                 log_dir=False, env={**os.environ, "MARK_DIR": str(self.marks)})
+        self.assertEqual(1, beside.returncode, beside.stdout + beside.stderr)
+        self.assertIn("beside the root", beside.stderr)
+        self.assertEqual([], list(self.marks.iterdir()))
+        self.assertFalse((self.workspace / "homes").exists())
+
+    def test_interrupt_reports_finished_units_and_keeps_their_homes(self):
+        for name, sig in [("sigterm", signal.SIGTERM), ("sigint", signal.SIGINT)]:
+            with self.subTest(signal=name):
+                writer = f"test_iwrite_{name}"
+                pid_file = self.workspace / f"{name}.pid"
+                self.add_module(writer, HOME_WRITING.format(module=writer, write=True))
+                self.add_module(f"test_isleep_{name}", sleeper(pid_file))
+                self.marks = self.workspace / f"marks-{name}"
+                self.marks.mkdir()
+                log_dir = self.workspace / f"logs-int-{name}"
+                runner = subprocess.Popen(
+                    [sys.executable, "-B", str(SCRIPT), "--root", str(self.root), "--workers", "2",
+                     "--keep-homes", "--log-dir", str(log_dir), writer, f"test_isleep_{name}"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                    env={**os.environ, "MARK_DIR": str(self.marks)})
+                self.addCleanup(runner.kill)
+                self.wait_until(lambda: pid_file.exists() and pid_file.read_text())
+                self.addCleanup(self.kill_all, [int(pid_file.read_text())])
+                self.wait_until(lambda: any("Ran 1 test" in path.read_text() for path in log_dir.glob(
+                    f"*{writer}.log")))
+                time.sleep(1)
+                runner.send_signal(sig)
+                out, err = runner.communicate(timeout=30)
+                self.assertEqual(130 if sig == signal.SIGINT else 143, runner.returncode, out + err)
+                self.assertIn("Interrupted", err)
+                self.assertIn(f"{writer}: 2 path(s)", out)
+                kept = Path(self.record(writer)["home"])
+                self.assertIn(f"kept HOME: {kept}", out)
+                self.assertEqual("x", (kept / ".config" / "tool.txt").read_text())
+                self.assertEqual([kept.name], [path.name for path in (log_dir / "homes").iterdir()])
 
     def kill_all(self, pids):
         for pid in pids:

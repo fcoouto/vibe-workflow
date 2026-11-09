@@ -44,7 +44,7 @@ TAIL_LINES = 20
 POLL_SECONDS = 0.05
 TERMINATE_GRACE_SECONDS = 5
 HOMES_DIR = "homes"
-HOME_OVERRIDES = ("CODEX_HOME", "XDG_STATE_HOME")
+HOME_OVERRIDES = ("CODEX_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
 LEAK_PATHS_KEPT = 20
 LEAK_PATHS_SHOWN = 5
 
@@ -317,16 +317,25 @@ def make_home(index, root, log_dir):
     """Create a fresh canonical HOME with .local/share for one unit, outside the root and its parent."""
     base = log_dir / HOMES_DIR
     home = base / f"home-{index:03d}"
+    if is_inside(base, root):
+        raise HomeError(f"private HOME directory {base} would be inside the root {root}")
+    if base.parent.resolve() == root.parent:
+        raise HomeError(f"private HOME directory {base} would sit in {root.parent}, beside the root; "
+                        "choose a log directory that is not the root's parent")
+    ready = owned = False
     try:
-        if is_inside(base, root) or base == root.parent:
-            raise HomeError(f"private HOME directory {base} would be inside the root or beside it")
         base.mkdir(exist_ok=True)
         home.mkdir()
+        owned = True
         (home / ".local" / "share").mkdir(parents=True)
         if Path(os.path.realpath(home)) != home:
             raise HomeError(f"private HOME {home} is not a canonical path")
+        ready = True
     except OSError as error:
         raise HomeError(f"cannot create private HOME {home}: {error}") from error
+    finally:
+        if owned and not ready:
+            shutil.rmtree(home, ignore_errors=True)  # only a directory this call created
     return home
 
 
@@ -415,10 +424,14 @@ def stop_all(runs):
             process.wait()
 
 
-def run_units(units, workers, root, log_dir, record, keep_homes=False):
-    """Start the next unit whenever a worker slot frees; a failing unit does not stop the rest."""
+def run_units(units, workers, root, log_dir, record, keep_homes=False, runs=None):
+    """Start the next unit whenever a worker slot frees; a failing unit does not stop the rest.
+
+    Started runs are appended to `runs` (when given) so a caller can still report the finished ones
+    if the run is interrupted."""
     queue = list(enumerate(units, start=1))
-    runs, active = [], []
+    runs = [] if runs is None else runs
+    active = []
     try:
         while queue or active:
             while queue and len(active) < workers:
@@ -641,11 +654,14 @@ def execute(plan, root, log_dir, args):
     print(f"Running {len(plan['chosen'])} modules as {len(plan['units'])} units on "
           f"{plan['workers']} workers; logs: {log_dir}", flush=True)
     started = time.monotonic()
+    runs = []
     try:
-        runs = run_units(plan["units"], plan["workers"], root, log_dir, record, args.keep_homes)
-    except KeyboardInterrupt:
+        run_units(plan["units"], plan["workers"], root, log_dir, record, args.keep_homes, runs)
+    except (KeyboardInterrupt, SystemExit) as stop:
+        code = 130 if isinstance(stop, KeyboardInterrupt) else stop.code
         print(f"\nInterrupted; stopped all units. Logs: {log_dir}", file=sys.stderr)
-        return 130
+        print_home_writes([read_result(run) for run in runs if run["finished"]])
+        return code
     except HomeError as error:
         print(f"test_sharded: unit failed to start, stopped all units: {error}", file=sys.stderr)
         return 1
