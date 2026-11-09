@@ -68,7 +68,7 @@ Manifests contain no code, expressions or paths outside the package. `scripts/va
 
 Effective value: **package default < project settings**. A missing entry inherits the default. Status always names the layer a value came from. The format reserves `user` and `checkout` scopes so they can be added later without a migration; until then they are rejected.
 
-Everything private lives under `private/`, created with owner-only modes; no private temporary file is written anywhere else in `.vibe-workflow/`. Any other new file there is treated as shareable and must be reviewed as such. Before creating anything under `private/`, writers check with Git that `project.json` and `private/` are ignored, and refuse otherwise, so a first write cannot expose private files.
+Everything private lives under `private/`, created with owner-only modes; no private temporary file is written anywhere else in `.vibe-workflow/`. Any other new file there is treated as shareable and must be reviewed as such. Before creating anything under `private/`, writers check the ignore rules with `git check-ignore --no-index` (which evaluates rules even for tracked paths) and, separately, whether the path is tracked. They refuse when `private/` is not covered by a rule or is tracked, so a first write cannot expose private files. An already-tracked `project.json` does not block settings writes; it is reported as a warning.
 
 Onboarding makes sure both entries are ignored and warns when `project.json` is already tracked. Where it records them is decided in section 9.
 
@@ -96,7 +96,7 @@ Onboarding makes sure both entries are ignored and warns when `project.json` is 
 **API.** `runtime/features.py` loads manifests, reads `.vibe-workflow/settings.json` for the checkout, and returns, per feature, four separate states and their reasons:
 
 - **desired:** what settings or the feature's own store ask for, with its source (`default`, `project`, `store`);
-- **consent:** `not_required`, `current`, `stale` (its binding to enrollment, qualification or checkout no longer matches), `missing`;
+- **consent:** `not_required`, `current`, `stale` (its binding to enrollment, qualification or checkout no longer matches), `missing`, or `unchecked` when the store was not inspected (for example at startup); `unchecked` never counts as missing or current;
 - **effective:** whether new automatic behavior may start now;
 - **observed:** whether execution was ever observed, when the feature records it, otherwise `unknown`.
 
@@ -125,7 +125,7 @@ workflow.py features set|unset <id> <key> [<json-value>] --cwd <checkout>
 | Feature | Source | Phase |
 |---|---|---|
 | `workstreams` | The `AGENTS.md` block becomes `features.workstreams.enabled`; the block is replaced by the instruction from section 6. New ordinary admissions (delegation sends and `routing_settings.workstreams_enabled`) read the resolved feature. The runtime file's top-level `enabled` is kept for historical requests and their pins, and stops deciding new ordinary admissions. Explicit delegation, required review and existing ownership are unchanged | 1 |
-| `workstreams.resource_admission`, `workstreams.capacity_recovery` | Phase 1 writes their current effective values explicitly into the runtime file's `features.*`, because absent entries inherit the top-level flag today (`runtime/workstreams.py:99-103`), and reports them through an adapter. Phase 2 moves them | 1 (materialize), 2 (move) |
+| `workstreams.resource_admission`, `workstreams.capacity_recovery` | Where advanced runtime state already exists, phase 1 writes their current effective values explicitly into the runtime file's `features.*`; it never creates runtime state for this, because absent entries inherit the top-level flag today (`runtime/workstreams.py:99-103`), and reports them through an adapter. Phase 2 moves them | 1 (materialize), 2 (move) |
 | `smart_routing` | `~/.local/state/vibe-workflow/routing/settings.json` (per OS user) becomes project settings; the API spending toggle becomes a grant, never a shared value | 2 |
 | `openrouter.*`, `observability.langfuse`, `usage_routing` | Their private stores become `private/grants/<id>.json` with the same checkout binding; renamed roots drop `vcw` | 2, one per change |
 
