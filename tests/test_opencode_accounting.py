@@ -75,10 +75,12 @@ EVENTS = [opencode.normalize_event(event, families=FAMILIES) for event in EXCERP
 
 
 def account(messages=C_MESSAGES, total=C_TOTAL, session_id=C_ID, **kwargs):
+    kwargs.setdefault("lineage", [])  # launchers supply lineage; tests of its absence pass None
     return accounting.usage_from_messages(messages, total, session_id=session_id, **kwargs)
 
 
 def state(messages=C_MESSAGES, total=C_TOTAL, session_id=C_ID, **extra):
+    extra.setdefault("lineage", [])
     return {"session_id": session_id, "messages": messages, "tokens": total, **extra}
 
 
@@ -344,7 +346,7 @@ class Cost(unittest.TestCase):
     def test_api_cost_passes_through_as_ceiling_micros_separate_from_tokens(self):
         messages = [synthetic("msg_c1", tokens(1, 2, 0, 0, 0), cost=0.0123),
                     synthetic("msg_c2", tokens(3, 4, 0, 0, 0), cost=1e-7)]
-        result = accounting.usage_from_messages(messages, tokens(4, 6, 0, 0, 0), session_id="ses_c", funding="api",
+        result = accounting.usage_from_messages(messages, tokens(4, 6, 0, 0, 0), session_id="ses_c", funding="api", lineage=[],
                                                 session_cost=0.0123001)
         self.assertEqual(result["title"]["state"], "zero")
         self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [12300, 1])
@@ -364,24 +366,24 @@ class Cost(unittest.TestCase):
 
     def test_api_zero_title_cost_delta_with_title_tokens_is_unknown(self):
         messages = [synthetic("msg_c1", tokens(1, 1, 0, 0, 0), cost=0.01)]
-        result = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api",
+        result = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api", lineage=[],
                                                 session_cost=0.01)
         self.assertTrue(all(r["cost_usd_micros"] is None for r in result["usage"]["requests"]))
         self.assertIn("cost_unknown", result["unknown"])
-        missing = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api")
+        missing = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api", lineage=[])
         self.assertIn("cost_unknown", missing["unknown"])
 
     def test_api_zero_token_zero_cost_message_stays_zero(self):
         messages = [synthetic("msg_c1", tokens(0, 0, 0, 0, 0), cost=0.0), synthetic("msg_c2", tokens(1, 1, 0, 0, 0),
                                                                                     cost=0.01)]
-        result = accounting.usage_from_messages(messages, tokens(1, 1, 0, 0, 0), session_id="ses_c", funding="api",
+        result = accounting.usage_from_messages(messages, tokens(1, 1, 0, 0, 0), session_id="ses_c", funding="api", lineage=[],
                                                 session_cost=0.01)
         self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [0, 10000])
         self.assertEqual(result["totals"]["usd_micros"], 10000)
 
     def test_api_cost_never_invented_from_tokens(self):
         messages = [synthetic("msg_c1", tokens(1000, 2000, 0, 0, 0), cost=None)]
-        result = accounting.usage_from_messages(messages, None, session_id="ses_c", funding="api")
+        result = accounting.usage_from_messages(messages, None, session_id="ses_c", funding="api", lineage=[])
         self.assertIsNone(result["usage"]["requests"][0]["cost_usd_micros"])
         self.assertIsNone(result["totals"]["usd_micros"])
         self.assertIn("cost_unknown", result["unknown"])
@@ -389,12 +391,12 @@ class Cost(unittest.TestCase):
     def test_api_title_cost_by_exact_subtraction(self):
         messages = [synthetic("msg_c1", tokens(1, 1, 0, 0, 0), cost=0.01),
                     synthetic("msg_c2", tokens(1, 1, 0, 0, 0), cost=0.01)]
-        result = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api",
+        result = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api", lineage=[],
                                                 session_cost=0.03)
         self.assertEqual(result["usage"]["requests"][-1], {"kind": "title", "model": "unknown",
                                                            "tokens": tokens(1, 1, 0, 0, 0), "cost_usd_micros": 10000})
         self.assertEqual(result["totals"]["usd_micros"], 30000)
-        lower = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api",
+        lower = accounting.usage_from_messages(messages, tokens(3, 3, 0, 0, 0), session_id="ses_c", funding="api", lineage=[],
                                                session_cost=0.01)
         self.assertIsNone(lower["usage"]["requests"][-1]["cost_usd_micros"])
         self.assertIsNone(lower["totals"]["usd_micros"])
@@ -402,7 +404,7 @@ class Cost(unittest.TestCase):
     def test_unknown_message_under_api_funding_makes_every_cost_unknown(self):
         messages = [synthetic("msg_c1", tokens(1, 1, 0, 0, 0), cost=0.01), dict(synthetic("msg_c2", {}, cost=0.01),
                                                                                tokens=None)]
-        result = accounting.usage_from_messages(messages, None, session_id="ses_c", funding="api")
+        result = accounting.usage_from_messages(messages, None, session_id="ses_c", funding="api", lineage=[])
         self.assertEqual([r["cost_usd_micros"] for r in result["usage"]["requests"]], [None])
         self.assertIsNone(result["totals"]["usd_micros"])
 
@@ -581,7 +583,8 @@ class Consistency(unittest.TestCase):
             "in_progress": 0, "unknown_records": 0, "missing_model": 0, "complete": True, "title": "known",
             "title_reason": None, "negative_classes": [], "rate_limit_messages": 1, "children_referenced": 0,
             "children_included": 0, "children_unaccounted": 0, "spawns_without_session": 0,
-            "tool_calls_dropped": 0})
+            "tool_calls_dropped": 0, "lineage_unaccounted": 0})
+        self.assertIsNone(accounting.consistency_report(state(lineage=None))["lineage_unaccounted"])
         self.assertEqual(accounting.consistency_report(state(D_MESSAGES, D_TOTAL, D_ID))["children_unaccounted"], 1)
 
     def test_report_counts_problems_without_raising_or_echoing(self):
@@ -795,7 +798,8 @@ class LedgerSettlement(ledger_tests.Accounting):
         return self.call(ledger_tests.complete(attempt, "c-" + attempt, usage=result["usage"]))
 
     def api(self, messages, total, cost):
-        return accounting.usage_from_messages(messages, total, session_id="ses_l", funding="api", session_cost=cost)
+        return accounting.usage_from_messages(messages, total, session_id="ses_l", funding="api", session_cost=cost,
+                                              lineage=[])
 
     def assert_cost_unknown(self, response, attempt):
         self.assertEqual(response["outcome"], "cost_unknown", response)
@@ -833,10 +837,11 @@ def tree_session(session_id, spawns=()):
     return {"session_id": session_id, "tokens": tokens(1, 1, 0, 0, 0), "cost": 0.01, "messages": [message]}
 
 
-def tree(root_spawns, children, funding="subscription"):
+def tree(root_spawns, children, funding="subscription", lineage=()):
     root = tree_session("ses_root", root_spawns)
     return accounting.usage_from_messages(root["messages"], root["tokens"], session_id="ses_root", funding=funding,
-                                          session_cost=0.01, children=children)
+                                          session_cost=0.01, children=children,
+                                          lineage=None if lineage is None else list(lineage))
 
 
 class SpawnsWithoutSession(unittest.TestCase):
@@ -900,6 +905,260 @@ class Reachability(unittest.TestCase):
         self.assertEqual(len(tree(names[:63], [tree_session(name) for name in names[:63]])["sessions"]), 64)
         self.assertEqual(assert_fixed_error(self, tree, names, [tree_session(name) for name in names]),
                          "invalid session")
+
+
+# The 9 November 2026 live re-qualification (docs/smart-routing-qualification.md, Blocker): the managed root ran a
+# `subagent: true` command. OpenCode created the child session directly, linked to the root only by `parentID`, and
+# delivered its result to the root as a `synthetic` message. Only shapes and counts were recorded, so the raw messages
+# are rebuilt from the recorded types and tokens.
+QUAL = load("qual-results.json")["inspection"]
+Q_ROOT, Q_CHILD = "ses_qroot", "ses_qchild"
+Q_TOTAL = dict(QUAL["managed_session_total_tokens"])
+Q_PRIMARY = QUAL["usage_from_messages_root_only"]["requests"][0]["tokens"]
+Q_LINEAGE = [{"session_id": Q_ROOT, "parent_session_id": None}, {"session_id": Q_CHILD, "parent_session_id": Q_ROOT}]
+
+
+def raw_tokens(values):
+    return {"input": values["input"], "output": values["output"], "reasoning": values["reasoning"],
+            "cache": {"read": values["cache_read"], "write": values["cache_write"]}}
+
+
+def raw_messages(types, prefix, cost=0):
+    """Raw OpenCode messages of the recorded types (`idle(failed)` is an idle message with that outcome)."""
+    messages = []
+    for index, recorded in enumerate(types):
+        kind, _, outcome = recorded.partition("(")
+        message = {"id": f"msg_{prefix}{index}", "type": kind, "time": {"created": 1794170600000 + index * 1000}}
+        if outcome:
+            message["outcome"] = outcome.rstrip(")")
+        if kind == "assistant":
+            message.update(model={"id": "haiku", "providerID": "claude-agent", "variant": "low"}, finish="stop",
+                           tokens=raw_tokens(Q_PRIMARY), cost=cost)
+            message["time"]["completed"] = message["time"]["created"] + 500
+        messages.append(message)
+    return messages
+
+
+def q_root(cost=0):
+    return normalized(raw_messages(QUAL["managed_root_message_types"], "qroot", cost))
+
+
+def q_child(parent=Q_ROOT):
+    session = {"id": Q_CHILD, "parentID": parent, "tokens": raw_tokens(QUAL["command_child"]["tokens"]), "cost": 0}
+    return dict(accounting.normalize_session(session), messages=normalized(raw_messages(QUAL["command_child"]["message_types"], "qchild")))
+
+
+def q_account(children=(), lineage=Q_LINEAGE, funding="subscription", cost=0, session_cost=0):
+    return accounting.usage_from_messages(q_root(cost), Q_TOTAL, session_id=Q_ROOT, funding=funding,
+                                          session_cost=session_cost, children=list(children), lineage=lineage)
+
+
+class CommandChildFixture(unittest.TestCase):
+    def test_recorded_live_shape(self):
+        self.assertTrue(QUAL["command_child"]["parent_is_managed_root"])
+        self.assertFalse(QUAL["command_child"]["linked_by_subagent_tool_part"])
+        self.assertEqual(QUAL["usage_from_messages_with_child"], "refused: session not in the attempt")
+        self.assertFalse(QUAL["usage_from_messages_root_only"]["child_session_unaccounted_flagged"])
+        self.assertEqual(QUAL["usage_from_messages_root_only"]["title"]["reason"], "unknown_record")
+        self.assertIn("synthetic", QUAL["managed_root_message_types"])
+        self.assertEqual(sum(len(m.get("tool_calls") or []) for m in q_root()), 0)
+        self.assertEqual([m["kind"] for m in q_root() if m["type"] == "synthetic"], ["synthetic"])
+
+    def test_child_linked_by_parent_id_is_accounted_and_the_title_is_known(self):
+        result = q_account([q_child()])
+        self.assertEqual(result["unknown"], [])
+        title = {field: Q_TOTAL[field] - Q_PRIMARY[field] for field in FIELDS}
+        self.assertEqual(title, tokens(2, 8, 0, 0, 1167))
+        self.assertEqual(result["title"], {"state": "known", "tokens": title, "reason": None})
+        self.assertEqual([s["session_id"] for s in result["sessions"]], [Q_ROOT, Q_CHILD])
+        self.assertEqual(result["totals"]["counted"], Q_TOTAL)
+        self.assertEqual([r["kind"] for r in result["usage"]["requests"]], ["primary", "title"])
+        self.assertIsNone(routing._usage_error(result["usage"]))
+
+    def test_child_without_its_parent_link_is_still_refused(self):
+        self.assertEqual(assert_fixed_error(self, q_account, [q_child(parent=None)]), "session not in the attempt")
+
+    def test_omitted_child_in_lineage_is_unaccounted(self):
+        for funding in ("subscription", "api"):
+            result = q_account(funding=funding, cost=0.0123, session_cost=0.0124)
+            self.assertIn("child_session_unaccounted", result["unknown"])
+            self.assertEqual(result["title"]["state"], "known")
+            self.assertIsNone(result["totals"]["usd_micros"])
+            self.assertTrue(all(r["cost_usd_micros"] is None for r in result["usage"]["requests"]))
+        self.assertIn("cost_unknown", q_account(funding="api", cost=0.0123, session_cost=0.0124)["unknown"])
+        self.assertNotIn("cost_unknown", q_account()["unknown"])
+
+    def test_absent_lineage_is_not_silently_complete(self):
+        subscription = q_account([q_child()], lineage=None)
+        self.assertEqual(subscription["unknown"], ["lineage_not_checked"])
+        self.assertTrue(all(r["cost_usd_micros"] is None for r in subscription["usage"]["requests"]))
+        api = q_account([q_child()], lineage=None, funding="api", cost=0.0123, session_cost=0.0124)
+        self.assertEqual(api["unknown"], ["cost_unknown", "lineage_not_checked"])
+        self.assertIsNone(api["totals"]["usd_micros"])
+        priced = q_account([q_child()], funding="api", cost=0.0123, session_cost=0.0124)
+        self.assertEqual((priced["unknown"], priced["totals"]["usd_micros"]), ([], 12400))
+
+    def test_synthetic_records_never_count_and_tokens_on_them_are_flagged(self):
+        messages = q_root()
+        self.assertEqual(accounting.title_tokens(Q_TOTAL, messages)["reason"], None)
+        flagged = [dict(m, tokens=tokens(1, 0, 0, 0, 0)) if m["type"] == "synthetic" else m for m in messages]
+        self.assertEqual(accounting.title_tokens(Q_TOTAL, flagged)["reason"], "unexpected_tokens")
+        zero = [dict(m, tokens=tokens(0, 0, 0, 0, 0)) if m["type"] == "synthetic" else m for m in messages]
+        self.assertEqual(accounting.title_tokens(Q_TOTAL, zero)["reason"], None)
+        synthetic_record = next(m for m in messages if m["type"] == "synthetic")
+        for bad in (dict(synthetic_record, type="assistant"), dict(synthetic_record, kind="message"),
+                    dict(synthetic_record, message_id=MARKER), dict(synthetic_record, created_ms=True)):
+            assert_fixed_error(self, accounting.title_tokens, Q_TOTAL, [bad])
+        report = accounting.consistency_report({"session_id": Q_ROOT, "messages": messages, "tokens": Q_TOTAL})
+        self.assertEqual((report["unknown_records"], report["by_type"]["synthetic"], report["title"]), (0, 1, "known"))
+
+    def test_resync_with_children_and_lineage_has_zero_deltas(self):
+        session = {"session_id": Q_ROOT, "messages": q_root(), "tokens": Q_TOTAL, "cost": 0,
+                   "children": [q_child()], "lineage": Q_LINEAGE}
+        once = accounting.reconcile_with_state(None, session)
+        self.assertEqual(once["accounting"], q_account([q_child()]))
+        twice = accounting.reconcile_with_state(once["accounting"], session)
+        self.assertEqual(twice["accounting"], once["accounting"])
+        self.assertEqual(twice["changes"]["tokens_delta"], tokens(0, 0, 0, 0, 0))
+        self.assertEqual((twice["changes"]["messages_added"], twice["changes"]["messages_missing"]), (0, 0))
+        report = accounting.consistency_report(dict(session, children=[]))
+        self.assertEqual(report["lineage_unaccounted"], 1)
+
+
+def linked(session_id, parent, spawns=()):
+    return dict(tree_session(session_id, spawns), parent_session_id=parent)
+
+
+class ParentLinks(unittest.TestCase):
+    def test_parent_only_chain_is_reachable(self):
+        result = tree([], [linked("ses_p1", "ses_root"), linked("ses_p2", "ses_p1")], funding="api")
+        self.assertEqual(result["unknown"], [])
+        self.assertEqual(result["totals"]["usd_micros"], 30000)
+
+    def test_tool_link_and_agreeing_parent_link(self):
+        result = tree(["ses_p1"], [linked("ses_p1", "ses_root", ["ses_p2"]), linked("ses_p2", "ses_p1"),
+                                   linked("ses_p3", "ses_p1")])
+        self.assertEqual(result["unknown"], [])
+        self.assertEqual(len(result["sessions"]), 4)
+
+    def test_parent_link_contradicting_a_tool_link_is_refused(self):
+        children = [linked("ses_p1", "ses_root"), linked("ses_p2", "ses_p1")]
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_p2"], children), "session not in the attempt")
+        children = [tree_session("ses_p1", ["ses_p2"]), linked("ses_p2", "ses_root")]
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_p1"], children), "session not in the attempt")
+
+    def test_parent_outside_the_attempt_is_refused(self):
+        self.assertEqual(assert_fixed_error(self, tree, ["ses_p1"], [linked("ses_p1", "ses_elsewhere")]),
+                         "session not in the attempt")
+        self.assertEqual(assert_fixed_error(self, tree, [], [linked("ses_p1", "ses_root"),
+                                                             linked("ses_p2", "ses_elsewhere")]),
+                         "session not in the attempt")
+
+    def test_parent_cycle_and_root_with_an_included_parent_are_refused(self):
+        children = [linked("ses_p1", "ses_p2"), linked("ses_p2", "ses_p1")]
+        self.assertEqual(assert_fixed_error(self, tree, [], children), "session not in the attempt")
+        root = tree_session("ses_root")
+        session = dict(root, parent_session_id="ses_p1", children=[linked("ses_p1", "ses_root")], lineage=[])
+        self.assertEqual(assert_fixed_error(self, accounting.reconcile_with_state, None, session),
+                         "session not in the attempt")
+
+    def test_session_bound_with_parent_links(self):
+        names = [f"ses_g{index}" for index in range(64)]
+        self.assertEqual(len(tree([], [linked(name, "ses_root") for name in names[:63]])["sessions"]), 64)
+        self.assertEqual(assert_fixed_error(self, tree, [], [linked(name, "ses_root") for name in names]),
+                         "invalid session")
+
+    def test_duplicate_child_is_refused(self):
+        self.assertEqual(assert_fixed_error(self, tree, [], [linked("ses_p1", "ses_root")] * 2), "invalid session")
+
+    def test_normalized_session_feeds_a_child_directly(self):
+        session = accounting.normalize_session(SESSIONS[CHILD_ID])
+        child = dict(session, messages=CHILD["messages"])
+        result = account(D_MESSAGES, D_TOTAL, D_ID, children=[child],
+                         lineage=[{"session_id": CHILD_ID, "parent_session_id": D_ID}])
+        self.assertNotIn("child_session_unaccounted", result["unknown"])
+
+
+class Lineage(unittest.TestCase):
+    def test_descendants_under_the_root_must_be_included(self):
+        lineage = [{"session_id": "ses_l1", "parent_session_id": "ses_root"},
+                   {"session_id": "ses_l2", "parent_session_id": "ses_l1"}]
+        self.assertIn("child_session_unaccounted", tree([], [], lineage=lineage)["unknown"])
+        included = tree([], [linked("ses_l1", "ses_root")], lineage=lineage)
+        self.assertIn("child_session_unaccounted", included["unknown"])  # the grandchild is missing
+        both = tree([], [linked("ses_l1", "ses_root"), linked("ses_l2", "ses_l1")], lineage=lineage)
+        self.assertEqual(both["unknown"], [])
+
+    def test_grandchild_of_an_included_child_missing_from_lineage(self):
+        lineage = [{"session_id": "ses_l2", "parent_session_id": "ses_l1"}]
+        self.assertIn("child_session_unaccounted", tree(["ses_l1"], [tree_session("ses_l1")], lineage=lineage)["unknown"])
+
+    def test_sessions_outside_the_root_are_ignored(self):
+        lineage = [{"session_id": "ses_o1", "parent_session_id": None},
+                   {"session_id": "ses_o2", "parent_session_id": "ses_o1"},
+                   {"session_id": "ses_o3", "parent_session_id": "ses_unknown"}]
+        self.assertEqual(tree([], [], lineage=lineage)["unknown"], [])
+
+    def test_contradicting_lineage_is_refused(self):
+        lineage = [{"session_id": "ses_l1", "parent_session_id": "ses_other"}]
+        self.assertEqual(assert_fixed_error(self, tree, [], [linked("ses_l1", "ses_root")], lineage=lineage),
+                         "invalid lineage")
+        conflicting = [{"session_id": "ses_l1", "parent_session_id": "ses_root"},
+                       {"session_id": "ses_l1", "parent_session_id": "ses_other"}]
+        self.assertEqual(assert_fixed_error(self, tree, [], [], lineage=conflicting), "invalid lineage")
+        same = [{"session_id": "ses_l1", "parent_session_id": "ses_root"}] * 2
+        self.assertIn("child_session_unaccounted", tree([], [], lineage=same)["unknown"])
+        rooted = [{"session_id": "ses_root", "parent_session_id": "ses_l1"},
+                  {"session_id": "ses_l1", "parent_session_id": "ses_root"}]
+        self.assertEqual(assert_fixed_error(self, tree, [], [], lineage=rooted), "invalid lineage")
+
+    def test_lineage_cycle_is_refused(self):
+        cycle = [{"session_id": "ses_c1", "parent_session_id": "ses_c2"},
+                 {"session_id": "ses_c2", "parent_session_id": "ses_c1"}]
+        self.assertEqual(assert_fixed_error(self, tree, [], [], lineage=cycle), "invalid lineage")
+        self.assertEqual(assert_fixed_error(self, tree, [], [], lineage=[{"session_id": "ses_c1",
+                                                                          "parent_session_id": "ses_c1"}]),
+                         "invalid lineage")
+
+    def test_long_chain_within_bounds(self):
+        names = [f"ses_k{index}" for index in range(accounting.MAX_LINEAGE)]
+        chain = [{"session_id": name, "parent_session_id": parent}
+                 for name, parent in zip(names, ["ses_root"] + names[:-1])]
+        self.assertIn("child_session_unaccounted", tree([], [], lineage=list(reversed(chain)))["unknown"])
+
+    def test_hostile_lineage(self):
+        entry = {"session_id": "ses_h1", "parent_session_id": "ses_root"}
+        loop = [entry]
+        loop.append(loop)
+        for bad in (MARKER, {"x": 1}, [MARKER], [None], [dict(entry, session_id=MARKER)],
+                    [dict(entry, parent_session_id=MARKER)], [dict(entry, session_id=True)],
+                    [dict(entry, parent_session_id=1)], [dict(entry, extra=MARKER)], [{"session_id": "ses_h1"}],
+                    loop, [entry] * (accounting.MAX_LINEAGE + 1)):
+            self.assertIn(assert_fixed_error(self, tree, [], [], lineage=bad), ("invalid lineage", "too many sessions"))
+            assert_fixed_error(self, accounting.consistency_report, dict(state(), lineage=bad))
+        for parent in (True, 1, MARKER, {"x": 1}):
+            self.assertEqual(assert_fixed_error(self, tree, [], [dict(tree_session("ses_h1"),
+                                                                      parent_session_id=parent)]), "invalid session")
+
+
+class CommandChildSettlement(ledger_tests.Accounting):
+    """The live command-child shape through the merged S3.6a `record complete` path, API-funded."""
+
+    settle_with, assert_cost_unknown = LedgerSettlement.settle_with, LedgerSettlement.assert_cost_unknown
+
+    def test_omitted_command_child_leaves_the_hold_cost_unknown(self):
+        result = q_account(funding="api", cost=0.0123, session_cost=0.0124)
+        self.assert_cost_unknown(self.settle_with("q1", result), "q1")
+
+    def test_absent_lineage_leaves_the_hold_cost_unknown(self):
+        result = q_account([q_child()], lineage=None, funding="api", cost=0.0123, session_cost=0.0124)
+        self.assert_cost_unknown(self.settle_with("q2", result), "q2")
+
+    def test_accounted_command_child_settles_as_an_estimate(self):
+        result = q_account([q_child()], funding="api", cost=0.0123, session_cost=0.0124)
+        settlement = self.settle_with("q3", result)["settlement"]
+        self.assertEqual((settlement["cost_source"], settlement["charged"], settlement["released"]),
+                         ("estimate", 5 * M, M))
 
 
 if __name__ == "__main__":

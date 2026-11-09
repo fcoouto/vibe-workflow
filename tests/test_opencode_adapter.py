@@ -39,6 +39,7 @@ EXCERPT = load("p0-hook-event-excerpt.json")
 LINEAGE = load("p0-8-lineage-aux.json")
 SESSION_A = load("p0-5-model-variant-messages.json")["messages"]
 SESSION_F = load("p0r2-mcp-codemode-messages.json")["messages"]
+QUAL = load("qual-results.json")  # the 9 November 2026 live re-qualification (docs/smart-routing-qualification.md)
 
 
 def hook_record(hook, **match):
@@ -429,6 +430,26 @@ class Messages(unittest.TestCase):
         result = opencode.normalize_message({"id": "msg_x1", "type": "hologram", "text": SECRET})
         self.assertEqual((result["kind"], result["source"], result["type"]), ("unknown", "message", "hologram"))
         self.assertNotIn(SECRET, json.dumps(result))
+        for near in ("Synthetic", "synthetic ", "synthetic-result"):
+            self.assertEqual(opencode.normalize_message({"id": "msg_x1", "type": near})["kind"], "unknown")
+
+    def test_synthetic_message_is_a_non_model_record(self):
+        # qual-results.json: a `subagent: true` command child's result reached the parent as a message whose
+        # `type` is `synthetic` (only the type was recorded); it carries no model request.
+        self.assertIn("synthetic", QUAL["inspection"]["managed_root_message_types"])
+        raw = {"id": "msg_x2", "type": "synthetic", "time": {"created": 1794170447818},
+               "text": SECRET, "content": [{"type": "text", "text": SECRET}]}
+        result = opencode.normalize_message(raw)
+        self.assertEqual(result, {"schema": 1, "client": "opencode", "kind": "synthetic", "type": "synthetic",
+                                  "message_id": "msg_x2", "created_ms": 1794170447818, "completed_ms": None,
+                                  "tokens": None})
+        self.assertNotIn(SECRET, json.dumps(result))
+        # Tokens are kept, never dropped, so accounting can flag a synthetic record that carries some.
+        counted = opencode.normalize_message(dict(raw, tokens={"input": 1, "output": 2}))
+        self.assertEqual(counted["tokens"], {"input": 1, "output": 2, "reasoning": None, "cache_read": None,
+                                             "cache_write": None})
+        for bad in ({"id": SECRET}, {"time": SECRET}, {"tokens": {"input": True}}):
+            assert_error_hides(self, opencode.normalize_message, dict(raw, **bad))
 
 
 class HostileInput(unittest.TestCase):
