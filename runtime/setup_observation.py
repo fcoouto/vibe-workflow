@@ -17,6 +17,7 @@ import time
 import tomllib
 from types import SimpleNamespace
 
+from runtime import package_manifest
 from runtime import onboarding as d3, startup
 
 
@@ -97,8 +98,7 @@ def _read(path, budget, *, absent=False, private=False, limit=d3.MAX_FILE, expec
     budget['paths'] += 1
     d3._no_links(path)
     try:
-        raw = d3._read_file(path, min(limit, d3.MAX_TOTAL-budget['bytes']-1), private=private,
-            expected_binding=expected_binding)
+        raw = d3._read_file(path, min(limit, package_manifest.PACKAGE_SCAN_MAX_BYTES-budget['bytes']-1), private=private, expected_binding=expected_binding)
     except FileNotFoundError:
         if absent:
             return None
@@ -157,13 +157,13 @@ def _package_scan(root, budget, *, runtime_sources=None):
     sources = list(runtime_sources) if runtime_sources is not None else None
     selected = set(sources) if sources is not None else set()
     runtime = hashlib.sha256() if sources is not None else None
-    consumed = 0
+    consumed, members = 0, package_manifest.export_members(root, deadline=budget.get('deadline'))
     pending = [root]
     digest = hashlib.sha256(b'codex-plugin-bundle-v1')
     while pending:
         startup._entry_budget_check(budget)
         path = pending.pop()
-        if path != root and (path.name in ('__pycache__', '.venv') or path.name.endswith(('.pyc', '.egg-info'))):
+        if path != root and package_manifest.scan_skips(root, path, members):
             continue
         budget['paths'] += 1
         relative = os.fsencode(str(path.relative_to(root))) if path != root else b''
@@ -174,7 +174,7 @@ def _package_scan(root, budget, *, runtime_sources=None):
             pending.extend(sorted(_children(path, budget), key=lambda item: os.fsencode(item.name), reverse=True))
         else:
             d3._require(stat.S_ISREG(info.st_mode), 'Unsupported plugin source entry')
-            raw = _read(path, budget)
+            raw = _read(path, budget, limit=package_manifest.PACKAGE_SCAN_MAX_FILE)
             d3._require(len(raw) == info.st_size, 'Plugin contents changed during setup observation')
             digest.update(b'file'); digest.update(info.st_size.to_bytes(8, 'little')); digest.update(raw)
             relative_source=path.relative_to(root)

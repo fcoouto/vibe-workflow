@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from scripts.read_instructions import build_manifest
+from tests.fixture_package import copy_package
 from scripts.validate import validate
 
 
@@ -163,7 +164,7 @@ class HarnessEvaluationTests(unittest.TestCase):
 
     def test_package_validation_rejects_missing_harness_assets(self):
         package = self.root / "package"
-        shutil.copytree(PACKAGE, package, ignore=shutil.ignore_patterns(".git", ".superpowers", "__pycache__"))
+        copy_package(PACKAGE, package, ".superpowers")
         (package / "clients/instruction-map.json").write_text(json.dumps(build_manifest(package)))
         self.assertEqual(validate(package)["validation"], "passed")
         required = ["scripts/validate-harness.mjs", "assets/harness-evaluation/LICENSE",

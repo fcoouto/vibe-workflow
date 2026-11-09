@@ -161,7 +161,7 @@ class NativeBehaviorRecordTests(unittest.TestCase):
             with self.assertRaises(startup.StartupError):
                 read(path, budget | {'deadline': 0}, 100)
             with self.assertRaisesRegex(startup.StartupError, 'file size limit'):
-                read(path, source._budget() | {'bytes': source.d3.MAX_TOTAL-2}, 100)
+                read(path, source._budget() | {'bytes': source.package_manifest.PACKAGE_SCAN_MAX_BYTES-2}, 100)
             replacement = path.with_suffix('.new')
             replacement.write_bytes(b'[]')
             replacement.chmod(0o600)

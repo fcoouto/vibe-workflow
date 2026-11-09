@@ -535,10 +535,10 @@ def _owners(config, context, db, *, budget=None):
                  and metadata['class'] == 'compact' and metadata['targets'] == targets
                  and not metadata['dependencies'] and metadata['closed_at'] is None and metadata['export'] is None)
         if budget is not None:
-            from runtime.onboarding import MAX_TOTAL
+            from runtime.onboarding import LEGACY_MAX_TOTAL
             if evidence._CAP_INPUT_BUDGET.get() is not budget:
                 budget['bytes'] += metadata['bytes']
-            _require(budget['bytes'] <= MAX_TOTAL)
+            _require(budget['bytes'] <= LEGACY_MAX_TOTAL)
         details = dict(target=targets[0], targets=targets, kind=content['kind'])
         if content['kind'] == 'temporary-project-owner':
             details.update(membership=content['membership'], members=content['members'])
