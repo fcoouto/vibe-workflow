@@ -11,7 +11,7 @@ import stat
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from tests.qualification import chatgpt, safety, sanitize
+from tests.qualification import chatgpt, safety, sanitize, user_dirs
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
 from tests.test_qualification_probes import UPSTREAM, StageHarness, approved_ledger
@@ -150,7 +150,7 @@ class UserDirPolicyTests(Temp):
             touch(root / name)
         before = safety.snapshot_tree(root)
         touch(root / change)
-        unexpected, churn = safety.classify_user_dir(policy, before, safety.snapshot_tree(root), root)
+        unexpected, churn = user_dirs.classify_user_dir(policy, before, safety.snapshot_tree(root), root)
         return unexpected, churn
 
     def test_data_dir(self):
