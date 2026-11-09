@@ -30,6 +30,8 @@ const DERIVED = "ses_" + "0123456789abcdef".repeat(2)
 const DERIVED_B = "ses_" + "fedcba9876543210".repeat(2)
 
 type Hooks = Record<string, (event: any) => Promise<void> | void>
+/** Emitting this makes the fake event stream throw, as a lost subscription would. */
+const STREAM_LOST = Symbol("stream lost")
 
 function child(control: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "routing-plugin-"))
@@ -79,7 +81,9 @@ function fakeCtx(sessions: Record<string, { parentID?: string }> = {}, options: 
               if (signal?.aborted) return { done: true, value: undefined }
               await new Promise<void>((resolve) => { wake = resolve; signal?.addEventListener("abort", () => resolve(), { once: true }) })
             }
-            return { done: false, value: queue.shift() }
+            const value = queue.shift()
+            if (value === STREAM_LOST) throw new Error("event stream lost")
+            return { done: false, value }
           },
           async return() { return { done: true, value: undefined } },
         }
@@ -128,9 +132,11 @@ const created = (sessionID: string, parentID?: string) =>
 async function start(control: Record<string, unknown> = {}, sessions = {}, config: Record<string, unknown> = {}) {
   const fake = child(control)
   const { ctx, hooks, lookups, state, emit } = fakeCtx(sessions)
+  const { noEvents, ...settings } = config
+  if (noEvents) delete (ctx as any).event  // a host without an event stream
   const refusals: string[] = []  // attach's internal refusal reasons, seen only through the test hook
   const instance = createRoutingPlugin({ argv: fake.argv, timeoutMs: TIMEOUT, spawnGraceMs: GRACE,
-    onRefusal: (reason: string) => refusals.push(reason), ...config })
+    onRefusal: (reason: string) => refusals.push(reason), ...settings })
   const cleanup = await instance.setup(ctx)
   const rpc = (method: string, input: unknown = {}) => state.handlers[method](input, { signal: new AbortController().signal })
   // The launcher's attach: the child is told to answer the verification normally, then the test's modes come back.
@@ -149,8 +155,10 @@ async function start(control: Record<string, unknown> = {}, sessions = {}, confi
   }
   const detach = (session = MANAGED, attempt = "att-1", authority: unknown = TOKENS[attempt]) =>
     rpc("detach", { session_id: session, attempt_id: attempt, authority })
+  const descendants = (session = MANAGED, attempt = "att-1", authority: unknown = TOKENS[attempt]) =>
+    rpc("descendants", { session_id: session, attempt_id: attempt, authority })
   const stop = () => { if (typeof cleanup === "function") cleanup(); fake.cleanup() }
-  return { fake, hooks, lookups, state, rpc, attach, detach, stop, emit, ctx, refusals }
+  return { fake, hooks, lookups, state, rpc, attach, detach, descendants, stop, emit, ctx, refusals }
 }
 
 const modelRequest = (sessionID: string, kind = "primary", model: unknown = HAIKU) => ({
@@ -973,7 +981,14 @@ test("the token never leaves the shim except on the routing child's stdin", asyn
         await settle(() => t.detach(MANAGED, "att-1", WRONG))
         await settle(() => t.detach(MANAGED, "att-b", TOKEN))
         await settle(() => t.rpc("detach", { session_id: MANAGED, attempt_id: "att-1", authority: TOKEN + " " }))
+        await settle(() => t.descendants())
+        await settle(() => t.descendants(MANAGED, "att-1", WRONG))
+        await settle(() => t.descendants(MANAGED, "att-b", TOKEN))
+        await settle(() => t.descendants("ses_kid1"))
+        await settle(() => t.rpc("descendants", { session_id: MANAGED, attempt_id: "att-1", authority: TOKEN + " " }))
+        await settle(() => t.rpc("descendants", { session_id: MANAGED, attempt_id: TOKEN, authority: TOKEN }))
         await settle(() => t.detach())
+        await settle(() => t.descendants())
         keep(t.lookups)
         keep(t.state.subscribed)
         keep(t.state.rpc)
@@ -1118,6 +1133,16 @@ for (const seed of [1, 7, 42]) {
           } else {
             assert.match(outcome, /^routing: blocked \(/, where)
             for (const check of enforced().slice(before)) assert.deepEqual([check.attempt_id, check.authority], ["att-1", TOKEN])
+            // The descendants RPC answers only with the asking root's own recorded sessions, and asks nothing.
+            const root = managed.get(session)!
+            const sent = t.fake.all().length
+            const answer = await t.descendants(root)
+            assert.equal(t.fake.all().length, sent, `${where}: descendants called the child`)
+            assert.equal(answer.root, root)
+            for (const entry of answer.descendants) {
+              assert.equal(managed.get(entry.session_id), root, `${where}: ${entry.session_id} is not under ${root}`)
+              assert.notEqual(entry.session_id, root)
+            }
           }
           const shell = { env: shellEnv() }
           await t.hooks["shell.create.before"](shell)
@@ -1486,6 +1511,209 @@ test("the real child without a ledger is alive but not ready, and attach is refu
     assert.deepEqual(t.refusals, ["ledger_absent"])
     await t.emit(created(DERIVED))
     await t.hooks["session.model.request"](modelRequest(DERIVED))  // no ledger: an unattached session is interactive
+  } finally { t.stop() }
+})
+
+// S3.3c: `routing.descendants` lets the launcher cross-check its own session listing against the shim's record.
+const link = (session_id: string, parent_session_id: string | null) => ({ session_id, parent_session_id })
+const byId = (entries: { session_id: string }[]) => [...entries].sort((a, b) => a.session_id < b.session_id ? -1 : 1)
+
+test("descendants: the attached root's recorded tree at any depth, also after a cache flood, without lookups", async () => {
+  const B = D("rootb1")
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))  // the launcher creates the root after attaching it
+    await t.emit(created("ses_kid1", MANAGED))
+    await t.emit(created("ses_grand1", "ses_kid1"))
+    await t.emit(created("ses_cmd1", MANAGED))  // a `subagent: true` command child: known only from its creation event
+    await t.attach(B, { attempt_id: "att-b" })
+    await t.emit(created(B))
+    await t.emit(created("ses_bkid1", B))
+    await t.emit(created("ses_iroot1"))
+    await t.emit(created("ses_ikid1", "ses_iroot1"))
+    await flood(t, 4100)
+    await t.emit(created("ses_great1", "ses_grand1"))
+    const sent = t.fake.all().length
+    assert.deepEqual(await t.descendants(), {
+      state: "ok", root: MANAGED,
+      descendants: byId([link("ses_kid1", MANAGED), link("ses_grand1", "ses_kid1"), link("ses_cmd1", MANAGED),
+        link("ses_great1", "ses_grand1")]),
+      truncated: false, complete: true, reason: null, cache: { recorded: 4, retired: 0 },
+    })
+    assert.deepEqual(await t.descendants(B, "att-b"), { state: "ok", root: B, descendants: [link("ses_bkid1", B)],
+      truncated: false, complete: true, reason: null, cache: { recorded: 1, retired: 0 } })
+    assert.deepEqual(await t.descendants(), await t.descendants())  // a read: repeating it changes nothing
+    assert.equal(t.fake.all().length, sent)  // answered from the shim's own record: no routing child question
+    assert.deepEqual(t.lookups, [])
+  } finally { t.stop() }
+})
+
+test("descendants: a child found by a lookup is listed with its parent", async () => {
+  const t = await start({ check: ["blocked"] }, { ses_missed1: { parentID: MANAGED } })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    await assert.rejects(t.hooks["session.model.request"](modelRequest("ses_missed1")), blocked)
+    const answer = await t.descendants()
+    assert.deepEqual(answer.descendants, [link("ses_missed1", MANAGED)])
+    assert.equal(answer.complete, true)
+  } finally { t.stop() }
+})
+
+test("descendants: one refusal for every caller without the attached root's attempt and token", async () => {
+  const B = D("rootb1")
+  const t = await start({ check: ["blocked"] })
+  const refusal = (error: unknown) => blocked(error) && (error as Error).message === "routing: blocked (descendants_refused)"
+  const invalid = (error: unknown) => blocked(error) && (error as Error).message === "routing: blocked (invalid_descendants)"
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    await t.emit(created("ses_kid1", MANAGED))
+    await t.attach(B, { attempt_id: "att-b" })
+    await t.emit(created("ses_bkid1", B))
+    const sent = t.fake.all().length
+    for (const [session, attempt, authority] of [[MANAGED, "att-1", TOKEN_B], [MANAGED, "att-b", TOKEN_B],
+      [MANAGED, "att-b", TOKEN], [B, "att-1", TOKEN], [MANAGED, "att-1", TOKEN.slice(0, -1) + "x"], [MANAGED, "att-1", TOKEN + "x"],
+      ["ses_kid1", "att-1", TOKEN], [OTHER, "att-1", TOKEN], [D("never1"), "att-1", TOKEN], [D("never1"), "att-none", "x".repeat(43)]]) {
+      await assert.rejects(Promise.resolve().then(() => t.descendants(session, attempt, authority)), refusal, `${session} ${attempt}`)
+    }
+    const hostile = JSON.parse(`{"__proto__": {"authority": "${TOKEN}"}, "session_id": "${MANAGED}", "attempt_id": "att-1"}`)
+    for (const bad of [null, [], "x", 7, {}, { session_id: MANAGED }, { session_id: MANAGED, attempt_id: "att-1" }, hostile,
+      { session_id: MANAGED, attempt_id: "att-1", authority: 7 }, { session_id: MANAGED, attempt_id: "att-1", authority: "" },
+      { session_id: MANAGED, attempt_id: "att-1", authority: "a".repeat(129) },
+      { session_id: MANAGED, attempt_id: "att-1", authority: "has space " + TOKEN },
+      { session_id: "nope", attempt_id: "att-1", authority: TOKEN }, { session_id: "ses_" + "x".repeat(200), attempt_id: "att-1", authority: TOKEN },
+      { session_id: MANAGED + "\n", attempt_id: "att-1", authority: TOKEN }, { session_id: [MANAGED], attempt_id: "att-1", authority: TOKEN },
+      { session_id: MANAGED, attempt_id: "a".repeat(300), authority: TOKEN }, { session_id: MANAGED, attempt_id: "", authority: TOKEN }]) {
+      await assert.rejects(Promise.resolve().then(() => t.rpc("descendants", bad)), invalid, JSON.stringify(bad)?.slice(0, 80))
+    }
+    assert.equal(t.fake.all().length, sent)
+    // The refusals never revealed anything, and the rightful callers still get only their own trees.
+    assert.deepEqual((await t.descendants()).descendants, [link("ses_kid1", MANAGED)])
+    assert.deepEqual((await t.descendants(B, "att-b")).descendants, [link("ses_bkid1", B)])
+    // After detach (and for a replayed call) the same refusal: the launcher reads the set before it detaches.
+    await t.detach()
+    await assert.rejects(Promise.resolve().then(() => t.descendants()), refusal)
+    await assert.rejects(Promise.resolve().then(() => t.descendants()), refusal)
+    assert.deepEqual((await t.descendants(B, "att-b")).descendants, [link("ses_bkid1", B)])
+  } finally { t.stop() }
+})
+
+test("descendants: the response is bounded and says when it was cut", async () => {
+  const t = await start({ check: ["blocked"] }, {}, { maxDescendantsResponse: 5 })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    for (let index = 0; index < 8; index++) await t.emit(created(`ses_many${index}`, MANAGED))
+    const answer = await t.descendants()
+    assert.equal(answer.descendants.length, 5)
+    assert.deepEqual([answer.truncated, answer.complete, answer.reason], [true, false, "response_truncated"])
+    assert.deepEqual(answer.cache, { recorded: 8, retired: 0 })
+    assert.deepEqual(answer.descendants, byId(answer.descendants))
+  } finally { t.stop() }
+  const plain = await start({ check: ["blocked"] })
+  try {
+    await plain.attach()
+    await plain.emit(created(MANAGED))
+    for (let index = 0; index < 256; index++) await plain.emit(created(`ses_many${index}`, MANAGED))
+    const answer = await plain.descendants()  // a full budget fits the default bound
+    assert.deepEqual([answer.descendants.length, answer.truncated, answer.complete], [256, false, true])
+    assert.ok(JSON.stringify(answer).length < 65536)
+  } finally { plain.stop() }
+})
+
+test("descendants: complete is false, with one fixed reason, whenever the shim cannot vouch for the set", async () => {
+  const cases: [string, Record<string, unknown>, (t: Awaited<ReturnType<typeof start>>) => Promise<void>][] = [
+    ["event_stream_unavailable", {}, async (t) => { await t.emit(STREAM_LOST) }],
+    ["event_stream_unavailable", { noEvents: true }, async () => {}],
+    ["descendant_limit", {}, async (t) => {
+      for (let index = 0; index < 257; index++) await t.emit(created(`ses_many${index}`, MANAGED))
+    }],
+    ["lineage_lookup_failed", {}, async (t) => {
+      t.state.failLookup = true
+      await assertUntouched(t, "ses_unknown1")  // an undeterminable chain: it may have been this root's child
+    }],
+  ]
+  for (const [reason, config, act] of cases) {
+    const t = await start({ check: ["blocked"] }, {}, config)
+    try {
+      await t.attach()
+      await t.emit(created(MANAGED))
+      await t.emit(created("ses_kid1", MANAGED))
+      await act(t)
+      const answer = await t.descendants()
+      assert.equal(answer.state, "ok", reason)
+      assert.deepEqual([answer.complete, answer.reason], [false, reason], reason)
+      if (!config.noEvents) assert.ok(answer.descendants.some((entry: any) => entry.session_id === "ses_kid1"), reason)
+    } finally { t.stop() }
+  }
+})
+
+test("descendants: a root whose creation the shim did not see after attach is not vouched for", async () => {
+  const t = await start({ check: ["blocked"], known_sessions: [MANAGED] }, {}, { pendingMs: 60000 })
+  try {
+    await t.emit(created(MANAGED))  // created before attach: children may have come and gone unrecorded
+    await assert.rejects(t.hooks["session.model.request"](modelRequest(MANAGED)), refused("attach_required"))
+    await t.emit(created("ses_early1", MANAGED))  // recorded while pending, so attach makes it a descendant
+    await t.attach()
+    const early = await t.descendants()
+    assert.deepEqual([early.complete, early.reason], [false, "root_creation_unobserved"])
+    assert.deepEqual(early.descendants, [link("ses_early1", MANAGED)])
+  } finally { t.stop() }
+  const again = await start({ check: ["blocked"] })
+  try {
+    await again.attach()
+    await again.emit(created(MANAGED))
+    await again.emit(created("ses_kid1", MANAGED))
+    assert.equal((await again.descendants()).complete, true)
+    await again.attach()  // the same attempt attaching again keeps what it saw
+    assert.equal((await again.descendants()).complete, true)
+    await again.detach()
+    await again.attach()  // after detach (or a plugin restart) the root's creation is in the past
+    await again.emit(created("ses_kid2", "ses_kid1"))
+    const answer = await again.descendants()
+    assert.deepEqual([answer.complete, answer.reason], [false, "root_creation_unobserved"])
+    assert.deepEqual(answer.descendants, byId([link("ses_kid1", MANAGED), link("ses_kid2", "ses_kid1")]))
+    assert.deepEqual(answer.cache, { recorded: 1, retired: 1 })
+  } finally { again.stop() }
+})
+
+test("descendants: interactive sessions are untouched by the RPC and never listed", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    await t.emit(created("ses_iroot1"))
+    await t.emit(created("ses_ikid1", "ses_iroot1"))
+    await t.emit(created("ses_orphan1", "ses_ghost1"))
+    await t.descendants()
+    for (const session of ["ses_iroot1", "ses_ikid1", "ses_orphan1"]) await assertUntouched(t, session)
+    assert.deepEqual((await t.descendants()).descendants, [])
+    assert.equal(t.fake.requests("check").length, 0)
+  } finally { t.stop() }
+})
+
+test("the real child: descendants before record complete and detach, refused afterwards", async () => {
+  const stores = realStores(true)
+  const t = await realPlugin(stores)
+  try {
+    const { authority, session_id: session } = stores.command("dispatch", { attempt_id: "real-a1", request: REAL_REQUEST })
+    const input = { session_id: session, attempt_id: "real-a1", authority }
+    await t.rpc("attach", { ...input, funding_pool: "sub", model: "claude-agent/haiku#low" })
+    await t.emit(created(session))
+    await t.emit(created("ses_realkid1", session))
+    await t.emit(created("ses_realcmd1", "ses_realkid1"))
+    await t.hooks["session.model.request"](modelRequest("ses_realkid1"))
+    const expected = { state: "ok", root: session, descendants: byId([link("ses_realkid1", session),
+      link("ses_realcmd1", "ses_realkid1")]), truncated: false, complete: true, reason: null, cache: { recorded: 2, retired: 0 } }
+    assert.deepEqual(await t.rpc("descendants", input), expected)
+    await assert.rejects(Promise.resolve().then(() => t.rpc("descendants", { ...input, authority: "x".repeat(43) })),
+      refused("descendants_refused"))
+    assert.equal(stores.command("record", { event: { event_id: "e1", attempt_id: "real-a1", kind: "complete" } }).state, "recorded")
+    assert.deepEqual(await t.rpc("descendants", input), expected)  // still attached: the order is account, record, detach
+    await t.rpc("detach", input)
+    await assert.rejects(Promise.resolve().then(() => t.rpc("descendants", input)), refused("descendants_refused"))
   } finally { t.stop() }
 })
 
