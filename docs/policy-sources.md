@@ -216,10 +216,10 @@ no installed runtime was reconstructed or edited.
 | Requirement | Local contract and implementation |
 | --- | --- |
 | Explicit choices, local wait/native fallback, useful automatic consideration | [Shared selection](../clients/external-delegation.md#select-before-dispatch), loaded by Agent Delegation; offline shared selector |
-| Existing approvals, checkout/destination/mode scope, no mandatory cap/expiry | [Reusable permission](../clients/external-delegation.md#reusable-permission); optional existing Usage Routing/OpenRouter configure fields |
+| Activation as the only approval; saved permissions as explicit restrictions; checkout/destination/mode scope; no mandatory cap/expiry | [Saved permission](../clients/external-delegation.md#saved-permission-optional); `effective_permission` from the executor's saved activation; optional existing Usage Routing/OpenRouter configure fields |
 | Real source packet, derived prose, exclusions, dispatch recheck | [Packet contract](../clients/external-delegation.md#construct-and-recheck-the-packet); shared byte construction, OpenAI final grants, OpenRouter dispatch and worker launch |
 | Accounting, duplicate/uncertain attempts, route-specific retry ownership | Existing route procedures and ledgers retained; scoped proposal dispatch uses its existing attempt token |
-| Funded API admission and distinct native acceptance | [Foreground host](../skills/manage-usage-routing/references/codex-host.md) binds task consent, financial coverage and a distinct native reviewer; existing ledger retains API reservations and accounting history |
+| Funded API admission and distinct native acceptance | [Foreground host](../skills/manage-usage-routing/references/codex-host.md) binds the checkout's activation, financial coverage and a distinct native reviewer; existing ledger retains API reservations and accounting history |
 | Distinct native acceptance and truthful provenance | [Native acceptance](../clients/external-delegation.md#native-acceptance-and-recovery); trusted native preparation, existing OpenAI review receipts and scoped OpenRouter review references |
 
 The [implementation plan](superpowers/plans/2026-11-05-shared-external-delegation.md)
@@ -350,6 +350,27 @@ the `manage-usage-routing` identifier and reference paths remain compatible.
 No live activation, credential lookup, billing change, purchase or publication
 is authorized by this implementation. [Validation](usage-routing-validation.md)
 separates offline proof from observed client execution.
+
+## Activation authority — 9 November 2026
+
+The user decided that activating an integration is the only approval its use
+needs: "The activation of API Usage or OpenRouter integrations, for example, are
+more than enough to allow autonomous agentic actions using those means." This
+supersedes, for active integrations, the 26 October explicit-approval rule for
+non-native routes and the per-task, per-source, automatic-selection and
+approval-line steps recorded in the two sections above and in the
+[shared external delegation design](superpowers/specs/2026-11-05-shared-external-delegation-design.md).
+[Agent Delegation](../policies/03-agent-delegation.md#select-capability-and-dispatch)
+and the [shared external contract](../clients/external-delegation.md) carry it;
+`runtime/external_delegation.py` derives each assignment's permission from the
+executor's own saved activation, and a saved permission remains an explicit
+restriction. The user also retired Manual mode: an explicit request to use the
+API is an ordinary instruction, so API Usage has one active behavior. Activation
+covers Smart Routing control-plane endpoints that may retain task text; terms that
+forbid confidential data and explicit restrictions still exclude them. Funding,
+caps, prices, revocation, source safety, replay protection and independent native
+review are unchanged, and routes without an integration still need explicit
+approval. [Validation](activation-authority-validation.md) records the checks.
 
 ## Usage Routing delegation registration — 4 November 2026
 
@@ -525,7 +546,7 @@ The local contract tables also retain their triggers, onboarding decisions, evid
 - Explicit project/client enrollment, silent activation, conflict-resolution modes and applicable policy adoption are plugin decisions. The approved [Project/Repository design](onboard-my-project-plan.md#project-and-repository-model), linked delivery, recovery and retention extend that scope; their concrete owner seams remain future implementation/qualification, without changing current D6 package or live instruction claims.
 - Resource reservations, observed settings and trusted reviewer provenance supplement Toolkit guidance.
 - On 30 October 2026, the user approved [capability-based client compatibility](../policies/11-tool-integrations.md#qualify-the-actual-workflow), including fresh native dispatch. [Native delegation](../clients/delegation.md) compares reobserved capabilities, surface, provider, parent and dispatch controls rather than release strings. New bindings record the actual reader; submitted observations, historical receipts, guidance snapshots and exact refresh claims retain their original provenance. Same-surface guidance reuse depends on compatible capabilities. This changes eligibility checks, not native qualification, source identity, schema validation or security-sensitive dependency pins.
-- On 26 October 2026, the user simplified model authorization: native agents/models are automatically approved across all current and future platforms/providers; any non-native model or execution route requires explicit approval. This replaces the earlier subscription-only restriction and the local-only exception. Local models additionally require assessment. Existing account access, task constraints, budgets and supported dispatch still apply; this decision changes neither coordinator settings nor adapter support.
+- On 26 October 2026, the user simplified model authorization: native agents/models are automatically approved across all current and future platforms/providers; any non-native model or execution route requires explicit approval. This replaces the earlier subscription-only restriction and the local-only exception. Since 9 November 2026, activating an integration is that approval for its own routes ([activation authority](#activation-authority--9-november-2026)). Local models additionally require assessment. Existing account access, task constraints, budgets and supported dispatch still apply; this decision changes neither coordinator settings nor adapter support.
 - Optional OpenRouter helpers have separate saved controls and software coverage; execution qualification remains separate. The local-model assessment workflow remains deferred.
 - The user clarified on 26 October 2026 that only the coordinator's model/reasoning must remain their choice. Delegated workers use task-based model/effort selection from each platform's current official guidance. The earlier interpretation requiring defaults for every worker was incorrect. Store guidance locally and refresh it instead of fetching it for every task; preserve active assignment evidence. This applies to repository development as well as the plugin's planned workflow.
 - Security review runs after implementation, includes relevant delivery working-tree layers and blocks completion/merge for confirmed high/critical findings. Medium/low findings require resolution or authorized disposition. A repository baseline is performed when requested; no separate planning-time security gate is added.

@@ -1,6 +1,6 @@
 ---
 name: openrouter-workers
-description: Use when running an approved read-only OpenRouter worker through OpenCode with native supervision and optional Habblaud visibility; not native delegation or proposal-only calls.
+description: Use when running an enabled read-only OpenRouter worker through OpenCode with native supervision and optional Habblaud visibility; not native delegation or proposal-only calls.
 ---
 
 # OpenRouter Workers

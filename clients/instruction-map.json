@@ -149,11 +149,11 @@
       ]
     },
     "clients/external-delegation.md": {
-      "sha256": "1c293206ab0622dca05959c7e2b480b885608995f9cc6acf5431da444f9bbee5",
+      "sha256": "f91cdf69216bebfeb9d3b83b1de04152bfc511c131a06a53debb321c87787398",
       "ranges": [
         [
           1,
-          109
+          119
         ]
       ]
     },
@@ -390,14 +390,14 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "6071a07b81f0973da419d02eb8bf510afec20bff06709bb5b320f70ec29ee0f3",
+      "sha256": "7a7d5925cd20d7be29f307e37d6af8f0bf0925d5bc7f5fcbf649c2adc0a8d67e",
       "ranges": [
         [
           1,
-          55
+          52
         ],
         [
-          56,
+          53,
           120
         ],
         [
@@ -456,7 +456,7 @@
       ]
     },
     "policies/09-workflow-maintenance.md": {
-      "sha256": "44199d3d5310195ed3e78d8472c5611d628237f6bb259d513e567fef8227fe46",
+      "sha256": "ecbb2748d3bb88f5da726d925f7b4f62dd1b5af6ec5d8c13eb98c819fec18f1e",
       "ranges": [
         [
           1,
@@ -478,7 +478,7 @@
       ]
     },
     "policies/11-tool-integrations.md": {
-      "sha256": "54464355ec44a14255aa2db8119dd0200d4348d6db97e9f038405c1251016f63",
+      "sha256": "7f49d8aeaccf32743e82768f54c97528b7bbf701bc1f6b5c7ca87f2734c72f30",
       "ranges": [
         [
           1,
@@ -522,11 +522,11 @@
       ]
     },
     "skills/manage-openrouter/SKILL.md": {
-      "sha256": "0b3b3cfc2161470434f595116d4416ff9ed542ce721cfd3c2f4822dade6232a4",
+      "sha256": "aaf257596d87920559e47cf5d74d2f08cf1f1b160186484b50943dcf3a86206e",
       "ranges": [
         [
           1,
-          20
+          21
         ]
       ]
     },
@@ -544,7 +544,7 @@
       ]
     },
     "skills/manage-usage-routing/SKILL.md": {
-      "sha256": "d72114e6c26347e6ec7dfa57f8bd0b2f9c382af8d8673d89bc12a7e5557ce718",
+      "sha256": "0d9533f09aef07bb37900ffba8c27424236704391baa8e57fedef9dd092fbb10",
       "ranges": [
         [
           1,
@@ -676,7 +676,7 @@
       ]
     },
     "skills/openrouter-proposals/SKILL.md": {
-      "sha256": "5bf2e094bb3363ebafb36c7b0790ed63838a4a0d77cd46c53fada0760aabef63",
+      "sha256": "c1f8c66c57d6de029999a4d7ecebe9c83fbf60c806e23618aa63ff9f5af837bd",
       "ranges": [
         [
           1,
@@ -702,7 +702,7 @@
       ]
     },
     "skills/openrouter-workers/SKILL.md": {
-      "sha256": "ab9db6b3edb00c62f2ea20d2521f42e89d3808c9e48d9e1060c1de2aa462f6f3",
+      "sha256": "312d37c229e107c62c0c085c50b94ca9c8d0087c6e73fe7dcf580247e92bd31a",
       "ranges": [
         [
           1,
