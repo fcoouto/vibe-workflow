@@ -376,6 +376,16 @@ class ExportBudgetTests(unittest.TestCase):
         self.assertEqual(usage["files"], len(exported(output)))
         self.assertEqual(validate.validate(output)["package_export"], usage)
 
+    def test_package_copy_fixture_copies_only_the_export_membership(self):
+        from tests.fixture_package import copy_package
+        source = self.root / "source"
+        write_tree(source, (("a.txt", b"a"), ("tests/t.py", b"t")))
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "add", "--all"], check=True)
+        write_tree(source, (("untracked.bin", b"x" * 1024), ("dist/build.txt", b"b")))
+        copy_package(source, self.root / "copy")
+        self.assertEqual(exported(self.root / "copy"), {"a.txt"})
+
     def test_export_budget_failures_and_warning(self):
         from scripts import validate
         write_tree(self.root, (("a", b"x" * 60), ("d/b", b"x" * 15)))

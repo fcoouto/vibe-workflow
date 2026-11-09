@@ -1,5 +1,6 @@
 """Only onboarding's project inventory follows MAX_TOTAL; other aggregates keep 8 MiB. Temporary files only."""
 import sqlite3
+import subprocess
 import tempfile
 import time
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from runtime import changes, evidence, onboarding, review_storage
+from runtime import changes, entry_budget, evidence, onboarding, review_storage
 from runtime.startup import StartupError
 from runtime.state import StateError
 
@@ -62,6 +63,55 @@ class AggregateBoundTests(unittest.TestCase):
             with self.assertRaises(StateError):
                 review_storage._owners(config, self.context, self.db, budget=budget)
             self.assertEqual(budget["bytes"], 8 * MEBIBYTE + 1)
+
+
+    def repository(self):
+        root = self.context.directory / "repo"
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        return root
+
+    def test_only_marked_project_inventory_budgets_reach_max_total(self):
+        self.assertEqual(onboarding._bound({"paths": 0, "bytes": 0}), onboarding.LEGACY_MAX_TOTAL)
+        self.assertEqual(onboarding._bound({"total": onboarding.MAX_TOTAL}), onboarding.MAX_TOTAL)
+        with self.assertRaises(StartupError):
+            onboarding._bound({"total": 64 * MEBIBYTE})
+
+    def test_shared_checkout_observation_keeps_eight_mebibytes_unless_marked(self):
+        # Review storage, startup acquisition, changes and evidence pass unmarked budgets.
+        root = self.repository()
+        near = onboarding.LEGACY_MAX_TOTAL - 64
+        observed, error = onboarding._checkout_observation(str(root), {"paths": 0, "bytes": near})
+        self.assertIsNotNone(error)
+        observed, error = onboarding._checkout_observation(str(root), {"paths": 0, "bytes": near,
+                                                                       "total": onboarding.MAX_TOTAL})
+        self.assertIsNone(error, error)
+        observed, error = onboarding._checkout_observation(str(root), {"paths": 0, "bytes": 0})
+        self.assertIsNone(error, error)
+
+    def test_review_storage_target_observation_keeps_eight_mebibytes(self):
+        root = self.repository()
+        with self.assertRaises(StateError):
+            review_storage._observe_target(root, budget={"paths": 0, "bytes": onboarding.LEGACY_MAX_TOTAL - 64,
+                                                         "deadline": time.monotonic() + 10})
+
+    def test_failed_entry_observation_exhausts_the_owner_budget(self):
+        def observe(*, deadline, budget):
+            budget["bytes"] += 10
+            raise ValueError("malformed after reading")
+        budget = {"paths": 0, "bytes": 5}
+        with self.assertRaisesRegex(ValueError, "malformed after reading"):
+            entry_budget.observe_within(budget, onboarding.MAX_TOTAL, observe)
+        self.assertGreater(budget["bytes"], onboarding.MAX_TOTAL)
+
+    def test_retained_toolkit_sources_keep_eight_mebibytes(self):
+        files = []
+        for index in range(9):
+            path = self.context.directory / f"source-{index}.md"
+            path.write_bytes(b"x" * MEBIBYTE)
+            path.chmod(0o600)
+            files.append({"path": f"source-{index}.md", "local_path": str(path)})
+        observed = onboarding._sources({"toolkit": {"files": files}})
+        self.assertEqual([observed[item["path"]]["status"] for item in files], ["read"] * 8 + ["source_total_limit"])
 
 
 if __name__ == "__main__":

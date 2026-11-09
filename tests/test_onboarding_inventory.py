@@ -54,14 +54,18 @@ class FileInventoryTests(OnboardingFixture):
         # Each startup observation keeps its own entry bound; onboarding keeps its aggregate.
         from runtime import package_manifest
         large = package_manifest.PACKAGE_SCAN_MAX_BYTES + 1024 * 1024
-        budget = {"paths": 0, "bytes": large}
+        budget = {"paths": 0, "bytes": large, "total": onboarding.MAX_TOTAL}
         snapshot = onboarding._snapshot(self.repo, inventory=True, budget=budget)
         self.assertIn("README.md", snapshot["fingerprints"])
         self.assertGreater(budget["bytes"], large)
-        observed, error = onboarding._checkout_observation(str(self.repo), {"paths": 0, "bytes": large})
+        observed, error = onboarding._checkout_observation(str(self.repo), {"paths": 0, "bytes": large,
+                                                                            "total": onboarding.MAX_TOTAL})
         self.assertIsNone(error)
         self.assertEqual(observed["root"], str(self.repo))
-        exhausted = {"paths": 0, "bytes": onboarding.MAX_TOTAL - 8}
+        # Only the project inventory's own budgets are marked; any other owner's budget keeps 8 MiB.
+        with self.assertRaises(StartupError):
+            onboarding._snapshot(self.repo, inventory=True, budget={"paths": 0, "bytes": large})
+        exhausted = {"paths": 0, "bytes": onboarding.MAX_TOTAL - 8, "total": onboarding.MAX_TOTAL}
         with self.assertRaises(StartupError):
             onboarding._snapshot(self.repo, inventory=True, budget=exhausted)
         self.assertGreater(exhausted["bytes"], onboarding.MAX_TOTAL)
@@ -206,11 +210,11 @@ class FileInventoryTests(OnboardingFixture):
 
     def test_inventory_preserves_shared_byte_path_and_deadline_limits(self):
         self.asset(size=9 * 1024 * 1024)
-        budget = {"paths": 20, "bytes": onboarding.MAX_TOTAL - 4}
+        budget = {"paths": 20, "bytes": onboarding.LEGACY_MAX_TOTAL - 4}
         observed = onboarding._inspection_fingerprint(self.repo, "asset.bin", budget, inventory=True)
         self.assertEqual(observed["status"], "metadata")
-        self.assertEqual(budget, {"paths": 21, "bytes": onboarding.MAX_TOTAL - 4})
-        for exhausted in ({"paths": 4096, "bytes": 0}, {"paths": 0, "bytes": onboarding.MAX_TOTAL + 1},
+        self.assertEqual(budget, {"paths": 21, "bytes": onboarding.LEGACY_MAX_TOTAL - 4})
+        for exhausted in ({"paths": 4096, "bytes": 0}, {"paths": 0, "bytes": onboarding.LEGACY_MAX_TOTAL + 1},
                           {"paths": 0, "bytes": 0, "deadline": 0}):
             with self.subTest(exhausted=exhausted), self.assertRaises(StartupError):
                 onboarding._inspection_fingerprint(self.repo, "asset.bin", exhausted, inventory=True)
@@ -234,7 +238,7 @@ class FileInventoryTests(OnboardingFixture):
         self.asset(size=100_000)
         with self.assertRaises(StartupError):
             onboarding._snapshot(self.repo, inventory=True,
-                                 budget={"paths": 0, "bytes": onboarding.MAX_TOTAL - 50_000})
+                                 budget={"paths": 0, "bytes": onboarding.LEGACY_MAX_TOTAL - 50_000})
 
     def test_old_plan_inventory_stays_strict_on_reinspection(self):
         self.inspect()
