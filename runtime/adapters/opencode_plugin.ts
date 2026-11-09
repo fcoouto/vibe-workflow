@@ -466,8 +466,17 @@ export function createRoutingPlugin(config: Config = {}) {
       }
 
       /** The session's parent: a session ID, null for a root, or undefined when it cannot be determined. */
+      /** An undetermined chain may belong to any attached root's tree, so none of them can vouch for its descendants. */
+      const undetermined = (): null => {
+        for (const attachment of attached.values()) attachment.lookupFailed = true
+        return null
+      }
+
       async function lookup(session: string): Promise<string | null | undefined> {
-        if ((failed.get(session) ?? 0) > performance.now()) return undefined
+        if ((failed.get(session) ?? 0) > performance.now()) {
+          undetermined()
+          return undefined
+        }
         if (typeof ctx?.session?.get === "function") {
           try {
             const answer: any = await within(Promise.resolve().then(() => ctx.session.get({ sessionID: session })), LOOKUP_TIMEOUT_MS)
@@ -480,8 +489,7 @@ export function createRoutingPlugin(config: Config = {}) {
           } catch { /* fall through: undetermined */ }
         }
         bounded(failed, MAX_FAILED_LOOKUPS, session, performance.now() + failedLookupMs)
-        // The session may belong to any attached root's tree, so none of them can vouch for its descendant set.
-        for (const attachment of attached.values()) attachment.lookupFailed = true
+        undetermined()
         return undefined
       }
 
@@ -536,11 +544,13 @@ export function createRoutingPlugin(config: Config = {}) {
         let current = sessionID as string
         let lookups = 0
         for (;;) {
-          if (seen.has(current) || seen.size >= MAX_CHAIN) return null
+          if (seen.has(current)) return null
+          if (seen.size >= MAX_CHAIN) return undetermined()
           seen.add(current)
           let parent = lineage.get(current)
           if (parent === undefined) {
-            if (!mayLookUp || lookups >= MAX_LOOKUPS) return null
+            if (!mayLookUp) return null
+            if (lookups >= MAX_LOOKUPS) return undetermined()
             lookups += 1
             parent = await lookup(current)
             if (parent === undefined) return null
@@ -559,7 +569,7 @@ export function createRoutingPlugin(config: Config = {}) {
           const above = await underRetired(parent, session)
           if (above !== undefined) return above
           if (derivedSession(parent)) {
-            if (lookups >= MAX_LOOKUPS) return null
+            if (lookups >= MAX_LOOKUPS) return attached.size > 0 ? undetermined() : null
             lookups += 1
             const answer = await ledgerAnswer(parent)
             if (answer === "known") return markPending(session, parent)
