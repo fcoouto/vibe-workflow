@@ -888,7 +888,7 @@ def main(argv=None):
     parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
                                          "descendants,s33d (docs/smart-routing-qualification.md)")
     parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
-    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's model list (default: lowest)")
+    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
     parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
@@ -943,8 +943,8 @@ def main(argv=None):
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
         if args.chatgpt:
-            ref = args.chatgpt_model or ""  # without #VARIANT the model's lowest listed variant is used
-            route = safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
+            ref = args.chatgpt_model or ""  # without #VARIANT the lowest listed variant; `auto`: chatgpt.AUTO_RULE
+            route = ("openai",) if ref == chatgpt.AUTO else safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
             if route[0] != "openai":
                 raise Refused("the chatgpt run allows only an openai model")
             if not 60 <= args.chatgpt_timeout <= 1800:

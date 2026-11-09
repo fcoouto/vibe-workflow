@@ -11,7 +11,9 @@ Codex rate limits are NOT read: the repository has no standalone reader of `acco
 fixture and a host bridge that receives limits from the Codex app), so the before/after window is unobserved here.
 """
 import json
+import math
 import os
+import re
 import time
 
 from tests.qualification import probe_stages
@@ -24,6 +26,18 @@ DONE = ("complete", "completed", "connected", "success", "succeeded")
 # Reasoning variants from cheapest up. The openai plugin drops maxTokens, so output length is not capped: when the
 # operator names only the model, its lowest listed variant is used.
 VARIANT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh")
+STATE_NAME = "chatgpt-login.json"
+# `--chatgpt-model auto` (the user delegated the choice): the listing exists only after the sign-in, so the harness
+# picks one model by this fixed rule. The listing fields come from OpenCode 2.2.6's `Model.Info` schema in the binary
+# (no live listing is recorded), so the name exclusions and the two-variant rule apply as well.
+AUTO = "auto"
+NON_CHAT = re.compile(r"image|embed|audio|transcri|tts|speech|realtime|moderation|search-preview|dall-e|whisper|sora", re.I)
+HINTS = ("nano", "mini", "small")
+AUTO_RULE = ("openai provider only; chat (type absent or chat, text in and out when listed, enabled, not deprecated, "
+             "no image/embedding/audio/transcription/tts/realtime/moderation/search-preview name); at least two variants "
+             "with one in the known order; cheapest untiered input+output catalog cost per million (missing or zero = "
+             "unknown, last); then nano, mini, small in the id; then the id; lowest variant; refused when the pick has "
+             "neither a cost nor a hint")
 CODEX_WINDOW = "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)"
 
 
@@ -68,12 +82,77 @@ def connect(run, state_file, timeout_s=900, poll_s=2, sleep=time.sleep, clock=ti
     return outcome
 
 
-def select_model(run):
-    """The operator's `--chatgpt-model` must be an openai model and variant the login lists; it becomes the run's
-    only route (and the guard's), with another listed variant for the guard probe."""
+def catalog_cost(model):
+    """The untiered input+output catalog cost per million, or None when missing or zero (a subscription login may
+    report every cost as 0, which says nothing about which model is cheaper)."""
+    entries = model.get("cost")
+    entries = [entries] if isinstance(entries, dict) else [c for c in entries or [] if isinstance(c, dict)]
+    base = [c for c in entries if not c.get("tier")] or entries
+    totals = [c["input"] + c["output"] for c in base if all(type(c.get(k)) in (int, float) for k in ("input", "output"))]
+    return min(totals) if totals and min(totals) > 0 else None
+
+
+def exclusion(model):
+    """Why an openai model is not an `auto` candidate, or None."""
+    caps = model.get("capabilities") if isinstance(model.get("capabilities"), dict) else {}
+    if model.get("type") not in (None, "chat"):
+        return "type"
+    if any(isinstance(caps.get(k), list) and "text" not in caps[k] for k in ("input", "output")):
+        return "modality"
+    if model.get("enabled") is False or model.get("status") == "deprecated":
+        return "unavailable"
+    if NON_CHAT.search(str(model.get("id"))) or NON_CHAT.search(str(model.get("name") or "")):
+        return "name"
+    variants = variants_of(model)
+    if len(variants) < 2:
+        return "variants"
+    if not any(v in VARIANT_ORDER for v in variants):
+        return "variant_order"
+    return None
+
+
+def hint(model_id):
+    return next((rank for rank, word in enumerate(HINTS) if word in model_id.lower()), len(HINTS))
+
+
+def auto_select(listed, announce):
+    """`openai/<id>` by `AUTO_RULE` and the sanitized record of the choice (ids only), or `Refused`."""
+    openai = [m for m in listed if m.get("providerID") == "openai" and isinstance(m.get("id"), str)]
+    excluded = {m["id"]: exclusion(m) for m in openai if exclusion(m)}
+    candidates = sorted((m for m in openai if m["id"] not in excluded),
+                        key=lambda m: (catalog_cost(m) if catalog_cost(m) is not None else math.inf, hint(m["id"]), m["id"]))
+    ids = [m["id"] for m in candidates]
+    record = dict(mode=AUTO, rule=AUTO_RULE, candidates=ids, excluded=excluded,
+                  other_providers=sum(1 for m in listed if m.get("providerID") != "openai"),
+                  costs={m["id"]: catalog_cost(m) for m in candidates})
+    if not candidates or (catalog_cost(candidates[0]) is None and hint(ids[0]) == len(HINTS)):
+        announce("chatgpt model candidates: %s" % (", ".join(ids) or "none"))
+        reason = "no candidate" if not candidates else "the cheapest candidate is ambiguous (no cost, no name hint)"
+        raise Refused("--chatgpt-model auto: %s; pass --chatgpt-model openai/MODEL; candidates: %s"
+                      % (reason, ", ".join(ids) or "none"))
+    return "openai/" + ids[0], record
+
+
+def write_state(run, **fields):
+    """Add fields to the sign-in state file (owner-only; never a token)."""
+    path = run.base / STATE_NAME
+    state = json.loads(path.read_text()) if path.exists() else {}
+    state.update(fields)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(json.dumps(state, indent=1) + "\n")
+
+
+def select_model(run, announce=print):
+    """The operator's `--chatgpt-model` (or `auto`'s pick) must be an openai model and variant the login lists; it
+    becomes the run's only route (and the guard's), with another listed variant for the guard probe. Nothing is
+    reserved or sent before this returns."""
     _, models, _ = run.server.request("GET", "/api/model")
     listed = [m for m in (run.data(models) or []) if isinstance(m, dict)]
     ref = run.chatgpt_model or ""
+    selection = dict(mode="explicit")
+    if ref == AUTO:
+        ref, selection = auto_select(listed, announce)
     if "#" not in ref:
         ref += "#" + lowest_variant(listed, ref)
     route = check_route(PURPOSE, parse_route(ref), listed)
@@ -82,6 +161,11 @@ def select_model(run):
     others = [v for v in variants if v != route[2]]
     if not others:
         raise Refused("the guard probe needs a second listed variant of the model")
+    selection["selected"] = "%s/%s#%s" % route
+    if selection["mode"] == AUTO:
+        announce("chatgpt model selected: %s (rule: %s)" % (selection["selected"], AUTO_RULE))
+        write_state(run, selection=dict(selected=selection["selected"], rule=AUTO_RULE, candidates=selection["candidates"]))
+    run.note(PURPOSE, "model_selection", selection)
     run.route, run.guard_variant = route, others[0]
     run.server.write_control(route=list(route))
     run.note(PURPOSE, "model", dict(listed=True, variants=len(variants),
@@ -143,11 +227,11 @@ def request(run):
     run.note(s, "pass", not failures)
 
 
-def run(run_):
+def run(run_, announce=print):
     """The whole chatgpt run: server, sign-in, model check, authority, the plugin-chain proof, one request."""
     run_.start(PURPOSE)
-    connect(run_, run_.base / "chatgpt-login.json", timeout_s=run_.chatgpt_timeout)
-    select_model(run_)
+    connect(run_, run_.base / STATE_NAME, timeout_s=run_.chatgpt_timeout, announce=announce)
+    select_model(run_, announce=announce)
     if run_.ledger.remaining(PURPOSE) < 3:  # two probe exposures plus the request
         raise Refused("the chatgpt purpose needs 3 calls left (2 probe exposures and 1 request)")
     answer, _ = run_.routing("set", authority_required=True)

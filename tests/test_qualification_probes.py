@@ -424,6 +424,8 @@ class ChatGPTAutoTests(StageHarness):
     connect = ChatGPTTests.connect
 
     def auto(self, models):
+        for name in ("iso", "state"):  # a test may select more than once: each gets a fresh ledger and dir
+            shutil.rmtree(self.tmp / name, ignore_errors=True)
         run, ledger, server, *_ = self.connect()
         server.openai_models = models
         run.chatgpt_model = "auto"
