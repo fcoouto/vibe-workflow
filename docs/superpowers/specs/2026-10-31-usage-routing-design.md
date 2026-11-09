@@ -1,5 +1,7 @@
 # Usage Routing for Codex
 
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+
 Usage Routing uses approved existing OpenAI API credits for bounded proposal
 work while preserving the Codex coordinator, existing provider choices and
 independent native review. See [observed validation](../../usage-routing-validation.md)
@@ -200,8 +202,8 @@ Direct API review suggestions may be recorded as advisory, but cannot impersonat
 Use a preview to inspect a routing decision without sending. If an operator
 requests an evaluation, set its task, data, time and cost bounds before any
 send. Use the [bounded canary](../../../skills/manage-usage-routing/references/first-canary.md)
-or the [exact approval test path](../../../skills/manage-usage-routing/references/codex-host.md#optional-exact-approval)
-when the requested test calls for it. An evaluation can report attribution,
+when the requested test calls for it (the exact approval test path was retired
+on 9 November 2026). An evaluation can report attribution,
 quality and uncertainty without gating ordinary activation.
 
 ### Paired comparison template

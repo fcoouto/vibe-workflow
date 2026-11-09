@@ -39,14 +39,18 @@ class ProposalTests(unittest.TestCase):
     def call(self, action, request=None, now=100):
         return self.api.run(action, self.store, request or {}, now=now, cwd=self.repo)
 
-    def scoped_request(self):
+    def scoped_request(self, *, saved=True, automatic=True):
         from runtime import external_delegation as external
         from tests.test_external_delegation import permission
         consent = permission('openrouter', model='model/v1', provider='p', effort=None)
+        consent['automatic'] = automatic
         disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
         configured = settings.configure(self.repo, dict(expected_revision=disabled['revision'], routes=['proposals'],
-            opencode=None, auth_data=None, external_permission=consent))
+            opencode=None, auth_data=None, external_permission=consent if saved else None))
         self.settings = settings.enable(self.repo, dict(expected_revision=configured['revision']))
+        if not saved:
+            consent = external.effective_permission(None, self.settings['activation'], service='openrouter',
+                mode='proposal', model='model/v1', provider='p', effort=None, class_name='investigation')
         (self.repo / 'src').mkdir()
         (self.repo / 'src/code.py').write_text('source bytes\n')
         packet = external.prepare(self.repo, consent, [dict(kind='source', path='src/code.py')])
@@ -54,6 +58,100 @@ class ProposalTests(unittest.TestCase):
         return dict(self.begin_request(), external=dict(packet['binding'], automatic=True, local_preferred=False,
             class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
             integration_available=True))
+
+    def test_enabled_proposal_without_approval_ref_dispatches_once(self):
+        request = self.scoped_request()
+        del request['approval_ref']
+        begin = self.call('begin', request)
+        row = self.call('history')['records'][0]
+        self.assertEqual(row['approval_ref'], self.settings['activation']['ref'])
+        self.assertNotIn('approval_ref', request)
+        dispatch = dict(request, attempt_token=begin['attempt_token'])
+        with self.assertRaisesRegex(ValueError, 'external_attempt_changed'):
+            self.call('dispatch', dict(dispatch, approval_ref=row['approval_ref']))
+        self.assertIn('source bytes', self.call('dispatch', dispatch)['packet'])
+        self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'already_dispatched')
+
+    def test_unbound_proposal_requires_external_binding_under_activation(self):
+        self.publish()
+        request = {key: value for key, value in self.begin_request().items()
+                   if key not in ('external', 'approval_ref')}
+        with self.assertRaisesRegex(ValueError, 'external_binding_required'):
+            self.call('begin', request)
+        self.assertEqual(self.call('history')['records'], [])
+
+    def test_unbound_proposal_cannot_bypass_saved_automatic_false(self):
+        request = {key: value for key, value in self.scoped_request(automatic=False).items()
+                   if key not in ('external', 'approval_ref')}
+        with self.assertRaisesRegex(ValueError, 'external_binding_required'):
+            self.call('begin', request)
+        self.assertEqual(self.call('history')['records'], [])
+
+    def test_legacy_admitted_proposal_settles_without_new_dispatch(self):
+        self.publish()
+        request = {key: value for key, value in self.begin_request().items() if key != 'external'}
+        state = json.loads(self.store.read_text())
+        state['attempts'].append(dict(request, attempt_token='legacy-token', begun_at=100,
+            management=dict(scope_id=self.settings['scope_id'], revision=self.settings['revision'])))
+        self.store.write_text(json.dumps(state))
+        with self.assertRaisesRegex(ValueError, 'external_binding_required'):
+            self.call('dispatch', dict(request, attempt_token='legacy-token'))
+        settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
+        recorded = self.call('record', dict(attempt_token='legacy-token', disposition='accepted',
+            native_review_ref='legacy-review', native_checks=[dict(success=True, ref='legacy-check')]))
+        self.assertTrue(recorded['recorded'])
+        self.assertEqual(self.call('record', dict(attempt_token='legacy-token'))['fallback'], 'already_recorded')
+        self.assertEqual(self.call('history')['records'][0]['outcome']['disposition'], 'accepted')
+
+    def test_new_proposal_acceptance_requires_admitted_reviewer(self):
+        request = self.scoped_request(saved=False)
+        begin = self.call('begin', request)
+        for disposition in ('accepted', 'repaired'):
+            for reviewer in (None, 'native-coordinator'):
+                with self.subTest(disposition=disposition, reviewer=reviewer), self.assertRaisesRegex(ValueError, 'independent_review'):
+                    self.call('record', dict(attempt_token=begin['attempt_token'], disposition=disposition,
+                        reviewer=reviewer, native_review_ref='review', native_checks=[dict(success=True, ref='tests')]))
+
+    def test_scoped_proposal_without_saved_permission_uses_activation(self):
+        request = self.scoped_request(saved=False)
+        begin = self.call('begin', request)
+        row = self.call('history')['records'][0]
+        self.assertIsNone(self.settings['external_permission'])
+        self.assertEqual(row['approval_ref'], request['approval_ref'])
+        result = self.call('dispatch', dict(request, attempt_token=begin['attempt_token']))
+        self.assertIn('source bytes', result['packet'])
+        with self.assertRaisesRegex(ValueError, 'independent_review'):
+            self.call('record', dict(attempt_token=begin['attempt_token'], disposition='accepted',
+                reviewer='native-coordinator', native_review_ref='review', native_checks=[dict(success=True, ref='tests')]))
+
+    def test_activation_packet_failure_never_falls_back_to_legacy_begin(self):
+        request = self.scoped_request(saved=False)
+        for binding, reason in ((dict(permission_digest='forged'), 'permission_changed'),
+                                (dict(reviewer='native-coordinator'), 'independent_review')):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                self.call('begin', dict(request, external=dict(request['external'], **binding)))
+        (self.repo / 'src/code.py').write_text('changed after preparation')
+        with self.assertRaisesRegex(ValueError, 'source_changed'):
+            self.call('begin', request)
+        self.assertEqual(self.call('history')['records'], [])
+
+    def test_activation_packet_does_not_survive_disable_and_reenable(self):
+        request = self.scoped_request(saved=False)
+        begin = self.call('begin', request)
+        dispatch = dict(request, attempt_token=begin['attempt_token'])
+        disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
+        self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'openrouter_disabled')
+        settings.enable(self.repo, dict(expected_revision=disabled['revision']))
+        with self.assertRaisesRegex(ValueError, 'permission_changed'):
+            self.call('dispatch', dispatch)
+
+    def test_saved_permission_automatic_false_still_denies_automatic_proposal(self):
+        request = self.scoped_request(automatic=False)
+        with self.assertRaisesRegex(ValueError, 'automatic_selection_denied'):
+            self.call('begin', request)
+        manual = dict(request, external=dict(request['external'], automatic=False))
+        begin = self.call('begin', manual)
+        self.assertTrue(self.call('dispatch', dict(manual, attempt_token=begin['attempt_token']))['dispatched'])
 
     def test_scoped_proposals_use_admitted_checkout_when_cwd_is_a_subdirectory(self):
         from runtime import external_delegation as external
@@ -160,12 +258,22 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         token = self.call('claim')['refresh_token']
         return self.call('publish', dict(refresh_token=token, metadata=METADATA))
 
+    def bind_request(self, request):
+        from runtime import external_delegation as external
+        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
+            service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
+            effort=request['effort'], class_name='investigation')
+        packet = external.prepare(self.repo, consent, [dict(kind='text', text='Source-free fixture objective', sources=[])])
+        return dict(request, external=dict(packet['binding'], automatic=True, local_preferred=False,
+            class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
+            integration_available=True))
+
     def begin_request(self, task='task-1'):
-        return dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
+        return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
                     snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
                     output_tokens=500, timeout_seconds=60,
                     visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
-                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[]))
+                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
 
     def test_begin_keeps_valid_roles_and_ignores_missing_or_invalid_metadata(self):
         self.publish()
@@ -265,7 +373,7 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
             token = self.call('begin', self.begin_request(str(index)))['attempt_token']
             with self.assertRaises(ValueError):
                 self.call('record', dict(attempt_token=token, disposition=disposition))
-            self.call('record', dict(attempt_token=token, disposition=disposition, native_review_ref='review/1', native_checks=[{'ref': 'check/1', 'success': True}], observations={'cost': None, 'provider': 'observed-p'}))
+            self.call('record', dict(attempt_token=token, disposition=disposition, reviewer='native-reviewer', native_review_ref='review/1', native_checks=[{'ref': 'check/1', 'success': True}], observations={'cost': None, 'provider': 'observed-p'}))
         rows = self.call('history', dict(profile=PROFILE, model='model/v1', provider='p', effort=None))['records']
         self.assertEqual([r['outcome']['disposition'] for r in rows], ['accepted', 'repaired'])
         self.assertEqual(self.call('history', dict(profile={**PROFILE, 'language': 'Go'}))['records'], [])
@@ -427,7 +535,7 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         self.assertNotIn('attempt_token', self.call('begin', request))
         request = self.begin_request()
         request['effort'] = 'high'
-        self.assertNotIn('attempt_token', self.call('begin', request))
+        self.assertNotIn('attempt_token', self.call('begin', self.bind_request(request)))
         request = self.begin_request()
         request['requirements']['output_tokens'] = 400
         with self.assertRaises(ValueError):
@@ -444,9 +552,9 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         self.call('publish', dict(refresh_token=token, metadata=metadata))
         request = self.begin_request()
         request['effort'] = 'high'
-        self.assertNotIn('attempt_token', self.call('begin', request))
+        self.assertNotIn('attempt_token', self.call('begin', self.bind_request(request)))
         request['effort'] = 'low'
-        self.assertIn('attempt_token', self.call('begin', request))
+        self.assertIn('attempt_token', self.call('begin', self.bind_request(request)))
         self.assertEqual(self.call('history')['records'][0]['requirements'], request['requirements'])
 
     def test_model_effort_values_need_explicit_endpoint_reasoning_control(self):
@@ -457,19 +565,19 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         self.call('publish', dict(refresh_token=token, metadata=metadata))
         request = self.begin_request()
         request['effort'] = 'high'
-        self.assertNotIn('attempt_token', self.call('begin', request))
+        self.assertNotIn('attempt_token', self.call('begin', self.bind_request(request)))
         token = self.call('claim', {'force': True})['refresh_token']
         del metadata['endpoints'][0]['supported_parameters']
         self.call('publish', dict(refresh_token=token, metadata=metadata))
         request = self.begin_request()
         request['effort'] = 'low'
-        self.assertNotIn('attempt_token', self.call('begin', request))
+        self.assertNotIn('attempt_token', self.call('begin', self.bind_request(request)))
         token = self.call('claim', {'force': True})['refresh_token']
         metadata['endpoints'][0]['supported_parameters'] = ['reasoning_effort']
         self.call('publish', dict(refresh_token=token, metadata=metadata))
         request = self.begin_request()
         request['effort'] = 'low'
-        self.assertIn('attempt_token', self.call('begin', request))
+        self.assertIn('attempt_token', self.call('begin', self.bind_request(request)))
 
     def test_attempt_retains_selected_evidence_after_alias_changes(self):
         metadata = json.loads(json.dumps(METADATA))

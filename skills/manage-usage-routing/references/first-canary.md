@@ -1,8 +1,9 @@
 # Optional foreground canary
 
 For an explicitly selected bounded test, use the reviewed, digest-pinned candidate and the accepted checkout. This test
-uses a new canary-only Manual configuration and requires an unused routing scope
-and organization budget. Keep ordinary routing OFF during preparation.
+uses a new temporary canary-only configuration and requires an unused routing
+scope and organization budget; its exact approval below is that temporary
+configuration's activation. Keep ordinary routing OFF during preparation.
 
 1. Freeze a `usage_canary_host.Plan` using the actual Codex thread, host,
    checkout, candidate digest, native account, independent reviewer, selected
@@ -28,7 +29,7 @@ and organization budget. Keep ordinary routing OFF during preparation.
    tier, a 10,000-input-token bound and 64 total output tokens. The maximum
    generation reservation is $0.05064. The direct approval expires after
    five minutes or the plan's earlier cutoff.
-6. Verify `canary_active:false` after the attempt. The runner disables its temporary Manual
+6. Verify `canary_active:false` after the attempt. The runner disables its temporary
    configuration on normal completion and handled failure. If interrupted,
    inspect status and disable the owned revision while preserving accounting.
    Keep uncertain charges. Inspect the exact

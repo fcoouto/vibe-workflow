@@ -1,5 +1,7 @@
 # Shared external delegation design
 
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+
 Status: implemented and independently reviewed, 2026-11-05. The owner authorized native Astra/high to reconcile source and implement both routes, preserving local-model priority and native review. Subsequent steering requires simple implementation without extra hardening controls. This does not authorize live inference, new source transmission, configuration activation, billing, installation, releases, commits or publication.
 
 ## Intent and boundaries

@@ -42,11 +42,54 @@ def validate_permission(permission):
         _path(path)
     require(permission['destinations'], 'invalid_destination')
     for route in permission['destinations']:
-        require(isinstance(route, dict) and set(route) == {'service', 'mode', 'model', 'provider', 'effort'}
-                and route['service'] in ('openai-api', 'openrouter')
-                and route['mode'] in ('proposal', 'worker')
-                and all(isinstance(route[key], str) and route[key] for key in ('model', 'provider'))
-                and (route['effort'] is None or isinstance(route['effort'], str)), 'invalid_destination')
+        require(_valid_route(route), 'invalid_destination')
+
+
+def _valid_route(route):
+    return (isinstance(route, dict) and set(route) == {'service', 'mode', 'model', 'provider', 'effort'}
+            and route['service'] in ('openai-api', 'openrouter')
+            and route['mode'] in ('proposal', 'worker')
+            and all(isinstance(route[key], str) and route[key] for key in ('model', 'provider'))
+            and (route['effort'] is None or isinstance(route['effort'], str)))
+
+
+def activation_permission(activation, *, service, mode, model, provider, effort, class_name):
+    """The permission an active integration grants by itself (user decision, 9 November 2026).
+
+    Executors build `activation` from their own saved settings, never from caller input:
+    `ref` names the service, checkout scope and settings revision; `funding_ref` the activation's
+    funding decision or provider-owned limits; `classes` and `destinations` are None or the task
+    classes and routes the activation is limited to. The packet may draw on the whole checkout;
+    preparation still rejects links, escapes and changed bytes, and native inspection still owns
+    minimum context and secrets.
+    """
+    require(isinstance(activation, dict) and set(activation) == {'ref', 'funding_ref', 'classes', 'destinations'}
+            and all(isinstance(activation[key], str) and activation[key].strip() for key in ('ref', 'funding_ref'))
+            and (activation['classes'] is None or (isinstance(activation['classes'], list) and activation['classes']
+                 and all(isinstance(item, str) and item for item in activation['classes'])))
+            and (activation['destinations'] is None or (isinstance(activation['destinations'], list)
+                 and activation['destinations'] and all(map(_valid_route, activation['destinations'])))),
+            'invalid_activation')
+    route = dict(service=service, mode=mode, model=model, provider=provider, effort=effort)
+    require(activation['classes'] is None or class_name in activation['classes'], 'task_class_denied')
+    require(activation['destinations'] is None or route in activation['destinations'], 'destination_denied')
+    permission = dict(version=1, approval_ref=activation['ref'], classes=[class_name], sources=['.'],
+                      exclusions=[], destinations=[route], automatic=True,
+                      funding_ref=activation['funding_ref'], valid_until=None)
+    validate_permission(permission)
+    return permission
+
+
+def effective_permission(saved, activation, **assignment):
+    """A saved reusable permission is the user's explicit scope and binds as saved, including
+    its automatic opt-out, classes, sources, exclusions, destinations and expiry. Without one,
+    the activation alone authorizes the assignment."""
+    return saved if saved is not None else activation_permission(activation, **assignment)
+
+
+def automatic_allowed(saved):
+    """Activation allows automatic selection unless a saved permission turned it off."""
+    return saved is None or saved['automatic'] is True
 
 
 def select(explicit, local_preferred, candidates, preference=None, *, api_only=False):

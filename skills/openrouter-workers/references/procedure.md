@@ -1,11 +1,12 @@
 # Background OpenRouter workers
 
-Use only within explicit OpenRouter authorization. These workers support read-only
+Use only on a checkout whose OpenRouter workers route is enabled; that enablement
+is the only approval needed. These workers support read-only
 investigation over copied UTF-8 files. OpenCode owns the external tool loop; Codex
 owns original files, integration and acceptance. The original proposal route remains
 separate. Its successful tests do not qualify tool use or autonomous editing.
 
-Apply the [shared selection and consent contract](../../../clients/external-delegation.md) for automatic consideration or reusable source permission.
+Apply the [shared selection contract](../../../clients/external-delegation.md) for automatic consideration or a saved restriction.
 
 ## Prepare
 
@@ -43,14 +44,16 @@ The runner disables OpenCode's background catalog fetch. The workflow's discover
 cache remains the selection source; the pinned client uses its bundled catalog and
 explicit model configuration.
 
-For a scoped worker, add `external` from the shared packet procedure. Construct
-its objective as a text part naming every copied file in `sources`; set `objective`
+Every brief adds `external` from the shared packet procedure; without it
+preparation fails with `external_binding_required`, and a subroot `source_root`
+is no longer admitted. Construct its objective as a text part naming every copied file in `sources`; set `objective`
 to the returned text and `files` to those exact source paths. Preparation checks
 the bytes it copies; launch rechecks original and copied bytes, permission and
 revision. Native tool-output provenance stays within that approved read scope.
 The existing OpenCode permissions, supervisor and retry ownership still apply.
-Accepted scoped results require `reviewer` matching the admitted native reviewer
-and `native_review_ref` in `verify`, alongside actual checks. Native evidence must
+Accepted results require `reviewer` matching the admitted native reviewer and
+`native_review_ref` in `verify`, alongside actual checks; only runs launched before
+binding became mandatory may settle without one. Native evidence must
 identify the exact candidate; these references do not authenticate review alone.
 
 ## Run
@@ -67,7 +70,8 @@ python3 -I -B <plugin-root>/scripts/openrouter_workers.py run
 
 The brief requires `task_id`, `coordinator_chat_id`,
 `model`, `provider`, `effort`, `objective`, `source_root`,
-`files`, `timeout_seconds`, `steps`, and `approval_ref`. Map the shared declaration
+`files`, `timeout_seconds`, `steps` and `external`. `approval_ref` is optional: when omitted,
+the brief records the enablement's activation reference. Map the shared declaration
 to `role` and `specialty`; add `model_display_name` when known. Add `custom_role_name`
 only for an explicit native fallback declaration, using the shared bounds.
 New external badges display the declared role followed by the
@@ -78,7 +82,7 @@ supervisor UUID separately in evidence. This keeps both workers visible in consu
 whose sidebar does not render nested children. Do not invent a native identity. Model is an
 OpenRouter author/slug; provider is the selected endpoint routing slug. File names
 are nonhidden relative paths under the canonical source root, without symlinks.
-Explicitly inspect the selected files for secrets before approving transmission.
+Explicitly inspect the selected files for secrets before transmission.
 Legacy optional `credit` is ignored and discarded. Choose 1–8 steps and 1–300 seconds. The runner currently caps
 requested output at 2048 tokens per model response. These controls do not set money
 limits, and API requests already in flight may still be billed after cancellation.
@@ -171,7 +175,8 @@ Habblaud child, plus the genuine supervisor's observed native identity. Record f
 or missing outcomes separately. Never use the worker's self-report as proof.
 
 Call `verify` with the same root and JSON containing `task_id`, `disposition`
-(`accepted` or `rejected`) and nonempty native `checks`. Supply the same visibility
+(`accepted` or `rejected`) and nonempty native `checks`; an accepted result adds
+`reviewer` and `native_review_ref`. Supply the same visibility
 arguments to publish the final outcome. These receipts record the supervisor's
 claims; the helper cannot independently attest verification. `status` reads an
 existing run with `{ "task_id": "..." }` and starts no work.

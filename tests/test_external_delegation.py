@@ -13,7 +13,58 @@ def permission(service='openai-api', mode='proposal', model='model', provider='o
         valid_until=None, destinations=[dict(service=service, mode=mode, model=model, provider=provider, effort=effort)])
 
 
+def activation(**changes):
+    return dict(ref='activation:openrouter:scope-1:r3', funding_ref='provider-owned-limits',
+                classes=None, destinations=None) | changes
+
+
+ASSIGNMENT = dict(service='openrouter', mode='worker', model='vendor/model', provider='endpoint',
+                  effort='high', class_name='investigation')
+
+
 class ExternalTests(unittest.TestCase):
+    def test_activation_alone_authorizes_automatic_scoped_packets(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / 'src').mkdir()
+            (root / 'src/code.py').write_text('body\n')
+            consent = external.effective_permission(None, activation(), **ASSIGNMENT)
+            self.assertTrue(consent['automatic'] and external.automatic_allowed(None))
+            self.assertEqual((consent['approval_ref'], consent['funding_ref'], consent['valid_until']),
+                             ('activation:openrouter:scope-1:r3', 'provider-owned-limits', None))
+            packet = external.prepare(root, consent, [dict(kind='source', path='src/code.py')])
+            binding = dict(packet['binding'], automatic=True, local_preferred=False)
+            rebuilt = external.effective_permission(None, activation(), **ASSIGNMENT)
+            options = dict(ASSIGNMENT, now=100)
+            self.assertEqual(external.check(root, rebuilt, binding, **options)['text'], packet['text'])
+            changed = external.effective_permission(None, activation(ref='activation:openrouter:scope-1:r4'),
+                                                    **ASSIGNMENT)
+            with self.assertRaisesRegex(ValueError, 'permission_changed'):
+                external.check(root, changed, binding, **options)
+            with self.assertRaisesRegex(ValueError, 'destination_denied'):
+                external.check(root, rebuilt, binding, **(options | dict(model='vendor/other')))
+            (root / 'link.py').symlink_to(root / 'src/code.py')
+            with self.assertRaisesRegex(ValueError, 'unsafe_source'):
+                external.prepare(root, consent, [dict(kind='source', path='link.py')])
+
+    def test_activation_scope_and_saved_permission_still_bind(self):
+        with self.assertRaisesRegex(ValueError, 'task_class_denied'):
+            external.activation_permission(activation(classes=['review']), **ASSIGNMENT)
+        other = dict(service='openrouter', mode='worker', model='vendor/other', provider='endpoint', effort='high')
+        with self.assertRaisesRegex(ValueError, 'destination_denied'):
+            external.activation_permission(activation(destinations=[other]), **ASSIGNMENT)
+        allowed = dict(other, model='vendor/model')
+        self.assertEqual(external.activation_permission(activation(classes=['investigation'], destinations=[allowed]),
+                                                        **ASSIGNMENT)['destinations'], [allowed])
+        saved = dict(permission(), automatic=False)
+        self.assertIs(external.effective_permission(saved, activation(), **ASSIGNMENT), saved)
+        self.assertFalse(external.automatic_allowed(saved))
+        for bad in (None, activation(ref=' '), activation(funding_ref=None), dict(activation(), extra=1),
+                    activation(classes=[]), activation(classes=['']), activation(destinations=[]),
+                    activation(destinations=[dict(other, service='elsewhere')])):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'invalid_activation'):
+                external.activation_permission(bad, **ASSIGNMENT)
+
     def test_local_preference_never_spills_and_explicit_choice_wins(self):
         routes = [dict(route='openai-api', enabled=True, automatic=True, suitable=True)]
         for condition in ('ready', 'busy', 'failed', 'suspended', 'verification_unavailable'):

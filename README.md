@@ -29,17 +29,15 @@ Use [Manage API Usage](skills/manage-usage-routing/SKILL.md) for OpenAI credit
 usage, spending limits and opt-in
 API proposals in enrolled Codex checkouts. Routing defaults to OFF.
 
-To opt in, open the project checkout in Codex and ask **“Enable Smart Balance
-for this project”** or **“Enable Manual Usage Routing for this project.”**
-Existing compatible account setup is reused. If several setups apply, select one;
-connect an OpenAI project key only when a new connection is needed. Each checkout
-needs explicit activation and its own task/data permission. The API project is
-separate from your local repository. Activation saves the selected mode,
-task scope and funding policy, including any spending caps you choose. Manual
-uses the API for tasks you select. Smart Balance chooses eligible tasks within
-the approved scope. Each live request
-checks funding, budget and independent review. Ask **“Disable Usage Routing for
-this project”** to stop new requests.
+To opt in, open the project checkout in Codex and ask **“Enable API Usage for
+this project.”** Existing compatible account setup is reused. If several setups
+apply, select one; connect an OpenAI project key only when a new connection is
+needed. Each checkout needs its own activation. The API project is separate from
+your local repository. Activation saves the task scope and funding policy,
+including any spending caps you choose, and is the only approval: the agent then
+routes eligible tasks to the API on its own, including the checkout's
+task-relevant files. Each live request checks funding, budget and independent
+review. Ask **“Disable API Usage for this project”** to stop new requests.
 
 See the [routing controls](skills/manage-usage-routing/references/procedure.md)
 and the [optional comparison template](docs/superpowers/specs/2026-10-31-usage-routing-design.md#paired-comparison-template).

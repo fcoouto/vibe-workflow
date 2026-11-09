@@ -75,16 +75,17 @@ def visibility_declaration(brief):
 
 
 def scoped_packet(brief, report, now=None, workspace=None):
-    if 'external' not in brief:
-        return None
+    external_delegation.require('external' in brief, 'binding_required')
     binding = brief['external']
     checkout = Path(report['checkout'])
     external_delegation.require(Path(brief['source_root']) == checkout, 'checkout_changed')
     external_delegation.native_review(binding)
     external_delegation.require(binding['coordinator'] == brief['coordinator_chat_id'], 'coordinator_changed')
-    packet = external_delegation.check(checkout, report['external_permission'], binding,
-        service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
-        effort=brief['effort'], class_name=binding['class_name'], now=time.time() if now is None else now)
+    assignment = dict(service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
+        effort=brief['effort'], class_name=binding['class_name'])
+    permission = external_delegation.effective_permission(report['external_permission'], report['activation'], **assignment)
+    packet = external_delegation.check(checkout, permission, binding,
+        **assignment, now=time.time() if now is None else now)
     selected = {str(Path(item['path']).relative_to(brief['source_root'])): item['sha256']
                 for item in packet['snapshots']}
     external_delegation.require(brief['objective'] == packet['text'] and set(brief['files']) == set(selected),
@@ -99,14 +100,15 @@ def scoped_packet(brief, report, now=None, workspace=None):
 
 def prepare(root, brief, now=None):
     if not isinstance(brief, dict): raise ValueError('invalid_brief_fields')
+    external_delegation.require('external' in brief, 'binding_required')
     # Older callers supplied credit observations; they no longer gate or persist.
     brief = {key: value for key, value in brief.items() if key != 'credit'}
     required = {'task_id', 'coordinator_chat_id', 'model', 'provider', 'objective', 'source_root', 'files',
-                'timeout_seconds', 'steps', 'approval_ref', 'effort'}
-    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'external'}
+                'timeout_seconds', 'steps', 'effort', 'external'}
+    optional = {'sizing', 'role', 'specialty', 'custom_role_name', 'model_display_name', 'approval_ref'}
     if not required <= set(brief) <= required | optional: raise ValueError('invalid_brief_fields')
     if len(json.dumps(brief, ensure_ascii=True, allow_nan=False).encode()) > MAX_INPUT: raise ValueError('input_limit')
-    for key in required - {'files', 'timeout_seconds', 'steps'}:
+    for key in (required - {'files', 'timeout_seconds', 'steps', 'external'}) | ({'approval_ref'} & brief.keys()):
         if not isinstance(brief[key], str) or not brief[key].strip() or len(brief[key]) > 16000:
             raise ValueError('invalid_brief_value')
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', brief['task_id']): raise ValueError('invalid_task_id')
@@ -124,7 +126,8 @@ def prepare(root, brief, now=None):
     with settings.admission(source, 'workers', root=root) as report:
         selected = scoped_packet(brief, report, now)
         if 'sizing' in brief: brief = dict(brief, validated_output_tokens=sizing(brief, report['proposal_store'], now))
-        brief = dict(brief, management=dict(scope_id=report['scope_id'], revision=report['revision']))
+        brief = dict(brief, approval_ref=brief.get('approval_ref', report['activation']['ref']),
+            management=dict(scope_id=report['scope_id'], revision=report['revision']))
     maximum = brief['sizing']['max_files'] if 'sizing' in brief else 16
     if len(files) > maximum: raise ValueError('invalid_files')
     inputs = {}
@@ -145,8 +148,7 @@ def prepare(root, brief, now=None):
                                     expected_binding=dict(device=info.st_dev,inode=info.st_ino))
         total += len(raw)
         if total > allowance: raise ValueError('input_too_large')
-        if selected is not None:
-            external_delegation.require(hashlib.sha256(raw).hexdigest() == selected[name], 'source_changed')
+        external_delegation.require(hashlib.sha256(raw).hexdigest() == selected[name], 'source_changed')
         inputs[name] = raw.decode('utf-8')
     if time.monotonic() >= deadline: raise TimeoutError('preparation_deadline')
     root = Path(root)
@@ -485,6 +487,7 @@ def verify(run, disposition, checks, publish=None, *, reviewer=None, native_revi
     if not isinstance(checks, list) or not checks or any(not isinstance(x, str) or not x.strip() for x in checks):
         raise ValueError('native_checks_required')
     brief = json.loads((run / 'brief.json').read_text())
+    # Only historical, already-launched runs may lack a reviewer binding; no new launch admits them.
     if 'external' in brief and disposition == 'accepted':
         external_delegation.require(reviewer == brief['external']['reviewer']
             and isinstance(native_review_ref, str) and native_review_ref.strip(), 'independent_review_required')

@@ -1,5 +1,7 @@
 # Smart Routing (Vibe Router) Implementation Plan
 
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace vibe-workflow's competing worker selectors with built-in Smart Routing, reusing Workstreams jobs and reserving eligible funding for parallel work, delivered in independently useful slices.

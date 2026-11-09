@@ -27,7 +27,7 @@ class CanaryHostTests(unittest.TestCase):
                             credential_ref='vcw_' + '0' * 32)
         self.receipt = dict(selection=dict(name='Codex', organization_id='org-fixture', project_id='proj_fixture'),
                             mode='off', binding=self.binding)
-        self.config = dict(enabled=True, disabled=False, requested_mode='manual', revision=2, org_revision=1,
+        self.config = dict(enabled=True, disabled=False, requested_mode='smart', revision=2, org_revision=1,
                            class_name='canary', binding=self.binding,
                            profile=usage_canary.profile_for(101, 200))
         cycle = 'canary-' + usage_admission.digest(asdict(self.plan))
@@ -129,6 +129,7 @@ class CanaryHostTests(unittest.TestCase):
             def reject(*args, **kwargs):
                 state = control.status()
                 self.assertEqual((state['mode'], state['canary_active']), ('off', True))
+                self.assertIsNone(state['activation'])
                 raise BudgetError('fixture_transport_error')
 
             with patch.object(usage_canary, 'run', side_effect=reject) as run:
