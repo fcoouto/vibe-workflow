@@ -321,14 +321,14 @@ class Discovery:
         current=(self.budget['paths'],self.budget['bytes'])
         require(all(value>=previous for value,previous in zip(current,self._seen)))
         object.__setattr__(self,'_seen',current)
-        require(current[0]+paths<=4096 and current[1]+material<8<<20)
+        require(current[0]+paths<=startup.PACKAGE_SCAN_MAX_PATHS and current[1]+material<startup.PACKAGE_SCAN_MAX_BYTES)
     def charge(self,*,paths=0,material=0):
         self.preflight(paths,material);self.state['paths']+=paths;self.state['bytes']+=material
         object.__setattr__(self,'_seen',(self.state['paths'],self.state['bytes']))
     def check_integrity(self):
         require(self.budget is self._original and ('deadline' in self.budget,self.budget.get('deadline'))==self._deadline)
         current=(self.budget['paths'],self.budget['bytes'])
-        require(all(type(v) is int and v>=0 for v in current) and current[0]<=4096 and current[1]<8<<20)
+        require(all(type(v) is int and v>=0 for v in current) and current[0]<=startup.PACKAGE_SCAN_MAX_PATHS and current[1]<startup.PACKAGE_SCAN_MAX_BYTES)
         require(all(value>=previous for value,previous in zip(current,self._seen)))
         object.__setattr__(self,'_seen',current)
 

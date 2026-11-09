@@ -14,6 +14,8 @@ import subprocess
 import time
 from types import MappingProxyType
 
+from runtime.package_manifest import PACKAGE_SCAN_MAX_BYTES, PACKAGE_SCAN_MAX_PATHS
+
 
 MAX_INPUT = 128 * 1024
 PROJECT_FILE = Path(".vibe-workflow/project.json")
@@ -97,11 +99,9 @@ def _check_observation_deadline(budget):
 
 def _entry_budget_check(budget, *, allow_full_bytes=False):
     _check_observation_deadline(budget)
-    byte_limit = 8 * 1024 * 1024
-    if not allow_full_bytes:
-        byte_limit -= 1
+    byte_limit = PACKAGE_SCAN_MAX_BYTES if allow_full_bytes else PACKAGE_SCAN_MAX_BYTES - 1
     if (type(budget.get("paths")) is not int or type(budget.get("bytes")) is not int
-            or not 0 <= budget["paths"] <= 4096
+            or not 0 <= budget["paths"] <= PACKAGE_SCAN_MAX_PATHS
             or not 0 <= budget["bytes"] <= byte_limit):
         raise StartupError("Entry observation budget exhausted")
 
@@ -113,7 +113,7 @@ def _budgeted_source_read(path, budget):
         _entry_budget_check(budget)
         budget["paths"] += 1
         _entry_budget_check(budget)
-        limit = min(1024 * 1024, 8 * 1024 * 1024 - budget["bytes"])
+        limit = min(1024 * 1024, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])
         with path.open("rb") as stream:
             raw = stream.read(limit + 1)
         budget["bytes"] += len(raw)
@@ -122,7 +122,7 @@ def _budgeted_source_read(path, budget):
         _entry_budget_check(budget)
         return raw
     except (OSError, StartupError):
-        budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+        budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
         raise
 
 
@@ -187,14 +187,14 @@ def _checkout_identity(cwd, *, include_git_dir=False, limit=1024 * 1024, total_l
     if budget is not None:
         _entry_budget_check(budget)
         deadline = min(deadline, budget["deadline"]) if deadline is not None and budget.get("deadline") is not None else budget.get("deadline", deadline)
-        limit = min(limit, 8 * 1024 * 1024 - budget["bytes"])
+        limit = min(limit, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])
     args = ("rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
     read_limit = limit
     if include_git_dir:
         args += ("--absolute-git-dir",)
         read_limit += 1024 * 1024
         if budget is not None:
-            read_limit = min(read_limit, 8 * 1024 * 1024 - budget["bytes"])
+            read_limit = min(read_limit, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])
     if total_limit is not None:
         if type(total_limit) is not int or total_limit < 0:
             raise StartupError("Invalid owner identity byte limit")
@@ -205,7 +205,7 @@ def _checkout_identity(cwd, *, include_git_dir=False, limit=1024 * 1024, total_l
                              timeout=7 if include_git_dir else 2, deadline=deadline)
     except (StartupError, subprocess.SubprocessError, OSError):
         if budget is not None:
-            budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+            budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
         raise
     if budget is not None:
         budget["bytes"] += len(raw)
@@ -219,7 +219,7 @@ def _checkout_identity(cwd, *, include_git_dir=False, limit=1024 * 1024, total_l
         git_raw = parts[2]
         if len(identity_raw) > limit or len(git_raw) > 1024 * 1024 or len(git_raw.splitlines()) != 1:
             if budget is not None:
-                budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+                budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
             raise StartupError("Checkout identity component is over limit or malformed")
     lines = os.fsdecode(identity_raw).splitlines()
     if code or len(lines) != 2:
@@ -280,12 +280,12 @@ def _read_record_snapshot(root, *, budget=None, allow_machine_only=False):
     with os.fdopen(descriptor, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise StartupError("Enrollment record must be a regular file")
-        limit = min(MAX_INPUT, 8 * 1024 * 1024 - budget["bytes"]) if budget is not None else MAX_INPUT
+        limit = min(MAX_INPUT, PACKAGE_SCAN_MAX_BYTES - budget["bytes"]) if budget is not None else MAX_INPUT
         raw = stream.read(limit + 1)
         if budget is not None:
             budget["bytes"] += len(raw)
             if len(raw) > limit:
-                budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+                budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
                 raise StartupError("Enrollment exceeds observation limit")
             _entry_budget_check(budget)
         info = os.fstat(stream.fileno())
@@ -354,11 +354,11 @@ def runtime_settings(record, package, common, *, budget=None):
         try:
             code, raw, diagnostic = read_git(existing, "-c", "safe.bareRepository=all", "rev-parse",
                 "--absolute-git-dir", discovery=True, with_stderr=True, timeout=2,
-                deadline=budget.get("deadline"), limit=min(1024 * 1024, 8 * 1024 * 1024 - budget["bytes"]))
+                deadline=budget.get("deadline"), limit=min(1024 * 1024, PACKAGE_SCAN_MAX_BYTES - budget["bytes"]))
             budget["bytes"] += len(raw) + len(diagnostic)
             _entry_budget_check(budget)
         except (StartupError, subprocess.SubprocessError, OSError):
-            budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+            budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
             raise
     if code == 0:
         raise StartupError("Runtime state directory must be outside repositories and plugin caches")
@@ -1102,7 +1102,7 @@ def _acquired_runtime_location(path, package, data, observed, budget):
         try:
             code, raw, diagnostic = read_git(existing, "-c", "safe.bareRepository=all", "rev-parse",
                                  "--absolute-git-dir", "--is-bare-repository", discovery=True, with_stderr=True,
-                                 deadline=budget.get("deadline"), limit=min(d3.MAX_FILE, max(0, d3.MAX_TOTAL - budget["bytes"])))
+                                 deadline=budget.get("deadline"), limit=min(d3.MAX_FILE, max(0, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])))
             budget["bytes"] += len(raw) + len(diagnostic)
             lines = raw.splitlines()
             if code == 0 and len(lines) == 2 and lines[1] in (b"true", b"false"):
@@ -1132,7 +1132,7 @@ def _acquired_dependency(location, budget):
     fp = d3._inspection_fingerprint(root, str(location.relative_to(root)), budget)
     target = d3._physical_target(root, location, fp, budget) if fp["status"] in ("read", "absent") else None
     if fp["status"] == "read":
-        raw = d3._read_file(location, min(d3.MAX_FILE, max(0, d3.MAX_TOTAL - budget["bytes"])),
+        raw = d3._read_file(location, min(d3.MAX_FILE, max(0, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])),
                             expected_binding=target["binding"])
         budget["bytes"] += len(raw)
         fresh = d3._inspection_fingerprint(root, str(location.relative_to(root)), budget)
@@ -1249,7 +1249,7 @@ def acquire_canonical_project(event, package, *, authority_path=None, qualifier=
     pointer = None
     def result(status, reason):
         if status == "conflict" and budget is not None:
-            budget["bytes"] = max(budget["bytes"], 8 * 1024 * 1024)
+            budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
         return CanonicalAcquisition(ScopeResolution(status, None, reason), pointer)
     try:
         now = time.monotonic()
@@ -1496,7 +1496,7 @@ def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budg
         return result
     except (StartupError, OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
         if budget is not None:
-            budget["bytes"] = max(budget.get("bytes", 0), 8 * 1024 * 1024)
+            budget["bytes"] = max(budget.get("bytes", 0), PACKAGE_SCAN_MAX_BYTES)
         return CanonicalAcquisition(ScopeResolution("conflict", None, "observation_unavailable"), pointer)
 
 

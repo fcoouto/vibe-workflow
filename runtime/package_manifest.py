@@ -3,11 +3,20 @@
 import os
 from pathlib import Path
 import selectors
+import stat
 import subprocess
 import time
 
 
-# Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
+# Codex's own codex-plugin-bundle-v1 limits, which the bundle scan in runtime/setup_observation.py mirrors.
+# Codex owns them: a package this scan accepted but Codex rejected would fail at install. The scan keeps
+# total bytes below PACKAGE_SCAN_MAX_BYTES and charges paths as export_usage() counts them.
+# runtime/startup.py _entry_budget_check enforces them for every entry observation, the scan included, so
+# they must not follow onboarding's project inventory bound (runtime/onboarding.py MAX_TOTAL).
+PACKAGE_SCAN_MAX_BYTES = 8 * 1024 * 1024
+PACKAGE_SCAN_MAX_FILE = 1024 * 1024
+PACKAGE_SCAN_MAX_PATHS = 4096
+# Development-only trees: nothing installed reads them, and they would not fit the bundle scan.
 # Local client configuration stays with the checkout.
 EXCLUDED = ("tests/", "scripts/test_sharded.py", ".vibe-workflow/", ".codex/", "CLAUDE.md")
 # Inherited repository variables (for example from a Git hook) would override -C. scripts/package.py drops
@@ -96,3 +105,42 @@ def export_members(root, *, deadline=None):
             parts = name.split("/")
             members.update("/".join(parts[:index]) for index in range(1, len(parts) + 1))
     return frozenset(members)
+
+
+def scan_skips(root, path, members):
+    """Whether the bundle scan leaves out path below root: build caches, and anything a checkout does not export."""
+    return (path.name in ("__pycache__", ".venv") or path.name.endswith((".pyc", ".egg-info"))
+            or members is not None and path.relative_to(root).as_posix() not in members)
+
+
+def export_usage(root, *, deadline=None):
+    """Measure, by file metadata, the export of root as the bundle scan would read it.
+
+    The export is a checkout's membership, or any other directory minus EXCLUDED. Errors for unsupported entries.
+    """
+    root = Path(root)
+    members = export_members(root, deadline=deadline)
+    usage = dict(files=0, directories=0, bytes=0, largest_file=None, largest_bytes=0,
+                 excluded=sorted(name for name in members or () if excluded(name)))
+    pending = [root]
+    while pending:
+        path = pending.pop()
+        relative = path.relative_to(root).as_posix()
+        if path != root and scan_skips(root, path, members):
+            continue
+        info = path.lstat()
+        if path != root and (excluded(relative) or stat.S_ISDIR(info.st_mode) and excluded(relative + "/")):
+            continue
+        if stat.S_ISDIR(info.st_mode):
+            usage["directories"] += path != root
+            pending.extend(path.iterdir())
+        elif stat.S_ISREG(info.st_mode):
+            usage["files"] += 1
+            usage["bytes"] += info.st_size
+            if info.st_size > usage["largest_bytes"]:
+                usage["largest_file"], usage["largest_bytes"] = relative, info.st_size
+        else:
+            raise PackageManifestError(f"Package export has an unsupported entry: {relative}")
+    # The scan charges each entry when listed and when visited, and each file once more when read.
+    usage["scan_paths"] = 1 + 3 * usage["files"] + 2 * usage["directories"]
+    return usage

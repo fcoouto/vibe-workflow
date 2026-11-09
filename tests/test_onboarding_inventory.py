@@ -172,11 +172,11 @@ class FileInventoryTests(OnboardingFixture):
 
     def test_inventory_preserves_shared_byte_path_and_deadline_limits(self):
         self.asset(size=9 * 1024 * 1024)
-        budget = {"paths": 20, "bytes": 8 * 1024 * 1024 - 4}
+        budget = {"paths": 20, "bytes": onboarding.MAX_TOTAL - 4}
         observed = onboarding._inspection_fingerprint(self.repo, "asset.bin", budget, inventory=True)
         self.assertEqual(observed["status"], "metadata")
-        self.assertEqual(budget, {"paths": 21, "bytes": 8 * 1024 * 1024 - 4})
-        for exhausted in ({"paths": 4096, "bytes": 0}, {"paths": 0, "bytes": 8 * 1024 * 1024 + 1},
+        self.assertEqual(budget, {"paths": 21, "bytes": onboarding.MAX_TOTAL - 4})
+        for exhausted in ({"paths": 4096, "bytes": 0}, {"paths": 0, "bytes": onboarding.MAX_TOTAL + 1},
                           {"paths": 0, "bytes": 0, "deadline": 0}):
             with self.subTest(exhausted=exhausted), self.assertRaises(StartupError):
                 onboarding._inspection_fingerprint(self.repo, "asset.bin", exhausted, inventory=True)
@@ -200,7 +200,7 @@ class FileInventoryTests(OnboardingFixture):
         self.asset(size=100_000)
         with self.assertRaises(StartupError):
             onboarding._snapshot(self.repo, inventory=True,
-                                 budget={"paths": 0, "bytes": 8 * 1024 * 1024 - 50_000})
+                                 budget={"paths": 0, "bytes": onboarding.MAX_TOTAL - 50_000})
 
     def test_old_plan_inventory_stays_strict_on_reinspection(self):
         self.inspect()
