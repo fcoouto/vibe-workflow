@@ -2,6 +2,10 @@
  "_meta": {
   "caps": {
    "qualification": 14,
+   "pilot": 28
+  },
+  "caps_in_code": {
+   "qualification": 14,
    "pilot": 24
   },
   "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
@@ -16,9 +20,9 @@
    "open_reservations": 0
   },
   "pilot": {
-   "cap": 24,
+   "cap": 28,
    "spent": 2,
-   "remaining": 22,
+   "remaining": 26,
    "open_reservations": 0
   }
  },
@@ -179,6 +183,12 @@
    "reserved": 2,
    "sent": 2,
    "settled": true
+  },
+  {
+   "kind": "cap",
+   "purpose": "pilot",
+   "cap": 28,
+   "reason": "Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are"
   }
  ]
 }

@@ -77,7 +77,15 @@ RPC round trips: `health` 17 ms warm and 58 ms with the child's start-up; `attac
 
 ## Pilot canary, run 1 (aborted)
 
-The bounded pilot aborted at admission 1. The harness's accounting step raised a `TypeError` (cause unknown; only the exception type was recorded), after the managed request and its title had been sent (2 calls). The [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1) have the per-criterion table.
+The bounded pilot aborted at admission 1. The harness's accounting step raised a `TypeError` after the managed request and its title had been sent (2 calls).
+
+**Root cause, found offline.** `Run.__init__` set `self.pool, self.account = (canary.POOL, canary.ACCOUNT)` (`3ae290c`). That instance attribute shadowed the method `Run.account(session)`, so `CanaryEnv.account` → `self.run.account(session)` called the string `"anthropic:pilot-canary"`. The same shadowing would have broken qualification stage 3 (`"anthropic:qual"`); the qualification re-run passed only because it ran at `3f87159`, before that line existed.
+
+- **Fix:** the attribute is renamed `route_account`.
+- **Why tests missed it:** they used doubles for the environment and never called the real `Run.account` from the canary path. A new end-to-end test runs the whole driver path against a live-shaped OpenCode double and the real routing command. The pilot tests now live in `tests/test_qualification_canary.py`.
+- **Abort recording:** aborts now record a sanitized origin, as type, the harness file, line and function, and the innermost frame's file and function; never a message or locals. They also record per-operation timings even for a partial admission, and bounded payload shapes for aborted admissions.
+- **Reset:** the canary state was deleted with `--reset-canary-state`, after confirming no harness process was alive.
+- **Pilot cap:** raised from 24 to 28 by pre-registration Edit 4. The [validation results](smart-routing-validation.md#pilot-canary-run-1-9-november-2026-aborted-at-admission-1) have the per-criterion table.
 
 - **Observed again on a dedicated canary state:** the plugin-chain proof (guard refusal `guard_variant`, pending probe refused by the shim), an attached managed request, `uncertain` recovery after an abort, the kill switch, and harness-verified cleanup. The repository was left byte-identical.
 - **Harness gaps found:**

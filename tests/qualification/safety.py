@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import time
+import traceback
 
 PROVIDER, MODEL, VARIANT = "claude-agent", "haiku", "low"
 ROUTE = "%s/%s#%s" % (PROVIDER, MODEL, VARIANT)
@@ -19,6 +20,8 @@ PROMPT_TEXT = "Reply with exactly: OK"
 QUALIFIED_OPENCODE = "2.2.6"
 # Durable caps per purpose (the user's authorizations): qualification 14, the bounded pilot canary 24.
 CAPS = {"qualification": 14, "pilot": 24}
+# The most a recorded cap line may raise each purpose to (pre-registration edit 4: pilot 24 -> 28 before attempt 2).
+MAX_CAPS = {"qualification": 14, "pilot": 28}
 # What the budget counts. A claude-agent SDK turn or an internal retry could make more upstream API calls than this.
 COUNTING = ("OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard "
             "(transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split")
@@ -175,9 +178,10 @@ class CallLedger:
                 record = json.loads(line)
             except ValueError:
                 raise Refused("the call ledger is damaged") from None
-            if type(record) is not dict or record.get("v") != 1 or record.get("kind") not in ("seed", "reserve", "settle") \
+            if type(record) is not dict or record.get("v") != 1 or record.get("kind") not in ("seed", "reserve", "settle", "cap") \
                     or not integer(record.get("calls")) or not integer(record.get("seq")) \
-                    or record.get("purpose") not in CAPS or (record["kind"] == "settle" and not integer(record.get("ref"))):
+                    or record.get("purpose") not in CAPS or (record["kind"] == "settle" and not integer(record.get("ref"))) \
+                    or (record["kind"] == "cap" and (not integer(record.get("cap")) or record["cap"] > MAX_CAPS[record["purpose"]])):
                 raise Refused("the call ledger is damaged")
             records.append(record)
         if len({record["seq"] for record in records}) != len(records):
@@ -197,7 +201,11 @@ class CallLedger:
             elif record["kind"] == "settle":
                 settled[record["ref"]] = record["calls"]
         totals = {}
-        for purpose, cap in CAPS.items():
+        caps = dict(CAPS)
+        for record in records:  # the latest recorded cap line wins; history is never rewritten
+            if record["kind"] == "cap":
+                caps[record["purpose"]] = record["cap"]
+        for purpose, cap in caps.items():
             spent = sum(r["calls"] for r in records if r["kind"] == "seed" and r["purpose"] == purpose)
             spent += sum(settled.get(seq, r["calls"]) for seq, r in reserved.items() if r["purpose"] == purpose)
             open_count = sum(1 for seq, r in reserved.items() if r["purpose"] == purpose and seq not in settled)
@@ -244,6 +252,21 @@ class CallLedger:
             raise BudgetExceeded("%s: %d sent against %d reserved" % (purpose, actual, reserved[ref]["calls"]))
         return totals
 
+    def set_cap(self, purpose, cap, reason):
+        """Append a recorded cap change (a pre-registration edit); never above `MAX_CAPS`, never below what was spent."""
+        if purpose not in CAPS:
+            raise Refused("unknown call purpose")
+        if type(cap) is not int or not reason or not str(reason).strip():
+            raise Refused("a cap change needs an integer cap and a recorded reason")
+        if cap > MAX_CAPS[purpose]:
+            raise Refused("the cap may not exceed the recorded maximum %d" % MAX_CAPS[purpose])
+        with self._locked(True) as handle:
+            records = self._read(handle)
+            if cap < self._totals(records)[0][purpose]["spent"]:
+                raise Refused("the cap may not be below what was already spent")
+            self._append(handle, records, dict(kind="cap", purpose=purpose, calls=0, cap=cap, reason=str(reason)[:300]))
+            return self._totals(self._read(handle))[0][purpose]
+
     def settle_dead(self, ref, processes):
         """Settle a reservation whose run died, at its full reserved count (never under-counting).
 
@@ -289,7 +312,9 @@ class CallLedger:
                 entries.append(dict(kind="reservation", purpose=record["purpose"], label=record["label"],
                                     reserved=record["calls"], sent=settled.get(record["seq"]),
                                     settled=record["seq"] in settled))
-        return {"_meta": {"caps": CAPS, "counting": COUNTING, "generated_from": "the durable call ledger (--export-call-ledger)",
+            elif record["kind"] == "cap":
+                entries.append(dict(kind="cap", purpose=record["purpose"], cap=record["cap"], reason=record.get("reason")))
+        return {"_meta": {"caps": {purpose: totals[purpose]["cap"] for purpose in totals}, "caps_in_code": CAPS, "counting": COUNTING, "generated_from": "the durable call ledger (--export-call-ledger)",
                           "write_ahead": "an unsettled reservation counts in full"},
                 "totals": totals, "entries": entries}
 
@@ -498,6 +523,41 @@ def repo_changes(start, now):
     was_dirty = set(start["dirty"])
     return dict(new=sorted(changed - was_dirty), dirty_changed=sorted(changed & was_dirty),
                 head_changed=start["head"] != now["head"])
+
+
+# ---------------------------------------------------------------- abort diagnostics
+
+HARNESS_DIR = Path(__file__).resolve().parent
+MAX_SHAPE = 2048
+
+
+def exception_origin(error):
+    """Where an exception came from, sanitized: its type, the innermost harness frame (file name, line, function) and
+    the innermost frame overall (file name and function). Never the message, arguments or locals."""
+    frames = traceback.extract_tb(error.__traceback__) if error.__traceback__ else []
+    harness = [frame for frame in frames if Path(frame.filename).resolve().parent == HARNESS_DIR]
+    pick, inner = (harness[-1] if harness else None), (frames[-1] if frames else None)
+    return dict(type=type(error).__name__, file=Path(pick.filename).name if pick else None,
+                line=pick.lineno if pick else None, function=pick.name if pick else None,
+                innermost=None if inner is None else dict(file=Path(inner.filename).name, function=inner.name))
+
+
+def shape_of(value, depth=0):
+    """The structure of a payload without its content: field names and value types, lists as length plus the first
+    three item shapes, bounded in depth and size. Strings (text, ids) are reduced to "str"."""
+    if depth >= 4:
+        return "..."
+    if isinstance(value, dict):
+        shape = {str(key)[:40]: shape_of(value[key], depth + 1) for key in sorted(value, key=str)[:24]}
+        if len(value) > 24:
+            shape["..."] = len(value) - 24
+    elif isinstance(value, list):
+        shape = dict(list=len(value), items=[shape_of(item, depth + 1) for item in value[:3]])
+    else:
+        shape = "null" if value is None else type(value).__name__
+    if depth == 0 and len(json.dumps(shape)) > MAX_SHAPE:
+        return dict(truncated=True, type=type(value).__name__)
+    return shape
 
 
 # ---------------------------------------------------------------- output

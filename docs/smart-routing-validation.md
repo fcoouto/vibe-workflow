@@ -1,6 +1,6 @@
 # Smart Routing cutover criteria
 
-- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed.
+- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line.
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
 
@@ -79,7 +79,7 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
 | Project allowlist | Exactly `/Users/fcouto/dev/git/vibe-workflow`. Any other project or working directory is refused. |
 | Routes | The subscription route `claude-agent/haiku#low` only. No API Usage, no organization, no OpenAI or Codex. |
 | Sample | Up to 20 admissions, across at least three roles (implementer, reviewer, researcher, each through an explicit worker choice) and two complexity bands. |
-| Requests | At most 1 real request per admission, plus one title request in the whole pilot. The durable call ledger caps the pilot at 24 real requests, separate from the qualification budget (9 of 14 spent, 5 remain). |
+| Requests | At most 1 real request per admission, plus one title request in the whole pilot. The durable call ledger caps the pilot at 28 real requests (24 before Edit 4), including the probes' exposure, separate from the qualification budget (9 of 14 spent, 5 remain). |
 | Concurrency | The defaults (4 total, 2 per account), never raised. The driver runs one admission at a time. |
 | Maximum duration | 24 hours of wall-clock time. |
 | Abort conditions | Any funding violation, unresolved launch, recovery error, non-haiku request, `status` anomaly, or cap breach. |
@@ -152,13 +152,15 @@ Replay, disagreement, re-execution and the pre-registered canary: not yet run.
 
 ### Pilot canary, run 1 (9 November 2026): aborted at admission 1
 
+Attempt 1 of the pilot.
+
 - **Run.** Harness at `0a19e6c`, `--canary --project /Users/fcouto/dev/git/vibe-workflow --admissions 20`, with the default dedicated canary state, a fresh isolated directory and `claude-agent/haiku#low` only. Evidence: [`pilot-results.json`](../tests/fixtures/smart-routing/probes/pilot-results.json) (harness output, unchanged) and [`qual-call-ledger.json`](../tests/fixtures/smart-routing/probes/qual-call-ledger.json) (exported from the durable ledger).
 - **Before admission 1.** Every refusal check passed:
   - The canary state was created on first use: `authority_required` on (canary ledger only), Smart Routing ON, API Usage off, no organization.
   - `status` was clean: no holds, 0 open attempts.
   - The plugin-chain probes passed. The guard probe was refused by the guard with `guard_variant`, and the pending probe was refused by the shim with `attach_required`, before `qual-post` saw it. Both settled at 0.
 - **Admission 1** (implementer, low band). The pilot sent the managed request and its one title: 2 calls, settled against the 2 reserved. Then the harness's accounting step raised a `TypeError`. The driver aborted with `recovery_error` (detail `accounting: TypeError`, phase `launched`), recorded the hold `uncertain` (the launch had happened) and ran the kill switch, which reported `updated`.
-- **Cause: unknown.** The accounting library converts its own errors into `AccountingError`, so the `TypeError` came from harness code around it (`Run.account` or `descendants`). The abort records only the exception type, and the session data was deleted with the isolated directory. An offline run of the same code on plausible payloads did not reproduce it. This is a harness defect; the run stopped as pre-registered and was not retried.
+- **Cause, unknown at the time of the run, found offline afterwards: a harness defect.** `Run.__init__` assigned the pilot's account id to `self.account` (`self.pool, self.account = ...`). That shadowed the method `Run.account(session)`, so `CanaryEnv.account` called the string `"anthropic:pilot-canary"` and raised `TypeError: 'str' object is not callable`. The attribute was added after the qualification re-run, which had used the method successfully. The run stopped as pre-registered and was not retried.
 - **State left behind, in the canary state only.** Smart Routing is OFF (settings revision 2), and one `uncertain` hold is open (1 open attempt), as accepted in the pre-registration. Recovery is the coordinator's decision. The production routing state was not touched.
 
 | Pass criterion (pre-registered) | Observed | Result |
@@ -175,5 +177,14 @@ Replay, disagreement, re-execution and the pre-registered canary: not yet run.
   - No processes left; isolated directory removed.
   - `.vibe-qual-canary/` removed, and `.git/info/exclude` byte-identical.
   - Project HEAD and the full `git status --porcelain=v1 -z --untracked-files=all` output identical to before the run.
+
+**After attempt 1** (no model call, no server):
+
+- The defect was fixed test-first: the attribute was renamed `route_account`.
+- An end-to-end unit test now drives whole pilot admissions through a live-shaped OpenCode double with the real `routing.py` on temporary stores. It covers one admission, admissions 2 to 20 with no further title, and a clean 20-admission run with window settlements and no charge.
+- Aborts now record a sanitized exception origin, the timing of each operation even when the admission is partial, and payload shapes for aborted admissions.
+- The canary state was reset by deleting the canary directory with the harness's guarded `--reset-canary-state`, after confirming no harness process was alive. The durable call ledger was left as it was (pilot 2 spent), and the pilot cap was then raised to 28 by Edit 4.
+
+### Pilot canary, attempt 2: pending
 
 **What the pilot does not show.** It is not the pre-registered canary, and cutover stays blocked. It is subscription-only. Window telemetry is not observable on this host, so the call cap was the proxy. One admission ran: no role other than implementer and no band other than low was exercised, and no latency budget was measured.

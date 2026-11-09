@@ -13,11 +13,12 @@ allow_title)`, `account(session)`, `record(event)`, `repo_changes()` and `kill_s
 """
 import os
 from pathlib import Path
+import shutil
 import stat
 import time
 
 from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, MODEL, PROTECTED, PROVIDER, Refused, VARIANT,
-                                        inside_git_worktree, summarize_ms)
+                                        exception_origin, inside_git_worktree, summarize_ms)
 
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
@@ -102,6 +103,37 @@ def check_canary_state(path, home=None, production=None, isolated=None):
         if mine == Path(theirs).parent.resolve() / Path(theirs).name or resolved == Path(theirs).parent.resolve():
             raise Refused("the canary state must not be the production routing state")
     return dict(dir=resolved, settings=settings, ledger=ledger)
+
+
+STATE_FILES = {"settings.json", "ledger.sqlite3", ".settings.lock", "ledger.sqlite3-wal", "ledger.sqlite3-shm",
+               "ledger.sqlite3-journal"}
+
+
+def reset_state(path, processes, home=None):
+    """Delete the dedicated canary state (after an aborted pilot). Refused unless the path passes
+    `check_canary_state` (so never the production state), exists and holds only the state's own files, and no harness
+    process is alive: a harness run, a harness OpenCode server, or a routing child pinned to this directory."""
+    state = check_canary_state(path, home=home)
+    directory = state["dir"]
+    if not directory.is_dir():
+        raise Refused("there is no canary state directory to reset")
+    own = os.getpid()
+    for line in (processes or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) < 2 or not parts[0].isdigit() or int(parts[0]) == own:
+            continue
+        command = parts[1]
+        if ("opencode_live.py" in command and "--reset-canary-state" not in command) \
+                or "opencode serve --hostname 127.0.0.1" in command or ("routing.py" in command and str(directory) in command):
+            raise Refused("a harness process is still alive; stop it before resetting the canary state")
+    names = sorted(entry.name for entry in directory.iterdir())
+    unexpected = [name for name in names if name not in STATE_FILES]
+    if unexpected:
+        raise Refused("the canary state directory holds unexpected files; inspect it first")
+    shutil.rmtree(directory)
+    if directory.exists():
+        raise Refused("the canary state directory could not be removed")
+    return dict(removed=True, files=names)
 
 
 def initialize_state(routing):
@@ -219,10 +251,11 @@ def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT):
 
 
 class Abort(Exception):
-    def __init__(self, reason, detail=None):
+    def __init__(self, reason, detail=None, origin=None):
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
+        self.origin = origin
 
 
 class PilotDriver:
@@ -230,13 +263,15 @@ class PilotDriver:
     the durable `pilot` purpose. Any abort condition, and any exception or signal, stops launching, recovers the
     current admission by phase, and runs the kill switch once."""
 
+    OPS = ("prepare", "health", "dispatch", "attach", "check", "record")  # per-admission timings, kept even on abort
+
     def __init__(self, env, ledger, n=PILOT_MAX, run="pilot", clock=time.monotonic, max_duration=MAX_DURATION_S,
                  tag=None, now=None):
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
         self.plan = plan_assignments(n, tag or run, now)
         self.current = None
         self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[],
-                            latency=dict(prepare=[], dispatch=[], check=[], record=[]), blocked_titles=0)
+                            latency={op: [] for op in self.OPS}, blocked_titles=0)
 
     def run(self):
         started = self.clock()
@@ -244,7 +279,7 @@ class PilotDriver:
             for item in self.plan:
                 index = item["label"]["index"]
                 self.current = dict(index=index, attempt=item["body"]["assignment"]["attempt_id"], phase="planned",
-                                    ref=None, settled=False)
+                                    ref=None, settled=False, timings={}, session=None)
                 if self.clock() - started > self.max_duration:
                     raise Abort("max_duration")
                 self.admit(item, first=index == 1)
@@ -254,11 +289,11 @@ class PilotDriver:
             self.repo_check("end")
         except Abort as stop:
             self.quiesce()  # first: no signal may skip the recovery
-            self.abort(stop.reason, stop.detail)
+            self.abort(stop.reason, stop.detail, stop.origin or exception_origin(stop))
         except BaseException as error:  # noqa: BLE001 - every exception and signal ends the pilot the same way
             self.quiesce()
             interrupted = isinstance(error, KeyboardInterrupt) or type(error).__name__ == "Interrupted"
-            self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__)
+            self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__, exception_origin(error))
         latency = self.results["latency"]
         self.results["latency_summary"] = {key: summarize_ms(values) for key, values in latency.items()}
         return self.results
@@ -297,19 +332,35 @@ class PilotDriver:
         if callable(getattr(self.env, "quiesce", None)):
             self.env.quiesce()  # no further signal interrupts the recovery
 
-    def abort(self, reason, detail=None):
+    def timed(self, op, action):
+        began = time.perf_counter()
+        try:
+            return action()
+        finally:
+            self.current["timings"][op] = round((time.perf_counter() - began) * 1000, 2)
+
+    def abort(self, reason, detail=None, origin=None):
         try:
             recovery = self.recover()
         except BaseException as error:  # noqa: BLE001
             recovery = "error:%s" % type(error).__name__
+        current = self.current or {}
+        shapes = None
+        if current.get("session") and current.get("phase") in ("launched", "recorded") and \
+                callable(getattr(self.env, "diagnostics", None)):
+            try:
+                shapes = self.env.diagnostics(current["session"])
+            except BaseException as error:  # noqa: BLE001
+                shapes = dict(unavailable=type(error).__name__)
         try:
             switched = self.env.kill_switch()
         except BaseException as error:  # noqa: BLE001
             switched = dict(state="error", reason=type(error).__name__)
-        current = self.current or {}
         self.results["abort"] = dict(reason=reason, admission=current.get("index"), phase=current.get("phase"), detail=detail,
-                                     recovery=recovery, kill_switch=switched,
-                                     kill_switch_ok=(switched or {}).get("state") == "updated")
+                                     origin=origin, timings=dict(current.get("timings") or {}), recovery=recovery,
+                                     kill_switch=switched, kill_switch_ok=(switched or {}).get("state") == "updated")
+        if shapes is not None:
+            self.results["abort"]["shapes"] = shapes
 
     def admit(self, item, first):
         env, label, current = self.env, item["label"], self.current
@@ -329,19 +380,21 @@ class PilotDriver:
             raise Abort("cap_breach") from None
         attempt = current["attempt"]
         self.phase("preparing")
-        answer, prepare_ms = env.prepare(item["body"])
+        timings = current["timings"]
+        answer, timings["prepare"] = env.prepare(item["body"])
         if answer.get("state") != "admitted" or (answer.get("admission") or {}).get("billing_class") != "included_subscription":
             raise Abort("admission_refused", answer.get("reason"))
         self.phase("admitted")
-        if (env.health() or {}).get("state") != "ok":
+        if (self.timed("health", env.health) or {}).get("state") != "ok":
             raise Abort("routing_unhealthy")
         self.phase("dispatching")
-        answer, dispatch_ms = env.dispatch(attempt)
+        answer, timings["dispatch"] = env.dispatch(attempt)
         if answer.get("state") != "dispatched":
             raise Abort("dispatch_refused", answer.get("reason"))
         self.phase("dispatched")
         token, session, message = answer["authority"], answer["session_id"], answer["message_id"]
-        if not env.attach(session, attempt, token):
+        current["session"] = session
+        if not self.timed("attach", lambda: env.attach(session, attempt, token)):
             raise Abort("recovery_error", "attach")
         self.phase("attached")
         self.phase("launching")
@@ -349,6 +402,8 @@ class PilotDriver:
         if not launched.get("idle"):
             raise Abort("unresolved_launch")  # the reservation stays open: its exposure counts in full
         self.phase("launched")
+        if launched.get("check_ms") is not None:
+            timings["check"] = launched["check_ms"]
         sent = launched["transmitted"]
         current["settled"] = True
         try:
@@ -364,8 +419,8 @@ class PilotDriver:
         try:
             accounting = env.account(session)
         except Exception as error:  # noqa: BLE001 - any accounting refusal is a recovery error
-            raise Abort("recovery_error", "accounting: %s" % type(error).__name__) from None
-        answer, record_ms = env.record(dict(event_id=attempt + "-complete", attempt_id=attempt, kind="complete",
+            raise Abort("recovery_error", "accounting: %s" % type(error).__name__, exception_origin(error)) from None
+        answer, timings["record"] = env.record(dict(event_id=attempt + "-complete", attempt_id=attempt, kind="complete",
                                             stage="worker", usage=accounting.get("usage")))
         settlement = answer.get("settlement") or {}
         if answer.get("state") != "recorded":
@@ -381,11 +436,9 @@ class PilotDriver:
         self.phase("completed")
         self.results["completed"] += 1
         self.results["settlements"][settlement["kind"]] = self.results["settlements"].get(settlement["kind"], 0) + 1
-        latency = self.results["latency"]
-        latency["prepare"].append(prepare_ms)
-        latency["dispatch"].append(dispatch_ms)
-        latency["record"].append(record_ms)
-        if launched.get("check_ms") is not None:
-            latency["check"].append(launched["check_ms"])
+        for op, value in timings.items():
+            self.results["latency"][op].append(value)
         self.results["admissions"].append(dict(label, sent=sent, unknown=sorted(accounting.get("unknown") or []),
-                                               settlement=settlement.get("kind"), outcome=launched.get("outcome")))
+                                               settlement=settlement.get("kind"), outcome=launched.get("outcome"),
+                                               released=sorted(settlement.get("released") or {}),
+                                               charged=settlement.get("charged") or 0, timings=dict(timings)))

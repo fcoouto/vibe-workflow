@@ -56,7 +56,7 @@ from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_M
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
                                         check_opencode_version, classify_changes, compare_snapshots, id_shape,
-                                        latency_pairs, on_route, repo_changes, repo_snapshot, snapshot_tree,
+                                        latency_pairs, on_route, repo_changes, repo_snapshot, shape_of, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
                                         processes, server_environment, status_view)
@@ -95,7 +95,8 @@ class Run:
         else:
             self.server = Server(base)
             self.routing = Routing(self.server.settings, self.server.ledger)
-        self.pool, self.account = (canary.POOL, canary.ACCOUNT) if canary_project else ("sub", "anthropic:qual")
+        # Not `self.account`: that name is the accounting method (shadowing it caused pilot attempt 1's TypeError).
+        self.pool, self.route_account = (canary.POOL, canary.ACCOUNT) if canary_project else ("sub", "anthropic:qual")
         self.repo_start = None
         self.results = dict(mode=self.purpose, stages={}, ledger=[], blockers=[], deviations=[])
         self.redact = Redactor(paths=[str(base), os.path.realpath(base), str(base).replace("/private/", "/", 1), str(ROOT),
@@ -299,7 +300,7 @@ class Run:
         guard_sent = self.done(token)
         guard = self.records(mark, session=guard_session, hook="model.request")
         # Pending probe: the derived session of an admitted, undispatched attempt; the shim must refuse it.
-        probe = canary.plan_assignments(1, self.run_id + "-probe", pool=self.pool, account=self.account)[0]["body"]
+        probe = canary.plan_assignments(1, self.run_id + "-probe", pool=self.pool, account=self.route_account)[0]["body"]
         answer, _ = self.routing("prepare", **probe)
         attempt = probe["assignment"]["attempt_id"]
         ids_ = self.routing.admission_ids(attempt) if answer.get("state") == "admitted" else None
@@ -339,7 +340,7 @@ class Run:
             self.results["deviations"].append("stage 0: health before any ledger was not not_ready")
         answer, ms = self.routing("set", authority_required=True)
         self.note(s, "set_authority_required", dict(answer=answer, ms=ms))
-        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1", pool=self.pool, account=self.account)[0]["body"])
+        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1", pool=self.pool, account=self.route_account)[0]["body"])
         self.attempt = "qual-a1-01"
         self.note(s, "prepare", dict(state=answer.get("state"), reason=answer.get("reason"), ms=ms,
                                      billing_class=(answer.get("admission") or {}).get("billing_class")))
@@ -609,7 +610,7 @@ class Run:
     # ------------------------------------------------------------ stage 4 (lost acknowledgment)
     def stage4(self):
         s = "4"
-        body = canary.plan_assignments(1, "qual-a2", pool=self.pool, account=self.account)[0]["body"]
+        body = canary.plan_assignments(1, "qual-a2", pool=self.pool, account=self.route_account)[0]["body"]
         attempt = body["assignment"]["attempt_id"]
         answer, _ = self.routing("prepare", **body)
         if answer.get("state") != "admitted":
@@ -858,6 +859,16 @@ class CanaryEnv:
     def account(self, session):
         return self.run.account(session)["result"]
 
+    def diagnostics(self, session):
+        """Structure only (no text, no ids) of what accounting read, kept for an aborted admission."""
+        run = self.run
+        _, record, _ = run.server.request("GET", "/api/session/%s" % session)
+        messages = run.messages(session)
+        _, listing, _ = run.server.request("GET", "/api/session")
+        listed = run.data(listing)
+        return dict(record=shape_of(run.data(record)), messages=[shape_of(m) for m in messages[:12]], message_count=len(messages),
+                    listing=dict(type=type(listed).__name__, count=len(listed) if isinstance(listed, list) else None))
+
     def record(self, event):
         return self.run.routing.served("record", event=event)
 
@@ -887,6 +898,11 @@ def main(argv=None):
     parser.add_argument("--project", help="canary: the allowlisted checkout")
     parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
                         help="canary: the dedicated routing state directory (never the production one)")
+    parser.add_argument("--set-cap", nargs=2, metavar=("PURPOSE", "CAP"),
+                        help="append a recorded cap change (up to the code's recorded maximum; needs --reason)")
+    parser.add_argument("--reason", help="the recorded reason for --set-cap")
+    parser.add_argument("--reset-canary-state", action="store_true",
+                        help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
                         help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
     parser.add_argument("--admissions", type=int, default=canary.PILOT_MAX, help="canary: admissions (1-20)")
@@ -897,6 +913,15 @@ def main(argv=None):
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))
+            return 0
+        if args.set_cap:
+            purpose, cap = args.set_cap
+            if not cap.isdigit():
+                raise Refused("the cap must be an integer")
+            print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or ""), indent=2))
+            return 0
+        if args.reset_canary_state:
+            print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
             return 0
         if args.settle_dead is not None:
             totals = CallLedger(args.call_ledger or "").settle_dead(args.settle_dead, processes())
