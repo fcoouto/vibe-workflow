@@ -69,6 +69,9 @@ REQUEST = dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness="claude-
 PROBE_REQUEST = dict(provider="opencode", model="session-probe", variant=None, harness="opencode session probe",
                      kind="primary", funding_pool="none")
 DENY_ALL = [{"action": "*", "resource": "*", "effect": "deny"}]
+KEEP_WARNING = ("kept: the isolated dir still holds the server password, the login-method reference and any login OpenCode "
+                "stored there (a ChatGPT sign-in is an OAuth record with access and refresh tokens); the server was "
+                "stopped. Remove the dir when done.")
 REPORT_ONLY_HOME = (".claude", ".opencode")  # written by the claude CLI / OpenCode under HOME: reported, not compared
 
 
@@ -750,7 +753,7 @@ class Run:
     # ------------------------------------------------------------ run, cleanup, output
     def snapshot_user_dirs(self):
         home = Path.home()
-        return {name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}
+        return dict({name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}, watched=safety.watched_home(home))
 
     def report_only_home(self):
         found = {}
@@ -854,6 +857,9 @@ class Run:
             changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn))
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
+        codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
+        if unexpected:
+            self.results["blockers"].append("the user's ~/.codex credentials or config changed during the run")
         home_after = self.report_only_home()
         report = {}
         for name, snapshot in home_before.items():
@@ -862,7 +868,7 @@ class Run:
                 continue
             diff = compare_snapshots(snapshot, home_after[name])
             report[name] = {key: len(value) for key, value in diff.items()}
-        self.results["user_dirs"] = dict(opencode=changes, home_report_only=report)
+        self.results["user_dirs"] = dict(opencode=changes, codex=codex, home_report_only=report)
 
     def output(self, results):
         meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose,
@@ -882,7 +888,7 @@ def main(argv=None):
     parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
                                          "descendants,s33d (docs/smart-routing-qualification.md)")
     parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
-    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL#VARIANT, which the login's model list must show")
+    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's model list (default: lowest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
     parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
@@ -931,11 +937,14 @@ def main(argv=None):
             raise Refused("--out must be outside the isolated dir, which is removed")
         if sum(map(bool, (args.canary, args.stages, args.chatgpt))) > 1:
             raise Refused("--canary, --stages and --chatgpt are separate runs")
+        if args.keep and args.chatgpt:
+            raise Refused("--keep is refused with --chatgpt: the dir would keep OpenCode's stored ChatGPT login")
         if args.chatgpt_model and not args.chatgpt:
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
         if args.chatgpt:
-            route = safety.parse_route(args.chatgpt_model or "")
+            ref = args.chatgpt_model or ""  # without #VARIANT the model's lowest listed variant is used
+            route = safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
             if route[0] != "openai":
                 raise Refused("the chatgpt run allows only an openai model")
             if not 60 <= args.chatgpt_timeout <= 1800:
@@ -965,8 +974,7 @@ def main(argv=None):
         Path(args.out).write_text(text + "\n")
     print(json.dumps(dict(blockers=clean["blockers"], cleanup=clean.get("cleanup"), call_ledger=clean.get("call_ledger")), indent=2))
     if args.keep:
-        print("kept: the isolated dir still holds the server password and the login-method reference; the server was "
-              "stopped. Remove the dir when done.", file=sys.stderr)
+        print(KEEP_WARNING, file=sys.stderr)
     return 1 if results["blockers"] else 0
 
 

@@ -21,6 +21,9 @@ PURPOSE = "chatgpt"
 INTEGRATION = "openai"
 METHOD_ID = "chatgpt-token-sharing"
 DONE = ("complete", "completed", "connected", "success", "succeeded")
+# Reasoning variants from cheapest up. The openai plugin drops maxTokens, so output length is not capped: when the
+# operator names only the model, its lowest listed variant is used.
+VARIANT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh")
 CODEX_WINDOW = "unobserved: the repository has no standalone Codex rate-limit reader (see the qualification report)"
 
 
@@ -70,9 +73,12 @@ def select_model(run):
     only route (and the guard's), with another listed variant for the guard probe."""
     _, models, _ = run.server.request("GET", "/api/model")
     listed = [m for m in (run.data(models) or []) if isinstance(m, dict)]
-    route = check_route(PURPOSE, parse_route(run.chatgpt_model or ""), listed)
+    ref = run.chatgpt_model or ""
+    if "#" not in ref:
+        ref += "#" + lowest_variant(listed, ref)
+    route = check_route(PURPOSE, parse_route(ref), listed)
     model = next(m for m in listed if m.get("providerID") == "openai" and m.get("id") == route[1])
-    variants = [v if isinstance(v, str) else (v or {}).get("id") for v in model.get("variants") or []]
+    variants = variants_of(model)
     others = [v for v in variants if v != route[2]]
     if not others:
         raise Refused("the guard probe needs a second listed variant of the model")
@@ -81,6 +87,19 @@ def select_model(run):
     run.note(PURPOSE, "model", dict(listed=True, variants=len(variants),
                                     openai_models=sum(1 for m in listed if m.get("providerID") == "openai")))
     return route
+
+
+def variants_of(model):
+    return [v if isinstance(v, str) else (v or {}).get("id") for v in (model or {}).get("variants") or []]
+
+
+def lowest_variant(listed, ref):
+    provider, _, name = ref.partition("/")
+    model = next((m for m in listed if m.get("providerID") == provider and m.get("id") == name), None)
+    known = [v for v in VARIANT_ORDER if v in variants_of(model)]
+    if not known:
+        raise Refused("cannot tell the model's lowest variant: pass openai/MODEL#VARIANT")
+    return known[0]
 
 
 def request(run):

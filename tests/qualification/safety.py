@@ -512,6 +512,31 @@ def compare_snapshots(before, after):
                 changed=sorted(k for k in set(before) & set(after) if before[k] != after[k]))
 
 
+# The user's OpenAI/Codex login directories. `~/.codex` is huge and rewritten by the running Codex app, so only its
+# top level is read (names and mtimes, never contents): its credential and config files fail the run, anything else
+# there is reported as the app's churn. Every change under `~/.config/openai` fails the run.
+WATCHED_HOME = {".codex": 0, ".config/openai": 8}  # name -> walk depth
+CODEX_GUARDED = re.compile(r"^(?:auth\.json|config\.toml|[^/]*(?:auth|token|credential)[^/]*)$", re.I)
+
+
+def watched_home(home, max_entries=20000):
+    return {name: snapshot_tree(Path(home) / name, max_entries=max_entries, max_depth=depth)
+            for name, depth in WATCHED_HOME.items()}
+
+
+def watched_changes(before, after):
+    """`({name: {unexpected, unexpected_count, churn_count}}, [unexpected names])` between two `watched_home` reads."""
+    changes, unexpected_all = {}, []
+    for name in WATCHED_HOME:
+        diff = compare_snapshots(before.get(name) or {}, after.get(name) or {})
+        names = sorted(diff["added"] + diff["removed"] + diff["changed"])
+        unexpected = [n for n in names if name != ".codex" or CODEX_GUARDED.match(n)]
+        changes[name] = dict(unexpected=["%s/%s" % (name, n) for n in unexpected][:50], unexpected_count=len(unexpected),
+                             churn_count=len(names) - len(unexpected))
+        unexpected_all += ["%s/%s" % (name, n) for n in unexpected]
+    return changes, unexpected_all
+
+
 def classify_changes(diff):
     """`(unexpected, desktop_churn)` names; churn is the desktop app's own database and logs, reported not hidden."""
     names = diff["added"] + diff["removed"] + diff["changed"]

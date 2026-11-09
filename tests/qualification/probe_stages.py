@@ -16,6 +16,7 @@ docs/smart-routing-qualification.md, "Live probes: descendants, S3.3d and the Ch
 Every send is written ahead to the durable ledger; nothing runs before `setup` has proved the plugin chain.
 """
 import json
+import os
 from pathlib import Path
 import time
 
@@ -234,6 +235,22 @@ def config_path(resource):
     return bool({segment.lower() for segment in str(resource).replace("\\", "/").split("/")} & CONFIG_SEGMENTS)
 
 
+def resource_shape(resource, project):
+    """An edit resource's shape, never the path itself: relative or absolute, whether an absolute one lies inside the
+    probe project, whether it is a config path, and which probe file it names (relative to the project) or `other`."""
+    if type(resource) is not str or not resource:
+        return dict(form="missing", inside_project=None, config=False, target="other")
+    relative, inside = resource, None
+    if os.path.isabs(resource):
+        base, target = os.path.realpath(project), os.path.realpath(resource)
+        inside = target.startswith(base + os.sep)
+        relative = os.path.relpath(target, base) if inside else None
+    relative = relative and os.path.normpath(relative).replace(os.sep, "/")
+    return dict(form="absolute" if os.path.isabs(resource) else "relative", inside_project=inside,
+                config=config_path(relative or resource),
+                target=relative if relative in CONFIG_FILES + (ORDINARY_FILE,) else "other")
+
+
 def s33d(run):
     need(run, "s33d")
     s, failures = "s33d", []
@@ -252,16 +269,25 @@ def s33d(run):
     diff = compare_snapshots(before, snapshot_tree(project))
     changes = sorted(diff["added"] + diff["changed"] + diff["removed"])
     edits = [r for r in run.records(mark, session=root, hook="permission.evaluate", phase="post") if r.get("action") == "edit"]
-    config = [r for r in edits if any(config_path(x) for x in r.get("resources") or [])]
-    ordinary = [r for r in edits if (r.get("resources") or [None])[0] == ORDINARY_FILE]
-    config_edits = dict(denied=sum(1 for r in config if r.get("effect") == "deny"),
-                        files_absent=not any((project / name).exists() for name in CONFIG_FILES))
-    ordinary_edit = dict(allowed=sum(1 for r in ordinary if r.get("effect") == "allow"), written=(project / ORDINARY_FILE).exists())
-    if any(r.get("effect") != "deny" for r in config):
+    evaluated = [(r.get("effect"), resource_shape(x, project)) for r in edits for x in (r.get("resources") or [None])]
+    paths = {name: dict(attempted=sum(1 for _, shape in evaluated if shape["target"] == name),
+                        denied=sum(1 for effect, shape in evaluated if shape["target"] == name and effect == "deny"))
+             for name in CONFIG_FILES}
+    config_edits = dict(state="observed" if any(p["attempted"] for p in paths.values()) else "unobserved",
+                        files_absent=not any((project / name).exists() for name in CONFIG_FILES), paths=paths)
+    ordinary = [effect for effect, shape in evaluated if shape["target"] == ORDINARY_FILE]
+    ordinary_edit = dict(state="observed" if ordinary else "unobserved", attempted=len(ordinary),
+                         allowed=ordinary.count("allow"), written=(project / ORDINARY_FILE).exists())
+    # Pass needs at least one attempted config path, each attempted one denied; nothing attempted is not a pass.
+    if config_edits["state"] == "unobserved":
+        failures.append("config_edit_unobserved")
+    if any(effect != "deny" for effect, shape in evaluated if shape["config"]):
         failures.append("config_edit_not_denied")
     if not config_edits["files_absent"]:
         failures.append("config_file_written")
-    if not ordinary_edit["written"]:
+    if ordinary_edit["state"] == "unobserved":
+        failures.append("ordinary_edit_unobserved")
+    elif not (ordinary_edit["allowed"] and ordinary_edit["written"]):
         failures.append("ordinary_edit_not_written")
     if not set(changes) <= {"agents/", ORDINARY_FILE}:
         failures.append("unexpected_project_change")
@@ -287,6 +313,7 @@ def s33d(run):
         failures.append("not_settled_clean")
     run.note(s, "config_edits", config_edits)
     run.note(s, "ordinary_edit", ordinary_edit)
+    run.note(s, "edit_resources", [shape for _, shape in evaluated])  # relative or absolute: is the session dir the base?
     run.note(s, "project_changes", changes)
     run.note(s, "env_command", dict(marker=marker, shell_hooks=shells))
     run.note(s, "image_generation", image)
