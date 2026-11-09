@@ -1061,6 +1061,8 @@ class ParentLinks(unittest.TestCase):
         session = dict(root, parent_session_id="ses_p1", children=[linked("ses_p1", "ses_root")], lineage=[])
         self.assertEqual(assert_fixed_error(self, accounting.reconcile_with_state, None, session),
                          "session not in the attempt")
+        outside = accounting.reconcile_with_state(None, dict(session, parent_session_id="ses_elsewhere"))
+        self.assertEqual(len(outside["accounting"]["sessions"]), 2)  # the root's own parent is not in the attempt
 
     def test_session_bound_with_parent_links(self):
         names = [f"ses_g{index}" for index in range(64)]
