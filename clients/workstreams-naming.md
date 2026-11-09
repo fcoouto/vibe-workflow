@@ -158,8 +158,10 @@ is not a thread status: a `[BLOCKED]` PR still in progress leaves the thread
 thread out of `DONE` until the user chooses another scope or `CANCELLED`. A PR
 closed as `[SUPERSEDED]` passes through its replacement instead: when the user
 decided it, that decision is the scope choice; when an agent replaced its own PR,
-the replacing PR must be merged. If the remote state cannot be read, report it
-unverified and withhold `DONE`.
+the replacing PR must be merged. This does not cover a publication that selected
+managed delivery requires: it keeps the thread out of `DONE` until the user
+chooses another scope or `CANCELLED`. If the remote state cannot be read, report
+it unverified and withhold `DONE`.
 
 A thread that opened no PR needs no extra step when its recorded scope excludes
 publication, such as read-only, investigation or review work, or a child scoped
