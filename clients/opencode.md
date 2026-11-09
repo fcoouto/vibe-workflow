@@ -134,7 +134,7 @@ The plugin registers RPC `routing` (`POST /api/rpc/routing/<method>` with `{"inp
 
   As with every RPC, a refusal reaches the caller as HTTP 500 with no reason code; the launcher then has no answer and passes `None` (see below).
 
-  **Required live observation before API-funded qualification** (not yet run; the qualification harness does not call `descendants` yet):
+  **Required live observation before API-funded qualification** (not yet run; the qualification harness's `descendants` stage, `tests/qualification/probe_stages.py`, implements it):
   1. Positive run: `health`, `dispatch`, `attach`, create the derived root, then send a prompt that spawns both a tool subagent and a `subagent: true` command child. Wait until every session is idle and call `descendants`. Expect `complete: true`, both children with their parents, and a set equal to the launcher's own listing. Then `record complete` and `detach`; a further `descendants` must be refused.
   2. Negative run: create the session before `attach`; `descendants` must answer `complete: false` with `root_creation_unobserved`.
 

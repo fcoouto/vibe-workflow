@@ -16,12 +16,27 @@ import traceback
 PROVIDER, MODEL, VARIANT = "claude-agent", "haiku", "low"
 ROUTE = "%s/%s#%s" % (PROVIDER, MODEL, VARIANT)
 HARNESS_NAME = "claude-agent-sdk via opencode"
+
+
+
+def harness_for(provider):
+    """The route identity's harness, as the routing shim names it (runtime/adapters/opencode_plugin.ts)."""
+    return HARNESS_NAME if provider == "claude-agent" else "opencode provider %s" % provider
 PROMPT_TEXT = "Reply with exactly: OK"
 QUALIFIED_OPENCODE = "2.2.6"
 # Durable caps per purpose (the user's authorizations): qualification 14, the bounded pilot canary 24.
-CAPS = {"qualification": 14, "pilot": 24}
+# New purposes start at 0 in code: nothing may be spent until a recorded approval cap line opens them.
+CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0}
 # The most a recorded cap line may raise each purpose to (pre-registration edit 4: pilot 24 -> 28 before attempt 2).
-MAX_CAPS = {"qualification": 14, "pilot": 28}
+MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 4}
+# The one route each live-probe mode may send to. `chatgpt` is an `openai` model chosen by the operator from the
+# ChatGPT login's own model list (see `check_route`); a run never allows two providers.
+MODE_ROUTES = {"qualification-2": ("claude-agent", "haiku", "low"), "chatgpt": None}
+APPROVAL_FIELDS = ("by", "at", "scope")
+# Keys whose values are credentials wherever they appear (OAuth responses, headers): redacted by key.
+SECRET_KEYS = {"access", "refresh", "id_token", "access_token", "refresh_token", "authorization", "cookie", "set-cookie",
+               "code_verifier", "device_code", "password", "client_secret", "authority", "token"}
+ROUTE_REF = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,63})/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127})#([A-Za-z0-9][A-Za-z0-9._-]{0,63})")
 # What the budget counts. A claude-agent SDK turn or an internal retry could make more upstream API calls than this.
 COUNTING = ("OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard "
             "(transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split")
@@ -252,19 +267,29 @@ class CallLedger:
             raise BudgetExceeded("%s: %d sent against %d reserved" % (purpose, actual, reserved[ref]["calls"]))
         return totals
 
-    def set_cap(self, purpose, cap, reason):
-        """Append a recorded cap change (a pre-registration edit); never above `MAX_CAPS`, never below what was spent."""
+    def set_cap(self, purpose, cap, reason, approval=None):
+        """Append a recorded cap change (a pre-registration edit or a user approval); never above `MAX_CAPS`, never
+        below what was spent. A purpose that starts closed in code (cap 0) opens only with an `approval` record
+        `{by, at, scope}` (who approved, when, and for what)."""
         if purpose not in CAPS:
             raise Refused("unknown call purpose")
         if type(cap) is not int or not reason or not str(reason).strip():
             raise Refused("a cap change needs an integer cap and a recorded reason")
+        if approval is not None or CAPS[purpose] == 0:
+            if type(approval) is not dict or set(approval) != set(APPROVAL_FIELDS) or \
+                    not all(type(approval[k]) is str and approval[k].strip() for k in APPROVAL_FIELDS):
+                raise Refused("an approval needs who approved, when and the scope")
+            approval = {k: approval[k][:200] for k in APPROVAL_FIELDS}
         if cap > MAX_CAPS[purpose]:
             raise Refused("the cap may not exceed the recorded maximum %d" % MAX_CAPS[purpose])
         with self._locked(True) as handle:
             records = self._read(handle)
             if cap < self._totals(records)[0][purpose]["spent"]:
                 raise Refused("the cap may not be below what was already spent")
-            self._append(handle, records, dict(kind="cap", purpose=purpose, calls=0, cap=cap, reason=str(reason)[:300]))
+            entry = dict(kind="cap", purpose=purpose, calls=0, cap=cap, reason=str(reason)[:300])
+            if approval is not None:
+                entry["approval"] = approval
+            self._append(handle, records, entry)
             return self._totals(self._read(handle))[0][purpose]
 
     def settle_dead(self, ref, processes):
@@ -313,7 +338,8 @@ class CallLedger:
                                     reserved=record["calls"], sent=settled.get(record["seq"]),
                                     settled=record["seq"] in settled))
             elif record["kind"] == "cap":
-                entries.append(dict(kind="cap", purpose=record["purpose"], cap=record["cap"], reason=record.get("reason")))
+                entries.append(dict(kind="cap", purpose=record["purpose"], cap=record["cap"], reason=record.get("reason"),
+                                    approval=record.get("approval")))
         return {"_meta": {"caps": {purpose: totals[purpose]["cap"] for purpose in totals}, "caps_in_code": CAPS, "counting": COUNTING, "generated_from": "the durable call ledger (--export-call-ledger)",
                           "write_ahead": "an unsettled reservation counts in full"},
                 "totals": totals, "entries": entries}
@@ -353,8 +379,10 @@ export default {
         model: m.id ?? null, variant: m.variant ?? null, session: event?.sessionID ?? null }
       if (PHASE === "pre") return log(record)
       const c = control()
-      if (m.providerID !== "__PROVIDER__" || m.id !== "__MODEL__") guard("guard_model", record)
-      if (m.variant !== "__VARIANT__") guard("guard_variant", record)
+      // The one allowed route comes from the control file, written by the harness for its mode; none blocks all.
+      const route = Array.isArray(c.route) && c.route.length === 3 ? c.route : null
+      if (!route || m.providerID !== route[0] || m.id !== route[1]) guard("guard_model", record)
+      if (m.variant !== route[2]) guard("guard_variant", record)
       if ((c.hold ?? []).includes(event?.sessionID)) guard("guard_hold", record)
       if (event?.kind === "title" && !(c.title_session === event?.sessionID && titles() < 1)) guard("guard_title", record)
       if (event?.kind !== "primary" && event?.kind !== "title") guard("guard_kind", record)
@@ -365,11 +393,14 @@ export default {
       const record = { hook: "tool.execute.before", tool: event?.tool ?? null, session: event?.sessionID ?? null,
         spawn_model: typeof event?.input?.model === "string" ? event.input.model : null }
       if (PHASE === "pre") return log(record)
-      if (record.tool === "subagent" && record.spawn_model !== null && record.spawn_model !== "__ROUTE__") guard("guard_spawn_model", record)
+      const c = control()
+      const route = Array.isArray(c.route) && c.route.length === 3 ? `${c.route[0]}/${c.route[1]}#${c.route[2]}` : null
+      if (record.tool === "subagent" && record.spawn_model !== null && record.spawn_model !== route) guard("guard_spawn_model", record)
       log({ ...record, decision: "passed" })
     })
     await ctx.permission.hook("evaluate", async (event) => {
-      log({ hook: "permission.evaluate", action: event?.action ?? null, effect: event?.effect ?? null, session: event?.sessionID ?? null })
+      const resources = Array.isArray(event?.resources) ? event.resources.slice(0, 4).map((r) => String(r).slice(0, 160)) : null
+      log({ hook: "permission.evaluate", action: event?.action ?? null, effect: event?.effect ?? null, session: event?.sessionID ?? null, resources })
     })
     await ctx.shell.hook("create.before", (event) => {
       const env = event?.env
@@ -384,8 +415,38 @@ export default {
 def recorder_source(phase):
     if phase not in ("pre", "post"):
         raise ValueError("phase must be pre or post")
-    return (RECORDER.replace("__PHASE__", phase).replace("__PROVIDER__", PROVIDER).replace("__MODEL__", MODEL)
-            .replace("__VARIANT__", VARIANT).replace("__ROUTE__", ROUTE).replace("__PROBE__", PROBE_ENV))
+    return RECORDER.replace("__PHASE__", phase).replace("__PROBE__", PROBE_ENV)
+
+
+def parse_route(ref):
+    """`provider/model#variant` as a tuple, or `Refused`."""
+    match = ROUTE_REF.fullmatch(ref) if type(ref) is str else None
+    if not match:
+        raise Refused("a route is provider/model#variant")
+    return match.groups()
+
+
+def check_route(mode, route, listed=None):
+    """The route a live-probe mode may send to, or `Refused`. `qualification-2` allows only claude-agent/haiku#low;
+    `chatgpt` allows one `openai` model and variant that the ChatGPT login itself lists (`listed`: GET /api/model)."""
+    if mode not in MODE_ROUTES:
+        raise Refused("unknown live-probe mode")
+    route = tuple(route) if isinstance(route, (list, tuple)) else None
+    if MODE_ROUTES[mode] is not None:
+        if route != MODE_ROUTES[mode]:
+            raise Refused("%s allows only %s/%s#%s" % ((mode,) + MODE_ROUTES[mode]))
+        return route
+    if not route or len(route) != 3 or route[0] != "openai":
+        raise Refused("the chatgpt mode allows only one openai model")
+    if listed is None:
+        raise Refused("the ChatGPT login's model list is required")
+    for model in listed:
+        if model.get("providerID") == "openai" and model.get("id") == route[1]:
+            variants = [v if isinstance(v, str) else (v or {}).get("id") for v in (model.get("variants") or [])]
+            if route[2] in variants:
+                return route
+            raise Refused("that variant is not listed for the model")
+    raise Refused("that model is not listed by the ChatGPT login")
 
 
 def verify_plugin_chain(plugins, guard, pending, guard_outcome, guard_reason, pending_reason):
@@ -449,6 +510,31 @@ def snapshot_tree(root, max_entries=20000, max_depth=8):
 def compare_snapshots(before, after):
     return dict(added=sorted(set(after) - set(before)), removed=sorted(set(before) - set(after)),
                 changed=sorted(k for k in set(before) & set(after) if before[k] != after[k]))
+
+
+# The user's OpenAI/Codex login directories. `~/.codex` is huge and rewritten by the running Codex app, so only its
+# top level is read (names and mtimes, never contents): its credential and config files fail the run, anything else
+# there is reported as the app's churn. Every change under `~/.config/openai` fails the run.
+WATCHED_HOME = {".codex": 0, ".config/openai": 8}  # name -> walk depth
+CODEX_GUARDED = re.compile(r"^(?:auth\.json|config\.toml|[^/]*(?:auth|token|credential)[^/]*)$", re.I)
+
+
+def watched_home(home, max_entries=20000):
+    return {name: snapshot_tree(Path(home) / name, max_entries=max_entries, max_depth=depth)
+            for name, depth in WATCHED_HOME.items()}
+
+
+def watched_changes(before, after):
+    """`({name: {unexpected, unexpected_count, churn_count}}, [unexpected names])` between two `watched_home` reads."""
+    changes, unexpected_all = {}, []
+    for name in WATCHED_HOME:
+        diff = compare_snapshots(before.get(name) or {}, after.get(name) or {})
+        names = sorted(diff["added"] + diff["removed"] + diff["changed"])
+        unexpected = [n for n in names if name != ".codex" or CODEX_GUARDED.match(n)]
+        changes[name] = dict(unexpected=["%s/%s" % (name, n) for n in unexpected][:50], unexpected_count=len(unexpected),
+                             churn_count=len(names) - len(unexpected))
+        unexpected_all += ["%s/%s" % (name, n) for n in unexpected]
+    return changes, unexpected_all
 
 
 def classify_changes(diff):
@@ -601,7 +687,15 @@ class Redactor:
         if isinstance(value, str):
             return self.text(value)
         if isinstance(value, dict):
-            return {self.text(str(key)): self(item) for key, item in value.items()}
+            clean = {}
+            for key, item in value.items():
+                if str(key).lower() in SECRET_KEYS and item not in (None, "", [], {}):
+                    for text in (item if isinstance(item, list) else [item]):
+                        self.add_secret(str(text))  # remembered, so the same value is caught anywhere else
+                    clean[self.text(str(key))] = "<secret>"
+                else:
+                    clean[self.text(str(key))] = self(item)
+            return clean
         if isinstance(value, (list, tuple)):
             return [self(item) for item in value]
         return value

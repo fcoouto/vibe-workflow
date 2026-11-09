@@ -2,11 +2,15 @@
  "_meta": {
   "caps": {
    "qualification": 14,
-   "pilot": 28
+   "pilot": 28,
+   "qualification-2": 10,
+   "chatgpt": 4
   },
   "caps_in_code": {
    "qualification": 14,
-   "pilot": 24
+   "pilot": 24,
+   "qualification-2": 0,
+   "chatgpt": 0
   },
   "counting": "OpenCode `model.request` hook invocations that passed the routing shim and the qual-post guard (transmitted by OpenCode); not upstream API calls, which the claude-agent SDK may retry or split",
   "generated_from": "the durable call ledger (--export-call-ledger)",
@@ -23,6 +27,18 @@
    "cap": 28,
    "spent": 23,
    "remaining": 5,
+   "open_reservations": 0
+  },
+  "qualification-2": {
+   "cap": 10,
+   "spent": 0,
+   "remaining": 10,
+   "open_reservations": 0
+  },
+  "chatgpt": {
+   "cap": 4,
+   "spent": 0,
+   "remaining": 4,
    "open_reservations": 0
   }
  },
@@ -188,7 +204,8 @@
    "kind": "cap",
    "purpose": "pilot",
    "cap": 28,
-   "reason": "Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are"
+   "reason": "Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are",
+   "approval": null
   },
   {
    "kind": "reservation",
@@ -365,6 +382,28 @@
    "reserved": 1,
    "sent": 1,
    "settled": true
+  },
+  {
+   "kind": "cap",
+   "purpose": "qualification-2",
+   "cap": 10,
+   "reason": "Live probes descendants and s33d on claude-agent/haiku#low (pre-registered in docs/smart-routing-qualification.md)",
+   "approval": {
+    "at": "2026-11-09",
+    "by": "Fernando Couto (user), relayed by the coordinator",
+    "scope": "up to 10 claude-agent/haiku#low requests; no API keys, API Usage, organization or OpenRouter"
+   }
+  },
+  {
+   "kind": "cap",
+   "purpose": "chatgpt",
+   "cap": 4,
+   "reason": "ChatGPT route probe on one tiny openai model via OpenCode Sign in with ChatGPT; stops after the first successful request",
+   "approval": {
+    "at": "2026-11-09",
+    "by": "Fernando Couto (user), relayed by the coordinator",
+    "scope": "up to 4 requests on one openai model; interactive sign-in inside the isolated server; no API keys, API Usage, organization or OpenRouter"
+   }
   }
  ]
 }

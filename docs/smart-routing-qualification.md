@@ -2,6 +2,78 @@
 
 **Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
+## Live probes: descendants, S3.3d and the ChatGPT route (pre-registered, not yet run)
+
+These probes are fixed here **before any run**. No numbers in this section change after a run starts; results go in the "Observed" lines. The existing qualification (9 of 14) and pilot (23 of 28) budgets and thresholds are untouched.
+
+**Approvals and budgets.** The user approved two new durable purposes, recorded on 9 November 2026 as cap lines with an approval record (who, when, scope) in `~/.local/state/vibe-workflow-qualification/calls.jsonl`:
+
+| Purpose | Cap | Route | Funding |
+| --- | --- | --- | --- |
+| `qualification-2` | 10 | `claude-agent/haiku#low` only | Claude subscription login in the isolated server (pool `sub`, account `anthropic:qual2`) |
+| `chatgpt` | 4 | one `openai` model and variant, chosen by the operator from the ChatGPT login's own model list | "Sign in with ChatGPT" inside the isolated server (pool `chatgpt-sub`, `included_subscription`) |
+
+No API keys, API Usage, organization or OpenRouter. A run uses one purpose, and the recorder guard allows only that purpose's route. The `qualification-2` and `chatgpt` purposes are closed in code (cap 0) until their approval lines exist. Every send is reserved in the durable ledger first. Each run first proves the plugin chain with a guard probe (two exposures, normally 0 sent) and stops if the probe fails.
+
+### Stage `descendants` (`qualification-2`, at most 5 calls)
+
+Purpose: the required live observation of `routing.descendants` (#152, [clients/opencode.md](../clients/opencode.md#plugin-rpc)).
+
+- **Positive run.** `prepare`, `health`, `dispatch`, `attach`, and only then create the derived root (deny everything except `subagent`). Then:
+  - (a) A prompt asks the model to call the subagent tool once on `claude-agent/haiku#low`, at most 3 calls: root, child, root continuation. Whether the model calls the tool is not deterministic, so a missing tool child is recorded as `unobserved` and is not a failure.
+  - (b) The `qualchild` `subagent: true` command child, 1 call. The parent's follow-up turn is held by the guard (`guard_hold`, 0 tokens).
+  - (c) A child created through the API with `parentID`, 1 call.
+
+  After idle: `routing.descendants`, accounting with `shim_descendants` (cross-check on), `record complete`, `detach`, and `descendants` again.
+- **Negative run (0 calls).** The derived root is created before `attach`. `descendants` and accounting run on it. The API-route semantics are checked offline on the positive run's re-read (no request).
+- **Pass:**
+  - the positive answer is `complete: true` with no `reason`, and its sessions and parents equal the launcher's own listing;
+  - the command and API children are present;
+  - accounting has no `shim_*` unknowns;
+  - settlement is `window`, and `detach` succeeded;
+  - `descendants` after `detach` is refused;
+  - the negative answer is `complete: false` with `root_creation_unobserved`, and its accounting is flagged `shim_lineage_incomplete`;
+  - routing `status` is clean afterwards.
+- **Recorded either way:** whether OpenCode emitted the root's `session.created` after `attach`, how many such events there were, and any event-stream error. For the offline API-route check, all costs must be null. claude-agent reports cost 0, which nulls API costs by itself, so this check cannot tell a correct shim answer from that.
+- **Observed:** _(to be filled by the run)_
+
+### Stage `s33d` (`qualification-2`, at most 4 calls)
+
+Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencode.md#image-generation-and-configuration-edits-s33d)).
+
+- **Edit probe (at most 3 calls).** The attached root denies everything except `edit`, so shell, MCP, `execute`, `webfetch`, `websearch` and image generation stay denied. One prompt asks the model to write three files:
+  - `.opencode/command/x.md` (a config path);
+  - `sub/opencode.json` (a config name in a subdirectory, chosen so a shim failure cannot reload the harness's own root `opencode.json`);
+  - `agents/ok.txt` (ordinary, allowed when the session directory is not a config directory).
+- **`` !`env` `` command (0 calls; the command's prompt is held).** The `qualenv` command runs under the attached root with a dummy credential-like variable `QUAL_PROBE_TOKEN`. Only the marker `QUAL_PROBE_PRESENT` or `QUAL_PROBE_ABSENT` is recorded, never the value.
+- **Image generation.** Probed only if the isolated server lists a claude-agent image model. Otherwise it is `unobserved`.
+- **Pass:**
+  - at least one config path was attempted, and every attempted config path has at least one `deny` and no other effect; neither config file exists afterwards;
+  - `agents/ok.txt` was attempted, allowed and written, and it is the only change in the probe project (snapshot before and after);
+  - settlement is `window`, `detach` succeeded, and `status` is clean.
+- **Not a pass:** if the model attempts no config path, the config-edit probe is `unobserved`. If it never attempts `agents/ok.txt`, the ordinary-edit probe is `unobserved`. The run then records what it saw, by shape only.
+- **Matching the resources.** A permission resource names a probe file when it is the relative path, or an absolute path inside the probe project that is that path relative to the project.
+- **Recorded, not judged:**
+  - each evaluated edit's resource shape: relative or absolute, inside the probe project or not, config path or not, which probe file or `other` (never the path itself). This shows whether `ctx.location.directory` is the base for relative paths;
+  - per config file: attempts and denials;
+  - the `env` marker (present or absent), the `shell.create.before` records, and the number of image models listed.
+- **Observed:** _(to be filled by the run)_
+
+### Run `chatgpt` (`chatgpt`, at most 4 calls; its own run)
+
+- **Sign-in (0 calls).** The harness does not connect the Claude login in this run, but the server keeps the user's `HOME`, so that login remains reachable. A Claude request is still blocked before transmission: the guard's control file allows only the chosen `openai` route, and no route at all until the model is checked. The harness checks that the `openai` integration offers `chatgpt-token-sharing` (OAuth, "Sign in with ChatGPT") and starts it with `POST /api/integration/openai/connect/oauth`. It prints only the authorization URL and instructions and writes them to `chatgpt-login.json` (mode 0600) in the isolated directory. The user completes the sign-in in their own browser. The harness polls the attempt (bounded, default 900 s), cancels the attempt on timeout and never prints a token. The login lives only in the isolated directory and is deleted with it. Cleanup deletes only the local copy and does **not** revoke the session on OpenAI's side; the user may revoke it at chatgpt.com afterwards. `--keep` is refused with `--chatgpt`, because a kept directory would keep OpenCode's stored login (an OAuth record with access and refresh tokens).
+- **Model (0 calls).** `--chatgpt-model openai/MODEL[#VARIANT]` must be in the login's `GET /api/model` list. Without `#VARIANT`, the model's lowest listed variant is used (order `none`, `minimal`, `low`, `medium`, `high`, `xhigh`). The openai plugin removes `maxTokens`, so output length is not capped and the variant is the only lever. If no listed variant is in that order, the operator must name one. The model needs a second listed variant for the guard probe. Anything else is refused before a request.
+- **Untested live:** `prepare` for the explicit `openai` choice (harness `opencode provider openai`, pool `chatgpt-sub`) is unit-tested against the real `scripts/routing.py` on a temporary store, but has never run on OpenCode. The unit tests stub the server start and the plugin-chain probes.
+- **The user's directories.** The run also watches `~/.codex` (top level only: names and mtimes, never contents) and `~/.config/openai`. A change to `~/.codex/auth.json`, `config.toml` or any top-level file named like auth, token or credential, or any change under `~/.config/openai`, fails the run. Other `~/.codex` changes are the running Codex app's own, so they are counted and reported, not failed. `~/.claude` and `~/.opencode` stay report-only as before.
+- **Request (1 call).** One titled session (so no title request) with `Reply with exactly: OK` goes through the full managed handshake. Then `descendants`, accounting (subscription: tokens only, cost null), `record complete`, `detach` and `status`. The run stops after the first successful request. The 3 remaining calls are reserved for retries, title or compaction observations only with the coordinator's go, and the harness does not send them by itself.
+- **Pass:** exactly one `primary` request, null costs, settlement `window`, `detach` succeeded, and `status` is clean.
+- **Recorded:**
+  - whether OpenCode's `native.rateLimit` appears, and its keys;
+  - the transmitted request kinds;
+  - the title state.
+- **Codex window: not read.** The repository has no standalone reader of the Codex `account/rateLimits/read` (`scripts/usage_codex_host.js` is a host bridge that receives limits from the Codex app), so the before and after windows are `unobserved`.
+- **Observed:** _(to be filled by the run)_
+
 ## Re-run: stages 0–4 (harness 3f87159)
 
 - **Run.** Qualification mode with `--through 4`. Model `claude-agent/haiku#low` only. Calls went through the durable call ledger under purpose `qualification`; canary mode and the `pilot` purpose were not used.
