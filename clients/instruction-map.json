@@ -293,7 +293,7 @@
       ]
     },
     "clients/workstreams-naming.md": {
-      "sha256": "10d91cfe48c0fcfe51759afe7bb1a35ea9d2f509a53087c0244a7a11a460cd60",
+      "sha256": "3f135f64a288dabfd9d68ec4ca2e79a9ad4ca0c71fdaa2c4fa6f5728b1226959",
       "ranges": [
         [
           1,
@@ -447,7 +447,7 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "64b715e02599b8c95904068da0a639b977c5558c0634e7fc7f2e1c764ad87df9",
+      "sha256": "02eac6cd29e039026b8c264cc89d20f534041b98aa55ae3ed9e674a8f4eb09d5",
       "ranges": [
         [
           1,

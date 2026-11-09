@@ -23,7 +23,7 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Where to look
 
-- Before the first edit of a task, and before selecting checks, marking a PR `[READY]`, merging or creating a release archive, read the [development guide](docs/development.md): where to work, which checks to run and how changes reach `main`.
+- Before the first edit of a task, and before selecting checks, opening a PR, marking it `[READY]`, merging or creating a release archive, read the [development guide](docs/development.md): where to work, which checks to run and how changes reach `main`.
 - For client-specific work, use [Clients](clients/index.md) and load only the entry whose trigger applies.
 - For an explicit workflow operation, read its `skills/<name>/SKILL.md` entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation.
 - For setup decisions, maintenance and undo, read [Setup record](docs/setup.md).

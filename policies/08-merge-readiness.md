@@ -23,14 +23,14 @@ When a merge is requested, act only on the reviewed candidate after its applicab
 
 ## PR lifecycle
 
-When agents publish through pull requests, the agent that owns a PR keeps its title prefix and draft state in step with its readiness:
+When agents publish through pull requests, the agent that opened or took over a PR keeps its title prefix and draft state in step with its readiness:
 
 1. Open every PR as a draft, where the host supports drafts, titled `[BLOCKED] <title>`. `[BLOCKED]` is the normal state while work, checks or review continue.
 2. When [readiness](#establish-readiness) holds for the current candidate, change the prefix to `[READY]` and mark the PR ready for review.
 3. Before pushing to a `[READY]` PR, and as soon as a base change, failed check or new finding invalidates its evidence, return it to `[BLOCKED]` and draft.
-4. If the project's recorded merge permission covers the target, merge a `[READY]` PR as described in [Perform and confirm](#perform-and-confirm). Otherwise stop at `[READY]` and report that it awaits the user's merge.
+4. If the project's recorded merge permission covers the target, or the user explicitly asks for this merge, merge a `[READY]` PR as described in [Perform and confirm](#perform-and-confirm). Otherwise stop at `[READY]` and report that it awaits the user's merge.
 
-The prefix belongs to the agent; never ask a person to change it. When agents may not merge, merging a `[READY]` PR is the person's step. Re-read the title before changing the prefix and keep the rest of it. A prefix reports readiness and is never evidence of it; one set by anyone else establishes nothing. A PR without a prefix gets the one its current evidence supports when its agent next updates it. Prefixes describe PRs, not threads; thread statuses stay in the [naming contract](../clients/workstreams-naming.md#status-and-accepted-progress). Selected managed delivery marks the same two phases with its own labels and comments ([delivery](../clients/delivery.md#private-manual-delivery)).
+The prefix belongs to the agent; never ask a person to change it. When agents may not merge, merging a `[READY]` PR is the person's step. Re-read the title before changing the prefix and keep the rest of it. A prefix reports readiness and is never evidence of it; one set by anyone else establishes nothing. A PR without a prefix gets the one its current evidence supports when an agent next updates it. Prefixes describe PRs, not threads; thread statuses stay in the [naming contract](../clients/workstreams-naming.md#status-and-accepted-progress). Selected managed delivery marks the same two phases with its own labels and comments ([delivery](../clients/delivery.md#private-manual-delivery)).
 
 ## Selected repository enforcement
 
