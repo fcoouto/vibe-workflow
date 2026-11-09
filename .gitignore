@@ -224,4 +224,5 @@ __marimo__/
 
 # Per-checkout enrollment and private feature-settings files; .vibe-workflow/settings.json is committed
 /.vibe-workflow/project.json
+/.vibe-workflow/.d4-*
 /.vibe-workflow/private/

@@ -19,7 +19,7 @@ Feature state is scattered. An inventory on 9 November 2026 found 28 settings in
 | Decision | Choice | Source |
 |---|---|---|
 | Settings location | The project-root `.vibe-workflow/` folder | User |
-| Team-shared file | `.vibe-workflow/settings.json` is committed. `.gitignore` lists only the private items: `/.vibe-workflow/project.json` and `/.vibe-workflow/private/` | User |
+| Team-shared file | `.vibe-workflow/settings.json` is committed. `.gitignore` lists only the private items: `/.vibe-workflow/project.json`, enrollment's temporary `/.vibe-workflow/.d4-*` files and `/.vibe-workflow/private/` | User |
 | Layers in this design | Package defaults and project (team) settings only; no user or personal layer for now | User |
 | Rollout | Phased: phase 1 builds the standard and moves Workstreams; consent stores move later, one per change | User |
 | Consent | Never granted by a committed file; stays private and checkout-bound | Policy (`policies/01-project-scope.md`) and existing stores |
@@ -71,7 +71,7 @@ Effective value: **package default < project settings**. A missing entry inherit
 
 Everything private lives under `private/`, created with owner-only modes; no private temporary file is written anywhere else in `.vibe-workflow/`. Any other new file there is treated as shareable and must be reviewed as such. Before creating anything under `private/`, writers check the ignore rules with `git check-ignore --no-index` (which evaluates rules even for tracked paths) and, separately, whether the path is tracked. They refuse when `private/` is not covered by a rule or is tracked, so a first write cannot expose private files. An already-tracked `project.json` does not block settings writes; it is reported as a warning.
 
-Onboarding makes sure both entries are ignored and warns when `project.json` is already tracked. It records them in the repository's `.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude` so linked worktrees share one file. Because onboarding's change machinery refuses `.git/` targets (`runtime/changes.py:77-81`), this is a new, narrowly scoped operation: it touches only that file, holds a lock for the shared resource, records the preimage, writes atomically, survives a crash and resumes, and undo removes only the lines it added while keeping later edits.
+Onboarding makes sure the private entries (`project.json`, `.d4-*` and `private/`) are ignored and warns when `project.json` is already tracked. It records them in the repository's `.git/info/exclude`, resolved with `git rev-parse --git-path info/exclude` so linked worktrees share one file. Because onboarding's change machinery refuses `.git/` targets (`runtime/changes.py:77-81`), this is a new, narrowly scoped operation: it touches only that file, holds a lock for the shared resource, records the preimage, writes atomically, survives a crash and resumes, and undo removes only the lines it added while keeping later edits.
 
 ## 5. Settings file
 
