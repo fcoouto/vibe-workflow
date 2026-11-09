@@ -38,4 +38,4 @@ Require Git and Python 3.11+ on the hook PATH. Current file operations require P
 
 Each lifecycle event may refresh context after resume, fork or compaction. There is no persistent deduplication: native events supply no unique invocation ID. Supplied model and permission settings remain observations; missing values, client version and UI surface remain unknown. Never infer approval from environment variables or hook output.
 
-From a checkout of this repository, run `python3 -B scripts/validate.py` and `python3 -B -m unittest discover -s tests`; installed packages may omit `tests/`. These establish package and fixture behavior. Native qualification must separately observe one handler, actual output, permissions and the client's installation/trust rules.
+From a checkout of this repository, run `python3 -B scripts/validate.py` and the tests that [AGENTS.md](../AGENTS.md#verification-and-delivery) selects for the change; installed packages may omit `tests/`. These establish package and fixture behavior. Native qualification must separately observe one handler, actual output, permissions and the client's installation/trust rules.
