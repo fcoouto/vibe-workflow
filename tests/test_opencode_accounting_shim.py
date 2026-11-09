@@ -52,6 +52,20 @@ class CrossCheck(unittest.TestCase):
         subscription = account(shim((GHOST, None)), funding="subscription")
         self.assertEqual(subscription["unknown"], ["child_session_unaccounted"])
 
+    def test_a_shim_child_listed_under_a_false_parent_but_not_included_is_unaccounted(self):
+        # Review S1: a null shim parent cannot contradict the listing, so inclusion is what is checked.
+        listing = Q_LINEAGE + [{"session_id": GHOST, "parent_session_id": "ses_outside"}]
+        result = account(shim((Q_CHILD, Q_ROOT), (GHOST, None)), lineage=listing)
+        self.assertEqual(result["unknown"], ["child_session_unaccounted", "cost_unknown"])
+        self.assertIsNone(result["totals"]["usd_micros"])
+        listed_right = Q_LINEAGE + [{"session_id": GHOST, "parent_session_id": Q_ROOT}]
+        self.assertEqual(account(shim((GHOST, Q_ROOT)), lineage=listed_right)["unknown"],
+                         ["child_session_unaccounted", "cost_unknown"])
+
+    def test_a_shim_child_listed_correctly_and_included_is_unchanged(self):
+        result = account(shim((Q_CHILD, Q_ROOT)), lineage=Q_LINEAGE)
+        self.assertEqual((result["unknown"], result["totals"]["usd_micros"]), ([], 12400))
+
     def test_a_shim_child_the_launcher_included_but_did_not_list_is_accounted(self):
         result = account(shim((Q_CHILD, Q_ROOT)), lineage=[])
         self.assertEqual((result["unknown"], result["totals"]["usd_micros"]), ([], 12400))
@@ -153,15 +167,17 @@ class Helper(unittest.TestCase):
         self.assertEqual(accounting.cross_check_lineage(listing, answer, Q_ROOT), {
             "lineage": [{"session_id": Q_CHILD, "parent_session_id": Q_ROOT},
                         {"session_id": "ses_qz", "parent_session_id": Q_CHILD}],
-            "unknown": ["child_session_unaccounted"], "unlisted": 2})
+            "unknown": ["child_session_unaccounted"], "not_included": 3})  # listing Q_CHILD does not include it
         self.assertEqual(accounting.cross_check_lineage(listing, answer, Q_ROOT, children=["ses_qa", "ses_qz"]),
                          {"lineage": [{"session_id": Q_CHILD, "parent_session_id": Q_ROOT},
                                       {"session_id": "ses_qz", "parent_session_id": Q_CHILD}],
-                          "unknown": [], "unlisted": 0})
+                          "unknown": ["child_session_unaccounted"], "not_included": 1})
+        self.assertEqual(accounting.cross_check_lineage(listing, answer, Q_ROOT,
+                                                        children=[Q_CHILD, "ses_qa", "ses_qz"])["unknown"], [])
         self.assertEqual(accounting.cross_check_lineage(listing, None, Q_ROOT),
-                         {"lineage": listing, "unknown": ["shim_lineage_not_checked"], "unlisted": 0})
+                         {"lineage": listing, "unknown": ["shim_lineage_not_checked"], "not_included": 0})
         self.assertEqual(accounting.cross_check_lineage(None, shim(complete=False), Q_ROOT),
-                         {"lineage": [], "unknown": ["shim_lineage_incomplete"], "unlisted": 0})
+                         {"lineage": [], "unknown": ["shim_lineage_incomplete"], "not_included": 0})
 
     def test_helper_errors_are_fixed(self):
         for args in ((MARKER, shim(), Q_ROOT), ([], shim(), MARKER), ([], shim(), Q_ROOT, MARKER),
@@ -182,6 +198,11 @@ class ShimSettlement(ledger_tests.Accounting):
     def test_incomplete_or_absent_shim_set_leaves_the_hold_cost_unknown(self):
         self.assert_cost_unknown(self.settle_with("s2", account(shim((Q_CHILD, Q_ROOT), complete=False))), "s2")
         self.assert_cost_unknown(self.settle_with("s3", account(None)), "s3")
+
+    def test_review_s1_probe_leaves_the_hold_cost_unknown(self):
+        listing = Q_LINEAGE + [{"session_id": GHOST, "parent_session_id": "ses_outside"}]
+        result = account(shim((Q_CHILD, Q_ROOT), (GHOST, None)), lineage=listing)
+        self.assert_cost_unknown(self.settle_with("s5", result), "s5")
 
     def test_agreeing_shim_set_settles_as_an_estimate(self):
         settlement = self.settle_with("s4", account(shim((Q_CHILD, Q_ROOT))))["settlement"]

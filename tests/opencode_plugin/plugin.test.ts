@@ -1644,16 +1644,6 @@ test("descendants: complete is false, with one fixed reason, whenever the shim c
       }
       try { await assertUntouched(t, "ses_deep0") } finally { ctxSessions.get = original }
     }],
-    ["lineage_lookup_failed", { failedLookupMs: 60000 }, async (t) => {
-      await t.detach()
-      await t.attach(D("first1"))
-      t.state.failLookup = true
-      await assertUntouched(t, "ses_unknown2")  // fails while only another root is attached...
-      t.state.failLookup = false
-      await t.attach()
-      await t.emit(created(MANAGED))  // (a repeated creation event, so only the lookup can make it incomplete)
-      await assertUntouched(t, "ses_unknown2")  // ...and is answered from the failure memory, still undetermined
-    }],
   ]
   for (const [reason, config, act] of cases) {
     const t = await start({ check: ["blocked"] }, {}, config)
@@ -1668,6 +1658,75 @@ test("descendants: complete is false, with one fixed reason, whenever the shim c
       if (!config.noEvents) assert.ok(answer.descendants.some((entry: any) => entry.session_id === "ses_kid1"), reason)
     } finally { t.stop() }
   }
+})
+
+// Moved out of the table above: it re-sent the root's creation event after a re-attach to reach a `watched` root,
+// which a repeated creation event may no longer do (S3). Here the later root is created for the first time instead.
+test("descendants: a remembered failed lookup also leaves a root attached after the failure unvouched", async () => {
+  const t = await start({ check: ["blocked"] }, {}, { failedLookupMs: 60000 })
+  try {
+    await t.attach(D("first1"))
+    await t.emit(created(D("first1")))
+    t.state.failLookup = true
+    await assertUntouched(t, "ses_unknown2")  // fails while only another root is attached...
+    t.state.failLookup = false
+    await t.attach()
+    await t.emit(created(MANAGED))
+    assert.equal((await t.descendants()).complete, true)
+    await assertUntouched(t, "ses_unknown2")  // ...and is answered from the failure memory, still undetermined
+    assert.deepEqual(Object.values(pick(await t.descendants())), [false, "lineage_lookup_failed"])
+  } finally { t.stop() }
+})
+
+const pick = (answer: any) => ({ complete: answer.complete, reason: answer.reason })
+
+test("descendants: a repeated creation event for the root never vouches for it again (S3)", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    await t.emit(created("ses_kid1", MANAGED))
+    await t.detach()
+    await t.emit(created("ses_gap1", MANAGED))  // created while detached: nobody recorded it
+    await t.attach()
+    await t.emit(created(MANAGED))  // the same creation event again (replayed or forged)
+    const answer = await t.descendants()
+    assert.deepEqual(pick(answer), { complete: false, reason: "root_creation_unobserved" })
+    assert.ok(!answer.descendants.some((entry: any) => entry.session_id === "ses_gap1"))
+  } finally { t.stop() }
+})
+
+test("descendants: only spend paths mark roots for an undetermined chain, never permission.evaluate (S2)", async () => {
+  const sessions: Record<string, { parentID?: string }> = {}
+  for (let depth = 0; depth < 30; depth++) sessions[`ses_deep${depth}`] = { parentID: `ses_deep${depth + 1}` }
+  const t = await start({ check: ["blocked"] }, sessions)
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    for (const action of ["read", "webfetch", "execute"]) {
+      const event = { sessionID: "ses_deep0", action, resources: [], effect: "ask" } as any
+      await t.hooks["permission.evaluate"](event)
+      assert.equal(event.effect, "ask")
+    }
+    assert.ok(t.lookups.length > 0)  // the chain was walked and stopped at its limit
+    assert.deepEqual(pick(await t.descendants()), { complete: true, reason: null })
+    await t.hooks["session.model.request"](modelRequest("ses_deep0"))  // a spend path: interactive, but unvouched
+    assert.deepEqual(pick(await t.descendants()), { complete: false, reason: "lineage_lookup_failed" })
+  } finally { t.stop() }
+})
+
+test("descendants: a subagent spawn on an undetermined chain marks roots too (S2)", async () => {
+  const t = await start({ check: ["blocked"] })
+  try {
+    await t.attach()
+    await t.emit(created(MANAGED))
+    t.state.failLookup = true
+    const event = { sessionID: "ses_unknown3", action: "read", resources: [], effect: "ask" } as any
+    await t.hooks["permission.evaluate"](event)
+    assert.deepEqual(pick(await t.descendants()), { complete: true, reason: null })
+    await t.hooks["tool.execute.before"](spawnCall("ses_unknown3", "claude-agent/haiku#low"))
+    assert.deepEqual(pick(await t.descendants()), { complete: false, reason: "lineage_lookup_failed" })
+  } finally { t.stop() }
 })
 
 test("descendants: a root whose creation the shim did not see after attach is not vouched for", async () => {
