@@ -222,5 +222,6 @@ __marimo__/
 # MacOS
 .DS_Store
 
-# Per-checkout enrollment: absolute paths bound to one checkout
-/.vibe-workflow/
+# Per-checkout enrollment and private feature-settings files; .vibe-workflow/settings.json is committed
+/.vibe-workflow/project.json
+/.vibe-workflow/private/
