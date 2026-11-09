@@ -9,12 +9,13 @@ from unittest.mock import patch
 
 from tests.qualification import chatgpt, safety
 from tests.qualification.doubles import Temp
-from tests.test_qualification_fallback import OTHER, UNSUPPORTED, ChatGPTClassify, FallbackTests
-from tests.test_qualification_probes import ChatGPTTests, StageHarness
+from tests import test_qualification_fallback as fallback
+from tests import test_qualification_probes as probes
+from tests.test_qualification_fallback import OTHER, UNSUPPORTED, ChatGPTClassify
 
 
-class CandidateCheckTests(StageHarness):
-    connect = ChatGPTTests.connect
+class CandidateCheckTests(probes.StageHarness):
+    connect = probes.ChatGPTTests.connect
 
     def refused_before_any_request(self, models):
         with self.assertRaises(safety.Refused):
@@ -52,7 +53,7 @@ class CandidateCheckTests(StageHarness):
             return made
         self.connect = keep
         try:
-            return FallbackTests.run_fallback(self, models, by_model, chatgpt_cap)
+            return fallback.FallbackTests.run_fallback(self, models, by_model, chatgpt_cap)
         finally:
             self.connect = original
 
