@@ -58,6 +58,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I -B \"${CLAUDE_PLUGIN_ROOT}/scripts/workflow.py\" claude-code UserPromptSubmit",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
