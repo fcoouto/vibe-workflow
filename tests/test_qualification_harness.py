@@ -186,7 +186,8 @@ console.log(JSON.stringify(out))
         (self.tmp / "recorder.mjs").write_text(safety.recorder_source("post"))
         (self.tmp / "driver.mjs").write_text(self.DRIVER)
         control = self.tmp / "control.json"
-        control.write_text(json.dumps(dict(budget=budget, title_session=title_session, hold=list(hold))))
+        control.write_text(json.dumps(dict(budget=budget, title_session=title_session, hold=list(hold),
+                                           route=["claude-agent", "haiku", "low"])))
         log = log or str(self.tmp / "hooks.jsonl")
         done = subprocess.run([NODE, str(self.tmp / "driver.mjs"), log, str(control), json.dumps(events)],
                               capture_output=True, text=True, timeout=60)

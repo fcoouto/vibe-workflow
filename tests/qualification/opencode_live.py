@@ -52,7 +52,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary  # noqa: E402
+from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir,
@@ -69,6 +69,9 @@ REQUEST = dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness="claude-
 PROBE_REQUEST = dict(provider="opencode", model="session-probe", variant=None, harness="opencode session probe",
                      kind="primary", funding_pool="none")
 DENY_ALL = [{"action": "*", "resource": "*", "effect": "deny"}]
+KEEP_WARNING = ("kept: the isolated dir still holds the server password, the login-method reference and any login OpenCode "
+                "stored there (a ChatGPT sign-in is an OAuth record with access and refresh tokens); the server was "
+                "stopped. Remove the dir when done.")
 REPORT_ONLY_HOME = (".claude", ".opencode")  # written by the claude CLI / OpenCode under HOME: reported, not compared
 
 
@@ -82,10 +85,17 @@ def _interrupt(signum, _frame):
 
 class Run:
     def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
-                 canary_state=None):
+                 canary_state=None, purpose=None, stages=None, chatgpt_model=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
         self.canary_project = canary_project
-        self.purpose = "pilot" if canary_project else "qualification"
+        self.purpose = purpose or ("pilot" if canary_project else "qualification")
+        if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt"):
+            raise Refused("unknown run purpose")
+        self.stage_names, self.chatgpt_model = list(stages or []), chatgpt_model
+        # The one route this run may send to; the chatgpt run sets it only after the login's model list is checked.
+        self.route = None if self.purpose == "chatgpt" else (PROVIDER, MODEL, VARIANT)
+        self.guard_variant = "high"
+        self.chatgpt_timeout = 900
         self.run_id = "%s-%s" % (self.purpose, uuid.uuid4().hex[:8])
         self.admissions = admissions
         if canary_project and not canary_state:
@@ -95,10 +105,12 @@ class Run:
             self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
             self.routing = Routing(canary_state["settings"], canary_state["ledger"], project=canary_project)
         else:
-            self.server = Server(base)
+            self.server = Server(base, route=self.route)
             self.routing = Routing(self.server.settings, self.server.ledger)
         # Not `self.account`: that name is the accounting method (shadowing it caused pilot attempt 1's TypeError).
-        self.pool, self.route_account = (canary.POOL, canary.ACCOUNT) if canary_project else ("sub", "anthropic:qual")
+        self.pool, self.route_account = dict(pilot=(canary.POOL, canary.ACCOUNT), qualification=("sub", "anthropic:qual"),
+                                             **{"qualification-2": ("sub", "anthropic:qual2"),
+                                                "chatgpt": ("chatgpt-sub", "openai:chatgpt-qual")})[self.purpose]
         self.repo_start = None
         self.reread_wait = canary.REREAD_WAIT_S
         self.account_progress = None
@@ -108,6 +120,21 @@ class Run:
         self.events = None
         self.token = None
         self.children = []
+
+    # ------------------------------------------------------------ the run's route
+    def route_ref(self):
+        return "%s/%s#%s" % tuple(self.route)
+
+    def route_choice(self):
+        """The explicit worker choice for `prepare`: the run's route as `{provider, model, effort, harness}`."""
+        provider, model, variant = self.route
+        return dict(provider=provider, model=model, effort=variant, harness=safety.harness_for(provider))
+
+    def request_facts(self, route=None):
+        """The `check`/`dispatch` request facts for the route (the run's own by default)."""
+        provider, model, variant = route or self.route
+        return dict(provider=provider, model=model, variant=variant, harness=safety.harness_for(provider), kind="primary",
+                    funding_pool=self.pool)
 
     # ------------------------------------------------------------ budget gate (write-ahead)
     def gate(self, permitted):
@@ -196,11 +223,14 @@ class Run:
                 self.last_pages = pages
                 return found
 
-    def create_session(self, session_id=None, title=None, permissions=None, variant=VARIANT):
-        body = {"model": {"id": MODEL, "providerID": PROVIDER, "variant": variant},
+    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None):
+        provider, model, default = self.route or (PROVIDER, MODEL, VARIANT)
+        body = {"model": {"id": model, "providerID": provider, "variant": variant or default},
                 "location": {"directory": self.server.directory}, "permissions": permissions or DENY_ALL}
         if session_id:
             body["id"] = session_id
+        if parent:
+            body["parentID"] = parent
         if title:
             body["title"] = title
         return self.server.request("POST", "/api/session", body)
@@ -242,7 +272,7 @@ class Run:
         lineage = [dict(session_id=s, parent_session_id=p) for s, p in parents.items()]
         return found, lineage[:1024]
 
-    def account(self, session, previous=None):
+    def account(self, session, previous=None, shim_descendants=None, cross_check=False):
         """S3.6b-1 accounting per #146: the root, every descendant as `children`, every listed session as `lineage`."""
         from runtime import opencode_accounting as accounting
         from runtime.adapters import opencode as adapter
@@ -263,20 +293,22 @@ class Run:
                                  messages=[adapter.normalize_message(m) for m in self.messages(child)], complete=True))
         state = dict(session_id=session, messages=normalized, tokens=total["tokens"], cost=total["cost"], complete=True,
                      children=children, lineage=lineage)
+        extra = dict(shim_descendants=shim_descendants) if cross_check else {}  # #152: the shim's own descendant record
         result = accounting.usage_from_messages(normalized, total["tokens"], session_id=session, funding="subscription",
-                                                complete=True, session_cost=total["cost"], children=children, lineage=lineage)
+                                                complete=True, session_cost=total["cost"], children=children, lineage=lineage,
+                                                **extra)
         return dict(result=result, state=state, raw=raw, pages=pages, total=total, normalized=normalized,
                     children=len(children), lineage=len(lineage))
 
-    def account_settled(self, session, titles_sent=0):
+    def account_settled(self, session, titles_sent=0, shim_descendants=None, cross_check=False):
         """`account`, re-read while the result may still be catching up (`canary.unsettled`): at most
         `canary.MAX_REREADS` full re-reads, `reread_wait` seconds apart. Accepted once settled; a token class that
         decreases or a message set that changes raises `AccountingRegressed`. Accounting and adapter errors are
         deterministic and propagate unretried. Still unsettled after the limit: `deviation: title_unaccounted`."""
-        read, rereads = self.account(session), 0
+        read, rereads = self.account(session, shim_descendants=shim_descendants, cross_check=cross_check), 0
         while canary.unsettled(read["result"], titles_sent) and rereads < canary.MAX_REREADS:
             time.sleep(self.reread_wait)
-            again, rereads = self.account(session), rereads + 1
+            again, rereads = self.account(session, shim_descendants=shim_descendants, cross_check=cross_check), rereads + 1
             before, after = read["total"]["tokens"] or {}, again["total"]["tokens"] or {}
             if {m.get("id") for m in again["raw"]} != {m.get("id") for m in read["raw"]} or any(
                     after.get(k) is None and before.get(k) is not None or
@@ -293,6 +325,10 @@ class Run:
         self.redact.add_secret(self.server.password)
         self.note(stage, "server", dict(version=self.server.request("GET", "/api/info")[1].get("version"), port="<random>",
                                         location="canary project subdirectory" if self.canary_project else "isolated project"))
+        if self.purpose == "chatgpt":  # no Claude login in this run: the only provider is the ChatGPT one
+            self.events = EventStream(self.server)
+            self.events.start()
+            return
         for _ in range(20):  # the provider's integration registers shortly after start-up
             if self.server.request("GET", "/api/integration/claude-agent")[0] == 200:
                 break
@@ -322,7 +358,7 @@ class Run:
         ids = [p.get("id") for p in (plugins or {}).get("data", []) if isinstance(p, dict)]
         chain_ids = [i for i in ids if i in ("qual-pre", "vibe-workflow.routing", "qual-post")]
         # Guard probe: an interactive session on haiku#high; `qual-post` must refuse it (guard_variant).
-        _, created, _ = self.create_session(title="qual guard probe", variant="high")
+        _, created, _ = self.create_session(title="qual guard probe", variant=self.guard_variant)
         guard_session = (self.data(created) or {}).get("id")
         mark, began = len(self.server.hooks()), int(time.time() * 1000)
         token = self.expect(stage, "guard probe (must be refused by qual-post)", 0, exposure=1)
@@ -331,7 +367,8 @@ class Run:
         guard_sent = self.done(token)
         guard = self.records(mark, session=guard_session, hook="model.request")
         # Pending probe: the derived session of an admitted, undispatched attempt; the shim must refuse it.
-        probe = canary.plan_assignments(1, self.run_id + "-probe", pool=self.pool, account=self.route_account)[0]["body"]
+        probe = canary.plan_assignments(1, self.run_id + "-probe", pool=self.pool, account=self.route_account,
+                                        route=self.route_choice())[0]["body"]
         answer, _ = self.routing("prepare", **probe)
         attempt = probe["assignment"]["attempt_id"]
         ids_ = self.routing.admission_ids(attempt) if answer.get("state") == "admitted" else None
@@ -716,7 +753,7 @@ class Run:
     # ------------------------------------------------------------ run, cleanup, output
     def snapshot_user_dirs(self):
         home = Path.home()
-        return {name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}
+        return dict({name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}, watched=safety.watched_home(home))
 
     def report_only_home(self):
         found = {}
@@ -735,6 +772,10 @@ class Run:
         try:
             if self.canary_project:
                 self.canary_run()
+            elif self.purpose == "qualification-2":
+                probe_stages.run_stages(self)
+            elif self.purpose == "chatgpt":
+                chatgpt.run(self)
             else:
                 for number, stage in ((0, self.stage0), (1, self.stage1), (2, self.stage2), (3, self.stage3),
                                       (3, self.stage2_closed), (4, self.stage4)):
@@ -816,6 +857,9 @@ class Run:
             changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn))
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
+        codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
+        if unexpected:
+            self.results["blockers"].append("the user's ~/.codex credentials or config changed during the run")
         home_after = self.report_only_home()
         report = {}
         for name, snapshot in home_before.items():
@@ -824,10 +868,11 @@ class Run:
                 continue
             diff = compare_snapshots(snapshot, home_after[name])
             report[name] = {key: len(value) for key, value in diff.items()}
-        self.results["user_dirs"] = dict(opencode=changes, home_report_only=report)
+        self.results["user_dirs"] = dict(opencode=changes, codex=codex, home_report_only=report)
 
     def output(self, results):
-        meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose, provider=ROUTE,
+        meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose,
+                    provider=self.route_ref() if self.route else None,
                     counting=COUNTING, sanitized=True, generated_by="tests/qualification/opencode_live.py (no post-processing)")
         return self.redact(dict(_meta=meta, **results))
 
@@ -840,12 +885,18 @@ def main(argv=None):
     parser.add_argument("--export-call-ledger", metavar="OUT", help="write the sanitized ledger view (qual-call-ledger.json)")
     parser.add_argument("--through", type=int, default=4, help="last qualification stage to run")
     parser.add_argument("--canary", action="store_true", help="run the bounded pilot canary instead")
+    parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
+                                         "descendants,s33d (docs/smart-routing-qualification.md)")
+    parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
+    parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's model list (default: lowest)")
+    parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
     parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
                         help="canary: the dedicated routing state directory (never the production one)")
     parser.add_argument("--set-cap", nargs=2, metavar=("PURPOSE", "CAP"),
                         help="append a recorded cap change (up to the code's recorded maximum; needs --reason)")
     parser.add_argument("--reason", help="the recorded reason for --set-cap")
+    parser.add_argument("--approval", nargs=3, metavar=("BY", "AT", "SCOPE"), help="--set-cap: who approved, when, for what")
     parser.add_argument("--reset-canary-state", action="store_true",
                         help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
@@ -863,7 +914,9 @@ def main(argv=None):
             purpose, cap = args.set_cap
             if not cap.isdigit():
                 raise Refused("the cap must be an integer")
-            print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or ""), indent=2))
+            approval = dict(zip(("by", "at", "scope"), args.approval)) if args.approval else None
+            print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or "", approval=approval),
+                             indent=2))
             return 0
         if args.reset_canary_state:
             print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
@@ -882,6 +935,21 @@ def main(argv=None):
         ledger = CallLedger(args.call_ledger or "")
         if args.out and (Path(os.path.realpath(args.out)) == base or base in Path(os.path.realpath(args.out)).parents):
             raise Refused("--out must be outside the isolated dir, which is removed")
+        if sum(map(bool, (args.canary, args.stages, args.chatgpt))) > 1:
+            raise Refused("--canary, --stages and --chatgpt are separate runs")
+        if args.keep and args.chatgpt:
+            raise Refused("--keep is refused with --chatgpt: the dir would keep OpenCode's stored ChatGPT login")
+        if args.chatgpt_model and not args.chatgpt:
+            raise Refused("--chatgpt-model belongs to --chatgpt")
+        stages = probe_stages.parse_stages(args.stages) if args.stages else None
+        if args.chatgpt:
+            ref = args.chatgpt_model or ""  # without #VARIANT the model's lowest listed variant is used
+            route = safety.parse_route(ref if "#" in ref or not ref else ref + "#lowest")
+            if route[0] != "openai":
+                raise Refused("the chatgpt run allows only an openai model")
+            if not 60 <= args.chatgpt_timeout <= 1800:
+                raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
+        purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt else None
         project = canary.check_project(args.project) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
@@ -893,7 +961,8 @@ def main(argv=None):
         print("refused: %s" % error, file=sys.stderr)
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep,
-              canary_state=state)
+              canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
+    run.chatgpt_timeout = args.chatgpt_timeout
     results = run.run()
     clean = run.output(results)
     text = json.dumps(clean, indent=2, sort_keys=True)
@@ -905,8 +974,7 @@ def main(argv=None):
         Path(args.out).write_text(text + "\n")
     print(json.dumps(dict(blockers=clean["blockers"], cleanup=clean.get("cleanup"), call_ledger=clean.get("call_ledger")), indent=2))
     if args.keep:
-        print("kept: the isolated dir still holds the server password and the login-method reference; the server was "
-              "stopped. Remove the dir when done.", file=sys.stderr)
+        print(KEEP_WARNING, file=sys.stderr)
     return 1 if results["blockers"] else 0
 
 

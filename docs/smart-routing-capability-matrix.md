@@ -119,6 +119,16 @@ Pilot attempt 2 (same day, harness `94f9e0e`, dedicated canary state):
 - **P0.8:** usage was accounted with `children` and `lineage`, the title was known by subtraction (admission 1) or zero (titled sessions), and 0 re-reads were needed. Every subscription hold settled as a window settlement with no charge, and `status` was clean at the end.
 - **Not covered:** subagents, compaction, retries and API-funded holds were not exercised. See the [validation results](smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort).
 
+Live probes (9 November 2026, harness 85ae5f4, `qualification-2`, 7 calls on `claude-agent/haiku#low`; [run](smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4)):
+
+- **P0.8 (S3.3c):** `routing.descendants` answered `complete: true` for a root with a tool subagent, a command child and an API child, and equalled the launcher's listing. A root created before `attach` answered `complete: false` with `root_creation_unobserved`. The answer was refused after `detach`. OpenCode emitted the root's `session.created` after `attach`.
+- **P0.6 (S3.3d):**
+  - model writes to `.opencode/command/x.md` and `sub/opencode.json` were denied, with relative resources;
+  - an ordinary `agents/ok.txt` write was allowed;
+  - a tool-call subagent spawn on the allowed route passed `tool.execute.before`;
+  - **a `` !`env` `` command shell under an attached root did not reach `shell.create.before` and saw a dummy credential-like variable**, so commands inside the shell stay unsupported and launchers must not invoke project commands in managed sessions;
+  - image generation was unobserved (no image model).
+
 Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
 
 ## Gate status (P0)
@@ -130,7 +140,7 @@ Open P0.8 item: the live event stream flagged `version_changed` on every session
 | P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
 | P0.3, P0.4 API grants and key binding | unverified | Not probed. |
 | P0.5 Model/effort | **partly established** | Requested model and variant observed; resolved model unsupported. |
-| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. The finished shim was observed live for the handshake, the blocked paths and the command-subagent path [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
+| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure (live 9 November 2026: a command template's `` !`env` `` shell bypasses `shell.create.before`, so its environment is not stripped). The finished shim was observed live for the handshake, the blocked paths and the command-subagent path [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
 | P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. Re-qualified live on 9 November 2026 for derived ids, one request per derived message id, duplicates, read-back, id shapes, ordering and the lost-acknowledgment drill. Open: an uncertain subscription hold has no operator recovery path. |
 | P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. Re-qualified live on 9 November 2026 for a worker attempt with a command-spawned child, its title, event tracking, resync and subscription settlement (#146); auxiliary kinds other than the title, retries and API-funded holds were not observed. |
 
