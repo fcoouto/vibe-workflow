@@ -221,3 +221,6 @@ __marimo__/
 
 # MacOS
 .DS_Store
+
+# Per-checkout enrollment: absolute paths bound to one checkout
+/.vibe-workflow/

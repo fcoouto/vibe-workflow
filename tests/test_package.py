@@ -36,7 +36,7 @@ class BuildTests(unittest.TestCase):
     def test_exports_only_tracked_files_and_validates(self):
         report = package.build(PACKAGE, self.output)
         self.assertEqual(exported(self.output), tracked())
-        for ignored in (".git", ".superpowers", ".vibe-workflow", "__pycache__", "tests"):
+        for ignored in (".git", ".superpowers", ".vibe-workflow", ".codex", "CLAUDE.md", "__pycache__", "tests"):
             self.assertFalse(any(part == ignored for path in exported(self.output)
                                  for part in Path(path).parts), ignored)
         self.assertEqual(report["validation"], "passed")

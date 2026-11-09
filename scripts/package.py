@@ -21,7 +21,8 @@ DEFAULT_OUTPUT = Path("~/.cache/vibe-workflow/dev-package")
 RELEASE_OUTPUT = Path("~/.cache/vibe-workflow/release-package")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
 # Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
-EXCLUDED = ("tests/", "scripts/test_sharded.py")
+# Local client configuration stays with the checkout.
+EXCLUDED = ("tests/", "scripts/test_sharded.py", ".vibe-workflow/", ".codex/", "CLAUDE.md")
 
 
 def read_json(path):
