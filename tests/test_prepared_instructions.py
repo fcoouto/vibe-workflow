@@ -370,6 +370,30 @@ class PreparedInstructionsTests(unittest.TestCase):
         self.assertEqual(len(page["sections"]), 1)
         self.assertEqual(page["sections"][0]["text"], "# Client\nRead applicable contracts.\n")
 
+    def test_root_templates_are_prepared_instructions_but_other_root_folders_are_not(self):
+        (self.root / "templates/nested").mkdir(parents=True)
+        (self.root / "templates/brief.md").write_text("# Brief\n- Objective: [outcome]\n")
+        (self.root / "templates/nested/deep.md").write_text("# Deep\n")
+        (self.root / "assets").mkdir()
+        (self.root / "assets/notes.md").write_text("# Notes\n")
+        self.prepare()
+        files = json.loads((self.root / "clients/instruction-map.json").read_text())["files"]
+        self.assertIn("templates/brief.md", files)
+        self.assertNotIn("templates/nested/deep.md", files)
+        self.assertNotIn("assets/notes.md", files)
+        page = self.reader.load_page(self.root, ["templates/brief.md"])
+        self.assertEqual(page["sections"][0]["text"], "# Brief\n- Objective: [outcome]\n")
+        import hashlib
+        map_path = self.root / "clients/instruction-map.json"
+        manifest = json.loads(map_path.read_text())
+        for name in ("templates/nested/deep.md", "assets/notes.md"):
+            # A forged entry must not get past the folder rule.
+            manifest["files"][name] = dict(sha256=hashlib.sha256((self.root / name).read_bytes()).hexdigest(), ranges=[[1, 1]])
+        map_path.write_text(json.dumps(manifest))
+        for name in ("templates/nested/deep.md", "assets/notes.md"):
+            with self.assertRaises(ValueError):
+                self.reader.load_page(self.root, [name])
+
     def test_preparation_rejects_unsplittable_line_instead_of_clipping_it(self):
         (self.root / "policies/rules.md").write_text("漢" * 8000)
         with self.assertRaises(ValueError):
