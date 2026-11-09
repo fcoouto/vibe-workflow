@@ -17,12 +17,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from runtime.package_manifest import EXCLUDED, GIT_ENVIRONMENT, excluded  # noqa: E402
 DEFAULT_OUTPUT = Path("~/.cache/vibe-workflow/dev-package")
 RELEASE_OUTPUT = Path("~/.cache/vibe-workflow/release-package")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
-# Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
-# Local client configuration stays with the checkout.
-EXCLUDED = ("tests/", "scripts/test_sharded.py", ".vibe-workflow/", ".codex/", "CLAUDE.md")
 
 
 def read_json(path):
@@ -31,10 +29,6 @@ def read_json(path):
 
 def manifest(root):
     return read_json(root / ".codex-plugin/plugin.json")
-
-
-# Inherited repository variables (for example from a Git hook) would override -C.
-GIT_ENVIRONMENT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY")
 
 
 def git(root, *args, index=None):
@@ -53,11 +47,6 @@ def resolve_commit(root, ref):
 
 def tracked_changes(root):
     return bool(git(root, "status", "--porcelain", "--untracked-files=no"))
-
-
-def excluded(name):
-    # Entries ending in "/" are directories; others name one file, as in the release pathspecs.
-    return any(name.startswith(item) if item.endswith("/") else name == item for item in EXCLUDED)
 
 
 def tracked_files(root):
