@@ -44,7 +44,8 @@ class ProbeServer(FakeOpenCode):
         self.upstream_error, self.upstream_retry = None, None
         self.assistant_overrides, self.retry_message = {}, "retrying"
         self.connection_label = "ChatGPT"
-        self.no_reply = False  # transmitted, then the session goes idle (failed) with no assistant message
+        self.no_reply = False
+        self.upstream_by_model = {}  # model id -> StructuredError (or None for a normal reply), overriding upstream_error  # transmitted, then the session goes idle (failed) with no assistant message
         store = self.project.parent / "data" / "opencode"  # the isolated server's own store, as 2.2.6 writes it
         store.mkdir(parents=True, exist_ok=True)
         (store / "opencode.db").write_text("")  # the credential's label as GET /api/integration/openai lists it  # fuzzing: extra assistant fields, status text  # extra fields of the attempt's final status (refusal codes, unknown shapes)
@@ -198,6 +199,16 @@ class ProbeServer(FakeOpenCode):
             self._request_hook(parts[2], "primary")
             state["messages"].append(dict(id=self._id("msg"), type="idle", outcome="failed", time=dict(created=now + 2)))
             return 200, dict(data=state["messages"][0]), 1.0
+        model_id = ((self.sessions.get(parts[2]) or {}).get("record") or {}).get("model", {}).get("id") \
+            if method == "POST" and len(parts) == 4 and parts[3] == "prompt" else None
+        if model_id in self.upstream_by_model:
+            if self.upstream_by_model[model_id] is None:
+                return super().request(method, path, body, query, timeout)
+            saved, self.upstream_error = self.upstream_error, self.upstream_by_model[model_id]
+            try:
+                return self._failed_prompt(parts[2], body, now)
+            finally:
+                self.upstream_error = saved
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and self.upstream_error is not None:
             return self._failed_prompt(parts[2], body, now)
         if method == "POST" and len(parts) == 4 and parts[3] == "prompt" and (
