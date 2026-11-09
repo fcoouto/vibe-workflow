@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export this checkout's tracked files as a clean local plugin package; no network."""
+"""Export this checkout's tracked files, minus development-only trees, as a clean local plugin package; no network."""
 
 import argparse
 import fcntl
@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 DEFAULT_OUTPUT = Path("~/.cache/vibe-workflow/dev-package")
 VERSION = re.compile(r"\d+\.\d+\.\d+")
+# Development-only trees: nothing installed reads them, and Codex's bundle scan allows 8 MiB in total.
+EXCLUDED = ("tests/", "scripts/test_sharded.py")
 
 
 def read_json(path):
@@ -36,6 +38,8 @@ def tracked_files(root):
     names = dict.fromkeys(name for name in git(root, "ls-files", "-z").decode("utf-8").split("\0") if name)
     files = []
     for name in names:
+        if name.startswith(EXCLUDED):
+            continue
         path = root / name
         if path.is_symlink() or not path.resolve().is_relative_to(root):
             raise ValueError(f"Tracked symlinks cannot be packaged: {name}")
