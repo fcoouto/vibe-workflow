@@ -1978,8 +1978,8 @@ def _validate_task(db,scope_id,client,session,task_id,version,task,*,historical=
     if task["turn_id"] is not None:
         _text(task["turn_id"], "stored turn_id", 4096)
     _task_projection(db, scope_id, task)
-    if task["client"] == "claude-code" and any(field in task for field in ("delegation", "retirement", "writer_stop")):
-        raise StateError("Claude Code task records do not support delegation or retirement yet")
+    if task["client"] == "claude-code" and any(field in task for field in ("retirement", "writer_stop")):
+        raise StateError("Claude Code task records do not support retirement yet")
     if version == 3:
         _task_lifecycle(task)
         if _task_retired(db,scope_id,client,session,task_id):

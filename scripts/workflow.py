@@ -13,6 +13,7 @@ from types import SimpleNamespace
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
 TASK_CLIENTS = ("codex", "claude-code")
+CLAUDE_DELEGATION = ("plan", "prepare", "observe", "reconcile", "status", "guidance")
 
 
 def title_transport(client):
@@ -151,7 +152,7 @@ def control_main():
             action = delegation_actions.add_parser(name, add_help=False)
             action.add_argument("--cwd", required=True)
             if name == "status":
-                action.add_argument("--client", required=True, choices=("codex",))
+                action.add_argument("--client", required=True, choices=TASK_CLIENTS)
                 action.add_argument("--session", required=True)
                 action.add_argument("--compact", action="store_true")
         workstreams = delegation_actions.add_parser("workstreams", add_help=False)
@@ -213,21 +214,24 @@ def control_main():
             else:
                 request = json_object(sys.stdin.buffer.read(MAX_INPUT + 1))
                 if args.delegation_action == "guidance":
-                    if request.get("client_surface") not in {"codex-cli", "codex-desktop"}:
+                    surfaces = {"codex-cli": "codex", "codex-desktop": "codex", "claude-code-cli": "claude-code"}
+                    if request.get("client_surface") not in surfaces:
                         raise StartupError("Expected a supported native guidance surface")
-                    client = "codex"
+                    client = surfaces[request["client_surface"]]
                 else:
                     client = request.get("client")
-                    if client != "codex":
+                    if client not in TASK_CLIENTS:
                         raise StartupError("Expected a supported native task client")
+            # Claude has native review observation only: no workers, workstreams, coordinators or continuations.
+            if client == "claude-code" and args.delegation_action not in CLAUDE_DELEGATION:
+                raise StartupError("This delegation action is Codex-only")
         elif (args.command == "task" and args.action in ("start", "update", "retire", "title") or
                 args.command == "evidence" and args.action != "status"):
             request = json_object(sys.stdin.buffer.read(MAX_INPUT + 1))
             client = request.get("client")
-            # Claude task records carry no evidence, delegation or retirement, so only start and update apply.
-            # Review needs a native observation source, which Claude Code does not have yet.
+            # Claude task records carry no retirement, so only start, update and title apply to them.
             supported = TASK_CLIENTS if (args.command == "task" and args.action in ("start", "update", "title")
-                                         or args.command == "evidence" and args.action != "review") else ("codex",)
+                                         or args.command == "evidence") else ("codex",)
             if client not in supported:
                 raise StartupError("Expected a supported native task client")
         else:
@@ -307,7 +311,7 @@ def control_main():
                           "prepare": evidence.prepare_review, "collect": evidence.collect_review, "assess": evidence.assess_review}
             report = (evidence.evidence_status(scope, client, args.session) if args.action == "status" else
                       operations[args.review_action if args.action == "review" else args.action](scope, request))
-            if args.action == "review" and args.review_action == "prepare":
+            if args.action == "review" and args.review_action == "prepare" and client == "codex":
                 from runtime.worker_visibility import prepare_managed
                 report = prepare_managed(scope.repository_root, request.get("session_id"), report)
             report = title_report(scope, client, request.get("session_id") if args.action != "status" else args.session, report)

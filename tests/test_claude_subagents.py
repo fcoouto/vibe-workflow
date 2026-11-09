@@ -57,7 +57,8 @@ class SubagentChainTests(unittest.TestCase):
             self.assertTrue(subagents.record(self.scope, payload))
 
     def collect(self, **updates):
-        arguments = dict(session_id=SESSION, agent_id=AGENT, marker=MARKER, native_version="2.1.311", **DIGESTS)
+        arguments = dict(session_id=SESSION, agent_id=AGENT, marker=MARKER, native_version="2.1.311",
+                         requested_model="haiku", requested_effort="default", **DIGESTS)
         return subagents.collect_review(self.scope, **(arguments | updates))
 
     def test_a_complete_chain_yields_the_review_receipt_and_report_contract(self):
@@ -66,8 +67,10 @@ class SubagentChainTests(unittest.TestCase):
         receipt = result["receipt"]
         self.assertEqual((receipt["mechanism"], receipt["task_name"], receipt["reviewer_id"], receipt["spawn_item_id"]),
                          (subagents.MECHANISM, MARKER, AGENT, "toolu_spawn"))
-        self.assertEqual((receipt["requested_model"], receipt["spawn_observed_model"], receipt["parent_turn_id"]),
-                         ("haiku", "claude-haiku-5-5", "prompt-1"))
+        self.assertEqual((receipt["requested_model"], receipt["requested_effort"], receipt["parent_turn_id"]),
+                         ("haiku", "default", "prompt-1"))
+        # The review receipt carries exactly the D5 contract; the observed model lives in the worker observation.
+        self.assertNotIn("spawn_observed_model", receipt)
         self.assertEqual(receipt["report_digest"], receipt["report_item_id"])
         self.assertEqual(result["report"]["attempt_id"], "attempt-1")
         # The Codex collector's required receipt fields are all present.
@@ -75,6 +78,29 @@ class SubagentChainTests(unittest.TestCase):
                       "reviewer_id", "review_turn_id", "report_item_id", "assignment_digest", "candidate_digest",
                       "report_digest", "requested_model", "requested_effort"):
             self.assertIn(field, receipt)
+
+    def test_a_reviewer_spawned_with_another_model_is_refused(self):
+        self.record(start(), spawn(), stop())
+        with self.assertRaisesRegex(StartupError, "different model"):
+            self.collect(requested_model="opus")
+
+    def test_a_resolved_model_that_does_not_contain_the_alias_is_refused(self):
+        self.assertTrue(subagents.model_matches("haiku", "claude-haiku-5-5"))
+        self.assertTrue(subagents.model_matches(None, None))
+        self.assertFalse(subagents.model_matches("haiku", "claude-sonnet-5-5"))
+        self.assertFalse(subagents.model_matches("haiku", None))
+        payload = spawn()
+        payload["tool_response"]["resolvedModel"] = "claude-sonnet-5-5"
+        self.record(start(), payload, stop())
+        with self.assertRaisesRegex(StartupError, "different model"):
+            self.collect()
+
+    def test_the_spawning_agent_call_identifies_exactly_one_agent(self):
+        self.record(start(), spawn(), stop())
+        self.assertEqual(subagents.agent_for_spawn(self.scope, SESSION, "prompt-1", "toolu_spawn"), AGENT)
+        self.assertIsNone(subagents.agent_for_spawn(self.scope, SESSION, "prompt-1", "toolu_other"))
+        self.assertIsNone(subagents.agent_for_spawn(self.scope, SESSION, "prompt-2", "toolu_spawn"))
+        self.assertIsNone(subagents.agent_for_spawn(self.scope, "other-session", "prompt-1", "toolu_spawn"))
 
     def test_event_order_does_not_matter_for_background_agents(self):
         self.record(spawn(), start(), stop())

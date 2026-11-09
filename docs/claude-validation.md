@@ -54,7 +54,13 @@ Claude Code 2.1.311, `haiku`, a Claude-born canonical checkout activated by a re
 - An earlier run with 64-character digests failed correctly: the model dropped one character when echoing `candidate_digest`, so the report did not match its assignment. Model echo reliability matters; use a model that copies digests exactly, and do not relax the match.
 - Setup artifact: a test that patched `MANAGED_DIRECTORIES` to empty produced a different configuration digest than the real hook subprocess. Real use is consistent because collection and reading see the same paths.
 
-Not observed: D6 ledger integration, background versus synchronous completion ordering beyond this run, Desktop and Cowork, older Claude versions.
+Not observed: the D6 ledger consuming a real chain (see the next section), background versus synchronous completion ordering beyond this run, Desktop and Cowork, older Claude versions.
+
+## Native review through the delegation ledger (package level)
+
+`tests/test_claude_delegation.py` drives the whole review path on a Claude-born canonical scope with a synthetic trusted-owner qualification: guidance for `claude-code-cli`, an evidence plan that requires review, a delegation plan on the route `claude-code-subagent-hook`, `prepare`, hook events recorded by the real recorder from payloads shaped like the recorded 2.1.311 run, `observe`, `collect`, `assess`, independent `reconcile`, then `verify` and `DONE`. It also checks that refusals hold: a Codex route or surface, controls Claude does not expose (`explicit_effort`, `fork_turns_none`), workers, a missing, partial or misbound chain (another marker or model), a report for another assignment, and completion before the review is settled.
+
+**Not natively observed.** The route has not run against a real Claude session, because a real stage-1 scope has no verified `native-review` capability and refuses review preparation. The pieces it relies on were each observed before: the recorded spawn chain and the review report (above), and `claude --version`. The `Agent` tool's model aliases and the absence of an effort control are documentation, not observation.
 
 ## What S1, S3 and S4 do and do not establish (9 November 2026)
 

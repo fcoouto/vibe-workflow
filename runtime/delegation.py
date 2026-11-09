@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import evidence, routing, state
+from runtime import evidence, native_routes, routing, state
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -905,8 +905,8 @@ def _delegation_plan(scope, plan):
     _require(type(plan['version']) is int and plan['version'] == ADMISSION_VERSION, 'Unsupported delegation plan')
     route = plan['route']
     state._fields(route, ('mechanism', 'client_surface', 'parent_session_id', 'authority_ref', 'controls_ref'))
-    _require(route['mechanism'] == 'codex-native-subagent' and route['client_surface'] in
-             {'codex-cli', 'codex-desktop'}, 'Only the supported existing native Codex route can execute')
+    spec = native_routes.supported(route, scope)
+    _require(spec, 'Only the supported existing native route can execute')
     for field in ('parent_session_id', 'authority_ref', 'controls_ref'):
         state._text(route[field], 'native route ' + field)
     authority = plan['authority']
@@ -919,7 +919,7 @@ def _delegation_plan(scope, plan):
     for field in ('complexity', 'risk', 'rationale'):
         state._text(constraints[field], 'selection ' + field)
     _strings(constraints['required_controls'], 'required dispatch controls')
-    _require(set(constraints['required_controls']) <= {'spawn', 'explicit_model', 'explicit_effort', 'fork_turns_none'},
+    _require(set(constraints['required_controls']) <= set(spec['controls']),
              'Required native enforcement or dispatch control is unavailable')
     limits = plan['limits']
     state._fields(limits, ('max_attempts', 'max_resource_units', 'deadline', 'max_parallel_workers', 'host_capacity', 'capacity_ref'))
@@ -1459,14 +1459,13 @@ def _validate_foreground_wait(scope, wait, claims):
 
 
 def _discovery(scope, plan, request):
-    from runtime.adapters.codex import discover_native_workers
     controls = request['control_observation']
     state._fields(controls, ('version', 'client_surface', 'native_version', 'parent_session_id', 'dispatch_controls'))
     state._text(controls['native_version'], 'control observation native version', 256)
     route = plan['route']
     _require(all(controls[key] == route[key] for key in ('client_surface', 'parent_session_id')),
              'Native controls do not match the prepared route')
-    observed = discover_native_workers(scope, controls)
+    observed = native_routes.discover(scope, controls)
     expected = request['discovery_expectation']
     state._fields(expected, ('capability_digest', 'client_surface', 'native_version', 'parent_session_id', 'parent_model_provider'))
     state._text(expected['native_version'], 'discovery expectation native version', 256)
@@ -1486,7 +1485,7 @@ def _discovery(scope, plan, request):
     _require(selected['mode'] in {'explicit', 'inherit'}, 'Unsupported worker settings mode')
     if selected['mode'] == 'explicit':
         _require('inheritance' not in selected and all(dispatch.get(key) is True for key in
-                 ('explicit_model', 'explicit_effort', 'fork_turns_none')), 'Explicit native settings are unsupported by exposed controls')
+                 native_routes.by_surface(observed['client_surface'])['explicit']), 'Explicit native settings are unsupported by exposed controls')
     else:
         inheritance = selected.get('inheritance')
         state._fields(inheritance, ('model', 'effort', 'reference'))
@@ -2056,7 +2055,7 @@ def _prepare_native(scope, request, *, role):
     """Reserve before native spawn, returning launch admission only on a new committed row."""
     evidence._request(request, ('dispatch_id', 'job_id', 'selection', 'control_observation',
         'discovery_expectation', 'guidance', 'resource_units', *(('brief',) if role == 'worker' else
-        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', 'workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility'), codex_only=True)
+        ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', *(('workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility') if request.get('client') == 'codex' else ())), codex_only=role == 'worker')
     request = json_object(evidence._raw(request))
     if 'visibility' in request:
         from runtime.worker_visibility import optional_declaration
@@ -2469,12 +2468,11 @@ def _worker_receipt(scope, record, request, observed):
         len(receipt['failure_code']) <= 128, 'Invalid native failure code')
     _require(receipt.get('will_retry') is None or type(receipt['will_retry']) is bool, 'Invalid native host retry intent')
     _require(type(receipt['version']) is int and receipt['version'] == 2 and
-        receipt['mechanism'] in {'codex-native-agent-path', 'codex-native-collab-call'} and
+        native_routes.origin_ok(receipt, binding['client_surface']) and
         all(receipt[key] == value for key, value in binding.items()) and
         all(receipt[key] == request[key] for key in ('parent_turn_id', 'spawn_item_id')) and
         receipt['checkout'] == str(scope.repository_root) and receipt['assignment_digest'] == data['assignment']['digest'] and
         receipt['candidate_digest'] == data['candidate']['digest'] and
-        receipt['originator'] in ({'codex_exec'} if binding['client_surface'] == 'codex-cli' else {'Codex Desktop','codex_work_desktop'}) and
         receipt['descendants_stopped'] is False and receipt['prompt_delivery'] == 'unverified',
         'Native receipt differs from the exact prepared worker binding')
     state._text(receipt['worker_id'], 'observed worker_id', 4096)
@@ -2510,8 +2508,7 @@ def _observation_reply(record, reference, value, replayed=False):
 
 
 def _native_observer(record):
-    from runtime.adapters.codex import observe_native_worker, observe_native_review_assignment
-    return observe_native_worker if record['data']['role'] == 'worker' else observe_native_review_assignment
+    return native_routes.observer(record['data']['role'], record['data']['binding']['client_surface'])
 
 
 def _cooperative_activity(activity):
@@ -2852,7 +2849,7 @@ def delegation_status(scope, client, session_id, *, compact=False):
     """Inspect current and retained historical admissions, never initializing or launching."""
     state._text(client, 'delegation client')
     state._text(session_id, 'delegation session')
-    _require(client == 'codex', 'Unsupported delegation client')
+    _require(client in ('codex', 'claude-code'), 'Unsupported delegation client')
     with state._database(scope) as db:
         if db is None:
             report = dict(ok=True, plan=None, assignments=[], conflicts=[], budgets=None, capacity=None, blockers=['Runtime task state is missing'],
