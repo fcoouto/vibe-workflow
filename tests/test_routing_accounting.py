@@ -166,6 +166,13 @@ class Accounting(DispatchBase):
         return budget.Ledger._total(self.snapshot(), 'personal') - sum(
             hold['amount'] for hold in budget.Ledger.open_holds(self.snapshot()).values())
 
+    def ledger_bytes(self):
+        """Every stored byte that accounting writes: the record, the events and the root aggregates."""
+        with closing(sqlite3.connect(self.ledger)) as db:
+            return [db.execute('SELECT body FROM ledger').fetchone()[0],
+                    db.execute('SELECT * FROM events ORDER BY event_id').fetchall(),
+                    db.execute('SELECT * FROM roots ORDER BY root').fetchall()]
+
     def events(self):
         with closing(sqlite3.connect(self.ledger)) as db:
             return [(row[0], json.loads(row[1])) for row in db.execute('SELECT event_id, body FROM events')]
@@ -177,9 +184,11 @@ class EventTests(Accounting):
         first = self.call(complete('a1', 'c1', usage=usage(4 * M)))
         self.assertEqual((first['state'], first['duplicate'], first['outcome']), ('recorded', False, 'complete'))
         before = self.snapshot()
+        stored = self.ledger_bytes()
         again = self.call(complete('a1', 'c1', usage=usage(4 * M)))
         self.assertEqual(again, dict(first, duplicate=True))
         self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.ledger_bytes(), stored)
         self.assertEqual(self.settled(), 4 * M)
 
     def test_a_conflicting_repeat_is_refused_and_changes_nothing(self):
@@ -385,9 +394,11 @@ class SettlementTests(Accounting):
         """Round 3: a replay with a wrong token or a closed anchor gets that answer, never `duplicate: true`."""
         self.funded('a1', root='root')
         self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1')['state'], 'recorded')
+        before = self.ledger_bytes()
         self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1', token='x' * 43),
                          dict(v=1, state='blocked', reason='authority_invalid'))
         self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1')['duplicate'], True)
+        self.assertEqual(self.ledger_bytes(), before)  # neither the refusal nor the duplicate changed anything
         self.call(complete('a1', 'c1', usage=usage(M)))
         self.assertEqual(self.observed('o1', 'coord', 'r1', anchor='a1'),
                          dict(v=1, state='blocked', reason='attempt_closed'))
@@ -700,6 +711,7 @@ class BlockReasonTests(Accounting):
         self.assertEqual(ledger['blocked_organizations'], [dict(id='personal', reasons=dict(
             over_bound=dict(ids=['s1'], more=0), overrun=dict(ids=['a1'], more=0)))])
         self.assertEqual(ledger['cost_unknown'], dict(ids=['u1'], more=0))
+        self.assertEqual(ledger['uncertain_dollar'], dict(ids=[], more=0))
         self.assertIs(ledger['overrun_backlog'], False)
         with self.open_ledger() as ledger, ledger.transaction() as data:
             for i in range(18):
@@ -708,6 +720,19 @@ class BlockReasonTests(Accounting):
         listed = self.call(dict(v=1, op='status'))['ledger']['blocked_organizations'][0]['reasons']
         self.assertEqual((len(listed['overrun']['ids']), listed['overrun']['more']), (16, 3))
         self.assertEqual(listed['legacy'], dict(ids=[], more=0))
+
+    def test_status_lists_uncertain_dollar_holds_until_s36b(self):
+        """Round 4 S1: an uncertain dollar hold has no way out before S3.6b, so `status` names it."""
+        for i in range(18):
+            self.funded('d%02d' % i)
+            self.call(record('d%02d' % i, 'uncertain'))
+        self.admit_sub('s1')
+        self.send('s1', sub=True)
+        self.call(record('s1', 'uncertain'))  # a subscription hold is not listed
+        listed = self.call(dict(v=1, op='status'))['ledger']['uncertain_dollar']
+        self.assertEqual(listed, dict(ids=['d%02d' % i for i in range(16)], more=2))
+        self.assertEqual(self.call(complete('d00', 'c1', usage=usage(M))),
+                         dict(v=1, state='blocked', reason='reconciliation_required'))
 
     def test_a_hold_table_full_of_pending_overruns_is_an_overrun_backlog(self):
         self.funded('a1')
@@ -831,6 +856,47 @@ class VersionTests(Accounting):
         self.assertEqual(self.reasons(), ['legacy'])
         self.assertTrue(self.admission_refused())
         self.assertEqual(self.admit('a1')['state'], 'pending')
+
+    def seed_unresolved_v3(self, blocked):
+        """A v3 ledger whose S1 call was left unresolved by main's older over-bound path (no marker)."""
+        self.start_run('s1')
+        with self.open_ledger() as ledger:
+            ledger.uncertain('s1', 'count')
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data['version'] = 3
+            data['organizations']['personal']['blocked'] = blocked
+            data['runs']['s1']['calls']['count'].pop('over_bound', None)
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+
+    def test_migration_marks_unresolved_calls_of_a_blocked_organization_over_bound(self):
+        """Round 4 S2: case C is closed for migrated ledgers too: a lower report cannot settle the old call."""
+        self.seed_unresolved_v3(True)
+        call = self.snapshot()['runs']['s1']['calls']['count']
+        self.assertEqual((call['state'], call['over_bound']), ('unresolved', call['maximum']))
+        self.assertEqual(self.reasons(), ['legacy', 'over_bound'])
+        with self.assertRaisesRegex(budget.BudgetError, 'over_bound_unresolved'):
+            self.finish_run('s1', 1)
+        total = budget.Ledger._total(self.snapshot(), 'personal')
+        self.assertEqual(total, call['maximum'])  # the books keep the maximum
+
+    def test_migration_leaves_unresolved_calls_of_an_unblocked_organization_alone(self):
+        self.seed_unresolved_v3(False)
+        self.assertNotIn('over_bound', self.snapshot()['runs']['s1']['calls']['count'])
+        self.finish_run('s1', 1)  # an ordinary uncertain call still completes in bound
+        self.assertEqual(self.reasons(), [])
+
+    def test_migration_backfills_roots_even_without_organizations(self):
+        """Round 4 N1: the root backfill runs for every hold of a migrated ledger, whatever its organizations."""
+        self.admit_sub('s1', root='root')
+        expected = self.hold('s1')['root']
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
+            data.update(version=3, organizations={})
+            for field in ('root', 'stage'):
+                del data['holds']['s1'][field]
+            db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
+        self.assertEqual(self.hold('s1')['root'], expected)
 
     def test_a_v3_unblocked_organization_has_no_reasons(self):
         self.seed_v3(False)
