@@ -1,5 +1,13 @@
 # Policy source map
 
+## Smart Routing qualification: OpenCode tool-output churn is report-only — 9 November 2026
+
+The ChatGPT run's user-directory check failed on OpenCode's own per-command output files. No model call, server or live run was made for this change, and the durable ledger is unchanged.
+
+| Contract | Source |
+| --- | --- |
+| The [pre-registration](smart-routing-qualification.md#run-chatgpt-chatgpt-at-most-4-calls-its-own-run) rule for OpenCode session tool output and the attempt 2 observation; `tests/qualification/safety.py` (`snapshot_tree` records symlinks distinctly; `session_output` and `classify_snapshots` count added or changed names strictly inside `shell/` and `tool-output/` of `~/.local/share/opencode`; deletions, symlinks, dot segments and every other path stay unexpected); `opencode_live.py` (`session_output_count`) | The 21:47 CET ChatGPT run of 9 November 2026 (sign-in completed, 18 openai models without cost or hints, `auto` refused with 0 calls, `shell/<project>/sh_*.out` flagged); the coordinator's fix brief; `tests/test_qualification_probes.py` |
+
 ## Package scan matches the export; separate Codex bundle bound — 9 November 2026
 
 A checkout's bundle scan now covers exactly what `scripts/package.py` exports, and the Codex bundle bound no longer shares onboarding's aggregate constant. An installed export's fingerprint is unchanged.

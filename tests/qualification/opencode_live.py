@@ -56,7 +56,7 @@ from tests.qualification import canary, chatgpt, probe_stages, safety  # noqa: E
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
-                                        check_opencode_version, classify_changes, compare_snapshots, id_shape,
+                                        check_opencode_version, compare_snapshots, id_shape,
                                         latency_pairs, on_route, repo_snapshot, snapshot_tree,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
@@ -853,8 +853,9 @@ class Run:
         after = self.snapshot_user_dirs()
         changes = {}
         for name in USER_OPENCODE_DIRS:
-            unexpected, churn = classify_changes(compare_snapshots(before[name], after[name]))
-            changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn))
+            unexpected, churn, session = safety.classify_snapshots(before[name], after[name], name == safety.SESSION_OUTPUT_DIR)
+            changes[name] = dict(unexpected=unexpected[:50], unexpected_count=len(unexpected), desktop_churn_count=len(churn),
+                                 session_output_count=len(session))
             if unexpected:
                 self.results["blockers"].append("the user's %s changed during the run" % name)
         codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))

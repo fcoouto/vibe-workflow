@@ -89,6 +89,9 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
   Do not use `python3 -m tests.qualification.opencode_live`: importing the `tests` package as the main module makes `tests/__init__.py` redirect `HOME` to a temporary directory. The real-directory snapshots and the server environment would then use that temporary home. Every live mode therefore refuses to start, with exit 2 and before anything starts, when `HOME` is not the current user's home from the password database.
 - **Untested live:** `prepare` for the explicit `openai` choice (harness `opencode provider openai`, pool `chatgpt-sub`) is unit-tested against the real `scripts/routing.py` on a temporary store, but has never run on OpenCode. The unit tests stub the server start and the plugin-chain probes.
 - **The user's directories.** The run also watches `~/.codex` (top level only: names and mtimes, never contents) and `~/.config/openai`. A change to `~/.codex/auth.json`, `config.toml` or any top-level file named like auth, token or credential, or any change under `~/.config/openai`, fails the run. Other `~/.codex` changes are the running Codex app's own, so they are counted and reported, not failed. `~/.claude` and `~/.opencode` stay report-only as before.
+- **OpenCode session tool output (report-only; added after the 21:47 run, before any further run).** OpenCode writes the output of every command and tool call of any running session under `~/.local/share/opencode`. That includes the coordinator's own session, and the shell call that launches the harness. Rule:
+  - **Counted, not failed:** new or rewritten files and subdirectories strictly inside `shell/` or `tool-output/` there, matched by exact first path segment. The results record only `session_output_count`, never the names.
+  - **Still fails the run:** deletions there; symlinks (never followed; a store replaced by a link shows as removed and added); names with `.`, `..` or empty segments; look-alikes such as `shell-evil/` or `tool-output.bak`; and every other path under the OpenCode and Codex directories, such as auth, config, `storage/`, `snapshot/` or a file directly in the data directory.
 - **Request (1 call).** One titled session (so no title request) with `Reply with exactly: OK` goes through the full managed handshake. Then `descendants`, accounting (subscription: tokens only, cost null), `record complete`, `detach` and `status`. The run stops after the first successful request. The 3 remaining calls are reserved for retries, title or compaction observations only with the coordinator's go, and the harness does not send them by itself.
 - **Pass:** exactly one `primary` request, null costs, settlement `window`, `detach` succeeded, and `status` is clean.
 - **Recorded:**
@@ -98,7 +101,11 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
 - **Codex window: not read.** The repository has no standalone reader of the Codex `account/rateLimits/read` (`scripts/usage_codex_host.js` is a host bridge that receives limits from the Codex app), so the before and after windows are `unobserved`.
 - **Observed:**
   - **Attempt 1** (9 November 2026, 21:05 CET, harness `3a3ee91`, `--chatgpt-model auto`) stopped at its first step with the blocker "the openai integration offers no 'Sign in with ChatGPT' OAuth method". 0 calls were spent (chatgpt 0 of 4), no sign-in happened, and cleanup was verified. See [the diagnosis](#chatgpt-sign-in-method-lookup-diagnosis).
-  - The request run itself has not run yet.
+  - **Attempt 2** (9 November 2026, 21:47 CET, `--chatgpt-model auto`):
+    - **Observed:** the "Sign in with ChatGPT" flow through the isolated server completed with the user's interactive browser sign-in. OpenCode then listed 18 `openai` models: `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`, each with a `-fast` twin. None had cost metadata, and none matched a name hint.
+    - **`auto` refused as designed,** before any reservation: 0 calls, chatgpt 0 of 4. On a listing without costs or hints, an explicit `--chatgpt-model` is required; the coordinator will pass `openai/gpt-5.5`.
+    - **False positive:** the post-run check reported "the user's .local/share/opencode changed during the run". The unexpected names were `shell/<project>/sh_*.out` files written for the coordinator's own OpenCode session, now report-only under the rule above.
+    - **Unobserved:** the request.
 
 ### ChatGPT sign-in method lookup (diagnosis)
 

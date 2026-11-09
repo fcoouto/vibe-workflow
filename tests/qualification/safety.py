@@ -486,7 +486,9 @@ def verify_plugin_chain(plugins, guard, pending, guard_outcome, guard_reason, pe
 # ---------------------------------------------------------------- user directories and cleanup
 
 def snapshot_tree(root, max_entries=20000, max_depth=8):
-    """`{relative name: mtime_ns}` for files and `{name/: None}` for directories under `root` (no contents)."""
+    """`{relative name: mtime_ns}` for files and `{name/: None}` for directories under `root` (no contents). A symlink
+    (to a file or a directory) is `{name: "symlink:<mtime_ns>"}`, never followed, so replacing a directory by a link
+    shows as `name/` removed and `name` added."""
     root = Path(root)
     if not root.is_dir():
         return {}
@@ -496,13 +498,20 @@ def snapshot_tree(root, max_entries=20000, max_depth=8):
         depth = 0 if relative == "." else relative.count(os.sep) + 1
         if depth >= max_depth:
             dirs[:] = []
-        for name in dirs:
+        for name in list(dirs):
+            if os.path.islink(os.path.join(current, name)):
+                dirs.remove(name)
+                files.append(name)
+                continue
             found[os.path.normpath(os.path.join(relative, name)) + "/"] = None
         for name in files:
             try:
-                found[os.path.normpath(os.path.join(relative, name))] = os.lstat(os.path.join(current, name)).st_mtime_ns
+                info = os.lstat(os.path.join(current, name))
             except FileNotFoundError:
                 continue
+            link = stat.S_ISLNK(info.st_mode)
+            found[os.path.normpath(os.path.join(relative, name))] = "%s%d" % (SYMLINK, info.st_mtime_ns) if link \
+                else info.st_mtime_ns
         if len(found) > max_entries:
             raise Refused("too many entries to snapshot under a user directory")
     return found
@@ -546,6 +555,37 @@ def check_real_home(home=None, passwd_home=None):
     if Path(home or Path.home()).resolve() != real:
         raise Refused("HOME is not the owner's real home; run as python3 -B tests/qualification/opencode_live.py")
     return real
+
+
+# OpenCode writes every session's command and tool output to these stores under ~/.local/share/opencode (for
+# example `shell/<project>/sh_*.out` for each command the coordinator's own OpenCode session runs). New or rewritten
+# files strictly inside them are report-only (counted, never named); deletions, symlinks and every other path stay
+# unexpected.
+SESSION_OUTPUT_DIR = ".local/share/opencode"
+SESSION_OUTPUT_STORES = ("shell", "tool-output")
+SYMLINK = "symlink:"
+
+
+def session_output(diff, before, after):
+    """The added or changed names strictly inside a session-output store: exact first segment, no `.`, `..` or empty
+    segments, and neither side a symlink."""
+    found = []
+    for name in diff["added"] + diff["changed"]:
+        segments = name[:-1].split("/") if name.endswith("/") else name.split("/")
+        linked = any(str(side.get(name, "")).startswith(SYMLINK) for side in (before, after))
+        if len(segments) >= 2 and segments[0] in SESSION_OUTPUT_STORES and not linked \
+                and all(segment not in ("", ".", "..") for segment in segments):
+            found.append(name)
+    return found
+
+
+def classify_snapshots(before, after, stores=False):
+    """`(unexpected, desktop_churn, session_output)` names between two snapshots of one OpenCode user directory;
+    `stores` (the session-output rule) applies only to `SESSION_OUTPUT_DIR`."""
+    diff = compare_snapshots(before, after)
+    session = session_output(diff, before, after) if stores else []
+    unexpected, churn = classify_changes({k: [n for n in v if n not in session] for k, v in diff.items()})
+    return unexpected, churn, session
 
 
 def classify_changes(diff):

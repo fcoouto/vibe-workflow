@@ -800,7 +800,7 @@ class SessionOutputChurnTests(Temp):
         os.utime(path, ns=(stamp, stamp), follow_symlinks=False)
 
     def classify(self, root, before, session_output=True):
-        return safety.classify_snapshots(before, safety.snapshot_tree(root), session_output=session_output)
+        return safety.classify_snapshots(before, safety.snapshot_tree(root), stores=session_output)
 
     def test_new_and_rewritten_tool_output_is_report_only(self):
         root = self.tree()
