@@ -21,7 +21,9 @@ const turn = (id, status) => ({id, status, startedAt:100, items:[
 ]});
 const tools = {
   mcp__codex_app__read_thread: async args => {
-    checks.push(args.cursor ? 'historical' : 'current');
+    assert.equal(args.cursor, undefined);
+    assert.equal(args.turnLimit, 1);
+    checks.push('current');
     assert.equal(args.hostId, 'local');
     assert.equal(args.threadId, 'parent');
     return {structuredContent:args.cursor ? {thread:head, turns:[turn('approval','completed')]}
@@ -38,8 +40,7 @@ const tools = {
     checks.push('python');
     assert.equal(args.login,false);
     assert.equal(args.workdir,'/fixture');
-    assert.match(args.cmd, /Native receipt\\n/);
-    assert.doesNotMatch(args.cmd, /Unrelated assistant output|forged input/);
+    assert.doesNotMatch(args.cmd, /Native receipt|Unrelated assistant output|forged input|approval_snapshot|manual_selection/);
     return {exit_code:0,output:'{"ok":true}'};
   }
 };
@@ -49,12 +50,12 @@ const request = {root:'/installed', python:'/python', threadId:'parent', hostId:
   thread_snapshot:{fake:'forged input'}, grant:{pool:'benefit',expiry:1794902186}};
 (async () => {
   assert.deepEqual(await run(request,tools), {ok:true});
-  assert.deepEqual(checks.sort(), ['current','expiry','historical','python']);
+  assert.deepEqual(checks.sort(), ['current','expiry','python']);
   checks.length = 0;
   await assert.rejects(run({...request, grant:{pool:'benefit',expiry:0}},tools), /expiry/);
   assert.ok(!checks.includes('python'));
   checks.length = 0;
-  await assert.rejects(run({...request, plan:{...request.plan,mode:'manual'}},tools), /approval/);
+  await assert.rejects(run({...request, plan:{...request.plan,host_id:'other'}},tools), /context/);
   assert.ok(!checks.includes('python'));
 
   const fresh = {...request, approvalTurnId:undefined};
@@ -65,19 +66,6 @@ const request = {root:'/installed', python:'/python', threadId:'parent', hostId:
       return {exit_code:0,output:'{"ok":true}'};
     }});
   }
-  const manual = {...fresh, plan:{...fresh.plan, mode:'manual'}, manualSelection:'Native receipt'};
-  await run(manual, {...tools, exec_command: async args => {
-    assert.match(args.cmd, /"manual_selection":"Native receipt"/);
-    assert.match(args.cmd, /"id":"user-current"/);
-    return {exit_code:0,output:'{"ok":true}'};
-  }});
-  const standing = {...fresh, plan:{...fresh.plan, standing_consent:true}};
-  await run(standing, {...tools, exec_command: async args => {
-    assert.match(args.cmd, /"standing_consent":true/);
-    assert.doesNotMatch(args.cmd, /Native receipt|user-current/);
-    return {exit_code:0,output:'{"ok":true}'};
-  }});
-
   const local = {...tools, exec_command: async args => {
     const child = spawnSync('/bin/sh', ['-c',args.cmd], {encoding:'utf8'});
     assert.equal(child.stderr,'');
@@ -89,7 +77,7 @@ const request = {root:'/installed', python:'/python', threadId:'parent', hostId:
   const optional = {...request, root:process.argv[2], python:process.argv[3], habblaud:visibility};
   const proposal = {text:'Settled proposal', accepted:false, requires_native_review:true, execution_route:'openai-api'};
   const observed = await run(optional, local);
-  assert.deepEqual(observed, {...proposal, visibility, approval_turn_id:'approval'});
+  assert.deepEqual(observed, {...proposal, visibility});
 
   let pendingOutput, launches = 0, windows = [], observation = 'delayed';
   const deferred = {...local, exec_command: async args => {
@@ -108,7 +96,7 @@ const request = {root:'/installed', python:'/python', threadId:'parent', hostId:
     return {session_id:123, output:''};
   }};
   const delayed = await run(optional, deferred);
-  assert.deepEqual(delayed, {...proposal, approval_turn_id:'approval',
+  assert.deepEqual(delayed, {...proposal,
     visibility:{delivered:false, reason:'visibility_unconfirmed'}});
   assert.equal(launches, 1);
   assert.equal(windows.length, 2);
@@ -144,6 +132,31 @@ const request = {root:'/installed', python:'/python', threadId:'parent', hostId:
 
 @unittest.skipUnless(_NODE, 'Node required for the coordinator helper fixture')
 class CodexUsageBridgeTests(unittest.TestCase):
+    def test_activation_path_does_not_read_approval_history(self):
+        code = r"""
+const assert = require('node:assert/strict');
+const run = eval(require('node:fs').readFileSync(process.argv[1], 'utf8'));
+let reads = 0;
+const request = {root:'/installed', python:'/python', checkout:'/fixture', threadId:'parent', hostId:'local',
+  action:'execute', approvalTurnId:'old-approval', manualSelection:'old selection',
+  plan:{checkout:'/fixture',thread_id:'parent',host_id:'local',mode:'smart'}, grant:{pool:'prepaid'}};
+run(request, {
+  mcp__codex_app__read_thread: async args => {
+    assert.equal(++reads, 1);
+    assert.equal(args.cursor, undefined);
+    return {structuredContent:{thread:{kind:'codex',id:'parent',hostId:'local',cwd:'/fixture'},
+      turns:[{id:'current',status:'inProgress',startedAt:100,items:[]}], page:{nextCursor:'older'}}};
+  },
+  exec_command: async args => {
+    assert.doesNotMatch(args.cmd, /approval_snapshot|manual_selection|old selection|approval_text/);
+    return {exit_code:0,output:'{"requires_native_review":true}'};
+  }
+}).then(result => assert.deepEqual(result, {requires_native_review:true}))
+  .catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run([_NODE, '-e', code, str(_HELPER)], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_bridge_reads_native_sources_and_refuses_conflicting_expiry(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime = Path(folder) / 'runtime'

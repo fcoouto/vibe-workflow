@@ -176,7 +176,7 @@ def execute(plan, *, thread_snapshot, key_receipt, grant, native_limits=None,
                   stop_at=min(plan.expires_at, plan.grant_expiry - 900),
                   ceiling='subscription_benefit', amount=None, grant_amount=plan.grant_amount,
                   pilot_limit=usage_canary.MAXIMUM_USD_MICROS, task_limit=usage_canary.MAXIMUM_USD_MICROS)
-    config = dict(enabled=True, disabled=False, requested_mode='manual', revision=2, org_revision=1,
+    config = dict(enabled=True, disabled=False, requested_mode='smart', revision=2, org_revision=1,
                   class_name=usage_canary.CLASS_NAME, binding=binding, profile=profile)
     evidence, native = issue(
         plan, thread_snapshot=thread_snapshot, key_receipt=key_receipt, config=config, policy=policy,
@@ -189,5 +189,5 @@ def execute(plan, *, thread_snapshot, key_receipt, grant, native_limits=None,
                 and plan.organization not in current['organizations'], 'canary_state_already_configured')
         controller.configure(dict(version=2, expected_revision=0, expected_org_revision=0,
                                   binding=binding, profile=profile, policy=policy,
-                                  class_name=usage_canary.CLASS_NAME, mode='manual'))
+                                  class_name=usage_canary.CLASS_NAME, mode='smart'))
         return _temporary_run(controller, plan, evidence, binding, profile, native)

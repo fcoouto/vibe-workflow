@@ -16,7 +16,7 @@ class UsageAdmissionTests(unittest.TestCase):
         self.config = dict(revision=3, org_revision=2, binding=dict(
             BINDING, storage_kind='macos_keychain', credential_ref='vcw_' + '0' * 32),
             profile=dict(PROFILE, verified_at=900, valid_until=1800, count_maximum=7),
-            class_name='investigation', enabled=True, disabled=False, requested_mode='manual')
+            class_name='investigation', enabled=True, disabled=False, requested_mode='manual', live_consent=True)
         self.task = task(provider='openai-api')
         self.task['native']['windows'][0].update(observed_at=980, reset_at=2000)
         self.grant = usage_admission.Grant('org', 'project', 800, 10000, 950, 'platform-credit-grants', 'benefit')
@@ -60,12 +60,14 @@ class UsageAdmissionTests(unittest.TestCase):
             with self.subTest(changes=tuple(changes)), self.assertRaises(BudgetError):
                 self.validate(candidate, **changes)
 
-    def test_manual_explicit_selection_and_independent_reviewer_are_required(self):
-        for change in (dict(enabled=False), dict(disabled=True), dict(requested_mode='smart'), dict(binding=BINDING)):
+    def test_active_legacy_mode_allows_auto_and_requires_independent_reviewer(self):
+        self.task['provider'] = 'auto'
+        self.assertEqual(self.validate(self.evidence()), 1750)
+        for change in (dict(enabled=False), dict(disabled=True), dict(live_consent=False), dict(binding=BINDING)):
             with self.subTest(config=tuple(change)), self.assertRaises(BudgetError):
                 self.validate(self.evidence(), config=dict(self.config, **change))
         original = self.task.copy()
-        for change in (dict(provider='auto'), dict(provider='openrouter'), dict(local_preferred=True),
+        for change in (dict(provider='openrouter'), dict(local_preferred=True),
                        dict(reviewer_available=False), dict(reviewer_available=1), dict(api_only='true')):
             self.task = dict(original, **change)
             with self.subTest(task=change), self.assertRaises(BudgetError):
