@@ -87,7 +87,7 @@ An independent agent reviewed the whole branch for behavior and security under
 [Code Review](../policies/06-code-review.md) and
 [Security Review](../policies/04-security-review.md), read-only, and kept its
 detailed report privately outside the repository. It confirmed five findings,
-and its re-check one more; all are fixed on this branch:
+its re-check one more and its final check another; all are fixed on this branch:
 
 | ID | Severity | Finding | Resolution |
 | --- | --- | --- | --- |
@@ -97,13 +97,16 @@ and its re-check one more; all are fixed on this branch:
 | EA-04 | Low | The Codex host procedure promised a replay where a live retry is refused | The procedure describes the refusal |
 | EA-05 | Low | This record was missing | Added |
 | EA-06 | Low | Found by the re-check: the shared contract still called the packet binding optional | It now says OpenRouter always requires it and when API Usage may omit it |
+| EA-07 | Low | Found by the final check: this record called the base `1dbce05` the reviewed candidate | It names head `54f6b5b` and its base separately |
 
 A focused re-check by the same reviewer at head `44c374a` closed EA-01, EA-02
 and EA-03 with passing regression tests (196 tests, 1 skipped) and found the two
 instruction additions free of conflicts. It reported one leftover sentence for
-EA-04 and the new EA-06; both were corrected in the final documentation commit.
-Live clients, providers, real credentials and exhaustive concurrency were not
-requalified.
+EA-04 and the new EA-06; both were corrected afterwards. A final check at head
+`2d7e49c` confirmed those corrections against the code, found EA-07 and nothing
+else, and passed package validation, the prepared-instruction tests (31) and
+the link check; EA-07 was then corrected. Live clients, providers, real
+credentials and exhaustive concurrency were not requalified.
 
 ## Verification boundary
 
