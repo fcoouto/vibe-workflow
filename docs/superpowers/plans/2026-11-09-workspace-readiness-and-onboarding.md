@@ -54,7 +54,7 @@ A tool with no official support for a client is `not supported` with the reason,
 
 ## 5. `prepare-my-workspace`
 
-Modes: **verify** (steps 1 and 7 only; changes nothing) and **prepare** (all steps). Identify the destination (host, container, VM, WSL, remote) first.
+Modes: **verify** (run `workspace status` and report; writes nothing, not even the private records) and **prepare** (all steps). Identify the destination (host, container, VM, WSL, remote) first.
 
 1. **Check:** run `workspace status`. Done: table produced.
 2. **Tell:** list what is missing with its value; say you are proceeding; list coming user actions. Done: message shown.
@@ -68,7 +68,7 @@ Plugin upgrades use the [upgrade procedure](../../../skills/prepare-my-workspace
 
 ## 6. `onboard-my-project`
 
-0. **Readiness:** run `workspace status`. For missing required items: announce what and why, run preparation for them as a separate operation, then resume. Items still `needs-user` are carried to the report; only work that depends on them waits.
+0. **Readiness:** run `workspace status`. For missing required items: announce what and why, run preparation for them as a separate operation, then resume. Items still `needs-user` are carried to the report; only work that depends on them waits. For an inspect-only or plan-only request, report what is missing and propose preparation without running it.
 1. **Target and clients:** confirm the checkout (never the toolkit checkout just because it is current) and the clients to enroll (installed supported clients by default). Respect inspect-only and plan-only requests.
 2. **Sources and inspection:** resolve the Toolkit revision once (resume at a recorded one; trusted offline copy marked unverified); inspect instructions, configuration, commands, project needs and baseline checks.
 3. **Preferences:** the standing questions, one at a time.
@@ -79,12 +79,12 @@ Plugin upgrades use the [upgrade procedure](../../../skills/prepare-my-workspace
 
 ## 7. OpenCode as a full plugin client (decided 2026-11-10)
 
-Designed in its own [brief](../specs/2026-11-10-opencode-full-client-brief.md); brainstorming, review and the implementation plan continue in a separate session (slice R4).
+Designed in its own brief, `docs/superpowers/specs/2026-11-10-opencode-full-client-brief.md` (draft PR #190); brainstorming, review and the implementation plan continue in a separate session (slice R4).
 
 ## 8. Enforcement in code
 
 - Readiness command: same answer every run.
-- Plan validator (`runtime/onboarding.py` `_validate_proposal`): a coverage row with `applicability: applicable` may not end `omit`, whatever its `mandatory` flag; `blocked` needs a non-empty prerequisite and resume condition.
+- Plan validator (`runtime/onboarding.py` `_validate_proposal`): an applicable row may end `omit` only when it links a recorded user decision through `decision_ids` (for example an optional item the user declined); mandatory rows never end `omit`; `blocked` needs a non-empty prerequisite and resume condition.
 - Startup warning: an enrolled client whose workspace record shows missing required items warns once, naming when it was checked.
 - `validate.py`: the package version must differ from the latest release tag when packaged content changed since that tag.
 
@@ -103,7 +103,7 @@ Each slice: short design note, implementer, independent review, affected tests (
 
 ## 10. Decisions (2026-11-10)
 
-1. **Consent:** an onboarding or preparation request authorizes installing the listed required items at machine or user scope, announced first. Costs, licensing, accounts, external data, authentication changes, sign-ins and trust approvals still wait for the user. Policies 10 and 11 and `upgrade.md` are amended to say this once.
+1. **Consent:** an onboarding or preparation request (not inspect-only or plan-only) authorizes installing the listed required items at machine or user scope, announced first. Costs, licensing, accounts, external data, authentication changes, sign-ins and trust approvals still wait for the user. Policies 10 and 11 and `upgrade.md` are amended to say this once.
 2. **Docker and other unused foundation items** are removed (see §3).
 3. **OpenCode** becomes a full client (R4).
 
@@ -112,7 +112,7 @@ Each slice: short design note, implementer, independent review, affected tests (
 - Onboarding on a machine missing a required plugin in any installed client announces it with its value, prepares it and resumes without a second request; independent onboarding work continues meanwhile.
 - Every requirement × client cell is reported; unsupported ones carry a reason; no cell is `ready` without its required observation.
 - Verify mode changes nothing; every edited client config has a backup and undo restores it; permissions, models and other plugins are preserved.
-- A plan with an applicable component marked `omit` is rejected.
+- A plan with an applicable component marked `omit` without a linked user decision is rejected.
 - A client with lapsed trust or a stale copy is never reported ready.
 - Readiness stays within its time budget; tests use fake client executables.
 - The requirements list, preparation and onboarding contain no Docker or other removed item.
