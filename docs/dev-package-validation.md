@@ -30,3 +30,23 @@ Disposable homes and fixtures were removed afterwards.
 
 - Desktop UI behavior, PreToolUse, PostToolUse, Stop and Interrupt (no tool call or completed turn ran), timing distributions and Claude Code execution.
 - The user's own Codex home: after moving to the export it lists all five hooks as `modified`, because the trusted fingerprint covers the earlier package content. Startup stays skipped there until the user approves the hooks again.
+
+## Real sessions on this machine
+
+After refreshing both clients from the export of `main` at `5b5c923` (285 files, no `tests/`, 6.4 MB per installed copy) and the user's re-approval of the Codex hooks:
+
+| Client | Enrolled checkout | Unrelated repository |
+| --- | --- | --- |
+| Codex 0.167.0, the user's own home through `app-server` | SessionStart completed in 224 ms with the workflow context; all five hooks `trusted` | Completed in 175 ms with no entries |
+| Claude Code 2.1.311, `claude --init-only` with the user's settings | SessionStart returned the workflow context | Completed with status 0 in 153 ms and no context |
+
+The Codex runs used ephemeral threads with a read-only sandbox, and each turn was interrupted once the hook completed; no model reply was produced. Claude Code ran the plugin from the export folder itself (`CLAUDE_PLUGIN_ROOT` was `~/.cache/vibe-workflow/dev-package`), not from its cache copy.
+
+## Release layout
+
+The published release branch at `8e32da7` installs the repository root as the plugin. In a disposable Codex home its installed copy was 17–18 MB with `.git` and `tests/`, and `plugin_content_hash` failed with `Onboarding file size limit exceeded` on a Git pack file over the 1 MiB per-file limit.
+
+`scripts/package.py --release --commit-onto origin/codex/marketplace-release` at `4e196d6` wrote `bc4991a`, one commit on `8e32da7` whose root holds only `.agents`, `.claude-plugin`, `LICENSE` and `plugins`. That commit was served from a local bare repository over HTTP (Codex rejects `file://` and `git://` sources) and nothing was pushed to GitHub:
+
+- A Codex install from `8e32da7` followed by `codex plugin marketplace upgrade` refreshed the installed copy in place to 6.4 MB, byte-identical to the release build, without `.git` or `tests/`; the bundle scan passed at 6,014,356 bytes and five untrusted hooks were listed from the new copy.
+- Claude Code accepted the layout from a checkout of the prototype branch used as a folder marketplace: the plugin resolved to `plugins/vibe-workflow`, nine skills loaded and SessionStart returned the context. Its Git transport accepts only `https://`, so a Git-sourced Claude install was not observed.
