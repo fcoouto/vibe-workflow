@@ -84,7 +84,9 @@ claude plugin install vibe-workflow@vibe-workflow-local
 
 Clients copy the whole source folder, including ignored local files and Git history, so the export holds only tracked files (stage new files first) and leaves out `tests/` and its runner `scripts/test_sharded.py`, which nothing installed uses; evidence links from `docs/` into `tests/` resolve only in a checkout. Each run replaces the previous build and passes package validation. `--prune-caches` also removes cached copies no client still uses; with `--dry-run` it lists them instead, while the build still runs. A project whose instructions link into a removed cached copy needs onboarding again.
 
-Start a new session in each client afterwards. To refresh after changes, rerun `python3 -B scripts/package.py`, then reinstall (`codex plugin remove` then `add`; `claude plugin uninstall` then `install`). Codex asks to approve the changed hooks again.
+Start a new session in each client afterwards. To refresh after changes, rerun `python3 -B scripts/package.py`, then reinstall (`codex plugin remove` then `add`; `claude plugin uninstall` then `install`). Codex asks to approve the changed hooks again. Claude Code runs a folder marketplace's plugin from the folder itself, so a rebuild already reaches its new sessions.
+
+To publish a release to the Codex Git marketplace, follow [Publish a release](docs/release.md).
 
 Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and `python3 -B -m unittest discover -s tests` (full suite; takes many minutes). Neither establishes live client behavior.
 
