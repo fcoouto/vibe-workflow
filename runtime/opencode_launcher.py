@@ -76,8 +76,9 @@ SERVER_START = 30
 MAX_PAGES = 200
 # Claude Agent `native.rateLimit` windows -> (window id, length in seconds). Window units are thousandths of the
 # provider's utilization, so a manifest route's `demand` for these windows is in the same unit.
-RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
-WINDOW_UNITS = 1000
+# Single source: routing_observations (the collector's seed and host paths read the same values).
+RATE_WINDOWS = routing_observations.RATE_WINDOWS
+WINDOW_UNITS = routing_observations.WINDOW_UNITS
 # The unit each stored window declares, in the field `unit`: the collector's own name, which it compares with the
 # manifest route's `window_unit` and refuses when missing or different.
 WINDOW_UNIT = routing_observations.WINDOW_UNIT
