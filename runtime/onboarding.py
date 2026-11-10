@@ -13,6 +13,7 @@ import subprocess
 import uuid
 
 from runtime.entry_budget import observe_within
+from runtime.onboarding_coverage import coverage_problem
 from runtime.startup import PROJECT_FILE, StartupError, checkout, _checkout_identity, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
 from runtime.state import runtime_fingerprint
 
@@ -1727,21 +1728,7 @@ def _validate_proposal(plan, *, shared=False, references=None):
         coverage_actions = references["coverage_actions"] if references is not None else action_ids
         for field, allowed in (("actions", coverage_actions), ("qualification_evidence", evidence_ids), ("decision_ids", decision_ids)):
             _require(set(_strings(row[field])) <= allowed, "Unknown coverage reference")
-        problem = None
-        if not row["reason"]:
-            problem = "Applicability/optional omission needs an explicit reason"
-        elif row["mandatory"] and row["outcome"] == "omit":
-            problem = "Mandatory adoption cannot be omitted by runtime inapplicability"
-        elif row["outcome"] == "planned" and not row["actions"]:
-            problem = "Planned adoption lacks exact proposed actions"
-        elif row["outcome"] == "blocked":
-            problem = row["blocker"] or "Required prerequisite is missing"
-        elif row["outcome"] == "reuse" and (row["current_adoption"] != "qualified" or not any(
-                evidence[ref]["kind"] == "behavior" and evidence[ref]["inputs"] for ref in row["qualification_evidence"])):
-            problem = "Equivalent integration lacks observed behavioral evidence on pinned inputs"
-        elif row["mandatory"] and any(decisions[ref]["conflict"] and decisions[ref]["mode"] == "preserve"
-                                       for ref in row["decision_ids"]):
-            problem = "Preserved conflicting behavior blocks mandatory adoption"
+        problem = coverage_problem(row, evidence, decisions)
         if problem:
             blockers.append(_block(row["id"], problem, row["resumption"] or "Resolve assessment/decision and supply evidence"))
     assessment = plan["semantic_assessment"]

@@ -265,8 +265,8 @@ def fast_selection(chosen, timings):
 
 def fast_banner(skipped, timings):
     lines = ["FAST TIER: a development aid, NOT a release gate.",
-             f"  Skipping {skipped} slow module(s) listed in the timings file; run without --fast "
-             "before completion or merge."]
+             f"  Skipping {skipped} slow module(s) listed in the timings file; "
+             "select tests for the change and run the full suite for a release."]
     if not timings:
         lines.append("  No usable timings file, so every module counts as fast.")
     return "\n".join(lines)
