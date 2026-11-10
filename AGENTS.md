@@ -11,6 +11,7 @@ Then pass each gate below before the action it guards. No task is too small for 
 | Before you… | Read in full first |
 | --- | --- |
 | Change anything: a file, setting, branch, commit or PR. Documentation, one-line fixes and settings commands count. | [Policy index](policies/00-index.md) and [development guide](docs/development.md), then every policy whose **Load when** row applies |
+| Review a change, judge whether work is complete or a PR is ready, or resume earlier work. These count even when you change nothing. | [Policy index](policies/00-index.md), then every policy whose **Load when** row applies |
 | Open or update a PR, mark it `[READY]` or merge | [Merge Readiness](policies/08-merge-readiness.md) and the [development guide](docs/development.md) |
 | Select checks, push or create a release archive | [Development guide](docs/development.md) |
 | Do client-specific work | [Clients](clients/index.md); load only the entry whose trigger applies |
@@ -19,7 +20,7 @@ Then pass each gate below before the action it guards. No task is too small for 
 | Add a client adapter | [Client interface layout](docs/onboard-my-project-plan.md#client-scope-and-adapter-organization) |
 | Create or change a skill or workflow instruction | [Instruction authoring](#instruction-authoring) |
 
-A question that changes nothing and dispatches no worker needs only the memory read: answer it from the actual files, then stop.
+A factual question about the repository needs only the memory read: answer it from the actual files, then stop. A request to review, to judge completion or readiness, to resume work or to dispatch a worker is not such a question; it passes its gate.
 
 - A file whose complete, current text is already in context need not be read again.
 - The owning file is the rule. A link, a routing summary or a line in this file is not the procedure: follow triggered dependencies to their complete local procedures, and read applicable directory instructions.
@@ -40,7 +41,7 @@ Run them in the task worktree. Install, lint, types and build are unavailable: n
 
 - Validate the package: `python3 -B scripts/validate.py`
 - Tests, selected by what the change can break: `python3 -B scripts/test_sharded.py <module-or-glob>...` (without names it runs the full suite, about 10 minutes)
-- After changing a policy or instruction file, before validating or testing: `python3 -B scripts/read_instructions.py --prepare`
+- After changing a policy or instruction file, before committing, validating or testing: `python3 -B scripts/read_instructions.py --prepare`
 - Dev package for both clients: `python3 -B scripts/package.py`
 
 ## Git and collaboration
@@ -48,8 +49,9 @@ Run them in the task worktree. Install, lint, types and build are unavailable: n
 The [development guide](docs/development.md) owns these rules and their detail.
 
 - The primary checkout on `main` is for reading and coordinating. Never change a tracked file or commit there, however small the change. A command that rewrites a tracked file, such as a feature setting, counts.
-- Make every change in a task worktree on its own branch from current `main`, created with the client's native worktree tool when it has one. If the tool leaves a detached `HEAD`, create the branch (`git switch -c <type>/<topic>`) before the first edit.
-- Finish a change without asking again: run the checks, commit, push the task branch and open a draft PR against `main` titled `[BLOCKED] <title>`, its body from the [PR template](templates/pull-request.md). The [setup record](docs/setup.md#decisions) holds this publishing choice; a request that says only "edit" or "commit" does not narrow it. Stop earlier only when the user says to.
+- Make every change in a task worktree on its own branch from current `main`. Create the worktree with the client's native worktree tool when it has one. Your next command there, before any edit or settings command, is `git switch -c <type>/<topic>`, unless the tool already put the worktree on a named branch.
+- Publish a completed change without asking again: commit, run the checks on the committed change, push the task branch and open a draft PR against `main` titled `[BLOCKED] <title>`, its body from the [PR template](templates/pull-request.md). The [setup record](docs/setup.md#decisions) holds this publishing choice; a request that says only "edit" or "commit" does not narrow it. Stop earlier only when the user says to.
+- The draft PR publishes the change; it does not finish it. The [PR lifecycle](policies/08-merge-readiness.md#pr-lifecycle) owns what follows (review, `[READY]`, merge), within the merge permission in the setup record.
 - Report what you ran, its result and what you did not run. Report package validation and observed client execution separately.
 
 ## Working agreements
