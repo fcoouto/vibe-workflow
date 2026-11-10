@@ -149,11 +149,15 @@
       ]
     },
     "clients/external-delegation.md": {
-      "sha256": "6057b04d4054ef32ed19bd063792ea1da71c2692b487644d0eedd4a1639cc269",
+      "sha256": "d7edf20fd137a78f448572f73c287015d81c333391671fe2fc7e181b517ff06a",
       "ranges": [
         [
           1,
-          123
+          131
+        ],
+        [
+          132,
+          138
         ]
       ]
     },
@@ -698,7 +702,7 @@
       ]
     },
     "skills/openrouter-proposals/SKILL.md": {
-      "sha256": "c1f8c66c57d6de029999a4d7ecebe9c83fbf60c806e23618aa63ff9f5af837bd",
+      "sha256": "7e75c9365258f1912d6366f869f52a70a0f3eef59d0e93a9bf8a6a7adbe043e4",
       "ranges": [
         [
           1,
@@ -707,7 +711,7 @@
       ]
     },
     "skills/openrouter-proposals/references/procedure.md": {
-      "sha256": "90b0622c7f915fd729e4b4ddd959fe129d232a75fae00ab831fac2d30ff1776e",
+      "sha256": "b54cbacf5f57e5b8629d2b630539c2df56060f20f79e0962e3c592e0513c5360",
       "ranges": [
         [
           1,
@@ -719,7 +723,7 @@
         ],
         [
           155,
-          206
+          214
         ]
       ]
     },
