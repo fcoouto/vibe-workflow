@@ -3,6 +3,7 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -85,9 +86,12 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(launcher.route_identity('openrouter_proposal', model='model/v1', provider='p', effort=None),
                          dict(provider='openrouter', model='model/v1', effort='none', harness='openrouter-proposal'))
         self.assertEqual(launcher.route_identity('openrouter_worker', model='v/m', provider='p', effort='low'),
-                         dict(provider='openrouter', model='v/m', effort='low', harness='opencode'))
+                         dict(provider='openrouter', model='v/m', effort='low', harness='opencode provider openrouter'))
         self.assertEqual(launcher.route_identity('opencode', provider='claude-agent', model='haiku'),
-                         dict(provider='claude-agent', model='haiku', effort='none', harness='opencode'))
+                         dict(provider='claude-agent', model='haiku', effort='none',
+                              harness='claude-agent-sdk via opencode'))
+        self.assertEqual(launcher.route_identity('opencode', provider='openai', model='gpt', effort='high')['harness'],
+                         'opencode provider openai')
         self.assertEqual(launcher.route_identity('api_usage', model='gpt', effort='low'),
                          dict(provider='openai', model='gpt', effort='low', harness='api'))
         self.assertEqual(launcher.pinned_endpoint('openrouter_worker', provider='p'), 'p')
@@ -95,6 +99,30 @@ class IdentityTests(unittest.TestCase):
         for host, fields in (('unknown', dict(model='m')), ('codex_native', {}), ('opencode', dict(model='m'))):
             with self.subTest(host=host), self.assertRaises(ValueError):
                 launcher.route_identity(host, **fields)
+
+    def test_opencode_hosts_name_the_harness_exactly_as_the_shim_does(self):
+        """C3-1b: `routing.attach` checks an admission with the shim's `harnessFor(provider)`, so every host that
+        runs inside OpenCode must yield that name, or no admission could ever attach. This runs the real shim."""
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('node is not installed; the shim harnessFor comparison was not run')
+        providers = ['claude-agent', 'openrouter', 'openai', 'anthropic', 'z-ai']
+        shim = Path(launcher.__file__).resolve().parent / 'adapters' / 'opencode_plugin.ts'
+        script = ('const { harnessFor } = await import(process.argv[1]);'
+                  'console.log(JSON.stringify(JSON.parse(process.argv[2]).map(harnessFor)))')
+        done = subprocess.run([node, '--input-type=module', '-e', script, shim.as_uri(), json.dumps(providers)],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        expected = dict(zip(providers, json.loads(done.stdout.strip().splitlines()[-1])))
+        self.assertEqual(expected['claude-agent'], 'claude-agent-sdk via opencode')
+        for provider in providers:
+            with self.subTest(provider=provider):
+                self.assertEqual(launcher.route_identity('opencode', provider=provider, model='m')['harness'],
+                                 expected[provider])
+                self.assertEqual(launcher.shim_harness(provider), expected[provider])
+        # An OpenRouter worker runs in OpenCode on the `openrouter` provider; its endpoint is pinned separately.
+        self.assertEqual(launcher.route_identity('openrouter_worker', provider='p', model='v/m')['harness'],
+                         expected['openrouter'])
 
     def test_choice_is_the_one_assignment_shape_admit_accepts(self):
         choice = launcher.choice('openrouter_proposal', 'api', model='model/v1', provider='p', effort=None)
@@ -275,6 +303,16 @@ class LaunchTests(Stores):
                                                  settings_path=self.settings, source=self.source),
                          (None, 'route_not_entitled'))
 
+    def test_an_endpoint_ambiguous_manifest_entitles_no_route(self):
+        """C3-1b: the identity has no endpoint, so a manifest qualifying one identity at two endpoints is refused."""
+        from tests.test_routing_observations import gateway_route
+        gateway = launcher.route_identity('openrouter_proposal', model='model/v1', provider='p', effort=None)
+        source = collector.StaticSource([gateway_route('gw-p', endpoint='p'), gateway_route('gw-q', endpoint='q')])
+        admission = dict(route='gw-p', billing_class='gateway',
+                         route_identity=routing.route_identity(*gateway.values()))
+        self.assertEqual(launcher.admitted_check(admission, host='openrouter_proposal', catalog=[gateway],
+                                                 source=source), (None, 'route_not_entitled'))
+
     def test_a_dollar_admission_always_runs_the_dollar_preflight(self):
         """S4: the dollar checks follow the admitted billing class; no caller flag can skip them."""
         from runtime import openrouter_settings
@@ -283,13 +321,15 @@ class LaunchTests(Stores):
         self.fund()
         self.source = collector.StaticSource([gateway_route(), sub_route()],
                                              dict(gw=[gateway_window(self.now)], sub=[sub_window(self.now)]), ready)
-        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=1)
+        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=1,
+                      checkout=str(self.checkout), activation=dict(ref='activation:openrouter:s:r1'))
         gateway = launcher.route_identity('openrouter_proposal', model='model/v1', provider='p', effort=None)
         service = Reconciling(self.settings, self.ledger_path, project=self.checkout)
         self.addCleanup(service.close)
         with mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
             refused = launcher.launch(service, host='openrouter_proposal', catalog=[gateway], transport=Transport(),
-                                      assignment=dict(attempt_id='g1', task='task-g1', scope=SCOPE,
+                                      assignment=dict(attempt_id='g1', task='task-g1',
+                                                      scope=launcher.assignment_scope(self.checkout),
                                                       choice=dict(gateway, funding='api')),
                                       job=launcher.unplanned_job('researcher', SCOPE, 'proposal'))
         self.assertEqual(refused, dict(state='blocked', reason='ledger_reconcile_pending', attempt_id='g1'))

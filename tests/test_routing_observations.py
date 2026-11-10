@@ -58,6 +58,20 @@ def ready(route, scope):
     return dict(state='ready', scope=scope, ref='ref-' + route['route'])
 
 
+ACTIVATION = 'activation:openrouter:scope-id:r4'
+SECRET = 'sk-or-v1-never-in-observations'  # stands in for any settings content the collector must not copy
+
+
+def report(root, **extra):
+    """An enabled, ready `openrouter_settings.status` report for `checkout`, with secret-like content in the fields
+    the collector must never copy."""
+    value = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=4, checkout=str(root),
+                 activation=dict(ref=ACTIVATION, funding_ref='openrouter-provider-limits'), scope_id='scope-id',
+                 auth_data='/private/' + SECRET, opencode='/bin/' + SECRET, proposal_store='/data/' + SECRET)
+    value.update(extra)
+    return value
+
+
 class Refused(Exception):
     pass
 
@@ -168,19 +182,22 @@ class CollectorTests(Stores):
 
     def test_the_collector_reads_no_secret_and_makes_no_network_call(self):
         self.fund()
-        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=4)
+        status = report(self.root)
         with ExitStack() as stack:
             for target, name in ((usage_credentials, 'resolve_key'), (usage_credentials, '_read_key'),
                                  (socket.socket, 'connect'), (socket, 'create_connection'),
                                  (urllib.request, 'urlopen'), (subprocess, 'Popen'),
                                  (routing, 'ensure_profile'), (routing, 'rank'), (routing, 'admit')):
                 stack.enter_context(mock.patch.object(target, name, refuse(name)))
-            stack.enter_context(mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)))
+            stack.enter_context(mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(status)))
             result = self.collect([sub_route(), gateway_route()],
                                   dict(sub=[sub_window(self.now)], gw=[gateway_window(self.now)]))
         self.assertEqual(set(kept(result)), {'sub', 'gw'})
-        self.assertEqual(kept(result)['gw']['credential'], dict(state='ready', scope=SCOPE, ref='ref-gw'))
+        # C3-1b: the gateway credential comes from the status report (the source's `ref-gw` is ignored).
+        self.assertEqual(kept(result)['gw']['credential'],
+                         dict(state='ready', scope=collector.assignment_scope(self.root), ref=ACTIVATION))
         self.assertEqual(result['seen'], dict(openrouter_revision=4))
+        self.assertNotIn(SECRET, json.dumps(result))
 
     def test_the_local_source_reads_the_manifest_and_private_window_store(self):
         collector.store_window(self.settings, 'sub', sub_window(self.now))
@@ -249,14 +266,14 @@ class CollectorTests(Stores):
         the two can never disagree; a default path is never opened."""
         self.fund()
         collector.store_window(self.settings, 'gw', gateway_window(self.now))
-        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=2)
+        status = report(self.root, revision=2)
         local = collector.default_source(self.settings)
         source = collector.StaticSource([gateway_route()], local.windows, ready)
         from runtime import usage_settings
         with mock.patch.object(command, 'default_settings', refuse('default_settings')), \
                 mock.patch.object(command, 'default_ledger', refuse('default_ledger')), \
                 mock.patch.object(usage_settings, 'directory', refuse('usage_settings.directory')), \
-                mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
+                mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(status)):
             result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
                                        ledger_path=self.ledger_path, source=source)
             elsewhere = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.root / 'other' / 's.json',
@@ -266,6 +283,37 @@ class CollectorTests(Stores):
         self.assertEqual(collector.default_source(self.root / 'other' / 's.json').windows('gw', self.now), [])
         with self.assertRaises(TypeError):
             collector.collect(str(self.root), dict(scope=SCOPE), source=source)  # both paths are required
+
+
+class ManifestEndpointTests(Stores):
+    """C3-1b: the route identity has no endpoint, so a manifest qualifying one identity at two endpoints is refused
+    as a whole (fail closed) rather than letting either route stand for the other."""
+
+    def write(self, routes):
+        path = self.root / 'routes.json'
+        path.write_text(json.dumps(dict(version=1, routes=routes)))
+        return path
+
+    def test_two_qualified_routes_differing_only_by_endpoint_refuse_the_manifest(self):
+        ambiguous = [gateway_route('gw-p', endpoint='p'), gateway_route('gw-q', endpoint='q', account='other')]
+        missing = [gateway_route('gw-p', endpoint='p'), {k: v for k, v in gateway_route('gw-x').items()
+                                                        if k != 'endpoint'}]
+        for routes in (ambiguous, missing):
+            with self.subTest(routes=[route['route'] for route in routes]):
+                with self.assertRaisesRegex(ValueError, 'route_manifest_endpoint_ambiguous'):
+                    collector.load_manifest(self.write(routes))
+                source = collector.StaticSource(routes, dict(gw=[gateway_window(self.now)]), ready)
+                self.assertEqual(collector.manifest_check(source), ['route_manifest_invalid'])
+                with self.assertRaisesRegex(ValueError, 'route_manifest_endpoint_ambiguous'):  # prepare fails closed
+                    self.collect(routes, dict(gw=[gateway_window(self.now)]))
+
+    def test_one_endpoint_per_identity_is_accepted(self):
+        routes = [gateway_route('gw-p', endpoint='p'), gateway_route('gw-p2', endpoint='p', account='other'),
+                  gateway_route('gw-q', endpoint='q', status='unverified'),  # not qualified: never confusable
+                  gateway_route('gw-m2', endpoint='q', model='model/v2')]  # another identity
+        self.assertEqual(collector.load_manifest(self.write(routes))['routes'], routes)
+        self.assertEqual(collector.manifest_check(collector.StaticSource(routes)), [])
+        self.assertEqual(collector.load_manifest(), json.loads(collector.MANIFEST.read_text()))  # shipped one is valid
 
 
 class GatewayDerivationTests(Stores):
@@ -289,6 +337,10 @@ class GatewayDerivationTests(Stores):
         result = self.collect([self.gateway()], self.windows, project=self.repo)
         route = kept(result)['gw']
         self.assertEqual((route['integration_enabled'], route['funding_verified']), (True, True))
+        # C3-1b: the credential is the real report's checkout scope and activation reference, nothing else.
+        self.assertEqual(route['credential'], dict(state='ready', scope=collector.assignment_scope(self.repo),
+                                                   ref=status['activation']['ref']))
+        self.assertEqual(route['credential']['scope'], collector.assignment_scope(status['checkout']))
         window = result['observations']['pools']['gw']['windows'][0]
         self.assertEqual((window['organization'], window['organization_revision']), ('or-org', 1))
         self.assertEqual(result['observations']['pools']['gw']['billing_class'], 'gateway')
@@ -299,6 +351,39 @@ class GatewayDerivationTests(Stores):
         openrouter_settings.disable(self.repo, dict(expected_revision=status['revision']))
         self.assertEqual(excluded(self.collect([self.gateway()], self.windows, project=self.repo)),
                          dict(gw='integration_disabled'))
+
+    def test_a_gateway_credential_is_ready_only_from_an_enabled_ready_report(self):
+        """C3-1b: each not-ready report leaves the gateway route out with its fixed reason; a source credential never
+        stands in, and no settings content reaches observations or seen."""
+        self.fund()
+        cases = (('disabled', report(self.repo, enabled=False, activation=None), 'integration_disabled'),
+                 ('route_not_listed', report(self.repo, routes=['workers']), 'integration_disabled'),
+                 ('local_unavailable', report(self.repo, local_configuration='unavailable'), 'integration_disabled'),
+                 ('not_configured', report(self.repo, local_configuration='not_configured'), 'integration_disabled'),
+                 ('no_activation', report(self.repo, activation=None), 'credential_unavailable'),
+                 ('activation_without_ref', report(self.repo, activation=dict(ref='')), 'credential_unavailable'),
+                 ('no_checkout', report(self.repo, checkout=None), 'credential_unavailable'))
+        for name, status, reason in cases:
+            with self.subTest(name), mock.patch.object(openrouter_settings, 'status', lambda cwd, s=status: dict(s)):
+                result = self.collect([self.gateway(credential=dict(state='ready', scope=SCOPE, ref='x'))],
+                                      self.windows, project=self.repo)
+                self.assertEqual(excluded(result), dict(gw=reason))
+                self.assertEqual(result['seen'], dict(openrouter_revision=4))
+                self.assertNotIn(SECRET, json.dumps(result))
+        with mock.patch.object(openrouter_settings, 'status', lambda cwd: report(self.repo)):
+            result = self.collect([self.gateway()], self.windows, project=self.repo)
+        self.assertEqual(kept(result)['gw']['credential'],
+                         dict(state='ready', scope=collector.assignment_scope(self.repo), ref=ACTIVATION))
+        self.assertEqual(set(kept(result)['gw']['credential']), {'state', 'scope', 'ref'})
+        self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_a_busy_lock_leaves_the_gateway_without_a_credential(self):
+        busy = mock.Mock(side_effect=openrouter_settings.SettingsError('openrouter_operation_busy'))
+        with mock.patch.object(openrouter_settings, 'status', busy):
+            result = self.collect([self.gateway()], self.windows, project=self.repo)
+        self.assertEqual(excluded(result), dict(gw='openrouter_operation_busy'))
+        self.assertEqual((result['observations']['routes'], result['seen']), ([], dict(openrouter_revision=None)))
+        self.assertEqual(busy.call_count, 1)
 
     def test_a_disabled_or_unfunded_organization_is_funding_unverified(self):
         self.assertEqual(excluded(self.collect([self.gateway()], self.windows, project=self.repo)),
@@ -326,6 +411,7 @@ class GatewayDerivationTests(Stores):
                 elapsed = time.monotonic() - started
         self.assertEqual(excluded(result), dict(gw='openrouter_operation_busy'))
         self.assertEqual(set(kept(result)), {'sub'})  # subscription routes are unaffected
+        self.assertNotIn('credential', kept(result)['sub'])
         self.assertEqual(result['seen'], dict(openrouter_revision=None))
         self.assertEqual((admission.call_count, status.call_count), (0, 1))  # no retry loop
         self.assertLess(elapsed, 5)

@@ -8,6 +8,7 @@ the caller gives, never under a path derived from HOME.
 from contextlib import closing, contextmanager
 import copy
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,9 +57,9 @@ class StaticSource:
 class LocalSource:
     """The production source: the shipped manifest, the private window store and no secret.
 
-    Binding readiness for dollar routes is not read here yet: every direct API and gateway route reports no
-    credential (`credential_unavailable`), which fails closed. No dollar route is qualified in the manifest until
-    user decision 5 (C.3 design 7.1), and the hosts that need one (C3-4a, C3-5) wire their binding reader."""
+    It reports no credential. For gateway routes the collector derives binding readiness itself from the cached
+    `openrouter_settings.status` report and never asks a source; direct API routes (API Usage) stay unwired, so they
+    report no credential (`credential_unavailable`) and fail closed until that wiring lands after the release."""
 
     def __init__(self, settings_path=None):
         self.settings_path = settings_path
@@ -82,17 +83,44 @@ def default_source(settings_path=None):
     return LocalSource(settings_path)
 
 
+def assignment_scope(checkout):
+    """The assignment `scope` credential readiness is compared with: a digest of the checkout's real path."""
+    return 'project:' + hashlib.sha256(os.fsencode(os.path.realpath(checkout))).hexdigest()[:32]
+
+
+def validate_routes(routes):
+    """`routes`, or ValueError when a manifest is unusable. The route identity has no endpoint field yet, so two
+    `qualified` routes with the same identity but different endpoints (an absent endpoint counts as one) could be
+    confused at dispatch: the whole manifest is refused instead of picking one."""
+    if type(routes) is not list:
+        raise ValueError('route_manifest_invalid')
+    endpoints = {}
+    for route in routes:
+        if type(route) is dict and route.get('status') == 'qualified':
+            identity = tuple(json.dumps(route.get(key)) for key in routing.ROUTE_IDENTITY)
+            if endpoints.setdefault(identity, route.get('endpoint')) != route.get('endpoint'):
+                raise ValueError('route_manifest_endpoint_ambiguous')
+    return routes
+
+
+def manifest_routes(source):
+    """The source's manifest routes after `validate_routes`; every reader of a manifest goes through here."""
+    return validate_routes(source.manifest())
+
+
 def load_manifest(path=MANIFEST):
     value = json.loads(Path(path).read_text())
     if type(value) is not dict or value.get('version') != 1 or type(value.get('routes')) is not list:
         raise ValueError('route_manifest_invalid')
+    validate_routes(value['routes'])
     return value
 
 
 def manifest_check(source=None):
-    """The activation-gate data check (C.3 design 4.2): at least one route is `qualified`."""
+    """The activation-gate data check (C.3 design 4.2): the manifest is valid and at least one route is
+    `qualified`."""
     try:
-        routes = (source or default_source()).manifest()
+        routes = manifest_routes(source or default_source())
     except (OSError, ValueError):
         return ['route_manifest_invalid']
     return [] if any(type(route) is dict and route.get('status') == 'qualified' for route in routes) \
@@ -243,6 +271,17 @@ def _openrouter(project):
         return None, 'openrouter_operation_busy' if str(error) == 'openrouter_operation_busy' else 'openrouter_unavailable'
 
 
+def _gateway_credential(report):
+    """Binding readiness `{state, scope, ref}` of an enabled, ready OpenRouter report, or None. Only the checkout and
+    the activation reference are read; no secret, path or other settings content enters the result."""
+    activation = report.get('activation')
+    ref = activation.get('ref') if type(activation) is dict else None
+    checkout = report.get('checkout')
+    if not routing._text(ref) or not routing._text(checkout):
+        return None
+    return dict(state='ready', scope=assignment_scope(checkout), ref=ref)
+
+
 def _funding_verified(data, organization, now):
     """A ledger check only: the organization is enabled and its balance observation is at most 900 s old."""
     org = (data or {}).get('organizations', {}).get(organization) if routing._text(organization) else None
@@ -275,7 +314,11 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
     It reads only the stores the calling service uses: `settings_path` locates the private window and entitlement
     files and `ledger_path` the ledger whose organizations fund dollar routes. It never opens a default path.
     `observations` is the snapshot `routing.admit` takes plus `excluded`, one fixed reason per route left out;
-    `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed)."""
+    `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed).
+
+    A gateway route's credential is derived here from the same cached `status` report, never from the source: it is
+    ready only when the report is enabled, lists the host's route and is locally `ready`, and names an activation.
+    A manifest `validate_routes` refuses raises ValueError, so `prepare` fails closed."""
     now = int(time.time())
     source = source if source is not None else default_source(settings_path)
     data = _ledger_data(ledger_path)
@@ -292,7 +335,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         excluded.append(dict(route=route.get('route') if type(route) is dict and routing._text(route.get('route'))
                              else None, reason=reason))
 
-    for spec in source.manifest():
+    for spec in manifest_routes(source):
         reason = _manifest_reason(spec)
         if reason is None:
             reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
@@ -319,6 +362,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
                     and report.get('local_configuration') == 'ready'):
                 leave(spec, 'integration_disabled')
                 continue
+            credential = _gateway_credential(report)
+            if credential is None:
+                leave(spec, 'credential_unavailable')
+                continue
             route['integration_enabled'] = True
         if spec['pool'] not in pools:
             windows = []
@@ -344,7 +391,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
                 leave(spec, 'funding_unverified')
                 continue
             route['funding_verified'] = True
-            route['credential'] = source.credential(copy.deepcopy(spec), scope)
+            route['credential'] = credential if billing == 'gateway' else source.credential(copy.deepcopy(spec), scope)
         routes.append(route)
     used = {route['pool'] for route in routes}
     observations = dict(now=now, routes=routes[:routing.MAX_ROUTES],
