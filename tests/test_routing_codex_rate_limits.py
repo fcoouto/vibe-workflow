@@ -315,6 +315,25 @@ class RefreshTests(Sandbox):
         self.assertEqual(self.refresh()['state'], 'stored')
         self.assertEqual(self.stored()['7d']['used'], 420)
 
+    def test_a_fresh_seed_is_reused_and_a_reader_observation_replaces_it(self):
+        now = int(time.time())
+        seed = dict(pool=POOL, window='7d', used=1, limit=1000, reset_at=now + 60, length=604800, event_id='e')
+        collector._store_seed(self.settings, seed, now)
+        self.assertEqual(self.refresh()['state'], 'fresh')  # data already produced: no process
+        self.assertEqual(self.spawns(), 0)
+        self.assertEqual(self.refresh(force=True)['state'], 'stored')  # the operator's read
+        stored = self.stored()['7d']
+        self.assertEqual(stored['used'], 420)
+        self.assertNotIn('source', stored)  # a host observation now; status shows `host`
+        self.assertEqual(collector.window_status(self.settings, int(time.time()))['windows'][0]['source'], 'host')
+
+    def test_a_stale_seed_is_read_and_replaced(self):
+        old = int(time.time()) - collector.FRESH_SECONDS - 5
+        seed = dict(pool=POOL, window='7d', used=1, limit=1000, reset_at=old + 60, length=604800, event_id='e')
+        collector._store_seed(self.settings, seed, old)
+        self.assertEqual(self.refresh()['state'], 'stored')
+        self.assertNotIn('source', self.stored()['7d'])
+
     def test_a_reading_missing_a_needed_window_is_stale(self):
         self.refresh()
         outcome = self.refresh(need=('5h', '7d'), scenario='ok')

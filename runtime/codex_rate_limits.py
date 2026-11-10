@@ -335,8 +335,8 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
     """Make the pool's reading fresh if it is not: `{state, reason?, windows?}`, never raises.
 
     `fresh`: already fresh (a settled launch's, a seed's or an earlier read's), no process. `busy`: another reader
-    holds the pool. `backoff`: the last read failed less than FAILURE_BACKOFF s ago (`force`, the operator's
-    command, ignores this). `stored`: read and stored as host observations. `failed`: a fixed reason."""
+    holds the pool. `backoff`: the last read failed less than FAILURE_BACKOFF s ago. `force` (the operator's
+    command) reads even then, and even over a fresh reading. `stored`: read and stored as host observations. `failed`: a fixed reason."""
     try:
         if not force and _fresh(settings_path, need, int(time.time())):
             return dict(state='fresh')
@@ -344,7 +344,7 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             if not held:
                 return dict(state='busy', reason='reader_busy')
             now = int(time.time())
-            if _fresh(settings_path, need, now):
+            if not force and _fresh(settings_path, need, now):  # another reader may just have stored one
                 return dict(state='fresh')
             folder = _store_dir(settings_path)
             failure = _state(folder)
