@@ -141,7 +141,7 @@ class LauncherProbes:
     """Runs the chosen probes. `env` supplies `start(project, settings, ledger, environ)` (a host with `request`,
     `rpc`, `port`, `directory`, `workdir` and `stop`), `unauthenticated(host, path)` (an HTTP status), `launch(...)`
     (opencode_launcher.launch), `sleep`, `signin(host, note)` (the interactive ChatGPT sign-in), `which(name, path)`
-    and `codex_window()` (lane R7's read-only Codex reading, or None)."""
+    and `codex_window()` (one Codex rate-limit read: `{windows}` or `{reason}`)."""
 
     def __init__(self, base, ledger, run_id, env, real_home, user, redact, a5_model=None, no_variant_model=None,
                  accept_outside_reads=False, demand_log=None):
@@ -319,7 +319,7 @@ class LauncherProbes:
         entry = live_common.listed_model(host, route[0], route[1], self.env.sleep)
         if entry is None or route[2] not in live_common.variants_of(entry):
             raise Blocker("the A5 model and variant are not listed after the sign-in")
-        before = self.env.codex_window()
+        before = self.env.codex_window()  # never fails A5: a failed read is recorded with its fixed reason
         reservation = Reservation(self.ledger, "isolation", "A5 outside read (prompt and tool turn)", CALLS["A5"],
                                   self.run_id)
         try:
@@ -331,7 +331,8 @@ class LauncherProbes:
             if reservation.settled is None:
                 reservation.settle_unknown()
             facts["sent"] = reservation.settled  # kept when the ledger raised on an overrun
-        facts["demand"] = self.record_demand("chatgpt", "A5", [before, self.env.codex_window()])
+        after = self.env.codex_window() if "windows" in (before or {}) else None  # no second read after a failed one
+        facts["demand"] = self.record_demand("chatgpt", "A5", [before, after])
         reply = assistant_text(host, prompted)
         effects = [facts["evaluated"][key]["effect"] for key in ("read_decoy", "read_auth")]
         facts["decoy_in_reply"] = word in (reply or "")
@@ -354,13 +355,18 @@ class LauncherProbes:
         return session
 
     def record_demand(self, pool, label, readings):
-        """Codex readings around A5 (lane R7's reader); None from an absent reader is reported, never guessed."""
-        before, after = readings
-        if before is None or after is None:
-            return dict(measured=False, reason="codex_reader_unavailable")
-        for name, value in (("before", before), ("after", after)):
-            self.log_reading(demand.from_windows(value, "%s:%s" % (label, name), pool))
-        return dict(measured=True)
+        """Codex readings around A5 (`env.codex_window()`: `{windows}` or `{reason}`); a failed read is reported with
+        the reader's fixed reason, never guessed, and never fails the probe."""
+        for value in readings:
+            if "windows" not in (value or {}):
+                return dict(measured=False, reason=(value or {}).get("reason") or "codex_reading_missing")
+        declared = all(value.get("declared", True) for value in readings)
+        for name, value in zip(("before", "after"), readings):
+            reading = demand.from_windows(value["windows"], "%s:%s" % (label, name), pool)
+            if reading is not None and not declared:
+                reading["declared"] = False  # windows the manifest does not declare yet: a measurement, not a contract
+            self.log_reading(reading)
+        return dict(measured=True) if declared else dict(measured=True, declared=False)
 
     def log_reading(self, reading):
         if self.demand_log is not None and reading is not None:
@@ -483,8 +489,11 @@ def plan(probes):
     A1-A3 share one server, A5 has its own clean one, A4/A6/A7 share the real-HOME one."""
     chosen = set(probes)
     servers = sum(1 for group in ({"A1", "A2", "A3"}, {"A5"}, set(REAL_GROUP)) if group & chosen)
-    return dict(expected_calls=calls_needed(probes), servers=servers, processes=1 + 2 * servers,
-                processes_note="opencode --version once, then per server `opencode serve` and the shim's routing child",
+    codex_reads = 2 if "A5" in chosen else 0  # one zero-token Codex rate-limit read before and one after the A5 launch
+    return dict(expected_calls=calls_needed(probes), servers=servers, processes=1 + 2 * servers + codex_reads,
+                codex_reads=codex_reads,
+                processes_note="opencode --version once, then per server `opencode serve` and the shim's routing child, "
+                               "plus a short-lived `codex app-server` per Codex read around A5",
                 wall_time="about 1 min plus the interactive ChatGPT sign-in when A5 runs (up to --signin-timeout)")
 
 

@@ -207,10 +207,10 @@ class FakeEnv:
         return "/usr/local/bin/%s" % name
 
     def codex_window(self):
-        """Lane R7's reader stand-in: a list of windows, or None (the reader is not on main yet)."""
+        """The Codex reader stand-in: `{windows}` from the scripted list, else the reader's `codex_unavailable`."""
         self.codex_reads = getattr(self, "codex_reads", 0) + 1
         windows = self.knobs.get("codex_windows")
-        return windows.pop(0) if windows else None
+        return dict(windows=windows.pop(0)) if windows else dict(reason="codex_unavailable")
 
 
 class HttpFake:
