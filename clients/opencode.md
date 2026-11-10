@@ -255,12 +255,14 @@ When the launcher cannot confirm a launch it records `uncertain`. The hold then 
   - When the table is full, an abandon that adds a key is `ledger_capacity_reached`, and the hold stays uncertain.
   - Outcome: `abandoned` with `settlement{kind: window, released: {}, debited, observed_units: null, resolution{basis: abandon}}`.
 - **When a debit clears.** A debit clears only when a validated `prepare` snapshot carries a qualifying observation of the same pool and window. A qualifying window:
-  - is fixed, not `rolling`;
+  - is the only window with that id in the snapshot, and is explicitly fixed (`rolling: false` exactly; a missing `rolling`, `null` or `0` never qualifies, although admission still treats a missing key as fixed);
   - is `fresh` with known `used`, a numeric `reset_at` and a positive `length`;
   - is current (`reset_at` after the snapshot's `now`);
   - began (`reset_at − length`) no later than `now` and at least 60 s (the command's clock drift bound) after the abandon.
 
-  The abandoned request's units cannot be in such a window. The debit is removed once, in the admission transaction, whatever the admission outcome, with an audit row `window_debit_cleared`.
+  The abandoned request's units cannot be in such a window. The debit is removed once, in the admission transaction, whatever the admission outcome, with an audit row `window_debit_cleared`. The row's id is longer than any client `event_id` may be and unique per clearing, and it is inserted without replacement, so it never overwrites a client event or an earlier audit row.
+
+  The admission transaction is a growing write. When the ledger record is above its soft limit (`SOFT_RECORD`), `prepare` commits nothing, so a debit never clears through `prepare` then: it fails closed and stays counted until the record shrinks.
 
   A newer `now`, `epoch_at` or `snapshot_id` alone never clears a debit: neither does the same window seen later, a rolling window, a window with no reset or length, or one that has not begun or has already reset. A `used` figure cannot show that it already includes the abandoned units, so usage numbers never clear a debit. Nothing is released on lease expiry or time alone.
 - **Status.** `ledger.reconcile.reconcile_subscription{count, ids, more}` lists the uncertain subscription holds and `ledger.reconcile.window_debits{count, keys, more}` the debited window keys (16 per list). While such a hold is open, `reconcile_hint` carries a fixed subscription text, appended to the dollar text when both apply. A debit alone needs no operator action and leaves the hint `null`.
