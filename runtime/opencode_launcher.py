@@ -54,6 +54,17 @@ WORKER_RULES = ([dict(action='*', resource='*', effect='deny')]
 # Actions the shim also tightens to `deny` for the attached session (`deny_actions` only grow).
 DENY_ACTIONS = ('external_directory', 'shell', 'bash', 'webfetch', 'websearch')
 
+# The server's environment is an allowlist (as in the live-qualified harness, tests/qualification/server.py):
+# HOME, because OpenCode and the Claude Agent provider find their own sign-ins and data under it; USER, which the
+# macOS keychain lookup of a provider sign-in uses (the harness ran live with it); LANG for text decoding; TMPDIR for
+# OpenCode's temporary files; XDG_DATA_HOME only when the user moved OpenCode's data (its `auth.json` sign-ins)
+# there. PATH is fixed, never the caller's, so no project-local tool directory reaches the server.
+ENV_ALLOWED = ('HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME')
+SERVER_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+# Fixed switches (names present in the 2.2.6 binary; their effect on project config is unobserved).
+SERVER_FLAGS = dict(OPENCODE_DISABLE_AUTOUPDATE='1', OPENCODE_DISABLE_MODELS_FETCH='1',
+                    OPENCODE_DISABLE_PROJECT_CONFIG='1')
+
 REQUEST_TIMEOUT = 60  # seconds per HTTP request to the server
 IDLE_TIMEOUT = 1800  # seconds an attempt may run before its launch counts as unconfirmed
 IDLE_POLL = 0.5
@@ -101,10 +112,12 @@ def rule_effect(rules, action):
 
 
 def host_environment(environ):
-    """The environment for a process the launcher starts: no credential-like name (the shim's rule) and no
-    `OPENCODE_*` setting that could load another config, plugin or server password."""
-    return {name: value for name, value in environ.items()
-            if not adapter.credential_name(name) and not name.startswith('OPENCODE_')}
+    """The environment for a process the launcher starts: only the ENV_ALLOWED names the caller has, plus the fixed
+    SERVER_PATH. Everything else stays out, credential-like names and the variables that load code or config into
+    the server (`NODE_OPTIONS`, `BUN_*`, `PYTHON*`, `LD_*`/`DYLD_*`, `OPENCODE_*`, `XDG_CONFIG_HOME`) included."""
+    found = {name: environ[name] for name in ENV_ALLOWED if isinstance(environ.get(name), str)
+             and not adapter.credential_name(name)}
+    return dict(found, PATH=SERVER_PATH)
 
 
 def protected_paths(settings_path, ledger_path):
@@ -117,11 +130,14 @@ def protected_paths(settings_path, ledger_path):
 
 
 def server_config(settings_path, ledger_path, plugin):
-    """The server config the launcher loads: the routing shim pinned to the managed service's own stores, with the
-    routing state directories protected from model edits."""
+    """The inline server config (`OPENCODE_CONFIG_CONTENT`): the routing shim as the only plugin, pinned to the
+    managed service's own stores with the routing state directories protected from model edits; no MCP server,
+    formatter or LSP server; and the worker profile's permission rules. Whether OpenCode lets a project or global
+    config add to or override it is unobserved (clients/opencode.md#managed-launcher, pre-canary probe)."""
     options = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
                    protected_paths=protected_paths(settings_path, ledger_path))
-    return {'$schema': 'https://opencode.ai/config.json', 'plugins': [dict(package=str(plugin), options=options)]}
+    return {'$schema': 'https://opencode.ai/config.json', 'plugins': [dict(package=str(plugin), options=options)],
+            'mcp': {}, 'formatter': False, 'lsp': False, 'permissions': [dict(rule) for rule in WORKER_RULES]}
 
 
 # -- the host ----------------------------------------------------------------------------------------------------
@@ -199,11 +215,12 @@ def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', e
         (plugin / 'index.ts').write_text('export { default } from %s\n' % json.dumps(str(SHIM)))
         password = secrets.token_urlsafe(32)
         env = host_environment(os.environ if environ is None else environ)
-        env.update(OPENCODE_CONFIG_CONTENT=json.dumps(server_config(settings_path, ledger_path, plugin)),
-                   OPENCODE_SERVER_PASSWORD=password, OPENCODE_DISABLE_AUTOUPDATE='1')
+        env.update(SERVER_FLAGS, OPENCODE_CONFIG_CONTENT=json.dumps(server_config(settings_path, ledger_path, plugin)),
+                   OPENCODE_SERVER_PASSWORD=password)
         port, log = _free_port(), workdir / 'server.log'
+        executable = shutil.which(opencode) or opencode  # resolved with the caller's PATH; the server gets SERVER_PATH
         with open(os.open(log, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as out:
-            process = subprocess.Popen([opencode, 'serve', '--hostname', '127.0.0.1', '--port', str(port)],
+            process = subprocess.Popen([executable, 'serve', '--hostname', '127.0.0.1', '--port', str(port)],
                                        cwd=directory, env=env, stdout=out, stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL, start_new_session=True)
         deadline = time.monotonic() + timeout
