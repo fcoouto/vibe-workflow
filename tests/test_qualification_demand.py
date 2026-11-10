@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sys
 import time
+from unittest import mock
 
 from runtime import routing_observations
 from tests.qualification import demand, launcher_probes, live_modes, safety
@@ -150,7 +151,8 @@ class LiveCodexReadingTests(Temp):
     def test_one_read_goes_through_the_reader_and_stores_nothing(self):
         env = self.env()
         found = env.codex_window()
-        self.assertEqual(sorted(found), ["windows"])
+        self.assertEqual(sorted(found), ["declared", "windows"])
+        self.assertIs(found["declared"], False)  # the shipped manifest declares no chatgpt windows yet
         self.assertEqual([(w["id"], w["used"]) for w in found["windows"]], [("5h", 100)])
         self.assertEqual(env.counts["codex_reads"], 1)
         received = [e["received"].get("method") for e in self.spawns() if "received" in e]
@@ -170,11 +172,39 @@ class LiveCodexReadingTests(Temp):
                                                 a5_model="openai/gpt-6-luna#none", demand_log=log)
         result = probes.run(["A1", "A2", "A3", "A5"])["A5"]
         self.assertIs(result["passed"], True, json.dumps(result)[:1500])
-        self.assertEqual(result["demand"], dict(measured=True))
-        self.assertEqual(live.counts["codex_reads"], 2)  # one before and one after the launch, nothing else
+        self.assertEqual(result["demand"], dict(measured=True, declared=False))
+        self.assertEqual(live.counts["codex_reads"], 2)
+        self.assertEqual([r.get("declared") for r in log.readings()], [False, False])
+        report = demand.report(log)
+        self.assertEqual([m.get("declared") for m in report["per_launch"]], [False, False])
+        self.assertIs(report["suggestion"]["chatgpt"]["5h"]["declared"], False)  # one before and one after the launch, nothing else
         self.assertEqual(sum(1 for e in self.spawns() if e.get("spawned")), 2)
         self.assertEqual([r["label"] for r in log.readings()], ["A5:before", "A5:after"])
         self.assertEqual(demand.suggest(demand.measure(log.readings()))["chatgpt"]["5h"]["max_delta"], 30)
+
+    def manifest(self, windows):
+        from runtime import codex_rate_limits as reader
+        return dict(version=1, routes=[], pools={reader.POOL: dict(windows=[dict(id=key) for key in windows])})
+
+    def test_the_manifest_s_declared_windows_are_used_when_it_declares_any(self):
+        for declared, expected in ((["5h"], "windows"), (["7d"], "codex_window_undeclared")):
+            with self.subTest(declared=declared):
+                env = self.env()
+                with mock.patch.object(routing_observations, "load_manifest", return_value=self.manifest(declared)):
+                    found = env.codex_window()
+                self.assertIn(expected, (found.get("reason"), "windows" if "windows" in found else None))
+                if "windows" in found:
+                    self.assertIs(found["declared"], True)
+        with mock.patch.object(routing_observations, "load_manifest", side_effect=ValueError("route_manifest_invalid")):
+            self.assertEqual(self.env().codex_window(), dict(reason="route_manifest_invalid"))
+
+    def test_declared_readings_carry_no_mark(self):
+        log = demand.DemandLog(self.tmp / demand.FILE)
+        log.append(reading("A5:before", 100, 1000, pool="chatgpt"))
+        log.append(reading("A5:after", 130, 1010, pool="chatgpt"))
+        report = demand.report(log)
+        self.assertNotIn("declared", report["per_launch"][1])
+        self.assertNotIn("declared", report["suggestion"]["chatgpt"]["5h"])
 
     def test_a_failed_read_records_its_fixed_reason_and_never_fails_A5(self):
         for scenario, reason in (("exit_at_once", "codex_exited"), (None, "codex_unavailable")):

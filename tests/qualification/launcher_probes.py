@@ -360,9 +360,13 @@ class LauncherProbes:
         for value in readings:
             if "windows" not in (value or {}):
                 return dict(measured=False, reason=(value or {}).get("reason") or "codex_reading_missing")
+        declared = all(value.get("declared", True) for value in readings)
         for name, value in zip(("before", "after"), readings):
-            self.log_reading(demand.from_windows(value["windows"], "%s:%s" % (label, name), pool))
-        return dict(measured=True)
+            reading = demand.from_windows(value["windows"], "%s:%s" % (label, name), pool)
+            if reading is not None and not declared:
+                reading["declared"] = False  # windows the manifest does not declare yet: a measurement, not a contract
+            self.log_reading(reading)
+        return dict(measured=True) if declared else dict(measured=True, declared=False)
 
     def log_reading(self, reading):
         if self.demand_log is not None and reading is not None:

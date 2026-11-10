@@ -96,17 +96,24 @@ class LiveEnv:
 
     def codex_window(self):
         """One read of the ChatGPT pool's windows through runtime/codex_rate_limits.read_windows (zero tokens, one
-        short-lived `codex app-server`, the reader's own timeout and stop sequence): `{windows: [window]}`, or
-        `{reason}` with the reader's fixed reason. A5 reads once before and once after its launch only. Nothing is
+        short-lived `codex app-server`, the reader's own timeout and stop sequence): `{windows: [window], declared}`,
+        or `{reason}` with the reader's fixed reason. A5 reads once before and once after its launch only. Nothing is
         stored: no routing settings or window store (the user's or a temporary one) is read or written, so two reads
-        in the same second are both kept (a store keeps only the newer of two). The shipped manifest declares no
-        windows for the pool yet, so the read accepts every window the reader understands (`WINDOW_IDS`)."""
-        from runtime import codex_rate_limits as reader
+        in the same second are both kept (a store keeps only the newer of two). The shipped manifest's declared
+        windows for the pool are used when it declares any; only when it declares none does the read accept every
+        window the reader understands (`WINDOW_IDS`), marked `declared: False`."""
+        from runtime import codex_rate_limits as reader, routing_observations
         self.counts["codex_reads"] += 1
-        manifest = dict(pools={reader.POOL: dict(windows=[dict(id=key) for key in sorted(reader.WINDOW_IDS.values())])})
+        try:
+            manifest = routing_observations.load_manifest()
+        except (OSError, ValueError):
+            return dict(reason="route_manifest_invalid")
+        declared = bool(reader.declared_windows(manifest))
+        if not declared:
+            manifest = dict(pools={reader.POOL: dict(windows=[dict(id=key) for key in sorted(reader.WINDOW_IDS.values())])})
         try:
             return dict(windows=reader.read_windows(command=self.codex_command(), environ=self.codex_environ,
-                                                    manifest=manifest))
+                                                    manifest=manifest), declared=declared)
         except reader.ReadError as error:
             return dict(reason=str(error) if str(error) in reader.REASONS else "codex_reader_failed")
         except (OSError, ValueError):  # never fails A5: recorded, and A5 goes on without a ChatGPT sample
