@@ -12,13 +12,13 @@ import os
 from pathlib import Path
 import re
 import stat
-import sys
 import time
 import tomllib
 from types import SimpleNamespace
 
 from runtime import package_manifest
 from runtime import onboarding as d3, startup
+from runtime.codex_layout import installation_versions, system_layer_path as _system_layer_path
 
 
 BEHAVIOR_CASES = ('startup-context', 'pre-tool-enforcement', 'post-tool-handling',
@@ -90,7 +90,7 @@ def _projection_shape(value):
 
 
 def _budget(deadline=None):
-    return dict(paths=0, bytes=0, deadline=deadline if deadline is not None else time.monotonic()+4)
+    return dict(paths=0, bytes=0, deadline=deadline if deadline is not None else time.monotonic()+startup.OBSERVATION_SECONDS)
 
 
 def _read(path, budget, *, absent=False, private=False, limit=d3.MAX_FILE, expected_binding=None):
@@ -262,7 +262,7 @@ def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runti
     scan = bundle_budget if bundle_budget is not None else budget
     scan['paths'] = budget['paths']
     bundle,runtime_digest = _package_scan(root, scan, runtime_sources=runtime_sources)
-    versions = sorted(p.name for p in _children(root.parent, scan) if p.is_dir())
+    versions = installation_versions(root, scan, _children)
     budget['paths'] = scan['paths']
     material = dict(files=observed, bundle=bundle, installation_versions=versions)
     result=dict(digest=d3._digest(material), hook_owner=hook_owner, material=material)
@@ -352,21 +352,6 @@ def collect_setup(witness, accepted_identity, transaction_id, verified_assessmen
     except ObservationError:
         raise startup.StartupError('Actual owned frontend setup witness is required') from None
     return _collect_content(observed,accepted_identity,transaction_id,verified_assessment,predecessor=predecessor)
-
-
-def _system_layer_path(path):
-    alias = Path('/etc')
-    if sys.platform != 'darwin' or path != alias/'codex/config.toml' or not alias.is_symlink():
-        return path
-    # Codex reports the Unix system location even on macOS, where /etc is an OS alias.
-    d3._require(alias.readlink() == Path('private/etc') and alias.lstat().st_uid == 0,
-        'Unexpected macOS system configuration alias')
-    directory = Path('/private/etc')
-    for parent in (directory, directory.parent):
-        info = parent.lstat()
-        d3._require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0,
-            'Unexpected macOS system configuration parent')
-    return directory/'codex/config.toml'
 
 
 def _collect_content(observed, accepted_identity, transaction_id, verified_assessment, *, predecessor=None, capture_reference=None):
@@ -1475,6 +1460,8 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
             result['capabilities'] = dict(reference=binding['receipt'], verified=verified, complete=complete,
                 bootstrap_verified=_bootstrap_verified(content))
         return result, content
+    except startup.ObservationDeadline:
+        raise
     except (startup.StartupError, OSError, ValueError, TypeError, KeyError, StopIteration):
         return None
 
@@ -1502,6 +1489,8 @@ def require_capability(scope, keys, *, task, operation, attempt_ref=None):
     budget = _budget()
     current = startup.acquire_project_entry(SimpleNamespace(client=scope.client,cwd=scope.repository_root),state.PACKAGE,budget=budget)
     fresh = current.resolution.scope
+    if current.resolution.reason == 'observation_deadline':
+        raise startup.ObservationDeadline('Qualification observation deadline exceeded')
     d3._require(fresh is not None and fresh.accepted_scope_digest == scope.accepted_scope_digest
         and fresh.qualification == scope.qualification and fresh.authority_target == scope.authority_target,
         'Qualification scope or observable configuration changed')

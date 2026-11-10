@@ -16,6 +16,7 @@ from types import MappingProxyType
 from runtime.engine import HookResult, evaluate, guarded_mutation
 from runtime.startup import (StartupError, AcceptedScope, RuntimeSettings, PROJECT_FILE, json_object, _canonical_plain, _canonical_freeze,
     _canonical_path, _canonical_binding, _canonical_ref, _canonical_hash, _budgeted_source_read, _entry_budget_check)
+from runtime.state_errors import StateBusy, StateDeadline, StateError, database_failure
 
 
 SCHEMA_VERSION = 2
@@ -256,10 +257,6 @@ CANONICAL_INDEX_SQL = {
     "retired_assignment_id": "CREATE UNIQUE INDEX retired_assignment_id ON retired_identities(assignment_id) WHERE kind='assignment'",
 }
 TABLES = set(TABLE_SQL)
-
-
-class StateError(StartupError):
-    """Sanitized task/state diagnostic, without private record contents."""
 
 
 def _runtime_sources():
@@ -1829,7 +1826,8 @@ def _database(scope, write=False, initialize=False, *, guard_existing=False, his
                     _check_creation(path, creation, db)
         except StateError:
             raise
-        except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+        except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as error:
+            if (failure := database_failure(error, deadline)) is not None: raise failure from error
             raise StateError('Runtime state is unavailable, corrupt, locked or incompatible') from None
         finally:
             if db is not None:
@@ -2343,7 +2341,7 @@ def _unbound_patch_conflict(db, root, context, *, deadline=None):
     uncertain = False
     for task_scope, client, session, task_id in rows:
         if deadline is not None and time.monotonic() >= deadline:
-            raise StateError('Writer observation deadline exceeded')
+            raise StateDeadline('Writer observation deadline exceeded')
         try:
             task = _task(db, task_scope, client, session, task_id)
             if task is not None and not task.get('retirement'):
@@ -2356,7 +2354,7 @@ def _unbound_patch_conflict(db, root, context, *, deadline=None):
         raise StateError('Existing writer inspection exceeds its bound')
     for assignment_id, in assignments:
         if deadline is not None and time.monotonic() >= deadline:
-            raise StateError('Writer observation deadline exceeded')
+            raise StateDeadline('Writer observation deadline exceeded')
         try:
             for record in delegation._ledger(None, db, context=context, assignment_id=assignment_id):
                 for held in record['data']['claims']:

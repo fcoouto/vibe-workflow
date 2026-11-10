@@ -108,7 +108,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
         # reservation guard ('busy'), or, under load, a 0.1 s SQLite lock on artifact registration or
         # task state. Each rejection must leave no reservation of its own; a retry must replay.
         contention = ('D4 transaction busy', 'Evidence authority registration unavailable or locked',
-                      'Runtime state is unavailable, corrupt, locked or incompatible')
+                      'Runtime state is busy')
         rejected = []
         def reserve(_):
             try:
