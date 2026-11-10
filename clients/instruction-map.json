@@ -194,11 +194,11 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "b3e7acf87334698e39d5b6d15d810ff0bd2c2d899f7a70f05b8bdc26677aa05a",
+      "sha256": "b2782b65e0787938e8e6217f3f5a214e7e2749d50a33aea76f34d49b9b07304d",
       "ranges": [
         [
           1,
-          15
+          17
         ]
       ]
     },
@@ -465,11 +465,11 @@
       ]
     },
     "policies/09-workflow-maintenance.md": {
-      "sha256": "ecbb2748d3bb88f5da726d925f7b4f62dd1b5af6ec5d8c13eb98c819fec18f1e",
+      "sha256": "54a707e45fe64352e978c86d018ea466e56d74b17bdc88ba1bf0fa40ec46d86e",
       "ranges": [
         [
           1,
-          51
+          53
         ]
       ]
     },
@@ -487,7 +487,7 @@
       ]
     },
     "policies/11-tool-integrations.md": {
-      "sha256": "7f49d8aeaccf32743e82768f54c97528b7bbf701bc1f6b5c7ca87f2734c72f30",
+      "sha256": "17b295de8e874f39f1d16e34c6a8785881b9ef69a8e7d35af25f0d48b420ef97",
       "ranges": [
         [
           1,
@@ -733,16 +733,25 @@
       ]
     },
     "skills/prepare-my-workspace/SKILL.md": {
-      "sha256": "a1eb5a8864d5f33b302dea0ca0cacc237c94e0f7c9a65d0086e78e06eb8a3c05",
+      "sha256": "365208105727268c954583ab45cf033ddae2a6881910fa0cd150703d6c7de536",
       "ranges": [
         [
           1,
-          12
+          20
+        ]
+      ]
+    },
+    "skills/prepare-my-workspace/references/procedure.md": {
+      "sha256": "5101f243642c6a84f407a73060066f064c298a33986acc82dd1e149b45f81b7a",
+      "ranges": [
+        [
+          1,
+          36
         ]
       ]
     },
     "skills/prepare-my-workspace/references/upgrade.md": {
-      "sha256": "7f65f0f02a53990183abd915e05e5a2001e5ef519a0c636aaac0406d6a116cec",
+      "sha256": "dada72b7c69a7214d5c394e7acf255792bf81674cae70f342fecfbbf257c2c35",
       "ranges": [
         [
           1,
