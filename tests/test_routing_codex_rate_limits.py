@@ -223,6 +223,7 @@ class ExchangeTests(Sandbox):
         child = reader.child_env(self.environ)
         self.assertEqual(child['PATH'], '/usr/bin:/bin')  # relative entries never reach the child
         self.assertEqual(self.entries()[0]['cwd'], '/')
+        self.assertTrue(self.entries()[0]['stderr_devnull'])  # its stderr (which may print tokens) is discarded
 
     def test_codex_home_must_be_absolute(self):
         for value in ('relative/.codex', '.', '~/.codex'):
@@ -548,6 +549,16 @@ class CollectorTests(Sandbox):
 
     def test_a_fresh_reading_spawns_nothing(self):
         self.collect(refresh_windows=True)
+        self.collect(refresh_windows=True)
+        self.assertEqual(self.spawns(), 1)
+
+    def test_entitlement_marked_routes_are_not_read_for(self):
+        for route in ('opencode-openai', 'opencode-openai-2'):
+            collector.mark_not_entitled(self.settings, route, 'chatgpt-plan', int(time.time()))
+        observations = self.collect(refresh_windows=True)['observations']
+        self.assertEqual((self.calls, self.spawns()), ([], 0))
+        self.assertIn(dict(route='opencode-openai', reason='not_entitled'), observations['excluded'])
+        collector.clear_not_entitled(self.settings, 'opencode-openai', 'chatgpt-plan')
         self.collect(refresh_windows=True)
         self.assertEqual(self.spawns(), 1)
 

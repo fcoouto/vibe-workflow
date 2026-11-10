@@ -25,7 +25,9 @@ def send(value):
     sys.stdout.flush()
 
 
-log(spawned=True, env=sorted(os.environ), cwd=os.getcwd(), pid=os.getpid(), pgid=os.getpgid(0))
+null, err = os.stat(os.devnull), os.fstat(2)
+log(spawned=True, env=sorted(os.environ), cwd=os.getcwd(), pid=os.getpid(), pgid=os.getpgid(0),
+    stderr_devnull=(null.st_dev, null.st_ino) == (err.st_dev, err.st_ino))
 if scenario in ('graceful_timeout', 'hang_with_child'):
     signal.signal(signal.SIGTERM, lambda *_: log(signal='SIGTERM', at=time.monotonic()))  # ignored: logged only
 if scenario == 'hang_with_child':
