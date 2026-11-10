@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest import mock
@@ -197,8 +198,10 @@ def managed_self_check(workdir):
     return problems
 ''')
     (folder / 'data').mkdir(exist_ok=True)
-    (folder / 'data' / 'routes.json').write_text(json.dumps(dict(routes=[dict(id='r', status='qualified')])))
-    (folder / 'data' / 'empty.json').write_text(json.dumps(dict(routes=[dict(id='r', status='unverified')])))
+    (folder / 'data' / 'routes.json').write_text(json.dumps(dict(version=1, routes=[dict(id='r', status='qualified')])))
+    (folder / 'data' / 'empty.json').write_text(json.dumps(dict(version=1, routes=[dict(id='r', status='unverified')])))
+    (folder / 'data' / 'bare.json').write_text(json.dumps([dict(id='r', status='qualified')]))
+    (folder / 'data' / 'unversioned.json').write_text(json.dumps(dict(routes=[dict(id='r', status='qualified')])))
     (folder / 'data' / 'policy.md').write_text('# Policy\n\n## Managed projects\n\nText.\n')
     (folder / 'data' / 'other.md').write_text('# Policy\n\nManaged projects are mentioned, not a heading.\n')
     script = folder / 'scripts'
@@ -214,6 +217,8 @@ class ActivationGateTests(Base):
         self.project.mkdir()
         self.package = Path(self.temp.name).resolve() / 'package'
         write_checks(self.package)
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, one_shot=True)  # as only `main()` builds it
 
     def add(self, projects=None, revision=0, service=None):
         change = dict(managed_projects=[str(self.project)] if projects is None else projects)
@@ -229,6 +234,32 @@ class ActivationGateTests(Base):
                           'openrouter_proposals', 'openrouter_workers', 'api_usage', 'instructions'])
         self.assertEqual(command._package(), state.PACKAGE)
 
+    def test_an_in_process_service_refuses_add_and_remove(self):
+        routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
+        plain = command.Service(self.settings, self.ledger)
+        self.addCleanup(plain.close)
+        with mock.patch.multiple(command, default_settings=lambda: self.settings, default_ledger=lambda: self.ledger):
+            factory = command.managed_service(self.project)
+        self.addCleanup(factory.close)
+        with self.gate(('ok', 'module', 'gate_pass:managed_self_check')):
+            for service in (plain, factory):
+                for projects in ([], [str(self.project), str(Path(self.temp.name).resolve())]):
+                    with self.subTest(service=service, projects=projects):
+                        response = self.add(projects, revision=1, service=service)
+                        self.assertEqual((response['state'], response['reason']),
+                                         ('blocked', 'operator_op_not_served'))
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 1)
+        self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [str(self.project)])
+
+    def test_the_one_shot_cli_changes_managed_projects(self):
+        routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
+        stdout = io.BytesIO()
+        request = dict(v=1, op='set', expected_revision=1, change=dict(managed_projects=[]))
+        code = command.main(['set', '--settings', str(self.settings), '--ledger', str(self.ledger)],
+                            stdin=io.BytesIO(json.dumps(request).encode()), stdout=stdout)
+        self.assertEqual((code, json.loads(stdout.getvalue())['state']), (0, 'updated'))
+        self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [])
+
     def test_adding_a_project_is_refused_under_serve(self):
         serving = command.Service(self.settings, self.ledger, serving=True)
         self.addCleanup(serving.close)
@@ -240,20 +271,24 @@ class ActivationGateTests(Base):
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
     def test_the_real_gate_refuses_while_capabilities_are_missing(self):
-        """At C3-0b's base no phase W capability exists yet: the real checks run in children and fail."""
+        """The real checks run in children against the real package, whichever phase W slices are merged. One
+        capability is made missing through the gate's own list; `route_manifest` fails until user decision 5."""
         spawned = []
         real = subprocess.Popen
 
         def spy(argv, **kwargs):
             spawned.append((argv, kwargs))
             return real(argv, **kwargs)
-        with mock.patch.object(command.subprocess, 'Popen', spy):
+        capabilities = command.CAPABILITIES + (('simulated_missing', 'module', 'runtime.c3_0b_absent:managed_self_check'),)
+        with mock.patch.object(command.subprocess, 'Popen', spy), \
+                mock.patch.object(command, 'CAPABILITIES', capabilities):
             response = self.add()
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
-        self.assertIn('collector_and_launcher', response['failing'])
+        self.assertEqual(response['codes']['simulated_missing'], ['self_check_missing'])
+        self.assertIn('route_manifest', response['failing'])
+        self.assertEqual(len(spawned), len(capabilities))
         self.assertEqual(sorted(response['failing']), sorted(response['codes']))
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
-        self.assertEqual(len(spawned), len(command.CAPABILITIES))
         for argv, kwargs in spawned:
             self.assertEqual(argv[:4], [sys.executable, '-I', '-B', '-c'])
             self.assertEqual(argv[5], str(state.PACKAGE))
@@ -278,6 +313,8 @@ class ActivationGateTests(Base):
                  (('gone', 'script', 'scripts/absent.py'), ['self_check_missing']),
                  (('noisy', 'module', 'gate_noisy:managed_self_check'), ['self_check_invalid']),
                  (('manifest', 'manifest', 'data/empty.json'), ['no_qualified_route']),
+                 (('manifest', 'manifest', 'data/bare.json'), ['manifest_invalid']),
+                 (('manifest', 'manifest', 'data/unversioned.json'), ['manifest_invalid']),
                  (('heading', 'heading', 'data/other.md'), ['heading_missing'])]
         for capability, codes in cases:
             with self.subTest(capability), self.gate(('ok', 'module', 'gate_pass:managed_self_check'), capability):
@@ -300,6 +337,35 @@ class ActivationGateTests(Base):
         self.assertEqual(response['codes'], {'slow': ['self_check_timeout']})
         self.assertEqual(len(made), 1)
         self.assertFalse(os.path.exists(made[0]))
+
+    def test_a_grandchild_holding_the_pipe_is_killed_with_its_process_group(self):
+        """The timeout kills the check's whole process group; killing only the child would leave the grandchild
+        holding stdout, alive, and (without the bounded second wait) the gate blocked."""
+        record = Path(self.temp.name).resolve() / 'grandchild.pid'
+        (self.package / 'gate_grandchild.py').write_text(f"""import subprocess, sys, time
+def managed_self_check(workdir):
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    with open({str(record)!r}, 'w') as handle:
+        handle.write(str(child.pid))
+    time.sleep(60)
+    return []
+""")
+        started = time.monotonic()
+        with self.gate(('slow', 'module', 'gate_grandchild:managed_self_check')), \
+                mock.patch.object(command, 'SELF_CHECK_TIMEOUT', 2), mock.patch.object(command, 'SELF_CHECK_REAP', 2):
+            response = self.add()
+        self.assertEqual(response['codes'], {'slow': ['self_check_timeout']})
+        self.assertLess(time.monotonic() - started, 15)
+        pid = int(record.read_text())
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(pid, 9)
+            self.fail('the grandchild survived the gate timeout')
 
     def test_removal_is_always_allowed_one_shot(self):
         routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
@@ -339,8 +405,11 @@ class ManagedServiceTests(unittest.TestCase):
         self.assertIsInstance(service.workflow, routing_gates.D6Workflow)
         self.assertEqual(service.workflow.project, self.checkout)
         self.assertIs(service.workflow._resolve, routing_gates._resolve_scope)
-        self.assertFalse(service.test_inputs or service.serving)
+        self.assertFalse(service.test_inputs or service.serving or service.one_shot)
         self.assertIs(service.handle(b'{"v":1,"op":"status"}')['project_pinned'], True)
+        for projects in ([], [str(self.checkout)]):
+            change = dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=projects))
+            self.assertEqual(service.handle(json.dumps(change).encode())['reason'], 'operator_op_not_served')
 
     def test_a_supplied_scope_resolves_every_locator_and_is_still_checked_against_the_pin(self):
         scope = types.SimpleNamespace(repository_root=self.checkout)

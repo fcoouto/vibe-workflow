@@ -144,6 +144,28 @@ class RoutingSettingsTests(unittest.TestCase):
             with self.subTest(path):
                 self.assertIs(routing_settings.managed_project(path, settings_path=self.path), expected)
 
+    def test_managed_project_compares_file_identity_not_spelling(self):
+        root = Path(self.tmp.name).resolve()
+        checkout = root / 'Proj'
+        (checkout / 'Sub').mkdir(parents=True)
+        (root / 'link').symlink_to(checkout)
+        routing_settings.update(self.path, dict(managed_projects=[str(checkout)]), 0)
+        cases = [(checkout / 'Sub' / '..', True), (root / 'link' / 'Sub', True),
+                 (checkout / 'not-yet' / 'deeper', True),  # a path that does not exist yet, under the root
+                 (root / 'Proj-other', False)]
+        if (root / 'proj').exists():  # a case-insensitive filesystem (the macOS default)
+            cases += [(root / 'proj', True), (root / 'PROJ' / 'sub', True), (root / 'pRoJ' / 'nEw', True)]
+        for path, expected in cases:
+            with self.subTest(path):
+                self.assertIs(routing_settings.managed_project(path, settings_path=self.path), expected)
+
+    def test_managed_project_fails_closed_when_a_path_cannot_be_inspected(self):
+        root = Path(self.tmp.name).resolve()
+        (root / 'checkout').mkdir()
+        routing_settings.update(self.path, dict(managed_projects=[str(root / 'checkout')]), 0)
+        with unittest.mock.patch.object(routing_settings.os, 'stat', side_effect=PermissionError('denied')):
+            self.assertIs(routing_settings.managed_project(root / 'elsewhere', settings_path=self.path), True)
+
     def test_managed_project_fails_closed_on_unreadable_settings(self):
         routing_settings.update(self.path, dict(managed_projects=[]), 0)
         os.chmod(self.path, 0o644)
