@@ -200,7 +200,10 @@ def prepare(scope, request, role, inner):
             sent.pop('authority', None)  # advisory host: the token is never stored, logged or returned
         if reason is not None:
             reply['routing'] = dict(state='blocked', reason=reason)
-            reply['release'] = release(scope, request, attempt, reason, service=service)
+            if reply['replayed']:  # an earlier call may have handed out a launch (e.g. before the project was
+                _record(service, attempt, 'not_dispatched', '%s:%s' % (reason, attempt))  # managed): no proof
+            else:  # this call committed the assignment and handed out no permit: release it now
+                reply['release'] = release(scope, request, attempt, reason, service=service)
             return reply
     reply.update(routing=dict(state='admitted', mode=admission.get('mode')),
                  route=dict(model=facts['model'], effort=facts['variant'], attempt_id=attempt))
