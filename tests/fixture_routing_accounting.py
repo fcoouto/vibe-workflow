@@ -72,7 +72,8 @@ class Accounting(DispatchBase):
         super().setUp()
         self.reader = Reader(Path(self.temp.name) / 'workflow.json')
         self.service.close()
-        self.service = command.Service(self.settings, self.ledger, workflow=self.reader)
+        # Operator ops run only in a one-shot command (C3-0a review S1); only `main()` sets the flag in production.
+        self.service = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
         self.call(dict(v=1, op='set', expected_revision=0,
                        change=dict(api_usage_enabled=True, caps=dict(total=16, per_account=16))))
         budget.initialize(self.ledger)
