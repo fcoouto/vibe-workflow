@@ -30,7 +30,7 @@ def now():
 def sub_route(route='sub', status='qualified', **extra):
     value = dict(route=route, status=status, provider='openai', model='m', effort='high', harness='codex-native',
                  billing_class='included_subscription', pool='sub', account='sub-account', demand={'5h': 10},
-                 binding_enforceable=True)
+                 binding_enforceable=True, window_unit=collector.WINDOW_UNIT)
     value.update(extra)
     return value
 
@@ -44,7 +44,8 @@ def gateway_route(route='gw', integration_route='proposals', **extra):
 
 
 def sub_window(at, **extra):
-    value = dict(id='5h', limit=1000, used=100, length=18000, reset_at=at + 3600, rolling=False, observed_at=at)
+    value = dict(id='5h', limit=1000, used=100, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
+                 unit=collector.WINDOW_UNIT)
     value.update(extra)
     return value
 
@@ -160,6 +161,48 @@ class CollectorTests(Stores):
                               dict(sub=[sub_window(self.now - collector.FRESH_SECONDS - 1)]))
         self.assertIs(result['observations']['pools']['sub']['windows'][0]['fresh'], False)
         self.assertEqual(excluded(result), dict(none='window_unobserved'))  # enabled, but blocked with a reason
+
+    def test_subscription_windows_must_carry_the_manifest_window_unit(self):
+        """C3-1b: a route's `demand` is in its manifest's window unit, so a stored window in another unit, or in none,
+        would misadmit silently: the route is left out instead. A route that declares no unit fails closed."""
+        self.assertEqual(collector.WINDOW_UNIT, 'per_mille')
+        unitless = {key: value for key, value in sub_window(self.now).items() if key != 'unit'}
+        cases = (('matching', sub_route(), sub_window(self.now), None),
+                 ('mismatch', sub_route(), sub_window(self.now, unit='percent'), 'window_unit_mismatch'),
+                 ('window_without_unit', sub_route(), unitless, 'window_unit_mismatch'),
+                 ('route_without_unit', sub_route(window_unit=None), sub_window(self.now), 'window_unit_undeclared'),
+                 ('route_in_other_unit', sub_route(window_unit='percent'), sub_window(self.now), 'window_unit_mismatch'))
+        for name, route, window, reason in cases:
+            with self.subTest(name):
+                result = self.collect([route], dict(sub=[window]))
+                self.assertEqual(excluded(result), {} if reason is None else dict(sub=reason))
+                self.assertEqual(set(kept(result)), {'sub'} if reason is None else set())
+                if reason is None:  # the unit stays out of the snapshot `routing.admit` validates
+                    self.assertNotIn('unit', result['observations']['pools']['sub']['windows'][0])
+                    self.assertNotIn('window_unit', kept(result)['sub'])
+        # One unitless window among the demanded ones is enough to leave the route out.
+        result = self.collect([sub_route(demand={'5h': 10, '7d': 1})],
+                              dict(sub=[sub_window(self.now), dict(unitless, id='7d')]))
+        self.assertEqual(excluded(result), dict(sub='window_unit_mismatch'))
+
+    def test_the_local_source_declares_the_shipped_window_unit_and_stores_it(self):
+        manifest = json.loads(collector.MANIFEST.read_text())
+        self.assertEqual(manifest['window_unit'], collector.WINDOW_UNIT)
+        local = collector.default_source(self.settings)
+        self.assertTrue(all(route['window_unit'] == collector.WINDOW_UNIT for route in local.manifest()))
+        collector.store_window(self.settings, 'sub', sub_window(self.now))
+        self.assertEqual([window['unit'] for window in local.windows('sub', self.now)], [collector.WINDOW_UNIT])
+        result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                   ledger_path=self.ledger_path,
+                                   source=collector.StaticSource([sub_route()], local.windows, ready))
+        self.assertEqual(set(kept(result)), {'sub'})
+        for bad in (dict(sub_window(self.now), unit=''), dict(sub_window(self.now), unit=5)):
+            with self.assertRaisesRegex(ValueError, 'invalid_window_observation'):
+                collector.store_window(self.settings, 'sub', bad)
+        path = self.root / 'routes.json'
+        path.write_text(json.dumps(dict(version=1, window_unit=7, routes=[])))
+        with self.assertRaisesRegex(ValueError, 'route_manifest_invalid'):
+            collector.load_manifest(path)
 
     def test_a_not_entitled_route_stays_excluded_until_cleared(self):
         windows = dict(sub=[sub_window(self.now)])

@@ -26,6 +26,10 @@ MAX_FILE = 1 << 20
 MAX_MARKS = 256
 CLOCK_MARGIN = routing.MAX_CLOCK_DRIFT  # seconds a stored observation may run ahead of this clock
 LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it never stalls prepare
+# The unit of stored subscription window observations: a thousandth of the provider's utilisation (limit 1000). The
+# manifest declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and its
+# windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
+WINDOW_UNIT = 'per_mille'
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
@@ -65,7 +69,11 @@ class LocalSource:
         self.settings_path = settings_path
 
     def manifest(self):
-        return load_manifest()['routes']
+        """The shipped routes, each carrying the manifest's top-level `window_unit` unless it declares its own."""
+        manifest = load_manifest()
+        unit = manifest.get('window_unit')
+        return [dict(route, window_unit=route.get('window_unit', unit)) if type(route) is dict and unit is not None
+                else route for route in manifest['routes']]
 
     def windows(self, pool, now):
         if self.settings_path is None:
@@ -110,7 +118,8 @@ def manifest_routes(source):
 
 def load_manifest(path=MANIFEST):
     value = json.loads(Path(path).read_text())
-    if type(value) is not dict or value.get('version') != 1 or type(value.get('routes')) is not list:
+    if type(value) is not dict or value.get('version') != 1 or type(value.get('routes')) is not list \
+            or ('window_unit' in value and not routing._text(value['window_unit'])):
         raise ValueError('route_manifest_invalid')
     validate_routes(value['routes'])
     return value
@@ -191,7 +200,9 @@ def _write(path, value):
 
 
 def _valid_window(window):
-    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at'}:
+    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'unit'}:
+        return False
+    if 'unit' in window and not routing._text(window['unit']):
         return False
     numbers = all(window.get(key) is None or routing._finite(window[key])
                   for key in ('limit', 'used', 'length', 'reset_at'))
@@ -328,7 +339,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         marks_reason = None
     except (OSError, ValueError, KeyError, TypeError):
         marks, marks_reason = set(), 'entitlement_unavailable'
-    routes, pools, excluded, cache = [], {}, [], {}
+    routes, pools, units, excluded, cache = [], {}, {}, [], {}
     seen = dict(openrouter_revision=None)
 
     def leave(route, reason):
@@ -367,13 +378,17 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
                 leave(spec, 'credential_unavailable')
                 continue
             route['integration_enabled'] = True
+        if billing == 'included_subscription' and not routing._text(spec.get('window_unit')):
+            leave(spec, 'window_unit_undeclared')  # its demand's unit is unknown: fail closed
+            continue
         if spec['pool'] not in pools:
-            windows = []
+            windows, units[spec['pool']] = [], {}
             for window in source.windows(spec['pool'], now):
                 if not _valid_window(window):
                     continue
                 item = {key: window[key] for key in WINDOW_FIELDS if key in window}
                 item['fresh'] = 0 <= now - window['observed_at'] <= FRESH_SECONDS
+                units[spec['pool']][window['id']] = window.get('unit')  # kept apart: never in the snapshot
                 organization = (data or {}).get('organizations', {}).get(item.get('organization'))
                 if item.get('organization') and 'organization_revision' not in item and organization is not None:
                     item['organization_revision'] = organization['revision']
@@ -384,6 +399,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         pool = pools[spec['pool']]
         if not pool['windows'] or not set(spec['demand']) <= {window['id'] for window in pool['windows']}:
             leave(spec, 'window_unobserved')  # enabled, but no telemetry yet (C.3 design 7.1 decision 6)
+            continue
+        if billing == 'included_subscription' and any(units[spec['pool']].get(key) != spec['window_unit']
+                                                       for key in spec['demand']):
+            leave(spec, 'window_unit_mismatch')  # a stored window in another unit, or in none
             continue
         if dollar:
             organizations = {window.get('organization') for window in pool['windows']}

@@ -386,9 +386,10 @@ def _self_check_in_child(workdir):
     identity = route_identity('codex_native', model='self-check-model', effort='high')
     source = routing_observations.StaticSource(
         [dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
-              account='self-check', demand={'5h': 1}, binding_enforceable=True, **identity)],
+              account='self-check', demand={'5h': 1}, binding_enforceable=True,
+              window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
-                               observed_at=at)])
+                               observed_at=at, unit=routing_observations.WINDOW_UNIT)])
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
