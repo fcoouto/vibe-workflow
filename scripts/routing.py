@@ -28,7 +28,8 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import ledger_versions, routing, routing_gates, routing_settings, subscription_reconcile, usage_budget  # noqa: E402,E501
+from runtime import (ledger_versions, routing, routing_gates, routing_settings, subscription_reconcile,  # noqa: E402
+                     usage_budget)
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -59,13 +60,11 @@ FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constra
               resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}),
               drop_debit=({'key', 'marker', 'event_id'}, set()),
               settle_legacy_call=({'run_id', 'phase', 'evidence', 'event_id'}, set()))
-# Operator ops are one-shot commands only: the OpenCode shim's persistent `--serve` child never exposes them, so a
-# plugin or worker that can reach it cannot settle, release or unblock anything (`operator_op_not_served`).
+# Operator ops are one-shot commands only (`operator_op_not_served`): they need the `one_shot` flag that only `main()`
+# sets. Neither the OpenCode shim's persistent `--serve` child, which a plugin or worker can reach, nor any in-process
+# service (a launcher's `managed_service` included) can settle, release or unblock anything (C.3 design 3.5, 3.7).
 OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block',
                 'reconcile_subscription', 'drop_debit', 'settle_legacy_call')
-# C3-0a's ops also need the `one_shot` flag that only `main()` sets, so no in-process service (a launcher's
-# `managed_service` included) can run them either (C.3 design 3.5, 3.7).
-ONE_SHOT_OPS = ('drop_debit', 'settle_legacy_call')
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -228,7 +227,8 @@ class Service:
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
         self.serving = serving
         # Only `main()` sets this, for a one-shot command; no request field or environment can. In-process services
-        # (`managed_service` and every other caller) and `--serve` never change `managed_projects` (design 4.2).
+        # (`managed_service` and every other caller) and `--serve` never change `managed_projects` (design 4.2) and
+        # never run an operator op (OPERATOR_OPS).
         self.one_shot = one_shot and not serving
         self._open = None
         self._expired_at = None
@@ -256,8 +256,7 @@ class Service:
             require(op is None or value.get('op', op) == op, 'invalid_request')
             name = value.get('op', op)
             require(type(name) is str and name in FIELDS, 'unknown_op')
-            require(not (self.serving and name in OPERATOR_OPS), 'operator_op_not_served')
-            require(self.one_shot or name not in ONE_SHOT_OPS, 'operator_op_not_served')
+            require(self.one_shot or name not in OPERATOR_OPS, 'operator_op_not_served')
             body = {key: item for key, item in value.items() if key not in ('v', 'op', 'id')}
             required, optional = FIELDS[name]
             require(required <= set(body) <= required | optional, 'invalid_request')
@@ -443,9 +442,11 @@ class Service:
                 else dict(state='blocked', reason=bound[1], **echo)
         ledger = self._ledger(True, write=True)
         self._expire(ledger)
-        # S3.6c debits clear only outside `--serve` (C3-0a): the shim's persistent child never releases one.
+        # S3.6c debits clear only in the one-shot command or from a managed project's collector-built snapshot outside
+        # `--serve` (C3-0a): never in the shim's persistent child, never from an in-process caller's own snapshot.
+        clear = self.one_shot or (seen is not None and not self.serving)
         result = routing.admit(admitted, ranking, settings, observations, ledger=ledger,
-                               workflow=None if bound is None else bound[1], clear_debits=not self.serving)
+                               workflow=None if bound is None else bound[1], clear_debits=clear)
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'], **echo)

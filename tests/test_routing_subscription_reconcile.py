@@ -620,11 +620,20 @@ class ServeClearingTests(Subscription):
                                         revision)  # written directly: the activation gate is C3-0b's to test
         # Pinned and managed; `--test-inputs` only so the stub's off-clock `now` is accepted (no caller observations).
         managed = command.Service(self.settings, self.ledger, workflow=self.reader, project=project, test_inputs=True)
-        self.addCleanup(managed.close)
-        request = prepare('b1', constraints=dict(allowed_strategy_ids=['s-sub']))
-        request.pop('observations', None)
+        serving = command.Service(self.settings, self.ledger, workflow=self.reader, project=project, test_inputs=True,
+                                  serving=True)
+        for service in (managed, serving):
+            self.addCleanup(service.close)
+
+        def request(attempt):
+            value = prepare(attempt, constraints=dict(allowed_strategy_ids=['s-sub']))
+            value.pop('observations')
+            return json.dumps(value).encode()
+        with collector(dict(observations=self.qualifying(debit, 'acct-b0'), seen={})) as calls:
+            self.assertEqual(serving.handle(request('b0'))['state'], 'admitted')  # never under `--serve`
+        self.assertEqual((len(calls), self.debits(), self.cleared_rows()), (1, {KEY: debit}, []))
         with collector(dict(observations=self.qualifying(debit, 'acct-b1'), seen={})) as calls:
-            self.assertEqual(managed.handle(json.dumps(request).encode())['state'], 'admitted')
+            self.assertEqual(managed.handle(request('b1'))['state'], 'admitted')
         self.assertEqual(len(calls), 1)
         self.assertEqual((self.debits(), len(self.cleared_rows())), ({}, 1))
 

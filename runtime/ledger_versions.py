@@ -160,7 +160,8 @@ def _settle(ledger, event, digest, now):
     is charged as the receipts report (above its maximum it becomes over-bound, as `Ledger.complete` does, and
     `resolve_block` settles it) or charged its full maximum; its run closes, so it never continues. An over-bound
     call is `block_not_pending` (use `resolve_block`). The audit is the event row: ids, labels and integer totals,
-    and a receipt count and digest, never the receipt ids."""
+    and a receipt count and digest, never the receipt ids. Once the event table prunes that row, a replay is no
+    longer a duplicate: it finds the call settled (`call_closed`, or `block_not_pending` if left over-bound)."""
     require, Ledger = budget.require, budget.Ledger
     budget.integer(now)
     with ledger.transaction() as data:
