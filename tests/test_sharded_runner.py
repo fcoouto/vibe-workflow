@@ -288,6 +288,8 @@ class ShardedRunnerTest(unittest.TestCase):
         self.assertEqual(0, listed.returncode, listed.stderr)
         self.assertIn("FAST TIER: a development aid, NOT a release gate.", listed.stdout)
         self.assertIn("Skipping 1 slow module(s)", listed.stdout)
+        self.assertIn("run the full suite for a release", listed.stdout)
+        self.assertNotIn("before completion or merge", listed.stdout)
         self.assertIn("3 units, 3 modules", listed.stdout)
         self.assertNotIn("test_fail", listed.stdout.split("Plan:")[1])
         ran = self.run_script("--fast", "--timings", str(path), "test_pass", "test_fail")
