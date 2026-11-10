@@ -1,7 +1,12 @@
 """Graphify maintenance is reachable selectively, without loading at startup."""
 
 from pathlib import Path
+import os
 import re
+import subprocess
+import sys
+import tempfile
+import textwrap
 import unittest
 
 from scripts import read_instructions as reader
@@ -44,6 +49,53 @@ class GraphifyMaintenanceInstructionsTests(unittest.TestCase):
     def test_startup_does_not_load_graphify_maintenance(self):
         batch = reader.load_batch(ROOT, reader.BOOTSTRAP, auto=True)
         self.assertNotIn(PROCEDURE, [part["path"] for part in batch["sections"]])
+
+    def run_destination_preflight(self, root, override=None):
+        source = (ROOT / PROCEDURE).read_text()
+        block = re.search(r"```python\n(.*?)\n\s*```", source, re.S)
+        self.assertIsNotNone(block, "missing executable destination preflight")
+        env = dict(os.environ)
+        env.pop("GRAPHIFY_OUT", None)
+        if override is not None:
+            env["GRAPHIFY_OUT"] = str(override)
+        return subprocess.run([sys.executable, "-c", textwrap.dedent(block[1])], cwd=root, env=env,
+                              capture_output=True, text=True, timeout=10)
+
+    def test_preflight_accepts_only_the_primary_checkout_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for override in (None, "", "graphify-out", root / "graphify-out"):
+                with self.subTest(override=override):
+                    result = self.run_destination_preflight(root, override)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_preflight_rejects_another_worktree_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "primary"
+            other = Path(directory) / "occupied-worktree"
+            root.mkdir()
+            other.mkdir()
+            marker = other / "graph.json"
+            marker.write_bytes(b"other writer's graph")
+            for override in (other, "../occupied-worktree", "custom-output"):
+                with self.subTest(override=override):
+                    result = self.run_destination_preflight(root, override)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(marker.read_bytes(), b"other writer's graph")
+                    self.assertEqual(list(root.iterdir()), [])
+                    self.assertEqual(list(other.iterdir()), [marker])
+
+    def test_preflight_rejects_a_symlinked_default_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "primary"
+            other = Path(directory) / "occupied-worktree"
+            root.mkdir()
+            other.mkdir()
+            (root / "graphify-out").symlink_to(other, target_is_directory=True)
+            result = self.run_destination_preflight(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(list(other.iterdir()), [])
 
 
 if __name__ == "__main__":

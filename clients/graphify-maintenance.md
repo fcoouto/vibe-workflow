@@ -31,7 +31,23 @@ an accepted Graphify setup: the extraction below rebuilds it.
 3. Verify the project's indexing exclusions and Git exclusion of `graphify-out/`
    are in place. Reuse them; do not silently widen indexing, repair configuration,
    install a missing tool or enable a deferred project as part of maintenance.
-   Run in the synchronized primary checkout:
+   In the synchronized primary checkout, execute this read-only Python preflight
+   with `python3` before extraction or querying:
+
+   ```python
+   import os
+   from pathlib import Path
+
+   expected = Path.cwd().resolve() / "graphify-out"
+   destination = Path((os.environ.get("GRAPHIFY_OUT") or "").strip() or "graphify-out")
+   if destination.resolve() != expected:
+       raise SystemExit("Unapproved Graphify output destination; maintenance incomplete")
+   ```
+
+   A nonzero preflight, incompatible output override or unresolved path means
+   stop without writes; do not unset or override the user's environment to make
+   it pass. Check ownership and active writers of that approved output directory
+   as well as the primary checkout. Only then run:
 
    ```sh
    GRAPHIFY_NO_AUTO_REFRESH=1 graphify extract . --code-only --no-cluster

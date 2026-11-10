@@ -25,6 +25,7 @@
 - Remote merge success is not proof that the local primary checkout synchronized.
 - Dirty/diverged primary checkout and concurrent changes must preserve user work.
 - Failed extraction/query must not turn old output into successful maintenance.
+- An inherited output override or symlink must not write another worktree's graph.
 
 ### Task 1: Complete the shared maintenance procedure and its loading paths
 

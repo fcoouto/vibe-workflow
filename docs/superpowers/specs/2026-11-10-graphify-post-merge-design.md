@@ -34,6 +34,11 @@ code-only, no-clustering command with `GRAPHIFY_NO_AUTO_REFRESH=1`, which suppre
 installed skill/plugin changes rather than graph updates. No hooks, watchers,
 model calls, new settings, runtime activation or database are added.
 
+Validate the effective output destination before extraction or querying, including
+`GRAPHIFY_OUT` and symlinks. Only the approved ignored primary-checkout output
+and its established writer ownership are eligible; incompatible overrides stop
+maintenance without changing the user's environment or writing elsewhere.
+
 Verify the output and a representative query; bind the result to the synchronized
 commit. Missing tools, unsafe synchronization or failed refresh leave maintenance
 incomplete, never undo the merge or label an old graph current. External merges
