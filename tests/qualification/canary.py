@@ -7,6 +7,11 @@ routing state; never the production settings or ledger), `preflight` (refusals b
 roles and two complexity bands) and `PilotDriver` (sequential admissions with the durable `pilot` call cap, a 24-hour
 limit, working-tree checks, and a catch-all abort that recovers by phase and runs the Smart Routing OFF kill switch).
 
+Observations: `plan_assignments` builds the pilot's own snapshot for its unmanaged canary ledger. On a managed canary
+project (on the canary settings' `managed_projects`) `server.Routing` sends every `prepare` without it, so the routing
+service's collector supplies the snapshot from the shipped manifest and stored telemetry, the production path the
+pre-registered canary measures (C3-3; plan Task S3.7). The harness never changes `managed_projects` itself.
+
 The environment (`opencode_live.CanaryEnv` in a live run, a fake in tests) provides: `status()`, `health()`,
 `prepare(body)`, `dispatch(attempt)`, `attach(session, attempt, token)`, `detach(...)`, `launch(session, message,
 allow_title)`, `account(session, titles_sent)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally
