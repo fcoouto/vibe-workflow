@@ -13,6 +13,7 @@ from types import SimpleNamespace
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE))
 
+RETIRED_CONTEXT_ID = "workstream_context_id is retired; native children use their attempt name"
 
 def title_report(scope, client, session, report):
     if client == "codex" and session:
@@ -297,6 +298,8 @@ def control_main():
             else:
                 if args.delegation_action in {"prepare", "coordinator"} and {"workstream_revision", "workstream_limits"} & request.keys():
                     raise StartupError("Combined Workstreams fields cannot create assignments; use ordinary delegation and continuation_limits for native workers")
+                if args.delegation_action in {"prepare", "coordinator"} and "workstream_context_id" in request:
+                    raise StartupError(RETIRED_CONTEXT_ID)
                 operation = {"plan": delegation.plan_delegation, "prepare": delegation.prepare_assignment,
                              "observe": delegation.observe_assignment, "reconcile": delegation.reconcile_assignment,
                              "coordinator": delegation.reserve_coordinator}
@@ -312,6 +315,8 @@ def control_main():
             from runtime import evidence
             operations = {"plan": evidence.plan_evidence, "check": evidence.run_check, "reconcile-check": evidence.reconcile_check, "verify": evidence.verify_completion, "cleanup": evidence.cleanup_evidence,
                           "prepare": evidence.prepare_review, "collect": evidence.collect_review, "assess": evidence.assess_review}
+            if args.action == "review" and args.review_action == "prepare" and "workstream_context_id" in request:
+                raise StartupError(RETIRED_CONTEXT_ID)
             report = (evidence.evidence_status(scope, client, args.session) if args.action == "status" else
                       operations[args.review_action if args.action == "review" else args.action](scope, request))
             if args.action == "review" and args.review_action == "prepare":

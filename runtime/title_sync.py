@@ -3,46 +3,35 @@ from copy import deepcopy
 import re
 
 
-from runtime.task_statuses import ATTENTION_STATES, RETIRED_STATES, STATES as STATUSES
+from runtime.task_statuses import ATTENTION_STATES, STATES as STATUSES
 from runtime.evidence import _digest
 MAX_TITLE_BODY = 4096
-MAX_STATUS_LENGTH = max(map(len, ATTENTION_STATES))
 METER_PREFIX = '\uFFFB'  # Keeps the five cells in the compact Codex fallback font.
-# Accept saved titles with routine labels, no meter prefix, or status at the end.
-TITLE = re.compile(r'(?P<meter>\uFFFB?▰{0,5}▱{0,5}) (?:(?P<status>[A-Z ]+) · )?\[(?P<family>W[1-9][0-9]*)\] (?P<member>P|C) · (?P<topic>.+)')
-LEGACY_TITLE = re.compile(r'(?P<meter>▰{0,5}▱{0,5}) \[(?P<family>W[1-9][0-9]*)\] (?P<member>P|C) · (?P<topic>.+) · (?P<status>[A-Z ]+)')
+TITLE = re.compile(r'(?P<meter>\uFFFB▰{0,5}▱{0,5}) (?:(?P<status>[A-Z ]+) · )?(?P<topic>.+)')
 
 
-def format_title(family, member, topic, status, cells, *, user_attention=False):
-    if not isinstance(family,str) or not re.fullmatch(r'W[1-9][0-9]*',family):
-        raise ValueError('Invalid family code')
-    if not isinstance(member,str) or not re.fullmatch(r'P|C',member):
-        raise ValueError('Invalid member code')
+def format_title(topic, status, cells, *, user_attention=False):
     if not isinstance(topic,str) or not topic.strip() or topic!=topic.strip() or len(topic)>160 or not topic.isprintable() or ' · ' in topic:
         raise ValueError('Topic must be short, printable and contain no field separator')
     if status not in STATUSES or type(cells) is not int or not 0<=cells<=5:
         raise ValueError('Invalid canonical status or progress')
     filled=5 if status=='DONE' else min(cells,4)
     meter = '▰'*filled + '▱'*(5-filled) + ' '
-    identity_topic = f'[{family}] {member} · {topic}'
-    if len(meter) + MAX_STATUS_LENGTH + len(' · ') + len(identity_topic) > MAX_TITLE_BODY:
-        raise ValueError('Managed title exceeds the supported length')
     label = f'{status} · ' if user_attention is True and status in ATTENTION_STATES else ''
-    return METER_PREFIX + meter + label + identity_topic
+    return METER_PREFIX + meter + label + topic
 
 
 def _parsed(title):
-    match=(LEGACY_TITLE.fullmatch(title) or TITLE.fullmatch(title)) if isinstance(title,str) else None
+    match = TITLE.fullmatch(title) if isinstance(title,str) else None
     if match is None:return None
     fields=match.groupdict()
     status = fields['status']
-    if len(fields['meter'].removeprefix(METER_PREFIX)) != 5 or (status is not None and status not in STATUSES | RETIRED_STATES):
+    if len(fields['meter'].removeprefix(METER_PREFIX)) != 5 or (status is not None and status not in STATUSES):
         return None
     try:
-        format_title(fields['family'], fields['member'], fields['topic'], status if status in STATUSES else 'WORKING', fields['meter'].count('▰'))
+        format_title(fields['topic'], status or 'WORKING', fields['meter'].count('▰'))
     except ValueError:
         return None
-    fields['layout'] = 'status-after-meter' if match.re is TITLE else 'status-last'
     return fields
 
 
@@ -55,14 +44,14 @@ def reconcile(saved, current, task):
     if current!=saved['applied']:
         before,after=_parsed(saved['applied']),_parsed(current)
         pending = _parsed(saved['pending'])
-        if pending and after and all(pending[k] == after[k] for k in ('meter','family','member','status','layout')):
+        if pending and after and all(pending[k] == after[k] for k in ('meter','status')):
             before = pending
-        if before and after and all(before[k]==after[k] for k in ('meter','family','member','status','layout')):
+        if before and after and all(before[k]==after[k] for k in ('meter','status')):
             saved.update(topic=after['topic'],topic_workflow_owned=False,applied=current,pending=None)
         else:
             saved.update(paused=True,pending=None)
             return saved,None
-    desired = format_title(saved['family'], saved['member'], saved['topic'], task['state'], saved['cells'],
+    desired = format_title(saved['topic'], task['state'], saved['cells'],
                            user_attention=task.get('user_attention', False))
     return saved,None if current==desired else desired
 
@@ -162,10 +151,12 @@ def _load(path):
     if raw is None:
         return None
     saved = json.loads(raw)
+    if isinstance(saved, dict) and ({'family', 'member'} & saved.keys()):
+        return None  # Another title shape: unmanaged.
     from runtime import state
-    state._fields(saved, ('identity', 'family', 'member', 'topic', 'cells', 'applied',
+    state._fields(saved, ('identity', 'topic', 'cells', 'applied',
                           'pending', 'paused', 'notified', 'applied_revision'), ('topic_workflow_owned',))
-    format_title(saved['family'], saved['member'], saved['topic'], 'WORKING', saved['cells'])
+    format_title(saved['topic'], 'WORKING', saved['cells'])
     if not isinstance(saved['applied'], str) or len(saved['applied'].removeprefix(METER_PREFIX)) > MAX_TITLE_BODY:
         raise ValueError('Invalid saved title observation')
     if saved['pending'] is not None and (not isinstance(saved['pending'], str)
@@ -198,7 +189,7 @@ def operate(scope, action, request, transport=None, *, force=False):
     if action in {'sync', 'status'}:
         state._fields(request, ('client', 'session_id'))
     if action in {'configure', 'resume'}:
-        optional = ('topic', 'parent_session_id', 'member')
+        optional = ('topic',)
         if action == 'configure':
             optional += ('workflow_topic',)
         state._fields(request, ('client', 'session_id', 'task_id', 'scope_ref', 'expected_revision', 'reference'),
@@ -218,16 +209,16 @@ def operate(scope, action, request, transport=None, *, force=False):
         except BlockingIOError:
             return dict(ok=True, managed=True, pending=True, reason='busy')
         saved = _load(path)
+        if saved is None and action in {'sync', 'status'}:
+            return dict(ok=True, managed=False)
         identity = {key: task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref', 'pins')}
         rebind = saved is not None and saved.get('identity') != identity
         if rebind:
             if action not in {'configure', 'resume'}:
                 raise ValueError('Presentation belongs to a previous task; explicitly configure or resume it')
-            if any(key in request for key in ('parent_session_id', 'member')):
-                raise ValueError('Task replacement retains the native family/member binding')
             topic = request.get('topic', workflow_topic)
             if topic is not None:
-                format_title(saved['family'], saved['member'], topic, task['state'], 0)
+                format_title(topic, task['state'], 0)
             history = path.with_name('title-history-' + _digest(saved) + '.json')
             _atomic(history, saved)
             saved = dict(saved, identity=identity, applied_revision=None)
@@ -239,8 +230,6 @@ def operate(scope, action, request, transport=None, *, force=False):
             return dict(ok=True, managed=True, pending=False, paused=True, notification=None)
         if action == 'sync' and not force and saved is not None and not saved['paused'] and saved['pending'] is None and saved.get('applied_revision') == task['revision']:
             return dict(ok=True, managed=True, pending=False, paused=saved['paused'], notification=None)
-        if action == 'resume' and any(key in request for key in ('parent_session_id', 'member')):
-            raise ValueError('Resume cannot change family or member identity')
         with (transport or NativeTitles)() as native:
             current = native.read(session)
             if len(current.removeprefix(METER_PREFIX)) > MAX_TITLE_BODY and (action == 'resume' or (action == 'configure' and saved is None)):
@@ -253,28 +242,16 @@ def operate(scope, action, request, transport=None, *, force=False):
             elif action == 'configure':
                 if saved is not None:
                     raise ValueError('Title already managed; use explicit resume')
-                from scripts.workstreams_family import reserve
-                from pathlib import Path
-                import sqlite3
-                parent = request.get('parent_session_id', session)
-                state._text(parent, 'native family parent', 4096)
-                member = request.get('member', 'P')
-                if (member == 'P') != (parent == session):
-                    raise ValueError('Member role differs from declared family parent')
                 topic = request.get('topic', workflow_topic)
-                format_title('W1', member, topic, task['state'], 0)
-                try:
-                    family = reserve(Path.home() / '.vibe-workflow' / 'workstreams-families.sqlite3', client, parent)
-                except sqlite3.Error:
-                    raise OSError('Family code register unavailable') from None
-                saved = dict(identity=identity, family=family, member=member, topic=topic,
+                format_title(topic, task['state'], 0)
+                saved = dict(identity=identity, topic=topic,
                     topic_workflow_owned=workflow_topic is not None,
                     cells=0, applied=current, pending=None, paused=False, notified=False, applied_revision=None)
             elif action == 'resume':
                 if saved is None:
                     raise ValueError('Title is not managed')
                 if 'topic' in request:
-                    format_title(saved['family'], saved['member'], request['topic'], task['state'], 0)
+                    format_title(request['topic'], task['state'], 0)
                     saved.update(topic=request['topic'], topic_workflow_owned=False)
                 saved.update(paused=False, applied=current, pending=None, notified=False)
             task = _task(scope, client, session, presentation=True)

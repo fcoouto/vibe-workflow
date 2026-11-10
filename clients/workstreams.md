@@ -39,8 +39,9 @@ separate management procedure and do not load this execution contract.
 Follow [shared outcome ownership](../policies/03-agent-delegation.md#outcome-ownership)
 using the existing task plan.
 
-Each context retains its stable task/job ID, native child identity, bounded brief,
-files/resources, dependencies, acceptance/checks and next action. Native children
+Each context retains its stable task/job ID, native child identity, branch or
+worktree, bounded brief, files/resources, dependencies, acceptance/checks and next
+action. Native children
 remain distinct from external executions. Any separately available external route needs its own supported contract; this
 skill grants none. Do not invent native lineage or external same-thread resumption.
 
@@ -53,9 +54,9 @@ completion/readiness cannot authorize a resumed assignment. Replace a child only
 for a changed outcome, unusable history or a demonstrated recovery need, after
 reconciling its writers and partial changes.
 
-### Names identify the parent and its children
+### Coordinator title
 
-For allocation, display titles, progress and status changes, load the
+For the coordinator's display title, progress and status changes, load the
 [naming rules](workstreams-naming.md). Naming-only requests do not require the
 remaining execution procedures.
 
@@ -76,8 +77,6 @@ from each assignment and supported route. Retain consumed attempts across fixes,
 renames and toggles. Provider ceilings, permissions and validation limits remain
 binding. Requested limits are not measured consumption or proof of hard native
 token enforcement. Material reassessment uses remaining authorized totals.
-
-Add a coordination level only when it removes observed root work.
 
 The host owns its internal retries. Admitted child continuations need recognized
 terminal cause, known-finished host retry, supported recovery, reconciled writer

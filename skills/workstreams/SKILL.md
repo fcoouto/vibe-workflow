@@ -7,7 +7,7 @@ description: Enable, disable or inspect a project's Workstreams choice, coordina
 
 Load only the route needed:
 
-- **Naming:** read [naming rules](../../clients/workstreams-naming.md).
+- **Coordinator title:** read [naming rules](../../clients/workstreams-naming.md).
 - **Status or enable/disable, including onboarding:** read [project preference](references/procedure.md). Apply the saved choice immediately; ordinary coordination needs no runtime activation.
 - **Explicit resource-admission or capacity-recovery controls:** read [advanced controls](references/advanced-controls.md).
 - **Ordinary child delivery:** read [Agent Delegation](../../policies/03-agent-delegation.md). No managed runtime is required.
