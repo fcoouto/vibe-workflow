@@ -13,36 +13,10 @@ This repository's own [AGENTS.md](../AGENTS.md) now follows the section layout o
 | **Local deviation.** The template's Git section says not to require branches or worktrees by default. This repository requires a task worktree and branch for every change | Existing local rule in the [development guide](development.md#where-to-work), restated, not new |
 | Every rule of the previous `AGENTS.md` is kept. The "Where to look" list became the gate table under Start here; the memory paragraph is unchanged, and the Feature settings line no longer names the current choice ("Workstreams on"), which the settings file owns | Previous `AGENTS.md` at `a97614b4`; the memory vault's `INSTRUCTIONS.md`, which requires that paragraph to stay |
 | **Local change (factual questions).** A factual question about the repository needs the memory read but not the policy index. A request to review, to select checks, to judge completion or readiness, to resume work or to dispatch a worker is not such a question and has its own gate | This change, narrowed after independent review. The index's own loading rule ties contracts to triggered actions; observed runs answered such questions correctly without it |
-| **Local clarification (publishing).** Agents publish a completed change by committing, running the checks, pushing the task branch and opening a draft `[BLOCKED]` PR without asking again; a request that says only "edit" or "commit" does not narrow that. The draft PR does not finish the change: the PR lifecycle owns review, `[READY]` and merge | The recorded publishing choice in the [setup record](setup.md#decisions) and "reuse existing authorization" in the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) |
+| **Local clarification (publishing).** Agents publish a completed change by validating, committing, running the tests the change needs on the committed change, pushing the task branch and opening a draft `[BLOCKED]` PR without asking again; a request that says only "edit" or "commit" does not narrow that. The draft PR does not finish the change: the PR lifecycle owns review, `[READY]` and merge | The recorded publishing choice in the [setup record](setup.md#decisions) and "reuse existing authorization" in the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) |
 | **Local clarification (delegation and settings).** Agent Delegation is read before every worker call, including a read-only one the user asks for by name; feature-setting commands run in the task worktree because `.vibe-workflow/settings.json` is tracked | The index's trigger "when considering or dispatching a worker"; the development guide's rule that the primary checkout is not edited |
 
-Evidence: real OpenCode sessions (`opencode run`, OpenCode 2 on macOS) in disposable copies of the repository at `a97614b4`, each with a local bare remote and no GitHub access, eight short tasks (documentation edit, policy edit, feature setting, question, stale handoff, a request to raise a line ceiling, a requested subagent, and "take it as far as the rules allow"). The first rounds scored 74 runs over the previous file and three candidates: 64 on `claude-agent/haiku` and 10 on `openai/gpt-6-luna`. Six more haiku sessions were harness trials or were discarded because they shared one OpenCode project; five of their records were kept. Counts are runs that showed the behavior.
-
-| Behavior | Previous file (haiku, 16) | This file (haiku, 16) | Previous (luna, 5) | This file (luna, 5) |
-| --- | --- | --- | --- | --- |
-| Memory index read as the first action | 0/16 | 16/16 | 0/5 (read later in 4) | 5/5 |
-| Policy index read on change tasks | 5/8 | 8/8 | 3/3 | 3/3 |
-| Change ended on a named task branch | 3/8 | 8/8 | 1/3 | 3/3 |
-| Named branch created before the first change | 2/8 | 5/8 | 1/3 | 2/3 |
-| Primary checkout left unchanged on change tasks | 6/8 | 8/8 | 2/3 | 3/3 |
-| Task branch pushed | 2/8 | 8/8 | 0/3 | 2/3 |
-| Draft PR attempted (it cannot succeed without GitHub) | 1/8 | 8/8 | 0/3 | 1/3 |
-| Agent Delegation read before the requested subagent | 0/2 | 2/2 | 1/1 | 1/1 |
-| Refused to raise a legacy line ceiling | 2/2 | 2/2 | not run | not run |
-
-The table's "This file" columns are the third candidate. Two sets of edits followed it. First, four wording edits: the reason given for the memory read, the development guide added to the PR and merge gate, "commit or push to `main`" removed from that gate, and "push" added to the checks gate. Second, edits answering an independent review (GPT-6 Astra, one round, on the first candidate of PR #244): a gate row for reviewing, judging completion or readiness and resuming work; the question exemption narrowed to factual questions; the branch made the next command after the worktree; commit placed before the checks, as the development guide has it; and a line that the draft PR does not finish the change.
-
-A confirmation round then ran the committed file on five tasks, two haiku runs each, and the third candidate on a new read-only task ("review the most recent commit on `main`; change nothing"):
-
-| Behavior (haiku) | Third candidate | This file |
-| --- | --- | --- |
-| Named branch created before the first change (documentation edit, feature setting, "as far as the rules allow") | 3/6 | 6/6 |
-| Code Review policy read on the read-only review request | 0/2 | 2/2 |
-| Memory index read first; primary checkout unchanged; branch pushed; draft PR attempted (same six change runs) | 6/6 each | 6/6 each |
-| Factual question answered correctly after the memory read, without loading the policy index | 2/2 | 2/2 |
-| Committed before the first check | 0/6 | 0/6 |
-
-Limits: two runs per task on haiku and one on luna, so the counts show direction, not rates. Only OpenCode was observed; Codex and Claude Code were not. The committed file was not rerun on the policy-edit, stale-handoff, line-ceiling and subagent tasks, nor on luna. One edit came after the confirmation round and was not run: check selection added to the review gate row and to what the question exemption excludes, from the reviewer's recheck. Placing commit before the checks changed nothing: every run still validated first, then committed. Merging was never observed, because the disposable copies had no GitHub access. The file grew from 691 to about 1,600 words, and haiku sessions used more tool calls on average (5.4 to 9.6 with the third candidate) because they now read the files the rules name. Working agreements and Execution continuity were not shown to change behavior: the stale-handoff and line-ceiling tasks already passed with the previous file.
+Evidence: real OpenCode sessions on `claude-agent/haiku` and `openai/gpt-6-luna`, in disposable copies of the repository, compared the previous file with candidates of this one over nine short tasks; [PR #244](https://github.com/fcoouto/vibe-workflow/pull/244) holds the counts, the independent review and the full limits. With this file every haiku run read the memory index first (previous file: none), and every change run read the policy index, ended on a named task branch, left the primary checkout unchanged and pushed (previous file: 5, 3, 6 and 2 of 8); luna moved the same way. Limits: one or two runs per task, so the counts show direction, not rates; only OpenCode was observed; the last wording edits (check selection in the review gate, and the validate, commit, test order when publishing) were not run; merging was never observed.
 
 [agents-current]: https://github.com/soumatheusgomes/vibe-coding-toolkit/blob/7ef68dd7b00ddfc5cd464458855e4ab66dd2128f/templates/AGENTS.md.template
 
