@@ -4,7 +4,8 @@ Load this procedure for an eligible proposal in an active checkout. Use the
 trusted installed package and qualified local interpreter. Check status for the
 current activation (`live_enabled`). Activation is the only approval: no approval
 line or selection message is needed. If the host cannot validate admission,
-continue natively when the task permits.
+continue natively when the task permits. In a Smart Routing managed project,
+both host actions refuse; follow [managed projects](procedure.md#managed-projects).
 
 ## Prepare the proposal
 
