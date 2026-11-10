@@ -30,7 +30,7 @@ log(spawned=True, env=sorted(os.environ), cwd=os.getcwd(), pid=os.getpid(), pgid
     stderr_devnull=(null.st_dev, null.st_ino) == (err.st_dev, err.st_ino))
 if scenario in ('graceful_timeout', 'hang_with_child'):
     signal.signal(signal.SIGTERM, lambda *_: log(signal='SIGTERM', at=time.monotonic()))  # ignored: logged only
-if scenario == 'hang_with_child':
+if scenario in ('hang_with_child', 'exit_leaving_child'):
     child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
     log(grandchild=child.pid)
 sys.stderr.write('debug: access_token=token-xyz accountId=acct-secret-123\n')
@@ -53,7 +53,7 @@ for line in sys.stdin:
             time.sleep(0.6)
         if scenario == 'hang_read':
             time.sleep(60)
-        if scenario in ('graceful_timeout', 'hang_with_child'):
+        if scenario in ('graceful_timeout', 'hang_with_child', 'exit_leaving_child'):
             continue  # never answers; waits for stdin to close
         if scenario == 'touch_auth':
             os.utime(os.path.join(os.environ['HOME'], '.codex', 'auth.json'), (1, 1))

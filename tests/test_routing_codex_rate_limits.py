@@ -344,6 +344,17 @@ class ExchangeTests(Sandbox):
         self.assertTrue(self.gone(self.entries()[0]['pid']))
         self.assertTrue(self.gone(grandchild))
 
+    def test_a_leader_that_exits_on_stdin_close_after_a_timeout_still_has_its_group_killed_unreaped(self):
+        calls, patch = self.group_signals()
+        with patch, self.assertRaises(reader.ReadError) as caught:
+            self.read('exit_leaving_child', timeout=0.5)
+        self.assertEqual(str(caught.exception), 'codex_timeout')
+        self.assertTrue(any(entry.get('stdin') == 'eof' for entry in self.entries()))  # the leader exited itself
+        self.assertEqual([sig for sig, _ in calls], [signal.SIGTERM, signal.SIGKILL])
+        self.assertTrue(all(unreaped for _, unreaped in calls), calls)  # its pgid still reserved by the zombie
+        grandchild = next(entry['grandchild'] for entry in self.entries() if 'grandchild' in entry)
+        self.assertTrue(self.gone(grandchild))
+
     def test_the_whole_process_group_is_gone_after_the_timeout(self):
         with self.assertRaises(reader.ReadError) as caught:
             self.read('hang_with_child', timeout=0.5)
