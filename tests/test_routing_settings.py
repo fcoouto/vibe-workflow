@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 
 from runtime import routing_settings, usage_budget
 
@@ -117,6 +118,49 @@ class RoutingSettingsTests(unittest.TestCase):
     def test_resolve_rejects_invalid_stored(self):
         with self.assertRaises(routing_settings.SettingsError):
             routing_settings.resolve(dict(L=0.9, H=0.1))
+
+    def test_managed_projects_default_empty_and_validated(self):
+        self.assertEqual(routing_settings.resolve({})['managed_projects'], [])
+        routing_settings.update(self.path, dict(managed_projects=['/work/a', '/work/b']), 0)
+        self.assertEqual(routing_settings.read(self.path)['managed_projects'], ['/work/a', '/work/b'])
+        for bad in ('/work/a', ['relative'], ['/work/a', '/work/a'], ['/work/../a'], ['/work/a/'], [''], [7],
+                    ['/' + 'x' * 1024], ['/x%d' % n for n in range(routing_settings.MAX_MANAGED + 1)]):
+            with self.subTest(bad), self.assertRaises(routing_settings.SettingsError) as caught:
+                routing_settings.update(self.path, dict(managed_projects=bad), 1)
+            self.assertEqual(str(caught.exception), 'invalid_managed_projects')
+        self.assertIsNot(routing_settings.resolve({})['managed_projects'],
+                         routing_settings.resolve({})['managed_projects'])
+
+    def test_managed_project_matches_the_realpath_and_paths_inside_it(self):
+        root = Path(self.tmp.name).resolve()
+        checkout, other = root / 'checkout', root / 'other'
+        (checkout / 'sub').mkdir(parents=True)
+        other.mkdir()
+        (root / 'link').symlink_to(checkout)
+        self.assertIs(routing_settings.managed_project(checkout, settings_path=self.path), False)  # no file yet
+        routing_settings.update(self.path, dict(managed_projects=[str(checkout)]), 0)
+        for path, expected in ((checkout, True), (root / 'link', True), (checkout / 'sub', True), (other, False),
+                               (root, False), (str(root / 'checkout-2'), False)):
+            with self.subTest(path):
+                self.assertIs(routing_settings.managed_project(path, settings_path=self.path), expected)
+
+    def test_managed_project_fails_closed_on_unreadable_settings(self):
+        routing_settings.update(self.path, dict(managed_projects=[]), 0)
+        os.chmod(self.path, 0o644)
+        self.assertIs(routing_settings.managed_project('/anywhere', settings_path=self.path), True)
+        os.chmod(self.path, 0o600)
+        self.path.write_text('{not json')
+        self.assertIs(routing_settings.managed_project('/anywhere', settings_path=self.path), True)
+
+    def test_managed_project_defaults_to_the_routing_command_settings(self):
+        from scripts import routing as command
+        routing_settings.update(self.path, dict(managed_projects=['/work/repo']), 0)
+        with unittest.mock.patch.object(command, 'default_settings', lambda: self.path):
+            self.assertIs(routing_settings.managed_project('/work/repo'), True)
+            self.assertIs(routing_settings.managed_project('/work/other'), False)
+
+    def test_legacy_route_retired_is_a_fixed_code(self):
+        self.assertEqual(routing_settings.LEGACY_ROUTE_RETIRED, 'legacy_route_retired')
 
     def test_workstreams_preference_is_read_not_copied(self):
         calls = []
