@@ -43,8 +43,8 @@ Make delegated work simpler and cheaper. All delegated work runs as native child
 |---|---|
 | `runtime/title_sync.py` | `format_title` and the parser handle only the D4 format. A title or saved record in any other shape counts as unmanaged: sync, repair and resume write nothing for it. Configure no longer calls the allocator and rejects `member` and `parent_session_id`. |
 | `runtime/opencode_titles.py` | Comparison keys (`:152`) drop `family` and `member`. |
-| `scripts/workflow.py`, `runtime/evidence.py` | Reject `workstream_context_id` at worker prepare, like `workstream_revision` and `workstream_limits` (`scripts/workflow.py:277`), and at review prepare (`evidence.prepare_review`). |
-| Tests | `tests/test_title_sync.py`, `tests/test_title_sync_integration.py` (replace the register-corruption test with "register never opened"), `tests/test_opencode_titles.py`, `tests/test_delivery.py`, `tests/test_delivery_reconcile.py`, `tests/test_compact_status.py`; `tests/test_workstreams_cli.py:62-80` becomes a rejection test; `tests/test_workstreams.py` gains the review-prepare rejection. Tests that only exercise the removed formats are deleted. |
+| `scripts/workflow.py` | Reject `workstream_context_id` at worker prepare, like `workstream_revision` and `workstream_limits`, and at `evidence review prepare`. |
+| Tests | `tests/test_title_sync.py`, `tests/test_title_sync_integration.py` (replace the register-corruption test with "register never opened"), `tests/test_opencode_titles.py`, `tests/test_delivery.py`, `tests/test_delivery_reconcile.py`, `tests/test_compact_status.py`; `tests/test_workstreams_cli.py:62-80` becomes a rejection test and gains the review-prepare rejection. Tests that only exercise the removed formats are deleted. |
 
 Unchanged: `scripts/workstreams_family.py` (left byte-identical and unreferenced; it has no read-only mode and is part of the runtime fingerprint), `runtime/delegation.py`, `runtime/adapters/codex.py`, `runtime/startup.py`.
 
