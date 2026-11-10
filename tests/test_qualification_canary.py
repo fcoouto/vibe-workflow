@@ -700,5 +700,166 @@ class ManagedCanaryTests(PilotHarness):
             self.assertIsNone(run.routing.admission_ids("never-admitted"))
 
 
+APPROVED = ["the user", "2026-11-10", "canary only on the production routing ledger"]
+
+
+class ProductionLedgerTests(Temp):
+    """`--production-ledger` with a recorded `--approval` (user approval of 2026-11-10, canary only): refused without
+    both, never the default, and the production paths here are the test's temporary HOME (tests/__init__.py)."""
+
+    def setUp(self):
+        super().setUp()
+        import os
+        import tempfile
+        self.assertTrue(os.environ.get("VCW_TEST_HOME"))  # guard: the production defaults resolve in a private HOME
+        patcher = mock.patch.dict(os.environ, HOME=str(self.home))  # this test's own HOME: nothing shared between tests
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertEqual(Path.home().resolve(), self.home)
+        self.assertTrue(str(Path.home().resolve()).startswith(os.path.realpath(tempfile.gettempdir())))
+        from scripts import routing as command
+        self.settings, self.ledger = command.default_settings(), command.default_ledger()
+        for path in (self.settings, self.ledger):
+            self.assertIn(Path.home().resolve(), path.resolve().parents)
+
+    def test_the_default_is_never_production(self):
+        state = canary.resolve_state(str(self.private(self.tmp / "q") / "canary"), home=self.home)
+        self.assertNotIn("production", state)
+        self.assertNotEqual(state["ledger"], self.ledger)
+
+    def test_refused_without_the_flag_or_the_approval(self):
+        cases = [dict(production=True), dict(production=True, approval=["the user", "2026-11-10"]),
+                 dict(production=True, approval=["the user", " ", "canary"]),
+                 dict(production=False, approval=APPROVED),
+                 dict(production=True, approval=APPROVED, path=str(self.tmp / "canary"))]
+        for case in cases:
+            with self.subTest(case=case):
+                with self.assertRaises(safety.Refused):
+                    canary.resolve_state(case.pop("path", None), **case)
+
+    def test_with_both_it_points_at_the_production_paths_and_records_the_approval(self):
+        state = canary.resolve_state(None, production=True, approval=APPROVED)
+        self.assertEqual((state["settings"], state["ledger"]), (self.settings.resolve(), self.ledger.resolve()))
+        self.assertIs(state["production"], True)
+        self.assertEqual(state["approval"], dict(by="the user", at="2026-11-10",
+                                                 scope="canary only on the production routing ledger"))
+        with self.assertRaises(safety.Refused):  # the production state is never reset
+            canary.reset_state(state["settings"].parent, processes="")
+
+    def test_the_project_must_be_on_the_production_managed_projects(self):
+        project = self.private(self.tmp / "project")
+        (project / ".git").mkdir()
+        state = canary.resolve_state(None, production=True, approval=APPROVED)
+        with self.assertRaises(safety.Refused):
+            canary.check_project(str(project), str(project), state["settings"], managed=True)
+        revision = routing_settings._load(state["settings"])[0]
+        routing_settings.update(state["settings"], dict(managed_projects=[str(project.resolve())]), revision)
+        self.assertEqual(canary.check_project(str(project), str(project), state["settings"], managed=True),
+                         str(project.resolve()))
+
+    def routing_double(self, ops):
+        class Recording:
+            argv = ["--settings", str(self.settings), "--ledger", str(self.ledger)]
+
+            def __call__(self, op, **body):
+                ops.append(op)
+                return dict(state="ok"), 1.0
+        return Recording()
+
+    def test_the_canary_never_creates_or_initializes_the_production_ledger(self):
+        ops = []
+        with self.assertRaises(safety.Refused):
+            canary.initialize_state(self.routing_double(ops), production=True)
+        self.assertFalse(self.ledger.exists())
+        self.private(self.ledger.parent)
+        self.ledger.write_bytes(b"")
+        self.assertEqual(canary.initialize_state(self.routing_double(ops), production=True),
+                         dict(created=False, production=True))
+        self.assertEqual(ops, [])  # not even a status: nothing is written to the production state from here
+
+    def production_ledger(self):
+        """The production ledger in the temporary HOME, with one admission, written only by scripts/routing.py."""
+        for folder in (self.settings.parent, self.ledger.parent):
+            self.private(folder)
+        routing_cmd = qual_server.Routing(self.settings, self.ledger)
+        canary.initialize_state(routing_cmd)
+        answer = routing_cmd("prepare", **canary.plan_assignments(1, "prod")[0]["body"])[0]
+        self.assertEqual(answer["state"], "admitted", answer)
+        routing_cmd.stop()
+        return self.ledger.read_bytes(), self.ledger.stat().st_mtime_ns
+
+    def test_the_export_reads_the_production_ledger_read_only(self):
+        before = self.production_ledger()
+        replay = self.tmp / "replay"
+        from tests.qualification import replay_export
+        connects = []
+        real = replay_export.sqlite3.connect
+
+        def spy(database, **kwargs):
+            connects.append(database)
+            return real(database, **kwargs)
+        argv = ["--export-canary-admissions", "--production-ledger", "--replay-dir", str(replay)]
+        with mock.patch("sys.stdout"):
+            self.assertEqual(live.main(argv), 2)  # no approval: refused, nothing read
+            self.assertFalse(replay.exists())
+            with mock.patch.object(replay_export.sqlite3, "connect", spy):
+                self.assertEqual(live.main(argv + ["--approval", *APPROVED]), 0)
+        self.assertEqual(len(connects), 1)
+        self.assertTrue(connects[0].endswith("?mode=ro"))
+        self.assertEqual((self.ledger.read_bytes(), self.ledger.stat().st_mtime_ns), before)
+        self.assertEqual(len(replay_export.exported_keys(replay)), 1)
+
+    def test_main_refuses_the_production_ledger_outside_an_approved_canary(self):
+        ledger = self.private(self.tmp / "state") / "calls.jsonl"
+        safety.CallLedger.initialize(ledger)
+        target = self.private(self.tmp / "ok")
+        base = ["--isolated-dir", str(target), "--call-ledger", str(ledger)]
+        cases = [base + ["--canary", "--project", canary.ALLOWLIST, "--production-ledger"],  # no approval
+                 base + ["--canary", "--project", canary.ALLOWLIST, "--approval", *APPROVED],  # no flag
+                 base + ["--canary", "--project", canary.ALLOWLIST, "--production-ledger", "--approval", *APPROVED,
+                         "--canary-state", str(self.tmp / "canary")],
+                 base + ["--production-ledger", "--approval", *APPROVED],  # not a canary
+                 ["--reset-canary-state", "--production-ledger", "--approval", *APPROVED],
+                 ["--set-cap", "pilot", "4", "--reason", "r", "--production-ledger", "--approval", *APPROVED,
+                  "--call-ledger", str(ledger)]]
+        for argv in cases:
+            with self.subTest(argv=argv[4:]), mock.patch("sys.stderr") as err:
+                self.assertEqual(live.main(argv), 2)
+                self.assertIn("refused", "".join(str(c) for c in err.write.call_args_list))
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertFalse(self.ledger.exists())
+        self.assertFalse(self.settings.exists())
+
+    def test_an_approved_production_canary_is_not_managed_until_the_user_activates_it(self):
+        ledger = self.private(self.tmp / "state") / "calls.jsonl"
+        safety.CallLedger.initialize(ledger)
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--canary",
+                "--project", str(project), "--canary-allow", str(project), "--production-ledger", "--approval", *APPROVED]
+        with mock.patch("sys.stderr") as err:
+            self.assertEqual(live.main(argv), 2)
+        self.assertIn("managed_projects", "".join(str(c) for c in err.write.call_args_list))
+        self.assertFalse(self.ledger.exists())
+
+    def test_the_run_pins_the_production_paths_records_the_approval_and_writes_nothing_itself(self):
+        before = self.production_ledger()
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        state = canary.resolve_state(None, production=True, approval=APPROVED)
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        run = live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state)
+        pins = dict(zip(run.routing.argv[::2], run.routing.argv[1::2]))
+        self.assertEqual((pins["--settings"], pins["--ledger"]), (str(self.settings.resolve()), str(self.ledger.resolve())))
+        self.assertEqual(run.results["production_ledger"], dict(approval=state["approval"], scope="canary only"))
+        ops = []
+        run.routing = self.routing_double(ops)
+        run.start = lambda stage: ops.append("start")
+        with self.assertRaises(safety.Refused):
+            run.canary_run()  # the recording double's status is not clean: refused before any write or server
+        self.assertEqual(ops, ["status"])  # no `set`: the production state is never initialized by the harness
+        self.assertEqual((self.ledger.read_bytes(), self.ledger.stat().st_mtime_ns), before)
+
+
 if __name__ == "__main__":
     unittest.main()
