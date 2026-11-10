@@ -267,8 +267,10 @@ class EndToEndTests(SeedBase):
             return {(item['pool'], item['window']): item['source']
                     for item in json.loads(stdout.getvalue())['windows']['windows']}
 
-        unobserved = prepare('e1')
-        self.assertEqual((unobserved['state'], unobserved['reason']), ('pending', 'window_unobserved'), unobserved)
+        excluded = self.collect()['observations']['excluded']
+        self.assertIn(dict(route='sub', reason='window_unobserved'), excluded)
+        unobserved = prepare('e1')  # the only candidate is left out, so nothing can be admitted
+        self.assertEqual(unobserved['state'], 'pending', unobserved)
         self.assertEqual(status(), {})
         self.assertEqual(pinned.handle(json.dumps(seed()).encode())['reason'], 'operator_op_not_served')
 

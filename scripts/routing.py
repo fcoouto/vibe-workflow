@@ -28,8 +28,8 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import (ledger_versions, routing, routing_gates, routing_settings, subscription_reconcile,  # noqa: E402
-                     usage_budget)
+from runtime import (ledger_versions, routing, routing_gates, routing_observations, routing_settings,  # noqa: E402
+                     subscription_reconcile, usage_budget)
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -61,12 +61,13 @@ FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constra
               reconcile_subscription=({'attempt_id', 'evidence', 'event_id'}, set()),
               resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}),
               drop_debit=({'key', 'marker', 'event_id'}, set()),
-              settle_legacy_call=({'run_id', 'phase', 'evidence', 'event_id'}, set()))
+              settle_legacy_call=({'run_id', 'phase', 'evidence', 'event_id'}, set()),
+              seed_window=(set(routing_observations.SEED_FIELDS), set()))
 # Operator ops are one-shot commands only (`operator_op_not_served`): they need the `one_shot` flag that only `main()`
 # sets. Neither the OpenCode shim's persistent `--serve` child, which a plugin or worker can reach, nor any in-process
 # service (a launcher's `managed_service` included) can settle, release or unblock anything (C.3 design 3.5, 3.7).
 OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block',
-                'reconcile_subscription', 'drop_debit', 'settle_legacy_call')
+                'reconcile_subscription', 'drop_debit', 'settle_legacy_call', 'seed_window')
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -564,6 +565,14 @@ class Service:
         """Operator settlement of an open legacy S1 run call (C3-0a, design 4.4): release an unsent call, or charge."""
         return self._operator(*ledger_versions.settle_event(body), apply=ledger_versions.settle)
 
+    def _seed_window(self, body):
+        """Operator seed of a subscription window no host has reported yet (C.3 design 7.1 decision 6)."""
+        event = routing_observations.seed_event(body)
+        require(event is not None, 'invalid_request')
+        result = routing_observations.seed_window(self._ledger(True, write=True), event, self.clock(),
+                                                  self.settings_path)
+        return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
     def _operator(self, event, reason='invalid_request', apply=None):
         require(event is not None, reason)
         ledger = self._ledger(False, write=True)
@@ -625,7 +634,8 @@ class Service:
         effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
                     settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs,
-                    project_pinned=self.project is not None)
+                    project_pinned=self.project is not None,
+                    windows=routing_observations.window_status(self.settings_path, self.clock()))
 
     def _set(self, body):
         if 'organization' in body:
