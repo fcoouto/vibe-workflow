@@ -5,19 +5,25 @@ event_id}` is a one-shot operator op for an open `uncertain` hold with window cl
 `host_usage` (the launcher's idle re-read of the derived session) settles like a subscription `complete`; `abandon`
 frees the concurrency place and turns the window claims into a debit that admission keeps counting (`held`) until
 a `prepare` snapshot shows a fixed window that began after the abandon (`_qualifies`). Time alone never releases.
+Only a `prepare` outside `--serve` clears a debit (C3-0a); a debit that never clears (a rolling window) is removed by the
+one-shot operator op `drop_debit{key, marker, event_id}` against the marker `status` lists.
 """
 import hashlib
+import hmac
 import json
+import re
 import secrets
 
 from runtime import usage_budget
-from runtime.usage_budget import MAX_INTEGER, WIN, BudgetError, Ledger, require
+from runtime.usage_budget import MAX_INTEGER, WIN, BudgetError, Ledger, integer, require
 
 KIND = 'reconcile_subscription'
 EVIDENCE_KINDS = ('host_usage', 'abandon')
 HOST_SOURCE = 'host_message_totals'
 DEBITS = 'window_debits'
 CLEARED = 'window_debit_cleared'
+DROP_KIND = 'drop_debit'
+DEBIT_MARKER = re.compile(r'dd_[0-9a-f]{32}')
 MAX_WINDOW_DEBITS = 32
 # A provider's window start is compared with the command's clock, which `prepare` keeps within this drift of the
 # collector (routing.MAX_CLOCK_DRIFT): a window must begin at least this long after the abandon mark.
@@ -171,6 +177,57 @@ def clear_debits(ledger, data, observations):
     return data
 
 
+def debit_marker(data, key):
+    """The handshake value `drop_debit` needs: a digest of the ledger identity, the window key and the debit's units
+    and mark, shown only by `status`. A debit that grew or moved after the operator reviewed it makes it stale."""
+    entry = data[DEBITS][key]
+    raw = json.dumps([data['identity'], key, entry['units'], entry['at']], separators=(',', ':'), ensure_ascii=True)
+    return 'dd_' + hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def drop_event(value):
+    """The operator's `drop_debit{event_id, key, marker}` as a ledger event: (event, None) or (None, 'invalid_request')."""
+    from runtime import routing
+    fields = ('event_id', 'key', 'marker')
+    if type(value) is not dict or set(value) != set(fields) or \
+            not routing._bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID):
+        return None, 'invalid_request'
+    key, marker = value['key'], value['marker']
+    if type(key) is not str or not key.startswith(WIN) or len(key) > usage_budget.MAX_KEY or not key.isprintable() \
+            or type(marker) is not str or DEBIT_MARKER.fullmatch(marker) is None:
+        return None, 'invalid_request'
+    return dict(value, kind=DROP_KIND), None
+
+
+def drop(ledger, event, now):
+    """Remove one window debit in one write transaction, idempotent by event id: the key must still be debited
+    (`debit_not_pending`) and the marker current (`marker_stale`). It never charges or releases dollars or holds.
+    The audit is the event row: the key and its units only."""
+    from runtime import routing
+    try:
+        integer(now)
+        digest = routing.event_digest(event)
+        with ledger.transaction() as data:
+            usage_budget._create_tables(ledger.db)
+            known = ledger._event(data, event['event_id'], now)
+            if known is not None:
+                require(known[0] == digest, 'event_conflict')
+                return dict(json.loads(known[1])['outcome'], duplicate=True)
+            key = event['key']
+            require(key in data.get(DEBITS, {}), 'debit_not_pending')
+            require(hmac.compare_digest(event['marker'].encode(), debit_marker(data, key).encode()), 'marker_stale')
+            entry = data[DEBITS].pop(key)
+            if not data[DEBITS]:
+                del data[DEBITS]
+            outcome = dict(state='recorded', duplicate=False, outcome='debit_dropped', key=key, units=entry['units'])
+            body = dict(attempt_id='debit:' + hashlib.sha256(key.encode()).hexdigest()[:16], kind=DROP_KIND,
+                        recorded_at=now, outcome=dict(outcome))
+            ledger._store_event(data, event['event_id'], digest, body, now, effect=True)
+            return outcome
+    except BudgetError as error:
+        return dict(state='blocked', reason=str(error))
+
+
 def _counted(items, field='ids'):
     items = sorted(items)
     limit = usage_budget.SUMMARY_IDS
@@ -178,12 +235,16 @@ def _counted(items, field='ids'):
 
 
 def summary(data, listed, hint):
-    """Add the uncertain subscription holds and the window debits to the operator's reconcile listing. The hint
-    gains HINT while such a hold is open; a debit alone needs no operator action (telemetry clears it)."""
+    """Add the uncertain subscription holds and the window debits, each with its `drop_debit` marker, to the
+    operator's reconcile listing. The hint gains HINT while such a hold is open; a debit alone needs no operator action
+    (telemetry clears a fixed window's debit; `drop_debit` is for one that never clears)."""
     uncertain = [attempt for attempt, hold in Ledger.open_holds(data).items()
                  if hold['state'] == 'uncertain' and not hold.get('amount') and hold.get('organization') is None]
-    listed = dict(listed, reconcile_subscription=_counted(uncertain),
-                  window_debits=_counted(data.get(DEBITS, {}), 'keys'))
+    debits = data.get(DEBITS, {})
+    shown = [dict(key=key, units=debits[key]['units'], at=debits[key]['at'], marker=debit_marker(data, key))
+             for key in sorted(debits)[:usage_budget.SUMMARY_IDS]]
+    listed = dict(listed, reconcile_subscription=_counted(uncertain), window_debits=_counted(debits, 'keys'),
+                  drop_debit=dict(debits=shown, more=max(0, len(debits) - len(shown))))
     if uncertain:
         hint = HINT if hint is None else hint + ' ' + HINT
     return listed, hint

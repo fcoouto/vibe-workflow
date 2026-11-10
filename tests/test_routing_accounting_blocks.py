@@ -5,7 +5,7 @@ import random
 import sqlite3
 import unittest
 from unittest import mock
-from runtime import routing, usage_budget as budget
+from runtime import ledger_versions, routing, usage_budget as budget
 from scripts import routing as command
 from tests.test_routing_command import M, now, observations, prepare
 from tests.test_routing_dispatch import record
@@ -316,24 +316,24 @@ class VersionTests(fixture.Accounting):
         self.assertEqual((hold['root'], hold['stage']), (expected, 'worker'))
 
     """Review S3: settled charges need version 4, so older code fails closed instead of dropping them."""
-    def test_a_v3_ledger_migrates_to_v4_keeping_every_claim(self):
+    def test_a_v3_ledger_migrates_to_the_current_version_keeping_every_claim(self):
         self.funded('a1')
         with closing(sqlite3.connect(self.ledger)) as db:
             data = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
             data['version'] = 3
             db.execute('UPDATE ledger SET body=?', (json.dumps(data),)); db.commit()
         before = self.snapshot()
-        self.assertEqual(before['version'], 4)  # migrated on read
+        self.assertEqual(before['version'], 5)  # migrated on read (3 -> 4 -> 5)
         self.call(complete('a1', 'c1', usage=usage(M)))
         with closing(sqlite3.connect(self.ledger)) as db:
             stored = json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])
-        self.assertEqual(stored['version'], 4)
+        self.assertEqual(stored['version'], 5)
         self.assertEqual(stored['admissions'], before['admissions'])
-        self.assertEqual(budget.STATE_VERSION, 4)
+        self.assertEqual(ledger_versions.STATE_VERSION, 5)
 
     def test_older_code_refuses_a_v4_ledger(self):
         self.funded('a1')
-        with mock.patch.object(budget, 'STATE_VERSION', 3), self.assertRaisesRegex(budget.BudgetError,
+        with mock.patch.object(ledger_versions, 'STATE_VERSION', 3), self.assertRaisesRegex(budget.BudgetError,
                                                                                   'ledger_identity_changed'):
             self.snapshot()
 
