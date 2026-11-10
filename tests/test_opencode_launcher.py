@@ -564,7 +564,7 @@ class CommandLineTests(LauncherBase):
         server.request, server.rpc = self.host.request, self.host.rpc
         with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
                 mock.patch.object(opencode_launch.command, 'managed_service', return_value=self.service):
-            code = opencode_launch.main(stdin=json.dumps(request).encode(), write=stdout.append)
+            code = opencode_launch.main([], stdin=json.dumps(request).encode(), write=stdout.append)
         self.assertEqual(code, 0)
         answer = json.loads(stdout[0])
         self.assertEqual(answer['state'], 'recorded', answer)
