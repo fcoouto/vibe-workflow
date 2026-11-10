@@ -28,7 +28,7 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import routing, routing_gates, routing_settings, subscription_reconcile, usage_budget  # noqa: E402
+from runtime import ledger_versions, routing, routing_gates, routing_settings, subscription_reconcile, usage_budget  # noqa: E402,E501
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -56,11 +56,16 @@ FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constra
               resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()),
               reconcile_uncertain=({'attempt_id', 'evidence', 'event_id'}, set()),
               reconcile_subscription=({'attempt_id', 'evidence', 'event_id'}, set()),
-              resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}))
+              resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}),
+              drop_debit=({'key', 'marker', 'event_id'}, set()),
+              settle_legacy_call=({'run_id', 'phase', 'evidence', 'event_id'}, set()))
 # Operator ops are one-shot commands only: the OpenCode shim's persistent `--serve` child never exposes them, so a
 # plugin or worker that can reach it cannot settle, release or unblock anything (`operator_op_not_served`).
 OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block',
-                'reconcile_subscription')
+                'reconcile_subscription', 'drop_debit', 'settle_legacy_call')
+# C3-0a's ops also need the `one_shot` flag that only `main()` sets, so no in-process service (a launcher's
+# `managed_service` included) can run them either (C.3 design 3.5, 3.7).
+ONE_SHOT_OPS = ('drop_debit', 'settle_legacy_call')
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -252,6 +257,7 @@ class Service:
             name = value.get('op', op)
             require(type(name) is str and name in FIELDS, 'unknown_op')
             require(not (self.serving and name in OPERATOR_OPS), 'operator_op_not_served')
+            require(self.one_shot or name not in ONE_SHOT_OPS, 'operator_op_not_served')
             body = {key: item for key, item in value.items() if key not in ('v', 'op', 'id')}
             required, optional = FIELDS[name]
             require(required <= set(body) <= required | optional, 'invalid_request')
@@ -437,8 +443,9 @@ class Service:
                 else dict(state='blocked', reason=bound[1], **echo)
         ledger = self._ledger(True, write=True)
         self._expire(ledger)
+        # S3.6c debits clear only outside `--serve` (C3-0a): the shim's persistent child never releases one.
         result = routing.admit(admitted, ranking, settings, observations, ledger=ledger,
-                               workflow=None if bound is None else bound[1])
+                               workflow=None if bound is None else bound[1], clear_debits=not self.serving)
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
             return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'], **echo)
@@ -538,6 +545,14 @@ class Service:
         """Operator reconciliation of an uncertain subscription hold (S3.6c): a host re-read or abandon."""
         return self._operator(*subscription_reconcile.reconcile_event(body), apply=subscription_reconcile.reconcile)
 
+    def _drop_debit(self, body):
+        """Operator removal of one S3.6c window debit against its `status` marker (C3-0a), e.g. a rolling window's."""
+        return self._operator(*subscription_reconcile.drop_event(body), apply=subscription_reconcile.drop)
+
+    def _settle_legacy_call(self, body):
+        """Operator settlement of an open legacy S1 run call (C3-0a, design 4.4): release an unsent call, or charge."""
+        return self._operator(*ledger_versions.settle_event(body), apply=ledger_versions.settle)
+
     def _operator(self, event, reason='invalid_request', apply=None):
         require(event is not None, reason)
         ledger = self._ledger(False, write=True)
@@ -587,7 +602,8 @@ class Service:
             try:
                 data = self._ledger(False).snapshot()
                 stale = len(routing.unsent_admissions(data, revision)) if revision is not None else None
-                ledger = dict(state='ready', stale_admissions=stale, **routing.ledger_summary(data))
+                ledger = dict(state='ready', stale_admissions=stale, legacy_outstanding=ledger_versions.outstanding(data),
+                              **routing.ledger_summary(data))
                 stored = ledger['caps']
             except (Blocked, BudgetError, sqlite3.Error) as error:
                 self.close()

@@ -216,13 +216,13 @@ class SettleTests(Legacy):
         self.reserved('res')
         self.dispatching('dis')
         self.unresolved('unr')
-        self.over_bound('ob')
         self.start_run('done')
         self.finish_run('done', M // 2)
         self.funded('conv')
         with self.open_ledger() as ledger:
             ledger.convert_hold('conv', 'personal', 'packet', 5 * M, self.revision(), now(),
                                 dict(account='na', task=self.hold('conv')['task'], windows=[]))
+        self.over_bound('ob')  # last: an over-bound call blocks the organization's admissions
         before, stored = self.snapshot(), self.ledger_bytes()
         cases = [('res', receipts(1), 'call_state_forbidden'), ('res', RESERVATION, 'call_state_forbidden'),
                  ('dis', NEVER, 'call_state_forbidden'), ('unr', NEVER, 'call_state_forbidden'),
@@ -364,13 +364,13 @@ class OutstandingTests(Legacy):
         self.reserved('a-res')
         self.dispatching('b-dis')
         self.unresolved('c-unr')
-        self.over_bound('d-ob')
         self.start_run('e-done')
         self.finish_run('e-done', M)
         self.funded('conv')
         with self.open_ledger() as ledger:
             ledger.convert_hold('conv', 'personal', 'packet', 5 * M, self.revision(), now(),
                                 dict(account='na', task=self.hold('conv')['task'], windows=[]))
+        self.over_bound('d-ob')  # last: an over-bound call blocks the organization's admissions
         with self.open_ledger() as ledger, ledger.transaction() as data:
             data['organizations']['personal']['legacy_block'] = True
             data['handoffs'] = {'h1': dict(state='ready'), 'h2': dict(state='claimed'), 'h3': dict(state='ready')}
