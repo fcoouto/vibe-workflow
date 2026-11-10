@@ -121,11 +121,24 @@ class StateFailureTests(unittest.TestCase):
                 raise error
         return raised.exception
 
-    def test_startup_errors_keep_their_message_and_cause(self):
-        error = startup.StartupError('Original qualification operation is unavailable or expired')
+    def test_d4_transaction_contention_is_busy_with_its_own_message(self):
+        error = startup.StartupError('D4 transaction busy; retry the same bound request')
         failure = self.failure(error)
+        self.assertIsInstance(failure, state.StateBusy)
         self.assertEqual(str(failure), str(error))
         self.assertIs(failure.__cause__, error)
+
+    def test_other_startup_errors_never_surface_their_text(self):
+        # Many StartupError messages embed input (setting keys, client names, joined blockers).
+        from runtime import openrouter_settings
+        for error in (startup.StartupError('Invalid /Users/someone/private-input field'),
+                      changes.Pending('Published authority failed current qualification: private-input'),
+                      openrouter_settings.SettingsError('private-input'),
+                      startup.RuntimeScopeError('requires qualification: private-input')):
+            with self.subTest(type(error).__name__):
+                failure = self.failure(error)
+                self.assertEqual(str(failure), 'Runtime state is unavailable, corrupt, locked or incompatible')
+                self.assertNotIsInstance(failure, (state.StateBusy, state.StateDeadline))
 
     def test_a_locked_database_is_busy_not_corrupt(self):
         with closing(sqlite3.connect(state._path(self.scope), timeout=0, isolation_level=None)) as other:
@@ -159,6 +172,27 @@ class StateFailureTests(unittest.TestCase):
         failure = self.failure(sqlite3.DatabaseError('file is not a database'))
         self.assertEqual(str(failure), 'Runtime state is unavailable, corrupt, locked or incompatible')
         self.assertNotIsInstance(failure, (state.StateBusy, state.StateDeadline))
+
+
+class SurfacedMessageTests(unittest.TestCase):
+    """database_failure surfaces a deadline's own text, so every deadline must be raised with a literal message."""
+
+    def test_every_deadline_or_busy_error_is_raised_with_a_literal_message(self):
+        import ast
+        names, found = {'ObservationDeadline', 'StateDeadline', 'StateBusy'}, 0
+        root = Path(__file__).resolve().parents[1]
+        for path in sorted(root.glob('runtime/**/*.py')):
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+                callee = getattr(node, 'func', None)
+                name = getattr(callee, 'id', None) or getattr(callee, 'attr', None)
+                if not isinstance(node, ast.Call) or name not in names:
+                    continue
+                found += 1
+                literal = len(node.args) == 1 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                # The one pass-through re-raises an ObservationDeadline, whose text this rule already bounds.
+                passthrough = path.name == 'state_errors.py' and ast.unparse(node) == 'StateDeadline(str(error))'
+                self.assertTrue(literal or passthrough, f'{path.relative_to(root)}:{node.lineno}: {ast.unparse(node)}')
+        self.assertGreaterEqual(found, 5)
 
 
 class SiblingFingerprintTests(unittest.TestCase):
