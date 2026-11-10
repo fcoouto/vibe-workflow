@@ -230,7 +230,8 @@ class ExchangeTests(Sandbox):
                 reader.child_env(dict(self.environ, CODEX_HOME=value))
             self.assertEqual(str(caught.exception), 'codex_home_invalid')
         with self.assertRaises(reader.ReadError):
-            self.read(environ=dict(self.environ, CODEX_HOME='relative'))
+            reader.read_windows(command=self.command(), environ=dict(self.environ, CODEX_HOME='relative'),
+                                manifest=self.manifest)
         self.assertEqual(self.spawns(), 0)
 
     def test_a_changed_symlinked_auth_file_fails_closed(self):

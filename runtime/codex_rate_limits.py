@@ -39,14 +39,21 @@ LIMIT = 1000  # observations.WINDOW_UNIT: thousandths of the provider's utilisat
 # 5 s bounds one read: the app-server starts in well under a second and the read is one backend request; a
 # `prepare` that needs it waits at most this long, and a read slower than that is treated as failed.
 TIMEOUT = 5.0
+# A parallel `prepare` waits for the reader in flight (its timeout plus this) instead of failing at once; it then
+# finds that reading fresh. Polling a non-blocking lock: no extra process and no timer.
+LOCK_EXTRA = 1.0
+LOCK_POLL = 0.05
+# The stop sequence protects the user's login: close stdin (Codex exits on its own), then SIGTERM, then SIGKILL to
+# the process group, each after this grace.
+STOP_GRACE = 0.3
 FAILURE_BACKOFF = 300  # seconds without a new spawn after a failed read (no retry loop)
 MAX_LINE = 256 << 10
 MAX_MESSAGES = 64
 ENV_ALLOWLIST = ('PATH', 'HOME', 'CODEX_HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TMPDIR')
-WINDOW_KEYS = {'usedPercent', 'windowDurationMins', 'resetsAt'}
+WINDOW_KEYS = {'usedPercent', 'windowDurationMins', 'resetsAt'}  # required; unknown extra keys are ignored
 STATE_FILE = 'codex-rate-limits.json'
 LOCK_FILE = '.codex-rate-limits.lock'
-REASONS = ('codex_unavailable', 'codex_exited', 'codex_timeout', 'codex_protocol_invalid', 'codex_protocol_error',
+REASONS = ('reader_busy', 'codex_unavailable', 'codex_method_refused', 'codex_home_invalid', 'codex_exited', 'codex_timeout', 'codex_protocol_invalid', 'codex_protocol_error',
            'codex_protocol_unexpected', 'codex_auth_changed', 'codex_limits_invalid', 'codex_window_invalid',
            'codex_window_unknown', 'codex_window_undeclared', 'codex_pool_undeclared', 'codex_windows_absent',
            'codex_window_missing', 'observation_store_unsafe', 'observation_store_invalid', 'route_manifest_invalid')
@@ -85,8 +92,11 @@ def _private_dir(value):
 
 
 def child_env(environ):
-    """The allowlisted environment: relative PATH entries dropped, TMPDIR only when a private absolute directory."""
+    """The allowlisted environment: relative PATH entries dropped, TMPDIR only when a private absolute directory,
+    and `codex_home_invalid` for a relative CODEX_HOME."""
     env = {key: environ[key] for key in ENV_ALLOWLIST if type(environ.get(key)) is str and environ[key]}
+    if 'CODEX_HOME' in env and not os.path.isabs(env['CODEX_HOME']):
+        raise ReadError('codex_home_invalid')
     env['PATH'] = _absolute_path(env.get('PATH'))
     if 'TMPDIR' in env and not _private_dir(env['TMPDIR']):
         del env['TMPDIR']
@@ -106,17 +116,23 @@ def default_command(environ):
 
 
 def _auth_mark(env):
-    """Metadata of the Codex auth file (never its content), to detect a write during the read."""
-    home = env.get('CODEX_HOME') or os.path.join(env.get('HOME', '/nonexistent'), '.codex')
-    try:
-        info = os.lstat(os.path.join(home, 'auth.json'))
-    except OSError:
-        return None
-    return info.st_ino, info.st_size, info.st_mtime_ns
+    """Metadata of the Codex auth file (never its content), to detect a write during the read: the entry itself and,
+    through a symlink, its target. `absent` when there is no file (keyring storage); a file appearing is a change."""
+    path = os.path.join(env.get('CODEX_HOME') or os.path.join(env.get('HOME', '/nonexistent'), '.codex'), 'auth.json')
+    marks = []
+    for read in (os.lstat, os.stat):
+        try:
+            info = read(path)
+        except OSError:
+            marks.append(None)
+            continue
+        marks.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    return 'absent' if marks == [None, None] else tuple(marks)
 
 
 def _message(method, ident=None):
-    assert method in METHODS, method  # nothing else is ever sent
+    if method not in METHODS:
+        raise ReadError('codex_method_refused')  # nothing else is ever sent
     value = dict(method=method)
     if ident is not None:
         value['id'] = ident
@@ -177,19 +193,32 @@ class _Session:
 
 
 def _stop(process):
+    """Close stdin and let Codex exit on its own; then SIGTERM the group, then SIGKILL it, STOP_GRACE apart. The
+    group signals also reach anything the app-server started."""
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        process.stdin.close()
+    except OSError:
+        pass
+    for sig in (None, signal.SIGTERM, signal.SIGKILL):
+        if sig is not None:
+            try:
+                os.killpg(process.pid, sig)
+            except OSError:
+                pass  # the group is already gone
+        try:
+            process.wait(STOP_GRACE if sig != signal.SIGKILL else 1)
+            if sig is None:
+                break
+        except subprocess.TimeoutExpired:
+            continue
+    try:
+        os.killpg(process.pid, signal.SIGKILL)  # anything the leader left in its group
     except OSError:
         pass
     try:
-        process.wait(1)
-    except subprocess.TimeoutExpired:
+        process.stdout.close()  # only now: a late write never meets a closed pipe
+    except OSError:
         pass
-    for stream in (process.stdin, process.stdout):
-        try:
-            stream.close()
-        except OSError:
-            pass
 
 
 def exchange(command, environ, timeout=TIMEOUT, timing=None):
@@ -235,7 +264,7 @@ def _snapshot(result):
 
 
 def _window(raw, now, exhausted):
-    if type(raw) is not dict or set(raw) != WINDOW_KEYS:
+    if type(raw) is not dict or not WINDOW_KEYS <= set(raw):
         raise ReadError('codex_window_invalid')
     percent, minutes, reset = raw['usedPercent'], raw['windowDurationMins'], raw['resetsAt']
     if type(percent) not in (int, float) or not math.isfinite(percent) or not 0 <= percent <= 100 \
@@ -297,16 +326,22 @@ def _store_dir(settings_path):
 
 
 @contextmanager
-def _pool_lock(settings_path, pool):
-    """Non-blocking: yields True when this process holds the pool's reader lock, False when another does."""
+def _pool_lock(settings_path, pool, wait=0.0):
+    """Yields True once this process holds the pool's reader lock, polling the non-blocking lock for up to `wait`
+    seconds, or False when another reader still holds it then."""
     folder = _store_dir(settings_path)
     fd = os.open(folder / ('%s.%s' % (LOCK_FILE, pool)), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-            return
+        end = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    yield False
+                    return
+                time.sleep(LOCK_POLL)
         yield True
     finally:
         os.close(fd)
@@ -338,12 +373,12 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
     """Make the pool's reading fresh if it is not: `{state, reason?, windows?}`, never raises.
 
     `fresh`: already fresh (a settled launch's, a seed's or an earlier read's), no process. `busy`: another reader
-    holds the pool. `backoff`: the last read failed less than FAILURE_BACKOFF s ago. `force` (the operator's
+    still holds the pool after its timeout plus LOCK_EXTRA. `backoff`: the last read failed less than FAILURE_BACKOFF s ago. `force` (the operator's
     command) reads even then, and even over a fresh reading. `stored`: read and stored as host observations. `failed`: a fixed reason."""
     try:
         if not force and _fresh(settings_path, need, int(time.time())):
             return dict(state='fresh')
-        with _pool_lock(settings_path, POOL) as held:
+        with _pool_lock(settings_path, POOL, timeout + LOCK_EXTRA) as held:
             if not held:
                 return dict(state='busy', reason='reader_busy')
             now = int(time.time())
@@ -357,8 +392,11 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
             try:
                 windows = read_windows(command=command, environ=environ, timeout=timeout, manifest=manifest,
                                        timing=timing)
-                for item in windows:
-                    observations.store_window(settings_path, POOL, item)
+                try:
+                    for item in windows:
+                        observations.store_window(settings_path, POOL, item)
+                except (OSError, ValueError) as error:  # partway: back off as for any failed read
+                    raise ReadError(str(error) if str(error) in REASONS else 'observation_store_invalid') from None
                 if need and not set(need) <= {item['id'] for item in windows}:
                     raise ReadError('codex_window_missing')
             except ReadError as error:
