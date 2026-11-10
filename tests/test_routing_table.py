@@ -100,6 +100,25 @@ class WriteTests(Base):
         self.assertEqual(self.table.read_bytes(), before)
         self.assertEqual([p.name for p in self.table.parent.iterdir()], ['strategy-table.json'])
 
+    def test_folder_sync_failure_after_the_rename_still_reports_the_written_table(self):
+        real_fsync = os.fsync
+
+        def fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('folder sync')
+            return real_fsync(fd)
+        with mock.patch.object(routing_table.os, 'fsync', fsync):
+            code, report = self.refresh()
+        self.assertEqual((code, report['state'], report['warnings']), (0, 'refreshed', ['dir_sync_failed']))
+        self.assertEqual(self.stored()['version'], report['version'])
+        self.assertNotIn('warnings', self.refresh()[1])
+
+    def test_a_failed_temp_file_open_removes_the_temp_file(self):
+        with mock.patch.object(routing_table.os, 'fdopen', side_effect=OSError('fdopen')):
+            code, report = self.refresh()
+        self.assertEqual((code, report['reason']), (1, 'write_failed'))
+        self.assertEqual(list(self.table.parent.iterdir()), [])
+
     def test_refuses_symlink_or_non_regular_targets_and_shared_folders(self):
         self.refresh()
         real = self.root / 'elsewhere.json'
@@ -185,6 +204,57 @@ class FailureTests(Base):
         os.mkfifo(fifo)
         code, report = self.refresh(now='2026-11-09T00:00:00Z')
         self.assertEqual((code, report['state']), (1, 'kept'))
+
+    def refresh_with(self, name, path, now='2026-11-09T00:00:00Z'):
+        args = self.args()
+        args[args.index('--' + name) + 1] = str(path)
+        out = io.StringIO()
+        with mock.patch.object(routing_table, '_now', return_value=now), mock.patch('sys.stdout', out):
+            code = routing_table.main(args)
+        return code, json.loads(out.getvalue())
+
+    def test_a_symlinked_input_is_refused(self):
+        real = self.root / 'real-terms.json'
+        real.write_bytes((self.evidence / 'terms.json').read_bytes())
+        link = self.root / 'linked-terms.json'
+        link.symlink_to(real)
+        self.assertEqual(self.refresh_with('terms', link), (1, dict(v=1, state='blocked', reason='unsafe_input')))
+        self.assertFalse(self.table.exists())
+        self.refresh(now='2026-11-01T00:00:00Z')
+        code, report = self.refresh_with('terms', link)
+        self.assertEqual((code, report['state'], report['reason']), (1, 'kept', 'unsafe_input'))
+        self.assertEqual(self.stored()['compiled_at'], '2026-11-01T00:00:00Z')
+
+    def test_a_device_input_is_refused_before_it_is_opened(self):
+        opened = []
+        real_open = os.open
+
+        def spy(path, *args, **kwargs):
+            opened.append(str(path))
+            return real_open(path, *args, **kwargs)
+        with mock.patch.object(routing_table.os, 'open', spy):
+            code, report = self.refresh_with('catalog', os.devnull)
+        self.assertEqual((code, report['reason']), (1, 'unsafe_input'))
+        self.assertNotIn(os.devnull, opened)
+
+    def test_inputs_open_without_following_a_swapped_in_link(self):
+        flags = []
+        real_open = os.open
+
+        def spy(path, flag, *args, **kwargs):
+            if str(path).startswith(str(self.evidence)):
+                flags.append(flag)
+            return real_open(path, flag, *args, **kwargs)
+        with mock.patch.object(routing_table.os, 'open', spy):
+            self.assertEqual(self.refresh()[0], 0)
+        self.assertEqual(len(flags), len(NAMES))
+        self.assertTrue(all(flag & os.O_NOFOLLOW and flag & os.O_NONBLOCK for flag in flags))
+
+    def test_previous_table_read_is_bounded(self):
+        self.refresh(now='2026-11-01T00:00:00Z')
+        with mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('unbounded read')):
+            code, report = self.refresh()
+        self.assertEqual((code, report['state']), (0, 'refreshed'))
 
     def test_oversized_compiled_table_is_not_written(self):
         self.refresh(now='2026-11-01T00:00:00Z')
