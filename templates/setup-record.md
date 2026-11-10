@@ -37,7 +37,11 @@ The project's record of its workflow setup, kept in its setup document or an equ
 - Guidance written: [what was written]
 - Local paths and preservation checked: [what was checked]
 - Client startup integration: [registration, trust, handler execution and native delivery, each observed or not]
-- Agent routing observed: [each selected case, actual evidence, limitations and next action]
+- Agent routing observed: [observed, or not and why]
+
+| Layer | Selected case | Actual evidence | Limitations | Next action |
+| --- | --- | --- | --- | --- |
+| [layer] | [case] | [what was observed or checked] | [what it does not show] | [what to do next] |
 
 ## Maintenance and recovery
 

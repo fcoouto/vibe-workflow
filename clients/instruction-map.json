@@ -814,16 +814,16 @@
       ]
     },
     "templates/pull-request.md": {
-      "sha256": "8a1be86e6bbf445627c0d0a7c9c4aa74481096037499854971e9cb9384568481",
+      "sha256": "5c30a4678dce0673be692d4a2f6647c9996baf42603732e298cd47469847e0f5",
       "ranges": [
         [
           1,
-          30
+          29
         ]
       ]
     },
     "templates/review-report.md": {
-      "sha256": "7ac880054d353df50010ebf6a2914adf3ab211418ab2d55d6217b41ad4209640",
+      "sha256": "e71fc3f18448a4ef5f44f7ca4d9014832b75dfebba71e15461d17c2d2f37ee5d",
       "ranges": [
         [
           1,
@@ -832,11 +832,11 @@
       ]
     },
     "templates/setup-record.md": {
-      "sha256": "dced2be68d24ecdc0a528aef0ea2cf836d36cf9246823ce155d821c7ba1a2d07",
+      "sha256": "6094d6e4e4db6b15d8c9fdb730f63c8202c5da3606d36c0229fa3232e6fe7bf5",
       "ranges": [
         [
           1,
-          46
+          50
         ]
       ]
     },

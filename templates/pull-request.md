@@ -22,9 +22,8 @@ The body of a PR an agent opens or updates; its title prefix and draft state fol
 
 ## Readiness
 
-When the PR becomes `[READY]`, add this section, or post it as a comment if the body is already published:
+Optional summary for when the PR becomes `[READY]`, in the body or a comment. Reference or update the evidence above rather than copy it; the [readiness requirements](../policies/08-merge-readiness.md#establish-readiness) decide what is complete.
 
 - Candidate and base: [head commit, and the base it was checked against]
-- Checks: [results on that head; reruns, and reused evidence with the reason]
-- Review: [who reviewed which snapshot; open findings, or none]
+- Evidence: [which checks and review above cover that head; reruns, and reused evidence with the reason]
 - Limits: [what was not run or not observed]

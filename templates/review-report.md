@@ -1,6 +1,6 @@
 # Review report
 
-The report of a code, security or project review. Each line names the review kinds that require it; a review covering several kinds fills the lines of each. Analysis, redaction and storage rules stay with the owners: [Code Review](../policies/06-code-review.md#review-the-actual-change), [Security Review](../policies/04-security-review.md#evidence-and-completion) and [project review](../skills/review-my-project/references/procedure.md#findings-report-and-retention). Omit lines no kind requires when they don't apply; never invent values.
+The report of a code, security or project review. Each line names the review kinds that require it; a review covering several kinds fills the lines of each. Analysis, redaction and storage rules stay with the owners: [Code Review](../policies/06-code-review.md#review-the-actual-change), [Security Review](../policies/04-security-review.md#evidence-and-completion) and [project review](../skills/review-my-project/references/procedure.md#findings-report-and-retention). Omit lines no kind requires when they don't apply; never invent values. Add any section the reviewer's brief asks for.
 
 ## Review
 
