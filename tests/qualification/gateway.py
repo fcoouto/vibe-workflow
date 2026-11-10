@@ -51,6 +51,7 @@ PROVIDER = "openrouter"
 MAX_OUTPUT_TOKENS, STEPS, INPUT_TOKENS = 500, 2, 10_000
 KEY_LIMIT_MAX = 1.0
 ISOLATION_MAX_AGE_S = 12 * 3600
+ISOLATION_PROBES = ("A1", "A2", "A3", "A4")
 IDLE_S, POLL_S = 900, 1.0
 POOL, ACCOUNT = "openrouter", "openrouter:gateway-qual"
 MAX_INPUT_PER_M, MAX_OUTPUT_PER_M = 1.0, 4.0
@@ -99,8 +100,10 @@ def prompt_tokens(text):
 
 
 def read_isolation(path, now=None):
-    """The launcher-probes result of this session, or `Refused`: A1 passed (OpenCode honoured the inline config), on
-    the qualified OpenCode version, written today and at most ISOLATION_MAX_AGE_S ago."""
+    """The launcher-probes result of this session, or `Refused` with a fixed reason: A1, A2, A3 and A4 all passed,
+    no blockers, cleanup verified, on the qualified OpenCode version, written today and at most ISOLATION_MAX_AGE_S
+    ago. A1 shows the inline config's plugin, password and flags honoured; it does not show the step count or the
+    output cap honoured (those are observed by the gateway run itself)."""
     from tests.qualification.safety import QUALIFIED_OPENCODE
     now = time.time() if now is None else now
     if not path:
@@ -110,17 +113,23 @@ def read_isolation(path, now=None):
         value = json.loads(file.read_text())
         age = now - file.stat().st_mtime
     except (OSError, ValueError):
-        raise Refused("--isolation-result is unreadable") from None
+        raise Refused("isolation_result_unreadable: --isolation-result cannot be read") from None
     meta = value.get("_meta") if isinstance(value, dict) else None
-    a1 = ((value.get("probes") if isinstance(value, dict) else None) or {}).get("A1") or {}
+    probes = (value.get("probes") if isinstance(value, dict) else None) or {}
+    a1 = probes.get("A1") or {}
     if not isinstance(meta, dict) or meta.get("mode") != "launcher-probes":
-        raise Refused("--isolation-result is not a launcher-probes result")
-    if a1.get("passed") is not True:
-        raise Refused("--isolation-result does not show A1 passed: the inline config is not shown honoured")
+        raise Refused("isolation_result_wrong_mode: --isolation-result is not a launcher-probes result")
+    failed = [probe for probe in ISOLATION_PROBES if (probes.get(probe) or {}).get("passed") is not True]
+    if failed:
+        raise Refused("isolation_probes_not_passed: %s did not pass in --isolation-result" % ", ".join(failed))
+    if value.get("blockers") != []:
+        raise Refused("isolation_run_blocked: --isolation-result records blockers")
+    if (value.get("cleanup") or {}).get("verified_by_harness") is not True:
+        raise Refused("isolation_cleanup_unverified: --isolation-result's cleanup was not verified")
     if a1.get("server_version") != QUALIFIED_OPENCODE:
-        raise Refused("--isolation-result's server is not OpenCode %s" % QUALIFIED_OPENCODE)
+        raise Refused("isolation_version_differs: --isolation-result's server is not OpenCode %s" % QUALIFIED_OPENCODE)
     if meta.get("date") != time.strftime("%Y-%m-%d", time.localtime(now)) or not 0 <= age <= ISOLATION_MAX_AGE_S:
-        raise Refused("--isolation-result is not from this session (today, at most 12 h old)")
+        raise Refused("isolation_result_stale: --isolation-result is not from this session (today, at most 12 h old)")
     return dict(file=file.name, server_version=a1["server_version"])
 
 
@@ -242,7 +251,10 @@ class Gateway:
             hard_bound="key_limit_usd", key_limit_usd=self.key_limit, soft_bounds=["output_cap", "steps", "cost_abort"],
             output_cap=MAX_OUTPUT_TOKENS, steps=STEPS, input_limit=INPUT_TOKENS,
             input_note="the harness's own prompt is checked; OpenCode's system prompt and tool schemas are outside it",
-            inline_config_honoured="per A1 result %s" % self.isolation["file"]))
+            inline_config_honoured="plugin, password and flags per A1 result %s; agents.*.steps and body.max_tokens are "
+                                   "not shown by A1" % self.isolation["file"],
+            soft_bounds_status="unobserved until the live gateway run shows them (a session stopping at the step cap, "
+                               "output stopped within max_tokens): see positive.observed"))
         self.host, self.checks = None, {}
 
     def run(self):
@@ -277,7 +289,9 @@ class Gateway:
 
     def check_server(self, state):
         """Before any sign-in or reservation: the same OpenCode version as the A1 result, and the step count on every
-        agent the server lists (a session or its children may run any of them), else `steps_not_universal`."""
+        agent the server lists (a session or its children may run any of them), else `steps_not_universal`. Each
+        agent's steps come from the server's own listing when it reports them; otherwise from the inline config the
+        launcher builds, and the results say so."""
         from runtime import opencode_launcher
         status, info = self.host.request("GET", "/api/info")
         version = info.get("version") if status == 200 and isinstance(info, dict) else None
@@ -285,16 +299,52 @@ class Gateway:
             raise Blocker("server_version_differs: not the OpenCode the A1 result was taken on")
         status, body = self.host.request("GET", "/api/agent")
         listed = data(body) if status == 200 else None
-        names = sorted({(item.get("name") or item.get("id")) if isinstance(item, dict) else item
-                        for item in (listed.values() if isinstance(listed, dict) else listed or [])} - {None}) \
-            if isinstance(listed, (list, dict)) else None
-        agents = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}
-        capped = {name for name, value in agents.items() if (value or {}).get("steps") == STEPS}
+        items = list(listed.values()) if isinstance(listed, dict) else listed if isinstance(listed, list) else None
+        entries = {}
+        for item in items or []:
+            name = (item.get("name") or item.get("id")) if isinstance(item, dict) else item
+            if isinstance(name, str):
+                steps = item.get("steps") if isinstance(item, dict) else None
+                entries[name] = steps if type(steps) is int else None
+        names = sorted(entries) or None
+        if names and all(steps is not None for steps in entries.values()):
+            source = "server"
+            capped = {name for name, steps in entries.items() if 1 <= steps <= STEPS}
+        else:
+            source = "config: the agent listing reports no steps, so the launcher's inline config is read instead"
+            agents = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}
+            capped = {name for name, value in agents.items() if (value or {}).get("steps") == STEPS}
         missing = None if not names else [name for name in names if name not in capped]
-        self.results["bounds"]["agents"] = dict(listed=names, capped=sorted(capped))
+        self.results["bounds"]["agents"] = dict(listed=names, capped=sorted(capped), steps_source=source)
         if missing is None or missing:
             raise Blocker("steps_not_universal: the step count does not cover every agent (%s)" % (
                 "agent listing unreadable" if missing is None else ", ".join(map(str, missing))))
+
+    def observed_bounds(self, tree):
+        """What the run itself shows of the soft bounds; never assumed. `observed` is True only when a bound visibly
+        stopped something (a session at the step cap, output stopped by length within max_tokens); `violated` when a
+        session went past the step cap or a message's output past max_tokens (then the run fails)."""
+        sessions, outputs, length_stops = [], [], 0
+        for sid in tree:
+            status, body = self.host.request("GET", "/api/session/%s/message" % sid, query={"order": "asc"})
+            page = data(body) if status == 200 else None
+            if not isinstance(page, list):
+                return dict(steps=dict(observed=False, reason="unreadable"), max_tokens=dict(observed=False, reason="unreadable"),
+                            violated=None)
+            turns = [m for m in page if isinstance(m, dict) and m.get("type") == "assistant"]
+            sessions.append(len(turns))
+            for message in turns:
+                output = (message.get("tokens") or {}).get("output")
+                if type(output) is int:
+                    outputs.append(output)
+                length_stops += message.get("finish") == "length"
+        steps_hit = any(count == STEPS for count in sessions)
+        over_steps, over_tokens = any(count > STEPS for count in sessions), any(o > MAX_OUTPUT_TOKENS for o in outputs)
+        return dict(steps=dict(observed=steps_hit and not over_steps, reason=None if steps_hit else "cap_not_reached",
+                               turns_per_session=sessions),
+                    max_tokens=dict(observed=bool(length_stops) and not over_tokens and bool(outputs),
+                                    reason=None if length_stops else "cap_not_reached", max_output=max(outputs or [0])),
+                    violated=over_steps or over_tokens)
 
     def admitted(self, state, routing, label):
         attempt = attempt_id("gw-" + label)
@@ -357,6 +407,7 @@ class Gateway:
             child = self.session(self.host, parent=root, title="gateway api child")
             self.host.request("POST", "/api/session/%s/prompt" % child, dict(text=PROMPT_TEXT))
             facts["running_cost_micros"] = self.watch(root, began)
+            facts["observed"] = self.observed_bounds(live_common.session_tree(self.host, root))
             facts["sent"] = reservation.settle(message_counts(self.host, live_common.session_tree(self.host, root)))
         except Ceiling as stop:
             facts["sent"] = self.settle_aborted(reservation, root)
@@ -365,6 +416,7 @@ class Gateway:
             if reservation.settled is None:
                 reservation.settle_unknown()
             facts["sent"] = reservation.settled
+        checks["soft_bounds_not_violated"] = facts["observed"]["violated"] is False
         read = opencode_launcher.account(self.host, root, funding="api", attempt=attempt, authority=token["authority"],
                                          route=dict(provider=self.route[0], model=self.route[1], variant=self.route[2]))
         result, usage = read["result"], read["result"].get("usage") or {}

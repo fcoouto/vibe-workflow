@@ -109,7 +109,7 @@ class FakeLauncherHost:
         if path == "/api/plugin":
             return 200, dict(data=[dict(id=plugin) for plugin in self.plugins])
         if path == "/api/agent":
-            return 200, dict(data=[dict(name=name) for name in self.agents])
+            return 200, dict(data=[agent if isinstance(agent, dict) else dict(name=agent) for agent in self.agents])
         if path == "/api/mcp":
             return 200, dict(data=self.mcp)
         if path == "/api/config":

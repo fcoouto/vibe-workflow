@@ -18,12 +18,14 @@ APPROVAL = dict(by="the user", at="2026-11-10T12:00Z", scope="runbook part C")
 KEY = dict(key_limit_usd="1.00", endpoint="vendor")
 
 
-def isolation_file(directory, passed=True, version="2.2.6", date=None, mode="launcher-probes"):
-    """A launcher-probes result as live_modes.py writes it, with A1's outcome and server version."""
+def isolation_file(directory, passed=True, version="2.2.6", date=None, mode="launcher-probes", others=True,
+                   blockers=(), cleanup=True):
+    """A launcher-probes result as live_modes.py writes it: A1 (outcome, server version), A2-A4, blockers, cleanup."""
     import time
     path = Path(directory) / ("isolation-%d.json" % len(list(Path(directory).glob("isolation-*.json"))))
-    path.write_text(json.dumps(dict(_meta=dict(mode=mode, date=date or time.strftime("%Y-%m-%d")),
-                                    probes=dict(A1=dict(passed=passed, server_version=version)))))
+    probes = dict(A1=dict(passed=passed, server_version=version), **{p: dict(passed=others) for p in ("A2", "A3", "A4")})
+    path.write_text(json.dumps(dict(_meta=dict(mode=mode, date=date or time.strftime("%Y-%m-%d")), probes=probes,
+                                    blockers=list(blockers), cleanup=dict(verified_by_harness=cleanup))))
     return str(path)
 
 
@@ -203,13 +205,22 @@ class CeilingTests(GatewayBase):
         self.assertEqual(env.started_options, opencode_launcher.launch_options(
             "openrouter", "vendor-small", endpoint="vendor", max_output_tokens=gateway.MAX_OUTPUT_TOKENS,
             steps=gateway.STEPS))
-        self.assertEqual(result["bounds"]["agents"], dict(listed=["build"], capped=[opencode_launcher.PRIMARY_AGENT]))
+        agents = result["bounds"]["agents"]
+        self.assertEqual((agents["listed"], agents["capped"]), (["build"], [opencode_launcher.PRIMARY_AGENT]))
+        self.assertTrue(agents["steps_source"].startswith("config:"))
 
     def test_the_bounds_are_stated_honestly(self):
         result = self.run_gateway(Env(self.tmp))
         bounds = result["bounds"]
         self.assertEqual((bounds["hard_bound"], bounds["soft_bounds"]), ("key_limit_usd", ["output_cap", "steps", "cost_abort"]))
-        self.assertRegex(bounds["inline_config_honoured"], r"^per A1 result isolation-\d+\.json$")
+        self.assertRegex(bounds["inline_config_honoured"], r"^plugin, password and flags per A1 result isolation-\d+\.json; "
+                                                           r"agents\.\*\.steps and body\.max_tokens are not shown by A1$")
+        self.assertTrue(bounds["soft_bounds_status"].startswith("unobserved until the live gateway run shows them"))
+        observed = result["positive"]["observed"]  # reported by the run itself, never assumed
+        self.assertEqual(observed["steps"], dict(observed=False, reason="cap_not_reached", turns_per_session=[1, 1]))
+        self.assertEqual(observed["max_tokens"], dict(observed=False, reason="cap_not_reached", max_output=1))
+        self.assertIs(observed["violated"], False)
+        self.assertTrue(result["positive"]["checks"]["soft_bounds_not_violated"])
         self.assertEqual(bounds["key_limit_usd"], 1.0)
 
     def test_steps_must_cover_every_agent(self):
@@ -224,15 +235,21 @@ class CeilingTests(GatewayBase):
 
     def test_the_gateway_needs_this_sessions_passing_A1_result(self):
         results = self.private(self.tmp / "results")
-        bad = [None, str(results / "missing.json"), isolation_file(results, passed=False),
-               isolation_file(results, version="2.3.0"), isolation_file(results, date="2026-01-01"),
-               isolation_file(results, mode="drill")]
         old = isolation_file(results)
         os.utime(old, (1, 1))
-        for path in bad + [old]:
-            with self.subTest(path=path), self.assertRaises(safety.Refused):
+        cases = [(None, "isolation_result_unreadable"), (str(results / "missing.json"), "isolation_result_unreadable"),
+                 (isolation_file(results, passed=False), "isolation_probes_not_passed: A1"),
+                 (isolation_file(results, others=None), "isolation_probes_not_passed: A2, A3, A4"),
+                 (isolation_file(results, blockers=["probes failed: A5"]), "isolation_run_blocked"),
+                 (isolation_file(results, cleanup=False), "isolation_cleanup_unverified"),
+                 (isolation_file(results, version="2.3.0"), "isolation_version_differs"),
+                 (isolation_file(results, date="2026-01-01"), "isolation_result_stale"),
+                 (isolation_file(results, mode="drill"), "isolation_result_wrong_mode"), (old, "isolation_result_stale")]
+        for path, reason in cases:
+            with self.subTest(path=path, reason=reason), self.assertRaises(safety.Refused) as refused:
                 gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small",
                                 **dict(KEY, isolation_result=path))
+            self.assertIn(reason if path else "required", str(refused.exception))
         original = FakeLauncherHost.request
 
         def other_version(host, method, path, body=None, query=None):
@@ -338,3 +355,38 @@ class CeilingTests(GatewayBase):
         self.assertTrue(result["passed"], json.dumps(result)[:1500])
         self.assertEqual(opened, [])
         self.assertNotIn("sk-or", json.dumps(result))
+
+
+class SoftBoundTests(GatewayBase):
+    def test_a_session_at_the_step_cap_is_observed(self):
+        env = Env(self.tmp, extra_assistants=gateway.STEPS - 1)  # each prompt makes STEPS assistant turns
+        result = self.run_gateway(env)
+        self.assertIs(result["positive"]["observed"]["steps"]["observed"], True)
+        self.assertEqual(self.reservations(), [(3, 4)])  # more than reserved: recorded as sent, the run fails
+        self.assertIs(result["passed"], False)
+
+    def test_a_violated_bound_fails_the_run(self):
+        original = FakeLauncherHost.request
+
+        def long_output(host, method, path, body=None, query=None):
+            status, answer = original(host, method, path, body=body, query=query)
+            if path.endswith("/message") and isinstance((answer or {}).get("data"), list):
+                for message in answer["data"]:
+                    if message.get("type") == "assistant":
+                        message["tokens"] = dict(message["tokens"], output=gateway.MAX_OUTPUT_TOKENS + 1)
+            return status, answer
+        with mock.patch.object(FakeLauncherHost, "request", long_output):
+            result = self.run_gateway(Env(self.tmp))
+        self.assertIs(result["positive"]["observed"]["violated"], True)
+        self.assertFalse(result["positive"]["checks"]["soft_bounds_not_violated"])
+        self.assertIs(result["passed"], False)
+
+    def test_steps_come_from_the_server_when_it_reports_them(self):
+        env = Env(self.tmp, agents=[dict(name="build", steps=2), dict(name="plan", steps=2)])
+        result = self.run_gateway(env)
+        self.assertTrue(result["passed"], json.dumps(result)[:1500])
+        self.assertEqual(result["bounds"]["agents"]["steps_source"], "server")
+        env = Env(self.tmp, agents=[dict(name="build", steps=2), dict(name="plan", steps=50)])
+        self.assertIn("steps_not_universal: the step count does not cover every agent (plan)", self.run_gateway(env)["blocker"])
+        result = self.run_gateway(Env(self.tmp))  # names only: the config-based check, said so
+        self.assertTrue(result["bounds"]["agents"]["steps_source"].startswith("config: the agent listing reports no steps"))

@@ -191,7 +191,7 @@ class GatewayEntryTests(EntryTests):
     def test_a_launcher_probes_result_of_this_session_unlocks_the_gateway(self):
         self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
         self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
-        self.assertEqual(self.main(self.argv("launcher-probes", "--probes", "A1"), self.env_factory(FakeEnv)), 0)
+        self.assertEqual(self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A4"), self.env_factory(FakeEnv)), 0)
         isolation = self.out.parent / "isolation.json"
         self.out.rename(isolation)
         self.assertEqual(json.loads(isolation.read_text())["probes"]["A1"]["server_version"], "2.2.6")
@@ -200,4 +200,5 @@ class GatewayEntryTests(EntryTests):
         code = self.main(self.argv("gateway", *good), self.env_factory(GatewayEnv))
         results = json.loads(self.out.read_text())
         self.assertEqual(code, 0, results.get("blockers"))
-        self.assertEqual(results["gateway"]["bounds"]["inline_config_honoured"], "per A1 result isolation.json")
+        self.assertTrue(results["gateway"]["bounds"]["inline_config_honoured"].startswith(
+            "plugin, password and flags per A1 result isolation.json;"))
