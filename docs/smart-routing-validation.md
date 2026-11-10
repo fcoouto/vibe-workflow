@@ -1,6 +1,6 @@
 # Smart Routing cutover criteria
 
-- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line. Edit 5, before attempt 2 and changing no number: the settled-accounting re-read rule and titled sessions for admissions 2 to 20 (see Mechanism).
+- **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line. Edit 5, before attempt 2 and changing no number: the settled-accounting re-read rule and titled sessions for admissions 2 to 20 (see Mechanism). [Edit 6](#edit-6-10-november-2026-replay-against-the-available-history), on 10 November 2026 before any replay has run: the 200-assignment replay minimum becomes every eligible past session, labelled by fixed metadata rules, and its disagreement rate becomes advisory only; the strict replay moves to C.1 over real admission records, and quality re-execution is deferred to C.1. The replaced text is kept and marked superseded. No latency budget, canary bound or pilot number changed.
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
 
@@ -22,6 +22,8 @@ The 200-assignment minimum applies to the cutover replay over recorded historica
 
 Any single failure stops the cutover until the cause is fixed and the full replay passes again.
 
+> **Superseded on 10 November 2026 by [Edit 6](#edit-6-10-november-2026-replay-against-the-available-history).** The minimum of 200 recorded assignments, in the first row and in the paragraph after the table, no longer applies. The other four rows keep their values and now apply only to the strict replay over real admission records.
+
 ## Disagreement and quality re-execution
 
 A **disagreement** is a recorded historical assignment whose accepted model and effort, or whose funding class, differs from the strategy the new ranker and allocator choose for it. Replay reports the rate and which assignments disagree.
@@ -33,6 +35,8 @@ A **disagreement** is a recorded historical assignment whose accepted model and 
 | Pass condition | accepted rate under the new strategy is no more than 10 percentage points below the recorded rate, judged by the original acceptance checks |
 
 If the trigger is not met, no re-execution is required. If re-execution fails its pass condition, cutover stops and the report lists the failing assignments.
+
+> **Superseded on 10 November 2026 by [Edit 6](#edit-6-10-november-2026-replay-against-the-available-history).** The disagreement rate is advisory only and triggers nothing. Quality re-execution is deferred to C.1 and is not in force until its trigger, sample and comparison are registered again.
 
 ## Latency budgets
 
@@ -50,6 +54,8 @@ A promoted model ranker is out of scope here and has its own S4 evaluation. Repo
 ## Canary
 
 The canary enables enforced routing for one explicitly chosen project on OpenCode (plan Task S3.7). It starts only after replay passes and these bounds are recorded.
+
+> **Superseded on 10 November 2026 by [Edit 6](#edit-6-10-november-2026-replay-against-the-available-history).** "Only after replay passes" now means only after the historical replay has run and its advisory report is recorded under Results. The strict replay, including the check below that replay "still reproduces the canary's admission records exactly", runs at C.1.
 
 | Bound | Proposed value |
 |---|---|
@@ -152,6 +158,80 @@ The pilot therefore does **not** satisfy the canary above, and cutover stays blo
 - Zero disturbance of interactive sessions or of the user's own OpenCode directories.
 
 Results go to `tests/fixtures/smart-routing/probes/pilot-results.json` and to Results below, separately from unit tests.
+
+## Edit 6 (10 November 2026): replay against the available history
+
+Registered on 10 November 2026, before any historical or cutover replay has run, on the user's instruction of that day: "No problem, reduce the value to the amount of past assignments we have." It replaces the text marked superseded in [Allocator replay](#allocator-replay), [Disagreement and quality re-execution](#disagreement-and-quality-re-execution) and [Canary](#canary); that text stays as written. No latency budget, canary bound or pilot number changed.
+
+**Why.** The 200-assignment minimum assumed that recorded assignments carry what the strict checks need. Past worker sessions record the model, the variant or effort, timestamps and token counts, but not the task family, the complexity or risk band, the funding state at arrival, or acceptance. Only admission records carry those. Today the only ones are the pilot's 20, made with a fixed synthetic window observation. So the replay is split in two.
+
+| | Historical replay | Strict replay |
+|---|---|---|
+| Input | Every eligible past session ([sample](#sample)) | Real admission records only: the pilot's 20, then the canary's |
+| Labels | Inferred by the [labelling rules](#labelling-rules) | Read from the admission records |
+| Result | An advisory report; never a pass or a fail | Pass or fail on the four unchanged rows of [Allocator replay](#allocator-replay): 0 funding violations, 0 resurrected capacity, 100% of class and route decisions reproduced, 0 duplicate or rejected arrivals leaving an admission record |
+| When | Before the canary | At C.1 |
+
+A single strict failure still stops cutover until the cause is fixed and the full strict replay passes again.
+
+### Sample
+
+The historical replay uses **every eligible past session**, whatever their number. A read-only count on 10 November 2026 found about 1,349 past worker sessions: 258 OpenCode child sessions in this repository, 1,014 Codex child threads in the old `vibe-coding-workflow` checkouts and 77 in the `opus` store. These counts are context, not a target. The report states the number actually found and how many each exclusion removed.
+
+A session is **eligible** when it is a child worker or reviewer session: it has a parent session or thread, a model id, a start timestamp and a last-update timestamp. Excluded, and counted by reason:
+
+- sessions with no parent (coordinator and interactive sessions);
+- sessions without a model id or without either timestamp;
+- sessions updated within the hour before the replay starts, which may still be running;
+- title, compaction and summary sessions that the host marks as such, because they are not assignments;
+- qualification and pilot sessions, which ran in isolated stores that the replay does not scan;
+- a session id seen again in another checkout or worktree, which counts once.
+
+The strict replay's sample is the pilot's 20 admissions plus every canary admission (at least 60 by the canary bound). Together they must cover at least three roles and two complexity bands, as before.
+
+### Labelling rules
+
+These rules are fixed now, before any session is read, and apply to the historical replay only. They use metadata only: agent type, title, provider, model, variant or effort, timestamps and token counts. A prompt, message, tool call or output is never read. Any label may be `unknown`; the report counts the unknowns of every field.
+
+1. **Role.** The first rule that matches:
+   1. Agent type `reviewer` or `review` gives `reviewer`; `explore`, `explorer` or `researcher` gives `researcher`; `repair` gives `repair`. Any other agent type (such as `general`, `default` or `worker`) goes to the next rule.
+   2. Title keywords, matched as whole words regardless of case, in this order of groups: `review`, `reviewer`, `re-review`, `audit`, `verify` or `verification` gives `reviewer`; `research`, `investigate`, `investigation`, `explore`, `survey`, `scout` or `diagnose` gives `researcher`; `repair` or `rescue` gives `repair`; `implement`, `implementation`, `fix`, `build`, `add`, `refactor`, `write`, `update` or `migrate` gives `implementer`.
+   3. Otherwise `unknown`.
+
+   The title is read only for this match and is never stored, logged or committed.
+2. **Task family**, from the role: `implementer` and `repair` give `implementation`, `reviewer` gives `review`, `researcher` gives `research`, and `unknown` stays `unknown`.
+3. **Complexity band**, the higher of two bands. Generated tokens (output plus reasoning; input and cache tokens are left out because hosts count them differently): under 5,000 `low`, 5,000 to 19,999 `medium`, 20,000 to 59,999 `high`, 60,000 or more `critical`. Duration (last update minus start): under 5 minutes `low`, 5 to under 20 minutes `medium`, 20 to under 60 minutes `high`, 60 minutes or more `critical`. With only one of the two, that one; with neither, `unknown`.
+4. **Risk band:** always `unknown`, because no session metadata carries risk.
+5. **Funding class**, from the provider or harness: OpenCode's `claude-agent` provider, a Codex thread or a Claude Code subagent session gives `included_subscription`; the OpenAI API provider (`openai` in OpenCode) or `openrouter` gives `dollar`; anything else gives `unknown`.
+6. **Historical route:** the model id and the variant or reasoning effort as recorded; a missing effort is `unknown`.
+
+An `unknown` task family or band is passed to the router as a missing field, so the router applies its own conservative floors, as in production (`FLOORS` in `runtime/routing.py`: family `general`, complexity `high`, risk `high`).
+
+**Assumptions for the historical replay.** The window use and headroom at each arrival are unknown. The pre-registered assumption is that every arrival sees one fixed synthetic observation in which every subscription window is fresh at 0% use. Settings are the defaults: Smart Routing ON, API Usage off and no organization, so the router never chooses a dollar route. The concurrency caps are the defaults, with occupancy rebuilt from the sessions' own timestamps; an arrival that would wait is counted as `pending` and not compared. Arrivals run in start-time order, ties broken by session id. The strategy table and route manifest are those at the replay's commit, recorded by digest in the report. While the manifest qualifies no route (until user decision 5 in the plan), the router cannot choose and the historical replay cannot run. Under these assumptions the historical replay measures route choice only; it says nothing about funding or capacity.
+
+### Metrics
+
+- **Disagreement rate: advisory only.** A disagreement is a replayed session whose router-chosen model, effort or funding class differs from its historical one; with an `unknown` historical effort only the model and funding class are compared. The report gives the rate overall and by role, complexity band, funding class and store, with the counts of unknowns, `pending` arrivals and historical `dollar` sessions. Because the labels are inferred, the rate is never a pass or fail gate, never blocks cutover and triggers nothing.
+- **Strict criteria: pass or fail**, the four unchanged rows above, computed only on real admission records.
+
+### Order
+
+1. **Before the canary:** the historical replay runs once and its advisory report is recorded under Results. It must have run; its result blocks nothing. This is what the Canary's "only after replay passes" now means.
+2. **Canary** (plan S3.7), within its unchanged bounds.
+3. **C.1:** the strict replay runs over the pilot's 20 and the canary's admission records. The canary's own pass condition that "replay still reproduces the canary's admission records exactly" is this strict replay.
+
+**Keeping the admission records.** Retention removes a closed attempt's admission record after 14 days and its quota snapshot detail (`pressure`, `snapshot_id`) after 24 hours (plan S3.6a). The pilot ran on 9 November 2026, so its snapshot detail is already gone and its records are removed from about 23 November 2026. Before then, the pilot's admission records are exported read-only from the canary ledger to the local replay directory, and each canary admission's record is exported within 14 days. The pilot's window observation was the harness's fixed synthetic one, so its values remain known without the expired snapshot detail. A record that lacks a field exact reproduction needs counts as not reproduced, which is a strict failure.
+
+### Privacy
+
+- Stores are opened read-only: SQLite through a `mode=ro&immutable=1` URI, other files for reading only. Nothing is written to or locked in a store.
+- Only the metadata named in the labelling rules is read; message, prompt, part, tool and output content never is.
+- Extracted rows and exported admission records stay in an owner-only local directory outside every repository (`~/.local/state/vibe-workflow-replay/` by default).
+- Only aggregate results are committed: counts, rates, label distributions, exclusion counts and the digests of the table and manifest. No session id, title, timestamp or per-session row is committed.
+
+### Quality re-execution
+
+Deferred to C.1 with the canary. Re-execution needs each assignment's brief and acceptance checks; past sessions record no acceptance and their prompts are not read, so no past session is re-executed. Before C.1 runs, a dated edit here must register the trigger, sample and comparison for re-executing canary admissions. Until then no re-execution is in force; the earlier budget (at most 30 assignments within 5% of one pool's canary spend cap) remains the ceiling.
 
 ## Results
 

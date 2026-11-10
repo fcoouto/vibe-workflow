@@ -396,7 +396,7 @@ Open work that a status line names is tracked on that task's box. Open work from
 
 ### Task S2.7: Cutover criteria (A11)
 
-**Status (10 November 2026):** Done (#118; A14 in #114): [validation](../../smart-routing-validation.md) pre-registers the criteria and canary bounds, with each pilot edit recorded before its run (#145).
+**Status (10 November 2026):** Done (#118; A14 in #114): [validation](../../smart-routing-validation.md) pre-registers the criteria and canary bounds, with each pilot edit recorded before its run (#145). [Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history) (10 November 2026, before any replay) replaces the 200-assignment replay minimum with the available history: an advisory historical replay before the canary and the strict replay at C.1.
 
 **Files:** create `docs/smart-routing-validation.md`.
 
@@ -406,7 +406,7 @@ Open work that a status line names is tracked on that task's box. Open work from
 
 ### Task S2.8: Allocator replay
 
-**Status (10 November 2026):** Done (#118, #195): `tests/test_routing_replay.py` replays about 50 synthetic arrivals (concurrent claims, resets, expiries, OFF toggles, exact class and route replay) and, through `AdmissionReplay` over the merged compile/refresh, profile, rank, admit and settle path, a catalog refresh and a six-job dependency plan with zero Jev calls. The cutover replay of at least 200 recorded assignments belongs to C.1.
+**Status (10 November 2026):** Done (#118, #195): `tests/test_routing_replay.py` replays about 50 synthetic arrivals (concurrent claims, resets, expiries, OFF toggles, exact class and route replay) and, through `AdmissionReplay` over the merged compile/refresh, profile, rank, admit and settle path, a catalog refresh and a six-job dependency plan with zero Jev calls. The cutover replay is split by [validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history): the advisory historical replay runs before the canary and the strict replay at C.1.
 
 **Files:** create `tests/test_routing_replay.py`, `tests/fixtures/smart-routing/arrivals/*.json`, `tests/fixtures/smart-routing/arrivals/admission/*.json`.
 
@@ -604,7 +604,7 @@ Before #192 an uncertain subscription (window) hold had no operator recovery pat
 
 ### Task S3.7: Canary
 
-**Status (10 November 2026):** Pilot done (#145): attempt 2 ran 20 of 20 admissions with no abort ([results](../../smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort)); pre-registered Edit 4 raised its cap from 24 to 28 before that attempt. The pre-registered canary waits on the user and needs the [pre-canary requirements](#pre-canary-requirements), C3-4b and the replay minimum first. The C3-3 harness update is merged (#218): in canary mode on a managed project it sends no observations, package-tested only.
+**Status (10 November 2026):** Pilot done (#145): attempt 2 ran 20 of 20 admissions with no abort ([results](../../smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort)); pre-registered Edit 4 raised its cap from 24 to 28 before that attempt. The pre-registered canary waits on the user and needs the [pre-canary requirements](#pre-canary-requirements) (including the historical replay) and C3-4b first. The C3-3 harness update is merged (#218): in canary mode on a managed project it sends no observations, package-tested only.
 
 The canary runs between the [C.3 phases](#task-c3-replace-callers-and-retire-selectors): the phase W slices (C3-0a to C3-6) merge first, and the canary project joins `managed_projects` through the one-shot `set managed_projects` only once the activation gate passes. Phase R (C3-7) waits for C.1 and the user's cutover decision. Before the canary, C3-3 updates the qualification harness: in canary mode on a managed project it sends no observations, so the collector supplies them as in production. The bounded pilot mode keeps its own observations on its unmanaged canary ledger and moves to `--test-inputs` in C3-7 ([design §3.3](../specs/2026-11-10-smart-routing-c3-wiring-design.md#33-observation-collector)).
 
@@ -613,11 +613,11 @@ The canary runs between the [C.3 phases](#task-c3-replace-callers-and-retire-sel
 
 ### Task C.1: Confirm the cutover criteria
 
-**Status (10 November 2026):** Waiting on the user (cutover). It also needs the replay of at least 200 recorded assignments and the S3.7 canary.
+**Status (10 November 2026):** Waiting on the user (cutover). It also needs the S3.7 canary and the strict replay over the pilot's and the canary's admission records ([validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history)).
 
 C.1 comes after the C.3 phase W slices and the canary, and before phase R: C3-7 starts only once C.1 passes and the user decides on cutover ([C.3 phases](#task-c3-replace-callers-and-retire-selectors)).
 
-- [ ] Confirm that S2.8 replay and S3.7 canary meet the S2.7 pre-registered criteria; re-execute flagged disagreement samples within the recorded budget. If the criteria fail, stop and report; current selectors remain.
+- [ ] Confirm that the strict replay and the S3.7 canary meet the S2.7 pre-registered criteria as amended by [Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history); quality re-execution runs only as registered by a dated edit there before C.1. If the criteria fail, stop and report; current selectors remain.
 
 ### Task C.2: Feature contracts, one group per task
 
@@ -706,6 +706,7 @@ Before the canary project joins `managed_projects` ([S3.7](#task-s37-canary)), a
 4. **The S3.6c lost-acknowledgment drill observed live**: an uncertain subscription hold from a real managed launch is settled with `reconcile_subscription` ([S3.6c](#task-s36c-subscription-hold-reconcile-follow-up-required-before-c-and-before-any-production-use)).
 5. **The checklists already defined elsewhere:** the S3.1 [handshake pre-canary checklist](#task-s31-single-routing-command) (`authority_required`, `unstamped_open_holds: 0`), the S3.5 [wiring requirements](#task-s35-fresh-gates-at-dispatch-rf3), the S3.6 pre-canary resolutions ([S3.6](#task-s36-lineage-settlement-and-retention)) and the S3.3d [required live probe](../../../clients/opencode.md#image-generation-and-configuration-edits-s33d).
 6. **The canary project is enrolled for Codex**, with a configured or active entry, or the activation gate refuses it ([design §4.2](../specs/2026-11-10-smart-routing-c3-wiring-design.md#42-activation-gate) step 3). This holds for an OpenCode-coordinated canary too, because onboarding records only Codex and Claude Code entries today.
+7. **The historical replay has run** and its advisory report is recorded, and the pilot's admission records are exported before retention removes them ([validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history)). Its disagreement rate blocks nothing.
 
 ### Task C.4: Default ON
 
