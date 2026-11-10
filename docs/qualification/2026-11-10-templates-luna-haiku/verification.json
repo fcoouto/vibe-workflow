@@ -1,0 +1,48 @@
+{
+  "checks": {
+    "frozen_prompt_operator_and_criteria_hashes": true,
+    "unchanged_source_template_and_fixture_hashes": true,
+    "protected_input_bytes_and_write_boundaries": true,
+    "exact_route_guard_and_deadline": true,
+    "protected_python_and_boundary_checks": true,
+    "retained_failure_and_interruption_accounting": true,
+    "redaction": true
+  },
+  "cleanup": {
+    "selected_secrets_scanned_without_recording_values": true,
+    "selected_secret_files_before_cleanup": 0,
+    "credential_pattern_files_before_cleanup": 13,
+    "note": "JWT-shaped policy signature files are not asserted to be access tokens.",
+    "removed_runtime_files": 310,
+    "removed_native_storage": true,
+    "selected_secret_and_pattern_files_remaining": 0,
+    "evaluation_owned_native_processes_remaining": 0,
+    "raw_transcripts_and_operators_private": true,
+    "no_global_credential_mutation": true,
+    "secure_erasure_claimed": false
+  },
+  "classification_counts": {
+    "pass": 10,
+    "transport_failure": 1,
+    "behavioral_failure": 5,
+    "discovery_block": 2,
+    "deadline_interruption": 1
+  },
+  "deadline_observations": {
+    "limit_seconds": 1200,
+    "first_admission_seconds": 533.101,
+    "last_admission_seconds": 1192.986,
+    "last_batch_stopped_receipt_seconds": 1198.550,
+    "stop_condition_receipt_seconds": 1345.01,
+    "receipt_delay_extends_inference_window": false,
+    "all_runtime_guard_files_total_admissions": 104
+  },
+  "package_validation": {
+    "command": "python3 -B scripts/validate.py",
+    "status": "passed",
+    "warning": "Existing package export size warning; export remains below the 8 MiB limit.",
+    "client_execution": "not_checked"
+  },
+  "independent_report_review": "not_run_budget_closed",
+  "full_suite": "not_run_out_of_scope"
+}
