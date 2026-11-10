@@ -90,6 +90,21 @@ def features_main(args):
     return 0 if report["ok"] else 1
 
 
+def workspace_main(args):
+    """Workspace readiness: exit 0 ready, 1 not ready (or not recorded), 2 undetermined; see clients/workspace-requirements.md."""
+    from runtime import workspace
+    try:
+        report = (workspace.status if args.action == "status" else workspace.record)(PACKAGE, client=args.client)
+    except (ValueError, OSError) as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
+        return 1
+    if args.json or args.action == "record":
+        print(json.dumps(report))
+    else:
+        print(workspace.render(report))
+    return report["exit_code"] if args.action == "status" else 0 if report["ok"] else 1
+
+
 def control_main():
     from runtime.startup import MAX_INPUT, StartupError, json_object, acquire_project_entry, _entry_scope
 
@@ -171,6 +186,10 @@ def control_main():
                 action.add_argument("--cwd", required=True)
         upgrade = commands.add_parser("upgrade", add_help=False)
         upgrade.add_argument("action", choices=("status", "record"))
+        workspace = commands.add_parser("workspace", add_help=False)
+        workspace.add_argument("action", choices=("status", "record"))
+        workspace.add_argument("--json", action="store_true")
+        workspace.add_argument("--client", choices=("codex", "claude-code", "opencode"))
         settings = commands.add_parser("features", add_help=False)
         settings.add_argument("action", choices=("status", "enable", "disable", "set", "unset", "migrate", "undo"))
         settings.add_argument("arguments", nargs="*")
@@ -185,6 +204,8 @@ def control_main():
             report = (package_versions.status if args.action == "status" else package_versions.record)(PACKAGE)
             print(json.dumps(report))
             return 0 if report["ok"] else 1
+        if args.command == "workspace":
+            return workspace_main(args)
         if args.command == "onboard":
             from runtime.onboarding import MAX_REQUEST, inspect_project, read_request, record_plan
             request = read_request(sys.stdin.buffer.read(MAX_REQUEST + 1))
@@ -324,7 +345,7 @@ def control_main():
 
 
 def main():
-    control = len(sys.argv) > 1 and sys.argv[1] in {"task", "doctor", "onboard", "evidence", "delivery", "delegation", "upgrade", "features"}
+    control = len(sys.argv) > 1 and sys.argv[1] in {"task", "doctor", "onboard", "evidence", "delivery", "delegation", "upgrade", "workspace", "features"}
     if sys.version_info < (3, 11):
         print(json.dumps({"ok": False, "error": "Vibe Workflow requires Python 3.11+"} if control else
                          {"systemMessage": "Vibe Workflow requires Python 3.11+ on the hook PATH."}))

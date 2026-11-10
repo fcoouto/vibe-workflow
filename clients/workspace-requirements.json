@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "clients": ["codex", "claude-code", "opencode"],
+  "items": [
+    {
+      "id": "python",
+      "name": "Python 3.11 or newer",
+      "why": "Runs the plugin's hooks and checks.",
+      "scope": "machine",
+      "check": {"kind": "cli", "argv": ["python3", "--version"], "minimum": "3.11"},
+      "install_ref": "https://www.python.org/downloads/",
+      "user_actions": ["Enter the system password if the installer asks for it."]
+    },
+    {
+      "id": "git",
+      "name": "Git",
+      "why": "Runs the plugin's checks and publishes task branches.",
+      "scope": "machine",
+      "check": {"kind": "cli", "argv": ["git", "--version"]},
+      "install_ref": "https://git-scm.com/downloads",
+      "user_actions": ["Enter the system password if the installer asks for it."]
+    },
+    {
+      "id": "gh",
+      "name": "GitHub CLI, signed in",
+      "why": "Publishes task branches and pull requests.",
+      "scope": "machine",
+      "check": {"kind": "cli", "argv": ["gh", "--version"], "sign_in_argv": ["gh", "auth", "status"]},
+      "install_ref": "https://cli.github.com/",
+      "user_actions": ["Sign in with `gh auth login`."]
+    },
+    {
+      "id": "vibe-workflow-plugin",
+      "name": "vibe-workflow plugin at the expected version",
+      "why": "Loads the workflow rules at session start; a stale copy leaves a client on old rules.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "package"},
+        "claude-code": {"kind": "package"},
+        "opencode": {"kind": "not-supported", "reason": "OpenCode plugin client pending (plan slice R4)"}
+      },
+      "install_ref": "README.md#prepare-your-workspace",
+      "user_actions": []
+    },
+    {
+      "id": "vibe-workflow-hooks",
+      "name": "vibe-workflow hooks trusted",
+      "why": "Hooks that are not trusted do not run, so the workflow rules never load.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "hooks-trust"},
+        "claude-code": {"kind": "unobservable", "reason": "Claude Code does not list plugin hook trust; start a new session to see the hooks run"},
+        "opencode": {"kind": "not-supported", "reason": "OpenCode plugin client pending (plan slice R4)"}
+      },
+      "install_ref": "skills/prepare-my-workspace/references/upgrade.md#restart-and-trust",
+      "user_actions": ["Approve the plugin's hooks when the client asks; the agent never approves for you."]
+    },
+    {
+      "id": "superpowers",
+      "name": "Superpowers",
+      "why": "Design, planning, execution and review skills the workflow relies on.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "plugin", "names": ["superpowers"]},
+        "claude-code": {"kind": "plugin", "names": ["superpowers"]},
+        "opencode": {"kind": "plugin", "names": ["superpowers"]}
+      },
+      "install_ref": "https://github.com/obra/superpowers",
+      "user_actions": []
+    },
+    {
+      "id": "ponytail",
+      "name": "Ponytail",
+      "why": "Smallest complete change by default.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "plugin", "names": ["ponytail"]},
+        "claude-code": {"kind": "plugin", "names": ["ponytail"]},
+        "opencode": {"kind": "plugin", "names": ["ponytail"]}
+      },
+      "install_ref": "https://github.com/DietrichGebert/ponytail",
+      "user_actions": []
+    },
+    {
+      "id": "caveman",
+      "name": "Caveman",
+      "why": "Concise communication without losing technical substance.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "plugin", "names": ["caveman"]},
+        "claude-code": {"kind": "plugin", "names": ["caveman"]},
+        "opencode": {"kind": "plugin", "names": ["caveman"]}
+      },
+      "install_ref": "https://github.com/JuliusBrussee/caveman",
+      "user_actions": []
+    },
+    {
+      "id": "rtk",
+      "name": "RTK",
+      "why": "Compact command output, fewer wasted tokens.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "rtk"},
+        "claude-code": {"kind": "rtk"},
+        "opencode": {"kind": "rtk"}
+      },
+      "install_ref": "https://www.rtk-ai.app/",
+      "user_actions": ["Allow RTK to edit the client's settings when its installer asks."]
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "why": "Current library and tool documentation instead of stale memory.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "mcp", "names": ["context7"]},
+        "claude-code": {"kind": "mcp", "names": ["context7"]},
+        "opencode": {"kind": "mcp", "names": ["context7"]}
+      },
+      "install_ref": "https://github.com/upstash/context7",
+      "user_actions": ["Complete the sign-in if the client asks for one."]
+    },
+    {
+      "id": "graphify-cli",
+      "name": "Graphify command",
+      "why": "Builds the local code map that agents query to find dependencies without reading many files.",
+      "scope": "machine",
+      "check": {"kind": "cli", "argv": ["graphify", "--version"]},
+      "install_ref": "https://github.com/Graphify-Labs/graphify",
+      "user_actions": []
+    },
+    {
+      "id": "graphify-skill",
+      "name": "Graphify skill",
+      "why": "Lets each client use the code map.",
+      "scope": "client",
+      "check": {
+        "codex": {"kind": "skill", "paths": ["skills/graphify/SKILL.md"]},
+        "claude-code": {"kind": "skill", "paths": ["skills/graphify/SKILL.md"]},
+        "opencode": {"kind": "skill", "paths": ["skills/graphify/SKILL.md", "skill/graphify/SKILL.md"]}
+      },
+      "install_ref": "https://github.com/Graphify-Labs/graphify",
+      "user_actions": []
+    }
+  ]
+}
