@@ -46,6 +46,10 @@ def parity_cases():
     models += [{"providerID": "openrouter", "id": "glm-5"}, {"providerID": "openrouter", "id": "x/y"},
                {"providerID": "claude-agent", "id": "haiku", "variant": None}, {"providerID": "", "id": "a"},
                {"providerID": "p", "id": "m" * 200}, {"id": "haiku"}]
+    # OpenRouter `vendor/model` ids (F4): exactly one `/`, both parts in the name charset, 128 characters at most.
+    models += [{"providerID": "openrouter", "id": model_id} for model_id in [
+        "anthropic/claude-sonnet-4.5", "openai/gpt-5.1:online", "a" * 64 + "/" + "b" * 63, "a" * 64 + "/" + "b" * 64,
+        "../x", "a/../b", "a/b/c", "a//b", "/b", "a/", "a/.", "а/b", "a/K", "a/b\n", "a\\b", "a" * 128 + "/b"]]
     model_cases = []
     for model in models:
         result = _requested("model.request", {"sessionID": "ses_1", "kind": "primary", "model": model})
@@ -56,7 +60,10 @@ def parity_cases():
 
     spawns = [hook["input_model"] for hook in excerpt["hooks"] if hook.get("input_model")]
     spawns += [payload["input"]["model"] for payload in live if payload.get("tool") == "subagent"]
-    spawns += ["claude-agent/haiku", "openrouter/z-ai/glm-5", "haiku", "a/b#c#d", "claude-agent/haiku#", "x" * 300 + "/m"]
+    spawns += ["claude-agent/haiku", "openrouter/z-ai/glm-5", "haiku", "a/b#c#d", "claude-agent/haiku#", "x" * 300 + "/m",
+               "openrouter/anthropic/claude-sonnet-4.5#high", "openrouter/a/b/c", "openrouter/../x", "openrouter/a//b",
+               "openrouter/a/#low", "openrouter/" + "a" * 64 + "/" + "b" * 63 + "#low",
+               "openrouter/" + "a" * 64 + "/" + "b" * 64 + "#low", "openrouter/а/b"]
     spawn_cases = []
     for model in spawns:
         result = _requested("tool.execute.before", {"sessionID": "ses_1", "tool": "subagent",
