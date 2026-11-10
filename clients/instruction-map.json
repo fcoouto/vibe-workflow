@@ -292,6 +292,15 @@
         ]
       ]
     },
+    "clients/workspace-requirements.md": {
+      "sha256": "8424be01e7ae783132137ce6ca23a7d8693b9d3d7aa18171eb176f26c14e99c4",
+      "ranges": [
+        [
+          1,
+          38
+        ]
+      ]
+    },
     "clients/workstreams-naming.md": {
       "sha256": "9097571a3947a417c78e2e8714bffad8fdd431047088b526572043c641f5be5f",
       "ranges": [
