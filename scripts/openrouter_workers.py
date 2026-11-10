@@ -989,6 +989,8 @@ def main():
 
 if __name__ == '__main__':
     try: status = main()
+    except RoutingRefused as refused:  # routing's fixed reason; nothing was written or sent
+        print(json.dumps({'error': 'routing_refused', 'reason': str(refused)})); sys.exit(1)
     except (ValueError, OSError, KeyError, TypeError):
         print(json.dumps({'error': 'invalid_request_or_runtime_unavailable'})); sys.exit(1)
     sys.exit(status)

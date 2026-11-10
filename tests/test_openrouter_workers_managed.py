@@ -190,6 +190,24 @@ class ManagedPrepareTests(ManagedWorkerCase):
         self.assertEqual(self.holds(), {'admitted': 1})  # the new run's hold only
         self.assertTrue((run / 'brief.json').exists())
 
+    def test_the_cli_prints_routings_fixed_refusal_reason(self):
+        import contextlib
+        import io
+        import runpy
+        self.manage()
+        self.source(organization='unfunded-organization')
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(self.brief()).encode()))
+        out = io.StringIO()
+        argv = [str(SCRIPT), 'run', '--root', str(self.runs), '--opencode', str(self.executable),
+                '--auth-data', str(self.root / 'auth')]
+        with patch.object(sys, 'argv', argv), patch.object(sys, 'stdin', stdin), contextlib.redirect_stdout(out), \
+                self.assertRaises(SystemExit) as done:
+            runpy.run_path(str(SCRIPT), run_name='__main__')
+        self.assertEqual(done.exception.code, 1)
+        self.assertEqual(json.loads(out.getvalue()), dict(error='routing_refused', reason='explicit_choice_unavailable'))
+        self.assertFalse((self.runs / 'pilot-1').exists())
+        self.assertEqual(self.holds(), {})
+
     def test_an_unmanaged_project_never_reaches_routing(self):
         with patch.object(command, 'managed_service', side_effect=AssertionError('routing reached')), \
                 patch.object(self.api, '_server', side_effect=AssertionError('managed launcher reached')):

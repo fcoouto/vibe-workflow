@@ -745,15 +745,15 @@
       ]
     },
     "skills/openrouter-workers/references/procedure.md": {
-      "sha256": "1c591ea88ba01fa83f258d0bd837228723794a817dcdeb0d73ad03995bd79fb6",
+      "sha256": "356d1a5b4b7449232b2b2716532060f5a2e8e045f0a0ee4800e4ec401fad15fe",
       "ranges": [
         [
           1,
-          122
+          121
         ],
         [
-          123,
-          198
+          122,
+          209
         ]
       ]
     },
