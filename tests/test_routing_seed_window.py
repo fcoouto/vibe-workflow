@@ -7,11 +7,12 @@ observation replaces it, never the other way round. No model, network or host ca
 import io
 import json
 import sqlite3
+import threading
 import time
 import unittest
 from unittest import mock
 
-from runtime import routing_observations as collector, routing_settings
+from runtime import opencode_launcher, routing_observations as collector, routing_settings
 from scripts import routing as command
 from tests.test_routing_launch import IDENTITY, job
 from tests.test_routing_observations import SCOPE, Stores, gateway_route, gateway_window, sub_route, sub_window
@@ -112,18 +113,55 @@ class BoundsTests(SeedBase):
 
     def test_the_boundary_values_are_accepted(self):
         at = int(time.time())
-        response = self.call(seed(used=1000, limit=1000, length=7200, reset_at=at + 7200 - 5))
+        response = self.call(seed(used=1000, limit=1000, length=18000, reset_at=at + 18000 - 5))
         self.assertEqual(response['state'], 'recorded', response)
-        response = self.call(seed('seed-2', used=0, limit=1, length=1, reset_at=at + 1, window='1s'))
+        response = self.call(seed('seed-2', used=0, reset_at=at + 1))
+        self.assertEqual(response['state'], 'recorded', response)
+        response = self.call(seed('seed-3', used=0, limit=1000, length=1, reset_at=at + 1, window='1s'))
         self.assertEqual(response['reason'], 'invalid_request')  # `1s` is no subscription route's window
+
+    def test_the_limit_is_the_host_units_full_scale(self):
+        """B1: the host stores every window with limit WINDOW_UNITS in utilization_thousandths; a larger seed limit
+        would multiply the headroom."""
+        self.assertEqual(opencode_launcher.WINDOW_UNITS, 1000)
+        for limit in (999, 1001, 10**6, 1):
+            with self.subTest(limit=limit):
+                self.assertEqual(self.call(seed(used=0, limit=limit))['reason'], 'invalid_request')
+        self.assertIsNone(self.stored())
+
+    def test_the_length_is_the_hosts_length_for_that_window(self):
+        """S3: `length` must be what the host stores for that window id; which ids exist comes from the manifest
+        route's `demand` (plans differ: one may have only a 7d window)."""
+        lengths = {key: length for key, length in opencode_launcher.RATE_WINDOWS.values()}
+        at = int(time.time())
+        for length in (lengths['5h'] - 1, lengths['5h'] + 1, lengths['7d']):
+            with self.subTest(length=length):
+                self.assertEqual(self.call(seed(length=length))['reason'], 'invalid_request')
+        weekly = (sub_route(demand={'7d': 10}),)  # a plan with no 5h window
+        with mock.patch.object(Local, 'ROUTES', weekly):
+            self.assertEqual(self.call(seed())['reason'], 'invalid_request')
+            response = self.call(seed('seed-7d', window='7d', length=lengths['7d'], reset_at=at + 86400))
+            self.assertEqual(response['state'], 'recorded', response)
+        unknown = (sub_route(demand={'1d': 10}),)  # a window the host never stores
+        with mock.patch.object(Local, 'ROUTES', unknown):
+            self.assertEqual(self.call(seed('seed-1d', window='1d', length=86400, reset_at=at + 60))['reason'],
+                             'invalid_request')
+        self.assertEqual(set(self.stored()['sub']), {'7d'})
 
     def test_only_a_subscription_window_named_by_the_manifest_is_seeded(self):
         for change in (dict(pool='gw', window='credit'), dict(pool='unknown'), dict(window='weekly')):
             with self.subTest(change):
                 self.assertEqual(self.call(seed(**change))['reason'], 'invalid_request')
-        mixed = (sub_route(), sub_route('api', billing_class='api_prepaid', pool='sub', demand={'5h': 1}))
-        with mock.patch.object(Local, 'ROUTES', mixed):  # a pool any dollar route draws on is a dollar pool
-            self.assertEqual(self.call(seed())['reason'], 'invalid_request')
+        for status in ('qualified', 'candidate', 'retired', 'unverified'):
+            mixed = (sub_route(), sub_route('api', status=status, billing_class='api_prepaid', demand={'5h': 1}),
+                     gateway_route(status=status, pool='other'))
+            with self.subTest(status=status), mock.patch.object(Local, 'ROUTES', mixed):
+                # a pool any dollar route of any status draws on is a dollar pool
+                self.assertEqual(self.call(seed())['reason'], 'invalid_request')
+        for status in ('candidate', 'retired'):
+            gateway = (sub_route(), gateway_route(status=status, pool='sub'))
+            with self.subTest(gateway=status), mock.patch.object(Local, 'ROUTES', gateway):
+                self.assertEqual(self.call(seed())['reason'], 'invalid_request')
         unqualified = (sub_route(status='unverified'),)
         with mock.patch.object(Local, 'ROUTES', unqualified):
             self.assertEqual(self.call(seed())['reason'], 'invalid_request')
@@ -207,6 +245,53 @@ class StoreTests(SeedBase):
                               source='other'))
         self.assertIn(dict(route='sub', reason='window_unobserved'), self.collect()['observations']['excluded'])
 
+    def race(self, first, second):
+        """Run `first` in this thread; once it has read the store under its lock, start `second` in another thread.
+        Return whether `second` finished while `first` still held the store, and what `second` returned."""
+        read, started, result = collector._read, [], {}
+
+        def hooked(path):
+            value = read(path)
+            if not started and threading.current_thread() is threading.main_thread():
+                thread = threading.Thread(target=lambda: result.setdefault('value', capture(second)))
+                started.append(thread)
+                thread.start()
+                thread.join(0.5)  # a serialised writer stays blocked on the lock
+                result['overlapped'] = not thread.is_alive()
+            return value
+
+        def capture(call):
+            try:
+                return call()
+            except ValueError as error:
+                return str(error)
+        with mock.patch.object(collector, '_read', hooked):
+            outcome = capture(first)
+        started[0].join(10)
+        return outcome, result
+
+    def seed_event(self, **change):
+        body = {key: value for key, value in seed(**change).items() if key not in ('v', 'op')}
+        return collector.seed_event(body)
+
+    def test_a_host_write_racing_a_seed_waits_and_then_replaces_it(self):
+        """S1: the store lock serialises the seed's freshness check and its write; a host observation arriving in
+        between lands after the seed and replaces it, never under it."""
+        host = sub_window(int(time.time()), used=640)
+        outcome, result = self.race(lambda: collector._store_seed(self.settings, self.seed_event(), self.now),
+                                    lambda: collector.store_window(self.settings, 'sub', host))
+        self.assertEqual((outcome, result['overlapped'], result['value']), (None, False, None))
+        window = self.stored()['sub']['5h']
+        self.assertEqual((window['used'], window.get('source')), (640, None))
+
+    def test_a_seed_racing_a_host_write_waits_and_is_refused(self):
+        host = sub_window(int(time.time()), used=640)
+        outcome, result = self.race(lambda: collector.store_window(self.settings, 'sub', host),
+                                    lambda: collector._store_seed(self.settings, self.seed_event(), self.now))
+        self.assertEqual((outcome, result['overlapped'], result['value']), (None, False, 'fresh_observation_exists'))
+        window = self.stored()['sub']['5h']
+        self.assertEqual((window['used'], window.get('source')), (640, None))
+
     def test_the_host_path_can_never_store_an_operator_source(self):
         for source in ('operator', 'host'):
             with self.subTest(source), self.assertRaises(ValueError):
@@ -227,7 +312,7 @@ class IdempotencyTests(SeedBase):
         self.assertEqual(self.stored(), stored)
 
     def test_the_replay_survives_the_reset_passing(self):
-        request = seed(reset_at=int(time.time()) + 10, length=60)
+        request = seed(reset_at=int(time.time()) + 10)
         first = self.call(request)
         with mock.patch.object(command.Service, 'clock', staticmethod(lambda: first['observed_at'] + 100)):
             self.assertEqual(self.call(request), dict(first, duplicate=True))
