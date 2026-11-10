@@ -14,7 +14,7 @@
 
 - **Lightweight rule (binding).** On-demand reads only; no timers, polling or daemons; no model call to measure usage; short bounded processes that fail closed; cheap `prepare` and `check`. A task that adds a cost states it with the lighter alternative.
 - **Exact replay.** The strict replay reproduces every admission record, calls no model and reads no live data.
-- **File size.** Each Python file is at or under 1,000 lines. The files with a fixed ceiling in `scripts/validate.py:21-33` must not grow: `runtime/routing.py` 1506, `runtime/delegation.py` 3369, `runtime/evidence.py` 8505, `runtime/changes.py` 6074, `runtime/state.py` 2613, `runtime/usage_budget.py` 1553, `runtime/adapters/codex.py` 1579. A PR that shrinks one lowers its ceiling in the same PR. `scripts/routing.py` has 940 lines; new operations go into runtime modules and the script only dispatches.
+- **File size.** Each Python file is at or under 1,000 lines. The files with a fixed ceiling in `scripts/validate.py:21-33` must not grow: `runtime/routing.py` 1506, `runtime/delegation.py` 3369, `runtime/evidence.py` 8505, `runtime/changes.py` 6074, `runtime/state.py` 2613, `runtime/usage_budget.py` 1553, `runtime/adapters/codex.py` 1579, `runtime/setup_observation.py` 1526. All but `runtime/state.py` and `runtime/setup_observation.py` (1515 lines) are exactly at their ceiling, so a change in them replaces lines and adds none. A PR that shrinks one lowers its ceiling in the same PR. `scripts/routing.py` has 940 lines; new operations go into runtime modules and the script only dispatches.
 - **No model name** in `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/`, `templates/`, `AGENTS.md` or shipped JSON. Tests use invented names. Dated evidence records under `docs/` keep theirs.
 - **No API key or organization** before release, except the OpenRouter key approved for the gateway check. API Usage stays deferred; this plan only fixes its place in the funding order.
 - **Stored history.** Records written before a change keep their old values. They are read as written, never rewritten and never used for learning.
@@ -28,7 +28,7 @@ Each line names a condition the design implies and the task whose tests pin it.
 
 1. **A settings file or stored plan still uses an old role name.** It must load, match nothing new, and be reported once; it must never fail the whole settings file. Pinned in Task F2.2 (`test_legacy_worker_choice_key_is_reported_not_fatal`) and F2.3 (`test_stored_plan_with_legacy_roles_still_reads`).
 2. **The template file is missing or damaged in an installed package.** `prepare` must block with one reason and admit nothing. Pinned in Task F1.1 (`test_missing_or_invalid_template_fails_closed`) and F2.2 (`test_prepare_blocks_when_the_template_is_unavailable`).
-3. **A window reading is stale or absent while every other pool is full.** OpenRouter must stay closed, because an unknown is not a full window. Pinned in Task F5.3 (`test_stale_or_unread_window_never_opens_gateway`).
+3. **A window reading is stale or absent while every other pool is full.** OpenRouter must stay closed, because an unknown is not a full window and a route nobody has read is not a missing route. Pinned in Task F5.3 (`test_stale_or_unread_window_never_opens_gateway`, `test_unobserved_pool_is_not_a_capability_gap`).
 4. **A path is qualified but the table has no candidate for it,** or the table exists and no path is qualified. Activation must refuse with a reason that says which. Pinned in Task F4.3 (`test_activation_reports_no_generated_route`, `test_activation_reports_no_qualified_path`).
 5. **A ranking table compiled before the change is still in user state.** Ranking must report it as outdated and fall back to explicit choices, never read a four-part row. Pinned in Task F2.2 (`test_table_from_the_old_schema_is_reported_outdated`).
 
@@ -40,12 +40,12 @@ Each line names a condition the design implies and the task whose tests pin it.
 | F3 | Jev removal | Affected modules | now, in parallel with F1 |
 | F2 | Roster rename and the `work_kind` row key | Full suite, two reviewers | F1 and F3 |
 | F4 | Path rules, path qualification, generated routes | Full suite | F2 |
-| F5 | List price and value order, shortlist, funding order, replay fields, pre-registration Edit 7 | Full suite | F4 |
+| F5 | List price and value order, shortlist per funding step, funding order, replay fields, pre-registration Edit 7 | Full suite | F4 |
 | F6 | Model names removed, `validate.py` check | Affected modules | F5 |
 | F7 | Strict replay runner; canary harness in ranked mode | Affected modules | F6 |
 | F8 | Historical replay runner | Affected modules | F5, in parallel with F6 and F7 |
 
-The order follows the files the slices share: `runtime/routing.py`, `runtime/routing_evidence.py`, `scripts/routing.py`, `runtime/routing_launch.py` and `tests/qualification/canary.py`.
+The order follows the files the slices share: `runtime/routing.py`, `runtime/routing_evidence.py`, `runtime/routing_observations.py`, `scripts/routing.py`, `scripts/validate.py`, `runtime/routing_launch.py` and `tests/qualification/canary.py`. Slices that run in parallel own disjoint files: F1 does not touch `scripts/validate.py` or `runtime/routing.py`, and F8 touches only its own two files and one section of the validation document.
 
 **Differences from design section 6, and why (coordinator's calls):**
 
@@ -60,7 +60,8 @@ The order follows the files the slices share: `runtime/routing.py`, `runtime/rou
 | `templates/task-profile.json` | F1 | The single source: contract version, fields, level definitions, floors, work kinds, roster |
 | `runtime/task_profile.py` | F1, F2 | Loads and validates the template, roster accessors, renders the brief section |
 | `runtime/routing_paths.py` | F4 | Path rules, path qualification record, route generation, activation data check |
-| `runtime/routing_funding.py` | F5 | Funding order, the two cases that open OpenRouter, replay snapshot detail |
+| `runtime/routing_funding.py` | F5 | The ranked decision moved out of `runtime/routing.py`, the shortlist per funding step, the rule that opens OpenRouter, the admission record builder |
+| `runtime/model_names.py` | F6 | Display-name lookup and the model-name check `scripts/validate.py` calls |
 | `tests/qualification/replay_strict.py` | F7 | Strict replay over exported admission records |
 | `tests/qualification/replay_history.py` | F8 | Advisory historical replay over past session metadata |
 | `runtime/routing_learning.py` | L1 | Analysis rows and scores |
@@ -70,7 +71,7 @@ The order follows the files the slices share: `runtime/routing.py`, `runtime/rou
 
 ## Slice F1: Task Profile template
 
-**Owned files:** `templates/task-profile.json`, `runtime/task_profile.py`, `tests/test_task_profile.py`, `templates/worker-brief.md`, `scripts/validate.py`, `scripts/routing.py` (`_prepare` only), `tests/test_routing_command.py`, `clients/delegation-requests.md`, `docs/policy-sources.md`. F1 does not touch `runtime/routing.py`.
+**Owned files:** `templates/task-profile.json`, `runtime/task_profile.py`, `tests/test_task_profile.py`, `templates/worker-brief.md`, `scripts/routing.py` (`_prepare` only), `tests/test_routing_command.py`, `clients/delegation-requests.md`, `docs/policy-sources.md`. F1 touches neither `runtime/routing.py` nor `scripts/validate.py`, which F3 owns while the two run in parallel.
 
 ### Task F1.1: The template and its loader
 
@@ -106,7 +107,7 @@ The order follows the files the slices share: `runtime/routing.py`, `runtime/rou
 }
 ```
 
-The specialist is stored under the key `role`, as today; only its values change (see [Coordinator calls](#coordinator-calls-for-the-users-review), call 5).
+The specialist is stored under the key `role`, as today; only its values change (see [Coordinator calls](#coordinator-calls-for-the-users-review), call 5). The template's `fields.role.values` is `roster`; the reserved value `check` of Task F2 is not a specialist and is not in the template.
 
 **Level text (fixed copy).** Each `levels` entry is `{"definition": ..., "example": ...}`:
 
@@ -150,7 +151,7 @@ The specialist is stored under the key `role`, as today; only its values change 
 | `penetration-tester` | Penetration Tester | Simulates attacks against a real authentication flow or release. |
 | `security-auditor` | Security Auditor | Reviews defence in depth and models threats before an important release. |
 
-**Validation rules in `load`:** the file is at most 16 KB; `contract_version` is an integer; every `levels` field has exactly the field's values, each with a non-empty definition and example of at most 200 characters; roster ids are unique and match `[a-z][a-z0-9-]{1,63}`; `label` is non-empty; `when_to_use` is at most 200 characters; `work_kind` is in `work_kinds`; `writes` and `reviews` are booleans; no entry both writes and reviews.
+**Validation rules in `load`:** the file is at most 16 KB; `contract_version` is an integer; every `levels` field has exactly the field's values, each with a non-empty definition and example of at most 200 characters; roster ids are unique and match `[a-z][a-z0-9-]{1,63}`; `label` is non-empty; `when_to_use` is at most 200 characters; `work_kind` is in `work_kinds`; `writes` and `reviews` are booleans; no entry both writes and reviews; `reviews` is true exactly when `work_kind` is `review`, which is what lets the ledger stage follow the work kind (Task F2.3).
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_task_profile.py`:
 
@@ -191,19 +192,19 @@ class TemplateTests(unittest.TestCase):
 ### Task F1.2: Generated brief section and drift check
 
 **Files:**
-- Modify: `runtime/task_profile.py`, `templates/worker-brief.md`, `scripts/validate.py:123` (`validate`), `clients/delegation-requests.md:97-102`, `docs/policy-sources.md`
+- Modify: `runtime/task_profile.py`, `templates/worker-brief.md`, `clients/delegation-requests.md:97-102`, `docs/policy-sources.md`
 - Test: `tests/test_task_profile.py`
 
 **Interfaces:**
 - Produces: `BRIEF_START = '<!-- task-profile:start (generated from templates/task-profile.json) -->'`, `BRIEF_END = '<!-- task-profile:end -->'`, `render_brief(template: dict) -> str`, `brief_drift(root: Path) -> list[str]` (empty when `templates/worker-brief.md` holds exactly the rendered block between the markers).
 
-In F1 the block has a `- Task profile:` line, the level table above and the floors. F2 adds the specialist line and the roster table to the same block.
+In F1 the block has a `- Task profile:` line, the level table above and the floors, and a test pins the drift. F2 adds the specialist line and the roster table to the same block, and Task F2.5 adds the `scripts/validate.py` hook.
 
 - [ ] **Step 1: Write the failing tests** `test_brief_section_matches_the_template` (`brief_drift(ROOT) == []`) and `test_brief_drift_is_reported` (a copy with one edited definition returns one message naming `templates/worker-brief.md`).
 - [ ] **Step 2: Run** them. Expected: FAIL, `render_brief` is not defined.
-- [ ] **Step 3: Implement** `render_brief` and `brief_drift`; add the block to `templates/worker-brief.md`; make `validate` raise `ValueError` with the drift message. Replace the field list in `clients/delegation-requests.md` with a pointer to the template, keeping its rules (unknown fields rejected, floors, separate from guidance `profile_ids`). Add the roster's source row to `docs/policy-sources.md`.
+- [ ] **Step 3: Implement** `render_brief` and `brief_drift`; add the block to `templates/worker-brief.md`. Replace the field list in `clients/delegation-requests.md` with a pointer to the template, keeping its rules (unknown fields rejected, floors, separate from guidance `profile_ids`). Add the roster's source row to `docs/policy-sources.md`.
 - [ ] **Step 4: Run** `scripts/test_sharded.py test_task_profile test_prepared_instructions` and `scripts/validate.py`. Expected: OK, exit 0.
-- [ ] **Step 5: Commit** `feat(routing): generate the brief's task profile section and fail on drift`.
+- [ ] **Step 5: Commit** `feat(routing): generate the brief's task profile section and pin its drift`.
 
 ### Task F1.3: `prepare` returns the missing fields
 
@@ -252,18 +253,21 @@ Shared core. One PR with the commits in task order; the full suite must pass on 
 
 | Today | After F2 |
 |---|---|
-| Job and record field `role` with `worker`, `review`, `coordinator`, `check` | The field stays `role`; its value is a roster id. A check job has `kind: 'check'` and no `role`. |
+| Job and record field `role` with `worker`, `review`, `coordinator`, `check` | The field stays `role`. Its value is a roster id, or the reserved value `check` for a check run, which uses no model and is not a specialist (see [call 15](#coordinator-calls-for-the-users-review)). |
 | A branch on `role == 'review'` | `task_profile.reviews(role)` |
 | A branch on `role == 'worker'` or membership in `NATIVE_ROLES` | `task_profile.routed(role) and not task_profile.reviews(role)`, or `task_profile.routed(role)` |
-| `role == 'coordinator'` | `role == task_profile.ORCHESTRATOR` |
+| `role == 'coordinator'` | `task_profile.orchestrates(role)`, true for `orchestrator` and for the stored value `coordinator`. New records write `task_profile.ORCHESTRATOR`. |
+| `role == 'check'` | `role == task_profile.CHECK`; the value does not change |
 | A review job's claims must be read-only | Every specialist with `writes: false` must have read-only claims |
 | Profile field `task_family`, floor `general` | Gone. The profile carries `work_kind`, taken from the specialist. A supplied `task_family` is accepted and ignored. |
-| Row key `role|task_family|complexity|risk` | `work_kind|complexity|risk` |
+| Row key `role\|task_family\|complexity\|risk` | `work_kind\|complexity\|risk` |
 | `worker_choices` keyed by `implementer`, `reviewer`, `researcher`, `repair` | Keyed by roster id |
 | Admission `bucket = [role, complexity]` | `bucket = [work_kind, complexity]` |
 | Visibility `role` from seven labels | A roster id; the visible label is the roster `label` |
 
-New input is checked against the roster only. Stored records are read through one function, `task_profile.stored`, which also knows the eight old names.
+New input is checked against the roster only. Stored records are read through `task_profile.stored`, which also knows the seven old names.
+
+Three names look like roles and are not, so they stay: the operation kinds `coordinator-work` and `operation-coordinator`, the provenance value `coordinator`, and the accounting stages in `usage_budget.STAGES`.
 
 ### Task F2.1: Roster accessors
 
@@ -273,13 +277,14 @@ New input is checked against the roster only. Stored records are read through on
 
 **Interfaces:**
 - Produces:
-  - `ORCHESTRATOR = 'orchestrator'`
+  - `ORCHESTRATOR = 'orchestrator'`, `CHECK = 'check'`
   - `routed(identifier) -> bool`: a roster id other than the orchestrator
+  - `orchestrates(identifier) -> bool`: `orchestrator` or the stored value `coordinator`
   - `reviews(identifier) -> bool`, `writes(identifier) -> bool`, `work_kind(identifier) -> str | None`; each answers for roster ids and, through `stored`, for old names
-  - `stored(identifier) -> dict | None`: the roster entry, or for an old name a fixed entry with `legacy: True`. The old names: `worker`, `implementer`, `repair` (implementation, writes); `review`, `reviewer` (review, reviews); `researcher` (investigation); `coordinator` (the orchestrator entry); `check` (`kind: 'check'`, no work kind).
-  - `LEGACY: tuple[str, ...]`, those eight names. No other module defines them.
+  - `stored(identifier) -> dict | None`: the roster entry, or for an old name a fixed entry with `legacy: True`. The old names: `worker`, `implementer`, `repair` (implementation, writes); `review`, `reviewer` (review, reviews); `researcher` (investigation); `coordinator` (the orchestrator entry).
+  - `LEGACY: tuple[str, ...]`, those seven names. No other module defines them.
 
-- [ ] **Step 1: Write the failing tests** `test_attributes_answer_for_roster_ids`, `test_old_names_read_as_history` (`stored('review')['legacy'] is True`, `reviews('review')`, `specialist('review') is None`) and `test_unknown_names_have_no_attributes` (`stored('wizard') is None`, `routed('wizard') is False`).
+- [ ] **Step 1: Write the failing tests** `test_attributes_answer_for_roster_ids`, `test_old_names_read_as_history` (`stored('review')['legacy'] is True`, `reviews('review')`, `orchestrates('coordinator')`, `specialist('review') is None`), `test_check_is_reserved_and_not_a_specialist` (`specialist('check') is None`, `routed('check') is False`, `stored('check') is None`) and `test_unknown_names_have_no_attributes` (`stored('wizard') is None`, `routed('wizard') is False`).
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_task_profile`. Expected: FAIL, attributes not defined.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** again. Expected: OK.
@@ -297,17 +302,19 @@ New input is checked against the roster only. Stored records are read through on
   - `routing.ensure_profile(job)` requires `task_profile.specialist(job['role'])` and raises `ProfileUnavailable` otherwise, including when the template is unavailable. The profile it returns has `role` and `work_kind` and no `task_family`.
   - `routing.row_key(work_kind, complexity_band, risk_band) -> str`.
   - `routing.resolve_row(table, profile)`: the exact row, then the nearest stricter band for the same work kind, else `no_recommendation`. `ranking_conservative` is gone.
-  - `routing.rank` adds the reason `table_outdated` and returns no strategy when `table['schema'] != routing_evidence.SCHEMA`.
-  - `routing_evidence.SCHEMA == 2`. A guidance row is `{work_kind, complexity_band, risk_band, strategies}`; a row with `role` or `task_family` raises "Invalid guidance row". A benchmark matches on `work_kind`.
+  - `routing.TABLE_SCHEMA == 2` and `routing_evidence.SCHEMA = routing.TABLE_SCHEMA` (the evidence module imports `routing`, not the reverse). `routing.rank` adds the reason `table_outdated` and returns no strategy when the table is not empty and its `schema` differs. An empty table still reports `table_empty`.
+  - A guidance row is `{work_kind, complexity_band, risk_band, strategies}`; a row with `role` or `task_family` raises "Invalid guidance row". A benchmark matches on `work_kind`.
   - `routing_settings`: `ROLES`, `PROFILE_ROLES` and `EXPLICIT_ROLES` are gone. `set` accepts `worker_choices` keys that are routed roster ids, else `invalid_worker_choices`. On load, any other key is left in the file, dropped from the resolved values and listed in `settings_warnings: [{'code': 'worker_choice_key_unknown', 'key': <key>}]`. `assignment_role(profile_role, explicit=None)` returns the profile role, raises `coordinator_not_routed` for the orchestrator and `role_mismatch` when `explicit` differs.
-  - `scripts/routing.py`: `check` and `status` return `settings_warnings`; `PROFILE_FIELDS` has `work_kind` in place of `task_family`.
+  - `scripts/routing.py`: `check` and `status` return `settings_warnings`; `PROFILE_FIELDS` has `work_kind` in place of `task_family`; the assignment passed to admission carries `work_kind`, which admission uses for the bucket.
+
+**Cost:** the template is read and validated once per process and re-checked with one `stat` call per use. Lighter alternative: compile the roster into a Python constant; rejected because the template must stay the single source.
 
 - [ ] **Step 1: Change the tests first.** Fixtures use roster ids and work kinds. New tests:
   - `test_profile_needs_a_roster_specialist` (`role='worker'` raises `ProfileUnavailable`)
   - `test_prepare_blocks_when_the_template_is_unavailable` (`profile_unavailable`, nothing admitted)
   - `test_supplied_task_family_is_ignored` (no `profile_invalid`, no `task_family` in the result)
   - `test_row_key_has_three_parts`, `test_no_weaker_or_other_work_kind_row_is_used`
-  - `test_table_from_the_old_schema_is_reported_outdated`
+  - `test_table_from_the_old_schema_is_reported_outdated`, `test_empty_table_is_still_reported_empty`
   - `test_legacy_worker_choice_key_is_reported_not_fatal` (a file with `implementer` loads; `settings_warnings` names it; a prepare for `software-engineer` does not use it)
   - `test_set_refuses_a_non_roster_worker_choice_key`
   - `test_bucket_is_work_kind_and_complexity`
@@ -320,20 +327,33 @@ New input is checked against the roster only. Stored records are read through on
 ### Task F2.3: Delegation, ledger stages and the other role constants
 
 **Files:**
-- Modify: `runtime/delegation.py` (about 75 role comparisons; `NATIVE_ROLES` :1021, plan jobs :936-978, assignment record :1111-1124, check binding :1211-1228), `runtime/delegation_routing.py:42,165,330,456`, `runtime/routing_launch.py:42,405,428`, `runtime/opencode_launcher.py:853`, `runtime/usage_budget.py:84,1135`, `runtime/openrouter_worker_managed.py:28`, `scripts/openrouter_proposals.py:551-554`, `runtime/changes.py:2392`, `runtime/evidence.py:1097,2993`, `runtime/adapters/codex.py:1047,1513`, `runtime/setup_observation.py:1222`
+- Modify: `runtime/delegation.py`, `runtime/delegation_routing.py:42,165,330,456`, `runtime/routing_launch.py:42,405,428`, `runtime/opencode_launcher.py:853`, `runtime/usage_budget.py:84` (comment only), `runtime/openrouter_worker_managed.py:28`, `scripts/openrouter_proposals.py:551-554`, `runtime/changes.py`, `runtime/evidence.py`, `runtime/adapters/codex.py:1047,1513`, `runtime/setup_observation.py:1222`
 - Test: `tests/test_delegation*.py`, `tests/fixture_delegation.py`, `tests/test_routing_accounting*.py`, `tests/test_routing_launch.py`, `tests/test_openrouter_*.py`, `tests/test_workstreams.py`
+
+**The sites.** The builder lists them with this command and replaces each in place by the rule table above; the PR description carries the list with one line per site:
+
+```bash
+grep -nE "'(worker|review|coordinator|implementer|reviewer|researcher|repair)'" \
+  runtime/delegation.py runtime/evidence.py runtime/changes.py runtime/delegation_routing.py \
+  runtime/routing_launch.py runtime/opencode_launcher.py runtime/adapters/codex.py runtime/setup_observation.py
+```
+
+On `main` at `d36da833` they include, in `runtime/delegation.py`: the plan job roles (:940-955), the coordinator claims (:973), `NATIVE_ROLES` (:1021 and its 14 uses), the assignment record (:1111-1124), the verifier and coordinator bindings (:1148, :1211-1215), :1517, the coordinator job selection (:1819-1856) and `_reserve_operation` (:1874-2028). In `runtime/evidence.py`: :1097, :2993. In `runtime/changes.py`: :2392. The sites that compare with `'check'` (`delegation.py:1225,1716-1721,1912,1980,2028,3182`, `evidence.py:5396-5415`) do not change.
+
+`runtime/delegation.py`, `runtime/evidence.py` and `runtime/changes.py` have no spare line. Every replacement is on its own line, and the one new import joins an existing import line.
 
 **Interfaces:**
 - Produces:
-  - `delegation.NATIVE_ROLES`, `delegation_routing.ROLES`, `routing_launch.PROFILE_ROLE`, `usage_budget.ROLE_STAGES` and `openrouter_worker_managed.ROLE` are gone.
-  - A new delegation plan accepts a job whose `role` is a roster id, or a job with `kind: 'check'` and no `role`. A stored plan or record with an old name still reads.
-  - The ledger stage of an attempt is `review` when `task_profile.reviews(role)`, else `worker`. `usage_budget.STAGES` is unchanged: stages are accounting stages, not roles. A repair is another attempt of the same job.
+  - `delegation.NATIVE_ROLES`, `delegation_routing.ROLES`, `routing_launch.PROFILE_ROLE` and `openrouter_worker_managed.ROLE` are gone.
+  - A new delegation plan accepts a job whose `role` is a roster id or `check`. A stored plan or record with an old name still reads and behaves as before, including the attempt count of a stored `coordinator` job.
+  - The ledger stage of an admission stays `usage_budget.ROLE_STAGES.get(bucket[0], 'worker')`. A new bucket starts with the work kind, so `review` gives the stage `review` and every other work kind gives `worker`. The map keeps its old keys, because stored buckets start with an old role name. `usage_budget.STAGES` is unchanged. A repair is another attempt of the same job.
+  - The Codex adapter's native task name keeps its two prefixes, `worker_` and `review_`. They are name markers: the caller passes `review` when `task_profile.reviews(role)`, else `worker`.
   - OpenRouter proposals use the specialist `explorer-agent`. An OpenRouter worker uses the specialist its brief names, and `software-engineer` when it names none. Self-checks use `software-engineer`.
 
-- [ ] **Step 1: Change the fixtures and tests first.** New tests in `tests/test_delegation.py`: `test_plan_accepts_roster_specialists_and_check_jobs`, `test_new_plan_refuses_an_old_role_name`, `test_stored_plan_with_legacy_roles_still_reads` (write a plan artifact with `worker`, `review`, `coordinator` and `check`, then read the task: no error, same behaviour as before), `test_non_writing_specialist_needs_read_only_claims` (`debugger` with a write claim is refused). In `tests/test_routing_accounting.py`: `test_stage_comes_from_the_reviews_attribute`.
+- [ ] **Step 1: Change the fixtures and tests first.** New tests in `tests/test_delegation.py`: `test_plan_accepts_roster_specialists_and_check_jobs`, `test_new_plan_refuses_an_old_role_name`, `test_stored_plan_with_legacy_roles_still_reads` (write a plan artifact with `worker`, `review`, `coordinator` and `check`, then read the task: no error, same behaviour as before), `test_stored_coordinator_attempts_still_count` (a stored `coordinator` record counts against the orchestrator job's `max_attempts`), `test_non_writing_specialist_needs_read_only_claims` (`debugger` with a write claim is refused). In `tests/test_routing_accounting.py`: `test_stage_follows_the_buckets_work_kind` (`['review', 'low']` gives `review`; `['implementation', 'low']` and `['investigation', 'low']` give `worker`; the stored `['reviewer', 'low']` still gives `review`).
 - [ ] **Step 2: Run** `scripts/test_sharded.py 'test_delegation*' 'test_routing_accounting*' test_routing_launch`. Expected: FAIL in the new tests.
-- [ ] **Step 3: Implement.** The four oversized files must end at or below their ceilings; replace comparisons in place and add no helper block to them.
-- [ ] **Step 4: Run** the same modules plus `test_workstreams 'test_openrouter*' test_evidence test_changes`. Expected: OK.
+- [ ] **Step 3: Implement.** The oversized files must end at or below their ceilings.
+- [ ] **Step 4: Run** the same modules plus `test_workstreams 'test_openrouter*' test_evidence test_changes test_usage_codex_host`. Expected: OK.
 - [ ] **Step 5: Commit** `refactor(delegation): jobs, stages and launchers use the roster`.
 
 ### Task F2.4: Visible labels
@@ -354,13 +374,15 @@ New input is checked against the roster only. Stored records are read through on
 ### Task F2.5: Policies, contracts, skills, brief and the vocabulary gate
 
 **Files:**
-- Modify: `policies/03-agent-delegation.md`, `clients/*.md`, `skills/**/*.md` that name a role, `templates/worker-brief.md` (regenerated), `runtime/task_profile.py` (`render_brief` adds the `- Specialist:` line and the roster table), `tests/qualification/canary.py:49-50` and the other harness files that name a role, `docs/policy-sources.md`, `scripts/validate.py` (ceilings)
+- Modify: `policies/03-agent-delegation.md`, `clients/*.md`, `skills/**/*.md` that name a role, `templates/worker-brief.md` (regenerated), `runtime/task_profile.py` (`render_brief` adds the `- Specialist:` line and the roster table), `tests/qualification/canary.py:49-50` and the other harness files that name a role, `docs/policy-sources.md`, `scripts/validate.py` (the drift hook and the ceilings)
 - Create: `tests/test_roster_vocabulary.py`
 
 **Interfaces:**
-- Produces: `tests/test_roster_vocabulary.py` scans `*.py`, `*.js`, `*.mjs`, `*.ts`, `*.json` and `*.md` under `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/` and `templates/` for the eight names of `task_profile.LEGACY` written as a quoted or backticked value. `ALLOWED` is a tuple of `(path, name, reason)`; it starts with `runtime/task_profile.py` (the reader) and `runtime/usage_budget.py` (`worker`, `review`, `repair`, `check`, `coordinator` as accounting stages). Each further entry needs a reason that names the non-role meaning.
+- Produces:
+  - `scripts/validate.py` raises `ValueError` with the message of `task_profile.brief_drift` when the brief's block differs from the template.
+  - `tests/test_roster_vocabulary.py` scans `*.py`, `*.js`, `*.mjs`, `*.ts`, `*.json` and `*.md` under `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/` and `templates/` for six names written as a quoted or backticked value: `worker`, `review`, `implementer`, `reviewer`, `researcher`, `repair`. `coordinator` and `check` are outside the gate: the first is also the product's word for the user's main session and a provenance value, the second is an operation kind. `ALLOWED` is a tuple of `(path, name, reason)`; it starts with `runtime/task_profile.py` (the reader), `runtime/usage_budget.py` (accounting stages and stored bucket labels) and `runtime/adapters/codex.py` (the two task-name prefixes). Each further entry needs a reason that names the non-role meaning.
 
-- [ ] **Step 1: Write the failing test** `test_no_old_role_name_outside_the_allowlist`. Expected: FAIL, listing every remaining use.
+- [ ] **Step 1: Write the failing tests** `test_no_old_role_name_outside_the_allowlist` (expected: FAIL, listing every remaining use) and, in `tests/test_task_profile.py`, `test_validate_fails_on_brief_drift`.
 - [ ] **Step 2: Rewrite** policy 03's specialist selection (choose the specialist by its `when_to_use` sentence in `templates/task-profile.json`; the orchestrator is never routed), the client contracts and the skills. Regenerate the brief block. In the canary harness use `software-engineer`, `code-reviewer` and `explorer-agent`.
 - [ ] **Step 3: Check the instruction paths** with three representative tasks, as `AGENTS.md` requires: writing a worker brief, setting a worker choice, and reading a stored task with old roles. Record in the PR which instructions loaded.
 - [ ] **Step 4: Run the full suite** and `scripts/validate.py`. Expected: OK, exit 0. Lower every ceiling whose file shrank.
@@ -370,7 +392,7 @@ New input is checked against the roster only. Stored records are read through on
 
 ## Slice F4: Path rules and generated routes
 
-**Owned files:** `runtime/routing_routes.json`, `runtime/routing_paths.py`, `runtime/routing_observations.py`, `runtime/routing_evidence.py` (strategy `provider`), `scripts/routing.py` (`CAPABILITIES`, the `qualify_path` and `unqualify_path` operations), `tests/test_routing_paths.py`, `tests/test_routing_observations.py`, `tests/test_routing_managed_projects.py`, `tests/test_routing_command.py`, `tests/qualification/demand.py`, `docs/smart-routing-qualification.md`, `docs/smart-routing-capability-matrix.md`, the C.3 wiring design (decision 5 marked replaced).
+**Owned files:** `runtime/routing_routes.json`, `runtime/routing_paths.py`, `runtime/routing_observations.py`, `runtime/routing_evidence.py` (strategy `provider` and `endpoint`), `runtime/codex_rate_limits.py`, `runtime/routing_launch.py`, `runtime/opencode_launcher.py`, `scripts/openrouter_proposals.py`, `scripts/routing.py` (`CAPABILITIES`, `_collect`, the `qualify_path` and `unqualify_path` operations), `tests/test_routing_paths.py`, `tests/test_routing_observations.py`, `tests/test_routing_managed_projects.py`, `tests/test_routing_command.py`, `tests/test_routing_codex_rate_limits.py`, `tests/test_routing_launch.py`, `tests/test_qualification_demand.py`, `tests/qualification/demand.py`, `tests/qualification/live_modes.py`, `tests/openrouter_fixtures.py`, `docs/smart-routing-qualification.md`, `docs/smart-routing-capability-matrix.md`, the C.3 wiring design (decision 5 marked replaced).
 
 ### Task F4.1: Path rules and the path qualification record
 
@@ -380,22 +402,38 @@ New input is checked against the roster only. Stored records are read through on
   - `load_rules(path=RULES) -> dict`; raises `ValueError('route_manifest_invalid')`.
   - `qualifications(settings_path) -> dict[str, dict]`; `{}` when the file is absent; raises `ValueError('path_qualifications_invalid')`.
   - `qualify(settings_path, path_id, *, demand, evidence, account=None, now) -> dict` and `unqualify(settings_path, path_id) -> dict`, written atomically with mode 0600.
+  - `pool_windows(rules, pool) -> set[str]`: the window ids the rules declare for a pool.
 
-**Shipped file (fixed):** `{"version": 2, "window_unit": "utilization_thousandths", "paths": [...]}`. A path has `path`, `harness`, `provider`, `sign_in` (`subscription`, `api_key` or `gateway_key`), `billing_class`, `pool`, `account`, `windows` (ids), `binding_enforceable`, and optionally `host` and `advisory`. A path has no `model`, `effort` or `demand`; `load_rules` refuses a path that has one. The shipped paths:
+**Shipped file (fixed):** `{"version": 2, "paths": [...]}`. A path has:
+
+| Field | Meaning |
+|---|---|
+| `path`, `harness`, `provider` | The id and the two values a table strategy must match. No two paths share a `(harness, provider)` pair, so a strategy generates at most one route. |
+| `sign_in` | `subscription`, `api_key` or `gateway_key` |
+| `billing_class`, `pool`, `account`, `binding_enforceable` | As in today's manifest route |
+| `windows` | The window ids a launch is charged in |
+| `window_unit` | Required on a subscription path (`utilization_thousandths`); absent on a gateway path, whose one window is `credit` in micro-dollars |
+| `integration_route` | Required on a gateway path: `workers` or `proposals` |
+| `host`, `advisory`, `status` | Optional |
+
+A path has no `model`, `effort`, `endpoint` or `demand`; `load_rules` refuses a path that has one, a duplicate `(harness, provider)` pair, a subscription path without `window_unit` and a gateway path without `integration_route`. The shipped paths:
 
 | `path` | `harness` | `provider` | `billing_class` | `pool` | `windows` |
 |---|---|---|---|---|---|
 | `opencode-claude-subscription` | `claude-agent-sdk via opencode` | `claude-agent` | `included_subscription` | `claude-subscription` | `5h`, `7d` |
 | `opencode-chatgpt-subscription` | `opencode provider openai` | `openai` | `included_subscription` | `chatgpt-subscription` | `7d` |
 | `codex-chatgpt-subscription` | `codex-native` | `openai` | `included_subscription` | `chatgpt-subscription` | `7d` |
-| `opencode-openrouter` | `opencode provider openrouter` | `openrouter` | `gateway` | `openrouter` | none |
+| `openrouter-workers` | the OpenCode shim's harness name for `openrouter` | `openrouter` | `gateway` | `openrouter` | `credit` |
+| `openrouter-proposals` | `openrouter-proposal` | `openrouter` | `gateway` | `openrouter` | `credit` |
 | `test-only-subscription` | `test` | `test` | `included_subscription` | `test-only-subscription` | `5h` |
 
-The first three come from the draft manifest in #227. The Codex path keeps `host: codex_native` and `advisory: true`. The test path has `status: test_only`, and `qualify` refuses it outside test inputs. The builder checks each `harness` string against what the launchers compare before fixing it.
+The first three come from the draft manifest in #227. The Codex path keeps `host: codex_native` and `advisory: true`. The two gateway paths carry `integration_route` `workers` and `proposals`. The test path has `status: test_only`, and `qualify` refuses it outside test inputs. The builder checks each `harness` string against what the launchers compare (`routing_launch.HOSTS`, `harnessFor` in the OpenCode plugin) before fixing it.
 
-A qualification is `{path_id: {demand: {window: int}, account, evidence, qualified_at}}`. `qualify` requires a path from the rules, demand keys equal to the path's `windows`, each value an integer from 1 to 1000, and a non-empty `evidence` of at most 128 characters (the live result's id).
+A qualification is `{path_id: {demand: {window: int}, account, evidence, qualified_at}}`. `qualify` requires a path from the rules, demand keys equal to the path's `windows`, and a non-empty `evidence` of at most 128 characters (the live result's id). A subscription demand is an integer from 1 to 1000, in thousandths of the window. A gateway demand is `{credit: N}`, micro-dollars per launch, from 1 to 1,000,000.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_routing_paths.py`: `test_shipped_path_rules_are_valid_and_name_no_model`, `test_path_with_a_model_or_demand_is_refused`, `test_qualify_checks_the_path_and_the_demand_windows`, `test_qualification_file_is_private_and_atomic`, `test_unreadable_qualifications_fail_closed`.
+**The gateway demand (coordinator's call 19).** `N` is the largest launch cost the live gateway check observed, taken from the provider receipts, rounded up. Every route on the path reserves it until L1 records cost per model. Consequence: a model that costs more than the measured one is under-reserved at admission. The real cost is still settled from the receipt, and the organization limit and the key's own limit still stop the spend. Stricter alternative, not chosen: scale the reservation by each strategy's list price relative to the measured model's; it needs the measured model's price in the qualification record and one more rule in the replay.
+
+- [ ] **Step 1: Write the failing tests** in `tests/test_routing_paths.py`: `test_shipped_path_rules_are_valid_and_name_no_model`, `test_path_with_a_model_or_demand_is_refused`, `test_two_paths_with_one_harness_and_provider_are_refused`, `test_subscription_path_needs_a_window_unit_and_gateway_path_an_integration_route`, `test_qualify_checks_the_path_and_the_demand_windows`, `test_gateway_demand_is_micro_dollars_within_its_bound`, `test_qualification_file_is_private_and_atomic`, `test_unreadable_qualifications_fail_closed`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths`. Expected: FAIL, no module.
 - [ ] **Step 3: Implement** and replace the shipped file.
 - [ ] **Step 4: Run** again. Expected: OK.
@@ -404,34 +442,47 @@ A qualification is `{path_id: {demand: {window: int}, account, evidence, qualifi
 ### Task F4.2: Route generation
 
 **Interfaces:**
-- Consumes: a compiled table whose strategies carry `provider`. `routing_evidence._catalog` accepts an optional `provider` (text, at most 64 characters) per catalog entry and `compile_table` copies it onto each strategy. `strategy_id` is computed as before, so ids do not change.
-- Produces:
-  - `generate(rules, qualified, table, choices) -> list[dict]`, pure. For each qualified path and each distinct table strategy with the same `harness` and `provider`, one route: `route` (`<path>:<strategy_id>`), `status: 'qualified'`, `path`, `strategy_id`, `provider`, `model`, `effort`, `harness`, `billing_class`, `pool`, `account`, `demand` (the path's qualified demand), `binding_enforceable`, and `endpoint` when the strategy has one. For each explicit worker choice whose harness and provider match a qualified path and that no strategy route covers, one route with `strategy_id: None` and `route` `<path>:choice:<first 8 hex of the choice digest>`.
-  - `routes(settings_path, table, choices, *, rules_path=RULES) -> dict` with `routes` and `routes_version` (16 hex characters of the routes' digest). It regenerates and rewrites `routes.json` only when the stored `inputs` differ: the table version, the choices digest, and the size and modification time of the rules file and the qualification file.
-  - `routing_observations.LocalSource.manifest()` returns these routes. `validate_routes` still applies its endpoint rule to them.
+- Consumes: a compiled table whose strategies carry `provider` and, when it differs from the harness, `endpoint`. `routing_evidence._catalog` accepts an optional `provider` (text, at most 64 characters) per catalog entry; `compile_table` copies it onto each strategy and stops dropping `endpoint` (`runtime/routing_evidence.py:183`). `strategy_id` is computed as before, so ids do not change.
+- Produces, in `runtime/routing_paths.py`:
+  - `generate(rules, qualified, table, choices) -> dict` with `routes` and `skipped`, pure. For each qualified path and each distinct table strategy with the same `harness` and `provider`, one route with the fields the collector and `routing._valid_route` require:
+    - `route` (`<path>:<strategy_id>`), `status: 'qualified'`, `path`, `strategy_id`;
+    - `provider`, `model`, `harness`, and `effort`, where a strategy without an effort gets the text `'none'`, as today's gateway routes have;
+    - `billing_class`, `pool`, `account`, `binding_enforceable`, and `demand` (the path's qualified demand);
+    - `window_unit` on a subscription path, `integration_route` on a gateway path;
+    - `endpoint` when the strategy has one.
+  - For each explicit worker choice whose harness and provider match a qualified path and that no strategy route covers, one route with the same fields and **no `strategy_id` key**, named `<path>:choice:<first 8 hex of the choice digest>`.
+  - Two strategies with the same route identity and different endpoints generate no route; both are listed in `skipped` with the reason `endpoint_ambiguous`. Today `validate_routes` would refuse the whole list.
+  - `routes(settings_path, *, rules_path=RULES) -> dict` with `routes`, `skipped` and `routes_version` (16 hex characters of the routes' digest). It reads the table from `strategy-table.json` beside the settings and the resolved `worker_choices` from the settings itself. It regenerates and rewrites `routes.json` only when the stored `inputs` differ: the size and modification time of the table, the settings, the rules file and the qualification file. A missing table or settings file counts as empty.
+  - `routing_observations.LocalSource.manifest()` returns `routes(self.settings_path)['routes']`, and `[]` without a settings path. `load_manifest`, `MANIFEST` and the top-level `window_unit` are gone.
+  - `routing_observations.collect(..., strategy_ids=None)`: when given, it considers only the generated routes whose `strategy_id` is in the list and the routes without one. `scripts/routing.py` passes the ranking's ids. Each strategy has at most one route, and from F5.2 the collector keeps at most 20 strategy routes (10 per funding step) plus one choice route per routed specialist, so `routing.MAX_ROUTES` (64) is not reached.
+  - The other readers of the manifest read the whole generated list by route id and need only the settings path they already have: `routing_launch.admitted_check` (:207), `opencode_launcher._account_of` (:621) and `openrouter_proposals._endpoint` (:534).
+  - `codex_rate_limits.declared_windows(rules)` returns `routing_paths.pool_windows(rules, POOL)`, and `read_windows` loads the rules in place of the manifest (:71, :324).
 
-**Cost:** two `stat` calls per `prepare`, and one regeneration (two small file reads, one write) when an input changed. Lighter alternative: regenerate only inside `set`, `routing_table.py refresh` and `qualify_path`; rejected because a table replaced by hand would leave stale routes.
+**Cost:** four `stat` calls per `prepare`, and one regeneration (four small file reads, one write) when an input changed. Lighter alternative: regenerate only inside `set`, `routing_table.py refresh` and `qualify_path`; rejected because a table replaced by hand would leave stale routes.
 
 Until L1 records window use per launch, every route on a path uses the path's measured demand.
 
-- [ ] **Step 1: Write the failing tests:** `test_generation_combines_qualified_paths_with_table_strategies`, `test_unqualified_path_generates_nothing`, `test_strategy_without_a_provider_generates_nothing`, `test_explicit_choice_gets_a_route_on_a_qualified_path`, `test_demand_comes_from_the_path_qualification`, `test_routes_are_rewritten_only_when_an_input_changes` (count writes), `test_not_entitled_mark_still_excludes_a_generated_route` (in `tests/test_routing_observations.py`).
-- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths test_routing_observations test_routing_evidence`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** again. Expected: OK.
+- [ ] **Step 1: Write the failing tests:**
+  - In `tests/test_routing_paths.py`: `test_generation_combines_qualified_paths_with_table_strategies`, `test_unqualified_path_generates_nothing`, `test_strategy_without_a_provider_generates_nothing`, `test_strategy_without_an_effort_gets_the_text_none`, `test_gateway_route_carries_endpoint_and_integration_route`, `test_subscription_route_carries_the_window_unit`, `test_explicit_choice_gets_a_route_without_a_strategy_id`, `test_ambiguous_endpoints_skip_only_those_strategies`, `test_demand_comes_from_the_path_qualification`, `test_routes_are_rewritten_only_when_an_input_changes` (count writes), `test_every_generated_route_passes_the_collectors_checks` (each route gives `_manifest_reason(route) is None`).
+  - In `tests/test_routing_observations.py`: `test_not_entitled_mark_still_excludes_a_generated_route`, `test_local_source_without_a_settings_path_has_no_route`, `test_collect_reads_only_the_ranked_strategies_and_choice_routes` (80 generated routes, 5 ranked ids: 5 routes considered, none listed as excluded for the other 75).
+  - In `tests/test_routing_codex_rate_limits.py`: `test_declared_windows_come_from_the_path_rules`.
+- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths test_routing_observations test_routing_evidence test_routing_codex_rate_limits`. Expected: FAIL.
+- [ ] **Step 3: Implement.** Move the fixtures in `tests/openrouter_fixtures.py` and the route helpers in `tests/test_routing_observations.py` to generated routes.
+- [ ] **Step 4: Run** the same modules plus `test_routing_launch 'test_openrouter*' test_routing_dispatch`. Expected: OK.
 - [ ] **Step 5: Commit** `feat(routing): generate routes from qualified paths and the ranking table`.
 
 ### Task F4.3: Activation gate, the operator operation and the runbook
 
 **Interfaces:**
 - Produces:
-  - `routing_paths.gate(settings_path, table, choices) -> list[str]`: `[]`, or one of `['route_manifest_invalid']`, `['no_qualified_path']`, `['no_generated_route']`. `routing_observations.manifest_check` and the reason `route_manifest_unqualified` are gone.
-  - `scripts/routing.py`: the `route_manifest` capability calls `gate`. Two one-shot operator operations, refused under `--serve` like the other operator operations: `qualify_path` with `{path, demand, evidence, account?}` and `unqualify_path` with `{path}`.
-  - `tests/qualification/demand.py` (`measure-demand`) prints, for each path, the `qualify_path` request with the measured demand and the result id. It no longer names a manifest route.
+  - `routing_paths.gate(settings_path) -> list[str]`: `[]`, or one of `['route_manifest_invalid']`, `['no_qualified_path']`, `['no_generated_route']`. `routing_observations.manifest_check` and the reason `route_manifest_unqualified` are gone.
+  - `scripts/routing.py`: the `route_manifest` capability calls `gate`. Two one-shot operator operations, refused under `--serve` like the other operator operations: `qualify_path` with `{path, demand, evidence, account?}` and `unqualify_path` with `{path}`. Their bodies live in `runtime/routing_paths.py`; the script only dispatches.
+  - `tests/qualification/demand.py` (`measure-demand`) prints, for each subscription path, the `qualify_path` request with the measured demand and the result id. The `gateway` mode in `tests/qualification/live_modes.py` prints the same request for the gateway path it checked, with the largest receipt cost as `credit`. Neither names a manifest route.
 
-- [ ] **Step 1: Write the failing tests:** `test_activation_reports_no_qualified_path`, `test_activation_reports_no_generated_route`, `test_activation_reports_an_invalid_rules_file`, `test_activation_passes_with_one_generated_route` (in `tests/test_routing_managed_projects.py`); `test_qualify_path_is_one_shot_and_validates_its_request` (in `tests/test_routing_command.py`).
-- [ ] **Step 2: Run** those two modules. Expected: FAIL.
+- [ ] **Step 1: Write the failing tests:** `test_activation_reports_no_qualified_path`, `test_activation_reports_no_generated_route`, `test_activation_reports_an_invalid_rules_file`, `test_activation_passes_with_one_generated_route` (in `tests/test_routing_managed_projects.py`); `test_qualify_path_is_one_shot_and_validates_its_request` (in `tests/test_routing_command.py`); `test_measure_demand_prints_one_qualify_request_per_path` (in `tests/test_qualification_demand.py`).
+- [ ] **Step 2: Run** those three modules. Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Update the runbook** (`docs/smart-routing-qualification.md:7-145`): the live session qualifies paths; after `measure-demand`, the operator runs `qualify_path` once per path; a new model on a qualified path needs no session. Mark decision 5's route manifest in the C.3 wiring design as replaced. Fix the stale sentence at `docs/smart-routing-qualification.md:613` (`reconcile_subscription` exists since #192) and add a dated note under the table row at line 530 without changing the recorded result.
+- [ ] **Step 4: Update the runbook** (`docs/smart-routing-qualification.md:7-145`): the live session qualifies paths; after `measure-demand` and the gateway check, the operator runs `qualify_path` once per path; a new model on a qualified path needs no session. Mark decision 5's route manifest in the C.3 wiring design as replaced. Fix the stale sentence at `docs/smart-routing-qualification.md:613` (`reconcile_subscription` exists since #192) and add a dated note under the table row at line 530 without changing the recorded result.
 - [ ] **Step 5: Run the full suite** and `scripts/validate.py`. Expected: OK.
 - [ ] **Step 6: Commit** `feat(routing): activation and the runbook qualify paths`.
 
@@ -441,7 +492,7 @@ When F4 merges, the coordinator marks #227 `[SUPERSEDED]` and closes it.
 
 ## Slice F5: Value order, funding order and replay fields
 
-Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py`, `runtime/routing_funding.py`, `runtime/usage_budget.py` (constants only), `scripts/routing.py`, `tests/test_routing_evidence.py`, `tests/test_routing_ranker.py`, `tests/test_routing_funding_order.py`, `tests/test_routing_admission.py`, `tests/qualification/replay_export.py`, `tests/test_qualification_replay_export.py`, `docs/smart-routing-validation.md`, `clients/guidance-publication.md`.
+Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py`, `runtime/routing_funding.py`, `runtime/routing_observations.py` (`leave` and the per-step cut), `runtime/usage_budget.py` (constants only), `scripts/routing.py`, `scripts/validate.py` (ceilings only), `tests/test_routing_evidence.py`, `tests/test_routing_ranker.py`, `tests/test_routing_funding_order.py`, `tests/test_routing_funding.py`, `tests/test_routing_funding_property.py`, `tests/fixture_routing_funding.py`, `tests/test_routing_admission.py`, `tests/test_routing_observations.py`, `tests/qualification/replay_export.py`, `tests/test_qualification_replay_export.py`, `docs/smart-routing-validation.md`, `clients/guidance-publication.md`.
 
 ### Task F5.1: Pre-registration Edit 7
 
@@ -451,87 +502,140 @@ Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py
 This task merges first within F5, before any code of F5 runs against real records. Its content needs the user's approval, because it changes pre-registered text. Edit 7 says:
 
 1. **Vocabulary.** "Role" means specialist. The strict sample covers at least three specialists and two complexity bands.
-2. **What the strict replay recomputes.** From each record's stored detail alone: the class from `shares`, the earlier records, `bucket`, `epoch` and `feasible`; the route from the stored candidates of that class in the stored shortlist order; and whether OpenRouter was open from the stored pool states. The four pass or fail rows of the allocator replay are unchanged.
-3. **Records from before the redesign.** The exported pilot ledger holds 21 admission records, all in `worker_choice` mode with the old role names. Edit 6 says 20; the difference is explained under Results before a pass is recorded. For these records the class is checked against the choice's funding and the route against the one candidate rebuilt from the record's own constraints, so the route check reduces to feasibility. Their roles are read as history.
-4. **Historical replay labels.** Rule 1's outcomes become specialists: `reviewer` gives `code-reviewer`, `researcher` gives `explorer-agent`, `implementer` and `repair` give `software-engineer`. Rule 2 becomes the work kind of that specialist. An unknown band still takes the router's floors.
-5. **Value order.** The price of a candidate is `(3 × input + output) / 4` of its list prices per million tokens. A candidate without a price comes last. Ties go to the lower effort, then to the guidance order. The shortlist holds at most 10.
-6. **Benchmark tolerance:** 2%, applied from slice L2.
-7. **Promotion test,** registered before slice L3 reads the later half: a kind of task counts when at least two candidates have at least 5 results each in the later half; at least 3 kinds of task must count; scores are promoted only if the learned pick is at least as good as the table pick in at least 80% of them.
-8. **Canary.** It runs in ranked mode on generated routes. Its bounds are unchanged.
+2. **What the strict replay recomputes.** From each record's stored detail alone:
+   - the class, from `shares`, `bucket`, `epoch`, `feasible` and the earlier records. The earlier records are the ones the router itself counts: same ledger, same settings revision, at most 14 days older, and not funded by OpenRouter;
+   - the route, from the stored candidates of that class in the stored order;
+   - whether OpenRouter was open, from the stored pool states and the stored fact of whether a direct route existed.
 
-- [ ] **Step 1: Write the section** with the eight points, dated, stating that no replay, canary or label existed when it was registered.
+   The four pass or fail rows of the allocator replay are unchanged.
+3. **Records from before the redesign.** The exported pilot ledger holds 21 admission records, all in `worker_choice` mode with the old role names. Edit 6 says 20; the difference is explained under Results before a pass is recorded. Each of the 21 still holds its constraints (checked on 10 November 2026 without reading any other field), so the sentence in Edit 6 that the pilot's snapshot detail was gone is corrected by a dated note. For these records:
+   - the class must be the funding class of the record's billing class;
+   - every stored constraint must have a cost no greater than its headroom, and the record's reservation in that window must fit the headroom;
+   - the two ledger rows (no funding violation, no resurrected capacity) apply as for any record.
+
+   A legacy record without constraints fails and is counted. Their roles are read as history.
+4. **Historical replay labels.** Rule 1's outcomes become specialists: `reviewer` gives `code-reviewer`, `researcher` gives `explorer-agent`, `implementer` and `repair` give `software-engineer`. Rule 2 becomes the work kind of that specialist. An unknown band still takes the router's floors.
+5. **Value order.** The price of a candidate is `(3 × input + output) / 4` of its list prices per million tokens. A candidate without a price comes last. Ties go to the lower effort, then to the guidance order. Each funding step takes the first 10 candidates of that order that have a route for that step on this machine.
+6. **When OpenRouter opens.** Only when no shortlisted candidate has a direct route here, or when every subscription pool with such a route is full. A pool is full when one of its windows has a stored reading at or above `H` that is either fresh or belongs to a window that has not reset yet, or when every reading is fresh and the launch does not fit. An unread or otherwise stale window keeps OpenRouter closed.
+7. **Benchmark tolerance:** 2%, applied from slice L2.
+8. **Promotion test,** registered before slice L3 reads the later half: a kind of task counts when at least two candidates have at least 5 results each in the later half; at least 3 kinds of task must count; scores are promoted only if the learned pick is at least as good as the table pick in at least 80% of them.
+9. **Canary.** It runs in ranked mode on generated routes. Its bounds are unchanged.
+
+- [ ] **Step 1: Write the section** with the nine points, dated, stating that no replay, canary or label existed when it was registered. Add the dated correction beside Edit 6's sentence about the pilot's snapshot detail (`docs/smart-routing-validation.md:233`), without changing Edit 6's text.
 - [ ] **Step 2: Run** `scripts/validate.py` and `scripts/test_sharded.py test_prepared_instructions`. Expected: OK.
 - [ ] **Step 3: Commit** `docs(routing): pre-register Edit 7 for the redesigned replay and ranking`.
 
-### Task F5.2: List price, value order and the shortlist
+### Task F5.2: Move the ranked decision, then list price and value order
+
+`runtime/routing.py` has no spare line after F3 lowers its ceiling, so the first commit of this task only moves code.
 
 **Interfaces:**
 - Produces:
+  - `runtime/routing_funding.py` holds the ranked branch of `routing._decide` (:565-588) and the record builder (:596-611), moved without a change in behaviour. `routing._decide` calls them. `routing.py`'s ceiling is lowered to its new line count.
   - A catalog entry accepts an optional `list_price: {"input": number, "output": number}`, in dollars per million tokens, both finite and not negative.
   - Each compiled strategy carries `list_price_micros: int | None`, `round((3 * input + output) / 4 * 1_000_000)`.
-  - `compile_table` orders each row by: priced before unpriced, `list_price_micros` ascending, the effort's index in the model's `supported_efforts` ascending (no effort counts as 0), then the guidance order.
-  - `routing.SHORTLIST_MAX = 10`. `rank` cuts the list after the context and constraint filters and adds the reason `shortlist_cut` when it removed any.
+  - `compile_table` orders each row by: priced before unpriced, `list_price_micros` ascending, the effort's index in the model's `supported_efforts` ascending (no effort counts as 0), then the guidance order. The catalog contract in `clients/guidance-publication.md` states that `supported_efforts` is listed from the lowest to the highest; the compiler cannot check it.
+  - `routing.rank` returns the whole filtered order, as today. The cut is per funding step:
+    - `routing_funding.SHORTLIST_MAX = 10`
+    - `routing_funding.step_shortlists(strategy_ids, routes, excluded) -> dict` with `direct` and `gateway`: for each step, the first 10 ids of the order that have a route of that step. A route counts when the collector kept it, or left it out for any reason other than `not_entitled`. Pure.
+  - The collector uses the same function to keep only the routes of those ids (at most 20 strategy routes), and its `leave` adds `strategy_id`, `pool` and `billing_class` to each `excluded` entry. What a client sees of `excluded` does not change.
 
-- [ ] **Step 1: Write the failing tests:** `test_price_is_three_parts_input_one_part_output` (input 1.0 and output 5.0 give `2_000_000`), `test_rows_are_ordered_by_price_then_effort_then_guidance_order`, `test_unpriced_candidates_come_last`, `test_invalid_list_price_is_refused` (in `tests/test_routing_evidence.py`); `test_shortlist_is_cut_to_ten_after_the_filters` (12 candidates, 3 excluded by a constraint: 9 returned and no `shortlist_cut`; 12 with none excluded: 10 returned), `test_shortlist_is_never_padded` (in `tests/test_routing_ranker.py`).
-- [ ] **Step 2: Run** both modules. Expected: FAIL.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** both modules and `test_routing_table`. Expected: OK.
-- [ ] **Step 5: Commit** `feat(routing): order each row by list price and cut the shortlist to ten`.
+**Why the cut is per step (coordinator's call 18).** Design section 5.5 cuts the order to 10 before it looks at routes. With the cheapest first, those 10 can all be models this machine reaches only through OpenRouter, which would open OpenRouter while a subscription model in place 11 could serve. The per-step cut keeps the design's aim: use a subscription while it has room.
+
+- [ ] **Step 1: Move the code** and run `scripts/test_sharded.py 'test_routing_*'`. Expected: OK with no test changed. Commit `refactor(routing): move the ranked decision and the record builder to routing_funding`.
+- [ ] **Step 2: Write the failing tests:**
+  - In `tests/test_routing_evidence.py`: `test_price_is_three_parts_input_one_part_output` (input 1.0 and output 5.0 give `2_000_000`), `test_rows_are_ordered_by_price_then_effort_then_guidance_order`, `test_unpriced_candidates_come_last`, `test_invalid_list_price_is_refused`.
+  - In `tests/test_routing_funding_order.py`: `test_each_step_takes_its_first_ten_with_a_route` (12 ids, the 3 cheapest gateway-only: `direct` holds ids 4 to 12 and `gateway` the 3), `test_a_not_entitled_route_takes_no_place`, `test_an_unobserved_route_keeps_its_place`, `test_shortlists_are_never_padded`.
+  - In `tests/test_routing_observations.py`: `test_excluded_entries_name_strategy_pool_and_billing_class`, `test_collector_keeps_only_the_step_shortlists`.
+- [ ] **Step 3: Run** the three modules. Expected: FAIL.
+- [ ] **Step 4: Implement.**
+- [ ] **Step 5: Run** them and `test_routing_table test_routing_ranker test_routing_command`. Expected: OK.
+- [ ] **Step 6: Commit** `feat(routing): order each row by list price and cut the shortlist per funding step`.
 
 ### Task F5.3: The funding order
 
 **Files:**
-- Create: `runtime/routing_funding.py`, `tests/test_routing_funding_order.py`
-- Modify: `runtime/routing.py:330,549-621`
+- Create: `tests/test_routing_funding_order.py` (started in F5.2)
+- Modify: `runtime/routing_funding.py`, `runtime/routing.py`, `tests/test_routing_funding.py`, `tests/test_routing_funding_property.py`, `tests/fixture_routing_funding.py`
 
 **Interfaces:**
 - Produces, in `runtime/routing_funding.py`:
   - `GATEWAY_REASONS = ('gateway_capability_gap', 'gateway_windows_full', 'gateway_window_unknown', 'gateway_direct_available')`
-  - `gateway_open(shortlist, routes, pools, held, settings, now) -> tuple[bool, str, list[dict]]`: whether OpenRouter may be used, the reason, and the per-pool states `[{pool, full}]` with `full` True, False or None.
-  - `split(candidates) -> tuple[list, list]`: direct candidates and gateway candidates (`billing_class == 'gateway'`).
-- `routing._decide`, ranked mode: the existing subscription and API Usage logic runs on the direct candidates only, unchanged. If it chooses a route, that is the decision. Otherwise, if gateway candidates exist and `gateway_open` is true, `allocator.choose_route` picks among them in shortlist order. Otherwise the assignment is pending with its dominant reason and the gateway reason.
+  - `pool_state(windows, demanded, held, H, now, fits) -> 'full' | 'room' | 'unknown'`, pure.
+  - `gateway_decision(pool_states, direct_route_exists) -> tuple[bool, str]`, pure. Admission and the strict replay both call it.
+  - `gateway_open(shortlists, observations, rejected, held, settings, now) -> dict` with `open`, `reason`, `pools` (`[{pool, state}]`, sorted by pool) and `direct_route_exists`. It builds the inputs of `gateway_decision` from the collector's routes, pools and `excluded`, and from `rejected`, the reason `_candidate` gave for each route it refused.
+  - `choose(direct, gateway, shares, rows, bucket, epoch, feasible, gateway_state, now, horizon) -> tuple[str | None, str | None]`: the chosen route and its class, pure. The direct candidates go through `allocator.choose_class` and `allocator.choose_route` exactly as today. If no direct route is chosen and `gateway_state['open']`, `allocator.choose_route` picks among the gateway candidates in their order.
+- `routing._decide`, ranked mode, calls `choose`. With no route chosen the assignment is pending with its dominant reason and the gateway reason.
 
-**The rules `gateway_open` implements:**
+**The rules.**
 
-- `gateway_capability_gap`, open: no generated route of a shortlisted candidate has a subscription or direct API billing class on this machine.
-- `gateway_windows_full`, open: every subscription pool with a generated route for a shortlisted candidate has at least one fresh window whose reading, used plus currently held over the limit, is at or above `settings['H']`.
-- `gateway_window_unknown`, closed: a pool has no full fresh window and at least one window is stale or unread.
-- `gateway_direct_available`, closed: a pool has room.
+*Does a direct route exist?* Yes when a candidate of the direct shortlist has a subscription route on this machine: one the collector kept, or one it left out for a reason other than `not_entitled`. The shipped rules have no direct API path. When API Usage adds one after the release, its routes count only while API Usage is active, and its slice defines the pool state.
 
-The reading is the stored one, not the pace-projected value. The accounting class of an OpenRouter admission stays `api`, because it is a dollar route under the organization and ledger gates; its `billing_class` is `gateway`. `routing.decision_rows` leaves out records whose `billing_class` is `gateway`, so they never move the share between subscription and API Usage. An explicit choice with `funding: 'api'` on a gateway route works as today.
+*The state of each subscription pool that has such a route,* over the windows its routes demand:
+
+- `full`: one window has a stored reading where used, protected and held together are at or above `settings['H']` of the limit, and that reading is fresh, or the window is not rolling and its `reset_at` is in the future. Also `full`: every demanded window is fresh and `_candidate` refused every shortlisted route on the pool with `insufficient_headroom`.
+- `room`: not full, and every demanded window is fresh.
+- `unknown`: anything else, including a pool the collector reported no window for.
+
+*The decision:*
+
+| Condition, in this order | Result | Reason |
+|---|---|---|
+| No direct route exists | open | `gateway_capability_gap` |
+| A direct route exists and there is no pool state | closed | `gateway_window_unknown` |
+| A pool has `room` | closed | `gateway_direct_available` |
+| A pool is `unknown` | closed | `gateway_window_unknown` |
+| Every pool is `full` | open | `gateway_windows_full` |
+
+The reading is the stored one, not the pace-projected value.
+
+**Two calls that differ from the design's word "fresh" (calls 16 and 17).** A reading is fresh for 900 seconds, and only a settled launch or the Codex reader renews it. Without the "has not reset yet" rule, 15 minutes after the last launch on a full pool the reading is stale, OpenRouter closes, and every task waits until the user seeds the window. A full window cannot empty before its reset, so the old reading still proves it. Without the "does not fit" rule, a pool just below `H` whose room is smaller than one launch would block the task and keep OpenRouter closed until the reset.
+
+**Accounting.** The accounting class of an OpenRouter admission stays `api`, because it is a dollar route under the organization and ledger gates; its `billing_class` is `gateway`. `routing.decision_rows` leaves out records whose `billing_class` is `gateway`, so they never move the share between subscription and API Usage. An explicit choice with `funding: 'api'` on a gateway route works as today.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_routing_funding_order.py`:
   - `test_subscription_with_room_wins_over_gateway`
   - `test_gateway_opens_on_a_capability_gap`
+  - `test_a_not_entitled_direct_route_is_a_capability_gap`
+  - `test_unobserved_pool_is_not_a_capability_gap` (the only direct route was left out as `window_unobserved`: closed, `gateway_window_unknown`)
   - `test_gateway_opens_when_every_pool_is_at_or_above_H`
   - `test_one_pool_with_room_keeps_gateway_closed`
-  - `test_stale_or_unread_window_never_opens_gateway`
+  - `test_stale_or_unread_window_never_opens_gateway` (a stale reading below `H`, and a pool with no reading)
+  - `test_a_full_window_stays_full_until_its_reset` (a stale reading at `H`, not rolling, reset in the future: open; the same after the reset time, or rolling: closed)
+  - `test_a_launch_that_does_not_fit_fills_the_pool` (fresh reading below `H`, room smaller than the demand: open)
   - `test_fast_burning_half_empty_window_does_not_open_gateway`
   - `test_a_full_weekly_window_fills_the_pool_even_when_the_short_window_is_empty`
   - `test_gateway_needs_the_integration_and_its_ledger_gates` (the integration off, or no funded organization: pending)
   - `test_gateway_admissions_do_not_move_the_api_share`
   - `test_explicit_gateway_choice_still_admits`
   - `test_no_route_at_all_waits_with_a_reason`
-- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_funding_order`. Expected: FAIL, no module.
-- [ ] **Step 3: Implement,** keeping `runtime/routing.py` at or below its ceiling.
+  - `test_gateway_decision_table` (the five rows above, on `gateway_decision` alone)
+- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_funding_order`. Expected: FAIL.
+- [ ] **Step 3: Implement,** keeping `runtime/routing.py` at or below its ceiling. Update the mixed ranked shortlists in `tests/test_routing_funding_property.py:19-42` and `tests/fixture_routing_funding.py` to the new order: a gateway candidate is chosen only when the gateway is open.
 - [ ] **Step 4: Run** `scripts/test_sharded.py 'test_routing_funding*' test_routing_admission test_routing_allocator test_routing_replay`. Expected: OK.
 - [ ] **Step 5: Commit** `feat(routing): OpenRouter is the last step of the funding order`.
 
 ### Task F5.4: Replay fields in the admission record and the export
 
 **Interfaces:**
-- Produces, in the admission record built at `runtime/routing.py:596-611`:
-  - `ranking`: `table_version`, `profile_digest`, plus `shortlist` (the strategy ids used, at most 10), `strategy_id` (the chosen one, or `None`), `score_version` (`None` until L3), `routes_version`.
-  - `risk_band`, `floor_filled` (whether `missing_fields` was not empty), and `strategy: {provider, model, effort, harness}`. `scripts/routing.py` passes `work_kind`, `risk_band` and `floor_filled` in the admitted assignment.
-  - In `pressure`, which is the snapshot detail removed after 24 hours: `epoch`, `feasible` (the direct classes that had a candidate), `pools` (`{pool: constraints}`), `candidates` (`[[route, class, pool], ...]` in shortlist order) and `gateway` (`{open, reason, pools}`).
-  - A record with 10 candidates in 3 pools fits `usage_budget.MAX_ADMISSION_BYTES`; if the test shows it does not, raise the constant to `8192 + MAX_BINDING_BYTES` in this task and state it in the PR.
+- Produces, in the admission record (built in `runtime/routing_funding.py` since F5.2):
+  - `ranking`: `table_version`, `profile_digest`, plus `shortlist` (the strategy ids of the step that chose the route, at most 10), `strategy_id` (the chosen one, or `None`), `score_version` (`None` until L3), `routes_version`.
+  - `risk_band`, `floor_filled` (whether `missing_fields` was not empty), and `strategy: {provider, model, effort, harness}`. `scripts/routing.py` passes `risk_band` and `floor_filled` in the admitted assignment; `work_kind` is there since F2.2.
+  - In `pressure`, which is the snapshot detail removed after 24 hours:
+    - `epoch`, `feasible` (the direct classes that had a candidate), `minimum_horizon` and `H`;
+    - `candidates`: `[{route, cls, step, pool, constraints}]` in shortlist order, where `step` is `direct` or `gateway`. The direct candidates are always stored; the gateway candidates only when the direct step chose nothing;
+    - `gateway`: `{open, reason, pools: [{pool, state}], direct_route_exists}`.
+  - `shares` of a record funded by OpenRouter: the shares the direct step computed, or `{api: 0.0, subscription: 0.0}` when no direct class had a candidate.
+  - `usage_budget.MAX_ADMISSION_BYTES` becomes `8192 + MAX_BINDING_BYTES`, and the test below proves the largest record fits. **Cost:** a record grows by about 3 KB for the 24 hours its snapshot detail is kept; the ledger holds one per open or recent attempt. Lighter alternative: store one constraint list per pool; rejected because two paths on one pool have different costs, and the replay would not be exact.
   - `tests/qualification/replay_export.py` exports the records as stored, with a manifest field `format: 2`; records without `ranking.shortlist` are exported unchanged.
 - `ADMISSION_FIELDS` in `scripts/routing.py`, what a client may see, gains nothing.
 
-- [ ] **Step 1: Write the failing tests:** `test_admission_record_carries_the_replay_fields`, `test_class_and_route_recompute_from_the_record_alone` (feed `shares`, earlier records, `bucket`, `epoch` and `feasible` to `allocator.choose_class`, and the stored candidates to `allocator.choose_route`; both equal the record), `test_largest_record_fits_the_size_limit`, `test_snapshot_detail_is_removed_after_a_day_and_the_rest_stays` (in `tests/test_routing_admission.py`); `test_export_keeps_the_replay_fields_and_old_records` (in `tests/test_qualification_replay_export.py`).
+- [ ] **Step 1: Write the failing tests:**
+  - In `tests/test_routing_admission.py`: `test_admission_record_carries_the_replay_fields`; `test_class_and_route_recompute_from_the_record_alone` (call `routing_funding.choose` and `gateway_decision` with nothing but the record's fields, the earlier records and the record's `at`; the route and class equal the record's, for a subscription admission, an OpenRouter admission after full pools and one after a capability gap); `test_two_routes_on_one_pool_keep_their_own_costs`; `test_largest_record_fits_the_size_limit` (10 direct and 10 gateway candidates, 2 windows each, 3 pools); `test_snapshot_detail_is_removed_after_a_day_and_the_rest_stays`.
+  - In `tests/test_qualification_replay_export.py`: `test_export_keeps_the_replay_fields_and_old_records`.
 - [ ] **Step 2: Run** both modules. Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Update** `clients/guidance-publication.md`: a guidance row is `{work_kind, complexity_band, risk_band, strategies}`, a catalog entry carries `provider` and `list_price`.
+- [ ] **Step 4: Update** `clients/guidance-publication.md`: a guidance row is `{work_kind, complexity_band, risk_band, strategies}`; a catalog entry carries `provider`, `list_price` and `supported_efforts` from the lowest to the highest.
 - [ ] **Step 5: Run the full suite** and `scripts/validate.py`. Expected: OK.
 - [ ] **Step 6: Commit** `feat(routing): admission records store what the strict replay recomputes`.
 
@@ -539,14 +643,14 @@ The reading is the stored one, not the pace-projected value. The accounting clas
 
 ## Slice F6: No model names
 
-**Owned files:** `runtime/usage_canary.py`, `runtime/adapters/codex.py:596-597`, `runtime/routing_evidence.py` (`display_names`), `clients/opencode.md:22,350`, `skills/manage-usage-routing/references/first-canary.md:30`, `skills/openrouter-workers/references/procedure.md`, `scripts/validate.py`, `tests/test_model_names.py`, `tests/test_usage_canary*.py`, `tests/qualification/safety.py`, `tests/qualification/drill.py`, `tests/qualification/launcher_probes.py`, `tests/qualification/canary.py`, `tests/qualification/live_modes.py`, `docs/smart-routing-qualification.md`.
+**Owned files:** `runtime/usage_canary.py`, `runtime/adapters/codex.py:596-597`, `runtime/routing_evidence.py` (`display_names`), `runtime/model_names.py`, `clients/opencode.md:22,350`, `skills/manage-usage-routing/references/first-canary.md:30`, `skills/openrouter-workers/references/procedure.md`, `scripts/validate.py`, `tests/test_model_names.py`, `tests/test_usage_canary*.py`, `tests/qualification/safety.py`, `tests/qualification/drill.py`, `tests/qualification/launcher_probes.py`, `tests/qualification/canary.py`, `tests/qualification/live_modes.py`, `docs/smart-routing-qualification.md`.
 
 ### Task F6.1: Remove the names
 
 **Interfaces:**
 - Produces:
-  - `usage_canary`: the `_MODEL` constant is gone. The canary uses the cheapest priced strategy for its provider in the compiled table, and refuses with `canary_model_unavailable` when the table has none. The reasoning constant stays.
-  - A catalog entry accepts an optional `display_name`; the compiled table carries `display_names: {model: name}`. The Codex adapter's one hard-coded correction is replaced by a lookup of that map through `routing_paths`, at no added lines in `runtime/adapters/codex.py`. **Cost:** one read of the table file when a display name is resolved. Lighter alternative: drop the correction and show the vendor's spelling.
+  - `usage_canary`: the `_MODEL` constant is gone. The canary uses the cheapest priced strategy for its provider in the compiled table, and refuses with `canary_model_unavailable` when the table has none. The reasoning constant stays. Design section 5.14 says "the lightest model the catalog lists"; no catalog is on the machine before L2, so the table stands in for it (coordinator's call 20), and L2 may switch to the catalog.
+  - A catalog entry accepts an optional `display_name`; the compiled table carries `display_names: {model: name}`. The Codex adapter's one hard-coded correction is replaced by `model_names.display_name(model, settings_path)`, which reads that map from the table file, at no added lines in `runtime/adapters/codex.py`. **Cost:** one read of the table file when a display name is resolved. Lighter alternative: drop the correction and show the vendor's spelling.
   - The live harness takes the route as `--route PROVIDER/MODEL#VARIANT`; `tests/qualification/safety.py` has no `MODEL` constant and checks every launch against the route named in the approval.
 
 - [ ] **Step 1: Write the failing tests:** `test_canary_takes_the_cheapest_priced_model_for_its_provider`, `test_canary_refuses_without_a_priced_model`, `test_display_name_comes_from_the_table`, and in the qualification tests `test_harness_refuses_a_launch_outside_the_approved_route`.
@@ -564,7 +668,7 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_model_names.py`: `test_a_table_model_in_a_covered_file_fails_with_file_and_line`, `test_the_same_name_under_docs_tests_or_assets_passes`, `test_a_name_inside_a_longer_word_does_not_match`, `test_without_a_table_the_check_is_not_run`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_model_names`. Expected: FAIL.
-- [ ] **Step 3: Implement** in a new module `runtime/model_names.py` that `validate` calls.
+- [ ] **Step 3: Implement** in `runtime/model_names.py` (created in Task F6.1), which `validate` calls.
 - [ ] **Step 4: Run** `scripts/test_sharded.py test_model_names test_validate_release test_package` and `scripts/validate.py`. Expected: OK.
 - [ ] **Step 5: Commit** `feat(validate): fail on a model name in the covered areas`.
 
@@ -577,11 +681,11 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 ### Task F7.1: The strict replay runner
 
 **Interfaces:**
-- Consumes: the export directory of `replay_export.export`, the record fields of Task F5.4, `allocator.choose_class`, `allocator.choose_route`, `routing_funding.gateway_open`.
+- Consumes: the export directory of `replay_export.export`, the record fields of Task F5.4, and the two pure functions admission itself calls: `routing_funding.choose` and `routing_funding.gateway_decision`. It reimplements neither.
 - Produces: `replay_strict.run(directory) -> dict` with `records`, `legacy_records`, `class_reproduced`, `route_reproduced`, `funding_violations`, `resurrected_capacity`, `stray_records`, `specialists`, `bands`, `passed`; and `python3 -B -m tests.qualification.replay_strict --dir <directory>`, which prints the report without ids, titles or timestamps and exits 1 unless `passed`.
-- It opens nothing but the export directory, calls no model and uses no network. Per ledger identity it walks the records in `at` order and applies Edit 7's points 2 and 3.
+- It opens nothing but the export directory, calls no model and uses no network. Per ledger identity it walks the records in `at` order and applies Edit 7's points 2, 3 and 6. The earlier records it gives to `choose` are filtered as `routing.decision_rows` filters them: same settings revision, at most 14 days older, not funded by OpenRouter.
 
-- [ ] **Step 1: Write the failing tests** with synthetic exports and invented names: `test_reproduced_export_passes`, `test_a_changed_class_fails`, `test_a_reordered_shortlist_fails`, `test_a_duplicate_attempt_is_a_stray_record`, `test_reserved_beyond_the_stored_headroom_is_a_funding_violation`, `test_a_later_record_with_more_headroom_and_no_reset_is_resurrected_capacity`, `test_legacy_worker_choice_records_follow_the_legacy_rule`, `test_a_record_without_snapshot_detail_fails_and_is_counted`, `test_the_report_holds_no_identifier`.
+- [ ] **Step 1: Write the failing tests** with synthetic exports and invented names: `test_reproduced_export_passes`, `test_a_changed_class_fails`, `test_a_reordered_shortlist_fails`, `test_a_duplicate_attempt_is_a_stray_record`, `test_reserved_beyond_the_stored_headroom_is_a_funding_violation`, `test_a_later_record_with_more_headroom_and_no_reset_is_resurrected_capacity`, `test_a_gateway_record_is_checked_against_its_pool_states` (stored states that give "closed" with a gateway route: fails), `test_earlier_records_follow_the_routers_own_filters`, `test_legacy_worker_choice_records_follow_the_legacy_rule` (a copy of the pilot's record shape: one constraint, no `snapshot_id`), `test_a_record_without_snapshot_detail_fails_and_is_counted`, `test_the_report_holds_no_identifier`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_qualification_replay_strict`. Expected: FAIL, no module.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** again. Expected: OK.
@@ -590,7 +694,7 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 ### Task F7.2: The canary harness runs ranked
 
 **Interfaces:**
-- Produces: in `canary` mode on the production ledger the harness sends no explicit choice, so admissions are ranked on generated routes; it rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands; it refuses to start when `prepare` reports `table_outdated`, `no_generated_route` or `no_qualified_path`. The pilot and isolation modes keep their explicit `--route`.
+- Produces: in `canary` mode on the production ledger the harness sends no explicit choice, so admissions are ranked on generated routes; it rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands; it refuses to start when `prepare` reports `table_outdated` or `table_empty`, or the activation gate reports `no_generated_route` or `no_qualified_path`. The pilot and isolation modes keep their explicit `--route`.
 
 - [ ] **Step 1: Write the failing tests** against the doubles: `test_canary_admissions_are_ranked`, `test_canary_refuses_to_start_without_generated_routes`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_qualification_canary`. Expected: FAIL.
@@ -598,13 +702,13 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 - [ ] **Step 4: Run** `scripts/test_sharded.py 'test_qualification*'`. Expected: OK.
 - [ ] **Step 5: Commit** `test(qualification): the canary runs in ranked mode`.
 
-After F7 merges, the coordinator runs the strict replay over the exported pilot ledger and records the result, and the explanation of the 21st record, under Results in `docs/smart-routing-validation.md`.
+After F7 and F8 have both merged, the coordinator runs the strict replay over the exported pilot ledger and records the result, and the explanation of the 21st record, under Results in `docs/smart-routing-validation.md`, in a PR of its own. Waiting for F8 keeps that edit from colliding with F8's edit of the same document.
 
 ---
 
 ## Slice F8: Historical replay runner
 
-**Owned files:** `tests/qualification/replay_history.py`, `tests/test_qualification_replay_history.py`, `docs/smart-routing-validation.md` (the store field-mapping edit and, after the run, Results).
+**Owned files:** `tests/qualification/replay_history.py`, `tests/test_qualification_replay_history.py`, `docs/smart-routing-validation.md` (the store field-mapping edit only; F5.1 has merged by then, and Results are written by the coordinator after the run).
 
 ### Task F8.1: Field mapping and the runner
 
@@ -632,7 +736,7 @@ These join the [pre-canary requirements](2026-11-08-smart-routing.md#pre-canary-
 2. **The guidance is published again in the new row shape.** The coordinator runs the existing guidance publication procedure once: each vendor guide page is read by a model once and turned into rows of `work_kind`, complexity and risk; the catalog input gains `provider`, `list_price` and `display_name`; `scripts/routing_table.py refresh` compiles the production table. Until the due jobs of L2 exist, the catalog and guides are refreshed by hand.
 3. Edit 7 is registered (Task F5.1) and the strict replay over the exported pilot ledger has passed (after F7).
 4. `scripts/validate.py` has run once with the real home and reports `model_names: passed`.
-5. In the live session each path is qualified with `qualify_path` from the `measure-demand` result, and the historical replay runs once afterwards.
+5. In the live session each subscription path is qualified with `qualify_path` from the `measure-demand` result and the gateway path from the gateway check's largest receipt, and the historical replay runs once afterwards.
 
 ## After the canary: L1 to L4
 
@@ -644,6 +748,7 @@ These are outlines with the decisions already fixed. Each is expanded into tasks
 - Trigger: the `settle` operation, when the root has a canonical acceptance and no unresolved hold, and a one-shot `analyze` operation. Rows are idempotent by root and attempt.
 - A row is built from the admission record of Task F5.4 and the root report. Records with an old role name are skipped.
 - **New recording L1 must add,** because today's records lack it: the window readings before and after each launch, taken from readings the launch already makes; review rounds, rescues and escalations per assignment; finding counts by severity; elapsed time; and the served model version where the harness exposes one.
+- **Starting demand** (design section 5.4): once window use is recorded per model, a model with no launch on a path starts from its predecessor's value in the same family, or from the highest value recorded on the pool when it has no predecessor. Until a model has its own value, the path's qualified demand applies.
 - Score rules as in design section 5.9: first-pass success, rework factor, at least 5 results to reorder, full weight near 20, 60 days, half weight for a floor-filled profile, borrowing from the work kind at 10 results, a new score version when a kind of task gains 5 results.
 
 **L2, due jobs and importers.**
@@ -651,7 +756,8 @@ These are outlines with the decisions already fixed. Each is expanded into tasks
 - Module `runtime/due_jobs.py`; a small `routing/due.json` with one `expires_on` per job, read at the start of `scripts/workflow.py` and `scripts/routing.py`. A due job runs once in a bounded detached process, with one runner at a time and a backoff, following the lock and backoff in `runtime/codex_rate_limits.py`. No detached-process pattern exists in the repository today, so L2 builds it.
 - Importers for the catalog (a conditional request, so an unchanged catalog costs no download), the benchmarks and the vendor guide digests. The table is recompiled locally after a change.
 - Model family and the successor rule of design section 5.7; a model without a family is never a successor.
-- Benchmark qualification with the 2% tolerance of Edit 7.
+- Benchmark qualification with the 2% tolerance of Edit 7. A benchmark result that names no effort level qualifies a model only at its default effort (design section 5.5).
+- **Changed guide pages** (design section 5.8): the vendor-guide job stores a digest per page and calls no model. `prepare` and `check` report `guidance_page_changed` with the page ids until the guidance is published again. `clients/guidance-publication.md` changes so that a due job may recompile the table from an unchanged guidance file with a new catalog or new benchmarks, while turning a changed page into rows stays a model read in a maintenance session.
 - **To verify at the start of L2:** that each benchmark source downloads without a credential and may be used this way; whether a vendor states replacements anywhere beyond its guide; and how the catalog's model ids map to the ids each harness uses, since the two differ on some paths.
 
 **L3, chronological replay, promotion and rollback.** The promotion test of Edit 7, one-shot `promote_scores` and `rollback_scores` operations, and the value order `list price × rework factor ÷ first-pass success` once promoted. It replaces tasks S4.1 and S4.2 of the 8 November plan.
@@ -680,16 +786,33 @@ Decisions this plan makes that the design left open or that differ from it:
 5. The stored field key stays `role`; its values become specialist ids. Renaming the key would change the wire contract of every client and need a second reader for stored records. The unification design can revisit it.
 6. The admission bucket is work kind and complexity, not specialist and complexity, so the share accounting does not thin out over 24 specialists.
 7. OpenRouter is its own step in the funding order, but its accounting class stays `api`; the record's `billing_class` says `gateway`.
-8. A pool counts as full when any one of its fresh windows is at or above `H`.
-9. An explicit worker choice gets a generated route on a qualified path even when the table does not list its model.
+8. A pool counts as full when any one of its windows is at or above `H`; calls 16 and 17 say which readings count.
+9. An explicit worker choice gets a generated route on a qualified path even when the table does not list its model. That route has no `strategy_id`.
 10. Old `worker_choices` keys load, match nothing and are reported in `settings_warnings`; today an unknown key fails the whole file.
 11. OpenRouter proposals use `explorer-agent`; an OpenRouter worker defaults to `software-engineer`.
 12. The `terms` input of the table compiler is removed with the control roles, since nothing else reads it.
-13. Edit 7's numbers: 2% tolerance; promotion at 5 results, 3 kinds of task and 80%; the legacy rule for the pilot's records.
+13. Edit 7's nine points, among them: 2% tolerance; promotion at 5 results, 3 kinds of task and 80%; the legacy rule for the pilot's 21 records; the dated correction of Edit 6's sentence that the pilot's snapshot detail was gone.
 14. The model-name check takes its names from the compiled table until the downloaded catalog exists.
+
+Added after the independent review of this plan. Calls 15 to 18 and 20 depart from the design's wording, so each needs the user's explicit yes:
+
+15. **`check` stays a reserved value of `role`** for a check run, which uses no model and is not a specialist. Design section 5.2 says the role value goes. Removing it means a new stored shape and about 25 rewritten sites in three files that have no spare line (`runtime/delegation.py`, `runtime/evidence.py`, `runtime/changes.py`), for no change a user can see. Alternative: do that rewrite as its own slice after the canary.
+16. **A full window stays full until its reset.** A stale reading at or above `H` still counts when the window is not rolling and has not reset. The design says "fresh". Without this, 15 minutes after the last launch on a full pool every task waits until the user seeds the window.
+17. **A launch that does not fit fills the pool.** With fresh readings below `H`, a pool whose room is smaller than the launch counts as full. Without this, such a task waits until the reset with OpenRouter closed.
+18. **The shortlist is cut per funding step,** not once. Each step takes the first 10 candidates that have a route for it here (Task F5.2). Design section 5.5 cuts first, which can open OpenRouter while a subscription model in place 11 could serve.
+19. **The gateway demand is one value per path,** the largest launch cost the live gateway check observed, in micro-dollars (Task F4.1). A dearer model is under-reserved at admission until L1; the receipt, the organization limit and the key's own limit still bound the spend. Stricter alternative: scale by list price.
+20. **The usage canary takes the cheapest priced strategy of the table,** because no catalog is on the machine before L2. Design section 5.14 says the lightest model the catalog lists.
+21. `coordinator` becomes `orchestrator` through one reader, `task_profile.orchestrates`, which also accepts the stored value. The operation kinds `coordinator-work` and `operation-coordinator`, the provenance value `coordinator` and the accounting stages keep their names; the vocabulary gate covers six old names and leaves `coordinator` and `check` out.
+22. The ledger stage follows the bucket's work kind: `review` gives the stage `review`, every other work kind `worker`. The template enforces that a specialist reviews exactly when its work kind is `review`.
+23. OpenRouter has two paths, workers and proposals, because the two harnesses differ; no two paths may share a harness and provider.
+24. Generation skips two strategies that share a route identity and differ in endpoint, with a reason, where today the whole manifest would be refused.
+25. Design section 5.12 (advice in a project that is not managed) has no task here; see the self-review.
 
 ## Self-review
 
-- **Spec coverage.** 5.1 and 5.2: F1.1, F2. 5.3: F1. 5.4: F4. 5.5: F2.2 (row key), F5.2 (price, order, shortlist); benchmark qualification in L2. 5.6: F5.3. 5.7 and 5.8: L2. 5.9: L1. 5.10: F5.1, F5.4, F7, L3. 5.11: L4. 5.12: the shortlist of F5.2 is what `prepare` returns in every project; the W1 client design consumes it for advice. 5.13: F3. 5.14: F6. Section 8: the table above.
-- **Not covered here:** session titles and the vocabulary unification, which have their own designs.
-- **Type consistency.** `task_profile.specialist` is roster-only and `stored` also reads old names, in every task. Route fields in F4.2 are the ones `_candidate` and `_choice_matches` read. The record fields of F5.4 are the ones F7.1 consumes.
+- **Spec coverage.** 5.1 and 5.2: F1.1, F2. 5.3: F1. 5.4: F4; the starting demand of a model with no launch in L1. 5.5: F2.2 (row key), F5.2 (price, order, shortlist); benchmark qualification and the default-effort rule in L2. 5.6: F5.3. 5.7 and 5.8: L2, including the changed-page report and the guidance-publication rule. 5.9: L1. 5.10: F5.1, F5.4, F7, L3. 5.11: L4. 5.12: not covered, see below. 5.13: F3. 5.14: F6. Section 8: the table above.
+- **Not covered here:**
+  - Design section 5.12, advice in a project that is not managed. Today `prepare` in such a project requires observations from its caller (`scripts/routing.py:425`) and returns strategy ids, not advice a person can read. The OpenCode workflow client design (#243) owns the session-start advice; it will consume the per-step shortlist of F5.2 and the generated routes of F4, and its plan adds the task.
+  - Session titles and the vocabulary unification, which have their own designs.
+- **Independent review.** A first review of this plan returned six blocking findings: the OpenRouter path could not become a valid route; the record was not enough for an exact replay; the legacy rule relied on data the validation document says is gone (it is not: the export was checked); removing `check` and `coordinator` was under-scoped; F4 broke manifest readers it did not own; and an unread pool could look like a capability gap. Each is fixed in the task it concerns, and the calls it forced are 15 to 25.
+- **Type consistency.** `task_profile.specialist` is roster-only and `stored` also reads old names, in every task. Route fields in F4.2 are the ones `_manifest_reason`, `_valid_route`, `_candidate` and `_choice_matches` read, and a test runs every generated route through the collector's check. The record fields of F5.4 are the arguments of `routing_funding.choose` and `gateway_decision`, which F7.1 calls.
