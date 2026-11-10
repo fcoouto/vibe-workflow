@@ -83,6 +83,30 @@ class ExternalTests(unittest.TestCase):
         routes = [dict(routes[0], automatic=False)]
         self.assertEqual(external.select(None, False, routes)['route'], 'native')
 
+    def test_managed_constraints_keep_the_users_scope_and_choose_nothing(self):
+        consent = permission('openrouter', model='vendor/model', provider='endpoint', effort=None)
+        consent['destinations'] += [dict(service='openrouter', mode='proposal', model='vendor/model', provider='other',
+                                         effort='high'),
+                                    dict(service='openrouter', mode='worker', model='worker/model', provider='endpoint',
+                                         effort='low')]
+        binding = dict(automatic=True, local_preferred=False)
+        self.assertEqual(external.constraints(consent, binding, service='openrouter', mode='proposal'),
+                         dict(allowed_models=['vendor/model'], allowed_efforts=['high', 'none']))
+        for change, reason in ((dict(local_preferred=True), 'local_preference'),
+                               (dict(automatic='yes'), 'selection_required')):
+            with self.subTest(reason=reason), self.assertRaisesRegex(ValueError, reason):
+                external.constraints(consent, dict(binding, **change), service='openrouter', mode='proposal')
+        manual = dict(consent, automatic=False)
+        with self.assertRaisesRegex(ValueError, 'automatic_selection_denied'):
+            external.constraints(manual, binding, service='openrouter', mode='proposal')
+        self.assertEqual(external.constraints(manual, dict(binding, automatic=False), service='openrouter',
+                                              mode='worker'), dict(allowed_models=['worker/model'],
+                                                                   allowed_efforts=['low']))
+        with self.assertRaisesRegex(ValueError, 'destination_denied'):
+            external.constraints(consent, binding, service='openai-api', mode='proposal')
+        with self.assertRaisesRegex(ValueError, 'invalid_destination'):
+            external.constraints(dict(consent, destinations=[]), binding, service='openrouter', mode='proposal')
+
     def test_filesystem_case_aliases_cannot_bypass_source_or_derived_exclusions(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()

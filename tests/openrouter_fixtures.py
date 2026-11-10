@@ -1,10 +1,13 @@
 """Real disposable canonical births with explicit software-only qualification."""
+from contextlib import contextmanager
+import copy
 import json
 from pathlib import Path
 import sys
 from unittest.mock import patch
 
-from runtime import changes, review_storage, startup
+from runtime import changes, review_storage, routing, routing_observations, startup
+from scripts import routing as command
 from tests.fixture_canonical_birth import fresh_canonical
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -70,3 +73,133 @@ def configure(repo, *, executable=None, auth=None, routes=('proposals', 'workers
     if 'workers' in routes:
         request['consent_version'] = 2
     return settings.enable(repo, request)
+
+
+@contextmanager
+def managed_gateway(testcase, repo, *endpoints):
+    """C.3 phase W: `repo` is a managed project whose qualified OpenRouter gateway routes are `endpoints`
+    (`(model, provider)` pairs), funded on temporary routing stores. It is the C.2 `managed_project_fixture`
+    (C.3 design 6.4), so default paths never reach real user state. Yields `{routes, settings, ledger}`."""
+    from tests.test_smart_routing_features import fixture_route, managed_project_fixture
+    routes = [fixture_route('openrouter:%s@%s' % pair, 'gateway') for pair in endpoints]
+    with managed_project_fixture(testcase, repo, routes=routes) as stores:
+        yield stores
+
+
+class Funding:
+    """A source double over the fixture's: `organization` renames the dollar windows' organization and `extra`
+    routes come first in the manifest (so they shape a shared pool)."""
+    def __init__(self, source, organization=None, extra=()):
+        self.source, self.organization, self.extra = source, organization, list(extra)
+
+    def manifest(self):
+        return self.extra + self.source.manifest()
+
+    def windows(self, pool, now):
+        return [dict(window, organization=self.organization) if self.organization and window.get('organization')
+                else window for window in self.source.windows(pool, now)]
+
+    def credential(self, route, scope):
+        return self.source.credential(route, scope)
+
+
+class ManagedRouting:
+    """Spies and stores for managed-project tests; the class also needs `self.repo` and `enterContext`."""
+
+    def manage(self, *endpoints):
+        self.stores = self.enterContext(managed_gateway(self, self.repo, *(endpoints or [('model/v1', 'p')])))
+
+    def ledger(self, request=None, *, one_shot=False):
+        """The routing `status` ledger summary, or the answer to `request` (`one_shot`: the operator's command)."""
+        service = command.Service(self.stores['settings'], self.stores['ledger'], one_shot=one_shot)
+        try:
+            answer = service.handle(json.dumps(request or dict(v=1, op='status')).encode())
+        finally:
+            service.close()
+        return answer if request else answer['ledger']
+
+    def holds(self):
+        return self.ledger()['holds']
+
+    def unsent(self, failure):
+        """Begin and dispatch with `failure` active; the packet is never returned (nothing can be sent)."""
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        with failure:
+            try:
+                result = self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))
+            except (ValueError, KeyboardInterrupt) as error:
+                result = dict(raised=type(error).__name__)
+        self.assertNotIn('packet', result)
+        return result
+
+    def assert_recovered(self, disposition='routed_unsent', holds=None):
+        """The routed attempt's row is settled and the store usable: `record` has nothing left, and once the
+        operator resolves any unknown cost the next `begin` is admitted."""
+        [row] = self.call('history')['records']
+        self.assertEqual(row['outcome']['disposition'], disposition)
+        self.assertFalse({'dispatched_at', 'routing_state'} & set(row))
+        self.assertEqual(self.holds(), {'cost_unknown': 1} if holds is None else holds)
+        self.assertEqual(self.call('record', dict(attempt_token=row['attempt_token'], disposition='rejected'))
+                         ['fallback'], 'already_recorded')
+        if holds is None:
+            resolved = self.ledger(dict(v=1, op='resolve_cost_unknown', attempt_id=row['routing']['attempt_id'],
+                                        cost_usd_micros=1, event_id='resolve:1'), one_shot=True)
+            self.assertEqual(resolved['state'], 'recorded', resolved)
+        self.assertIn('attempt_token', self.call('begin', self.begin_request('task-2')))
+
+    def admissions(self):
+        calls, real = [], routing.admit
+
+        def admit(assignment, *args, **kwargs):
+            result = real(assignment, *args, **kwargs)
+            calls.append((assignment, result))
+            return result
+        self.enterContext(patch.object(routing, 'admit', admit))
+        return calls
+
+    def recorded(self):
+        """Every routing lifecycle event as (event, answer)."""
+        events, real = [], routing.record_event
+
+        def record(ledger, event, now):
+            answer = real(ledger, event, now)
+            events.append((event, answer))
+            return answer
+        self.enterContext(patch.object(routing, 'record_event', record))
+        return events
+
+    def prepared(self, then=None):
+        bodies, real = [], command.Service._prepare
+
+        def prepare(service, body):
+            bodies.append(copy.deepcopy(body))
+            answer = real(service, body)
+            if then is not None:
+                then(answer)
+            return answer
+        self.enterContext(patch.object(command.Service, '_prepare', prepare))
+        return bodies
+
+    def source(self, **options):
+        original = routing_observations.default_source
+        self.enterContext(patch.object(routing_observations, 'default_source',
+                                       lambda *args, **kwargs: Funding(original(*args, **kwargs), **options)))
+
+    def settled(self, cost):
+        """Begin, dispatch and record one proposal with a self-reported `cost` (None: no usage). Returns the
+        routing `complete` answer and the hold's reservation."""
+        calls, events = self.admissions(), self.recorded()
+        request = self.begin_request('cost-%s' % cost)
+        begun = self.call('begin', request)
+        self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
+        outcome = dict(attempt_token=begun['attempt_token'], disposition='rejected')
+        if cost is not None:  # a coordinator's claim: no receipt the helper can verify
+            outcome['usage'] = dict(source='provider_receipt', requests=[dict(
+                kind='primary', model='model/v1', cost_usd_micros=cost,
+                tokens=dict(input=10, output=5, reasoning=0, cache_read=0, cache_write=0))])
+        self.assertTrue(self.call('record', outcome)['recorded'])
+        [(_, answer)] = [item for item in events if item[0]['kind'] == 'complete']
+        reserved = max(value for key, value in calls[-1][1]['reserved'].items() if key.startswith('org:'))
+        return answer, reserved
