@@ -90,7 +90,7 @@ def _projection_shape(value):
 
 
 def _budget(deadline=None):
-    return dict(paths=0, bytes=0, deadline=deadline if deadline is not None else time.monotonic()+4)
+    return dict(paths=0, bytes=0, deadline=deadline if deadline is not None else time.monotonic()+startup.OBSERVATION_SECONDS)
 
 
 def _read(path, budget, *, absent=False, private=False, limit=d3.MAX_FILE, expected_binding=None):
@@ -100,8 +100,7 @@ def _read(path, budget, *, absent=False, private=False, limit=d3.MAX_FILE, expec
     try:
         raw = d3._read_file(path, min(limit, package_manifest.PACKAGE_SCAN_MAX_BYTES-budget['bytes']-1), private=private, expected_binding=expected_binding)
     except FileNotFoundError:
-        if absent:
-            return None
+        if absent:return None
         raise
     budget['bytes'] += len(raw)
     startup._entry_budget_check(budget)
@@ -192,8 +191,7 @@ def _projection(value, config, *, user=False):
     features = value.get('features') or {}
     d3._require(isinstance(features, dict), 'Unsupported hook feature configuration')
     selected = {key: features[key] for key in _FEATURES if key in features and features[key] is not None}
-    if selected:
-        result['features'] = selected
+    if selected:result['features'] = selected
     plugins = value.get('plugins') or {}
     d3._require(isinstance(plugins, dict), 'Unsupported plugin configuration')
     selected = {key: {field: plugins[key][field] for field in ('enabled', 'remote_plugin_id', 'release_id')
@@ -262,7 +260,9 @@ def current_configuration(config, cwd, budget=None, *, bundle_budget=None, runti
     scan = bundle_budget if bundle_budget is not None else budget
     scan['paths'] = budget['paths']
     bundle,runtime_digest = _package_scan(root, scan, runtime_sources=runtime_sources)
-    versions = sorted(p.name for p in _children(root.parent, scan) if p.is_dir())
+    # An installed copy's siblings are other versions; a Git-confirmed checkout's are unrelated worktrees.
+    checkout = os.path.lexists(root/'.git') and not any(p.name == 'cache' and p.parent.name == 'plugins' for p in root.parents)
+    versions = None if checkout else sorted(p.name for p in _children(root.parent, scan) if p.is_dir())
     budget['paths'] = scan['paths']
     material = dict(files=observed, bundle=bundle, installation_versions=versions)
     result=dict(digest=d3._digest(material), hook_owner=hook_owner, material=material)
@@ -356,8 +356,7 @@ def collect_setup(witness, accepted_identity, transaction_id, verified_assessmen
 
 def _system_layer_path(path):
     alias = Path('/etc')
-    if sys.platform != 'darwin' or path != alias/'codex/config.toml' or not alias.is_symlink():
-        return path
+    if sys.platform != 'darwin' or path != alias/'codex/config.toml' or not alias.is_symlink():return path
     # Codex reports the Unix system location even on macOS, where /etc is an OS alias.
     d3._require(alias.readlink() == Path('private/etc') and alias.lstat().st_uid == 0,
         'Unexpected macOS system configuration alias')
@@ -1475,13 +1474,13 @@ def _read_qualification(record, facts, *, cwd=None, pending_journal=None, budget
             result['capabilities'] = dict(reference=binding['receipt'], verified=verified, complete=complete,
                 bootstrap_verified=_bootstrap_verified(content))
         return result, content
+    except startup.ObservationDeadline:raise
     except (startup.StartupError, OSError, ValueError, TypeError, KeyError, StopIteration):
         return None
 
 
 def read_qualification(record, facts, **options):
-    retained = _read_qualification(record, facts, **options)
-    return retained[0] if retained is not None else None
+    return (_read_qualification(record, facts, **options) or (None,))[0]
 
 
 def require_capability(scope, keys, *, task, operation, attempt_ref=None):
@@ -1502,6 +1501,7 @@ def require_capability(scope, keys, *, task, operation, attempt_ref=None):
     budget = _budget()
     current = startup.acquire_project_entry(SimpleNamespace(client=scope.client,cwd=scope.repository_root),state.PACKAGE,budget=budget)
     fresh = current.resolution.scope
+    if current.resolution.reason == 'observation_deadline':raise startup.ObservationDeadline('Qualification observation deadline exceeded')
     d3._require(fresh is not None and fresh.accepted_scope_digest == scope.accepted_scope_digest
         and fresh.qualification == scope.qualification and fresh.authority_target == scope.authority_target,
         'Qualification scope or observable configuration changed')
