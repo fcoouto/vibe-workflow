@@ -89,6 +89,7 @@ CAPABILITIES = (
     ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
 )
 SELF_CHECK_TIMEOUT = 10
+SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
 SELF_CHECK_MARK = 'managed-self-check:'
 SELF_CHECK_CODE = re.compile(r'[a-z0-9_]{1,64}')
 # Runs in the child: the package root (argv[1]) first on the import path, never the project checkout.
@@ -119,8 +120,9 @@ def run():
     if kind == 'heading':
         return [] if re.search(r'^#+ Managed projects[ \t]*$', text, re.M) else ['heading_missing']
     data = json.loads(text)
-    routes = data.get('routes') if isinstance(data, dict) else data
-    qualified = isinstance(routes, list) and any(isinstance(r, dict) and r.get('status') == 'qualified' for r in routes)
+    if not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('routes'), list):
+        return ['manifest_invalid']  # C3-1's manifest is {version: 1, ..., routes: [...]}
+    qualified = any(isinstance(r, dict) and r.get('status') == 'qualified' for r in data['routes'])
     return [] if qualified else ['no_qualified_route']
 try:
     result = run()
@@ -213,13 +215,16 @@ class Service:
     `workflow` is the trusted reader of canonical workflow state for S3.5's gates (default: the delegation state
     reader). Only code constructs it; no request, configuration or test switch can replace it."""
     def __init__(self, settings_path, ledger_path, table_path=None, *, test_inputs=False, serving=False,
-                 workflow=None, project=None):
+                 workflow=None, project=None, one_shot=False):
         self.project = None if project is None else Path(project).resolve()
         self.workflow = workflow if workflow is not None else routing_gates.D6Workflow(project=self.project)
         self.settings_path, self.ledger_path = _resolved(settings_path), _resolved(ledger_path)
         self.table_path = _resolved(table_path or self.settings_path.parent / 'strategy-table.json')
         self.test_inputs, self.write_wait = test_inputs, WRITE_WAIT_SERVING if serving else WRITE_WAIT
         self.serving = serving
+        # Only `main()` sets this, for a one-shot command; no request field or environment can. In-process services
+        # (`managed_service` and every other caller) and `--serve` never change `managed_projects` (design 4.2).
+        self.one_shot = one_shot and not serving
         self._open = None
         self._expired_at = None
 
@@ -373,7 +378,9 @@ class Service:
         return ranking
 
     def _managed(self):
-        """Whether this pinned service serves a managed project; an unreadable answer counts as managed."""
+        """Whether this pinned service serves a managed project. An unreadable answer counts as managed (fail
+        closed): with an unreadable settings file, even an unmanaged project's `prepare` that carries observations
+        gets `observations_not_accepted`."""
         if self.project is None:
             return False
         try:
@@ -630,9 +637,11 @@ class Service:
         return dict(self._update_settings(body, None, stage), invalidated_attempts=None, ledger_state=problem)
 
     def _managed_change(self, change):
-        """`managed_projects` is one-shot only and stored as realpaths. Adding a project needs the activation gate
-        (C.3 design 4.2), which runs before any ledger lock and writes nothing when it fails; removal always works."""
-        require(not self.serving, 'operator_op_not_served')
+        """`managed_projects` changes only through the one-shot command (`operator_op_not_served` from `--serve` and
+        from every in-process service, `managed_service` included) and is stored as realpaths. Adding a project needs
+        the activation gate (C.3 design 4.2), which runs before any ledger lock and writes nothing when it fails;
+        removal always works."""
+        require(self.one_shot, 'operator_op_not_served')
         try:
             value = [str(Path(item).resolve()) for item in routing_settings._managed_projects(change['managed_projects'])]
             routing_settings._managed_projects(value)  # still distinct once resolved
@@ -738,7 +747,11 @@ def _self_check(kind, target):
                 os.killpg(child.pid, signal.SIGKILL)  # the whole process group, not just the child
             except OSError:
                 pass
-            child.communicate()
+            try:
+                child.communicate(timeout=SELF_CHECK_REAP)
+            except subprocess.TimeoutExpired:
+                child.stdout.close()
+                child.wait()
             return ['self_check_timeout']
         lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
         try:
@@ -809,7 +822,7 @@ def main(argv=None, stdin=None, stdout=None):
         op, serving, test_inputs, paths = parsed
         service = Service(paths.get('--settings') or default_settings(), paths.get('--ledger') or default_ledger(),
                           paths.get('--table'), test_inputs=test_inputs, serving=serving,
-                          project=paths.get('--project'))
+                          project=paths.get('--project'), one_shot=not serving)
         try:
             if serving:
                 return serve(service, stdin, stdout)
