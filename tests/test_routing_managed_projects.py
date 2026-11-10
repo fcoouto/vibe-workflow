@@ -219,6 +219,10 @@ class ActivationGateTests(Base):
         write_checks(self.package)
         self.service.close()
         self.service = command.Service(self.settings, self.ledger, one_shot=True)  # as only `main()` builds it
+        from runtime import delegation_routing  # the host check has its own tests (ActivationHostTests)
+        hosts = mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=['codex'])
+        hosts.start()
+        self.addCleanup(hosts.stop)
 
     def add(self, projects=None, revision=0, service=None):
         change = dict(managed_projects=[str(self.project)] if projects is None else projects)
@@ -426,6 +430,12 @@ class ActivationHostTests(Base):
                 self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [str(self.project)])
                 removal, _ = self.add(hosts, projects=[], revision=response['revision'])
                 self.assertEqual(removal['state'], 'updated', removal)
+
+    def test_an_unenrolled_project_is_refused_as_not_enrolled(self):
+        from runtime import delegation_routing
+        response, gate = self.add(delegation_routing.NotEnrolled('not_enrolled'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='not_enrolled', projects=[str(self.project)]))
+        self.assertEqual(gate, 0)
 
     def test_an_unreadable_enrolment_fails_closed(self):
         from runtime.startup import RuntimeScopeError

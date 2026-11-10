@@ -606,10 +606,59 @@ class RealScopeResolver(ManagedDelegation):
         self.assertEqual(delegation_routing.open_unrouted_assignments(outside), [])
         # #222 mutation M7: with no enrolment the legacy entry path's client is codex, not "no client".
         self.assertEqual(delegation_routing._enrolled_clients(outside), ['codex'])
-        self.assertEqual(delegation_routing.enrolled_hosts(outside), ['codex'])
         with mock.patch.object(routing_gates, '_resolve_scope', side_effect=LookupError('none')) as resolve:
             self.assertEqual(delegation_routing._scopes_for(outside), [])
         self.assertEqual(resolve.call_args.args[0]['client'], 'codex')
+
+    def test_an_unenrolled_directory_is_not_a_codex_host(self):
+        # #224 review: a never-onboarded directory (a Claude-only project, say) must not pass as legacy codex.
+        outside = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, outside)
+        with self.assertRaises(delegation_routing.NotEnrolled):
+            delegation_routing.enrolled_hosts(outside)
+        for error in (LookupError('no runtime'), RuntimeError('unreadable')):
+            with self.subTest(error), mock.patch.object(routing_gates, '_resolve_scope', side_effect=error), \
+                    self.assertRaises(delegation_routing.NotEnrolled):
+                delegation_routing.enrolled_hosts(outside)
+
+    def test_a_confirmed_legacy_codex_checkout_is_a_codex_host(self):
+        outside = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, outside)
+        legacy = types.SimpleNamespace(repository_root=outside, runtime=object())
+        with mock.patch.object(routing_gates, '_resolve_scope', return_value=legacy) as resolve:
+            self.assertEqual(delegation_routing.enrolled_hosts(outside), ['codex'])  # M7 where it applies
+        self.assertEqual(resolve.call_args.args[0], dict(client='codex', cwd=str(outside)))
+
+    def test_only_configured_or_active_entries_are_hosts(self):
+        # #224 review: a pending or suspended codex entry is no managed path; an unknown status fails closed.
+        record = json.loads(self.scope.authority_path.read_bytes())
+        for status, expected in (('configured', ['codex']), ('active', ['codex']), ('pending', []),
+                                 ('suspended', []), ('retired', None)):
+            with self.subTest(status):
+                entries = [dict(entry, activation=dict(entry['activation'], status=status))
+                           for repository in record['repositories'] for checkout in repository['checkouts']
+                           for entry in checkout['clients']]
+                with mock.patch.object(delegation_routing, '_enrolment', return_value=entries):
+                    if expected is None:
+                        from runtime.startup import RuntimeScopeError
+                        with self.assertRaises(RuntimeScopeError):
+                            delegation_routing.enrolled_hosts(self.repo)
+                    else:
+                        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), expected)
+
+    def test_a_suspended_codex_entry_does_not_let_a_claude_project_join(self):
+        record = json.loads(self.scope.authority_path.read_bytes())
+        for repository in record['repositories']:
+            for checkout in repository['checkouts']:
+                entry = json.loads(json.dumps(checkout['clients'][0]))
+                entry['client'], entry['configuration']['runtime'] = 'claude-code', None
+                checkout['clients'][0]['activation'] = dict(status='suspended', qualification='pending',
+                    accepted_scope_digest=None, transaction_id=None, evidence=[], qualification_binding=None)
+                checkout['clients'].append(entry)
+        self.scope.authority_path.write_text(json.dumps(record))
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
+        refused = self.activate()
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'advisory_host_unmanaged'))
 
     def activate(self):
         settings = Path(tempfile.mkdtemp()).resolve() / 'settings.json'
