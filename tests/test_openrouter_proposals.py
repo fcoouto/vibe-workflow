@@ -831,7 +831,7 @@ class ManagedProposalTests(ProposalCase):
         [body] = bodies
         self.assertEqual(body['assignment']['choice']['model'], 'model/v1')
         self.assertEqual(body['constraints'], dict(allowed_models=['model/v1'], allowed_efforts=['none']))
-        self.assertEqual(calls[0][1]['route_identity']['model'], 'model/v1')
+        self.assertTrue(calls[0][1]['route'].startswith('openrouter:model/v1@p|'), calls[0][1]['route'])
         with self.assertRaisesRegex(ValueError, 'destination_denied'):
             self.call('begin', dict(request, task_id='task-2', model='model/v2'))
         self.assertEqual(len(calls), 1)
@@ -864,7 +864,7 @@ class ManagedProposalTests(ProposalCase):
         begun = self.call('begin', self.begin_request())
         self.assertTrue(self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))['recorded'])
         self.assertEqual(self.holds(), {})
-        for task, usage, expected in (('task-2', None, {'cost_unknown': 1}), ('task-3', 1200, {'cost_unknown': 1})):
+        for task, usage, expected in (('task-2', 1200, {}), ('task-3', None, {'cost_unknown': 1})):
             request = self.begin_request(task)
             begun = self.call('begin', request)
             self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
@@ -876,6 +876,8 @@ class ManagedProposalTests(ProposalCase):
             self.assertTrue(self.call('record', outcome)['recorded'])
             self.assertEqual(self.holds(), expected)
         self.assertNotIn('usage', json.dumps(self.call('history')['records']))
+        # An unknown dollar cost keeps its exposure and stops new dollar launches until the operator resolves it.
+        self.assertEqual(self.call('begin', self.begin_request('task-4'))['fallback'], 'ledger_reconcile_pending')
 
     def test_a_store_refusal_after_admission_closes_the_hold(self):
         self.manage()
