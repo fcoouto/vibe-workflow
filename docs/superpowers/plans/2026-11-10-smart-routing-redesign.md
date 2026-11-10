@@ -16,7 +16,7 @@
 - **Exact replay.** The strict replay reproduces every admission record, calls no model and reads no live data.
 - **File size.** Each Python file is at or under 1,000 lines. The files with a fixed ceiling in `scripts/validate.py:21-33` must not grow: `runtime/routing.py` 1506, `runtime/delegation.py` 3369, `runtime/evidence.py` 8505, `runtime/changes.py` 6074, `runtime/state.py` 2613, `runtime/usage_budget.py` 1553, `runtime/adapters/codex.py` 1579, `runtime/setup_observation.py` 1526. All but `runtime/state.py` and `runtime/setup_observation.py` (1515 lines) are exactly at their ceiling, so a change in them replaces lines and adds none. A PR that shrinks one lowers its ceiling in the same PR. `scripts/routing.py` has 940 lines; new operations go into runtime modules and the script only dispatches.
 - **No model name** in `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/`, `templates/`, `AGENTS.md` or shipped JSON. Tests use invented names. Dated evidence records under `docs/` keep theirs.
-- **No API key or organization** before release, except the OpenRouter key approved for the gateway check. API Usage stays deferred; this plan only fixes its place in the funding order.
+- **No API key or organization** before release. The previously approved OpenRouter key exception does not supply the missing organization or observations. Pending decision A below recommends skipping the gateway check; choosing its alternative requires an explicit scoped exception. API Usage stays deferred.
 - **Stored history.** Records written before a change keep their old values. They are read as written, never rewritten and never used for learning.
 - **No stored task text, finding text or file paths** in learning or replay records.
 - **Tests run under a private home:** `T=$(mktemp -d); HOME="${T:?}" python3 -B scripts/test_sharded.py <modules>; rm -rf "${T:?}"`. The full suite is the same command with no module. `python3 -B scripts/validate.py` runs before every push.
@@ -28,9 +28,11 @@ Each line names a condition the design implies and the task whose tests pin it.
 
 1. **A settings file or stored plan still uses an old role name.** It must load, match nothing new, and be reported once; it must never fail the whole settings file. Pinned in Task F2.2 (`test_legacy_worker_choice_key_is_reported_not_fatal`) and F2.3 (`test_stored_plan_with_legacy_roles_still_reads`).
 2. **The template file is missing or damaged in an installed package.** `prepare` must block with one reason and admit nothing. Pinned in Task F1.1 (`test_missing_or_invalid_template_fails_closed`) and F2.2 (`test_prepare_blocks_when_the_template_is_unavailable`).
-3. **A window reading is stale or absent while every other pool is full.** OpenRouter must stay closed, because an unknown is not a full window and a route nobody has read is not a missing route. Pinned in Task F5.3 (`test_stale_or_unread_window_never_opens_gateway`, `test_unobserved_pool_is_not_a_capability_gap`).
+3. **A window reading is stale or absent while every other pool is full.** OpenRouter must stay closed, because an unknown is not a full window and a route that only lacks a reading is not a missing route. One function, `routing_funding.route_exists`, decides whether a route exists, from reasons that are each classified as permanent or temporary. Pinned in Task F5.2 (`test_every_reason_is_classified`) and F5.3 (`test_stale_or_unread_window_never_opens_gateway`, `test_unobserved_pool_is_not_a_capability_gap`, `test_permanently_unusable_direct_route_is_a_capability_gap`).
 4. **A path is qualified but the table has no candidate for it,** or the table exists and no path is qualified. Activation must refuse with a reason that says which. Pinned in Task F4.3 (`test_activation_reports_no_generated_route`, `test_activation_reports_no_qualified_path`).
 5. **A ranking table compiled before the change is still in user state.** Ranking must report it as outdated and fall back to explicit choices, never read a four-part row. Pinned in Task F2.2 (`test_table_from_the_old_schema_is_reported_outdated`).
+6. **A value that only a test supplies.** A rule may read a route, a window, a host or a record field only when production writes it. The table and the traces in [Production data flows](#production-data-flows) name the writer of each, and each trace has a test that runs on the production source, the real stores and a real time gap. Pinned in `tests/test_routing_production_flows.py` (F4, F5) and `tests/test_qualification_canary.py` (F7.2).
+7. **A launcher is admitted a route it cannot send.** Admission must consider only the routes of the launching host. Pinned in Task F4.4 (`test_managed_prepare_without_harnesses_is_refused`, `test_codex_routed_admission_considers_only_codex_routes`) and F5.3 (`test_opencode_ranked_admission_never_selects_a_gateway_route`).
 
 ## Slices and order
 
@@ -39,13 +41,13 @@ Each line names a condition the design implies and the task whose tests pin it.
 | F1 | Task Profile template with the roster, loader, generated brief section, `prepare` returns missing fields | Full suite | now |
 | F3 | Jev removal | Affected modules | now, in parallel with F1 |
 | F2 | Roster rename and the `work_kind` row key | Full suite, two reviewers | F1 and F3 |
-| F4 | Path rules, path qualification, generated routes | Full suite | F2 |
+| F4 | Path rules, path qualification, routes generated in memory, the host rule | Full suite | F2 |
 | F5 | List price and value order, shortlist per funding step, funding order, replay fields, pre-registration Edit 7 | Full suite | F4 |
 | F6 | Model names removed, `validate.py` check | Affected modules | F5 |
-| F7 | Strict replay runner; canary harness in ranked mode | Affected modules | F6 |
+| F7 | Strict replay runner; canary harness in ranked mode on the admitted route | Affected modules | F6 |
 | F8 | Historical replay runner | Affected modules | F5, in parallel with F6 and F7 |
 
-The order follows the files the slices share: `runtime/routing.py`, `runtime/routing_evidence.py`, `runtime/routing_observations.py`, `scripts/routing.py`, `scripts/validate.py`, `runtime/routing_launch.py` and `tests/qualification/canary.py`. Slices that run in parallel own disjoint files: F1 does not touch `scripts/validate.py` or `runtime/routing.py`, and F8 touches only its own two files and one section of the validation document.
+The order follows the files the slices share: `runtime/routing.py`, `runtime/routing_evidence.py`, `runtime/routing_observations.py`, `scripts/routing.py`, `scripts/validate.py`, `runtime/routing_launch.py`, `runtime/opencode_launcher.py`, `runtime/delegation_routing.py`, `runtime/openrouter_worker_managed.py`, `scripts/openrouter_proposals.py`, `runtime/usage_budget.py`, `tests/test_routing_production_flows.py`, `tests/qualification/server.py` and `tests/qualification/canary.py`. Slices that run in parallel own disjoint files: F1 does not touch `scripts/validate.py` or `runtime/routing.py`, and F8 touches only its own two files and one section of the validation document.
 
 **Differences from design section 6, and why (coordinator's calls):**
 
@@ -60,12 +62,61 @@ The order follows the files the slices share: `runtime/routing.py`, `runtime/rou
 | `templates/task-profile.json` | F1 | The single source: contract version, fields, level definitions, floors, work kinds, roster |
 | `runtime/task_profile.py` | F1, F2 | Loads and validates the template, roster accessors, renders the brief section |
 | `runtime/routing_paths.py` | F4 | Path rules, path qualification record, route generation, activation data check |
-| `runtime/routing_funding.py` | F5 | The ranked decision moved out of `runtime/routing.py`, the shortlist per funding step, the rule that opens OpenRouter, the admission record builder |
+| `tests/test_routing_production_flows.py` | F4, F5 | One test per production entry point, on the production source and the real stores |
+| `runtime/routing_funding.py` | F5 | The ranked decision moved out of `runtime/routing.py`, the reason classification, the shortlist per funding step, the rule that opens OpenRouter, the admission record builder |
 | `runtime/model_names.py` | F6 | Display-name lookup and the model-name check `scripts/validate.py` calls |
 | `tests/qualification/replay_strict.py` | F7 | Strict replay over exported admission records |
 | `tests/qualification/replay_history.py` | F8 | Advisory historical replay over past session metadata |
 | `runtime/routing_learning.py` | L1 | Analysis rows and scores |
 | `runtime/due_jobs.py` | L2 | Due-job check, one detached runner, backoff |
+
+## Production data flows
+
+Two reviews blocked this plan for one reason: a rule read a value that only a test supplied. This section is the check against that. It binds every task below.
+
+**The method, for the builder and the reviewer of each slice:**
+
+1. Every value a rule reads has a row in the table below that names its production writer. A rule that reads a value with no writer says so and fails closed.
+2. Every collector-backed production entry point has a trace below and a test on `routing_observations.LocalSource` with real temporary stores. P1 and P6 exercise gaps longer than 900 seconds. A `StaticSource` or a hand-built route list does not prove those flows. P7 deliberately tests the separate caller-observation contract.
+3. Every reason a route can be left out with is classified as permanent or temporary (Task F5.2), and a test fails when a new reason has no class.
+
+**Writers and readers after this plan:**
+
+| Value | Production writer | Production readers | Before the release |
+|---|---|---|---|
+| Path rules | Shipped in `runtime/routing_routes.json` | `LocalSource`, the Codex reader, `seed_window`, the activation gate | Six paths (Task F4.1) |
+| Path qualification | The operator operation `qualify_path` | `LocalSource`, the dispatch checks, `seed_window`, the activation gate | The two OpenCode subscription paths, in the live session |
+| Table strategies with `provider`, `endpoint` and `list_price_micros` | `routing_evidence.compile_table`, from the published guidance and the catalog input | `_rank`, route generation | Published again before the live session |
+| Route of a ranked strategy | Generated in memory at each `prepare`, from the rules, the qualifications and the table `_rank` loaded | The collector, `routing._candidate`, the dispatch checks | No file holds it |
+| Route of an explicit choice | Generated in memory from `assignment.choice` on the qualified path with its harness and provider | `routing._choice_matches`, the dispatch checks | No file holds it |
+| Route of a settings worker choice | Generated in memory from the specialist's `worker_choices` | `routing._choice_matches` | No file holds it |
+| The launching host's harnesses | Each launcher, through `routing_launch.prepare_request(harnesses=…)` (Task F4.4) | `routing.rank`, the collector's host filter | Required in a managed project |
+| Claude pool windows | `opencode_launcher._finish` after a settled subscription launch; the operator operation `seed_window` | The collector, through `LocalSource.windows` | Nothing reads the pool without a launch. The first launch, and any launch more than 900 seconds after the last reading, waits for a seed. This predates the plan (C.3 decision 6). |
+| ChatGPT pool windows | The Codex reader `codex_rate_limits.refresh`, outside `--serve`; `seed_window`; `_finish` when the harness reports a reading (not verified for this provider) | The collector | The reader runs only for a kept route on this pool |
+| A window's `protected` share | None | `routing._candidate` | Always 0 |
+| `not_entitled` mark | `opencode_launcher._finish`, keyed by route id and account | The collector | A strategy route and a choice route of the same model have different ids, so a mark on one does not carry to the other |
+| Gateway `credit` window | **None** | The collector | A gateway route is left out as `window_unobserved` |
+| OpenRouter balance observation | **None** | `_funding_verified`, `routing._candidate` | A gateway route is refused as `funding_unverified` |
+| The organization a gateway pool draws on | **None** | The collector | No gateway route can be admitted |
+| Replay fields of the admission record | The record builder in `runtime/routing_funding.py` (Task F5.4) | The strict replay, L1 | |
+| `routes_version` | `LocalSource.routes_version` at `prepare` in a managed project | Stored for audit only | `None` when the caller supplies the observations |
+
+**The entry points.** Each test below is in `tests/test_routing_production_flows.py` unless another file is named. The task that owns each test lists it again.
+
+- **P1, the OpenCode launcher, ranked.** `opencode_launcher.launch` reads its catalog once and passes the host's harnesses to `routing_launch.launch`. `_prepare` ranks, then asks the collector for the routes of the ranked strategies on this host. The collector reads the windows, `routing_funding.choose` picks the route, `admitted_check` checks it against the path and the catalog, and `_finish` stores the settled reading. Test (F4.4, extended in F5.3): `test_opencode_ranked_launch_on_the_local_source`. With no stored window the admission is pending with `window_unobserved`. After `seed_window` it admits a Claude subscription route. The settled reading is stored, and a second admission within 900 seconds needs no seed. After the clock moves past 900 seconds the admission is pending with `stale_observation`. No file other than the window store and the ledger was written.
+- **P2, Codex native.** `delegation_routing.admit` sends the one harness `codex-native`. A routed request considers only Codex routes. An explicit or inherited model gets one choice route on the Codex path. Test (F4.4): `test_codex_explicit_choice_admits_on_a_qualified_path`, with the Codex path qualified by the test and its window seeded; and `test_codex_routed_admission_considers_only_codex_routes`.
+- **P3, OpenRouter workers and proposals.** Both send an explicit choice with the coordinator's endpoint. The choice route carries that endpoint, and the dispatch check compares it. Tests (F4.2): `test_openrouter_choice_keeps_its_endpoint_on_the_local_source`, and `test_gateway_route_without_a_balance_producer_stays_out_in_production`: with a qualified path and no other state, admission fails at the first missing input, normally `integration_disabled`. With synthetic local integration readiness only, it reaches `window_unobserved`; supplying a credit window without a balance observation still cannot admit. Do not use live secrets or a `StaticSource` to prove this flow.
+- **P4, a settings worker choice.** With Smart Routing off, or with an empty ranking, `routing._decide` takes the specialist's `worker_choices`. Test (F4.2): `test_settings_choice_admits_without_a_table`: no table file, one qualified path, a seeded window; the admission is in `worker_choice` mode.
+- **P5, the operator operations.** `qualify_path`, `unqualify_path`, `seed_window` and activation. Tests (F4.2, F4.3): `test_seed_needs_a_qualified_path_not_a_table`, `test_activation_gate_reads_the_services_settings_path`, `test_unqualified_path_refuses_a_held_admission_at_dispatch`.
+- **P6, the canary harness.** Test (F7.2, in `tests/test_qualification_canary.py`): `test_canary_runs_on_the_local_source_across_a_stale_gap`.
+- **P7, `prepare` where the caller supplies the observations** (a project that is not managed; the pilot ran this way). No collector runs, so no route is generated and no host rule applies. Test (F5.4): `test_unmanaged_prepare_record_has_null_routes_version`.
+
+**Proposed pre-release scope, pending decisions A–C below:**
+
+- **A gateway admission.** Nothing writes the `credit` window, the balance observation or the organization. This predates the plan: the managed OpenRouter hosts have never admitted outside their self-checks. Decision A under [Coordinator calls](#coordinator-calls-for-the-users-review) is the user's.
+- **The OpenRouter step opening for a launch.** The step is built and tested, and each ranked record stores whether it would have opened. No gateway candidate reaches it: no gateway path is qualified, and the host rule keeps dollar harnesses out of the OpenCode host's set while `opencode_launcher.API_FUNDING_QUALIFIED` is `False`.
+- **A Codex admission in a managed project.** The Codex path has no measured demand and stays unqualified (decision C). A managed project's Codex delegation is refused, as it is today, where no route exists for it either.
+- **A read of the Claude pool without a launch.**
 
 ---
 
@@ -392,99 +443,204 @@ On `main` at `d36da833` they include, in `runtime/delegation.py`: the plan job r
 
 ## Slice F4: Path rules and generated routes
 
-**Owned files:** `runtime/routing_routes.json`, `runtime/routing_paths.py`, `runtime/routing_observations.py`, `runtime/routing_evidence.py` (strategy `provider` and `endpoint`), `runtime/codex_rate_limits.py`, `runtime/routing_launch.py`, `runtime/opencode_launcher.py`, `scripts/openrouter_proposals.py`, `scripts/routing.py` (`CAPABILITIES`, `_collect`, the `qualify_path` and `unqualify_path` operations), `tests/test_routing_paths.py`, `tests/test_routing_observations.py`, `tests/test_routing_managed_projects.py`, `tests/test_routing_command.py`, `tests/test_routing_codex_rate_limits.py`, `tests/test_routing_launch.py`, `tests/test_qualification_demand.py`, `tests/qualification/demand.py`, `tests/qualification/live_modes.py`, `tests/openrouter_fixtures.py`, `docs/smart-routing-qualification.md`, `docs/smart-routing-capability-matrix.md`, the C.3 wiring design (decision 5 marked replaced).
+**Owned files:** `runtime/routing_routes.json`, `runtime/routing_paths.py`, `runtime/routing_observations.py`, `runtime/routing_evidence.py` (strategy `provider` and `endpoint`), `runtime/codex_rate_limits.py`, `runtime/routing_launch.py`, `runtime/opencode_launcher.py`, `runtime/delegation_routing.py`, `runtime/openrouter_worker_managed.py`, `scripts/openrouter_proposals.py`, `runtime/routing.py` (`_valid_assignment` and `_valid_observations` only, replacing lines), `scripts/routing.py` (`CAPABILITIES`, `ASSIGNMENT_FIELDS`, `_rank`, `_collect`, `_prepare`, `_self_check`, `activation_gate`, the `qualify_path` and `unqualify_path` operations), `tests/test_routing_paths.py`, `tests/test_routing_production_flows.py`, `tests/test_routing_observations.py`, `tests/test_routing_managed_projects.py`, `tests/test_routing_command.py`, `tests/test_routing_codex_rate_limits.py`, `tests/test_routing_launch.py`, `tests/test_delegation_routing.py`, `tests/test_opencode_launcher.py`, `tests/test_openrouter_workers_managed.py`, `tests/test_openrouter_proposals_managed.py`, `tests/test_qualification_demand.py`, `tests/qualification/demand.py`, `tests/qualification/live_modes.py` (its one `load_manifest` call), `tests/qualification/server.py` (the harness set in collector mode), `tests/openrouter_fixtures.py`, `docs/smart-routing-qualification.md`, `docs/smart-routing-capability-matrix.md`, the C.3 wiring design (decision 5 marked replaced).
+
+F4 reads [Production data flows](#production-data-flows) first. Its routes exist only in memory: generation and route lookup write nothing. Existing window refresh and ledger writes retain their separate contracts.
 
 ### Task F4.1: Path rules and the path qualification record
 
 **Interfaces:**
 - Produces, in `runtime/routing_paths.py`:
-  - `RULES: Path` (`runtime/routing_routes.json`), `QUALIFICATIONS_FILE = 'path-qualifications.json'`, `ROUTES_FILE = 'routes.json'`; both files live beside the routing settings.
+  - `RULES: Path` (`runtime/routing_routes.json`) and `QUALIFICATIONS_FILE = 'path-qualifications.json'`, which lives beside the routing settings. There is no route file.
   - `load_rules(path=RULES) -> dict`; raises `ValueError('route_manifest_invalid')`.
   - `qualifications(settings_path) -> dict[str, dict]`; `{}` when the file is absent; raises `ValueError('path_qualifications_invalid')`.
   - `qualify(settings_path, path_id, *, demand, evidence, account=None, now) -> dict` and `unqualify(settings_path, path_id) -> dict`, written atomically with mode 0600.
+  - `resolved(rules, qualified) -> list[dict]`: the qualified paths, each with its rule fields, its `demand`, and the account that applies. Every reader of a path's account calls it.
+  - `path_of(route_id) -> str`: the text before the first `:`.
   - `pool_windows(rules, pool) -> set[str]`: the window ids the rules declare for a pool.
+  - `dollar_harnesses(rules) -> set[str]`: the harnesses of the paths whose `billing_class` is not `included_subscription`.
 
-**Shipped file (fixed):** `{"version": 2, "paths": [...]}`. A path has:
+**Shipped file (fixed):** `{"version": 2, "paths": [...]}`, at most 16 paths. A path has:
 
 | Field | Meaning |
 |---|---|
-| `path`, `harness`, `provider` | The id and the two values a table strategy must match. No two paths share a `(harness, provider)` pair, so a strategy generates at most one route. |
+| `path`, `harness`, `provider` | The id and the two values a table strategy must match. The id matches `[a-z0-9-]+` and has at most 32 characters, so it never holds the `:` that separates it in a route id. No two paths share a `(harness, provider)` pair, so a strategy generates at most one route. |
 | `sign_in` | `subscription`, `api_key` or `gateway_key` |
-| `billing_class`, `pool`, `account`, `binding_enforceable` | As in today's manifest route |
+| `billing_class`, `pool` | The values a route carries today |
+| `account` | The account label of the pool; a qualification may replace it (below) |
+| `binding_enforceable` | Required on a subscription path, where the collector and `routing._credential_reasons` read it. Left out on a gateway path, where nothing reads it. |
 | `windows` | The window ids a launch is charged in |
 | `window_unit` | Required on a subscription path (`utilization_thousandths`); absent on a gateway path, whose one window is `credit` in micro-dollars |
 | `integration_route` | Required on a gateway path: `workers` or `proposals` |
 | `host`, `advisory`, `status` | Optional |
 
-A path has no `model`, `effort`, `endpoint` or `demand`; `load_rules` refuses a path that has one, a duplicate `(harness, provider)` pair, a subscription path without `window_unit` and a gateway path without `integration_route`. The shipped paths:
+A path has no `model`, `effort`, `endpoint` or `demand`; `load_rules` refuses a path that has one, a malformed id, a duplicate `(harness, provider)` pair, a subscription path without `window_unit` or `binding_enforceable`, and a gateway path without `integration_route`. The shipped paths:
 
-| `path` | `harness` | `provider` | `billing_class` | `pool` | `windows` |
-|---|---|---|---|---|---|
-| `opencode-claude-subscription` | `claude-agent-sdk via opencode` | `claude-agent` | `included_subscription` | `claude-subscription` | `5h`, `7d` |
-| `opencode-chatgpt-subscription` | `opencode provider openai` | `openai` | `included_subscription` | `chatgpt-subscription` | `7d` |
-| `codex-chatgpt-subscription` | `codex-native` | `openai` | `included_subscription` | `chatgpt-subscription` | `7d` |
-| `openrouter-workers` | the OpenCode shim's harness name for `openrouter` | `openrouter` | `gateway` | `openrouter` | `credit` |
-| `openrouter-proposals` | `openrouter-proposal` | `openrouter` | `gateway` | `openrouter` | `credit` |
-| `test-only-subscription` | `test` | `test` | `included_subscription` | `test-only-subscription` | `5h` |
+| `path` | `harness` | `provider` | `billing_class` | `pool` | `account` | `binding_enforceable` | `windows` |
+|---|---|---|---|---|---|---|---|
+| `opencode-claude-subscription` | `claude-agent-sdk via opencode` | `claude-agent` | `included_subscription` | `claude-subscription` | `claude-plan` | `true` | `5h`, `7d` |
+| `opencode-chatgpt-subscription` | `opencode provider openai` | `openai` | `included_subscription` | `chatgpt-subscription` | `chatgpt-plan` | `true` | `7d` |
+| `codex-chatgpt-subscription` | `codex-native` | `openai` | `included_subscription` | `chatgpt-subscription` | `chatgpt-plan` | `true` | `7d` |
+| `openrouter-workers` | `opencode provider openrouter` | `openrouter` | `gateway` | `openrouter` | as in `tests/openrouter_fixtures.py` | absent | `credit` |
+| `openrouter-proposals` | `openrouter-proposal` | `openrouter` | `gateway` | `openrouter` | as in `tests/openrouter_fixtures.py` | absent | `credit` |
+| `test-only-subscription` | `test` | `test` | `included_subscription` | `test-only-subscription` | as in today's shipped test route | `true` | `5h` |
 
-The first three come from the draft manifest in #227. The Codex path keeps `host: codex_native` and `advisory: true`. The two gateway paths carry `integration_route` `workers` and `proposals`. The test path has `status: test_only`, and `qualify` refuses it outside test inputs. The builder checks each `harness` string against what the launchers compare (`routing_launch.HOSTS`, `harnessFor` in the OpenCode plugin) before fixing it.
+The first three come from the draft manifest in #227 (`origin/smart-routing-route-manifest:runtime/routing_routes.json`). The Codex path keeps `host: codex_native` and `advisory: true`; `advisory` refuses dollar routes only, so the subscription path is still enforceable. The two gateway paths carry `integration_route` `workers` and `proposals`. The test path has `status: test_only`, and `qualify` refuses it outside test inputs. The builder checks each `harness` string against what the launchers compare (`routing_launch.HOSTS`, `harnessFor` in the OpenCode plugin) before fixing it.
 
 A qualification is `{path_id: {demand: {window: int}, account, evidence, qualified_at}}`. `qualify` requires a path from the rules, demand keys equal to the path's `windows`, and a non-empty `evidence` of at most 128 characters (the live result's id). A subscription demand is an integer from 1 to 1000, in thousandths of the window. A gateway demand is `{credit: N}`, micro-dollars per launch, from 1 to 1,000,000.
 
-**The gateway demand (coordinator's call 19).** `N` is the largest launch cost the live gateway check observed, taken from the provider receipts, rounded up. Every route on the path reserves it until L1 records cost per model. Consequence: a model that costs more than the measured one is under-reserved at admission. The real cost is still settled from the receipt, and the organization limit and the key's own limit still stop the spend. Stricter alternative, not chosen: scale the reservation by each strategy's list price relative to the measured model's; it needs the measured model's price in the qualification record and one more rule in the replay.
+**The account.** A qualification's `account`, when it has one, replaces the rule's; otherwise the rule's applies. `resolved` is the only place that decides it.
 
-- [ ] **Step 1: Write the failing tests** in `tests/test_routing_paths.py`: `test_shipped_path_rules_are_valid_and_name_no_model`, `test_path_with_a_model_or_demand_is_refused`, `test_two_paths_with_one_harness_and_provider_are_refused`, `test_subscription_path_needs_a_window_unit_and_gateway_path_an_integration_route`, `test_qualify_checks_the_path_and_the_demand_windows`, `test_gateway_demand_is_micro_dollars_within_its_bound`, `test_qualification_file_is_private_and_atomic`, `test_unreadable_qualifications_fail_closed`.
+**The gateway paths ship unqualified, and no step before the release qualifies one** (decision A). The demand contract below is for the slice that later adds the gateway's producers.
+
+**The gateway demand (coordinator's call 19).** `N` is the largest launch cost a live gateway check observed, taken from the provider receipts, rounded up. Every route on the path reserves it until L1 records cost per model. Consequence: a model that costs more than the measured one is under-reserved at admission. The real cost is still settled from the receipt, and the organization limit and the key's own limit still stop the spend. Stricter alternative, not chosen: scale the reservation by each strategy's list price relative to the measured model's; it needs the measured model's price in the qualification record and one more rule in the replay.
+
+- [ ] **Step 1: Write the failing tests** in `tests/test_routing_paths.py`: `test_shipped_path_rules_are_valid_and_name_no_model`, `test_path_with_a_model_or_demand_is_refused`, `test_path_id_shape_is_enforced`, `test_two_paths_with_one_harness_and_provider_are_refused`, `test_subscription_path_needs_a_window_unit_and_gateway_path_an_integration_route`, `test_shipped_subscription_paths_are_binding_enforceable`, `test_qualify_checks_the_path_and_the_demand_windows`, `test_gateway_demand_is_micro_dollars_within_its_bound`, `test_a_qualifications_account_replaces_the_rules`, `test_dollar_harnesses_are_those_of_the_non_subscription_paths`, `test_qualification_file_is_private_and_atomic`, `test_unreadable_qualifications_fail_closed`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths`. Expected: FAIL, no module.
 - [ ] **Step 3: Implement** and replace the shipped file.
 - [ ] **Step 4: Run** again. Expected: OK.
 - [ ] **Step 5: Commit** `feat(routing): model-free path rules and the path qualification record`.
 
-### Task F4.2: Route generation
+### Task F4.2: Route generation in memory
 
 **Interfaces:**
 - Consumes: a compiled table whose strategies carry `provider` and, when it differs from the harness, `endpoint`. `routing_evidence._catalog` accepts an optional `provider` (text, at most 64 characters) per catalog entry; `compile_table` copies it onto each strategy and stops dropping `endpoint` (`runtime/routing_evidence.py:183`). `strategy_id` is computed as before, so ids do not change.
-- Produces, in `runtime/routing_paths.py`:
-  - `generate(rules, qualified, table, choices) -> dict` with `routes` and `skipped`, pure. For each qualified path and each distinct table strategy with the same `harness` and `provider`, one route with the fields the collector and `routing._valid_route` require:
+- Produces, in `runtime/routing_paths.py`, all pure:
+  - `strategy_route(path, strategy) -> dict`: the route of one table strategy on one resolved path, with the fields the collector and `routing._valid_route` require:
     - `route` (`<path>:<strategy_id>`), `status: 'qualified'`, `path`, `strategy_id`;
     - `provider`, `model`, `harness`, and `effort`, where a strategy without an effort gets the text `'none'`, as today's gateway routes have;
-    - `billing_class`, `pool`, `account`, `binding_enforceable`, and `demand` (the path's qualified demand);
-    - `window_unit` on a subscription path, `integration_route` on a gateway path;
+    - `billing_class`, `pool`, `account` and `demand` (the path's qualified demand);
+    - `window_unit` and `binding_enforceable` on a subscription path, `integration_route` on a gateway path;
     - `endpoint` when the strategy has one.
-  - For each explicit worker choice whose harness and provider match a qualified path and that no strategy route covers, one route with the same fields and **no `strategy_id` key**, named `<path>:choice:<first 8 hex of the choice digest>`.
-  - Two strategies with the same route identity and different endpoints generate no route; both are listed in `skipped` with the reason `endpoint_ambiguous`. Today `validate_routes` would refuse the whole list.
-  - `routes(settings_path, *, rules_path=RULES) -> dict` with `routes`, `skipped` and `routes_version` (16 hex characters of the routes' digest). It reads the table from `strategy-table.json` beside the settings and the resolved `worker_choices` from the settings itself. It regenerates and rewrites `routes.json` only when the stored `inputs` differ: the size and modification time of the table, the settings, the rules file and the qualification file. A missing table or settings file counts as empty.
-  - `routing_observations.LocalSource.manifest()` returns `routes(self.settings_path)['routes']`, and `[]` without a settings path. `load_manifest`, `MANIFEST` and the top-level `window_unit` are gone.
-  - `routing_observations.collect(..., strategy_ids=None)`: when given, it considers only the generated routes whose `strategy_id` is in the list and the routes without one. `scripts/routing.py` passes the ranking's ids. Each strategy has at most one route, and from F5.2 the collector keeps at most 20 strategy routes (10 per funding step) plus one choice route per routed specialist, so `routing.MAX_ROUTES` (64) is not reached.
-  - The other readers of the manifest read the whole generated list by route id and need only the settings path they already have: `routing_launch.admitted_check` (:207), `opencode_launcher._account_of` (:621) and `openrouter_proposals._endpoint` (:534).
-  - `codex_rate_limits.declared_windows(rules)` returns `routing_paths.pool_windows(rules, POOL)`, and `read_windows` loads the rules in place of the manifest (:71, :324).
+  - `choice_route(path, choice) -> dict`: the route of one explicit choice, with the same fields, **no `strategy_id` key**, the choice's `endpoint` when it has one, and the id `<path>:choice:<digest>`. The digest is the first 16 hex characters of the SHA-256 of the canonical JSON of `[provider, model, effort, harness, endpoint or null]`.
+  - `generate(rules, qualified, table, choices) -> dict` with `routes` and `skipped`. For each qualified path: one strategy route per distinct table strategy with the path's `harness` and `provider`, and one choice route per choice with them. Two strategies with the same route identity and different endpoints generate no route; both are listed in `skipped` with the reason `endpoint_ambiguous`. Today `validate_routes` would refuse the whole list.
+  - `selection(assignment, settings, strategy_ids) -> tuple[str, list]`: which routes one request needs. It repeats the mode rule of `routing._decide` exactly:
 
-**Cost:** four `stat` calls per `prepare`, and one regeneration (four small file reads, one write) when an input changed. Lighter alternative: regenerate only inside `set`, `routing_table.py refresh` and `qualify_path`; rejected because a table replaced by hand would leave stale routes.
+    | Request | Mode | Routes |
+    |---|---|---|
+    | `assignment.choice` is set | `choice` | The one choice route of that choice |
+    | Smart Routing on, no choice, a non-empty ranking | `ranked` | Only the strategy routes of the ranked ids, in ranking order; the collector cuts after the host filter and static checks, to 64 in F4 and per funding step in F5.2 |
+    | Anything else | `choices` | One choice route per entry of the specialist's `worker_choices`, at most 16 |
+
+    A choice never uses a strategy route, and a ranked request never uses a choice route. So one request has at most 64 routes in F4 and at most 20 after F5.2.
+- `routing_launch.choice` gains an optional `endpoint` (text, at most 256 characters), which the two OpenRouter hosts send; `routing_launch.route_identity` still replaces their provider with `openrouter`. `routing._valid_assignment` accepts it, replacing a line. A choice on a gateway path without an endpoint is valid.
+- The source interface in `runtime/routing_observations.py`. `LocalSource` and `StaticSource` both have every method, so the self-checks and the harness, which install a `StaticSource` through `default_source`, keep working:
+
+  | Method | `LocalSource` | `StaticSource` |
+  |---|---|---|
+  | `manifest(table=None, choices=())` | `generate(load_rules(), qualifications(settings_path), table, choices)['routes']`; `[]` without a settings path | Its fixed list |
+  | `admitted_route(route_id, identity=None)` | The qualified resolved path named by `path_of(route_id)`, with `route`, `path`, `pool`, `account` and `billing_class`; reject a malformed route suffix or, when supplied, an identity whose provider/harness differs from the path | The qualified fixed route with that id and matching identity when supplied, or `None` |
+  | `pins_endpoint(route_id, identity, endpoint)` | Whether `route_id` equals the id `choice_route` gives that identity and endpoint on that path. `False` for a strategy route: no launcher sends a ranked gateway admission (decision B). | Whether the fixed route's `endpoint` equals it, as today |
+  | `seedable(pool, window)` | Whether a qualified subscription path on the pool lists the window, and no dollar path draws on the pool | As `_subscription_window` decides today, from the fixed list |
+  | `routes_version(table)` | 16 hex characters of the SHA-256 of the rules, the qualifications and the table's version | `None` |
+
+  `load_manifest`, `MANIFEST` and the top-level `window_unit` are gone.
+- `routing_observations.collect(..., table=None, strategy_ids=None, choices=(), harnesses=None)`. `scripts/routing.py` passes them: `_rank` returns the table it loaded beside the ranking, and `_prepare` calls `selection` on the resolved settings. `ASSIGNMENT_FIELDS` is unchanged, because `endpoint` travels inside `choice`. The collector works in this order:
+  1. the routes of the request from `source.manifest(table, choices)`, restricted to the mode and ids that `selection` returns;
+  2. the host filter of Task F4.4;
+  3. the reasons that need no window: an invalid route, a `not_entitled` mark, the integration and credential checks;
+  4. in F4, the first `MAX_ROUTES` routes in ranking order; in F5, replace that cut with Task F5.2's per-step cut over the whole host-filtered ranking, with no earlier 64-id truncation;
+  5. the Codex reader, only when a route still kept is a subscription route on the ChatGPT pool and `refresh_windows` is set;
+  6. the windows of the kept routes' pools.
+
+  Its result gains `observations['routes_version']`; `routing._valid_observations` accepts the key.
+- The dispatch checks stop reading a route list and ask the source:
+   - `routing_launch.admitted_check` (:207) calls `admitted_route(admission['route'], admission['route_identity'])`, checks that its pool and billing class equal the admission's, then checks the `not_entitled` marks and catalog, as today. Decode the identity with the existing identity representation; do not introduce another encoding.
+  - `opencode_launcher._account_of` (:621) takes the account from `admitted_route`.
+  - `openrouter_proposals._endpoint` (:534), which the workers share, calls `pins_endpoint` with the request's identity and endpoint.
+- `routing_observations._subscription_window` (the `seed_window` operation) calls `seedable`. A seed needs a qualified path and no table.
+- `codex_rate_limits.declared_windows(rules)` returns `routing_paths.pool_windows(rules, POOL)`, and `read_windows` loads the rules in place of the manifest (:71, :324). `tests/qualification/live_modes.py:108` loads the rules the same way.
+
+**Consequences, stated so nobody finds them later:**
+
+- A `not_entitled` mark on a strategy route does not carry to the choice route of the same model, and the reverse. Each is found again by its own refused launch.
+- The dispatch check is by path. A strategy that left the table after an admission still dispatches within its hold's lifetime, because the admission's `route_identity` and the catalog still pin what is sent. After `unqualify_path`, a held admission on that path is refused at dispatch.
+- A settings worker choice whose harness and provider match no qualified path has no route, and the request waits with `worker_choice_unavailable`; a per-request explicit choice gives `explicit_choice_unavailable`.
+
+**Cost:** each managed `prepare` reads the rules and qualifications and scans the already-bounded ranking table that `_rank` loaded. At most 64 routes enter the snapshot in F4, 20 in F5; generation may inspect more before the cut. Each dispatch check reads the same two small files. Route reads write no route cache. Lighter alternative: stream generation through the same filters if measured latency needs it; a persistent cache adds invalidation and writes to read paths.
 
 Until L1 records window use per launch, every route on a path uses the path's measured demand.
 
 - [ ] **Step 1: Write the failing tests:**
-  - In `tests/test_routing_paths.py`: `test_generation_combines_qualified_paths_with_table_strategies`, `test_unqualified_path_generates_nothing`, `test_strategy_without_a_provider_generates_nothing`, `test_strategy_without_an_effort_gets_the_text_none`, `test_gateway_route_carries_endpoint_and_integration_route`, `test_subscription_route_carries_the_window_unit`, `test_explicit_choice_gets_a_route_without_a_strategy_id`, `test_ambiguous_endpoints_skip_only_those_strategies`, `test_demand_comes_from_the_path_qualification`, `test_routes_are_rewritten_only_when_an_input_changes` (count writes), `test_every_generated_route_passes_the_collectors_checks` (each route gives `_manifest_reason(route) is None`).
-  - In `tests/test_routing_observations.py`: `test_not_entitled_mark_still_excludes_a_generated_route`, `test_local_source_without_a_settings_path_has_no_route`, `test_collect_reads_only_the_ranked_strategies_and_choice_routes` (80 generated routes, 5 ranked ids: 5 routes considered, none listed as excluded for the other 75).
+  - In `tests/test_routing_paths.py`: `test_generation_combines_qualified_paths_with_table_strategies`, `test_unqualified_path_generates_nothing`, `test_strategy_without_a_provider_generates_nothing`, `test_strategy_without_an_effort_gets_the_text_none`, `test_gateway_route_carries_endpoint_and_integration_route`, `test_subscription_route_carries_the_window_unit`, `test_choice_route_has_no_strategy_id_and_a_stable_id`, `test_choice_route_id_changes_with_the_endpoint`, `test_ambiguous_endpoints_skip_only_those_strategies`, `test_demand_comes_from_the_path_qualification`, `test_every_generated_route_passes_the_collectors_checks` (each route gives `_manifest_reason(route) is None`), `test_route_selection_agrees_with_the_decision_mode` (over a grid of Smart Routing on and off, with and without a choice, an empty and a non-empty ranking: `selection`'s mode equals the `mode` `routing._decide` records).
+  - In `tests/test_routing_observations.py`: `test_not_entitled_mark_still_excludes_a_generated_route`, `test_local_source_without_a_settings_path_has_no_route`, `test_collect_reads_only_the_ranked_strategies` (80 table strategies, 5 ranked ids: 5 routes considered, none listed as excluded for the other 75), `test_collector_route_count_bound`, `test_static_source_answers_the_whole_interface`, `test_reader_runs_only_for_a_kept_chatgpt_route` (a Claude-only request never starts the Codex reader, with the ChatGPT reading stale).
+  - In `tests/test_routing_production_flows.py`, on `LocalSource` and the real stores in a temporary directory:
+     - `test_read_paths_write_nothing`: with a fresh window (so no reader is needed), `prepare` one-shot, `prepare` under `--serve`, `admitted_check`, `_account_of` and `_endpoint` leave route inputs unchanged and create no route cache. Admission may write its ledger; test route lookup separately with all state files byte-identical.
+    - `test_explicit_choice_outside_the_row_still_admits`
+    - `test_settings_choice_covered_by_another_rows_strategy_still_admits`
+    - `test_settings_choice_admits_without_a_table`
+    - `test_openrouter_choice_keeps_its_endpoint_on_the_local_source`
+    - `test_gateway_route_without_a_balance_producer_stays_out_in_production`
+    - `test_seed_needs_a_qualified_path_not_a_table`
+    - `test_unqualified_path_refuses_a_held_admission_at_dispatch`
+    - `test_a_strategy_that_left_the_table_still_dispatches_its_held_admission`
+  - In `tests/test_routing_launch.py`: `test_admitted_check_accepts_an_explicit_choice_route`, `test_choice_carries_an_optional_endpoint`.
   - In `tests/test_routing_codex_rate_limits.py`: `test_declared_windows_come_from_the_path_rules`.
-- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths test_routing_observations test_routing_evidence test_routing_codex_rate_limits`. Expected: FAIL.
-- [ ] **Step 3: Implement.** Move the fixtures in `tests/openrouter_fixtures.py` and the route helpers in `tests/test_routing_observations.py` to generated routes.
-- [ ] **Step 4: Run** the same modules plus `test_routing_launch 'test_openrouter*' test_routing_dispatch`. Expected: OK.
-- [ ] **Step 5: Commit** `feat(routing): generate routes from qualified paths and the ranking table`.
+- [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_paths test_routing_production_flows test_routing_observations test_routing_evidence test_routing_codex_rate_limits test_routing_launch`. Expected: FAIL.
+- [ ] **Step 3: Implement.** Move the fixtures in `tests/openrouter_fixtures.py` and the route helpers in `tests/test_routing_observations.py` to the new interface. Keep `runtime/routing.py` at its ceiling.
+- [ ] **Step 4: Run** the same modules plus `'test_openrouter*' test_routing_dispatch test_opencode_launcher 'test_qualification*'`. Expected: OK.
+- [ ] **Step 5: Commit** `feat(routing): generate routes in memory from qualified paths and the ranking table`.
 
 ### Task F4.3: Activation gate, the operator operation and the runbook
 
 **Interfaces:**
 - Produces:
-  - `routing_paths.gate(settings_path) -> list[str]`: `[]`, or one of `['route_manifest_invalid']`, `['no_qualified_path']`, `['no_generated_route']`. `routing_observations.manifest_check` and the reason `route_manifest_unqualified` are gone.
-  - `scripts/routing.py`: the `route_manifest` capability calls `gate`. Two one-shot operator operations, refused under `--serve` like the other operator operations: `qualify_path` with `{path, demand, evidence, account?}` and `unqualify_path` with `{path}`. Their bodies live in `runtime/routing_paths.py`; the script only dispatches.
-  - `tests/qualification/demand.py` (`measure-demand`) prints, for each subscription path, the `qualify_path` request with the measured demand and the result id. The `gateway` mode in `tests/qualification/live_modes.py` prints the same request for the gateway path it checked, with the largest receipt cost as `credit`. Neither names a manifest route.
+  - `routing_paths.gate(settings_path) -> list[str]`: `[]`, or one of `['route_manifest_invalid']`, `['path_qualifications_invalid']`, `['no_qualified_path']`, `['no_generated_route']`. It reads the packaged rules, and the qualification file and the table file beside `settings_path`, and nothing else. `no_generated_route` means no table strategy has the harness and provider of a qualified path. `routing_observations.manifest_check` and the reason `route_manifest_unqualified` are gone.
+  - **How the gate reaches user state.** The activation checks run in a child with a temporary `HOME` that reads only the package (`scripts/routing.py:108-139`, `:808-819`). The `route_manifest` entry of `CAPABILITIES` gets the new kind `paths` and the target `runtime.routing_paths:gate`. `_self_check(kind, target, settings_path)` passes the service's absolute settings path as a fifth argument to the child, and the child calls the gate with it. `activation_gate(settings_path)` receives the path from its one caller (`scripts/routing.py:727`). The other kinds ignore the argument.
+  - `scripts/routing.py`: two one-shot operator operations, refused under `--serve` like the other operator operations: `qualify_path` with `{path, demand, evidence, account?}` and `unqualify_path` with `{path}`. Their bodies live in `runtime/routing_paths.py`; the script only dispatches.
+  - `tests/qualification/demand.py` (`measure-demand`):
+    - each reading is tagged with the path id of the route the harness launched, in place of the harness's own pool label; `suggest` groups by path;
+    - for each subscription path with a usable sample in every one of its windows, it prints one `qualify_path` request with the measured demand and the result id;
+    - **a window whose every sample is `below_resolution`** (the reported reading did not move; this is not proof of precise launch usage) gets the proposed demand 10, and the output names the window and reason beside the request (call 29);
+    - a path with a window that has no sample at all gets no request, and the output says which window is missing.
 
-- [ ] **Step 1: Write the failing tests:** `test_activation_reports_no_qualified_path`, `test_activation_reports_no_generated_route`, `test_activation_reports_an_invalid_rules_file`, `test_activation_passes_with_one_generated_route` (in `tests/test_routing_managed_projects.py`); `test_qualify_path_is_one_shot_and_validates_its_request` (in `tests/test_routing_command.py`); `test_measure_demand_prints_one_qualify_request_per_path` (in `tests/test_qualification_demand.py`).
-- [ ] **Step 2: Run** those three modules. Expected: FAIL.
+    It names no manifest route. The `gateway` mode prints no request (decision A).
+
+- [ ] **Step 1: Write the failing tests:**
+  - In `tests/test_routing_managed_projects.py`: `test_activation_reports_no_qualified_path`, `test_activation_reports_no_generated_route`, `test_activation_reports_an_invalid_rules_file`, `test_activation_passes_with_one_generated_route`.
+  - In `tests/test_routing_production_flows.py`: `test_activation_gate_reads_the_services_settings_path` (two settings directories, one with a qualified path and a table: the real child process passes for that one and reports `no_qualified_path` for the other).
+  - In `tests/test_routing_command.py`: `test_qualify_path_is_one_shot_and_validates_its_request`.
+  - In `tests/test_qualification_demand.py`: `test_measure_demand_maps_readings_to_path_ids`, `test_measure_demand_prints_one_qualify_request_per_path`, `test_a_window_below_resolution_gets_the_floor_demand_and_says_so`, `test_a_path_with_an_unmeasured_window_gets_no_request`.
+- [ ] **Step 2: Run** those four modules. Expected: FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Update the runbook** (`docs/smart-routing-qualification.md:7-145`): the live session qualifies paths; after `measure-demand` and the gateway check, the operator runs `qualify_path` once per path; a new model on a qualified path needs no session. Mark decision 5's route manifest in the C.3 wiring design as replaced. Fix the stale sentence at `docs/smart-routing-qualification.md:613` (`reconcile_subscription` exists since #192) and add a dated note under the table row at line 530 without changing the recorded result.
-- [ ] **Step 5: Run the full suite** and `scripts/validate.py`. Expected: OK.
+- [ ] **Step 4: Update the runbook** (`docs/smart-routing-qualification.md:7-145`): the live session qualifies paths; after `measure-demand` the operator runs `qualify_path` once per OpenCode subscription path, then `seed_window` for each window of each qualified pool, then activation; a new model on a qualified path needs no session; the gateway check and the Codex path qualify nothing before the release. Mark decision 5's route manifest in the C.3 wiring design as replaced. Fix the stale sentence at `docs/smart-routing-qualification.md:613` (`reconcile_subscription` exists since #192) and add a dated note under the table row at line 530 without changing the recorded result.
+- [ ] **Step 5: Run** the modules of Step 2 and `scripts/validate.py`. Expected: OK.
 - [ ] **Step 6: Commit** `feat(routing): activation and the runbook qualify paths`.
+
+### Task F4.4: The host rule
+
+A ranked admission must not pick a route its launcher cannot send. Today the host is checked only after the admission, in `admitted_check`, and a failed check closes the hold as `not_dispatched` with no second try: the task fails where it should have waited or taken another route.
+
+**Interfaces:**
+- Produces:
+  - `routing_launch.host_harnesses(host, catalog=(), *, dollar=False, rules=None) -> tuple[str, ...]`, sorted:
+
+    | Host | Harnesses |
+    |---|---|
+    | `codex_native` | `codex-native` |
+    | `openrouter_proposal` | `openrouter-proposal` |
+    | `openrouter_worker` | `opencode provider openrouter` |
+    | `opencode` | The harnesses of the catalog's entries that a path of the rules names, minus `routing_paths.dollar_harnesses(rules)` unless `dollar` is set |
+
+    The OpenCode launcher passes `dollar=API_FUNDING_QUALIFIED`, which stays `False` (decision B). The rules have at most 16 paths, so the set has at most 16 entries.
+  - `routing_launch.prepare_request(..., harnesses)`: a required keyword, sent as `constraints.allowed_harnesses`. When the caller's own constraints already have `allowed_harnesses`, the two sets are intersected. An empty set is refused before any request is sent, with `harness_required`.
+  - Every production caller passes it: `routing_launch.launch` for the OpenCode launcher, which reads its catalog once before `prepare` and uses the same catalog for `admitted_check`; `delegation_routing.admit`; `openrouter_worker_managed`; `scripts/openrouter_proposals.py`.
+  - `scripts/routing.py` `_prepare`: a request that uses the collector (no `observations` in the body) and has no `constraints.allowed_harnesses`, or an empty one, is refused with `harness_required`, also when Smart Routing is off. A request that supplies its own observations is not checked, because its caller already chose the routes.
+  - The collector drops every route whose `harness` is outside the set, strategy routes and choice routes alike, before any other step (step 2 of Task F4.2). A dropped route is not listed in `excluded`: for this host it does not exist. `routing.rank` already narrows the ranking on `allowed_harnesses` (`runtime/routing.py:276`).
+  - `tests/qualification/server.py` sends the harness set of the providers its isolated server is signed in to, whenever it strips the observations for the collector (`:304-307`).
+
+**What it changes for the design's rule.** Design section 5.6 opens OpenRouter over "the pools qualified on this machine". With the host rule, a pool counts only when the launching host can send on it. A Codex launch with a full ChatGPT pool waits; it does not see the Claude pool, which it could not use (call 31).
+
+- [ ] **Step 1: Write the failing tests:**
+  - In `tests/test_routing_launch.py`: `test_host_harnesses_per_host`, `test_opencode_host_excludes_dollar_harnesses_until_api_funding_is_qualified`, `test_prepare_request_intersects_the_callers_harnesses`, `test_an_empty_harness_set_is_refused_before_prepare`.
+  - In `tests/test_routing_command.py`: `test_managed_prepare_without_harnesses_is_refused` (also with Smart Routing off), `test_prepare_with_caller_observations_needs_no_harnesses`.
+  - In `tests/test_routing_observations.py`: `test_host_filter_drops_routes_silently_before_every_other_step`, `test_pool_windows_are_read_only_for_paths_the_host_can_send`.
+  - In `tests/test_routing_production_flows.py`: `test_opencode_ranked_launch_on_the_local_source` (trace P1, with the four time points it lists), `test_codex_routed_admission_considers_only_codex_routes` (Claude and Codex paths qualified, the Claude strategies ranked first: the Codex host is admitted a Codex route, never a Claude one), `test_codex_explicit_choice_admits_on_a_qualified_path`.
+  - In `tests/test_delegation_routing.py`, `tests/test_opencode_launcher.py`, `tests/test_openrouter_workers_managed.py` and `tests/test_openrouter_proposals_managed.py`: one test each that the request the caller sends carries its host's harnesses.
+- [ ] **Step 2: Run** those modules. Expected: FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the full suite** and `scripts/validate.py`. Expected: OK.
+- [ ] **Step 5: Commit** `feat(routing): admission considers only the routes of the launching host`.
 
 When F4 merges, the coordinator marks #227 `[SUPERSEDED]` and closes it.
 
@@ -492,7 +648,7 @@ When F4 merges, the coordinator marks #227 `[SUPERSEDED]` and closes it.
 
 ## Slice F5: Value order, funding order and replay fields
 
-Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py`, `runtime/routing_funding.py`, `runtime/routing_observations.py` (`leave` and the per-step cut), `runtime/usage_budget.py` (constants only), `scripts/routing.py`, `scripts/validate.py` (ceilings only), `tests/test_routing_evidence.py`, `tests/test_routing_ranker.py`, `tests/test_routing_funding_order.py`, `tests/test_routing_funding.py`, `tests/test_routing_funding_property.py`, `tests/fixture_routing_funding.py`, `tests/test_routing_admission.py`, `tests/test_routing_observations.py`, `tests/qualification/replay_export.py`, `tests/test_qualification_replay_export.py`, `docs/smart-routing-validation.md`, `clients/guidance-publication.md`.
+Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py`, `runtime/routing_funding.py`, `runtime/routing_paths.py` (replace F4's provisional cut), `runtime/routing_observations.py` (`leave` and the per-step cut), `runtime/usage_budget.py` (constants and capacity comment only), `scripts/routing.py`, `scripts/validate.py` (ceilings only), `tests/test_routing_evidence.py`, `tests/test_routing_ranker.py`, `tests/test_routing_funding_order.py`, `tests/test_routing_funding.py`, `tests/test_routing_funding_property.py`, `tests/test_routing_funding_capacity.py`, `tests/test_routing_gates.py`, `tests/test_routing_production_flows.py`, `tests/fixture_routing_funding.py`, `tests/test_routing_admission.py`, `tests/test_routing_observations.py`, `tests/qualification/replay_export.py`, `tests/test_qualification_replay_export.py`, `docs/smart-routing-validation.md`, `clients/guidance-publication.md`.
 
 ### Task F5.1: Pre-registration Edit 7
 
@@ -502,24 +658,24 @@ Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py
 This task merges first within F5, before any code of F5 runs against real records. Its content needs the user's approval, because it changes pre-registered text. Edit 7 says:
 
 1. **Vocabulary.** "Role" means specialist. The strict sample covers at least three specialists and two complexity bands.
-2. **What the strict replay recomputes.** From each record's stored detail alone:
+2. **What the strict replay recomputes for ranked records.** From each record's stored detail alone:
    - the class, from `shares`, `bucket`, `epoch`, `feasible` and the earlier records. The earlier records are the ones the router itself counts: same ledger, same settings revision, at most 14 days older, and not funded by OpenRouter;
    - the route, from the stored candidates of that class in the stored order;
    - whether OpenRouter was open, from the stored pool states and the stored fact of whether a direct route existed.
 
    The four pass or fail rows of the allocator replay are unchanged.
-3. **Records from before the redesign.** The exported pilot ledger holds 21 admission records, all in `worker_choice` mode with the old role names. Edit 6 says 20; the difference is explained under Results before a pass is recorded. Each of the 21 still holds its constraints (checked on 10 November 2026 without reading any other field), so the sentence in Edit 6 that the pilot's snapshot detail was gone is corrected by a dated note. For these records:
+3. **Worker-choice records, old and new.** The exported pilot ledger holds 21 admission records, all in `worker_choice` mode with the old role names. Edit 6 says 20; the difference is explained under Results before a pass is recorded. Each of the 21 still holds its constraints (checked on 10 November 2026 without reading any other field), so the sentence in Edit 6 that the pilot's snapshot detail was gone is corrected by a dated note. For these records and new `worker_choice` admissions:
    - the class must be the funding class of the record's billing class;
    - every stored constraint must have a cost no greater than its headroom, and the record's reservation in that window must fit the headroom;
    - the two ledger rows (no funding violation, no resurrected capacity) apply as for any record.
 
-   A legacy record without constraints fails and is counted. Their roles are read as history.
+    A worker-choice record without constraints fails and is counted. Old roles are read as history. New worker-choice records have `ranking.shortlist: []` and no `pressure.candidates` or `pressure.gateway`; they do not claim a ranked route was reproduced. The report counts them separately. The canary accepts only `mode: ranked`.
 4. **Historical replay labels.** Rule 1's outcomes become specialists: `reviewer` gives `code-reviewer`, `researcher` gives `explorer-agent`, `implementer` and `repair` give `software-engineer`. Rule 2 becomes the work kind of that specialist. An unknown band still takes the router's floors.
 5. **Value order.** The price of a candidate is `(3 × input + output) / 4` of its list prices per million tokens. A candidate without a price comes last. Ties go to the lower effort, then to the guidance order. Each funding step takes the first 10 candidates of that order that have a route for that step on this machine.
-6. **When OpenRouter opens.** Only when no shortlisted candidate has a direct route here, or when every subscription pool with such a route is full. A pool is full when one of its windows has a stored reading at or above `H` that is either fresh or belongs to a window that has not reset yet, or when every reading is fresh and the launch does not fit. An unread or otherwise stale window keeps OpenRouter closed.
+6. **When OpenRouter opens.** Only when no shortlisted candidate has a direct route the launching host can send, or when every subscription pool with such a route is full. A window is at the limit when `used + protected + held >= H * limit`, using the quantities admission subtracts to calculate room; `protected` defaults to 0 because no production writer supplies it. A pool is `full` when one demanded window is at the limit and its reading is fresh or (`rolling` is exactly `False` and `reset_at > now`), or when every demanded window is fresh and every shortlisted route on the pool was refused with `insufficient_headroom`. A pool is `room` when it is not full and all demanded windows are fresh; otherwise it is `unknown`. Fresh means `_candidate` would not return `stale_observation`. Stored windows have `rolling=False`; a caller-supplied rolling window counts only while fresh. An unknown pool keeps OpenRouter closed unless another demanded window already proves that same pool full.
 7. **Benchmark tolerance:** 2%, applied from slice L2.
 8. **Promotion test,** registered before slice L3 reads the later half: a kind of task counts when at least two candidates have at least 5 results each in the later half; at least 3 kinds of task must count; scores are promoted only if the learned pick is at least as good as the table pick in at least 80% of them.
-9. **Canary.** It runs in ranked mode on generated routes. Its bounds are unchanged.
+9. **Canary.** It runs only in ranked mode on generated routes; dispatch, attach and the off-route guard use the admitted identity and pool. Its existing bounds remain unchanged, including the 10% window cap. F7.2 adds the missing enforcement of that cap and keeps local-state `--serve` preparation for the registered latency measurements. Pause for a seed when no eligible pool has a fresh reading; do not admit a probe on stale data.
 
 - [ ] **Step 1: Write the section** with the nine points, dated, stating that no replay, canary or label existed when it was registered. Add the dated correction beside Edit 6's sentence about the pilot's snapshot detail (`docs/smart-routing-validation.md:233`), without changing Edit 6's text.
 - [ ] **Step 2: Run** `scripts/validate.py` and `scripts/test_sharded.py test_prepared_instructions`. Expected: OK.
@@ -531,22 +687,25 @@ This task merges first within F5, before any code of F5 runs against real record
 
 **Interfaces:**
 - Produces:
-  - `runtime/routing_funding.py` holds the ranked branch of `routing._decide` (:565-588) and the record builder (:596-611), moved without a change in behaviour. `routing._decide` calls them. `routing.py`'s ceiling is lowered to its new line count.
+   - `runtime/routing_funding.py` holds the ranked branch of `routing._decide` (:565-588) and the record builder (:596-611), moved without a change in behaviour. `routing._decide` imports it locally and calls it; `routing_funding` may import `routing`, never the reverse at module import time. Lower `routing.py`'s ceiling to its new line count.
   - A catalog entry accepts an optional `list_price: {"input": number, "output": number}`, in dollars per million tokens, both finite and not negative.
   - Each compiled strategy carries `list_price_micros: int | None`, `round((3 * input + output) / 4 * 1_000_000)`.
   - `compile_table` orders each row by: priced before unpriced, `list_price_micros` ascending, the effort's index in the model's `supported_efforts` ascending (no effort counts as 0), then the guidance order. The catalog contract in `clients/guidance-publication.md` states that `supported_efforts` is listed from the lowest to the highest; the compiler cannot check it.
   - `routing.rank` returns the whole filtered order, as today. The cut is per funding step:
     - `routing_funding.SHORTLIST_MAX = 10`
-    - `routing_funding.step_shortlists(strategy_ids, routes, excluded) -> dict` with `direct` and `gateway`: for each step, the first 10 ids of the order that have a route of that step. A route counts when the collector kept it, or left it out for any reason other than `not_entitled`. Pure.
-  - The collector uses the same function to keep only the routes of those ids (at most 20 strategy routes), and its `leave` adds `strategy_id`, `pool` and `billing_class` to each `excluded` entry. What a client sees of `excluded` does not change.
+     - `routing_funding.step_shortlists(strategy_ids, routes, excluded) -> dict` with `direct` and `gateway`: for each step, the first 10 ids whose host-reachable route satisfies `route_exists(reasons)`. Use only reasons known before a window read for this cut. Pure.
+   - `PERMANENT_REASONS`, `TEMPORARY_REASONS` and `route_exists(reasons) -> bool` live in `routing_funding`. A route exists unless at least one reason is permanent. An empty reason list means it exists. Unknown reasons count as temporary at runtime, keeping a dollar fallback closed; the exhaustive test below still fails on them.
+     - Permanent: `route_invalid`, `route_unqualified`, `billing_class_excluded`, `not_entitled`, `window_unit_undeclared`, `codex_window_unknown`, `codex_window_undeclared`, `codex_pool_undeclared`, `route_manifest_invalid`, `endpoint_ambiguous`, `api_usage_disabled`, `binding_unenforceable`, `pool_funding_mismatch`, `capability_missing`, `not_permitted`.
+     - Temporary: `entitlement_unavailable`, `window_unobserved`, `window_unit_mismatch`, `stale_observation`, `insufficient_headroom`, `concurrency_cap`, `pool_unknown`, `observation_incomplete`, `invalid_observation`, and all remaining Codex reader and observation-store reasons. Dollar-only reasons are also temporary: `integration_disabled`, `credential_unavailable`, `credential_scope_mismatch`, `funding_unverified`, `no_funded_organization`, `openrouter_operation_busy`, `openrouter_unavailable`.
+   - The collector uses the same function to keep at most 20 strategy routes, with no preceding 64-strategy cut. Its `leave` adds `strategy_id`, `pool` and `billing_class` to each `excluded` entry; client-visible fields stay unchanged. Host filtering is silent and precedes this classification. Only kept subscription routes may trigger a needed stale Codex refresh. A permanent reason discovered after the cut consumes its place; do not refill and read another pool.
 
 **Why the cut is per step (coordinator's call 18).** Design section 5.5 cuts the order to 10 before it looks at routes. With the cheapest first, those 10 can all be models this machine reaches only through OpenRouter, which would open OpenRouter while a subscription model in place 11 could serve. The per-step cut keeps the design's aim: use a subscription while it has room.
 
 - [ ] **Step 1: Move the code** and run `scripts/test_sharded.py 'test_routing_*'`. Expected: OK with no test changed. Commit `refactor(routing): move the ranked decision and the record builder to routing_funding`.
 - [ ] **Step 2: Write the failing tests:**
   - In `tests/test_routing_evidence.py`: `test_price_is_three_parts_input_one_part_output` (input 1.0 and output 5.0 give `2_000_000`), `test_rows_are_ordered_by_price_then_effort_then_guidance_order`, `test_unpriced_candidates_come_last`, `test_invalid_list_price_is_refused`.
-  - In `tests/test_routing_funding_order.py`: `test_each_step_takes_its_first_ten_with_a_route` (12 ids, the 3 cheapest gateway-only: `direct` holds ids 4 to 12 and `gateway` the 3), `test_a_not_entitled_route_takes_no_place`, `test_an_unobserved_route_keeps_its_place`, `test_shortlists_are_never_padded`.
-  - In `tests/test_routing_observations.py`: `test_excluded_entries_name_strategy_pool_and_billing_class`, `test_collector_keeps_only_the_step_shortlists`.
+   - In `tests/test_routing_funding_order.py`: `test_each_step_takes_its_first_ten_with_a_route` (12 ids, the 3 cheapest gateway-only: `direct` holds ids 4 to 12 and `gateway` the 3), `test_a_not_entitled_route_takes_no_place`, `test_an_unobserved_route_keeps_its_place`, `test_shortlists_are_never_padded`, `test_unknown_reason_is_temporary`, `test_every_reason_is_classified` (inspect reason-return/append/leave literals through `ast` in the collector and `_candidate`/`_credential_reasons`, plus `codex_rate_limits.REASONS`, `_openrouter`'s reasons and generation's `endpoint_ambiguous`; every emitted reason has exactly one class).
+   - In `tests/test_routing_observations.py`: `test_excluded_entries_name_strategy_pool_and_billing_class`, `test_collector_keeps_only_the_step_shortlists`, `test_reader_runs_only_for_shortlisted_chatgpt_routes`, `test_direct_candidate_beyond_position_64_is_not_lost`, `test_post_cut_permanent_reason_does_not_refill_the_shortlist`.
 - [ ] **Step 3: Run** the three modules. Expected: FAIL.
 - [ ] **Step 4: Implement.**
 - [ ] **Step 5: Run** them and `test_routing_table test_routing_ranker test_routing_command`. Expected: OK.
@@ -563,19 +722,17 @@ This task merges first within F5, before any code of F5 runs against real record
   - `GATEWAY_REASONS = ('gateway_capability_gap', 'gateway_windows_full', 'gateway_window_unknown', 'gateway_direct_available')`
   - `pool_state(windows, demanded, held, H, now, fits) -> 'full' | 'room' | 'unknown'`, pure.
   - `gateway_decision(pool_states, direct_route_exists) -> tuple[bool, str]`, pure. Admission and the strict replay both call it.
-  - `gateway_open(shortlists, observations, rejected, held, settings, now) -> dict` with `open`, `reason`, `pools` (`[{pool, state}]`, sorted by pool) and `direct_route_exists`. It builds the inputs of `gateway_decision` from the collector's routes, pools and `excluded`, and from `rejected`, the reason `_candidate` gave for each route it refused.
+   - `gateway_open(shortlists, observations, rejected, held, settings, now) -> dict` with `open`, `reason`, `pools` (`[{pool, state}]`, sorted by pool) and `direct_route_exists`. It combines collector exclusions with `_candidate` rejections for each shortlisted route. Missing `excluded` or `rejected` means empty, including caller-supplied observations. Only host-reachable routes and their demanded pools participate.
   - `choose(direct, gateway, shares, rows, bucket, epoch, feasible, gateway_state, now, horizon) -> tuple[str | None, str | None]`: the chosen route and its class, pure. The direct candidates go through `allocator.choose_class` and `allocator.choose_route` exactly as today. If no direct route is chosen and `gateway_state['open']`, `allocator.choose_route` picks among the gateway candidates in their order.
 - `routing._decide`, ranked mode, calls `choose`. With no route chosen the assignment is pending with its dominant reason and the gateway reason.
 
 **The rules.**
 
-*Does a direct route exist?* Yes when a candidate of the direct shortlist has a subscription route on this machine: one the collector kept, or one it left out for a reason other than `not_entitled`. The shipped rules have no direct API path. When API Usage adds one after the release, its routes count only while API Usage is active, and its slice defines the pool state.
+*Does a direct route exist?* Yes when `route_exists` is true for the combined collector and candidate reasons of at least one direct shortlisted route the host can send. The shipped rules have no direct API path. When API Usage adds one after release, its routes count only while active, and that slice defines its pool state. A missing reading is temporary, not a capability gap; a permanently unusable route does not count.
 
 *The state of each subscription pool that has such a route,* over the windows its routes demand:
 
-- `full`: one window has a stored reading where used, protected and held together are at or above `settings['H']` of the limit, and that reading is fresh, or the window is not rolling and its `reset_at` is in the future. Also `full`: every demanded window is fresh and `_candidate` refused every shortlisted route on the pool with `insufficient_headroom`.
-- `room`: not full, and every demanded window is fresh.
-- `unknown`: anything else, including a pool the collector reported no window for.
+A window is at the limit when `used + protected + held >= H * limit`, using the quantities admission subtracts to calculate room; `protected` defaults to 0 because no production writer supplies it. A pool is `full` when one demanded window is at the limit and its reading is fresh or (`rolling` is exactly `False` and `reset_at > now`), or when every demanded window is fresh and every shortlisted route on the pool was refused with `insufficient_headroom`. A pool is `room` when it is not full and all demanded windows are fresh; otherwise it is `unknown`. Fresh means `_candidate` would not return `stale_observation`. Stored windows have `rolling=False`; a caller-supplied rolling window counts only while fresh. An unknown pool keeps OpenRouter closed unless another demanded window already proves that same pool full.
 
 *The decision:*
 
@@ -591,7 +748,9 @@ The reading is the stored one, not the pace-projected value.
 
 **Two calls that differ from the design's word "fresh" (calls 16 and 17).** A reading is fresh for 900 seconds, and only a settled launch or the Codex reader renews it. Without the "has not reset yet" rule, 15 minutes after the last launch on a full pool the reading is stale, OpenRouter closes, and every task waits until the user seeds the window. A full window cannot empty before its reset, so the old reading still proves it. Without the "does not fit" rule, a pool just below `H` whose room is smaller than one launch would block the task and keep OpenRouter closed until the reset.
 
-**Accounting.** The accounting class of an OpenRouter admission stays `api`, because it is a dollar route under the organization and ledger gates; its `billing_class` is `gateway`. `routing.decision_rows` leaves out records whose `billing_class` is `gateway`, so they never move the share between subscription and API Usage. An explicit choice with `funding: 'api'` on a gateway route works as today.
+**Accounting.** The accounting class of an OpenRouter admission stays `api`, because it is a dollar route under the organization and ledger gates; its `billing_class` is `gateway`. `routing.decision_rows` leaves out records whose `billing_class` is `gateway`, so they never move the share between subscription and API Usage. An explicit choice with `funding: 'api'` retains its existing contract when all funding inputs exist; passing synthetic tests does not prove production admission.
+
+**Production scope (pending decisions A and B).** Build and test this pure decision step now, retaining its replay evidence at zero gateway spend. No production gateway candidate can be admitted before its missing producers and a ranked consumer are added. `API_FUNDING_QUALIFIED` remains `False`; path qualification alone never lifts it. The lighter alternative is to defer the gateway decision code too, with a later replay-format change.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_routing_funding_order.py`:
   - `test_subscription_with_room_wins_over_gateway`
@@ -609,7 +768,13 @@ The reading is the stored one, not the pace-projected value.
   - `test_gateway_admissions_do_not_move_the_api_share`
   - `test_explicit_gateway_choice_still_admits`
   - `test_no_route_at_all_waits_with_a_reason`
-  - `test_gateway_decision_table` (the five rows above, on `gateway_decision` alone)
+   - `test_gateway_decision_table` (the five rows above, on `gateway_decision` alone)
+   - `test_permanently_unusable_direct_route_is_a_capability_gap` (each permanent reason, from collector and candidate)
+   - `test_pool_states_ignore_paths_the_host_cannot_send`
+   - `test_held_and_protected_capacity_count_toward_H`
+   - `test_one_fitting_route_keeps_the_pool_from_the_insufficient_headroom_rule`
+   - `test_missing_excluded_and_rejected_are_empty`
+   - In `tests/test_routing_production_flows.py`: extend P1 through ranked funding and add `test_opencode_ranked_admission_never_selects_a_gateway_route`, with both path types present and the subscription full; assert pending, no dollar hold and no dispatch.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_routing_funding_order`. Expected: FAIL.
 - [ ] **Step 3: Implement,** keeping `runtime/routing.py` at or below its ceiling. Update the mixed ranked shortlists in `tests/test_routing_funding_property.py:19-42` and `tests/fixture_routing_funding.py` to the new order: a gateway candidate is chosen only when the gateway is open.
 - [ ] **Step 4: Run** `scripts/test_sharded.py 'test_routing_funding*' test_routing_admission test_routing_allocator test_routing_replay`. Expected: OK.
@@ -619,21 +784,26 @@ The reading is the stored one, not the pace-projected value.
 
 **Interfaces:**
 - Produces, in the admission record (built in `runtime/routing_funding.py` since F5.2):
-  - `ranking`: `table_version`, `profile_digest`, plus `shortlist` (the strategy ids of the step that chose the route, at most 10), `strategy_id` (the chosen one, or `None`), `score_version` (`None` until L3), `routes_version`.
+   - `ranking`: `table_version`, `profile_digest`, plus `shortlist` (the strategy ids of the step that chose the route, at most 10), `strategy_id` (the chosen one, or `None`), `score_version` (`None` until L3), `routes_version` (from the source, or `None` for caller observations or a `StaticSource`). It is audit data, not a replay dependency; replay never regenerates its digest.
   - `risk_band`, `floor_filled` (whether `missing_fields` was not empty), and `strategy: {provider, model, effort, harness}`. `scripts/routing.py` passes `risk_band` and `floor_filled` in the admitted assignment; `work_kind` is there since F2.2.
   - In `pressure`, which is the snapshot detail removed after 24 hours:
-    - `epoch`, `feasible` (the direct classes that had a candidate), `minimum_horizon` and `H`;
-    - `candidates`: `[{route, cls, step, pool, constraints}]` in shortlist order, where `step` is `direct` or `gateway`. The direct candidates are always stored; the gateway candidates only when the direct step chose nothing;
+     - `epoch`, `feasible` (the direct classes that had a candidate), `minimum_horizon`, `H`, and the effective `allowed_harnesses` (empty for a caller snapshot without that constraint);
+     - `candidates`: `[{route, cls, step, pool, constraints}]` in shortlist order, where `step` is `direct` or `gateway`. The direct candidates are always stored; the gateway candidates only when the direct step chose nothing. Each constraint stores `window`, `headroom`, `cost`, `resets_at`; omit the repeated pool, which its candidate already names. Admission and replay expand that pool when calling the allocator. Costs stay per candidate, not per pool;
     - `gateway`: `{open, reason, pools: [{pool, state}], direct_route_exists}`.
   - `shares` of a record funded by OpenRouter: the shares the direct step computed, or `{api: 0.0, subscription: 0.0}` when no direct class had a candidate.
-  - `usage_budget.MAX_ADMISSION_BYTES` becomes `8192 + MAX_BINDING_BYTES`, and the test below proves the largest record fits. **Cost:** a record grows by about 3 KB for the 24 hours its snapshot detail is kept; the ledger holds one per open or recent attempt. Lighter alternative: store one constraint list per pool; rejected because two paths on one pool have different costs, and the replay would not be exact.
+   - In `worker_choice` mode, store an empty shortlist and no `pressure.candidates` or `pressure.gateway`; keep the existing chosen-route constraints. Edit 7 point 3 applies.
+   - Proposed capacity (call 33): `MAX_REPLAY_BYTES = 7168`, `MAX_ADMISSION_BYTES = 4096 + MAX_REPLAY_BYTES + MAX_BINDING_BYTES`, `MAX_RECORD = 15_000_000`; `SOFT_RECORD` stays `6_000_000`. Preserve `record_too_large` refusal before any hold is written. These are compact JSON character limits, as today, despite the constant names. Update the capacity comment without raising the file's line ceiling.
+
+     **Cost and proof:** a representative 20-candidate record adds about 6,600 compact characters, not the earlier estimate of 3 KB. That estimate uses the shipped two-window subscription paths and one-window gateway paths; it is not proof for every schema-valid caller snapshot. At 256 maximal admission slots the new allowance adds 1,835,008 characters, projecting the existing whole-record capacity fixture from 10,716,910 to 12,551,918 (83.68% of 15 MB). F5 must measure the actual serialized maximum fixture, including bindings, all supported harness entries and Unicode escaping, and retain the 90% capacity test. Oversized caller inputs fail with `record_too_large`, never truncated replay detail. If the shipped-path maximum does not fit, stop and report the measured bound before changing these proposed limits. Lighter alternative: halve `MAX_ADMISSIONS` instead of raising the whole-record ceiling; this reduces retained history and must preserve `MAX_HOLDS <= MAX_ADMISSIONS`.
   - `tests/qualification/replay_export.py` exports the records as stored, with a manifest field `format: 2`; records without `ranking.shortlist` are exported unchanged.
 - `ADMISSION_FIELDS` in `scripts/routing.py`, what a client may see, gains nothing.
 
 - [ ] **Step 1: Write the failing tests:**
-  - In `tests/test_routing_admission.py`: `test_admission_record_carries_the_replay_fields`; `test_class_and_route_recompute_from_the_record_alone` (call `routing_funding.choose` and `gateway_decision` with nothing but the record's fields, the earlier records and the record's `at`; the route and class equal the record's, for a subscription admission, an OpenRouter admission after full pools and one after a capability gap); `test_two_routes_on_one_pool_keep_their_own_costs`; `test_largest_record_fits_the_size_limit` (10 direct and 10 gateway candidates, 2 windows each, 3 pools); `test_snapshot_detail_is_removed_after_a_day_and_the_rest_stays`.
-  - In `tests/test_qualification_replay_export.py`: `test_export_keeps_the_replay_fields_and_old_records`.
-- [ ] **Step 2: Run** both modules. Expected: FAIL.
+   - In `tests/test_routing_admission.py`: `test_admission_record_carries_the_replay_fields`; `test_class_and_route_recompute_from_the_record_alone` (call `routing_funding.choose` and `gateway_decision` with nothing but the record's fields, earlier records and the record's `at`, for subscription, gateway after full pools and gateway after a capability gap); `test_two_routes_on_one_pool_keep_their_own_costs`; `test_largest_shipped_path_record_fits_the_size_limit` (10 direct candidates with two windows and 10 gateway candidates with one, maximum supported identity/harness fields and binding); `test_oversized_replay_detail_refuses_without_a_hold`; `test_new_worker_choice_record_uses_the_legacy_replay_contract`; `test_snapshot_detail_is_removed_after_a_day_and_the_rest_stays`.
+   - In `tests/test_qualification_replay_export.py`: `test_export_keeps_the_replay_fields_and_old_records`.
+   - In `tests/test_routing_production_flows.py`: `test_unmanaged_prepare_record_has_null_routes_version`, with caller observations, no `excluded` and no `rejected`; exact replay succeeds with no live source.
+   - Update `tests/test_routing_gates.py`'s bound assertion; extend `tests/test_routing_funding_capacity.py`'s maximal-record fixture with the full new per-admission allowance and prove settlement still fits above the soft limit, below 90% of the hard limit.
+- [ ] **Step 2: Run** those five modules. Expected: FAIL.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Update** `clients/guidance-publication.md`: a guidance row is `{work_kind, complexity_band, risk_band, strategies}`; a catalog entry carries `provider`, `list_price` and `supported_efforts` from the lowest to the highest.
 - [ ] **Step 5: Run the full suite** and `scripts/validate.py`. Expected: OK.
@@ -676,7 +846,7 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 
 ## Slice F7: Strict replay runner and the ranked canary
 
-**Owned files:** `tests/qualification/replay_strict.py`, `tests/test_qualification_replay_strict.py`, `tests/qualification/canary.py`, `tests/test_qualification_canary.py`, `docs/smart-routing-qualification.md` (the replay step).
+**Owned files:** `tests/qualification/replay_strict.py`, `tests/test_qualification_replay_strict.py`, `tests/qualification/canary.py`, `tests/qualification/pilot_env.py`, `tests/qualification/opencode_live.py` (route handoff only; currently 985 lines), `tests/qualification/server.py`, `tests/qualification/safety.py`, `tests/test_qualification_canary.py`, `tests/test_qualification_harness.py`, `docs/smart-routing-qualification.md` (replay and ranked-canary steps).
 
 ### Task F7.1: The strict replay runner
 
@@ -684,6 +854,7 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 - Consumes: the export directory of `replay_export.export`, the record fields of Task F5.4, and the two pure functions admission itself calls: `routing_funding.choose` and `routing_funding.gateway_decision`. It reimplements neither.
 - Produces: `replay_strict.run(directory) -> dict` with `records`, `legacy_records`, `class_reproduced`, `route_reproduced`, `funding_violations`, `resurrected_capacity`, `stray_records`, `specialists`, `bands`, `passed`; and `python3 -B -m tests.qualification.replay_strict --dir <directory>`, which prints the report without ids, titles or timestamps and exits 1 unless `passed`.
 - It opens nothing but the export directory, calls no model and uses no network. Per ledger identity it walks the records in `at` order and applies Edit 7's points 2, 3 and 6. The earlier records it gives to `choose` are filtered as `routing.decision_rows` filters them: same settings revision, at most 14 days older, not funded by OpenRouter.
+- Accept `routes_version: None`; no route-table lookup or choice-route regeneration is needed. Expand each compact constraint with its candidate's pool. Apply point 3 to every `worker_choice` record, including new empty-shortlist records; report that coverage separately from ranked class/route reproduction. A missing ranked snapshot fails rather than falling back to the legacy rule.
 
 - [ ] **Step 1: Write the failing tests** with synthetic exports and invented names: `test_reproduced_export_passes`, `test_a_changed_class_fails`, `test_a_reordered_shortlist_fails`, `test_a_duplicate_attempt_is_a_stray_record`, `test_reserved_beyond_the_stored_headroom_is_a_funding_violation`, `test_a_later_record_with_more_headroom_and_no_reset_is_resurrected_capacity`, `test_a_gateway_record_is_checked_against_its_pool_states` (stored states that give "closed" with a gateway route: fails), `test_earlier_records_follow_the_routers_own_filters`, `test_legacy_worker_choice_records_follow_the_legacy_rule` (a copy of the pilot's record shape: one constraint, no `snapshot_id`), `test_a_record_without_snapshot_detail_fails_and_is_counted`, `test_the_report_holds_no_identifier`.
 - [ ] **Step 2: Run** `scripts/test_sharded.py test_qualification_replay_strict`. Expected: FAIL, no module.
@@ -691,16 +862,26 @@ Tests run under a private home, so they see `not_checked`. The coordinator runs 
 - [ ] **Step 4: Run** again. Expected: OK.
 - [ ] **Step 5: Commit** `test(qualification): strict replay over exported admission records`.
 
-### Task F7.2: The canary harness runs ranked
+### Task F7.2: The canary harness runs ranked on the admitted route
 
 **Interfaces:**
-- Produces: in `canary` mode on the production ledger the harness sends no explicit choice, so admissions are ranked on generated routes; it rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands; it refuses to start when `prepare` reports `table_outdated` or `table_empty`, or the activation gate reports `no_generated_route` or `no_qualified_path`. The pilot and isolation modes keep their explicit `--route`.
+- In `canary` mode on the approved production ledger, `plan_assignments` sends no explicit choice or synthetic observation. Rotate `software-engineer`, `code-reviewer` and `explorer-agent` over `low` and `medium` complexity bands. Refuse `table_outdated`, `table_empty`, `no_generated_route` and `no_qualified_path`; abort any returned admission whose `mode != 'ranked'` before dispatch.
+- Before the run, record the approved identity set: the union of the direct shortlists for those profiles, restricted to qualified OpenCode subscription paths and the providers the isolated server is signed in to. A changed table or qualification requires a renewed preflight; it never silently expands the approved set. Pilot and isolation modes retain the single explicit `--route` contract.
+- `CanaryEnv` retains each returned admission by attempt. Dispatch and attach facts come from that admission's identity, billing class and pool, checked by `routing_launch.admitted_check` against the same catalog and qualified path. `Run.prompt`, the server guard and the off-route check receive that admitted identity for the specific attempt. Check both membership in the approved set and equality to the admission; being somewhere in the approved set is insufficient. Replace the fixed model guard and fixed `pilot-sub` attach values. Keep write-ahead call reservations and title-call accounting intact.
+- Keep `prepare` on the existing `--serve` child. F4.4 supplies its effective host harnesses; it reads local state only, preserving the registered 50 ms warm and 500 ms cold preparation budgets. Before preparation, outside its latency timer, perform a needed ChatGPT refresh through the existing bounded `codex_rate_limits.refresh` only when a shortlisted host-reachable route needs a missing or stale reading. Reuse `routing_observations.FRESH_SECONDS` (900 seconds) and the reader's backoff; no model, timer, polling or retry loop. Record refresh duration separately.
+- After each settled launch, convert and store the reported windows through `opencode_launcher.windows` and `routing_observations.store_window`, as `_finish` does. Use the observation's actual timestamp, not settlement time. A launch longer than 900 seconds may still leave stale data. Before the next admission, if no eligible pool is fresh, stop with a resumable `seed_required` result and name the needed pool/window; resume only after an operator seed. Never invent a fresh observation or launch a probe.
+- `--serve` does not clear abandoned-window debits today. Keep that conservative behavior: the canary never drops a debit or manufactures a clearing admission. Report a debit that prevents progress for operator reconciliation through the existing one-shot procedure. Any unresolved launch or recovery error still aborts. This avoids inventing a standalone automatic-clear operation; `subscription_reconcile.clear_debits` currently runs only inside a validated admission transaction.
+- Enforce the registered subscription cap: track cumulative positive increases for every approved pool/window in thousandths, starting from the seeded baseline, and abort at more than 100. A reset never replenishes this run's allowance; missing or ambiguous readings pause for evidence instead of passing. Before dispatch, refuse a reservation whose demand exceeds the remaining allowance. Count unrelated usage conservatively during the quiet window. Actual settlement may exceed its reservation; record and abort an overrun rather than claiming a hard provider-side cap. Keep the existing duration, concurrency, recovery, funding and unresolved-launch checks.
+- The builder maps every row of the existing Canary table in `docs/smart-routing-validation.md` to its check and reported evidence: one project, 60 admissions, three specialists, two bands, each enabled funding class, window cap, seven days/80-admission stop, concurrency, aborts and kill switch. Strict replay and latency budgets still gate a pass. No pass is inferred merely from successful calls.
 
-- [ ] **Step 1: Write the failing tests** against the doubles: `test_canary_admissions_are_ranked`, `test_canary_refuses_to_start_without_generated_routes`.
-- [ ] **Step 2: Run** `scripts/test_sharded.py test_qualification_canary`. Expected: FAIL.
-- [ ] **Step 3: Implement** and add the strict replay command to the runbook before the canary step.
-- [ ] **Step 4: Run** `scripts/test_sharded.py 'test_qualification*'`. Expected: OK.
-- [ ] **Step 5: Commit** `test(qualification): the canary runs in ranked mode`.
+**Cost (calls 32 and 34):** store writes from telemetry already produced and a stale-and-needed zero-token Codex read. No new model calls. Lighter alternative: require operator seeds between batches; that adds manual work. Switching all prepares to one-shot would mix reader startup into the registered local-state latency budget, so this plan does not take that diagnostic recommendation. Existing debits remain conservative and may require operator recovery.
+
+- [ ] **Step 1: Write failing tests** in `tests/test_qualification_canary.py`: `test_canary_admissions_are_ranked`, `test_canary_aborts_a_non_ranked_admission`, `test_canary_refuses_to_start_without_generated_routes`, `test_canary_dispatches_the_admitted_route`, `test_canary_attaches_the_admitted_pool`, `test_guard_requires_the_admitted_identity_not_just_an_approved_one`, `test_canary_stores_the_settled_window`, `test_canary_prepare_stays_served`, `test_canary_refreshes_only_a_needed_stale_chatgpt_pool`, `test_canary_never_clears_abandoned_debits`, `test_canary_window_cap_survives_a_reset`, `test_canary_refuses_demand_beyond_remaining_allowance`, `test_canary_stops_after_a_window_overrun`.
+- [ ] **Step 2: Add the production-shaped P6 test** `test_canary_runs_on_the_local_source_across_a_stale_gap`: real service, `LocalSource`, real temporary stores, deterministic transport doubles only. Seed, rank, dispatch/attach the admitted facts, settle/store, advance over 900 seconds, assert the Claude path needs a seed, then seed and resume. Separately exercise the ChatGPT refresh with a fake reader executable and no production credentials. Verify served preparation never starts it.
+- [ ] **Step 3: Run** `scripts/test_sharded.py test_qualification_canary test_qualification_harness`. Expected: FAIL.
+- [ ] **Step 4: Implement**, keeping each Python file within its limit. Add the strict replay command, approval-set preflight, seed/resume steps and per-bound evidence map to the runbook. Extend F7.1 tests for null route versions, new worker-choice records and missing ranked detail.
+- [ ] **Step 5: Run** `scripts/test_sharded.py 'test_qualification*'` and `scripts/validate.py`. Expected: OK.
+- [ ] **Step 6: Commit** `test(qualification): the canary uses ranked admissions and real window state`.
 
 After F7 and F8 have both merged, the coordinator runs the strict replay over the exported pilot ledger and records the result, and the explanation of the 21st record, under Results in `docs/smart-routing-validation.md`, in a PR of its own. Waiting for F8 keeps that edit from colliding with F8's edit of the same document.
 
@@ -736,7 +917,9 @@ These join the [pre-canary requirements](2026-11-08-smart-routing.md#pre-canary-
 2. **The guidance is published again in the new row shape.** The coordinator runs the existing guidance publication procedure once: each vendor guide page is read by a model once and turned into rows of `work_kind`, complexity and risk; the catalog input gains `provider`, `list_price` and `display_name`; `scripts/routing_table.py refresh` compiles the production table. Until the due jobs of L2 exist, the catalog and guides are refreshed by hand.
 3. Edit 7 is registered (Task F5.1) and the strict replay over the exported pilot ledger has passed (after F7).
 4. `scripts/validate.py` has run once with the real home and reports `model_names: passed`.
-5. In the live session each subscription path is qualified with `qualify_path` from the `measure-demand` result and the gateway path from the gateway check's largest receipt, and the historical replay runs once afterwards.
+5. Subject to decisions A–C: skip the gateway check and leave the gateway and Codex-native paths unqualified. Run the approved isolation probes, drill and demand measurement; qualify only measured OpenCode subscription paths. No OpenRouter key or organization is needed for this proposed session.
+6. Use this order: compiled table → measured `qualify_path` requests → `seed_window` for every demanded window → activation → historical replay and its recorded advisory report → approved ranked canary. The strict pilot replay has already passed. Seeding itself requires qualification, not a table.
+7. Record the approved identity set and existing call caps before the canary, arrange its quiet window, and seed again after a stale gap where no eligible pool is fresh. Remove the project from `managed_projects` after the approved canary. The user schedules the live session; this plan grants no new live calls.
 
 ## After the canary: L1 to L4
 
@@ -787,7 +970,7 @@ Decisions this plan makes that the design left open or that differ from it:
 6. The admission bucket is work kind and complexity, not specialist and complexity, so the share accounting does not thin out over 24 specialists.
 7. OpenRouter is its own step in the funding order, but its accounting class stays `api`; the record's `billing_class` says `gateway`.
 8. A pool counts as full when any one of its windows is at or above `H`; calls 16 and 17 say which readings count.
-9. An explicit worker choice gets a generated route on a qualified path even when the table does not list its model. That route has no `strategy_id`.
+9. Each per-request explicit choice gets its own generated route on a qualified path even outside the table. When the decision uses settings choices, each gets a choice route regardless of coverage by another table row. Choice routes have no `strategy_id`; ranked mode uses strategy routes only.
 10. Old `worker_choices` keys load, match nothing and are reported in `settings_warnings`; today an unknown key fails the whole file.
 11. OpenRouter proposals use `explorer-agent`; an OpenRouter worker defaults to `software-engineer`.
 12. The `terms` input of the table compiler is removed with the control roles, since nothing else reads it.
@@ -797,16 +980,34 @@ Decisions this plan makes that the design left open or that differ from it:
 Added after the independent review of this plan. Calls 15 to 18 and 20 depart from the design's wording, so each needs the user's explicit yes:
 
 15. **`check` stays a reserved value of `role`** for a check run, which uses no model and is not a specialist. Design section 5.2 says the role value goes. Removing it means a new stored shape and about 25 rewritten sites in three files that have no spare line (`runtime/delegation.py`, `runtime/evidence.py`, `runtime/changes.py`), for no change a user can see. Alternative: do that rewrite as its own slice after the canary.
-16. **A full window stays full until its reset.** A stale reading at or above `H` still counts when the window is not rolling and has not reset. The design says "fresh". Without this, 15 minutes after the last launch on a full pool every task waits until the user seeds the window.
-17. **A launch that does not fit fills the pool.** With fresh readings below `H`, a pool whose room is smaller than the launch counts as full. Without this, such a task waits until the reset with OpenRouter closed.
-18. **The shortlist is cut per funding step,** not once. Each step takes the first 10 candidates that have a route for it here (Task F5.2). Design section 5.5 cuts first, which can open OpenRouter while a subscription model in place 11 could serve.
-19. **The gateway demand is one value per path,** the largest launch cost the live gateway check observed, in micro-dollars (Task F4.1). A dearer model is under-reserved at admission until L1; the receipt, the organization limit and the key's own limit still bound the spend. Stricter alternative: scale by list price.
+16. **A full window stays full until its reset.** The full test is `used + protected + held >= H * limit`; a stale reading counts only with `rolling is False` and a future reset. `protected` defaults to zero. Every production writer currently records fixed windows. Rolling caller snapshots require freshness. This departs from the design's fresh-only rule; retaining the design's rule means waiting for a seed once readings age out.
+17. **A pool is full for this task when no shortlisted route fits.** Every demanded window must be fresh and every shortlisted route on the pool must be rejected with `insufficient_headroom`. A different rejection or one fitting route does not establish this condition. This replaces the ambiguous phrase "the launch does not fit".
+18. **Cut per funding step after the host filter and static checks.** Each step keeps its first 10 routes whose reasons are not permanent, with one reason classification used again after candidate checks. Unknown or unobserved is temporary. No global 64-id cut precedes it. A permanent rejection discovered after window reads consumes its place rather than causing more reads.
+19. **Future gateway demand remains one value per path**, the largest live observed receipt cost, rounded up in micro-dollars (F4.1). Decision A defers producing it. A dearer model can be under-reserved until L1; provider receipts settle real cost, and the organization and key limits still apply. Stricter alternative: scale by list price.
 20. **The usage canary takes the cheapest priced strategy of the table,** because no catalog is on the machine before L2. Design section 5.14 says the lightest model the catalog lists.
 21. `coordinator` becomes `orchestrator` through one reader, `task_profile.orchestrates`, which also accepts the stored value. The operation kinds `coordinator-work` and `operation-coordinator`, the provenance value `coordinator` and the accounting stages keep their names; the vocabulary gate covers six old names and leaves `coordinator` and `check` out.
 22. The ledger stage follows the bucket's work kind: `review` gives the stage `review`, every other work kind `worker`. The template enforces that a specialist reviews exactly when its work kind is `review`.
 23. OpenRouter has two paths, workers and proposals, because the two harnesses differ; no two paths may share a harness and provider.
 24. Generation skips two strategies that share a route identity and differ in endpoint, with a reason, where today the whole manifest would be refused.
 25. Design section 5.12 (advice in a project that is not managed) has no task here; see the self-review.
+
+### Product decisions after the root-cause diagnosis
+
+**These are proposals, not approvals.** Tasks above describe the recommended branch so it can be reviewed. A contrary choice changes the affected tasks before implementation. In particular, decision A would change the user's earlier instruction to include OpenRouter workers in the live session.
+
+26. **Decision A — gateway producers. Recommended: defer production gateway admission until after release.** The current production path has no writer for the `credit` window, fresh OpenRouter balance, or organization binding. Build/test the pure funding decision and record when it would open, but leave gateway paths unqualified and skip the live gateway check. This needs no key, organization or network balance reader. **Alternative:** add a gateway-producers slice before the live session: resolve `activation.funding_ref` to an explicitly funded ledger organization, synthesize its `credit` window, add a bounded stale-and-needed key-limit reader, and fix `ManagedState`'s integration route, organization and temporary integration settings. That requires a scoped organization/key/network exception and an approved live budget. It is not hidden inside F4.
+27. **Decision B — ranked gateway launcher. Recommended: none before decision A changes.** Keep `API_FUNDING_QUALIFIED=False`; the OpenCode and Codex host sets exclude gateway dispatch. If gateway production is required now, add a ranked consumer through the existing managed OpenRouter worker path, preserving its lock, endpoint pin and scoped packet. Do not merely toggle the OpenCode constant. Alternative: qualify explicit OpenRouter workers first and defer automatic ranked fallback; that still requires decision A's producers.
+28. **Decision C — Codex-native demand. Recommended: leave `codex-chatgpt-subscription` unqualified for this OpenCode canary.** Its pool is shared, but its launch path has not been measured. Alternative: approve reusing the OpenCode ChatGPT demand as a proxy, explicitly recording that limitation, or budget a separate Codex-native measurement.
+
+### Additional flagged calls
+
+29. **Below-resolution demand: 10 thousandths per window.** This is a conservative starting reservation, not a measured cost bound. The diagnosis proposed 1; that lighter alternative admits more work but reserves less uncertainty. Missing samples still prevent qualification.
+30. **Per-request choice ids and path-based dispatch checks.** Hash identity plus endpoint into a stable choice id; check the qualified path and admission identity at dispatch. A table removal does not revoke a live hold; unqualification does. Entitlement marks do not cross between strategy and choice ids.
+31. **Host-reachable pools only.** Funding decisions consider only paths the launching host can send. A full Codex pool cannot borrow a Claude or gateway route its host cannot dispatch. Empty/missing collector-mode harness constraints fail closed, even with Smart Routing off.
+32. **Staleness remains fail-closed in routing.** Store settled readings in the canary and pause for an operator seed after a stale gap when no eligible pool is fresh. No Claude probe launch or extra model call. Routine Claude routing still needs the same manual recovery after idle time.
+33. **Raise the admission allowance by 7,168 characters and the ledger hard limit to 15 MB.** Keep the 6 MB soft limit and prove the maximal ledger stays below 90% of the hard limit. The representative size estimate is not the maximum proof. Alternative: reduce retained admissions and maximum holds, sacrificing capacity/history instead of allowing a larger settlement record.
+34. **Keep served canary preparation and enforce the existing window cap.** Refresh needed stale ChatGPT readings outside the latency timer; keep abandoned debits conservative. Track the 100-thousandths allowance across resets, check demand before dispatch, and abort an observed overrun. The cap is not a provider-side hard stop. Alternative: manual seeds between batches; switching prepare to one-shot requires revisiting the registered latency measurement.
+35. **Generate routes in memory, with no `routes.json`.** This departs from design section 5.4's stored routes. The already-loaded table plus rules and qualifications produce each request's routes; route reads write nothing. `routes_version` hashes those inputs for audit only; strict replay consumes stored candidates and also accepts a null version.
 
 ## Self-review
 
@@ -815,4 +1016,7 @@ Added after the independent review of this plan. Calls 15 to 18 and 20 depart fr
   - Design section 5.12, advice in a project that is not managed. Today `prepare` in such a project requires observations from its caller (`scripts/routing.py:425`) and returns strategy ids, not advice a person can read. The OpenCode workflow client design (#243) owns the session-start advice; it will consume the per-step shortlist of F5.2 and the generated routes of F4, and its plan adds the task.
   - Session titles and the vocabulary unification, which have their own designs.
 - **Independent review.** A first review of this plan returned six blocking findings: the OpenRouter path could not become a valid route; the record was not enough for an exact replay; the legacy rule relied on data the validation document says is gone (it is not: the export was checked); removing `check` and `coordinator` was under-scoped; F4 broke manifest readers it did not own; and an unread pool could look like a capability gap. Each is fixed in the task it concerns, and the calls it forced are 15 to 25.
+- **Round 2 and diagnosis.** Head `986c7230` received a second BLOCK (three blocking and nine non-blocking findings). The independent root-cause diagnosis found tests supplying data with no production writer. The revision adds the producer/reader table, P1–P7 traces, host constraints, write-free route lookup, complete reason classification, explicit unsupported production paths and a canary that uses actual admitted facts. Round 3 uses a fresh reviewer; neither diagnosis nor this self-review is an approval.
+- **Deliberate differences from the diagnosis.** Mode-specific routes replace its combined 37-route proposal (20 ranked or 16 settings choices or one explicit choice). Route-version hashes cover rules, qualifications and table version, rather than regenerating a route-list hash at dispatch. Below-resolution demand is proposed as 10 rather than 1. Served preparation is retained for latency comparability, with external stale-and-needed refresh and operator seed recovery; it does not silently clear abandoned debits. Capacity constants require maximum-fixture proof, not the illustrative size measurement.
+- **Approval boundary.** Decisions A–C, calls 15–18 and 20, additional calls 29–35, gateway demand call 19 and Edit 7 remain subject to the user's approval. No implementation or live run is authorized by the plan revision itself.
 - **Type consistency.** `task_profile.specialist` is roster-only and `stored` also reads old names, in every task. Route fields in F4.2 are the ones `_manifest_reason`, `_valid_route`, `_candidate` and `_choice_matches` read, and a test runs every generated route through the collector's check. The record fields of F5.4 are the arguments of `routing_funding.choose` and `gateway_decision`, which F7.1 calls.
