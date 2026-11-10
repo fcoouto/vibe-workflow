@@ -4,8 +4,13 @@ The harness only composes `runtime.routing_allocator`, `runtime.routing_settings
 `runtime.usage_budget` ledger. Subscription windows are plain fractions held by the harness; the ledger
 holds the API grant. Admission records live in the harness until the admission layer persists them.
 Network, clocks and models are never touched: time comes from each fixture event.
+
+`AdmissionReplay` (fixtures in `arrivals/admission/`) drives the merged part-B path instead: the strategy table
+compiled and refreshed by `runtime.routing_evidence`, `routing.ensure_profile` with a counting Jev double,
+`routing.rank`, `routing.admit` and `routing.record_event`, over one temporary ledger per run.
 """
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -13,7 +18,7 @@ import threading
 import unittest
 from unittest import mock
 
-from runtime import routing_allocator as allocator, routing_settings, usage_budget as budget
+from runtime import routing, routing_allocator as allocator, routing_evidence, routing_settings, usage_budget as budget
 
 FIXTURES = Path(__file__).parent / 'fixtures/smart-routing/arrivals'
 ORG = 'org'
@@ -404,6 +409,385 @@ class ReplayTests(unittest.TestCase):
         self.assertTrue(all(r['mode'] == 'auto' for r in records))
         _, records, _ = replay('mixed_load', dict(smart_routing=False))
         self.assertTrue(all(r['mode'] == 'off' for r in records) or not records)
+
+
+ADMISSION = FIXTURES / 'admission'
+COMPILED_AT = '2026-11-10T00:00:00Z'
+CLASSES = ('api', 'subscription')
+
+
+def load_admission(name):
+    return json.loads((ADMISSION / (name + '.json')).read_text())
+
+
+def strategy_id(model, effort, harness):
+    """The compiler's strategy id formula, kept here so the collector can offer routes the table never ranked."""
+    return hashlib.sha256(json.dumps([model, effort, harness], separators=(',', ':')).encode()).hexdigest()[:16]
+
+
+class CountingJev:
+    """Jev double: counts every enrichment request and answers nothing, so floors would apply if it were asked."""
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, view, fields):
+        self.calls.append((view.get('job_id'), tuple(fields)))
+        return {}
+
+
+class AdmissionReplay:
+    """Replay arrivals through compile/refresh, profile, rank, admit and settle over one isolated ledger."""
+    def __init__(self, scenario, folder):
+        self.scenario = copy.deepcopy(scenario)
+        path = Path(folder) / 'private' / 'ledger.sqlite3'
+        self.identity = budget.initialize(path)
+        self.ledger = budget.Ledger(path, self.identity)
+        self.settings = dict(routing_settings.resolve(self.scenario['settings']), revision=1)
+        caps = self.settings['caps']
+        self.ledger.set_caps(caps['total'], caps['per_account'])
+        org = self.scenario['organization']
+        self.org, self.balance = org['id'], org['balance']
+        self.ledger.configure(self.org, org['policy'], 0)
+        self.observed_at = None
+        self.pools = self.scenario['pools']
+        self.deployments = {d['route']: d for d in self.scenario['deployments']}
+        self.jev = CountingJev()
+        self.table = None
+        self.tables = []
+        self.refresh(self.scenario['catalog'], None)
+        self.log, self.open, self.settlements, self.checks, self.charged = [], {}, {}, 0, 0
+
+    def close(self):
+        self.ledger.close()
+
+    # -- inputs ----------------------------------------------------------------------------------------
+    def refresh(self, catalog, now):
+        evidence = self.scenario['evidence']
+        inputs = (evidence['guidance'], catalog, evidence['benchmarks'], evidence['terms'])
+        self.table = routing_evidence.refresh_table(self.table, lambda: inputs, now=COMPILED_AT)
+        self.catalog = {item['model']: item for item in catalog}
+        self.tables.append(dict(at=now, table=self.table, catalog=self.catalog))
+
+    def observe(self, now):
+        if self.observed_at is None or now > self.observed_at:
+            self.ledger.observe(self.org, self.balance - self.charged, now,
+                                **({'issued': self.balance} if self.observed_at is None else {}))
+            self.observed_at = now
+
+    def observations(self, now):
+        revision = self.ledger.snapshot()['organizations'][self.org]['revision']
+        pools = copy.deepcopy(self.pools)
+        for pool in pools.values():
+            for window in pool['windows']:
+                if 'organization' in window:
+                    window['organization_revision'] = revision
+        routes = []
+        for d in self.scenario['deployments']:
+            route = dict(route=d['route'], strategy_id=strategy_id(d['model'], d['effort'], d['harness']),
+                         provider=d['provider'], model=d['model'], effort=d['effort'], harness=d['harness'],
+                         account=d['account'], billing_class=d['billing_class'], pool=d['pool'],
+                         demand=dict(d['demand']), capable=True, permitted=True)
+            if d['billing_class'] == 'included_subscription':
+                route['binding_enforceable'] = True
+            else:
+                route.update(funding_verified=True, credential=dict(ref='keychain:opaque', scope='scope1', state='ready'))
+            routes.append(route)
+        return dict(now=now, routes=routes, pools=pools, snapshot_id='snap-%d' % now)
+
+    # -- lifecycle -------------------------------------------------------------------------------------
+    def arrive(self, job, now):
+        self.observe(now)
+        profile = routing.ensure_profile(job, jev=self.jev)
+        ranking = routing.rank(profile, self.table, None)
+        assignment = dict(attempt_id=job['id'], task=job['id'], role=routing_settings.PROFILE_ROLES[job['role']],
+                          complexity_band=profile['complexity_band'], scope='scope1')
+        outcome = routing.admit(assignment, ranking, self.settings, self.observations(now), ledger=self.ledger)
+        entry = dict(id=job['id'], at=now, outcome=outcome['status'], ranked=list(ranking['strategy_ids']),
+                     table_version=ranking['table_version'])
+        if outcome['status'] == 'admitted':
+            entry.update(route=outcome['route'], **{'class': outcome['class']})
+            self.open[job['id']] = outcome
+            self.dispatched(job['id'], now)
+        else:
+            entry['reason'] = outcome['reason_code']
+        self.log.append(entry)
+        self.verify(now)
+        return outcome
+
+    def dispatched(self, attempt, now):
+        result = routing.record_event(self.ledger, dict(event_id='d-' + attempt, attempt_id=attempt,
+                                                        kind='dispatched'), now)
+        assert result.get('state') != 'blocked', result
+
+    def complete(self, attempt, now):
+        """Settle at 80% of each reserved amount; subscription use reaches the collector's next snapshot."""
+        record = self.open.pop(attempt)
+        self.observe(now)
+        reserved = record['reserved']
+        units = {key: amount * 4 // 5 for key, amount in reserved.items() if key.startswith(budget.WIN)}
+        cost = sum(amount * 4 // 5 for key, amount in reserved.items() if key.startswith(budget.ORG))
+        request = dict(kind='primary', model=self.deployments[record['route']]['model'], tokens=dict(
+            input=10, output=5, reasoning=1, cache_read=0, cache_write=0), cost_usd_micros=cost)
+        if units:
+            request['units'] = units
+        result = routing.record_event(self.ledger, dict(
+            event_id='c-' + attempt, attempt_id=attempt, kind='complete',
+            usage=dict(source='provider_receipt', requests=[request])), now)
+        assert result.get('state') != 'blocked', result
+        for key, amount in units.items():
+            pool, _, window = key[len(budget.WIN):].partition('/')
+            next(w for w in self.pools[pool]['windows'] if w['id'] == window)['used'] += amount
+        self.charged += cost
+        self.settlements[attempt] = dict(result['settlement'], reserved_claims=dict(reserved))
+        self.log.append(dict(id=attempt, at=now, outcome=result['outcome']))
+        self.verify(now)
+        return result
+
+    def run(self):
+        for event in self.scenario['events']:
+            if event['kind'] == 'arrive':
+                self.arrive(event['job'], event['t'])
+            elif event['kind'] == 'complete':
+                self.complete(event['id'], event['t'])
+            elif event['kind'] == 'refresh':
+                self.refresh(event['catalog'], event['t'])
+                self.log.append(dict(at=event['t'], outcome='refreshed', table_version=self.table['version']))
+        return self.log
+
+    # -- invariants ------------------------------------------------------------------------------------
+    def verify(self, now):
+        """No funding violation and no resurrected capacity, checked after every transition."""
+        data = self.ledger.snapshot()
+        self.checks += 1
+        held = budget.Ledger.held(data)
+        expected = {}
+        for record in self.open.values():
+            for key, amount in record['reserved'].items():
+                expected[key] = expected.get(key, 0) + amount
+        assert held == expected, ('held claims differ from open admissions', held, expected)
+        for name, pool in self.pools.items():
+            for window in pool['windows']:
+                if 'organization' not in window:
+                    key = routing._window_key(name, window['id'])
+                    assert window['used'] + held.get(key, 0) <= window['limit'], 'window over-committed'
+        assert budget.Ledger._credit_raw(data, self.org, now) >= 0, 'organization credit overdrawn'
+        open_attempts = budget.Ledger.open_attempts(data)
+        assert sorted(open_attempts) == sorted(self.open), 'open attempts differ from open admissions'
+        accounts = list(open_attempts.values())
+        caps = self.settings['caps']
+        assert len(accounts) <= caps['total'], 'total concurrency cap exceeded'
+        assert all(accounts.count(a) <= caps['per_account'] for a in accounts), 'per-account cap exceeded'
+
+
+def run_admission(scenario, runner=None):
+    with tempfile.TemporaryDirectory() as folder:
+        run = AdmissionReplay(scenario, folder)
+        try:
+            (runner or AdmissionReplay.run)(run)
+            return run, copy.deepcopy(run.ledger.snapshot())
+        finally:
+            run.close()
+
+
+def strip_nonce(records):
+    return [{k: v for k, v in record.items() if k != 'nonce'} for record in records]
+
+
+def replay_classes(test, records):
+    """Recompute every ranked class from the admission records before it, as the allocator saw them."""
+    for index, record in enumerate(records):
+        with test.subTest(job=record['attempt_id']):
+            prior = [r for r in records[:index] if r['settings_revision'] == record['settings_revision']]
+            test.assertEqual(allocator.choose_class(record['shares'], prior, record['bucket'], 0, CLASSES),
+                             record['class'])
+
+
+class CatalogRefreshReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.scenario = load_admission('catalog_refresh')
+        self.run_, self.snapshot = run_admission(self.scenario)
+        self.refresh_at = next(e['t'] for e in self.scenario['events'] if e['kind'] == 'refresh')
+
+    def test_refresh_drops_removed_unsupported_and_uncited_options(self):
+        before, after = self.run_.tables[0]['table'], self.run_.tables[-1]['table']
+        self.assertNotEqual(before['version'], after['version'])
+        self.assertNotIn('refresh_failed', after)
+        dropped = {(item['model'], item['effort'], item['reason']) for item in after['dropped']}
+        self.assertLessEqual({('alpha-small', 'low', 'model_not_in_catalog'),
+                              ('alpha-large', 'high', 'effort_unsupported'),
+                              ('gamma-new', 'low', 'evidence_missing')}, dropped)
+        models = lambda table: {(s['model'], s['effort'], s['harness']) for row in table['rows'].values() for s in row}
+        self.assertEqual(models(after), {('alpha-large', 'max', 'native'), ('alpha-large', 'max', 'api')})
+        self.assertIn(('alpha-small', 'low', 'native'), models(before))
+        for table in (before, after):  # the harness's route ids match the compiler's
+            for strategies in table['rows'].values():
+                for s in strategies:
+                    self.assertEqual(s['strategy_id'], strategy_id(s['model'], s['effort'], s['harness']))
+
+    def test_later_admissions_never_choose_removed_or_unsupported_options(self):
+        later = [e for e in self.run_.log if e['outcome'] == 'admitted' and e['at'] > self.refresh_at]
+        self.assertTrue(later)
+        live = self.run_.tables[-1]['catalog']
+        for entry in later:
+            deployment = self.run_.deployments[entry['route']]
+            with self.subTest(job=entry['id']):
+                self.assertEqual(entry['table_version'], self.run_.tables[-1]['table']['version'])
+                self.assertIn(deployment['model'], live)
+                self.assertIn(deployment['effort'], live[deployment['model']]['supported_efforts'])
+                self.assertNotEqual(deployment['model'], 'gamma-new')  # offered by the collector, never cited
+                self.assertIn(strategy_id(deployment['model'], deployment['effort'], deployment['harness']),
+                              entry['ranked'])
+
+    def test_admissions_granted_before_the_refresh_settle_normally(self):
+        log = self.run_.log
+        granted = {e['id']: e for e in log if e['outcome'] == 'admitted' and e['at'] < self.refresh_at}
+        settled_after = [e for e in log if e['outcome'] == 'complete' and e['at'] > self.refresh_at and e['id'] in granted]
+        retired = [e for e in settled_after
+                   if self.run_.deployments[granted[e['id']]['route']]['model'] == 'alpha-small' or
+                   self.run_.deployments[granted[e['id']]['route']]['effort'] == 'high']
+        self.assertTrue(retired, 'an admission on a now-retired option must still be open at the refresh')
+        self.assertEqual({granted[e['id']]['class'] for e in retired}, set(CLASSES))
+        holds = self.snapshot['holds']
+        for attempt in granted:
+            settlement, hold = self.run_.settlements[attempt], holds[attempt]
+            with self.subTest(job=attempt):
+                self.assertEqual((hold['closed'], hold['state']), (True, 'released'))
+                claims = settlement['reserved_claims']
+                if settlement['kind'] == 'window':  # subscription: the whole window claim is released once
+                    self.assertEqual(settlement['released'], claims)
+                else:  # dollars: 80% charged, the rest released, no overrun
+                    reserved = claims[budget.ORG + self.run_.org]
+                    self.assertEqual((settlement['reserved'], settlement['charged'], settlement['released'],
+                                      settlement['overrun']), (reserved, reserved * 4 // 5,
+                                                               reserved - reserved * 4 // 5, 0))
+                    self.assertEqual(hold['settlement']['charged'], reserved * 4 // 5)
+        self.assertEqual(budget.Ledger.held(self.snapshot), {})
+        self.assertEqual(self.run_.open, {})
+
+    def test_refresh_neither_frees_nor_resurrects_capacity(self):
+        def at_refresh(run):
+            for event in run.scenario['events']:
+                if event['kind'] == 'refresh':
+                    data = run.ledger.snapshot()
+                    held, credit = budget.Ledger.held(data), run.ledger.credit_headroom(run.org, event['t'])
+                    run.refresh(event['catalog'], event['t'])
+                    data = run.ledger.snapshot()
+                    self.assertEqual(budget.Ledger.held(data), held)
+                    self.assertEqual(run.ledger.credit_headroom(run.org, event['t']), credit)
+                    self.assertTrue(held, 'holds must be open across the refresh')
+                    self.observed = True
+                elif event['kind'] == 'arrive':
+                    run.arrive(event['job'], event['t'])
+                else:
+                    run.complete(event['id'], event['t'])
+        self.observed = False
+        run, snapshot = run_admission(self.scenario, at_refresh)
+        self.assertTrue(self.observed)
+        # Settled charges stay counted: headroom never exceeds the issued balance less protection and every charge.
+        self.assertGreater(run.charged, 0)
+        self.assertGreater(run.checks, 0)
+        org = snapshot['organizations'][run.org]
+        self.assertLessEqual(budget.Ledger._credit(snapshot, run.org, run.observed_at),
+                             run.balance - budget.Ledger._protected(org) - run.charged)
+
+    def test_exact_replay_of_class_and_route_from_admission_records(self):
+        again, snapshot = run_admission(self.scenario)
+        self.assertEqual(again.log, self.run_.log)
+        records = self.snapshot['admissions']
+        self.assertEqual(strip_nonce(snapshot['admissions']), strip_nonce(records))
+        self.assertEqual(len(records), len([e for e in self.run_.log if e['outcome'] == 'admitted']))
+        self.assertEqual({r['class'] for r in records}, set(CLASSES))
+        replay_classes(self, records)
+        for record in records:
+            d = self.run_.deployments[record['route']]
+            self.assertEqual(record['route_identity'],
+                             routing.route_identity(d['provider'], d['model'], d['effort'], d['harness']))
+
+    def test_no_jev_calls(self):
+        self.assertEqual(self.run_.jev.calls, [])
+
+
+class DependencyPlanReplayTests(unittest.TestCase):
+    """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. Caps hold two at once."""
+
+    def schedule(self, run):
+        """Admit ready jobs in id order whenever capacity frees; finish the earliest-ending open job."""
+        jobs = {job['id']: job for job in run.scenario['jobs']}
+        done, ends, now = set(), {}, run.scenario['start']
+        self.trace = []
+        while len(done) < len(jobs):
+            for job_id in sorted(jobs):
+                job = jobs[job_id]
+                if job_id in done or job_id in ends or not set(job['depends_on']) <= done:
+                    continue
+                payload = {k: v for k, v in job.items() if k not in ('depends_on', 'duration')}
+                outcome = run.arrive(payload, now)
+                if outcome['status'] == 'admitted':
+                    ends[job_id] = now + job['duration']
+                    self.trace.append(('admit', job_id, now, sorted(done)))
+                else:
+                    self.trace.append(('wait', job_id, now, outcome['reason_code']))
+            job_id = min(ends, key=lambda j: (ends[j], j))
+            now = ends.pop(job_id)
+            run.complete(job_id, now)
+            done.add(job_id)
+            self.trace.append(('done', job_id, now))
+
+    def setUp(self):
+        self.scenario = load_admission('dependency_plan')
+        self.run_, self.snapshot = run_admission(self.scenario, self.schedule)
+
+    def test_jobs_are_admitted_in_dependency_order(self):
+        deps = {job['id']: set(job['depends_on']) for job in self.scenario['jobs']}
+        admitted = [step for step in self.trace if step[0] == 'admit']
+        self.assertEqual(sorted(step[1] for step in admitted), sorted(deps))
+        for _, job_id, _, done in admitted:
+            with self.subTest(job=job_id):
+                self.assertLessEqual(deps[job_id], set(done))
+        order = [step[1] for step in admitted]
+        self.assertEqual(order[0], 'job-1')
+        self.assertEqual(order[-1], 'job-6')
+        self.assertLess(order.index('job-5'), order.index('job-6'))
+
+    def test_fan_out_waits_for_a_concurrency_place(self):
+        waits = [step for step in self.trace if step[0] == 'wait']
+        self.assertTrue(waits, 'three ready jobs under a cap of two must wait')
+        self.assertTrue(all(step[3] == 'concurrency_cap' for step in waits))
+        peak, current = 0, 0
+        for step in self.trace:
+            current += {'admit': 1, 'done': -1}.get(step[0], 0)
+            peak = max(peak, current)
+        self.assertEqual(peak, self.scenario['settings']['caps']['total'])
+
+    def test_claims_are_released_on_settlement(self):
+        self.assertGreater(self.run_.checks, 12)
+        self.assertEqual(budget.Ledger.held(self.snapshot), {})
+        self.assertTrue(all(hold['closed'] for hold in self.snapshot['holds'].values()))
+        self.assertEqual(len(self.snapshot['holds']), 6)
+
+    def test_zero_jev_calls_and_coordinator_profiles(self):
+        self.assertEqual(self.run_.jev.calls, [])
+        for job in self.scenario['jobs']:
+            profile = routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')},
+                                             jev=self.run_.jev)
+            self.assertEqual(profile['uncertain_fields'], [])
+            self.assertEqual({profile['provenance'][f] for f in routing.SEMANTIC_FIELDS}, {'coordinator'})
+        self.assertEqual(self.run_.jev.calls, [])
+
+    def test_the_counting_double_would_see_a_gap(self):
+        jev = CountingJev()
+        job = dict(self.scenario['jobs'][0], profile=dict(task_family='implementation'))
+        routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')}, jev=jev)
+        self.assertEqual(jev.calls, [('job-1', ('complexity_band', 'risk_band'))])
+
+    def test_exact_replay(self):
+        first = (self.run_.log, self.trace)
+        again, snapshot = run_admission(self.scenario, self.schedule)
+        self.assertEqual((again.log, self.trace), first)
+        records = self.snapshot['admissions']
+        self.assertEqual(strip_nonce(snapshot['admissions']), strip_nonce(records))
+        self.assertEqual(len(records), 6)
+        replay_classes(self, records)
 
 
 if __name__ == '__main__':

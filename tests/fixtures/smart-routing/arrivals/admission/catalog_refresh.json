@@ -1,0 +1,529 @@
+{
+ "settings": {
+  "api_usage_enabled": true,
+  "caps": {
+   "total": 8,
+   "per_account": 4
+  }
+ },
+ "organization": {
+  "id": "api-org",
+  "balance": 100000000,
+  "policy": {
+   "cycle": "c",
+   "start": 0,
+   "end": 2000000,
+   "expiry": 2000000,
+   "stop_at": 1900000,
+   "ceiling": "none",
+   "amount": null,
+   "grant_amount": 0,
+   "pilot_limit": null,
+   "task_limit": null,
+   "allowance_bp": 10000
+  }
+ },
+ "evidence": {
+  "guidance": [
+   {
+    "id": "guide-1",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "checked_at": "2026-11-01T00:00:00Z",
+    "rows": [
+     {
+      "role": "worker",
+      "task_family": "implementation",
+      "complexity_band": "medium",
+      "risk_band": "medium",
+      "strategies": [
+       {
+        "model": "alpha-large",
+        "effort": "high",
+        "harness": "native",
+        "evidence_refs": [
+         "guide-1"
+        ]
+       },
+       {
+        "model": "alpha-large",
+        "effort": "high",
+        "harness": "api",
+        "evidence_refs": [
+         "guide-1"
+        ]
+       },
+       {
+        "model": "alpha-small",
+        "effort": "low",
+        "harness": "native",
+        "evidence_refs": [
+         "guide-1"
+        ]
+       },
+       {
+        "model": "alpha-large",
+        "effort": "max",
+        "harness": "native",
+        "evidence_refs": [
+         "guide-1"
+        ]
+       },
+       {
+        "model": "alpha-large",
+        "effort": "max",
+        "harness": "api",
+        "evidence_refs": [
+         "guide-1"
+        ]
+       },
+       {
+        "model": "gamma-new",
+        "effort": "low",
+        "harness": "native",
+        "evidence_refs": []
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "benchmarks": [],
+  "terms": []
+ },
+ "pools": {
+  "sub-a": {
+   "billing_class": "included_subscription",
+   "windows": [
+    {
+     "id": "5h",
+     "limit": 1000,
+     "used": 700,
+     "length": 18000,
+     "reset_at": null,
+     "rolling": true,
+     "fresh": true
+    }
+   ]
+  },
+  "sub-b": {
+   "billing_class": "included_subscription",
+   "windows": [
+    {
+     "id": "5h",
+     "limit": 1000,
+     "used": 720,
+     "length": 18000,
+     "reset_at": null,
+     "rolling": true,
+     "fresh": true
+    }
+   ]
+  },
+  "api": {
+   "billing_class": "api_grant",
+   "windows": [
+    {
+     "id": "credit",
+     "limit": 60000000,
+     "used": 0,
+     "length": null,
+     "reset_at": null,
+     "fresh": true,
+     "organization": "api-org"
+    }
+   ],
+   "grant": {
+    "remaining": 60000000,
+    "expected_spend": 0,
+    "expires_at": 1900000
+   }
+  }
+ },
+ "deployments": [
+  {
+   "route": "al-high-a",
+   "provider": "anthropic",
+   "model": "alpha-large",
+   "effort": "high",
+   "harness": "native",
+   "pool": "sub-a",
+   "account": "A",
+   "billing_class": "included_subscription",
+   "demand": {
+    "5h": 60
+   }
+  },
+  {
+   "route": "as-low-b",
+   "provider": "anthropic",
+   "model": "alpha-small",
+   "effort": "low",
+   "harness": "native",
+   "pool": "sub-b",
+   "account": "B",
+   "billing_class": "included_subscription",
+   "demand": {
+    "5h": 20
+   }
+  },
+  {
+   "route": "al-max-b",
+   "provider": "anthropic",
+   "model": "alpha-large",
+   "effort": "max",
+   "harness": "native",
+   "pool": "sub-b",
+   "account": "B",
+   "billing_class": "included_subscription",
+   "demand": {
+    "5h": 90
+   }
+  },
+  {
+   "route": "gamma-a",
+   "provider": "anthropic",
+   "model": "gamma-new",
+   "effort": "low",
+   "harness": "native",
+   "pool": "sub-a",
+   "account": "A",
+   "billing_class": "included_subscription",
+   "demand": {
+    "5h": 5
+   }
+  },
+  {
+   "route": "al-high-api",
+   "provider": "anthropic",
+   "model": "alpha-large",
+   "effort": "high",
+   "harness": "api",
+   "pool": "api",
+   "account": "api-org",
+   "billing_class": "api_grant",
+   "demand": {
+    "credit": 3000000
+   }
+  },
+  {
+   "route": "al-max-api",
+   "provider": "anthropic",
+   "model": "alpha-large",
+   "effort": "max",
+   "harness": "api",
+   "pool": "api",
+   "account": "api-org",
+   "billing_class": "api_grant",
+   "demand": {
+    "credit": 5000000
+   }
+  }
+ ],
+ "description": "Catalog refresh mid-replay: alpha-small removed, alpha-large loses effort high, gamma-new added without cited evidence.",
+ "catalog": [
+  {
+   "model": "alpha-large",
+   "supported_efforts": [
+    "low",
+    "high",
+    "max"
+   ],
+   "context_limit": 200000
+  },
+  {
+   "model": "alpha-small",
+   "supported_efforts": [
+    "low",
+    "high"
+   ],
+   "context_limit": 50000
+  }
+ ],
+ "events": [
+  {
+   "t": 1000010,
+   "kind": "arrive",
+   "job": {
+    "id": "job-1",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 1",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000020,
+   "kind": "arrive",
+   "job": {
+    "id": "job-2",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 2",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000030,
+   "kind": "arrive",
+   "job": {
+    "id": "job-3",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 3",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000040,
+   "kind": "arrive",
+   "job": {
+    "id": "job-4",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 4",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000100,
+   "kind": "complete",
+   "id": "job-1"
+  },
+  {
+   "t": 1000200,
+   "kind": "refresh",
+   "catalog": [
+    {
+     "model": "alpha-large",
+     "supported_efforts": [
+      "low",
+      "max"
+     ],
+     "context_limit": 200000
+    },
+    {
+     "model": "gamma-new",
+     "supported_efforts": [
+      "low"
+     ],
+     "context_limit": 100000
+    }
+   ]
+  },
+  {
+   "t": 1000250,
+   "kind": "arrive",
+   "job": {
+    "id": "job-5",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 5",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000260,
+   "kind": "arrive",
+   "job": {
+    "id": "job-6",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 6",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000270,
+   "kind": "arrive",
+   "job": {
+    "id": "job-7",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 7",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000280,
+   "kind": "arrive",
+   "job": {
+    "id": "job-8",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 8",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000400,
+   "kind": "complete",
+   "id": "job-2"
+  },
+  {
+   "t": 1000410,
+   "kind": "complete",
+   "id": "job-3"
+  },
+  {
+   "t": 1000420,
+   "kind": "complete",
+   "id": "job-4"
+  },
+  {
+   "t": 1000500,
+   "kind": "complete",
+   "id": "job-5"
+  },
+  {
+   "t": 1000510,
+   "kind": "complete",
+   "id": "job-6"
+  },
+  {
+   "t": 1000520,
+   "kind": "complete",
+   "id": "job-7"
+  },
+  {
+   "t": 1000530,
+   "kind": "complete",
+   "id": "job-8"
+  },
+  {
+   "t": 1000690,
+   "kind": "arrive",
+   "job": {
+    "id": "job-9",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 9",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000700,
+   "kind": "arrive",
+   "job": {
+    "id": "job-10",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 10",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000710,
+   "kind": "arrive",
+   "job": {
+    "id": "job-11",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 11",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000720,
+   "kind": "arrive",
+   "job": {
+    "id": "job-12",
+    "role": "worker",
+    "scope_ref": "scope1",
+    "objective": "replay job 12",
+    "profile": {
+     "task_family": "implementation",
+     "complexity_band": "medium",
+     "risk_band": "medium",
+     "review_policy": "independent",
+     "uncertainty": "low"
+    }
+   }
+  },
+  {
+   "t": 1000890,
+   "kind": "complete",
+   "id": "job-9"
+  },
+  {
+   "t": 1000900,
+   "kind": "complete",
+   "id": "job-10"
+  },
+  {
+   "t": 1000910,
+   "kind": "complete",
+   "id": "job-11"
+  },
+  {
+   "t": 1000920,
+   "kind": "complete",
+   "id": "job-12"
+  }
+ ]
+}
