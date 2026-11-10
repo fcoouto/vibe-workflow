@@ -2,7 +2,7 @@
 
 import hashlib
 
-from runtime import delegation as d6, evidence, state
+from runtime import delegation as d6, delegation_routing, evidence, state
 from runtime.startup import json_object
 
 
@@ -201,6 +201,7 @@ def validate_admission(scope, request):
 def consume_dispatch(scope, request):
     """Commit one send decision before the external native call; never report actual delivery."""
     request = _request(request, ('workstream_revision',))
+    delegation_routing.dispatch(scope, request)  # C3-2: routing `dispatch` is the last pre-spawn step (managed project)
     with d6._reservation_write(scope) as db:
         _permission(scope, request['workstream_revision'])
         d6._require(db is not None, 'Missing native assignment state')

@@ -665,6 +665,9 @@ class Service:
         except (SettingsError, OSError, RuntimeError):
             raise Blocked('invalid_managed_projects') from None
         if set(value) - set(self._settings()['managed_projects']):
+            from runtime import delegation_routing  # C3-2: no project joins with an unrouted native launch open
+            require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
+                'managed_projects']))), 'open_unrouted_assignments')
             codes = activation_gate()
             if codes:
                 raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
