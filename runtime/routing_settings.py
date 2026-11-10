@@ -19,9 +19,15 @@ EXPLICIT_ROLES = ('researcher', 'repair')
 FUNDING = ('subscription', 'api')
 CHOICE_FIELDS = {'provider', 'model', 'effort', 'harness', 'funding'}
 MAX_CHOICES = 16
+# C.3 phase W (design 4.1, 4.2): checkouts (realpaths) that use the managed routing path. Changed only by the one-shot
+# `scripts/routing.py set`, behind its activation gate; C3-7 removes it.
+MAX_MANAGED = 64
+MAX_PROJECT_PATH = 1024
+# The fixed code a legacy selector or writer answers for a managed project (design 3.6; used by C3-4b and C3-5).
+LEGACY_ROUTE_RETIRED = 'legacy_route_retired'
 DEFAULTS = dict(smart_routing=True, api_usage_enabled=False, L=0.65, H=0.85, T_hours=72,
                 min_elapsed_fraction=0.10, lookback_hours=72, margin_bp=usage_budget.DEFAULT_MARGIN_BP,
-                caps=usage_budget.DEFAULT_CAPS, worker_choices={})
+                caps=usage_budget.DEFAULT_CAPS, worker_choices={}, managed_projects=[])
 
 
 class SettingsError(ValueError):
@@ -77,8 +83,21 @@ def _fraction(value):
     return value
 
 
+def _project_path(value):
+    return (type(value) is str and 0 < len(value) <= MAX_PROJECT_PATH and value.isprintable()
+            and os.path.isabs(value) and os.path.normpath(value) == value)
+
+
+def _managed_projects(value):
+    """Absolute, normalized, distinct paths; the routing command stores realpaths."""
+    require(type(value) is list and len(value) <= MAX_MANAGED and all(_project_path(item) for item in value)
+            and len(set(value)) == len(value), 'invalid_managed_projects')
+    return list(value)
+
+
 KEYS = dict(smart_routing=_bool, api_usage_enabled=_bool, L=_fraction, H=_fraction,
-            min_elapsed_fraction=_fraction, caps=_caps, worker_choices=_worker_choices)
+            min_elapsed_fraction=_fraction, caps=_caps, worker_choices=_worker_choices,
+            managed_projects=_managed_projects)
 
 
 def _validated(key, value):
@@ -96,7 +115,7 @@ def _validated(key, value):
 def resolve(stored):
     """Merge explicitly stored values over the defaults and enforce the invariants."""
     require(type(stored) is dict, 'invalid_settings')
-    value = {key: (dict(v) if type(v) is dict else v) for key, v in DEFAULTS.items()}
+    value = {key: (dict(v) if type(v) is dict else list(v) if type(v) is list else v) for key, v in DEFAULTS.items()}
     for key, item in stored.items():
         value[key] = _validated(key, item)
     require(0 <= value['L'] < value['H'] <= 1, 'invalid_thresholds')
@@ -192,6 +211,21 @@ def assignment_role(profile_role, explicit=None):
     require(explicit in ROLES, 'invalid_role')
     require(explicit in EXPLICIT_ROLES or explicit == PROFILE_ROLES[profile_role], 'role_mismatch')
     return explicit
+
+
+def managed_project(path, settings_path=None):
+    """Whether `path` (realpath) is a managed project or lies inside one. `settings_path` defaults to the routing
+    command's settings (`scripts.routing.default_settings`). A missing file has no managed project; settings that
+    exist but cannot be read count as managed, so a legacy spending path refuses and the managed path fails closed."""
+    if settings_path is None:
+        from scripts import routing as command
+        settings_path = command.default_settings()
+    try:
+        projects = read(settings_path)['managed_projects']
+    except (SettingsError, usage_budget.BudgetError, OSError):
+        return True
+    target = Path(path).resolve()
+    return any(target == Path(item) or Path(item) in target.parents for item in projects)
 
 
 def workstreams_enabled(scope, *, load=None):
