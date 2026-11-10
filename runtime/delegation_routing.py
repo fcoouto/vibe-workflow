@@ -123,8 +123,9 @@ def _writer_models(service, scope, request, attempt_id):
     return sorted(models)
 
 
-def admit(service, scope, request, *, attempt_id, routing_attempt, role, choice, constraints=None):
-    """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt."""
+def admit(service, scope, request, *, attempt_id, routing_attempt, role, choice, constraints=None, job=None):
+    """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt. `job` is
+    the canonical job (`delegation.routing_job`); only the self-check supplies it."""
     preflight = routing_launch.preflight(_call(service, dict(v=1, op='status')))
     if preflight is not None:
         return dict(state='blocked', reason=preflight)
@@ -134,7 +135,7 @@ def admit(service, scope, request, *, attempt_id, routing_attempt, role, choice,
     if choice is not None:
         assignment['choice'] = choice
     try:
-        body = routing_launch.prepare_request(assignment, delegation.routing_job(scope, locator), workflow=locator,
+        body = routing_launch.prepare_request(assignment, job or delegation.routing_job(scope, locator), workflow=locator,
                                               constraints=constraints, planned=True)
     except routing_launch.Refused as error:
         return dict(state='blocked', reason=error.reason)
@@ -367,3 +368,114 @@ def dispatch(scope, request, routing_attempt=None, *, record=None):
         if reason is not None:
             raise state.StateError('Managed native launch refused by routing: ' + str(reason))
     return routing_attempt
+
+
+# -- activation-gate self-check ---------------------------------------------------------------------------------
+_SELF_CHECK_CHILD = False  # set only by SELF_CHECK_CHILD's entry code, never from the environment or a request
+SELF_CHECK_MARK = 'delegation-routing-self-check:'
+SELF_CHECK_CHILD = (
+    'import json, sys\n'
+    'sys.path.insert(0, sys.argv[1])\n'
+    'from runtime import delegation_routing\n'
+    'delegation_routing._SELF_CHECK_CHILD = True\n'
+    'print(delegation_routing.SELF_CHECK_MARK + json.dumps(delegation_routing._self_check_in_child(sys.argv[2])))\n')
+SELF_CHECK_ATTEMPT = 'a' * 32
+
+
+def managed_self_check(workdir):
+    """C.3 design 4.2 capability "Native delegation": `[]` when it holds, else fixed failure codes. In a child of this
+    interpreter (it swaps module globals), on stores inside `workdir`: one routing admission bound to its workflow job
+    and delegation attempt, and a catalog mismatch that closes the hold and dispatches nothing."""
+    import signal
+    import subprocess
+    import sys
+    root = routing_launch._sandbox(workdir)
+    if root is None:
+        return ['self_check_workdir_unsafe']
+    for name in ('home', 'tmp'):
+        (root / name).mkdir(mode=0o700)
+    env = dict(PATH='/usr/bin:/bin', HOME=str(root / 'home'), TMPDIR=str(root / 'tmp'), LANG='C.UTF-8')
+    package = str(Path(__file__).resolve().parents[1])
+    child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, package, str(root / 'check')],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+                             cwd=root, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=routing_launch.SELF_CHECK_BUDGET)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
+        return ['self_check_timeout']
+    lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
+    try:
+        codes = json.loads(lines[-1][len(SELF_CHECK_MARK):])
+    except (IndexError, ValueError):
+        return ['self_check_error']
+    if type(codes) is not list or not all(type(code) is str for code in codes):
+        return ['self_check_error']
+    return codes if child.returncode == 0 or codes else ['self_check_error']
+
+
+class _Reader:
+    """A workflow double for one open planned job (routing_gates' reader contract): its view and a fixed etag."""
+
+    def __init__(self, digest):
+        self.digest = digest
+
+    def view(self, locator):
+        return dict(etag='self-check', job=dict(role='worker', revision='1' * 64, semantic_digest=self.digest, open=True),
+                    dependencies=dict(accepted=True, digest='2' * 64, count=0),
+                    ownership=dict(digest='3' * 64, conflict=False), resource=None)
+
+    def etag(self, locator):
+        return 'self-check'
+
+
+def _self_check_in_child(workdir):
+    """The check body. It refuses to run unless its child entry point set `_SELF_CHECK_CHILD`."""
+    if _SELF_CHECK_CHILD is not True:
+        return ['self_check_not_in_child']
+    root = routing_launch._sandbox(workdir)
+    if root is None:
+        return ['self_check_workdir_unsafe']
+    from types import SimpleNamespace
+    from runtime import routing_observations, routing_settings
+    checkout = root / 'checkout'
+    checkout.mkdir(mode=0o700)
+    identity = routing_launch.route_identity(HOST, model='self-check-model', effort='high')
+    source = routing_observations.StaticSource(
+        [dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
+              account='self-check', demand={'5h': 1}, binding_enforceable=True, **identity)],
+        lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
+                               observed_at=at)])
+    routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
+    routing_observations.default_source = lambda *args, **kwargs: source
+    job = dict(id='self-check', role='worker', scope_ref='self-check', claims=[], objective=None, context=None)
+    service = _command().Service(root / 'routing' / 'settings.json', root / 'usage' / 'organizations.sqlite3',
+                                 project=checkout, workflow=_Reader(routing.ensure_profile(job)['semantic_digest']))
+    request, attempt, codes = dict(client='codex', session_id='self-check', task_id='self-check', job_id='self-check'), \
+        SELF_CHECK_ATTEMPT, []
+    try:
+        if _call(service, dict(v=1, op='set', authority_required=True)).get('state') != 'updated':
+            return ['self_check_store_unavailable']
+        answer = admit(service, SimpleNamespace(repository_root=checkout), request, attempt_id=attempt,
+                       routing_attempt=attempt, role='worker', job=job,
+                       choice=routing_launch.choice(HOST, 'subscription', model='self-check-model', effort='high'))
+        record = _hold(service, attempt)[1] if answer.get('state') == 'admitted' else None
+        bound = (((record or {}).get('binding') or {}).get('job') or {}).get('locator') or {}
+        if (bound.get('job_id'), bound.get('attempt_id')) != ('self-check', attempt):
+            codes.append('workflow_binding_missing')
+        else:
+            _, reason = routing_launch.admitted_check(answer['admission'], host=HOST, catalog=[])
+            if reason != routing_launch.CATALOG_MISMATCH:
+                codes.append('catalog_mismatch_not_detected')
+            _record(service, attempt, 'not_dispatched', 'catalog_mismatch:' + attempt)
+            if _hold(service, attempt)[0] != 'released':
+                codes.append('catalog_mismatch_dispatched')
+    except Exception:  # noqa: BLE001 - any failure is a fixed code, never a traceback
+        codes.append('self_check_error')
+    finally:
+        service.close()
+    return codes
