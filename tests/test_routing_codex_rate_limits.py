@@ -370,6 +370,73 @@ class RefreshTests(Sandbox):
         self.assertFalse(reader.applies(dict(route, billing_class='gateway')))
 
 
+class CollectorTests(Sandbox):
+    """The collector reads only when a prepare needs a chatgpt-subscription route whose reading is stale."""
+
+    def setUp(self):
+        super().setUp()
+        claude = dict(copy.deepcopy(self.manifest['routes'][0]), route='claude', pool='claude-subscription',
+                      account='claude-plan')
+        second = dict(copy.deepcopy(self.manifest['routes'][0]), route='opencode-openai-2', model='m2')
+        self.manifest['routes'] += [claude, second]
+        self.calls = []
+        original = reader.refresh
+
+        def refresh(settings, **options):
+            self.calls.append(options)
+            return original(settings, command=self.command(), environ=self.environ, manifest=self.manifest, **options)
+        for patch in (mock.patch.object(reader, 'refresh', side_effect=refresh),
+                      mock.patch.object(collector, 'load_manifest', return_value=copy.deepcopy(self.manifest))):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def collect(self, **options):
+        return collector.collect(self.temp.name, dict(scope='s'), settings_path=self.settings,
+                                 ledger_path=Path(self.temp.name) / 'ledger.sqlite3', **options)
+
+    def test_a_missing_reading_is_read_once_per_pool_and_admitted_fresh(self):
+        observations = self.collect(refresh_windows=True)['observations']
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0]['need'], ('7d',))
+        self.assertEqual(sorted(route['route'] for route in observations['routes']),
+                         ['opencode-openai', 'opencode-openai-2'])
+        self.assertEqual([(item['id'], item['used'], item['fresh']) for item in observations['pools'][POOL]['windows']],
+                         [('7d', 420, True)])
+        self.assertIn(dict(route='claude', reason='window_unobserved'), observations['excluded'])
+
+    def test_a_fresh_reading_spawns_nothing(self):
+        self.collect(refresh_windows=True)
+        self.collect(refresh_windows=True)
+        self.assertEqual(self.spawns(), 1)
+
+    def test_without_refresh_windows_nothing_is_read(self):
+        observations = self.collect()['observations']
+        self.assertEqual((self.calls, self.spawns()), ([], 0))
+        self.assertIn(dict(route='opencode-openai', reason='window_unobserved'), observations['excluded'])
+
+    def test_a_static_source_never_reads(self):
+        source = collector.StaticSource(self.manifest['routes'])
+        self.collect(refresh_windows=True, source=source)
+        self.assertEqual((self.calls, self.spawns()), ([], 0))
+
+    def test_a_failed_read_leaves_the_route_out_and_prepare_fails_closed(self):
+        with mock.patch.object(self, 'command', return_value=self.command('exit_at_once')):
+            observations = self.collect(refresh_windows=True)['observations']
+        self.assertIn(dict(route='opencode-openai', reason='window_unobserved'), observations['excluded'])
+        self.assertEqual(observations['routes'], [])
+
+    def test_the_service_reads_only_outside_serve(self):
+        from scripts import routing as command
+        for serving, one_shot, expected in ((True, False, False), (False, True, True), (False, False, True)):
+            service = command.Service(self.settings, Path(self.temp.name) / 'ledger.sqlite3', serving=serving,
+                                      one_shot=one_shot, project=self.temp.name)
+            with self.subTest(serving=serving, one_shot=one_shot), \
+                    mock.patch.object(collector, 'collect', return_value=dict(observations={}, seen={})) as collect:
+                service._collect(dict(scope='s'))
+                self.assertIs(collect.call_args.kwargs['refresh_windows'], expected)
+            service.close()
+
+
 class CommandTests(Sandbox):
     """The operator's one-shot command."""
 
