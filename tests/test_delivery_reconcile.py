@@ -634,8 +634,8 @@ class ManualDeliveryTests(unittest.TestCase):
         with patch.object(Path, 'home', return_value=self.fixture.root):
             title_sync.operate(self.scope, 'configure', request | dict(expected_revision=task['revision'],
                 reference='fixture:adopt', topic='Delivery'), transport=lambda: native)
-        self.assertIn(' WAITING · [', native.title)
-        baseline = native.title.replace(' WAITING · [', ' [')
+        self.assertIn(' WAITING · Delivery', native.title)
+        baseline = native.title.replace(' WAITING · ', ' ')
 
         def sync():
             return title_sync.operate(self.scope, 'sync', dict(client='codex', session_id='parent'),
@@ -652,7 +652,7 @@ class ManualDeliveryTests(unittest.TestCase):
         state.update_task(self.scope, self.fixture.request(**update,
             resolutions=[dict(id='agent-check', reference='fixture:checked')]))
         sync()
-        self.assertIn(' WAITING · [', native.title)
+        self.assertIn(' WAITING · Delivery', native.title)
         self.case.provider.pr['draft'] = True
         self.case.reconcile('manual-back-to-draft')
         sync()
