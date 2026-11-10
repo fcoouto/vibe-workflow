@@ -11,6 +11,7 @@ import random
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -821,7 +822,9 @@ class ProtocolTests(Reconcile):
         others = [dict(v=1, op='reconcile_subscription', attempt_id='a1', evidence=dict(kind='abandon'),
                        event_id='o1'),
                   dict(v=1, op='drop_debit', key='win:sub/5h', marker='dd_' + '0' * 32, event_id='o2'),
-                  dict(v=1, op='settle_legacy_call', run_id='s1', phase='count', evidence=CHARGE, event_id='o3')]
+                  dict(v=1, op='settle_legacy_call', run_id='s1', phase='count', evidence=CHARGE, event_id='o3'),
+                  dict(v=1, op='seed_window', pool='sub', window='5h', used=0, limit=1000, length=18000,
+                       reset_at=int(time.time()) + 60, event_id='o4')]
         requests = {request['op']: request for request in operator + others}
         self.assertEqual(set(requests), set(command.OPERATOR_OPS))
         before, stored = self.snapshot(), self.ledger_bytes()
