@@ -12,11 +12,17 @@ The request and response contract, reason codes, clock, busy-wait and test-switc
 the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
 """
 from contextlib import closing
+import importlib
 import json
 import os
 from pathlib import Path
+import re
+import shutil
+import signal
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,7 +44,8 @@ TEST_FLAG = '--test-inputs'
 READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
-FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constraints', 'workflow'}),
+# `observations` is refused for a managed project, where the collector builds them (C.3 design 3.3).
+FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constraints', 'workflow'}),
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
               dispatch=({'attempt_id', 'request'}, {'now'}), record=({'event'}, set()), status=(set(), set()),
               set=(set(), {'expected_revision', 'change', 'organization', 'authority_required'}),
@@ -62,12 +69,68 @@ PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_ban
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
                  'invalid_binding', 'admission_error')
+# The observation collector (C3-1): `collect(project, assignment) -> {observations, seen}` (C.3 design 3.3).
+COLLECTOR = 'runtime.routing_observations'
+# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's behavioural
+# self-check passes. (name, kind, target): `module` calls `<module>:<function>(workdir)`; `script` loads
+# PACKAGE/<target> by path and calls its `managed_self_check(workdir)`; `manifest` needs one qualified route in
+# PACKAGE/<target>; `heading` needs a `Managed projects` heading in PACKAGE/<target>.
+CAPABILITIES = (
+    ('collector_and_launcher', 'module', 'runtime.routing_launch:managed_self_check'),  # C3-1
+    ('route_manifest', 'manifest', 'runtime/routing_routes.json'),  # C3-1, content per user decision 5
+    ('native_delegation', 'module', 'runtime.delegation_routing:managed_self_check'),  # C3-2
+    ('opencode_launcher', 'module', 'runtime.opencode_launcher:managed_self_check'),  # C3-3
+    ('openrouter_proposals', 'script', 'scripts/openrouter_proposals.py'),  # C3-4a
+    ('openrouter_workers', 'script', 'scripts/openrouter_workers.py'),  # C3-4b
+    ('api_usage', 'module', 'runtime.usage_routing:managed_self_check'),  # C3-5
+    ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
+)
+SELF_CHECK_TIMEOUT = 10
+SELF_CHECK_MARK = 'managed-self-check:'
+SELF_CHECK_CODE = re.compile(r'[a-z0-9_]{1,64}')
+# Runs in the child: the package root (argv[1]) first on the import path, never the project checkout.
+SELF_CHECK_CHILD = r'''
+import sys
+sys.path.insert(0, sys.argv[1])
+import importlib, importlib.util, json, os, re
+package, kind, target, workdir = sys.argv[1:5]
+def run():
+    if kind == 'module':
+        name, _, function = target.partition(':')
+        try:
+            check = getattr(importlib.import_module(name), function)
+        except (ImportError, AttributeError):
+            return ['self_check_missing']
+        return check(workdir)
+    path = os.path.join(package, target)
+    if not os.path.isfile(path):
+        return ['self_check_missing']
+    if kind == 'script':
+        spec = importlib.util.spec_from_file_location('managed_self_check_script', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        check = getattr(module, 'managed_self_check', None)
+        return ['self_check_missing'] if check is None else check(workdir)
+    with open(path, encoding='utf-8') as handle:
+        text = handle.read()
+    if kind == 'heading':
+        return [] if re.search(r'^#+ Managed projects[ \t]*$', text, re.M) else ['heading_missing']
+    data = json.loads(text)
+    routes = data.get('routes') if isinstance(data, dict) else data
+    qualified = isinstance(routes, list) and any(isinstance(r, dict) and r.get('status') == 'qualified' for r in routes)
+    return [] if qualified else ['no_qualified_route']
+try:
+    result = run()
+except Exception:
+    result = ['self_check_error']
+sys.stdout.write('\n' + %r + json.dumps(result, default=str) + '\n')
+''' % SELF_CHECK_MARK
 
 
 class Blocked(Exception):
-    def __init__(self, reason):
+    def __init__(self, reason, **detail):
         super().__init__(reason)
-        self.reason = reason
+        self.reason, self.detail = reason, detail
 
 
 def require(condition, reason):
@@ -186,7 +249,7 @@ class Service:
             require(required <= set(body) <= required | optional, 'invalid_request')
             result = getattr(self, '_' + name)(body)
         except Blocked as error:
-            result = dict(state='blocked', reason=error.reason)
+            result = dict(error.detail, state='blocked', reason=error.reason)
         except BudgetError as error:
             self.close()
             result = dict(state='blocked', reason=str(error))
@@ -306,9 +369,32 @@ class Service:
             ranking = dict(ranking, reason_codes=ranking['reason_codes'] + [problem])
         return ranking
 
+    def _managed(self):
+        """Whether this pinned service serves a managed project; an unreadable answer counts as managed."""
+        if self.project is None:
+            return False
+        try:
+            return routing_settings.managed_project(self.project, settings_path=self.settings_path) is not False
+        except Exception:  # noqa: BLE001 - fail closed: caller observations are refused
+            return True
+
+    def _collect(self, assignment):
+        """The collector's snapshot and `seen` revisions for a managed project; `seen` passes through as an opaque
+        mapping. A missing or failing collector admits nothing (`observations_unavailable`)."""
+        try:
+            result = importlib.import_module(COLLECTOR).collect(str(self.project), assignment)
+        except Exception:  # noqa: BLE001 - missing module (before C3-1) or a collector failure
+            raise Blocked('observations_unavailable') from None
+        require(type(result) is dict and {'observations', 'seen'} <= set(result) and type(result['seen']) is dict,
+                'observations_unavailable')
+        return result['observations'], result['seen']
+
     def _prepare(self, body):
         assignment = body['assignment']
         require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS, 'invalid_request')
+        managed = self._managed()
+        require(not managed or self.test_inputs or 'observations' not in body, 'observations_not_accepted')
+        require(managed or 'observations' in body, 'invalid_request')
         settings = self._settings()
         try:
             profile = routing.ensure_profile(body['job'])
@@ -324,24 +410,31 @@ class Service:
             require('table' not in body or self.test_inputs, 'invalid_request')
             ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                            profile_digest=profile['semantic_digest'])
-        observations = self._observations(body['observations'])
+        admitted = dict(assignment, role=role, complexity_band=profile['complexity_band'])
+        seen = None
+        if 'observations' in body:
+            observations = self._observations(body['observations'])
+        else:
+            collected, seen = self._collect(admitted)
+            observations = self._observations(collected)
+        echo = {} if seen is None else dict(seen=seen)  # C3-1's revisions, unchanged, in every answer that follows
         bound = self._workflow_binding(body, profile)
         if bound is not None and bound[0] != 'bound':
-            return dict(state=bound[0], reason=bound[1], reasons=[bound[1]]) if bound[0] == 'pending' \
-                else dict(state='blocked', reason=bound[1])
+            return dict(state=bound[0], reason=bound[1], reasons=[bound[1]], **echo) if bound[0] == 'pending' \
+                else dict(state='blocked', reason=bound[1], **echo)
         ledger = self._ledger(True, write=True)
         self._expire(ledger)
-        result = routing.admit(dict(assignment, role=role, complexity_band=profile['complexity_band']), ranking,
-                               settings, observations, ledger=ledger, workflow=None if bound is None else bound[1])
+        result = routing.admit(admitted, ranking, settings, observations, ledger=ledger,
+                               workflow=None if bound is None else bound[1])
         if result['status'] == 'pending':
             require(result['reason_code'] not in SHAPE_REASONS, result['reason_code'])
-            return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'])
+            return dict(state='pending', reason=result['reason_code'], reasons=result['reason_codes'], **echo)
         stored = result.get('binding') if isinstance(result.get('binding'), dict) else {}
         return dict(state='admitted', duplicate=result.get('duplicate', False), admission=_public(result),
                     workflow_bound=stored.get('job') is not None,
                     ranking=dict(strategy_ids=ranking['strategy_ids'], reason_codes=ranking['reason_codes'],
                                  table_version=ranking.get('table_version')),
-                    profile={key: profile[key] for key in PROFILE_FIELDS})
+                    profile={key: profile[key] for key in PROFILE_FIELDS}, **echo)
 
     def _workflow_binding(self, body, profile):
         """S3.5: read the canonical job the request names (before any ledger write) and bind to it.
@@ -352,9 +445,10 @@ class Service:
             return None
         locator = body['workflow']
         require(routing_gates.valid_locator(locator), 'invalid_request')
-        if self.project is not None:  # early refusal; the reader checks the checkout it actually resolves
-            cwd = Path(locator['cwd']).resolve()
-            require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
+        # Binding a workflow job needs the service pinned to its checkout (C.3 design 3.1 step 1), before any read.
+        require(self.project is not None, 'project_required')
+        cwd = Path(locator['cwd']).resolve()  # early refusal; the reader checks the checkout it actually resolves
+        require(cwd == self.project or self.project in cwd.parents, 'project_mismatch')
         try:
             view = self.workflow.view(dict(locator))
         except routing_gates.WorkflowChanged:
@@ -504,6 +598,8 @@ class Service:
             self._ledger(True, write=True).require_authority()
             return dict(state='updated', authority_required=True)
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
+        if type(body['change']) is dict and 'managed_projects' in body['change']:
+            body = dict(body, change=self._managed_change(body['change']))
         # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
         # so a change and a dispatch are totally ordered and `invalidated_attempts` is exact. A ledger that is absent,
         # busy, corrupt or unsafe must not stop a change (turning API Usage or Smart Routing off is a money stop):
@@ -526,6 +622,21 @@ class Service:
             if 'updated' in stage:  # written under the lock, then the ledger failed: report it as unordered
                 return dict(stage['updated'], invalidated_attempts=None, ledger_state=problem)
         return dict(self._update_settings(body, None, stage), invalidated_attempts=None, ledger_state=problem)
+
+    def _managed_change(self, change):
+        """`managed_projects` is one-shot only and stored as realpaths. Adding a project needs the activation gate
+        (C.3 design 4.2), which runs before any ledger lock and writes nothing when it fails; removal always works."""
+        require(not self.serving, 'operator_op_not_served')
+        try:
+            value = [str(Path(item).resolve()) for item in routing_settings._managed_projects(change['managed_projects'])]
+            routing_settings._managed_projects(value)  # still distinct once resolved
+        except (SettingsError, OSError, RuntimeError):
+            raise Blocked('invalid_managed_projects') from None
+        if set(value) - set(self._settings()['managed_projects']):
+            codes = activation_gate()
+            if codes:
+                raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
+        return dict(change, managed_projects=value)
 
     def _update_settings(self, body, data, stage):
         try:
@@ -586,6 +697,64 @@ def default_settings():
 def default_ledger():
     from runtime import usage_settings  # the one account-wide ledger Usage Routing already uses
     return usage_settings.directory() / 'organizations.sqlite3'
+
+
+def managed_service(checkout, scope=None):
+    """The only way production code builds an in-process service for a managed launch (C.3 design 3.3): pinned to
+    the realpath of `checkout`, on the default stores read at call time. A caller that holds the canonical delegation
+    scope passes it and every locator resolves to it; the reader still compares its root with the pin."""
+    project = Path(checkout).resolve()
+    resolve = None if scope is None else (lambda locator: scope)
+    return Service(default_settings(), default_ledger(), project=project,
+                   workflow=routing_gates.D6Workflow(resolve=resolve, project=project))
+
+
+def _package():
+    from runtime import state  # the plugin package root, never the project checkout
+    return state.PACKAGE
+
+
+def _self_check(kind, target):
+    """One capability's self-check in a child of this interpreter, in a fresh owner-only sandbox with a fixed
+    environment, deleted afterwards. Returns its failure codes ([] when it passes)."""
+    folder = Path(tempfile.mkdtemp(prefix='routing-self-check-')).resolve()
+    try:
+        for name in ('home', 'tmp', 'work'):
+            (folder / name).mkdir(mode=0o700)
+        env = dict(PATH='/usr/bin:/bin', HOME=str(folder / 'home'), TMPDIR=str(folder / 'tmp'), LANG='C.UTF-8')
+        child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, str(_package()), kind, target,
+                                  str(folder / 'work')], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, env=env, cwd=folder / 'work', start_new_session=True)
+        try:
+            output, _ = child.communicate(timeout=SELF_CHECK_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)  # the whole process group, not just the child
+            except OSError:
+                pass
+            child.communicate()
+            return ['self_check_timeout']
+        lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
+        try:
+            codes = json.loads(lines[-1][len(SELF_CHECK_MARK):])
+        except (IndexError, ValueError):
+            return ['self_check_error']
+        if type(codes) is not list or len(codes) > 16 or not all(
+                type(code) is str and SELF_CHECK_CODE.fullmatch(code) for code in codes):
+            return ['self_check_invalid']
+        return codes if child.returncode == 0 or codes else ['self_check_error']
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def activation_gate():
+    """The failing capabilities as {name: codes}; empty when every self-check passes."""
+    failures = {}
+    for name, kind, target in CAPABILITIES:
+        codes = _self_check(kind, target)
+        if codes:
+            failures[name] = codes
+    return failures
 
 
 def _arguments(argv):
