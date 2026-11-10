@@ -154,7 +154,7 @@ class ManagedSelectionModes(ManagedDelegation):
         def windows(pool, now):
             if pool == 'fixture-codex-subscription' and spent['value']:
                 return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
-                             observed_at=now)]
+                             observed_at=now, unit=routing_observations.WINDOW_UNIT)]
             return None
         request = self.prepare_request()
         with self.managed(NATIVE, windows=windows):
@@ -216,7 +216,7 @@ class ManagedRelease(ManagedDelegation):
         def windows(pool, now):
             if spent['value']:
                 return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
-                             observed_at=now)]
+                             observed_at=now, unit=routing_observations.WINDOW_UNIT)]
             return None
         request = self.routed_request()
         with self.managed(NATIVE, windows=windows):  # worker_choices list the fixture CHOICE first

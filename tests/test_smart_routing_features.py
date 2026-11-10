@@ -192,8 +192,11 @@ def managed_project_fixture(test, checkout, routes=()):
     # Rule 2: the checkout is managed, and the collector reads the fixture source.
     manifest = [dict(route='fixture-choice', status='qualified', **{key: CHOICE[key] for key in routing.ROUTE_IDENTITY},
                      billing_class='included_subscription', pool='fixture-choice-subscription',
-                     account='fixture-choice-subscription', demand={'5h': 10}, binding_enforceable=True)]
+                     account='fixture-choice-subscription', demand={'5h': 10}, binding_enforceable=True,
+                     window_unit=observations.WINDOW_UNIT)]
     for route, host, fields, billing, pool, demand, extra in mapped:
+        if billing == 'included_subscription':  # its demand is in the collector's window unit (C3-1b)
+            extra = dict(extra, window_unit=observations.WINDOW_UNIT)
         manifest.append(dict(route=route, status='qualified', **launch.route_identity(host, **fields),
                              billing_class=billing, pool=pool, account=pool, demand=demand, **extra))
 
@@ -202,7 +205,7 @@ def managed_project_fixture(test, checkout, routes=()):
             return [dict(id='credit', limit=10**12, used=0, length=None, reset_at=None, rolling=False, observed_at=now,
                          organization='fixture-openrouter', organization_revision=revision)]
         return [dict(id='5h', limit=1000, used=100, length=18000, reset_at=now + 3600, rolling=False,
-                     observed_at=now)]
+                     observed_at=now, unit=observations.WINDOW_UNIT)]
 
     def credential(route, scope):
         return dict(state='ready', scope=scope, ref='fixture-openrouter') if route['billing_class'] == 'gateway' \

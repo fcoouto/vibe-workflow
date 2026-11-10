@@ -17,6 +17,7 @@ import subprocess
 import sys
 
 from runtime import routing, routing_observations, routing_settings
+from runtime.adapters import opencode as opencode_adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6); `project_required` is the routing service's own code.
 PROJECT_REQUIRED = 'project_required'
@@ -29,9 +30,11 @@ CATALOG_MISMATCH = 'catalog_mismatch'
 ROUTE_NOT_ENTITLED = 'route_not_entitled'
 DOLLAR_ROUTE_NEEDS_ENFORCED_HOST = 'dollar_route_needs_enforced_host'
 
-# host -> (provider, harness); a None provider comes from the host's own request.
+# host -> (provider, harness); a None provider comes from the host's own request. A None harness is the OpenCode
+# shim's name for the provider (`harnessFor` in runtime/adapters/opencode_plugin.ts, `HARNESS` in the Python adapter),
+# because the shim's `routing.attach` checks an admission with exactly that name.
 HOSTS = dict(codex_native=('openai', 'codex-native'), openrouter_proposal=('openrouter', 'openrouter-proposal'),
-             openrouter_worker=('openrouter', 'opencode'), opencode=(None, 'opencode'), api_usage=('openai', 'api'))
+             openrouter_worker=('openrouter', None), opencode=(None, None), api_usage=('openai', 'api'))
 PINNED_ENDPOINT = ('openrouter_proposal', 'openrouter_worker')  # the request's `provider` is the pinned endpoint
 # Advisory hosts cannot block a send before it happens, so they never get a dollar route (C.3 design 3.7).
 ADVISORY_HOSTS = ('codex_native',)
@@ -53,16 +56,28 @@ def route_identity(host, **fields):
     if host not in HOSTS:
         raise ValueError('unknown_host')
     provider, harness = HOSTS[host]
+    provider = fields.get('provider') if provider is None else provider
+    if harness is None:
+        harness = shim_harness(provider) if routing._text(provider) else None
     effort = fields.get('effort')
-    value = dict(provider=fields.get('provider') if provider is None else provider, model=fields.get('model'),
-                 effort='none' if effort is None else effort, harness=harness)
+    value = dict(provider=provider, model=fields.get('model'), effort='none' if effort is None else effort,
+                 harness=harness)
     if not all(routing._text(item) for item in value.values()):
         raise ValueError('invalid_route_identity')
     return value
 
 
+def shim_harness(provider):
+    """The harness the OpenCode shim names `provider` with (`harnessFor`); tests compare it with the shim itself."""
+    return opencode_adapter.HARNESS.get(provider, 'opencode provider %s' % provider)
+
+
 def pinned_endpoint(host, **fields):
-    """The OpenRouter endpoint a gateway host pins (its request's `provider`), else None."""
+    """The OpenRouter endpoint a gateway host pins (its request's `provider`), else None.
+
+    Not part of the route identity yet: until an identity extension adds it, the manifest refuses two qualified
+    routes that differ only by endpoint (`routing_observations.validate_routes`), and a gateway host compares this
+    value with its admitted manifest route's `endpoint`."""
     return fields.get('provider') if host in PINNED_ENDPOINT else None
 
 
@@ -74,9 +89,8 @@ def choice(host, funding, **fields):
     return dict(route_identity(host, **fields), funding=funding)
 
 
-def assignment_scope(checkout):
-    """The assignment `scope` credential readiness is compared with: a digest of the checkout's real path."""
-    return 'project:' + hashlib.sha256(os.fsencode(os.path.realpath(checkout))).hexdigest()[:32]
+# The assignment `scope` credential readiness is compared with; the collector derives gateway credentials with it.
+assignment_scope = routing_observations.assignment_scope
 
 
 def unplanned_job(role, scope_ref, objective, *, tools=None):
@@ -190,8 +204,9 @@ def admitted_check(admission, *, host, catalog, settings_path=None, source=None)
         return None, DOLLAR_ROUTE_NEEDS_ENFORCED_HOST
     if source is not None or settings_path is not None:
         try:
-            listed = {route['route']: route for route in (source or routing_observations.default_source(settings_path))
-                      .manifest() if type(route) is dict and route.get('status') == 'qualified'}
+            listed = {route['route']: route for route in routing_observations.manifest_routes(
+                source or routing_observations.default_source(settings_path))
+                if type(route) is dict and route.get('status') == 'qualified'}
             marks = routing_observations.entitlement_marks(settings_path) if settings_path is not None else []
         except (OSError, ValueError, KeyError, TypeError):
             return None, ROUTE_NOT_ENTITLED
@@ -371,9 +386,10 @@ def _self_check_in_child(workdir):
     identity = route_identity('codex_native', model='self-check-model', effort='high')
     source = routing_observations.StaticSource(
         [dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
-              account='self-check', demand={'5h': 1}, binding_enforceable=True, **identity)],
+              account='self-check', demand={'5h': 1}, binding_enforceable=True,
+              window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
-                               observed_at=at)])
+                               observed_at=at, unit=routing_observations.WINDOW_UNIT)])
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source

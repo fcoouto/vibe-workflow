@@ -76,9 +76,9 @@ MAX_PAGES = 200
 # provider's utilization, so a manifest route's `demand` for these windows is in the same unit.
 RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 WINDOW_UNITS = 1000
-# The unit each stored window declares, in the field `unit`. The collector (C3-1b) adds the field and rejects a unit
-# its manifest route does not declare; until its WINDOW_FIELDS includes `unit`, windows are stored without it.
-WINDOW_UNIT = 'utilization_thousandths'
+# The unit each stored window declares, in the field `unit`: the collector's own name, which it compares with the
+# manifest route's `window_unit` and refuses when missing or different.
+WINDOW_UNIT = routing_observations.WINDOW_UNIT
 
 
 class Unconfirmed(Exception):
@@ -90,19 +90,10 @@ class ServerUnavailable(Exception):
 
 
 # -- identities, profile and server configuration ----------------------------------------------------------------
-def harness(provider):
-    """The harness name the shim checks with (`harnessFor` in the plugin, `HARNESS` in the adapter)."""
-    return adapter.HARNESS.get(provider, 'opencode provider %s' % provider)
-
-
-def identity(provider, model, variant):
-    return dict(provider=provider, model=model, effort='none' if variant is None else variant,
-                harness=harness(provider))
-
-
 def choice(provider, model, variant, funding='subscription'):
-    """An explicit `assignment.choice` for an OpenCode route, in the shim's route identity."""
-    return dict(identity(provider, model, variant), funding=funding)
+    """An explicit `assignment.choice` for an OpenCode route, in the shim's route identity
+    (`routing_launch.route_identity('opencode', ...)`)."""
+    return routing_launch.choice('opencode', funding, provider=provider, model=model, effort=variant)
 
 
 def rule_effect(rules, action):
@@ -295,7 +286,11 @@ def catalog(host):
         variants = [item if isinstance(item, str) else (item or {}).get('id') if isinstance(item, dict) else None
                     for item in model.get('variants') or []]
         for variant in [item for item in variants if isinstance(item, str)] or [None]:
-            entries.append(identity(model['providerID'], model['id'], variant))
+            try:
+                entries.append(routing_launch.route_identity('opencode', provider=model['providerID'],
+                                                             model=model['id'], effort=variant))
+            except ValueError:  # an entry no admitted identity could ever match (routing.route_identity is None)
+                continue
     return entries
 
 
@@ -542,12 +537,9 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
     admission = result.get('admission') or {}
     if admission.get('billing_class') == 'included_subscription':
-        declared = 'unit' in routing_observations.WINDOW_FIELDS  # the collector's field, matched by name
         try:  # telemetry for the collector; an unusable observation is skipped, never fatal
             for window in windows(attempt.read['result'].get('rate_limit')):
-                stored = window if declared else {key: item for key, item in window.items() if key != 'unit'}
-                routing_observations.store_window(settings_path, admission['pool'], stored)
-                result['window_unit_recorded'] = declared
+                routing_observations.store_window(settings_path, admission['pool'], window)
         except (OSError, ValueError, KeyError, TypeError):
             result['windows_stored'] = False
     if attempt.read['not_entitled']:
@@ -623,7 +615,7 @@ class _SelfCheckHost:
             return (200, dict(state='ok', managed_denies=list(self.denies))) if self.healthy else (500, None)
         self.tokens.append(payload.get('authority'))
         if method == 'attach':
-            facts = dict(provider='self-check', model='self-check-model', variant='high', harness=harness('self-check'),
+            facts = dict(provider='self-check', model='self-check-model', variant='high', harness=routing_launch.shim_harness('self-check'),
                          kind='primary', funding_pool=payload['funding_pool'])
             answer = self.shim.handle(json.dumps(dict(v=1, op='check', attempt_id=payload['attempt_id'],
                                                       session_id=payload['session_id'], authority=payload['authority'],
@@ -720,10 +712,11 @@ def _self_check_in_child(workdir):
     checkout.mkdir(mode=0o700)
     picked = choice('self-check', 'self-check-model', 'high')
     spec = dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
-                account='self-check', demand={'5h': 1}, binding_enforceable=True,
+                account='self-check', demand={'5h': 1}, binding_enforceable=True, window_unit=WINDOW_UNIT,
                 **{key: picked[key] for key in routing.ROUTE_IDENTITY})
     source = routing_observations.StaticSource([spec], lambda pool, at: [dict(
-        id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at)])
+        id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
+        unit=WINDOW_UNIT)])
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source

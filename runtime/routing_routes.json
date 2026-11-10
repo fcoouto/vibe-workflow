@@ -3,6 +3,8 @@
   "decision": "pending: C.3 design 7.1 user decision 5",
   "source": "docs/smart-routing-capability-matrix.md",
   "note": "Production routes are added with their classification only after user decision 5. Until then no route is qualified, so the collector admits nothing from this file and the activation gate fails closed.",
+  "window_unit": "utilization_thousandths",
+  "endpoint_rule": "Gateway routes name their pinned OpenRouter endpoint in `endpoint`. The route identity (provider, model, effort, harness) has no endpoint yet, so two qualified routes with the same identity must name the same endpoint, or the whole manifest is refused (routing_observations.validate_routes).",
   "routes": [
     {
       "route": "test-only-subscription",
