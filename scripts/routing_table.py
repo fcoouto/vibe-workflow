@@ -10,10 +10,12 @@ The four inputs are the JSON shapes `runtime.routing_evidence` documents. The ta
 reads and writes local files only: no network, model, subprocess or secret access. Spawn paths, hooks and
 startup never run it; the maintenance procedure is clients/guidance-publication.md#strategy-table-refresh.
 
-It prints one JSON line. Exit 0 when a fresh table was written; 1 when the last verified table was kept
-(`kept`, marked `refresh_failed` with its original `compiled_at`) or nothing could be written (`blocked`);
-2 for a usage error.
+Inputs must be regular files, not symlinks, FIFOs or devices (`unsafe_input`). It prints one JSON line.
+Exit 0 when a fresh table was written (`refreshed`); 1 when the last verified table was kept (`kept`, marked
+`refresh_failed` with its original `compiled_at`) or nothing was written (`blocked`); 2 for a usage error.
+A `dir_sync_failed` warning means the table was written but the folder sync after the rename failed.
 """
+import errno
 import hashlib
 import json
 import math
@@ -39,6 +41,10 @@ class Blocked(Exception):
     pass
 
 
+class UnsafeInput(ValueError):
+    pass
+
+
 def _now():
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
@@ -56,12 +62,34 @@ def _parse(raw):
                       parse_float=_finite)
 
 
+def _read_regular(path, limit):
+    """At most ``limit + 1`` bytes of a regular file that is not a symlink. The path is checked before it is
+    opened, so a link, FIFO or device is never opened; the open descriptor is checked again against a swap."""
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        raise UnsafeInput('Not a regular file')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise UnsafeInput('Not a regular file')
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = os.read(fd, limit + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
 def _read_input(path):
-    # Non-blocking open so a FIFO or device is refused instead of waiting for a writer.
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), 'rb') as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise ValueError('Evidence input is not a regular file')
-        raw = handle.read(MAX_INPUT + 1)
+    try:
+        raw = _read_regular(path, MAX_INPUT)
+    except OSError as error:
+        if error.errno == errno.ELOOP:  # O_NOFOLLOW met a link swapped in after the check
+            raise UnsafeInput('Symlinked input') from None
+        raise
     if len(raw) > MAX_INPUT:
         raise ValueError('Evidence input too large')
     return raw
@@ -84,7 +112,8 @@ def _previous(path):
     if info.st_size > reader.MAX_TABLE:
         return None
     try:
-        value = _parse(path.read_bytes())
+        raw = _read_regular(path, reader.MAX_TABLE)
+        value = None if len(raw) > reader.MAX_TABLE else _parse(raw)
     except (ValueError, RecursionError, reader.Blocked, OSError):
         return None
     compiled = (type(value) is dict and reader._table_shape(value) and value.get('schema') == routing_evidence.SCHEMA
@@ -100,7 +129,10 @@ def _encode(table):
 
 
 def _write(path, data):
-    """Atomic replace: private temp file in the same folder, fsync, rename, fsync the folder."""
+    """Atomic replace: private temp file in the same folder, fsync, rename, fsync the folder.
+
+    Returns warnings. Once the rename has happened the table is written, so a failed folder sync is a
+    warning, not a failure."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         usage_budget.private(path.parent, True)
@@ -110,7 +142,12 @@ def _write(path, data):
         raise Blocked('unsafe_table_path') from None
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.strategy-table.', suffix='.tmp')
     try:
-        with os.fdopen(fd, 'wb') as handle:
+        try:
+            handle = os.fdopen(fd, 'wb')
+        except OSError:
+            os.close(fd)
+            raise
+        with handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
@@ -118,23 +155,31 @@ def _write(path, data):
     except OSError:
         Path(temp).unlink(missing_ok=True)
         raise Blocked('write_failed') from None
-    folder = os.open(path.parent, os.O_RDONLY)
     try:
-        os.fsync(folder)
-    finally:
-        os.close(folder)
+        folder = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    except OSError:
+        return ['dir_sync_failed']
+    return []
 
 
 def refresh(table_path, sources, now=None):
     """Compile from local files and write the table; returns the one-line report."""
     path = reader._resolved(table_path)
     previous = _previous(path)
-    digests = {}
+    digests, problem = {}, {}
 
     def load():
         values = []
         for name in INPUTS:
-            raw = _read_input(sources[name])
+            try:
+                raw = _read_input(sources[name])
+            except UnsafeInput:
+                problem['reason'] = 'unsafe_input'
+                raise
             digests[name] = hashlib.sha256(raw).hexdigest()
             values.append(_parse(raw))
         return values
@@ -155,12 +200,15 @@ def refresh(table_path, sources, now=None):
             except ValueError:  # the failure mark does not fit: leave the verified file exactly as it is
                 table, data = dict(previous, refresh_failed=True), None
     except ValueError:
-        raise Blocked('no_verified_table') from None
-    if data is not None:
-        _write(path, data)
-    state = 'kept' if table.get('refresh_failed') else 'refreshed'
-    return dict(v=VERSION, state=state, version=table['version'], compiled_at=table['compiled_at'],
-                rows=len(table['rows']), dropped=len(table.get('dropped', [])))
+        raise Blocked(problem.get('reason', 'no_verified_table')) from None
+    warnings = _write(path, data) if data is not None else []
+    report = dict(v=VERSION, state='refreshed', version=table['version'], compiled_at=table['compiled_at'],
+                  rows=len(table['rows']), dropped=len(table.get('dropped', [])))
+    if table.get('refresh_failed'):
+        report.update(state='kept', reason=problem.get('reason', 'refresh_failed'))
+    if warnings:
+        report['warnings'] = warnings
+    return report
 
 
 def _arguments(argv):

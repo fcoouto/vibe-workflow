@@ -55,10 +55,13 @@ python3 -B scripts/routing_table.py refresh --guidance GUIDANCE.json \
 
 It writes `strategy-table.json` beside the routing settings file (or `--table`),
 where `scripts/routing.py` reads it, and makes no network, model or secret
-access. It prints one JSON line: `refreshed` (exit 0) wrote a new table; `kept`
-(exit 1) kept the last verified table; `blocked` (exit 1) wrote nothing, for
-example on a symlinked or shared target. Report a `kept` or `blocked` result as a
-maintenance finding; it never blocks delegation. Code drops rows naming unavailable models,
+access. Inputs must be regular files, not symlinks or devices. It prints one
+JSON line: `refreshed` (exit 0) wrote a new table; `kept` (exit 1) kept the last
+verified table; `blocked` (exit 1) wrote nothing, for example on a symlinked or
+shared target or input; a usage error exits 2. A `dir_sync_failed` warning
+means the table was written but may not survive a crash; rerun the refresh.
+Report a `kept`, `blocked` or warning result as a maintenance finding; it never
+blocks delegation. Code drops rows naming unavailable models,
 unsupported efforts or harnesses, and rows without cited evidence. Profiling or
 ranking models also need known endpoint terms that allow confidential data
 (`forbids_confidential: false`). An active integration covers endpoints that may
