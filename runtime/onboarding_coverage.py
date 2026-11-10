@@ -12,8 +12,9 @@ def coverage_problem(row, evidence, decisions):
         if row["mandatory"]:
             return "Mandatory adoption cannot be omitted by runtime inapplicability"
         if row["applicability"] == "applicable" and not any(
-                decisions[ref]["disposition"] in USER_DECISIONS for ref in row["decision_ids"]):
-            return "Applicable component cannot be omitted without a linked user decision"
+                decisions[ref]["disposition"] in USER_DECISIONS and decisions[ref]["rule"] == row["id"]
+                for ref in row["decision_ids"]):
+            return "Applicable component cannot be omitted without a linked user decision for it"
     elif outcome == "planned" and not row["actions"]:
         return "Planned adoption lacks exact proposed actions"
     elif outcome == "blocked":

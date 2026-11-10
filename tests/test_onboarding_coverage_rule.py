@@ -1,4 +1,6 @@
-"""An applicable catalog component ends `omit` only through a recorded user decision."""
+"""An applicable catalog component ends `omit` only through a recorded user decision.
+
+The `new-tool` row stands in for the 2026-11-08 Graphify row: applicable, absent, `omit`."""
 
 import unittest
 
@@ -20,11 +22,11 @@ class CoverageRuleTests(unittest.TestCase):
         row.update(actions=[], reason="assessed for this project", **changes)
         return request, row
 
-    def user_decision(self, disposition="confirmed", selected="decline"):
-        return {"id": "decline-new-tool", "rule": "new-tool", "source": "README.md", "scope": "checkout",
-            "options": ["adopt", "decline"], "recommendation": "adopt", "selected": selected,
-            "disposition": disposition, "provenance": "user answered in their own words",
-            "evidence": ["inventory"], "affected_actions": [], "invalidate_on": ["README.md"],
+    def user_decision(self, disposition="confirmed", selected="Not now", evidence=("inventory",), rule="new-tool"):
+        return {"id": "decline-new-tool", "rule": rule, "source": "README.md", "scope": "checkout",
+            "options": ["Yes, set it up now", "Not now"], "recommendation": "Yes, set it up now",
+            "selected": selected, "disposition": disposition, "provenance": "user answered the preference question",
+            "evidence": list(evidence), "affected_actions": [], "invalidate_on": ["README.md"],
             "conflict": False, "mode": None}
 
     def submit(self, request):
@@ -59,6 +61,22 @@ class CoverageRuleTests(unittest.TestCase):
 
     def test_a_proposed_decision_does_not_count(self):
         self.assert_pending_decision_does_not_count("proposed")
+
+    def test_a_decision_about_another_component_does_not_count(self):
+        request, row = self.row_and_request(outcome="omit", applicability="applicable")
+        request["decisions"] = [self.user_decision(rule="fixture")]
+        row["decision_ids"] = ["decline-new-tool"]
+        report = self.submit(request)
+        self.assertNotEqual(report["status"], "ready_for_review")
+        self.assertIn("linked user decision", " ".join(self.reasons(report)))
+
+    def test_an_inherited_decision_without_evidence_blocks_the_plan(self):
+        request, row = self.row_and_request(outcome="omit", applicability="applicable")
+        request["decisions"] = [self.user_decision("inherited", evidence=())]
+        row["decision_ids"] = ["decline-new-tool"]
+        report = self.submit(request)
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("Inherited choice lacks evidence", " ".join(self.reasons(report)))
 
     def test_inapplicable_omit_with_a_reason_passes_without_a_decision(self):
         request, row = self.row_and_request(outcome="omit", applicability="inapplicable")
