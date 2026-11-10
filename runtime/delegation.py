@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import delegation_routing, evidence, routing, state
+from runtime import delegation_routing, evidence, routing, startup, state
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -1596,7 +1596,7 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
             matches.append(record)
     if not matches and prepared:
         if event.kind == 'PreToolUse' and event.transcript_path is not None:
-            deadline = budget['deadline'] if budget is not None else time.monotonic() + 4
+            deadline = budget['deadline'] if budget is not None else time.monotonic() + startup.OBSERVATION_SECONDS
             lineage = codex.guarded_child_lineage(event, deadline=deadline)
             matches = [record for record in prepared if
                 record['owner']['session_id'] == lineage['parent_session_id'] and all(

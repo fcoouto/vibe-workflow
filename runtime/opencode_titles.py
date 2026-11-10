@@ -135,7 +135,7 @@ def _session(session):
 
 def _title(title):
     parsed = _parsed(title)
-    if (parsed is None or parsed['layout'] != 'status-after-meter' or not title.startswith(METER_PREFIX)
+    if (parsed is None or not title.startswith(METER_PREFIX)
             or len(title.removeprefix(METER_PREFIX)) > MAX_TITLE_BODY):
         raise ValueError('Invalid managed title')
 
@@ -149,7 +149,7 @@ def _blocked(current, baseline):
     if current == baseline:
         return None
     before, after = _parsed(baseline), _parsed(current)
-    if before and after and all(before[k] == after[k] for k in ('meter', 'family', 'member', 'status', 'layout')):
+    if before and after and all(before[k] == after[k] for k in ('meter', 'status')):
         return dict(ok=False, deferred=True, reason='topic_changed', topic=after['topic'])
     return dict(ok=False, deferred=True, reason='manual_title')
 

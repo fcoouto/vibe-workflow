@@ -30,8 +30,6 @@ When considering a Usage Routing proposal on an active scope, load its [proposal
 
 Before optional automatic native delegation, honor the [project preference](../skills/workstreams/references/procedure.md), read with `features status`. Onboarding and the Workstreams skill manage this same Enabled/Disabled choice. It needs no managed runtime. Explicit delegation and required independent review remain available when disabled or not configured. Preserve explicitly selected protections.
 
-For native delegation, load the [display naming rules](../clients/workstreams-naming.md) to assess parent/child eligibility, including ordinary workers and independent reviewers. Follow their implementation trigger; dispatch alone does not authorize title adoption. This route is independent of Workstreams feature preferences and does not select managed task controls.
-
 For role preparation, follow the [shared contract](../clients/worker-visibility.md#declare-before-dispatch) and its applicable native or external procedure.
 
 Resource admission and capacity recovery are independent preferences. A new supported scope with no saved choice starts with both enabled; preserve each existing choice, including a legacy combined choice where separate settings do not exist. The [Workstreams skill](../skills/workstreams/SKILL.md) routes naming, feature controls, heavy resource work and parent recovery. Ordinary delegation and its shared dependency, continuation, ownership and acceptance checks apply in all four preference combinations. Resource-managed coordinator, worker and reviewer phases require current resource authority; parent recovery registration requires current recovery authority and no resource lease. A stale/disabled feature permission never authorizes the other feature. Uncertain recovery state does not block ordinary delegation or resource admission. Saved preferences grant no route, ownership, budget or native capability; load only the applicable operation procedure.
@@ -74,15 +72,16 @@ integration. Small integration fixes are reasonable. Keeping most feature
 implementation in the coordinator needs a task-specific reason.
 
 Outcome ownership is responsibility; a native child is its reusable execution
-context. A worktree separates checkout files. A user-owned sidebar chat is a
-separate conversation: create one only on explicit user request. Prefer separate
+context. Delegated work runs only in native children that one coordinator starts;
+children start none of their own. A separate chat the user asks for is an
+independent conversation, outside the task's delegation. A worktree separates
+checkout files. Prefer separate
 worktrees for independent concurrent reviewable outcomes when useful. Preserve
 partial work in place rather than migrate it merely for presentation.
 
 Owners are not simultaneous workers. Decide dependent interfaces before affected
 work; start ready independent outcomes just in time within actual host capacity
-and the original budgets. A backlog does not establish capacity. Keep outcome-to-child bindings and the
-[family/member mapping](../clients/workstreams-naming.md) in the existing task
+and the original budgets. A backlog does not establish capacity. Keep outcome-to-child bindings in the existing task
 record. Use [handoff and supervision](#progress-and-result-retrieval) for checkpoint
 receipt and continuation.
 
@@ -98,9 +97,8 @@ receipt and continuation.
 Children report to the brief's one coordinator through its permitted route, using the
 [compact child report](07-context-and-handoff.md#lifecycle-record-and-reports)
 and its report triggers rather than repeating the assignment.
-Use native completion/attention delivery. Separate sidebar peer chats may push
-only with direct human authorization to message the recipient; a coordinator's
-brief grants none. Otherwise report locally for coordinator retrieval.
+Use native completion/attention delivery; otherwise report locally for
+coordinator retrieval.
 
 The coordinator collects and records receipt in the existing plan, then applies
 [review and integration](#review-integration-and-recovery) before acceptance.

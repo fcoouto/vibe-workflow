@@ -13,7 +13,7 @@ from unittest.mock import patch
 from runtime import opencode_titles, title_sync
 
 SESSION = 'ses_0123456789abcdefghijklmnop'
-DESIRED = title_sync.format_title('W1', 'P', 'Thread naming', 'WORKING', 1)
+DESIRED = title_sync.format_title('Thread naming', 'WORKING', 1)
 FAKE = r'''#!{python} -I
 """Fake `opencode api`: one scripted behavior per call; titles persist in state."""
 import json, os, sys, time
@@ -214,7 +214,8 @@ class OpenCodeTitleTests(unittest.TestCase):
                 self.assertEqual(self.deliver(session=session),
                                  dict(ok=False, deferred=False, reason='invalid_request'))
         for desired in ('My title', DESIRED + '\n', DESIRED.removeprefix('￻'), None,
-                        '▰▰▱▱▱ [W1] P · Thread naming · WORKING'):
+                        '▰▰▱▱▱ [' + 'W1] P · Thread naming · WORKING',
+                        DESIRED.replace(' Thread', ' [' + 'W1] P · Thread')):
             with self.subTest(desired=desired):
                 self.assertEqual(self.deliver(desired=desired),
                                  dict(ok=False, deferred=False, reason='invalid_request'))
@@ -222,7 +223,7 @@ class OpenCodeTitleTests(unittest.TestCase):
 
     def test_title_is_one_argv_element_without_shell_interpolation(self):
         topic = 'It\'s "$(touch pwned)" `id` $HOME; echo'
-        desired = title_sync.format_title('W1', 'P', topic, 'WORKING', 1)
+        desired = title_sync.format_title(topic, 'WORKING', 1)
         fake = FakeOpenCode(self)
         self.assertTrue(self.deliver(desired=desired)['ok'])
         self.assertEqual(fake.title, desired)
@@ -261,7 +262,7 @@ class OpenCodeTitleTests(unittest.TestCase):
         self.assertNotIn('session.update', [call[1] for call in fake.calls])
 
     def test_without_baseline_empty_default_or_managed_titles_are_written(self):
-        older = title_sync.format_title('W1', 'P', 'Thread naming', 'REVIEW', 2, user_attention=True)
+        older = title_sync.format_title('Thread naming', 'REVIEW', 2, user_attention=True)
         for current in ('', None, 'New session - 2026-11-08T10:11:12.345Z',
                         'Child session - 2026-11-08T10:11:12.345Z', older):
             with self.subTest(current=current):
@@ -270,12 +271,12 @@ class OpenCodeTitleTests(unittest.TestCase):
                 self.assertEqual(fake.title, DESIRED)
 
     def test_baseline_mismatch_follows_manual_title_rules(self):
-        baseline = title_sync.format_title('W1', 'P', 'Thread naming', 'REVIEW', 2, user_attention=True)
+        baseline = title_sync.format_title('Thread naming', 'REVIEW', 2, user_attention=True)
         topic_edit = baseline.replace('Thread naming', 'Better naming')
         for current, expected in ((topic_edit, dict(ok=False, deferred=True, reason='topic_changed',
                                                       topic='Better naming')),
                                   ('Custom title', dict(ok=False, deferred=True, reason='manual_title')),
-                                  (baseline.replace('W1', 'W2'), dict(ok=False, deferred=True, reason='manual_title'))):
+                                  (baseline.replace('▰▰▱▱▱', '▰▰▰▱▱'), dict(ok=False, deferred=True, reason='manual_title'))):
             with self.subTest(current=current):
                 fake = FakeOpenCode(self, title=current)
                 self.assertEqual(self.deliver(baseline=baseline), expected)
@@ -293,7 +294,7 @@ class OpenCodeTitleTests(unittest.TestCase):
         state = fake.state()
         state['titles'][SESSION] = 'Renamed by the user'
         fake.save(state)
-        later = title_sync.format_title('W1', 'P', 'Thread naming', 'REVIEW', 2, user_attention=True)
+        later = title_sync.format_title('Thread naming', 'REVIEW', 2, user_attention=True)
         self.assertEqual(self.deliver(desired=later, baseline=result['baseline']),
                          dict(ok=False, deferred=True, reason='manual_title'))
         self.assertEqual(fake.title, 'Renamed by the user')
@@ -307,8 +308,7 @@ class OpenCodeTitleTests(unittest.TestCase):
         fake = FakeOpenCode(self, title=long_title)
         self.assertEqual(self.deliver(adopt=True)['previous'], None)
         self.assertEqual(fake.title, DESIRED)
-        self.assertNotIn('previous', self.deliver(desired=title_sync.format_title(
-            'W1', 'P', 'Thread naming', 'WORKING', 2), baseline=DESIRED))
+        self.assertNotIn('previous', self.deliver(desired=title_sync.format_title('Thread naming', 'WORKING', 2), baseline=DESIRED))
 
     def test_adopt_is_not_sticky_across_calls(self):
         fake = FakeOpenCode(self, title='Generated summary of the chat')
