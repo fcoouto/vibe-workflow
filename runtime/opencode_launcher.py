@@ -323,12 +323,19 @@ def _descendants(host, root):
     return found, [dict(session_id=sid, parent_session_id=parent) for sid, parent in parents.items()][:1024]
 
 
-def _not_entitled(messages):
-    """Whether an assistant message carries the provider's refusal of the route for this account: HTTP 400 with
-    `model_not_found` in the upstream body (C.3 design 3.4; clients/opencode.md#route-identity)."""
+def _not_entitled(messages, route):
+    """Whether one of the primary session's own assistant messages, on the admitted route itself, carries the
+    provider's refusal of that route for this account: HTTP 400 with `model_not_found` in the upstream body (C.3
+    design 3.4; clients/opencode.md#route-identity). A child session's or another model's refusal is not this route's."""
+    if not isinstance(route, dict):
+        return False
+    admitted = dict(providerID=route.get('provider'), id=route.get('model'), variant=route.get('variant'))
     for message in messages:
         error = message.get('error') if isinstance(message, dict) and message.get('type') == 'assistant' else None
         if not isinstance(error, dict) or error.get('status') != 400:
+            continue
+        model = message.get('model') if isinstance(message.get('model'), dict) else {}
+        if {key: model.get(key) for key in admitted} != admitted:
             continue
         response = error.get('response') if isinstance(error.get('response'), dict) else {}
         if 'model_not_found' in str(response.get('body') or ''):
@@ -336,17 +343,17 @@ def _not_entitled(messages):
     return False
 
 
-def account(host, root, *, funding, attempt, authority):
+def account(host, root, *, funding, attempt, authority, route=None):
     """Re-read the attempt and account it (clients/opencode.md wiring steps 2-5): the root and every page of its
     messages, every descendant by `parentID`, then `routing.descendants` while the root is still attached (None when
-    the call failed), then `usage_from_messages` with `children`, `lineage` and `shim_descendants`."""
+    the call failed), then `usage_from_messages` with `children`, `lineage` and `shim_descendants`. `route` is the
+    admitted route (`provider`, `model`, `variant`); only the root's refusal on it counts as `not_entitled`."""
     raw = _messages(host, root)
     total = opencode_accounting.normalize_session(_data(_get(host, '/api/session/%s' % root)))
     found, lineage = _descendants(host, root)
-    children, seen = [], list(raw)
+    children = []
     for child in found:
         messages = _messages(host, child)
-        seen.extend(messages)
         children.append(dict(opencode_accounting.normalize_session(_data(_get(host, '/api/session/%s' % child))),
                              messages=[adapter.normalize_message(item) for item in messages], complete=True))
     try:
@@ -357,7 +364,7 @@ def account(host, root, *, funding, attempt, authority):
     result = opencode_accounting.usage_from_messages(
         [adapter.normalize_message(item) for item in raw], total['tokens'], session_id=root, funding=funding,
         complete=True, session_cost=total['cost'], children=children, lineage=lineage, shim_descendants=shim)
-    return dict(result=result, not_entitled=_not_entitled(seen), children=len(children))
+    return dict(result=result, not_entitled=_not_entitled(raw, route), children=len(children))
 
 
 def _wait_idle(host, root, after_ms, timeout):
@@ -449,12 +456,12 @@ class _Attempt:
             raise Unconfirmed('prompt_unconfirmed')
         _wait_idle(self.host, session_id, began, self.idle_timeout)
         funding = routing.FUNDING_OF.get((self.gate.admission or {}).get('billing_class'), 'api')
-        read = account(self.host, session_id, funding=funding, attempt=attempt, authority=authority)
+        read = account(self.host, session_id, funding=funding, attempt=attempt, authority=authority, route=route)
         for _ in range(REREADS):  # a message still finishing: re-read, bounded; still unfinished settles unknown
             if 'message_in_progress' not in (read['result'].get('unknown') or []):
                 break
             time.sleep(REREAD_WAIT)
-            read = account(self.host, session_id, funding=funding, attempt=attempt, authority=authority)
+            read = account(self.host, session_id, funding=funding, attempt=attempt, authority=authority, route=route)
         self.read = read
         usage = read['result'].get('usage')
         return dict(kind='complete', **({} if usage is None else dict(usage=usage)))
@@ -504,6 +511,9 @@ def _finish(result, gate, attempt, detached, settings_path, source):
             result['windows_stored'] = False
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
+        if account_name is None:  # never a mark without its account: the route stays a candidate, the result says why
+            result['entitlement_mark'] = 'account_unknown'
+            return result
         try:
             routing_observations.mark_not_entitled(settings_path, admission['route'], account_name, int(time.time()))
             result['entitlement_mark'] = 'written'
