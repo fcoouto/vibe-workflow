@@ -45,6 +45,13 @@ class DeadlineTypeTests(unittest.TestCase):
                                               budget=budget)
             self.assertEqual(budget['deadline'], now + 50)
 
+    def test_delegation_caps_child_lineage_with_the_shared_constant(self):
+        import re
+        from runtime import delegation
+        source = Path(delegation.__file__).read_text()
+        self.assertIsNone(re.search(r'monotonic\(\) \+ 4\b', source))  # PR #219 follow-up: no inline cap
+        self.assertIn('time.monotonic() + startup.OBSERVATION_SECONDS', source)
+
 
 class AcquisitionReasonTests(unittest.TestCase):
     def test_membership_deadline_is_reported_as_a_deadline(self):
