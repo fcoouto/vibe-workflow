@@ -424,18 +424,18 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "37e4a29fbe629ebb12b66b1865aedc3417ad637bc9b1fcda6b80e1e9d67d113c",
+      "sha256": "8e726a11a782ff16b57f2032335bdfa235f9646af45efc66149b790f3332ff2b",
       "ranges": [
         [
           1,
-          42
+          40
         ],
         [
-          43,
-          120
+          41,
+          116
         ],
         [
-          121,
+          117,
           139
         ]
       ]
