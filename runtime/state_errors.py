@@ -21,9 +21,11 @@ class StateDeadline(StateError, ObservationDeadline):
 
 def database_failure(error, deadline):
     """Name a deadline, lock contention or a startup diagnostic; return None for the generic sanitized error."""
+    if isinstance(error, ObservationDeadline):
+        return StateDeadline(str(error))
     timed_out = deadline is not None and time.monotonic() >= deadline
-    if isinstance(error, ObservationDeadline) or isinstance(error, sqlite3.OperationalError) and (
-            str(error) == 'interrupted' or timed_out and str(error) == 'database is locked'):
+    # The progress handler interrupts a query at the deadline; a lock wait cut short by it is a deadline too.
+    if isinstance(error, sqlite3.OperationalError) and (str(error) == 'interrupted' or timed_out and str(error) == 'database is locked'):
         return StateDeadline('Runtime state deadline exceeded')
     if isinstance(error, sqlite3.OperationalError) and str(error) == 'database is locked':
         return StateBusy('Runtime state is busy')
