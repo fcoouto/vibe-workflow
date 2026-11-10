@@ -11,7 +11,7 @@ Then pass each gate below before the action it guards. No task is too small for 
 | Before you… | Read in full first |
 | --- | --- |
 | Change anything: a file, setting, branch, commit or PR. Documentation, one-line fixes and settings commands count. | [Policy index](policies/00-index.md) and [development guide](docs/development.md), then every policy whose **Load when** row applies |
-| Review a change, judge whether work is complete or a PR is ready, or resume earlier work. These count even when you change nothing. | [Policy index](policies/00-index.md), then every policy whose **Load when** row applies |
+| Review a change, select checks, judge whether work is complete or a PR is ready, or resume earlier work. These count even when you change nothing. | [Policy index](policies/00-index.md), then every policy whose **Load when** row applies |
 | Open or update a PR, mark it `[READY]` or merge | [Merge Readiness](policies/08-merge-readiness.md) and the [development guide](docs/development.md) |
 | Select checks, push or create a release archive | [Development guide](docs/development.md) |
 | Do client-specific work | [Clients](clients/index.md); load only the entry whose trigger applies |
@@ -20,7 +20,7 @@ Then pass each gate below before the action it guards. No task is too small for 
 | Add a client adapter | [Client interface layout](docs/onboard-my-project-plan.md#client-scope-and-adapter-organization) |
 | Create or change a skill or workflow instruction | [Instruction authoring](#instruction-authoring) |
 
-A factual question about the repository needs only the memory read: answer it from the actual files, then stop. A request to review, to judge completion or readiness, to resume work or to dispatch a worker is not such a question; it passes its gate.
+A factual question about the repository needs only the memory read: answer it from the actual files, then stop. A request to review, to select checks, to judge completion or readiness, to resume work or to dispatch a worker is not such a question; it passes its gate.
 
 - A file whose complete, current text is already in context need not be read again.
 - The owning file is the rule. A link, a routing summary or a line in this file is not the procedure: follow triggered dependencies to their complete local procedures, and read applicable directory instructions.
