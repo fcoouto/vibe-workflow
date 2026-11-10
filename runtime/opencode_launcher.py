@@ -76,6 +76,9 @@ MAX_PAGES = 200
 # provider's utilization, so a manifest route's `demand` for these windows is in the same unit.
 RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 WINDOW_UNITS = 1000
+# The unit each stored window declares, in the field `unit`. The collector (C3-1b) adds the field and rejects a unit
+# its manifest route does not declare; until its WINDOW_FIELDS includes `unit`, windows are stored without it.
+WINDOW_UNIT = 'utilization_thousandths'
 
 
 class Unconfirmed(Exception):
@@ -391,7 +394,7 @@ def windows(observation):
             continue
         key, length = RATE_WINDOWS[name]
         found.append(dict(id=key, limit=WINDOW_UNITS, used=min(WINDOW_UNITS, math.ceil(fraction * WINDOW_UNITS)),
-                          length=length, reset_at=reset, rolling=False,
+                          length=length, reset_at=reset, rolling=False, unit=WINDOW_UNIT,
                           observed_at=observation['observed_ms'] // 1000))
     return found
 
@@ -504,9 +507,12 @@ def _finish(result, gate, attempt, detached, settings_path, source):
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
     admission = result.get('admission') or {}
     if admission.get('billing_class') == 'included_subscription':
+        declared = 'unit' in routing_observations.WINDOW_FIELDS  # the collector's field, matched by name
         try:  # telemetry for the collector; an unusable observation is skipped, never fatal
             for window in windows(attempt.read['result'].get('rate_limit')):
-                routing_observations.store_window(settings_path, admission['pool'], window)
+                stored = window if declared else {key: item for key, item in window.items() if key != 'unit'}
+                routing_observations.store_window(settings_path, admission['pool'], stored)
+                result['window_unit_recorded'] = declared
         except (OSError, ValueError, KeyError, TypeError):
             result['windows_stored'] = False
     if attempt.read['not_entitled']:
