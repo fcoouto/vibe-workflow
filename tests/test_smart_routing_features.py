@@ -484,6 +484,12 @@ class C2bQuotaResetIsNotAuthority(command_tests.Base):
 class C2bProjectPin(gate_tests.GateBase):
     """F03 (S3.5 wiring): production prepare of a workflow job needs the project pin. Unpinned service."""
 
+    def setUp(self):
+        # Its own explicitly unpinned service, independent of GateBase.setUp's (which C3-0b pins).
+        super().setUp()
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow)
+
     # C3-0b must make `--project` mandatory for a workflow-bound `prepare` (S3.5 wiring list): an unpinned service
     # refuses it with `project_required`, as `settle` already does.
     @NEEDS_C3('C3-0b')
