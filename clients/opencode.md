@@ -233,6 +233,40 @@ Observed in the live re-qualification (9 November 2026), for launchers:
 - A `subagent: true` command does not pass through `tool.execute.before`, so the shim's spawn checks never see it. The shim stopped the child at its first model request through the parent lineage it learned from `session.created`. The blocked child's failure still started an extra parent turn on the attempt's route, which costs the parent.
 - RPC refusals such as `attach_refused` reach the caller as HTTP 500 `rpc.internal` ("RPC call failed") with no reason code, so a launcher cannot tell a refusal from a routing-child failure and must treat both as "do not send".
 
+### Uncertain subscription holds (S3.6c)
+
+When the launcher cannot confirm a launch it records `uncertain`. The hold then keeps its window claim and its concurrency place, and a client's `complete` stays `reconciliation_required`. `reconcile_uncertain` settles only dollar holds. For a subscription hold, the operator uses `reconcile_subscription{attempt_id, evidence, event_id}` ([`runtime/subscription_reconcile.py`](../runtime/subscription_reconcile.py)). Package-only: it is not observed on OpenCode.
+
+- **Scope.** The op applies only to an open `uncertain` hold whose claims are all `win:` window claims, with no organization and no dollars. Any other hold is `hold_state_forbidden`, including admitted, dispatched, `cost_unknown` and uncertain dollar holds. A closed hold is `attempt_closed` and an unknown one `unknown_attempt`. The op never charges dollars and never changes a derived block reason.
+- **Operator op rules.** Like the other operator ops, it is a one-shot command only: `--serve` answers `operator_op_not_served` before reading anything, and `record` can never reach it (`record_unsupported`, or `invalid_request` for its fields). It is idempotent by `event_id` in the S3.6a event table:
+  - the same payload returns the original outcome with `duplicate: true` and writes nothing;
+  - another payload under the same id is `event_conflict`;
+  - refusals are not remembered;
+  - 15 racing processes apply one effect.
+
+  The audit is the event row: ids, labels and integer totals only, never receipts, session ids, tokens or content.
+- **`evidence{kind: host_usage, session_id, usage}`.** After stopping the worker, the launcher re-reads the attempt's sessions once they are idle, as in steps 1–5 of the wiring above, and sends `usage_from_messages(...)["usage"]` with source `host_message_totals`.
+  - The hold must have been dispatched through `dispatch` (else `dispatch_required`), and `session_id` must be its derived session (else `evidence_mismatch`). Another usage source is `evidence_invalid`.
+  - It settles exactly like a subscription `complete`: the window claim and the concurrency place are released, the units are recorded as an observation and the root aggregate is updated. The settlement adds `resolution{basis: host_usage}`.
+  - A message or session the host no longer returns proves nothing (a not-found answer can also mean deleted, reverted, or another server or directory), so an empty re-read cannot be sent as `host_usage`. The operator uses `abandon` instead.
+- **`evidence{kind: abandon}`.** The operator stops the worker first and accepts the worst case: the request may have been sent and may have used window units.
+  - The concurrency place is released at once. The hold's window claims become a window debit per window key in the ledger record (`window_debits`: units added up and the latest abandon time kept per key, at most 32 keys). Admission keeps counting the debit against that window's headroom.
+  - No units are invented or observed: the root aggregate gets none.
+  - When the table is full, an abandon that adds a key is `ledger_capacity_reached`, and the hold stays uncertain.
+  - Outcome: `abandoned` with `settlement{kind: window, released: {}, debited, observed_units: null, resolution{basis: abandon}}`.
+- **When a debit clears.** A debit clears only when a validated `prepare` snapshot carries a qualifying observation of the same pool and window. A qualifying window:
+  - is fixed, not `rolling`;
+  - is `fresh` with known `used`, a numeric `reset_at` and a positive `length`;
+  - is current (`reset_at` after the snapshot's `now`);
+  - began (`reset_at − length`) no later than `now` and at least 60 s (the command's clock drift bound) after the abandon.
+
+  The abandoned request's units cannot be in such a window. The debit is removed once, in the admission transaction, whatever the admission outcome, with an audit row `window_debit_cleared`.
+
+  A newer `now`, `epoch_at` or `snapshot_id` alone never clears a debit: neither does the same window seen later, a rolling window, a window with no reset or length, or one that has not begun or has already reset. A `used` figure cannot show that it already includes the abandoned units, so usage numbers never clear a debit. Nothing is released on lease expiry or time alone.
+- **Status.** `ledger.reconcile.reconcile_subscription{count, ids, more}` lists the uncertain subscription holds and `ledger.reconcile.window_debits{count, keys, more}` the debited window keys (16 per list). While such a hold is open, `reconcile_hint` carries a fixed subscription text, appended to the dollar text when both apply. A debit alone needs no operator action and leaves the hint `null`.
+- **Trust.** The prepare snapshot is the collector's, the same input admission already trusts for headroom, so a forged snapshot that can admit work can also clear a debit. Evidence and abandons are the operator's word: offline, nothing can check a host re-read. A request still in flight when the hold closes is covered only by the debit (abandon) or by the re-read (host_usage).
+- **Capacity.** The debit table adds 18,226 characters to the worst-case ledger record: 10,716,910 of 12,000,000 (89.31%), against the 90% test ceiling. Code older than S3.6c ignores the debits when it reads this ledger, so downgrading the package drops their protection.
+
 ## Evidence limits
 
 Tests drive the adapter with the committed, sanitized probe fixtures in `tests/fixtures/smart-routing/probes/`. Most hook entries there are the probe plugin's summaries: their key sets and recorded values are real, while header, base URL and environment values were never recorded and are supplied by the tests. `s3-3-shim-live.json` holds full sanitized payloads recorded with this shim loaded, and what the shim blocked. The shim's own tests run under `node --test` with a fake routing child and with the real `routing.py --serve` on pinned temporary stores (prepare, dispatch, attach with the token, checks); the authority handshake was observed live once on OpenCode 2.2.6 with `claude-agent/haiku#low` ([live qualification](../docs/smart-routing-qualification.md): attach, allowed request, blocked unattached and wrong-token sessions, detach), while settlement, the closed-attempt block and the lost-acknowledgment drill were not reached. `routing.descendants` (S3.3c) is tested only with a fake event stream and the real `routing.py --serve`; it has not been called on OpenCode. Accounting rests on three recorded sessions with complete message lists: in one, the remainder after subtracting the messages is the title request (2 input, 9 output, 605 cache-read and 549 cache-write tokens); in the two with titles given by the user it is zero. The fixtures contain no `generate` request, no message deleted or reverted, no paging, no provider-reported non-zero cost, no API-funded route, no child session's messages (only its total) and no observed sequence gap: the event excerpt skips sequence numbers only because it is an excerpt. A passing test is not observed OpenCode execution, and a new OpenCode version needs the probes re-run before its results are relied on.
