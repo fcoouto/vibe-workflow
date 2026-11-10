@@ -32,10 +32,7 @@ class FakeLauncherHost:
             if not hasattr(self, name):
                 raise TypeError("unknown knob %s" % name)
             setattr(self, name, value)
-        self.shim = None
-        if settings is not None:
-            from scripts import routing as command
-            self.shim = command.Service(settings, ledger, serving=True)
+        self.stores = (settings, ledger)
         if self.honour_hostile:
             self.load_hostile()
 
@@ -53,8 +50,6 @@ class FakeLauncherHost:
 
     def stop(self):
         self.stopped = True
-        if self.shim is not None:
-            self.shim.close()
 
     # ------------------------------------------------------------ RPC
     def rpc(self, method, payload):
@@ -66,9 +61,14 @@ class FakeLauncherHost:
             provider, _, model = route.partition("/")
             facts = dict(provider=provider, model=model, variant=variant, harness=routing_launch.shim_harness(provider),
                          kind="primary", funding_pool=payload["funding_pool"])
-            answer = self.shim.handle(json.dumps(dict(v=1, op="check", attempt_id=payload["attempt_id"],
-                                                      session_id=payload["session_id"], authority=payload["authority"],
-                                                      request=facts)).encode())
+            from scripts import routing as command
+            shim = command.Service(*self.stores, serving=True)  # per call: the launch may run in another thread
+            try:
+                answer = shim.handle(json.dumps(dict(v=1, op="check", attempt_id=payload["attempt_id"],
+                                                     session_id=payload["session_id"], authority=payload["authority"],
+                                                     request=facts)).encode())
+            finally:
+                shim.close()
             ok = self.attach_ok and answer.get("authority") == "verified"
             return (200, dict(state="attached")) if ok else (500, None)
         if method == "descendants":
@@ -165,3 +165,64 @@ class FakeEnv:
 
     def which(self, name, path):
         return "/usr/local/bin/%s" % name
+
+
+class HttpFake:
+    """Serves a FakeLauncherHost over loopback HTTP with Basic auth, so a child process can reach it through the
+    launcher's own `ServerHost`. `port`, `_password` and `directory` are what the drill passes to its child."""
+
+    def __init__(self, host):
+        import base64
+        import http.server
+        import threading
+        fake, password = host, host._password
+        expected = "Basic " + base64.b64encode(("opencode:" + password).encode()).decode()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def answer(self, method):
+                if self.headers.get("Authorization") != expected:
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                import urllib.parse
+                length = int(self.headers.get("content-length") or 0)
+                body = json.loads(self.rfile.read(length)) if length else None
+                path, _, query = self.path.partition("?")
+                query = dict(urllib.parse.parse_qsl(query)) or None
+                if path.startswith("/api/rpc/routing/"):
+                    status, output = fake.rpc(path.rsplit("/", 1)[1], (body or {}).get("input"))
+                    payload = dict(output=output) if status == 200 else dict(error="rpc.internal")
+                else:
+                    status, payload = fake.request(method, path, body=body, query=query)
+                raw = json.dumps(payload).encode() if payload is not None else b""
+                self.send_response(status)
+                self.send_header("content-length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+            def do_GET(self):  # noqa: N802
+                self.answer("GET")
+
+            def do_POST(self):  # noqa: N802
+                self.answer("POST")
+
+            def do_DELETE(self):  # noqa: N802
+                self.answer("DELETE")
+
+            def log_message(self, *_):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port, self._password, self.directory, self.fake = self.server.server_address[1], password, host.directory, host
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def request(self, method, path, body=None, query=None):
+        return self.fake.request(method, path, body=body, query=query)
+
+    def rpc(self, method, payload):
+        return self.fake.rpc(method, payload)
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.fake.stop()
