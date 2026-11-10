@@ -104,18 +104,23 @@ python3 -B tests/qualification/live_modes.py measure-demand --call-ledger "${L:?
 ### 7. Canary admission export (no calls)
 
 ```sh
-python3 -B tests/qualification/opencode_live.py --export-canary-admissions
+CS=<the dedicated canary state directory>   # absolute, owner-only parent; never the production routing state
+python3 -B tests/qualification/opencode_live.py --export-canary-admissions --canary-state "${CS:?}" \
+  [--replay-dir <export dir>]
 ```
+
+Pass `--canary-state` explicitly: without it the command is refused.
 
 - **Proves:** every canary admission record, with its snapshot detail, is in the owner-only export (`~/.local/state/vibe-workflow-replay/canary/`) before the ledger prunes the detail after 24 hours. The canary also exports at the end of each run and at the next admission once the last export is 12 hours old, and refuses a new run while any record is missing. Rules: [validation Edit 6](smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history).
 - **Expect:** 0 calls, no server, one read-only ledger connection, under a second.
-- **Limit:** it reads the dedicated canary state (`--canary-state`), which refuses the production routing state; the canary on the production ledger needs the harness change in [pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements).
+- **Limit:** it reads only a dedicated canary state; `--canary-state` refuses the production routing state. The production-ledger form for the canary ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)) comes with a harness change that is in progress and not built: an explicit `--production-ledger` flag plus an `--approval` record, never the default.
 
 ### After the session
 
 - **Revoke sign-ins.** Delete or disable the OpenRouter key at openrouter.ai. The ChatGPT login used by A5 lives in the run's temporary data directory and goes with it; the user may also sign that session out in the ChatGPT account settings.
 - **Remove temporary directories.** The harness removes each run's `$Q` itself; after each run, confirm with `test ! -e "${Q:?}"`. Remove the reader's directory with `rm -rf -- "${T:?}"`. Delete any `withheld/` file after reading it.
 - **Verify no processes.** `pgrep -fl 'codex app-server'` prints nothing, `pgrep -fl -- "${Q:?}"` prints nothing after each run, and each result file shows `cleanup.processes_left: 0`.
+- **Re-export the call ledger** (0 calls): `python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --export-call-ledger "${OUT:?}/qual-call-ledger.json"`.
 - **Record results** in a new dated section of this document, with the call-ledger totals, and update the pre-canary items they close.
 
 ## Live probes: descendants, S3.3d and the ChatGPT route (pre-registered, not yet run)
