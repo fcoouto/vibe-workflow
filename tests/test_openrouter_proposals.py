@@ -958,8 +958,9 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertNotIn('dispatched_at', self.call('history')['records'][0])
 
     def test_managed_self_check_admits_one_gateway_proposal_in_a_sandbox(self):
-        work = Path(self.tmp.name).resolve() / 'self-check'
-        self.assertEqual(self.api.managed_self_check(work), [])
+        outside = tempfile.TemporaryDirectory()  # self.tmp holds this class's patched default routing state
+        self.addCleanup(outside.cleanup)
+        self.assertEqual(self.api.managed_self_check(Path(outside.name).resolve() / 'self-check'), [])
         self.assertEqual(command._self_check('script', 'scripts/openrouter_proposals.py'), [])
 
     def test_the_self_check_flag_refuses_an_unsafe_workdir(self):

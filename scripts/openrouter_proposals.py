@@ -187,9 +187,10 @@ def triage(state, request, now):
     return result
 
 
-def act(action, state, request, now, *, activation_ref=None, authorize=None, settle=None):
+def act(action, state, request, now, *, activation_ref=None, authorize=None, settle=None, own=None):
     """`authorize(row)` and `settle(row, request)` run under the store lock just before a dispatch or an outcome is
-    stored; a returned reason refuses it and stores nothing (the routing hold's dispatch and closing event)."""
+    stored; a returned reason refuses it and stores nothing (the routing hold's dispatch and closing event). A
+    write-ahead routing entry (`routing_pending`) is a pending attempt for every `begin` but its `own`."""
     current = status(state, now)
     if action == 'status':
         if request.get('include_metadata') is True:
@@ -245,7 +246,8 @@ def act(action, state, request, now, *, activation_ref=None, authorize=None, set
             return dict(fallback='task_already_attempted')
         if not current['fresh'] or request.get('snapshot_digest') != current['snapshot_digest']:
             return dict(fallback='stale_discovery')
-        if any('outcome' not in row for row in state['attempts']):
+        if any('outcome' not in row for row in state['attempts']) or any(
+                entry['attempt_id'] != own for entry in state.get('routing_pending', [])):
             return dict(fallback='pending_attempt')
         if len(state['attempts']) >= MAX_ATTEMPTS:
             return dict(fallback='capacity')
@@ -295,10 +297,16 @@ def act(action, state, request, now, *, activation_ref=None, authorize=None, set
             if key not in ('attempt_token', 'visibility')})
         if row['external_digest'] != expected:
             raise ValueError('external_attempt_changed')
+        row['dispatched_at'] = now
+        try:  # capacity first: a stored dispatch must fit before any routing authority is taken
+            encoded(state, MAX_STATE)
+        except ValueError:
+            del row['dispatched_at']
+            return dict(fallback='capacity')
         refused = authorize(row) if authorize is not None else None
         if refused is not None:
+            del row['dispatched_at']
             return dict(fallback=refused)
-        row['dispatched_at'] = now
         return dict(dispatched=True, attempt_token=row['attempt_token'])
     if action == 'record':
         row = next((r for r in state['attempts'] if r['attempt_token'] == request.get('attempt_token')), None)
@@ -347,16 +355,23 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
             managed = cwd is not None and _managed(cwd)
             if action == 'begin' and managed:
                 return _begin_managed(store, request, now, cwd)
-            with settings.admission(cwd, 'proposals', store=store) as report:
-                _, packet = _external(report, request, now)
-                result = _run(action, store, request, now=now,
-                    management=dict(scope_id=report['scope_id'], revision=report['revision']),
-                    activation_ref=report['activation']['ref'],
-                    authorize=lambda row: _authorize(row, managed))
-                if action == 'dispatch' and result.get('dispatched'):
-                    result.update(packet=packet['text'], model=request['model'], provider=request['provider'],
-                                  effort=request.get('effort'), requires_native_review=True, accepted=False)
-                return result
+            granted = []  # routed holds dispatched in this call; a dispatch that is not stored keeps their exposure
+            try:
+                with settings.admission(cwd, 'proposals', store=store) as report:
+                    _, packet = _external(report, request, now)
+                    result = _run(action, store, request, now=now,
+                        management=dict(scope_id=report['scope_id'], revision=report['revision']),
+                        activation_ref=report['activation']['ref'],
+                        authorize=lambda row: _authorize(row, managed, granted))
+            except BaseException:
+                _unsent(granted)
+                raise
+            if not result.get('dispatched'):
+                _unsent(granted)
+            elif action == 'dispatch':
+                result.update(packet=packet['text'], model=request['model'], provider=request['provider'],
+                              effort=request.get('effort'), requires_native_review=True, accepted=False)
+            return result
         except settings.SettingsError as exc:
             return dict(fallback=str(exc), advisory=True)
     return _run(action, store, request, now=now, settle=_settle if action == 'record' else None)
@@ -366,7 +381,14 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
 # In a managed project `begin` is one routing admission on the `gateway` route, prepared before the OpenRouter
 # admission lock; `dispatch` takes the routing authority and checks it in process before the packet is returned (the
 # caller sends only after that); `record` closes the hold. Unmanaged projects keep the path above unchanged.
+#
+# Holds are never stranded. `begin` writes its routing attempt id to the store (`routing_pending`) BEFORE `prepare`,
+# so a crash between `prepare` and the stored attempt leaves a record: it blocks new attempts like any pending one
+# for LEASE seconds, then the next `begin` closes its hold (`not_dispatched`) and drops it. A failure after the
+# routing `dispatch` (the ledger never accepts `not_dispatched` once dispatched) completes the hold with no usage, so
+# its whole reservation stays held as `cost_unknown` for the operator; the packet was never returned.
 HOST = 'openrouter_proposal'
+RECOVERED = ('unknown_attempt', 'attempt_closed')  # no admitted hold is left behind for this id
 
 
 def _managed(cwd):
@@ -382,9 +404,48 @@ def _routing():
 
 
 def _close(service, attempt):
-    """Close an admitted hold that will never be sent (`not_dispatched`)."""
+    """Close an admitted hold that will never be sent (`not_dispatched`); True when none is left open."""
     _, launch = _routing()
-    launch._record(service, attempt, 'not_dispatched')
+    answer = launch._record(service, attempt, 'not_dispatched')
+    return answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED
+
+
+def _forget(state, attempt):
+    kept = [entry for entry in state.get('routing_pending', []) if entry['attempt_id'] != attempt]
+    if kept:
+        state['routing_pending'] = kept
+    else:
+        state.pop('routing_pending', None)
+
+
+def _release(service, store, attempt, now):
+    """A begin that will not store its attempt: close the hold, then drop the write-ahead entry."""
+    if _close(service, attempt):
+        _run('begin', store, {}, now=now, hook=lambda state, moment: _forget(state, attempt) or {})
+
+
+def _recover(state, moment):
+    """Under the store lock: close and drop write-ahead entries older than LEASE (their begin died)."""
+    command, _ = _routing()
+    for entry in [entry for entry in state.get('routing_pending', []) if moment >= entry['at'] + LEASE]:
+        service = command.managed_service(entry['checkout'])
+        try:
+            if _close(service, entry['attempt_id']):
+                _forget(state, entry['attempt_id'])
+        finally:
+            service.close()
+
+
+def _unsent(granted):
+    """Routed holds dispatched for a packet that was never returned: completed with no usage (`cost_unknown`)."""
+    command, launch = _routing()
+    for checkout, attempt in granted:
+        service = command.managed_service(checkout)
+        try:
+            launch._record(service, attempt, 'complete')
+        finally:
+            service.close()
+    granted.clear()
 
 
 def _endpoint(settings_path, route, provider):
@@ -398,33 +459,34 @@ def _endpoint(settings_path, route, provider):
                for spec in specs)
 
 
-def _prepare(service, checkout, request, limits):
-    """(attempt id, dispatch facts, seen revision) for an admitted proposal, else (None, reason, None). Routing
+def _prepare(service, checkout, request, limits, attempt):
+    """(dispatch facts with the reservation, seen revision) for an admitted proposal, else (None, reason). Routing
     decides from the collector's observations; the coordinator's model is an explicit choice it admits or refuses,
-    never substitutes. An admitted hold the host cannot use is closed before returning."""
+    never substitutes."""
     _, launch = _routing()
     reason = launch.preflight(launch._call(service, dict(v=1, op='status')), dollar=True)
     if reason is not None:
-        return None, reason, None
+        return None, reason
     fields = dict(model=request['model'], provider=request['provider'], effort=request.get('effort'))
     scope = launch.assignment_scope(checkout)
-    assignment = dict(attempt_id='proposal-' + secrets.token_hex(12), role='researcher', scope=scope,
+    assignment = dict(attempt_id=attempt, role='researcher', scope=scope,
                       task='proposal:' + hashlib.sha256(request['task_id'].encode()).hexdigest()[:32],
                       choice=launch.choice(HOST, 'api', **fields))
     job = launch.unplanned_job('researcher', scope, request['task_id'])
     prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
     if prepared.get('state') != 'admitted':
         reason = prepared.get('reason')
-        return None, reason if isinstance(reason, str) and reason else 'routing_unavailable', None
+        return None, reason if isinstance(reason, str) and reason else 'routing_unavailable'
     admission = prepared['admission']
     facts, reason = launch.admitted_check(admission, host=HOST, catalog=[launch.route_identity(HOST, **fields)],
                                           settings_path=service.settings_path)
     if reason is None and not _endpoint(service.settings_path, admission['route'], request['provider']):
         reason = launch.CATALOG_MISMATCH
     if reason is not None:
-        _close(service, admission['attempt_id'])
-        return None, reason, None
-    return admission['attempt_id'], facts, (prepared.get('seen') or {}).get('openrouter_revision')
+        return None, reason
+    reserved = [value for key, value in (admission.get('reserved') or {}).items() if key.startswith('org:')]
+    return dict(facts=facts, reserved=max(reserved) if reserved else None), \
+        (prepared.get('seen') or {}).get('openrouter_revision')
 
 
 def _begin_managed(store, request, now, cwd):
@@ -437,31 +499,46 @@ def _begin_managed(store, request, now, cwd):
     permission, _ = _external(current, request, now)  # nothing outside the user's scope reaches routing
     limits = external_delegation.constraints(permission, request['external'], service='openrouter', mode='proposal')
     checkout = Path(current['checkout'])
+    attempt = 'proposal-' + secrets.token_hex(12)
+
+    def reserve(state, moment):
+        """Recover dead write-ahead entries, run every local `begin` refusal on a copy (nothing reaches routing
+        unless the attempt could be stored), then record this attempt id before `prepare`."""
+        _recover(state, moment)
+        trial = act('begin', json.loads(encoded(state, MAX_STATE)), request, moment, own=attempt)
+        if 'attempt_token' not in trial:
+            return trial
+        state.setdefault('routing_pending', []).append(dict(attempt_id=attempt, checkout=str(checkout), at=moment))
+        return dict(reserved=True)
+    reserved = _run('begin', store, request, now=now, hook=reserve)
+    if not reserved.get('reserved'):
+        return reserved
     service = command.managed_service(checkout)
+    result = None
     try:
-        attempt, facts, seen = _prepare(service, checkout, request, limits)
-        if attempt is None:
-            return dict(fallback=facts, advisory=True)
-        result = None
-        try:
-            settings.require(type(seen) is int, 'openrouter_preparation_stale')
-            with settings.admission(cwd, 'proposals', store=store, revision=seen) as report:
-                _external(report, request, now)
-                result = _run('begin', store, request, now=now,
-                    management=dict(scope_id=report['scope_id'], revision=report['revision']),
-                    activation_ref=report['activation']['ref'],
-                    routing=dict(attempt_id=attempt, checkout=str(checkout), facts=facts))
-        finally:
-            if result is None or 'attempt_token' not in result:
-                _close(service, attempt)
+        bound, seen = _prepare(service, checkout, request, limits, attempt)
+        if bound is None:
+            return dict(fallback=seen, advisory=True)
+        settings.require(type(seen) is int, 'openrouter_preparation_stale')
+        with settings.admission(cwd, 'proposals', store=store, revision=seen) as report:
+            _external(report, request, now)
+            result = _run('begin', store, request, now=now,
+                management=dict(scope_id=report['scope_id'], revision=report['revision']),
+                activation_ref=report['activation']['ref'],
+                routing=dict(attempt_id=attempt, checkout=str(checkout), **bound))
         return result
     finally:
-        service.close()
+        try:
+            if result is None or 'attempt_token' not in result:
+                _release(service, store, attempt, now)
+        finally:
+            service.close()
 
 
-def _authorize(row, managed):
-    """Before a dispatch is stored: the routing authority and an in-process `check` for a routed attempt. The
-    token stays here; it is never stored or returned. A managed project never dispatches an unrouted attempt."""
+def _authorize(row, managed, granted):
+    """Before a dispatch is stored: the dollar preflight again, the routing authority and an in-process `check` for
+    a routed attempt. The token stays here; it is never stored or returned. A managed project never dispatches an
+    unrouted attempt. Before the routing dispatch a refusal closes the hold; after it, `run` keeps the exposure."""
     bound = row.get('routing')
     if bound is None:
         from runtime import routing_settings
@@ -470,32 +547,57 @@ def _authorize(row, managed):
     service = command.managed_service(bound['checkout'])
     try:
         attempt, facts = bound['attempt_id'], bound['facts']
-        sent = launch._call(service, dict(v=1, op='dispatch', attempt_id=attempt, request=facts))
+        reason = launch.preflight(launch._call(service, dict(v=1, op='status')), dollar=True)
+        sent = {} if reason is not None else launch._call(service, dict(v=1, op='dispatch', attempt_id=attempt,
+                                                                         request=facts))
         if sent.get('state') == 'already_dispatched':
             return 'already_dispatched'  # an earlier grant's send is unknown: reconcile, never close or resend
         authority = sent.pop('authority', None)
-        reason = None if sent.get('state') == 'dispatched' and authority else sent.get('reason') or 'dispatch_refused'
-        if reason is None:
-            checked = launch._call(service, dict(v=1, op='check', attempt_id=attempt, authority=authority,
-                                                 request=facts))
-            reason = None if checked.get('state') == 'allow' else checked.get('reason') or 'check_refused'
+        if reason is None and not (sent.get('state') == 'dispatched' and authority):
+            reason = sent.get('reason') or 'dispatch_refused'
         if reason is not None:
-            _close(service, attempt)
-        return reason
+            _close(service, attempt)  # still admitted: nothing was dispatched
+            return reason
+        granted.append((bound['checkout'], attempt))
+        checked = launch._call(service, dict(v=1, op='check', attempt_id=attempt, authority=authority,
+                                             request=facts))
+        return None if checked.get('state') == 'allow' else checked.get('reason') or 'check_refused'
     finally:
         service.close()
 
 
+def _charged_usage(usage, reserved):
+    """The routing usage a self-reported cost settles with (coordinator decision on S1 of the PR #216 review).
+
+    The helper cannot verify a provider receipt, so a reported cost never lowers the charge: the hold is charged its
+    full reservation, labelled `estimate`, and a reported cost above it stays an unconfirmed overrun for the operator.
+    Tokens are kept as observations. A report with any unknown cost, or no known reservation, settles nothing
+    (`cost_unknown`). A receipt re-read that may lower the charge is future work."""
+    from runtime import routing, usage_budget
+    if routing.event_error(dict(event_id='usage', attempt_id='usage', kind='complete', usage=usage)) is not None:
+        raise ValueError('invalid_usage')
+    costs = [item.get('cost_usd_micros') for item in usage['requests']]
+    if None in costs or type(reserved) is not int:
+        return None
+    limit = usage_budget.MAX_INTEGER
+    tokens = {field: min(limit, sum(item['tokens'][field] for item in usage['requests']))
+              for field in usage_budget.TOKEN_FIELDS}
+    return dict(source='estimate', requests=[dict(kind='primary', model=usage['requests'][0]['model'], tokens=tokens,
+                                                  cost_usd_micros=min(limit, max(sum(costs), reserved)))])
+
+
 def _settle(row, request):
-    """Before an outcome is stored: close the routed hold. A dispatched attempt completes, with the caller's
-    routing `usage` when it has one; without it the dollar exposure stays held as `cost_unknown`."""
+    """Before an outcome is stored: close the routed hold. A dispatched attempt completes; a self-reported `usage`
+    is charged as `_charged_usage` says, and without one the dollar exposure stays held as `cost_unknown`."""
     command, launch = _routing()
     dispatched = 'dispatched_at' in row
-    extra = {'usage': request['usage']} if dispatched and 'usage' in request else {}
+    usage = _charged_usage(request['usage'], row['routing'].get('reserved')) \
+        if dispatched and 'usage' in request else None
     service = command.managed_service(row['routing']['checkout'])
     try:
         recorded = launch._record(service, row['routing']['attempt_id'],
-                                  'complete' if dispatched else 'not_dispatched', **extra)
+                                  'complete' if dispatched else 'not_dispatched',
+                                  **({} if usage is None else dict(usage=usage)))
     finally:
         service.close()
     return None if recorded.get('state') == 'recorded' else recorded.get('reason') or 'record_refused'
@@ -513,8 +615,7 @@ def managed_self_check(workdir):
     this interpreter with a fixed environment, never in the calling process. Every store is created in `workdir`."""
     import signal
     import subprocess
-    _, launch = _routing()
-    root = launch._sandbox(workdir)
+    root = _self_check_root(workdir)  # the child's own safety checks, before this process creates anything
     if root is None:
         return [SELF_CHECK_UNSAFE]
     for name in ('home', 'tmp'):
@@ -639,7 +740,7 @@ def _self_check(workdir):
 
 
 def _run(action: str, store: Path, request: dict, *, now: float | None = None, management=None, activation_ref=None,
-         routing=None, authorize=None, settle=None) -> dict:
+         routing=None, authorize=None, settle=None, hook=None) -> dict:
     """Serialize one short local operation; callers perform all external actions."""
     if not isinstance(request, dict):
         raise ValueError('request must be an object')
@@ -677,11 +778,14 @@ def _run(action: str, store: Path, request: dict, *, now: float | None = None, m
                 row = next((row for row in state['attempts'] if row['attempt_token'] == request.get('attempt_token')), None)
                 if row is not None and row.get('management') != management:
                     raise ValueError('openrouter_preparation_stale')
-            result = act(action, state, request, now, activation_ref=activation_ref, authorize=authorize, settle=settle)
+            own = routing['attempt_id'] if routing is not None else None
+            result = hook(state, now) if hook is not None else act(
+                action, state, request, now, activation_ref=activation_ref, authorize=authorize, settle=settle, own=own)
             if action == 'begin' and 'attempt_token' in result:
                 state['attempts'][-1]['management'] = management
                 if routing is not None:
                     state['attempts'][-1]['routing'] = routing
+                    _forget(state, own)
             try:
                 after = encoded(state, MAX_STATE)
             except ValueError:
