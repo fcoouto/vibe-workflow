@@ -38,6 +38,7 @@ ATTACH_FAILED = 'attach_failed'
 LAUNCH_UNCONFIRMED = 'launch_unconfirmed'
 LAUNCH_OPTIONS_UNEXPRESSIBLE = 'launch_options_unexpressible'
 LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
+AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -85,10 +86,15 @@ WINDOW_UNIT = routing_observations.WINDOW_UNIT
 
 
 # Per-launch provider options (`launch_options`) go into the launch's own inline config, in OpenCode's V2 keys:
-# `providers.<p>.models.<m>.body` request fields and `agents.<PRIMARY_AGENT>.steps`. Only OpenRouter can pin an
-# endpoint (its request body's `provider.only` with `allow_fallbacks: false`). Whether 2.2.6 honours each key, and
-# that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6), are live items (clients/opencode.md).
+# `providers.<p>.models.<m>.body` request fields and `agents.<name>.steps` for every BUILTIN_AGENTS name. Only
+# OpenRouter can pin an endpoint (its request body's `provider.only` with `allow_fallbacks: false`). V2 has no
+# default step limit, so an agent the config does not name would run uncapped: the launch reads the host's agent
+# listing once and refuses unless every listed agent carries the cap. Whether 2.2.6 honours each key, whether its
+# listing includes the hidden agents, and that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6),
+# are live items (clients/opencode.md).
 PRIMARY_AGENT = 'build'
+# The V2 built-in agents: the visible `build`, `plan`, `general` and `explore`, and the hidden maintenance agents.
+BUILTIN_AGENTS = (PRIMARY_AGENT, 'plan', 'general', 'explore', 'compaction', 'title', 'summary')
 ENDPOINT_PIN_PROVIDERS = ('openrouter',)
 MAX_OUTPUT_TOKENS = 1_000_000
 MAX_STEPS = 64
@@ -156,7 +162,7 @@ def server_config(settings_path, ledger_path, plugin, options=None):
     """The inline server config (`OPENCODE_CONFIG_CONTENT`): the routing shim as the only plugin, pinned to the
     managed service's own stores with the routing state directories protected from model edits; no MCP server,
     formatter or LSP server; and the worker profile's permission rules. With `options` (`launch_options`), the
-    model's request body pins the endpoint and caps the output, and the primary agent's steps are capped. Whether
+    model's request body pins the endpoint and caps the output, and every built-in agent's steps are capped. Whether
     OpenCode lets a project or global config add to or override it is unobserved (clients/opencode.md#managed-launcher,
     pre-canary probe)."""
     shim = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
@@ -168,7 +174,7 @@ def server_config(settings_path, ledger_path, plugin, options=None):
         body = dict(provider=dict(only=[options['endpoint']], allow_fallbacks=False),
                     max_tokens=options['max_output_tokens'])
         config.update(providers={options['provider']: dict(models={options['model']: dict(body=body)})},
-                      agents={PRIMARY_AGENT: dict(steps=options['steps'])})
+                      agents={name: dict(steps=options['steps']) for name in BUILTIN_AGENTS})
     return config
 
 
@@ -315,6 +321,19 @@ def enforcement(host, answer):
     except adapter.AdapterError:
         return 'advisory'
     return probed['enforcement_profile']
+
+
+def agents_capped(host, steps):
+    """Whether the host lists at least one agent and every listed agent carries exactly `steps` (one
+    `GET /api/agent`). An unreadable or malformed listing is not capped."""
+    try:
+        status, body = host.request('GET', '/api/agent')
+    except Exception:  # noqa: BLE001 - an unreadable listing proves no cap
+        return False
+    listed = _data(body) if status == 200 else None
+    return isinstance(listed, list) and bool(listed) and all(
+        isinstance(agent, dict) and isinstance(agent.get('id'), str) and type(agent.get('steps')) is int
+        and agent['steps'] == steps for agent in listed)
 
 
 def catalog(host):
@@ -617,6 +636,7 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
     nothing and close any admitted hold with `not_dispatched`; a refused attach creates nothing and closes the hold
     with `record complete`; a launch that cannot be confirmed is recorded `uncertain` and names the operator op.
     With `options` (`launch_options`), `host.options` must be exactly those options (`launch_options_unexpressible`,
+    before anything is prepared), every agent the host lists must carry their step cap (`agent_steps_uncapped`, also
     before anything is prepared) and the admitted model theirs (`launch_options_mismatch`, before `dispatch`)."""
     owned = service is None
     if owned:
@@ -634,6 +654,8 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                 options = None
             if options is None or getattr(host, 'options', None) != options:
                 return dict(state='blocked', reason=LAUNCH_OPTIONS_UNEXPRESSIBLE)
+            if not agents_capped(host, options['steps']):
+                return dict(state='blocked', reason=AGENT_STEPS_UNCAPPED)
         reason = routing_launch.preflight(service.handle(json.dumps(dict(v=1, op='status')).encode()))
         if reason is not None:
             return dict(state='blocked', reason=reason)

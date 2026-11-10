@@ -2,9 +2,10 @@
 
 A worker's endpoint pin, output cap and step count reach OpenCode in the launch's own inline config
 (`OPENCODE_CONFIG_CONTENT`): the V2 `providers.<p>.models.<m>.body` request fields (OpenRouter's `provider.only` and
-`allow_fallbacks`, and `max_tokens`) and `agents.build.steps`. Options that cannot be expressed refuse the launch
-before anything is prepared; a server that does not carry them, or an admission on another model, refuses before
-`dispatch` and closes the hold. Fake server and the real routing command on temporary stores; OpenCode never runs.
+`allow_fallbacks`, and `max_tokens`) and `agents.<name>.steps` for every built-in agent. Options that cannot be
+expressed refuse the launch before anything is prepared; so does a host listing an agent without the step cap (lane
+F5). A server that does not carry them, or an admission on another model, refuses before `dispatch` and closes the
+hold. Fake server and the real routing command on temporary stores; OpenCode never runs.
 """
 import json
 from pathlib import Path
@@ -41,8 +42,11 @@ class OptionShape(unittest.TestCase):
         config = launcher.server_config('/s/settings.json', '/l/ledger.sqlite3', '/p', options=GOOD)
         self.assertEqual(config['providers'], {'openrouter': {'models': {'anthropic/claude-sonnet-4.5': {'body': {
             'provider': {'only': ['anthropic'], 'allow_fallbacks': False}, 'max_tokens': 2048}}}}})
-        self.assertEqual(config['agents'], {launcher.PRIMARY_AGENT: {'steps': 3}})
+        self.assertEqual(config['agents'], {name: {'steps': 3} for name in launcher.BUILTIN_AGENTS})
         self.assertEqual(launcher.PRIMARY_AGENT, 'build')  # the agent an un-agented prompt ran as on 2.2.6
+        # every agent the V2 documentation lists, visible and hidden: a child or maintenance run is capped too
+        self.assertEqual(set(launcher.BUILTIN_AGENTS),
+                         {'build', 'plan', 'general', 'explore', 'compaction', 'title', 'summary'})
         plain = launcher.server_config('/s/settings.json', '/l/ledger.sqlite3', '/p')
         self.assertEqual({key: value for key, value in config.items() if key not in ('providers', 'agents')}, plain)
         self.assertFalse({'providers', 'agents', 'provider', 'agent'} & set(plain))
@@ -77,7 +81,7 @@ class StartedServer(unittest.TestCase):
             finally:
                 server.stop()
             self.assertEqual(server.options, GOOD)
-            self.assertEqual(config['agents'], {'build': {'steps': 3}})
+            self.assertEqual(config['agents'], {name: {'steps': 3} for name in launcher.BUILTIN_AGENTS})
             self.assertEqual(config['providers']['openrouter']['models']['anthropic/claude-sonnet-4.5']['body']
                              ['provider'], {'only': ['anthropic'], 'allow_fallbacks': False})
 
@@ -121,7 +125,50 @@ class LaunchWithOptions(base.LauncherBase):
 
     def test_a_launch_without_options_is_unchanged(self):
         self.host.options = GOOD  # a host's options alone require nothing
+        self.host.agents = []  # and no agent listing is read
         self.assertEqual(self.launch()['state'], 'recorded')
+        self.assertNotIn(('GET', '/api/agent'), self.host.requests)
+
+
+class EveryAgentCapped(base.LauncherBase):
+    """Lane F5: V2 has no default step limit, so the launch reads the host's agent listing once and refuses, before
+    anything is prepared, unless every listed agent carries the required step cap."""
+
+    assert_refused = base.RefusalTests.assert_refused
+
+    def capped(self, steps=3, names=None):
+        return [dict(id=name, name=name, mode='primary', hidden=False, permissions=[], request={}, steps=steps)
+                for name in names or launcher.BUILTIN_AGENTS]
+
+    def test_every_listed_agent_capped_passes_with_one_listing_read(self):
+        self.host.options, self.host.agents = GOOD, self.capped()
+        result = self.launch(options=GOOD)
+        self.assertEqual(result['reason'], launcher.LAUNCH_OPTIONS_MISMATCH)  # it got past the check to `dispatch`
+        self.assertEqual(self.host.requests.count(('GET', '/api/agent')), 1)
+
+    def test_an_agent_without_the_cap_refuses_before_prepare(self):
+        extra = dict(self.capped(names=['reviewer'])[0])
+        del extra['steps']
+        listings = [self.capped() + [extra],  # a new or custom agent the inline config does not name
+                    self.capped()[:-1] + self.capped(steps=4)[-1:],  # one agent's cap overridden
+                    self.capped()[:-1] + [dict(self.capped()[-1], steps=True)],
+                    [], 'not a list', [dict(id='build')], [dict(steps=3)]]
+        for listing in listings:
+            with self.subTest(listing=listing):
+                del self.order[:]
+                self.host.options, self.host.agents = GOOD, listing
+                self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
+                self.assertNotIn('prepare', self.order)
+
+    def test_an_unreadable_listing_refuses(self):
+        self.host.options, self.host.agents = GOOD, self.capped()
+        for status in (500, 404):
+            with self.subTest(status=status):
+                self.host.agent_status = status
+                self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
+        self.host.agent_status, self.host.agent_raises = 200, ConnectionResetError('lost')
+        self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
+        self.assertNotIn('prepare', self.order)
 
 
 if __name__ == '__main__':
