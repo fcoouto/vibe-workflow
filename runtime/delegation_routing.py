@@ -373,11 +373,29 @@ def _enrolled_clients(cwd, entries=False):
         e['client'] for e in entries if (e['configuration'] or {}).get('runtime'))
 
 
+class NotEnrolled(Exception):
+    """A checkout with no canonical record and no legacy codex runtime state that resolves."""
+
+
 def enrolled_hosts(checkout):
-    """Read-only, for the activation gate (`scripts/routing.py` MANAGED_HOSTS): every client enrolled for this
-    checkout, with or without runtime state; ['codex'] with no canonical record. Raises when it cannot be read."""
-    entries = _enrolment(Path(checkout).resolve())
-    return ['codex'] if entries is None else sorted({e['client'] for e in entries})
+    """Read-only, for the activation gate (`scripts/routing.py` MANAGED_HOSTS): the clients whose enrolment of this
+    checkout is configured or active, with or without runtime state. A pending or suspended entry is no host and an
+    unknown status raises. With no canonical record the checkout is codex only when its legacy codex scope really
+    resolves; otherwise `NotEnrolled` (a never-onboarded directory is not a legacy codex checkout). Raises when the
+    enrolment cannot be read."""
+    from runtime import routing_gates, startup
+    cwd = Path(checkout).resolve()
+    entries = _enrolment(cwd)
+    if entries is None:
+        try:
+            routing_gates._resolve_scope(dict(client='codex', cwd=str(cwd)))
+        except Exception:  # noqa: BLE001 - LookupError, RuntimeScopeError: no confirmed legacy codex scope
+            raise NotEnrolled('not_enrolled') from None
+        return ['codex']
+    statuses = [(e.get('activation') or {}).get('status') for e in entries]
+    if not set(statuses) <= {'pending', 'configured', 'active', 'suspended'}:
+        raise startup.RuntimeScopeError('Unknown client activation status')
+    return sorted({e['client'] for e, status in zip(entries, statuses) if status in ('configured', 'active')})
 
 
 def _scopes_for(checkout):

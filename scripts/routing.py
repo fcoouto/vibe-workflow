@@ -98,7 +98,9 @@ CAPABILITIES = (
 # native delegation preparation (C3-2), opencode through the managed launcher (C3-3). Claude Code native subagents
 # have none, so a project enrolled only for clients outside this list is refused (`advisory_host_unmanaged`); a mix
 # may join, and policy 03's hold covers a Claude Code coordinator there. The user's decision 2 (whether advisory
-# hosts get automatic selection) may change this list.
+# hosts get automatic selection) may change this list. `opencode` is forward-compatible: onboarding records only codex
+# and claude-code entries today (runtime/onboarding.py, clients/startup.md), so an OpenCode-coordinated project must
+# be enrolled for codex to be activated.
 MANAGED_HOSTS = ('codex', 'opencode')
 SELF_CHECK_TIMEOUT = 10
 SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
@@ -827,12 +829,16 @@ def _self_check(kind, target):
 
 
 def _require_managed_hosts(delegation_routing, projects):
-    """Refuse adding a project none of whose enrolled clients is in MANAGED_HOSTS; an unreadable enrolment fails
-    closed (`enrolment_unavailable`). Read-only, before the self-checks and any ledger lock."""
-    unreadable, advisory = [], []
+    """Refuse adding a project none of whose configured or active clients is in MANAGED_HOSTS. A project with neither
+    a canonical record nor a resolving legacy codex scope is `not_enrolled`; an unreadable enrolment fails closed
+    (`enrolment_unavailable`). Read-only, before the self-checks and any ledger lock."""
+    unreadable, unenrolled, advisory = [], [], []
     for project in projects:
         try:
             hosts = delegation_routing.enrolled_hosts(project)
+        except delegation_routing.NotEnrolled:
+            unenrolled.append(project)
+            continue
         except Exception:  # noqa: BLE001 - e.g. RuntimeScopeError or OSError: unknown enrolment never joins
             unreadable.append(project)
             continue
@@ -840,6 +846,8 @@ def _require_managed_hosts(delegation_routing, projects):
             advisory.append(project)
     if unreadable:
         raise Blocked('enrolment_unavailable', projects=unreadable)
+    if unenrolled:
+        raise Blocked('not_enrolled', projects=unenrolled)
     if advisory:
         raise Blocked('advisory_host_unmanaged', projects=advisory)
 
