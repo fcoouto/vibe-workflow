@@ -377,13 +377,13 @@ Open work that a status line names is tracked on that task's box. Open work from
 
 ### Task S2.6: Allocate and reserve in one transaction
 
-**Status (10 November 2026):** Done (#123, #124): admission, persisted records and the single claim model (`tests/test_routing_admission.py`, `tests/test_routing_funding*.py`). The first box is ticked for the tests that exist; the model-ranker timeout test waits for S4, which builds the model ranker. Until then the empty-ranking and missing-table fallbacks carry RF8.
+**Status (10 November 2026):** Partial. Done for 7 of the 8 listed tests (#123, #124: `tests/test_routing_admission.py`, `tests/test_routing_funding*.py`); the model-ranker timeout test (RF8) waits for S4, where the ranker is introduced; the fallback when the ranking is empty or the strategy table is missing is tested instead.
 
 **Files:** modify `runtime/routing.py`, `runtime/usage_budget.py`; create `tests/test_routing_admission.py`.
 
 **Interface:** `admit(assignment, ranking, settings, observations, *, ledger) -> dict | blocked` filters by eligibility (spec §6.4), billing class (A12) and feasibility (spec §7.1), computes the class and route, then reserves and records `{bucket, shares, class, route, settings_revision}` in the same ledger transaction. The result is the admission (single-use dispatch authority added in S3).
 
-- [x] Write failing tests:
+- [ ] Write failing tests:
   - API Usage OFF excludes direct API routes and their expiry pressure.
   - No organization defined or enabled: `admit` still works for subscription and `worker_choices` routes, funded routes are excluded with `no_funded_organization`, and nothing raises. Routing never creates or enables an organization or key; the Personal workspace is enabled only by the user, and an enabled organization with no ready key is unavailable with a reason (spec §6.4).
   - A stored-but-unenabled key excludes them; a wrong-scope or revoked binding blocks the route.
