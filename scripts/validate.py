@@ -4,7 +4,9 @@
 import hashlib
 import json
 from pathlib import Path
+import os
 import re
+import subprocess
 import sys
 
 
@@ -236,12 +238,61 @@ def validate(root=ROOT):
             "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
 
 
-if __name__ == "__main__":
+def release_pathspecs():
+    """The paths a release ships: everything tracked except what scripts/package.py leaves out."""
+    from runtime.package_manifest import EXCLUDED
+    return [".", *[f":(exclude){item.rstrip('/')}" for item in EXCLUDED]]
+
+
+def _git(root, *args):
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env["GIT_CEILING_DIRECTORIES"] = str(root.parent)
+    try:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60,
+                              stdin=subprocess.DEVNULL, env=env)
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("Release check: cannot run Git here") from None
+
+
+def release_check(root=ROOT):
+    """Fail when the package version is already a release tag and shipped content differs from that tag.
+
+    A version without a tag is unreleased and passes. The comparison is the working tree against the tag,
+    limited to the paths scripts/package.py exports, so development-only changes need no version bump."""
+    root = Path(root).resolve(strict=True)
+    version = read_json(root / ".codex-plugin/plugin.json")["version"]
+    tag = _git(root, "rev-parse", "-q", "--verify", f"refs/tags/{version}^{{commit}}")
+    if tag.returncode == 1:
+        return {"release_tag": "absent", "version": version}
+    if tag.returncode != 0:
+        raise ValueError("Release check: cannot read this checkout's Git tags; run it inside the repository")
+    changed = _git(root, "diff", "--name-only", f"refs/tags/{version}", "--", *release_pathspecs())
+    if changed.returncode != 0:
+        raise ValueError(f"Release check: cannot compare with tag {version}")
+    names = changed.stdout.split()
+    if names:
+        listed = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+        raise ValueError(f"Version {version} is already released as a tag, but shipped content changed since "
+                         f"({listed}); raise the version in both plugin manifests before releasing")
+    return {"release_tag": "unchanged", "version": version}
+
+
+def main(arguments):
+    if arguments not in ([], ["--release"]):
+        print("Usage: validate.py [--release]", file=sys.stderr)
+        return 2
     try:
         report = validate()
+        if arguments:
+            report["release_check"] = release_check()
         for warning in report["warnings"]:
             print(f"Validation warning: {warning}", file=sys.stderr)
         print(json.dumps(report, indent=2))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Validation failed: {error}", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

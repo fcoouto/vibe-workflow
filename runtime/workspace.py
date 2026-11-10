@@ -10,9 +10,9 @@ import json
 import os
 from pathlib import Path
 import re
-import tempfile
 import time
 
+from runtime import hook_delivery
 from runtime import package_versions as pv
 from runtime import workspace_observe as ob
 
@@ -136,32 +136,35 @@ def _approved(entry, content):
 
 
 def check_hooks(context, client):
-    """Codex records approvals in its config. Missing approvals are visible; whether present ones still
-    match the current hook content is not, so that stays unknown rather than ready."""
+    """`ready` only when the client's own startup hook left a delivery note for the current package. Codex also
+    records approvals in its config, so missing ones are visible as `needs-user`; Claude Code lists nothing."""
     text, reason = ob.listing(context.observer, client, "plugin")
     if text is None:
         return _unobserved(reason)
-    parsed = pv.parse_codex(text)
+    parsed = (pv.parse_codex if client == "codex" else pv.parse_claude)(text)
     if parsed["state"] == "unknown":
         return _unobserved("unrecognized-output")
     enabled = [install for install in parsed["installs"] if install["status"] == "enabled"]
     if not enabled:
         return cell("missing", f"{pv.PLUGIN} is not installed and enabled in {client}")
-    try:
-        keys = _hook_keys(context.package)
-    except (OSError, ValueError, KeyError, TypeError):
-        return _unobserved("the package hook definitions are not readable")
-    try:
-        approvals = _approvals(ob.client_home(client, context.environ))
-    except ValueError:
-        return _unobserved("the client configuration is not readable")
-    untrusted = 0
-    for install in enabled:
-        prefix = f"{pv.PLUGIN}@{install['marketplace']}:hooks/codex.json:"
-        untrusted += sum(1 for key in keys if not _approved(approvals.get(prefix + key), content=True))
-    if untrusted:
-        return cell("needs-user", f"{untrusted} hook approvals are missing or disabled; the user must approve them in {client}")
-    return _unobserved("approvals are recorded, but whether they match the current hooks is only visible in a new session")
+    if client == "codex":
+        try:
+            keys = _hook_keys(context.package)
+        except (OSError, ValueError, KeyError, TypeError):
+            return _unobserved("the package hook definitions are not readable")
+        try:
+            approvals = _approvals(ob.client_home(client, context.environ))
+        except ValueError:
+            return _unobserved("the client configuration is not readable")
+        untrusted = 0
+        for install in enabled:
+            prefix = f"{pv.PLUGIN}@{install['marketplace']}:hooks/codex.json:"
+            untrusted += sum(1 for key in keys if not _approved(approvals.get(prefix + key), content=True))
+        if untrusted:
+            return cell("needs-user", f"{untrusted} hook approvals are missing or disabled; the user must approve them in {client}")
+    if hook_delivery.delivered(context.package, client, context.environ):
+        return cell("ready")
+    return _unobserved("start a new session")
 
 
 PLUGIN_PARSERS = {"codex": ob.codex_plugins, "claude-code": ob.claude_plugins, "opencode": ob.opencode_plugins}
@@ -373,26 +376,36 @@ def read_record(path):
     return record
 
 
+READINESS_ACTION = "run prepare-my-workspace"
+READINESS_LISTED = 3
+CHECKED_AT = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
+ITEM_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def readiness_warning(client, environ=None):
+    """One short line for startup when the last record lists required items missing for this client or the machine.
+
+    Reads one small private file; absent, corrupt or ready records give None."""
+    record = read_record(record_path(environ))
+    if record is None or not CHECKED_AT.fullmatch(record["observed_at"]):
+        return None
+    found = []
+    for entry in record["not_ready"]:
+        parts = entry.split(":") if isinstance(entry, str) else []
+        if len(parts) == 3 and ITEM_ID.fullmatch(parts[0]) and parts[1] in ("machine", client) and parts[2] in NOT_READY:
+            found.append(f"{parts[0]} {parts[2]}")
+    if not found:
+        return None
+    more = f" and {len(found) - READINESS_LISTED} more" if len(found) > READINESS_LISTED else ""
+    return (f"Workspace not ready for {client} (checked {record['observed_at']}): "
+            f"{', '.join(found[:READINESS_LISTED])}{more}. Next action: {READINESS_ACTION}.")
+
+
 def write_record(path, record):
-    path = Path(path)
     data = (json.dumps(record, indent=1) + "\n").encode()
     if len(data) > MAX_RECORD:
         raise ValueError("Record is too large")
-    pv._private_directory(path.parent)
-    descriptor, temporary = tempfile.mkstemp(prefix=".workspace-readiness-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
+    pv.write_private(path, data, ".workspace-readiness-")
 
 
 def record(package, environ=None, client=None, budget=BUDGET):
