@@ -215,8 +215,10 @@ def assignment_role(profile_role, explicit=None):
 
 def managed_project(path, settings_path=None):
     """Whether `path` (realpath) is a managed project or lies inside one. `settings_path` defaults to the routing
-    command's settings (`scripts.routing.default_settings`). A missing file has no managed project; settings that
-    exist but cannot be read count as managed, so a legacy spending path refuses and the managed path fails closed."""
+    command's settings (`scripts.routing.default_settings`). A missing file has no managed project. Settings that
+    exist but cannot be read count as managed (fail closed): the managed path then blocks on `settings_unavailable`,
+    and every legacy spending entry point refuses, so a corrupt settings file also stops legacy API Usage spending
+    (once C3-5 lands) until it is repaired."""
     if settings_path is None:
         from scripts import routing as command
         settings_path = command.default_settings()

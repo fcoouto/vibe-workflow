@@ -71,7 +71,8 @@ PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_ban
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
                  'invalid_binding', 'admission_error')
-# The observation collector (C3-1): `collect(project, assignment) -> {observations, seen}` (C.3 design 3.3).
+# The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
+# `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
 # Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's behavioural
 # self-check passes. (name, kind, target): `module` calls `<module>:<function>(workdir)`; `script` loads
@@ -382,9 +383,12 @@ class Service:
 
     def _collect(self, assignment):
         """The collector's snapshot and `seen` revisions for a managed project; `seen` passes through as an opaque
-        mapping. A missing or failing collector admits nothing (`observations_unavailable`)."""
+        mapping. The collector reads this service's own stores, never the defaults. A missing or failing collector
+        admits nothing (`observations_unavailable`)."""
         try:
-            result = importlib.import_module(COLLECTOR).collect(str(self.project), assignment)
+            result = importlib.import_module(COLLECTOR).collect(str(self.project), assignment,
+                                                                settings_path=self.settings_path,
+                                                                ledger_path=self.ledger_path)
         except Exception:  # noqa: BLE001 - missing module (before C3-1) or a collector failure
             raise Blocked('observations_unavailable') from None
         require(type(result) is dict and {'observations', 'seen'} <= set(result) and type(result['seen']) is dict,
