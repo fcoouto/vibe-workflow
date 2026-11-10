@@ -7,7 +7,9 @@ Holds are never stranded; every recovery settles only its own attempt id, and se
 - `execute` writes `dispatching` to `<run>/routing.json` BEFORE the routing `dispatch` and `dispatched` after it
   (`Routed`), while it holds the run's execution lock. A started run whose lock is free and whose hold is open
   belongs to a dead `execute`.
-- The next managed `prepare` or `execute` recovers both under `<root>/.routing.lock` (`recover`): the hold is
+- A run `prepare` wrote but no `execute` ever started keeps its admission until it is older than
+  `routing.ADMISSION_TTL` (`admitted_at`, else the routing file's time); it can no longer be sent then.
+- The next managed `prepare` or `execute` recovers all three under `<root>/.routing.lock` (`recover`): the hold is
   released, or, once dispatched, completed with no usage (its whole reservation stays held as `cost_unknown`). An
   `uncertain` hold is the operator's (C.3 design 3.5). Nothing is sent on any of these paths.
 
@@ -18,8 +20,9 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import time
 
-from runtime import opencode_launcher as launcher
+from runtime import opencode_launcher as launcher, routing
 
 PENDING, ROOT_LOCK, ROUTING = '.routing', '.routing.lock', 'routing.json'
 OPEN_STATES = ('admitted', 'dispatching', 'dispatched')
@@ -67,8 +70,9 @@ def _save(path, value):
 
 
 def admitted(run, attempt, checkout):
-    """The run's dispatch state when its run is written: admitted, not yet dispatched."""
-    _save(Path(run) / ROUTING, dict(attempt_id=attempt, checkout=str(checkout), state='admitted'))
+    """The run's dispatch state when its run is written: admitted at this time, not yet dispatched."""
+    _save(Path(run) / ROUTING, dict(attempt_id=attempt, checkout=str(checkout), state='admitted',
+                                    admitted_at=int(time.time())))
 
 
 def state(run):
@@ -162,11 +166,31 @@ def _unlocked(path):
     return handle
 
 
-def recover(root, settle_at):
+def _expired(run, current, now):
+    """Whether a run's admission is older than routing.ADMISSION_TTL (never for a time ahead of `now`)."""
+    at = current.get('admitted_at')
+    if type(at) is not int:
+        try:
+            at = int((run / ROUTING).stat().st_mtime)  # written after the admission: never earlier than it
+        except OSError:
+            return False
+    return 0 <= now - at and now - at > routing.ADMISSION_TTL
+
+
+def _started(run):
+    """Whether `execute` began this run (its result left `prepared`), None when unreadable."""
+    try:
+        return json.loads((run / 'result.json').read_text())['state'] != 'prepared'
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def recover(root, settle_at, expired=None):
     """Under `root_lock`: settle what dead processes left. `settle_at(checkout, attempt)` closes one attempt's own hold
     and answers None once nothing of it is open, else routing's fixed reason. A run still `prepared` keeps its
-    admission, which expires unsent."""
-    root = Path(root)
+    admission until it is older than ADMISSION_TTL; then its hold is released and `expired(run)` marks the run.
+    A write-ahead entry or a run whose lock another process holds is alive and never touched."""
+    root, now = Path(root), int(time.time())
     for path in sorted((root / PENDING).glob('*.json')) if (root / PENDING).is_dir() else []:
         handle = _unlocked(path)
         if handle is None:
@@ -181,15 +205,22 @@ def recover(root, settle_at):
     for run in sorted(root.iterdir()):
         try:
             current = json.loads((run / ROUTING).read_text())
-            started = json.loads((run / 'result.json').read_text())['state'] != 'prepared'
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError):
             continue
-        if current.get('state') not in OPEN_STATES or not started:
+        started = _started(run)
+        if not isinstance(current, dict) or current.get('state') not in OPEN_STATES or started is None or \
+                not started and (current.get('state') != 'admitted' or not _expired(run, current, now)):
             continue
         handle = _unlocked(run / 'execution.lock')
-        if handle is not None:  # its `execute` is dead
-            with handle:
-                settled(run, settle_at(current['checkout'], current['attempt_id']))
+        if handle is None:
+            continue  # its `execute` is alive
+        with handle:
+            if not started and _started(run) is not False:
+                continue  # an `execute` began between the read and the lock
+            reason = settle_at(current['checkout'], current['attempt_id'])
+            settled(run, reason)
+            if not started and reason is None and expired is not None:
+                expired(run)  # never executed: nothing ran, so native takeover is ready
 
 
 def response(host, session, limit):

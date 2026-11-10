@@ -187,6 +187,27 @@ class ManagedPrepareTests(ManagedWorkerCase):
         self.assertEqual(self.holds(), {'admitted': 1})  # the new run's hold only
         self.assertTrue((run / 'brief.json').exists())
 
+    def test_a_prepared_run_never_executed_is_released_after_the_admission_ttl(self):
+        """F4 item 4: before, recovery skipped every `prepared` run, so its admitted hold was kept for good."""
+        from runtime import openrouter_worker_routing as state, routing
+        self.manage()
+        events = self.recorded()
+        first = self.api.prepare(self.runs, self.brief())
+        attempt = json.loads((first / 'brief.json').read_text())['routing']['attempt_id']
+        self.api.prepare(self.runs, self.brief('pilot-2'))  # within the TTL: kept
+        self.assertEqual((state.state(first), self.holds()), ('admitted', {'admitted': 2}))
+        path = first / state.ROUTING
+        path.write_text(json.dumps(dict(json.loads(path.read_text()),
+                                        admitted_at=json.loads(path.read_text())['admitted_at'] - routing.ADMISSION_TTL - 1)))
+        self.api.prepare(self.runs, self.brief('pilot-3'))
+        self.assertIn((attempt, 'not_dispatched'), [(event['attempt_id'], event['kind']) for event, _ in events])
+        self.assertEqual((state.state(first), self.holds()), ('settled', {'admitted': 2}))  # pilot-2 and pilot-3
+        result = json.loads((first / 'result.json').read_text())
+        self.assertEqual((result['state'], result['failure'], result['native_fallback_ready']),
+                         ('failed', dict(category='integration', reason='admission_expired'), True))
+        with self.assertRaisesRegex(ValueError, 'already_started'):  # never sent afterwards
+            self.execute(first)
+
     def test_the_cli_prints_routings_fixed_refusal_reason(self):
         import contextlib
         import io

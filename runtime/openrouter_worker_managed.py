@@ -26,6 +26,7 @@ from runtime import external_delegation, openrouter_settings as settings
 
 HOST = 'openrouter_worker'
 ROLE = 'researcher'
+ADMISSION_EXPIRED = 'admission_expired'  # a prepared run never executed within routing.ADMISSION_TTL
 SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
 SELF_CHECK_UNSAFE = 'self_check_workdir_unsafe'
 
@@ -99,7 +100,7 @@ def prepare(api, root, brief, now, deadline, source):
                                              service='openrouter', mode='worker')
     checkout, attempt = Path(current['checkout']), 'worker-' + secrets.token_hex(12)
     with state.root_lock(root):
-        state.recover(root, api._settle_at)
+        state.recover(root, api._settle_at, expired=_expire(api))
         pending, entry = state.write_ahead(root, attempt, checkout)
     service, run = None, None
     try:
@@ -124,6 +125,14 @@ def prepare(api, root, brief, now, deadline, source):
             pending.close()
             if service is not None:
                 service.close()
+
+
+def _expire(api):
+    """`recover`'s mark for a prepared run whose admission expired unsent: it failed before anything ran."""
+    def expired(run):
+        brief = json.loads((run / 'brief.json').read_text())
+        api.save(run / 'result.json', api._failed_result(brief, ADMISSION_EXPIRED))
+    return expired
 
 
 def _charge(api, reserved):
@@ -160,7 +169,8 @@ def execute(api, run, brief, executable, auth_data, publish):
     service = None
     try:
         with state.root_lock(run.parent):
-            state.recover(run.parent, api._settle_at)  # this run's own execution lock is held: it is never touched here
+            # this run's own execution lock is held: it is never touched here
+            state.recover(run.parent, api._settle_at, expired=_expire(api))
         stamp = api.management_stamp(brief)
         with settings.admission(brief['source_root'], 'workers', root=run.parent, opencode=executable,
                                 auth_data=auth_data, revision=stamp['revision'], scope_id=stamp['scope_id']) as report:
