@@ -1,0 +1,345 @@
+"""C3-2: native delegation and review through Smart Routing `prepare` in a managed project (C.3 design 6.3).
+
+Synthetic native catalog and the C3-1 `managed_project_fixture` (temporary routing stores, a static route source);
+no model, network, host or secret-store call, and no real user state.
+"""
+from contextlib import closing, contextmanager
+import json
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from runtime import delegation, delegation_routing, evidence, routing, routing_gates, routing_launch, \
+    routing_observations, state
+from scripts import routing as command
+from tests import test_smart_routing_features as features
+from tests.fixture_delegation import AdmissionFixture
+
+NATIVE = features.fixture_route('native:new-native-model#high', 'included_subscription')
+OTHER = features.fixture_route('native:other-native-model#high', 'included_subscription')
+
+
+class ManagedDelegation(AdmissionFixture, unittest.TestCase):
+    planned = True
+
+    def setUp(self):
+        super().setUp()
+        if self.planned:
+            self.plan()
+
+    @contextmanager
+    def managed(self, *routes, windows=None):
+        with features.managed_project_fixture(self, self.repo, routes=routes) as stores:
+            self.stores = stores
+            if windows is not None:  # a mutable window override: (pool, now) -> windows or None for the fixture's
+                source = routing_observations.default_source()
+                original = source._windows
+
+                def current(pool, now):
+                    found = windows(pool, now)
+                    return original(pool, now) if found is None else found
+                source._windows = current
+            yield stores
+
+    def service(self):
+        return command.Service(self.stores['settings'], self.stores['ledger'])
+
+    def snapshot(self):
+        with closing(self.service()) as service:
+            return service._ledger(False).snapshot()
+
+    def admission(self, attempt_id):
+        return next((r for r in self.snapshot()['admissions'] if r['attempt_id'] == attempt_id), None)
+
+    def hold(self, attempt_id):
+        found = self.snapshot()['holds'].get(attempt_id)
+        return None if found is None else found['state']
+
+    def worker_choices(self, *identities):
+        with closing(self.service()) as service:
+            revision = service.handle(json.dumps(dict(v=1, op='status')).encode())['settings_revision']
+            choices = [dict(identity, funding='subscription') for identity in identities]
+            answer = service.handle(json.dumps(dict(v=1, op='set', expected_revision=revision, change=dict(
+                worker_choices=dict(implementer=choices, reviewer=choices)))).encode())
+        self.assertEqual(answer['state'], 'updated', answer)
+
+    @staticmethod
+    def native(model='new-native-model', effort='high'):
+        return routing_launch.route_identity('codex_native', model=model, effort=effort)
+
+    def routed_request(self, **updates):
+        request = self.prepare_request(**updates)
+        request['selection'] = dict(rationale='Routing chooses the worker', profile_ids=['bounded'], mode='routed')
+        return request
+
+    def inherit_request(self, **updates):
+        request = self.prepare_request(**updates)
+        request['selection'] = dict(request['selection'], mode='inherit', inheritance=dict(
+            model='new-native-model', effort='high', reference='codex:documented-inheritance'))
+        return request
+
+
+class UnmanagedProjects(ManagedDelegation):
+    def test_an_unmanaged_project_keeps_todays_selection_behaviour(self):
+        with self.assertRaisesRegex(state.StateError, 'Invalid task control fields|Unsupported worker settings mode'):
+            self.api.prepare_assignment(self.scope, self.routed_request(dispatch_id='routed-unmanaged'))
+        with features.counted_admissions() as admit:
+            prepared = self.prepare()
+        self.assertTrue(prepared['launch_admitted'])
+        self.assertEqual((prepared['requested_model'], prepared['requested_effort']), ('new-native-model', 'high'))
+        self.assertNotIn('routing', prepared)
+        self.assertNotIn('route', prepared)
+        self.assertEqual(admit.count, 0)
+
+
+class ManagedSelectionModes(ManagedDelegation):
+    def test_an_explicit_choice_is_admitted_once_bound_to_its_job_and_attempt(self):
+        with self.managed(NATIVE), features.counted_admissions() as admit:
+            prepared = self.prepare()
+        self.assertTrue(prepared['launch_admitted'], prepared)
+        self.assertEqual(admit.count, 1)
+        self.assertEqual(prepared['route'], dict(model='new-native-model', effort='high',
+                                                 attempt_id=prepared['attempt_id']))
+        self.assertEqual(prepared['routing']['state'], 'admitted')
+        self.assertIsNone(prepared['requested_model'])  # the routing admission is the only record of the model
+        self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')  # the last pre-spawn step ran
+        self.assertNotIn('authority', json.dumps(prepared))
+        binding = self.admission(prepared['attempt_id'])['binding']['job']
+        self.assertEqual((binding['locator']['job_id'], binding['locator']['attempt_id']),
+                         ('edit', prepared['attempt_id']))
+        self.assertEqual(delegation_routing.admitted_route(self.scope, prepared['attempt_id'])['model'],
+                         'new-native-model')
+
+    def test_explicit_and_inherit_never_get_a_substituted_route(self):
+        with self.managed(OTHER):  # only another native model is qualified, and worker_choices list it
+            self.worker_choices(self.native('other-native-model'))
+            previous = {}
+            for name, build in (('explicit', self.prepare_request), ('inherit', self.inherit_request)):
+                with self.subTest(mode=name):
+                    request = build(dispatch_id=name + '-1', **previous)
+                    prepared = self.api.prepare_assignment(self.scope, request)
+                    previous = dict(retry_of=prepared['attempt_id'])
+                    self.assertFalse(prepared['launch_admitted'])
+                    self.assertEqual(prepared['routing'], dict(state='pending', reason='explicit_choice_unavailable'))
+                    self.assertNotIn('route', prepared)
+                    self.assertIsNone(self.admission(prepared['attempt_id']))
+                    self.assertEqual(self.raw_assignment(prepared['attempt_id'])['status'], 'prepared')
+                    delegation_routing.release(self.scope, request, prepared['attempt_id'], 'routing_pending')
+
+    def test_inherit_is_admitted_on_the_inherited_route(self):
+        with self.managed(NATIVE):
+            prepared = self.api.prepare_assignment(self.scope, self.inherit_request())
+        self.assertTrue(prepared['launch_admitted'], prepared)
+        self.assertEqual(self.admission(prepared['attempt_id'])['route_identity'], self.native())
+
+    def test_routed_mode_lets_routing_choose(self):
+        with self.managed(OTHER, NATIVE):
+            self.worker_choices(self.native())
+            prepared = self.api.prepare_assignment(self.scope, self.routed_request())
+        self.assertTrue(prepared['launch_admitted'], prepared)
+        self.assertEqual(prepared['route']['model'], 'new-native-model')
+        self.assertIsNone(prepared['requested_model'])
+
+    def test_pending_then_admitted_on_a_replay_grants_exactly_one_permit(self):
+        spent = dict(value=True)
+
+        def windows(pool, now):
+            if pool == 'fixture-codex-subscription' and spent['value']:
+                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
+                             observed_at=now)]
+            return None
+        request = self.prepare_request()
+        with self.managed(NATIVE, windows=windows):
+            waiting = self.api.prepare_assignment(self.scope, request)
+            self.assertFalse(waiting['launch_admitted'])
+            self.assertEqual(waiting['routing']['state'], 'pending')
+            spent['value'] = False
+            granted = self.api.prepare_assignment(self.scope, request)
+            again = self.api.prepare_assignment(self.scope, request)
+        self.assertEqual(granted['attempt_id'], waiting['attempt_id'])
+        self.assertTrue(granted['launch_admitted'], granted)
+        self.assertFalse(again['launch_admitted'])
+        self.assertTrue(again['routing']['duplicate'])
+        self.assertEqual([waiting['launch_admitted'], granted['launch_admitted'], again['launch_admitted']].count(True), 1)
+
+    def changed_workflow(self, failures):
+        original, raised = routing_gates.D6Workflow.view, []
+
+        def view(reader, locator):
+            if len(raised) < failures:
+                raised.append(locator)
+                raise routing_gates.WorkflowChanged('raced')
+            return original(reader, locator)
+        with self.managed(NATIVE), mock.patch.object(routing_gates.D6Workflow, 'view', view):
+            return self.prepare(), raised
+
+    def test_a_workflow_change_is_retried_once(self):
+        prepared, raised = self.changed_workflow(1)
+        self.assertEqual(len(raised), 1)
+        self.assertEqual(prepared['routing']['state'], 'admitted', prepared)
+        self.assertTrue(prepared['launch_admitted'])
+
+    def test_a_repeated_workflow_change_is_reported_and_launches_nothing(self):
+        prepared, raised = self.changed_workflow(2)
+        self.assertEqual(len(raised), 2)
+        self.assertEqual(prepared['routing'], dict(state='blocked', reason='workflow_changed'))
+        self.assertFalse(prepared['launch_admitted'])
+        self.assertEqual(self.raw_assignment(prepared['attempt_id'])['status'], 'prepared')  # released explicitly
+
+
+class ManagedRelease(ManagedDelegation):
+    def test_a_routed_catalog_mismatch_releases_the_never_launched_assignment(self):
+        with self.managed(NATIVE):  # worker_choices list the fixture CHOICE first: an anthropic route Codex lacks
+            prepared = self.api.prepare_assignment(self.scope, self.routed_request())
+            self.assertFalse(prepared['launch_admitted'])
+            self.assertEqual(prepared['routing'], dict(state='blocked', reason='catalog_mismatch'))
+            self.assertEqual(self.hold(prepared['attempt_id']), 'released')  # `not_dispatched` closed the hold
+            record = self.raw_assignment(prepared['attempt_id'])
+            self.assertEqual((record['status'], record['result']), ('settled', dict(outcome='cancelled')))
+            self.assertEqual(prepared['release']['status'], 'settled')
+            self.worker_choices(self.native())
+            again = self.api.prepare_assignment(self.scope, self.routed_request(
+                dispatch_id='request-2', retry_of=prepared['attempt_id']))
+        self.assertTrue(again['launch_admitted'], again)  # claims and resource units were free again
+
+    def test_an_advisory_host_never_gets_a_dollar_route(self):
+        gateway = dict(state='admitted', duplicate=False, admission=dict(
+            attempt_id='x', route='gateway-route', billing_class='gateway', pool='p', mode='worker_choice',
+            route_identity=self.native()))
+        dispatched = []
+        with self.managed(NATIVE), mock.patch.object(delegation_routing, 'admit', return_value=gateway), \
+                mock.patch.object(command.Service, '_dispatch', side_effect=lambda body: dispatched.append(body)):
+            prepared = self.prepare()
+        self.assertFalse(prepared['launch_admitted'])
+        self.assertEqual(prepared['routing'], dict(state='blocked', reason='dollar_route_needs_enforced_host'))
+        self.assertEqual(dispatched, [])
+        self.assertEqual(self.raw_assignment(prepared['attempt_id'])['status'], 'settled')
+
+    def test_reconcile_closes_a_dispatched_hold_the_coordinator_never_spawned(self):
+        with self.managed(NATIVE):
+            prepared = self.prepare()
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
+            settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
+                prepared, outcome='cancelled'))
+            self.assertEqual(settled['routing']['closed'][0]['kind'], 'complete')
+            self.assertEqual(self.hold(prepared['attempt_id']), 'complete')
+
+
+class ManagedGraph(ManagedDelegation):
+    planned = False
+
+    def test_one_task_graph_each_job_binds_its_own_canonical_job(self):
+        value = self.plan_value(jobs=[dict(id='edit', role='worker', claims=[self.path_claim()], dependencies=[],
+                                           max_attempts=3),
+                                      dict(id='docs', role='worker', claims=[self.path_claim('docs.md')],
+                                           dependencies=[], max_attempts=3)])
+        self.plan(value)
+        (self.repo / 'docs.md').write_text('docs\n')
+        with self.managed(NATIVE):
+            first = self.prepare()
+            docs = self.prepare_request(dispatch_id='docs-1', job_id='docs')
+            docs['brief'].update(resources=[self.path_claim('docs.md')], files=['docs.md'])
+            second = self.api.prepare_assignment(self.scope, docs)
+            body = json.dumps(self.snapshot())
+        for prepared, job_id in ((first, 'edit'), (second, 'docs')):
+            self.assertTrue(prepared['launch_admitted'], prepared)
+            locator = self.admission(prepared['attempt_id'])['binding']['job']['locator']
+            self.assertEqual((locator['job_id'], locator['attempt_id']), (job_id, prepared['attempt_id']))
+        self.assertNotIn('Implement bounded edit', body)  # the ledger keeps digests, never the brief or graph
+
+
+class ManagedGates(ManagedDelegation):
+    def test_resource_and_funding_gates_bind_the_same_job_revision(self):
+        with self.managed(NATIVE):
+            prepared = self.prepare()
+            stored = self.admission(prepared['attempt_id'])['binding']['job']
+            locator = dict(stored['locator'])
+            watch = delegation.routing_watch(self.scope)
+            try:
+                view = delegation.routing_view(self.scope, locator, watch)
+            finally:
+                watch.close()
+        self.assertEqual(stored['revision'], view['job']['revision'])
+        self.assertEqual(stored['resource'], view['resource']['marker'])  # the bound assignment's resource units
+        self.assertIsNotNone(self.admission(prepared['attempt_id'])['pool'])
+
+    def test_a_workflow_change_after_prepare_sends_nothing(self):
+        from runtime import workstreams
+        current = workstreams.control(self.scope, 'status', dict(client='codex'))
+        enabled = workstreams.control(self.scope, 'enable', dict(client='codex', expected_revision=current['revision']))
+        limits = dict(context_id='WS42.01', rationale='One bounded outcome', output_tokens=12000, context_tokens=64000,
+                      max_steps=40, max_seconds=1200, max_continuations=3, backoff_seconds=0)
+        with self.managed(NATIVE):
+            prepared = self.prepare(workstream_revision=enabled['revision'], workstream_limits=limits)
+            self.assertTrue(prepared['dispatch_prepared'], prepared)
+            self.assertEqual(self.hold(prepared['attempt_id']), 'admitted')  # dispatch waits for consume_dispatch
+            with mock.patch.object(delegation, 'validate_dependencies',
+                                   side_effect=state.StateError('reopened')):  # a prerequisite reopened
+                with self.assertRaisesRegex(state.StateError, 'dependency_reopened'):
+                    workstreams.consume_dispatch(self.scope, self.request(attempt_id=prepared['attempt_id'],
+                                                                          workstream_revision=enabled['revision']))
+            self.assertEqual(self.hold(prepared['attempt_id']), 'admitted')  # nothing was dispatched or sent
+            self.assertNotIn('workstream_dispatch', self.raw_assignment(prepared['attempt_id']))
+            sent = workstreams.consume_dispatch(self.scope, self.request(attempt_id=prepared['attempt_id'],
+                                                                         workstream_revision=enabled['revision']))
+            self.assertTrue(sent['send_admitted'])
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
+
+    def test_an_unchanged_continuation_reuses_its_child_and_profile_with_a_new_admission(self):
+        from runtime import workstreams
+        current = workstreams.control(self.scope, 'status', dict(client='codex'))
+        enabled = workstreams.control(self.scope, 'enable', dict(client='codex', expected_revision=current['revision']))
+        limits = dict(context_id='WS42.01', rationale='One bounded outcome', output_tokens=12000, context_tokens=64000,
+                      max_steps=40, max_seconds=1200, max_continuations=3, backoff_seconds=0)
+        with self.managed(NATIVE):
+            prepared = self.prepare(workstream_revision=enabled['revision'], workstream_limits=limits)
+            workstreams.consume_dispatch(self.scope, self.request(attempt_id=prepared['attempt_id'],
+                                                                  workstream_revision=enabled['revision']))
+            self.observe_worker(prepared)
+            proof = self.worker_reconciliation_request(prepared, outcome='failed')
+            intent = workstreams.prepare_continuation(self.scope, self.request(
+                attempt_id=prepared['attempt_id'], workstream_revision=enabled['revision'], reason='follow-up',
+                prompt='Finish the original accepted scope', human_continue=False, host_proof=proof['host_proof']))
+            self.assertEqual(intent['routing']['state'], 'admitted', intent)
+            fresh = intent['routing']['attempt_id']
+            self.assertEqual(self.hold(prepared['attempt_id']), 'complete')  # the previous turn ended
+            first, second = self.admission(prepared['attempt_id']), self.admission(fresh)
+            self.assertNotEqual(fresh, prepared['attempt_id'])
+            self.assertEqual(first['ranking']['profile_digest'], second['ranking']['profile_digest'])
+            self.assertEqual(second['route_identity'], first['route_identity'])
+            sent = workstreams.consume_continuation(self.scope, self.request(
+                attempt_id=prepared['attempt_id'], workstream_revision=enabled['revision'], token=intent['token']))
+            self.assertTrue(sent['send_admitted'])
+            self.assertEqual(sent['worker_id'], 'child')
+            self.assertEqual(self.hold(fresh), 'dispatched')
+
+
+class ManagedReview(ManagedDelegation):
+    planned = False
+
+    def test_review_admission_goes_through_prepare_with_the_reviewer_role(self):
+        self.plan(self.plan_value(jobs=[dict(id='review', role='review', claims=[self.path_claim(mode='read')],
+                                             dependencies=[], max_attempts=3)]))
+        request = self.prepare_request(job_id='review', dispatch_id='review-dispatch')
+        request.pop('brief')
+        request |= dict(coverage=['general'], criteria=['works'], assignment='Review app.py read-only.')
+        with self.managed(NATIVE), features.counted_admissions() as admit:
+            prepared = evidence.prepare_review(self.scope, request)
+        self.assertTrue(prepared['launch_admitted'], {k: prepared.get(k) for k in ('routing', 'launch_admitted')})
+        self.assertEqual(admit.count, 1)
+        (assignment, *_), kwargs = admit.calls[0]
+        self.assertEqual(assignment['role'], 'reviewer')
+        self.assertEqual(kwargs['workflow']['locator']['job_id'], 'review')
+
+
+class SelfCheck(unittest.TestCase):
+    def test_managed_self_check_passes_in_a_sandbox(self):
+        workdir = Path(tempfile.mkdtemp()).resolve() / 'check'
+        self.addCleanup(shutil.rmtree, workdir.parent)
+        self.assertEqual(delegation_routing.managed_self_check(str(workdir)), [])
+
+
+if __name__ == '__main__':
+    unittest.main()
