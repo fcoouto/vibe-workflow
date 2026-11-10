@@ -15,8 +15,8 @@ pre-registered canary measures (C3-3; plan Task S3.7). The harness never changes
 The environment (`opencode_live.CanaryEnv` in a live run, a fake in tests) provides: `status()`, `health()`,
 `prepare(body)`, `dispatch(attempt)`, `attach(session, attempt, token)`, `detach(...)`, `launch(session, message,
 allow_title)`, `account(session, titles_sent)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally
-`quiesce()`, `diagnostics(session)` (payload shapes for an aborted admission) and `progress()` (how far the last
-accounting read got).
+`quiesce()`, `diagnostics(session)` (payload shapes for an aborted admission), `progress()` (how far the last
+accounting read got) and `export_if_due()` (the 12-hour replay export of the canary admissions).
 """
 import os
 from pathlib import Path
@@ -24,7 +24,8 @@ import shutil
 import stat
 import time
 
-from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, MODEL, PROTECTED, PROVIDER, Refused, VARIANT,
+from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, HARNESS_SCRIPTS, MODEL, PROTECTED, PROVIDER,
+                                        Refused, VARIANT,
                                         exception_origin, inside_git_worktree, summarize_ms)
 
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
@@ -83,14 +84,38 @@ def request(pool=POOL):
     return dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness=HARNESS_NAME, kind="primary", funding_pool=pool)
 
 
-def check_project(project):
-    """The pilot runs only in the allowlisted checkout: exactly that path, resolved, and a git checkout root."""
+def check_project(project, allow=None, settings=None):
+    """The pilot runs only in the allowlisted checkout: exactly that path, resolved, and a git checkout root.
+
+    `allow` replaces the default ALLOWLIST for one run (`--canary-allow`). An explicit project must also be on the
+    dedicated canary settings' `managed_projects` (`settings`), which the harness never changes itself."""
     if not project:
         raise Refused("--project is required in canary mode")
     resolved = os.path.realpath(project)
-    if resolved != os.path.realpath(ALLOWLIST) or not (Path(resolved) / ".git").exists():
+    if resolved != os.path.realpath(allow or ALLOWLIST) or not (Path(resolved) / ".git").exists():
         raise Refused("canary mode runs only in the allowlisted project")
+    if allow is not None:
+        from runtime import routing_settings
+        try:
+            managed = settings is not None and routing_settings.managed_project(Path(resolved), settings_path=Path(settings))
+        except Exception:  # noqa: BLE001 - unreadable settings never admit a project
+            managed = False
+        if managed is not True:
+            raise Refused("an explicit canary project must be on the canary settings' managed_projects")
     return resolved
+
+
+def pilot_max(requested, ledger):
+    """The admissions for one run (`--pilot-max`): PILOT_MAX by default; an explicit value is 1 to PILOT_MAX and its
+    planned exposure must fit what the durable `pilot` purpose still has."""
+    if requested is None:
+        return PILOT_MAX
+    if type(requested) is not int or not 1 <= requested <= PILOT_MAX:
+        raise Refused("--pilot-max is 1 to %d" % PILOT_MAX)
+    if planned_exposure(requested) > ledger.remaining("pilot"):
+        raise Refused("--pilot-max %d needs %d pilot calls; the ledger has %d" % (
+            requested, planned_exposure(requested), ledger.remaining("pilot")))
+    return requested
 
 
 CONFIG_NAMES = ("opencode.json", "opencode.jsonc", ".opencode")
@@ -161,7 +186,7 @@ def reset_state(path, processes, home=None):
         if len(parts) < 2 or not parts[0].isdigit() or int(parts[0]) == own:
             continue
         command = parts[1]
-        if ("opencode_live.py" in command and "--reset-canary-state" not in command) \
+        if (any(script in command for script in HARNESS_SCRIPTS) and "--reset-canary-state" not in command) \
                 or "opencode serve --hostname 127.0.0.1" in command or ("routing.py" in command and str(directory) in command):
             raise Refused("a harness process is still alive; stop it before resetting the canary state")
     names = sorted(entry.name for entry in directory.iterdir())
@@ -261,12 +286,13 @@ def preconditions(status, health, probes):
     return reasons
 
 
-def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None):
-    """`n` (1-20) explicit subscription admissions cycling three roles and two complexity bands. `route` is
-    `{provider, model, effort, harness}` (default: the pilot's claude-agent/haiku#low)."""
+def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, limit=None):
+    """`n` (1 to `limit`, default PILOT_MAX) explicit subscription admissions cycling three roles and two complexity
+    bands. `route` is `{provider, model, effort, harness}` (default: the pilot's claude-agent/haiku#low)."""
     route = dict(route or dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME))
-    if type(n) is not int or not 1 <= n <= PILOT_MAX:
-        raise Refused("the pilot runs 1 to %d admissions" % PILOT_MAX)
+    limit = PILOT_MAX if limit is None else min(limit, PILOT_MAX)
+    if type(n) is not int or not 1 <= n <= limit:
+        raise Refused("the pilot runs 1 to %d admissions" % limit)
     now = int(time.time()) if now is None else now
     plan = []
     for index in range(n):
@@ -409,6 +435,10 @@ class PilotDriver:
 
     def admit(self, item, first):
         env, label, current = self.env, item["label"], self.current
+        if callable(getattr(env, "export_if_due", None)):  # the 12-hour replay export, on the next routing step
+            exported = env.export_if_due()
+            if exported is not None:
+                self.results.setdefault("exports", []).append(dict(admission=label["index"], exported=exported.get("exported")))
         status = env.status()
         if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
             raise Abort("concurrency")

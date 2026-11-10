@@ -2,7 +2,8 @@
 
 It reads local trusted records only: the route manifest, stored rate-limit observations, the entitlement record,
 the ledger it is given and `openrouter_settings.status`. It never reads a secret, makes a network call, calls a
-model or takes the OpenRouter admission lock. Window and entitlement files live next to the routing settings path
+model or takes the OpenRouter admission lock; the one exception is the opt-in Codex window read (`refresh_windows`,
+R7), which runs `codex app-server` read-only. Window and entitlement files live next to the routing settings path
 the caller gives, never under a path derived from HOME.
 """
 from contextlib import closing, contextmanager
@@ -435,7 +436,26 @@ def _ledger_data(ledger_path):
     return data if type(data) is dict and type(data.get('organizations')) is dict else None
 
 
-def collect(project, assignment, *, settings_path, ledger_path, source=None):
+def _refresh_windows(specs, settings_path, marks):
+    """R7: make the Codex pool's reading fresh before it is read, only for routes this `prepare` could admit
+    (`runtime/codex_rate_limits.py`: on demand, one reader per pool, a fixed reason and no retry on failure).
+    Returns `{pool: reason}` for each pool left without a fresh reading (`reader_busy` or a `codex_*` reason)."""
+    from runtime import codex_rate_limits
+    need = {}
+    for spec in specs:
+        if _manifest_reason(spec) is None and (spec['route'], spec['account']) not in marks \
+                and codex_rate_limits.applies(spec):
+            need.setdefault(spec['pool'], set()).update(spec['demand'])
+    failed = {}
+    for pool, windows in need.items():
+        outcome = codex_rate_limits.refresh(settings_path, need=tuple(sorted(windows)))
+        if outcome.get('state') not in ('fresh', 'stored'):
+            failed[pool] = outcome.get('reason') if outcome.get('reason') in codex_rate_limits.REASONS \
+                else 'observation_store_invalid'
+    return failed
+
+
+def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False):
     """Build `{observations, seen}` for `prepare` from local records (C.3 design 3.3, collector return shape).
 
     It reads only the stores the calling service uses: `settings_path` locates the private window and entitlement
@@ -445,8 +465,11 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
 
     A gateway route's credential is derived here from the same cached `status` report, never from the source: it is
     ready only when the report is enabled, lists the host's route and is locally `ready`, and names an activation.
-    A manifest `validate_routes` refuses raises ValueError, so `prepare` fails closed."""
-    now = int(time.time())
+    A manifest `validate_routes` refuses raises ValueError, so `prepare` fails closed.
+
+    `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
+    `codex app-server` first when its reading is missing or stale; this is the collector's only process or network
+    use, and a failed read leaves the route stale or unobserved."""
     source = source if source is not None else default_source(settings_path)
     data = _ledger_data(ledger_path)
     scope = assignment.get('scope') if type(assignment) is dict else None
@@ -455,6 +478,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         marks_reason = None
     except (OSError, ValueError, KeyError, TypeError):
         marks, marks_reason = set(), 'entitlement_unavailable'
+    unread = {}
+    if refresh_windows and type(source) is LocalSource and marks_reason is None:
+        unread = _refresh_windows(manifest_routes(source), settings_path, marks)
+    now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
     routes, pools, excluded, cache = [], {}, [], {}
     seen = dict(openrouter_revision=None)
 
@@ -512,6 +539,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
             if dollar:
                 pools[spec['pool']]['billing_class'] = billing
         pool = pools[spec['pool']]
+        demanded = [window for window in pool['windows'] if window['id'] in spec['demand']]
+        if spec['pool'] in unread and (len(demanded) < len(spec['demand']) or not all(w['fresh'] for w in demanded)):
+            leave(spec, unread[spec['pool']])  # the Codex reader's fixed reason (R7), instead of stale or unobserved
+            continue
         if not pool['windows'] or not set(spec['demand']) <= {window['id'] for window in pool['windows']}:
             leave(spec, 'window_unobserved')  # enabled, but no telemetry yet (C.3 design 7.1 decision 6)
             continue

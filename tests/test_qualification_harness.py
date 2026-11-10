@@ -578,6 +578,7 @@ class CleanupOrderTests(Temp):
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
         base = self.private(self.tmp / "iso")
         run = live.Run(base, ledger, canary_project=str(project), canary_state=state)
+        run.replay_dir = self.tmp / "replay"  # the cleanup's admission export stays in the test's tree
         run.server.project_config.create({"plugins": []})
         run.server.log.write_text('{"hook":"model.request","phase":"pre"}\n{"hook":"model.req' if damaged else "")
         order = []

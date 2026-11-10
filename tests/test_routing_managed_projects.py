@@ -31,9 +31,9 @@ def collector(result=None, error=None):
     """Install a stub collector module; it records each call and returns `result` (or raises `error`)."""
     calls = []
 
-    def collect(project, assignment, *, settings_path, ledger_path, source=None):
+    def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False):
         calls.append(dict(project=project, assignment=assignment, source=source, settings_path=settings_path,
-                          ledger_path=ledger_path))
+                          ledger_path=ledger_path, refresh_windows=refresh_windows))
         if error is not None:
             raise error
         return result

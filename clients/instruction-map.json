@@ -216,7 +216,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "c9bfe237f8493b9cae295a7b2d3a061c22937ffdfab06d0f8f0930bfc3b40835",
+      "sha256": "a9f3f39a82212604ae37a845c39d8c414e71943eb75a0fc7fe326b435f8240d1",
       "ranges": [
         [
           1,
@@ -256,11 +256,11 @@
         ],
         [
           309,
-          336
+          339
         ],
         [
-          337,
-          337
+          340,
+          350
         ]
       ]
     },
@@ -300,10 +300,14 @@
       ]
     },
     "clients/startup.md": {
-      "sha256": "72ee66fc3a439f2ec28bcb070958f97ab0464eda7dc9a7486c8236263559296b",
+      "sha256": "4d5678b2d3c1c3ce354a8da36c25db337fbd6b427f011d5e168086b53e2a338d",
       "ranges": [
         [
           1,
+          40
+        ],
+        [
+          41,
           41
         ]
       ]

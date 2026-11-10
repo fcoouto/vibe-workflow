@@ -64,6 +64,9 @@ class Fake:
                     effective_caps=dict(self.caps), ledger=json.loads(json.dumps(self.ledger)), test_inputs=False,
                     project_pinned=True)
 
+    def export_if_due(self):
+        return None  # the 12-hour replay export is not due in a double
+
     def health(self):
         self.calls.append("health")
         return dict(state="ok")

@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -357,14 +359,26 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(self.hook(package), baseline)
         self.assertFalse(self.state.exists())
 
-    def test_note_is_not_written_by_other_events_or_a_failed_startup(self):
+    def test_a_diagnostic_startup_still_writes_the_note(self):
+        # Trust is per client: the hook ran even though this checkout's enrollment failed.
         self.enroll()
-        self.assertIsNotNone(self.hook())
-        self.note.unlink()
         shutil.rmtree(self.repo / ".git")
         (self.repo / ".git").write_text("gitdir: /missing-vibe-fixture\n")
         self.assertIn("startup unavailable", self.hook()["systemMessage"])
-        self.assertFalse(self.note.exists())
+        self.assertTrue(hd.delivered(PACKAGE, self.client, self.environ))
+
+    def test_invalid_input_still_writes_the_note_but_other_events_and_clients_do_not(self):
+        self.assertIn("startup unavailable", self.invoke(raw=b"{", env=self.environment)["systemMessage"])
+        self.assertTrue(hd.delivered(PACKAGE, self.client, self.environ))
+        self.note.unlink()
+        payload = dict(hook_event_name="PreToolUse", session_id="s", cwd=str(self.repo), tool_name="apply_patch",
+                       tool_input="*** Begin Patch\n*** End Patch")
+        for client, event in (("codex", "PreToolUse"), ("opencode", "SessionStart")):
+            with self.subTest(client=client, event=event):
+                subprocess.run([sys.executable, "-I", "-B", str(PACKAGE / "scripts/workflow.py"), client, event],
+                               input=json.dumps(payload).encode(), cwd=self.repo, capture_output=True, timeout=5,
+                               env=self.environment)
+                self.assertEqual(os.listdir(self.note.parent) if self.note.parent.exists() else [], [])
 
     def write_readiness(self, not_ready, **extra):
         ws.write_record(ws.record_path(self.environ), readiness_record(not_ready, **extra))
