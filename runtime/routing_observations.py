@@ -236,24 +236,36 @@ def store_window(settings_path, pool, window):
             _write(path, value)
 
 
+def _host_windows():
+    """(full scale, {window id: length}) the host path stores subscription windows with: the OpenCode launcher's own
+    constants, so a seed is in exactly the unit, scale and length a host observation would have."""
+    from runtime import opencode_launcher  # it imports this module; read at call time
+    return opencode_launcher.WINDOW_UNITS, dict(opencode_launcher.RATE_WINDOWS.values())
+
+
 def seed_event(value):
     """The operator's `seed_window` request as a ledger event, or None when malformed: `used`, `limit`, `length` and
-    `reset_at` are integers (never bools or floats) with `0 <= used <= limit`, `limit > 0` and `length > 0`. The
-    clock bounds on `reset_at` are checked when it is applied, after a replay is recognised."""
+    `reset_at` are integers (never bools or floats) with `0 <= used <= limit`, `limit > 0` and `length > 0`, and
+    `limit` is the host's full scale (1000 in utilization_thousandths): a larger one would multiply the headroom.
+    The window's length and the clock bounds on `reset_at` are checked when it is applied, after a replay is
+    recognised."""
     if type(value) is not dict or set(value) != set(SEED_FIELDS) or \
             not routing._bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID):
         return None
     if not (routing._part(value['pool']) and routing._part(value['window'])
             and all(routing._amount(value[key]) for key in ('used', 'limit', 'length', 'reset_at'))):
         return None
-    if not (0 < value['limit'] and value['used'] <= value['limit'] and 0 < value['length']):
+    if not (0 < value['limit'] == _host_windows()[0] and value['used'] <= value['limit'] and 0 < value['length']):
         return None
     return dict(value, kind=SEED_KIND)
 
 
-def _subscription_window(settings_path, pool, window):
-    """Whether `window` of `pool` is a subscription window: a qualified `included_subscription` route of the manifest
-    names it in its `demand`, and no dollar route of any status draws on the pool."""
+def _subscription_window(settings_path, pool, window, length):
+    """Whether `window` of `pool` is a subscription window of that `length`: a qualified `included_subscription`
+    route of the manifest names it in its `demand` (plans differ in which windows they have), the host stores that
+    window id with exactly that length, and no dollar route of any status draws on the pool."""
+    if _host_windows()[1].get(window) != length:
+        return False
     try:
         routes = [route for route in manifest_routes(default_source(settings_path))
                   if type(route) is dict and route.get('pool') == pool]
@@ -296,7 +308,7 @@ def seed_window(ledger, event, now, settings_path):
                 usage_budget.require(known[0] == digest, 'event_conflict')
                 return dict(json.loads(known[1])['outcome'], duplicate=True)
             usage_budget.require(now < event['reset_at'] <= now + event['length'], 'invalid_request')
-            usage_budget.require(_subscription_window(settings_path, event['pool'], event['window']),
+            usage_budget.require(_subscription_window(settings_path, event['pool'], event['window'], event['length']),
                                  'invalid_request')
             _store_seed(settings_path, event, now)
             outcome = dict({key: event[key] for key in ('pool', 'window', 'used', 'limit', 'reset_at', 'length')},
@@ -321,7 +333,8 @@ def window_status(settings_path, now):
                       fresh=0 <= now - window['observed_at'] <= FRESH_SECONDS)
                  for pool, windows in sorted(pools.items()) for key, window in sorted(windows.items())]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-        return dict(state='unavailable', reason=str(error) if str(error) in STORE_ERRORS else 'observation_store_invalid')
+        reason = str(error) if str(error) in STORE_ERRORS else 'observation_store_invalid'
+        return dict(state='unavailable', reason=reason)
     limit = usage_budget.SUMMARY_IDS
     return dict(state='ok', windows=items[:limit], more=max(0, len(items) - limit))
 

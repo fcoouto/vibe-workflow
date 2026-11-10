@@ -347,7 +347,8 @@ class StatusTests(SeedBase):
         path.write_text('[]')
         path.chmod(0o600)
         response = self.call(dict(v=1, op='status'))
-        self.assertEqual((response['state'], response['windows']), ('ok', dict(state='unavailable', reason='observation_store_invalid')))
+        self.assertEqual((response['state'], response['windows']),
+                         ('ok', dict(state='unavailable', reason='observation_store_invalid')))
         self.assertEqual(self.call(seed())['reason'], 'observation_store_invalid')
 
 
