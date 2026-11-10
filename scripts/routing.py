@@ -20,7 +20,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import routing, routing_gates, routing_settings, usage_budget  # noqa: E402
+from runtime import routing, routing_gates, routing_settings, subscription_reconcile, usage_budget  # noqa: E402
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -46,10 +46,12 @@ FIELDS = dict(prepare=({'assignment', 'job', 'observations'}, {'table', 'constra
               resolve_cost_unknown=({'attempt_id', 'cost_usd_micros', 'event_id'}, {'receipts', 'source'}),
               resolve_overrun=({'attempt_id', 'decision', 'event_id'}, set()),
               reconcile_uncertain=({'attempt_id', 'evidence', 'event_id'}, set()),
+              reconcile_subscription=({'attempt_id', 'evidence', 'event_id'}, set()),
               resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}))
 # Operator ops are one-shot commands only: the OpenCode shim's persistent `--serve` child never exposes them, so a
 # plugin or worker that can reach it cannot settle, release or unblock anything (`operator_op_not_served`).
-OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block')
+OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block',
+                'reconcile_subscription')
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
 EXPIRE_INTERVAL = 3600
 ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
@@ -424,6 +426,10 @@ class Service:
     def _resolve_block(self, body):
         """Operator recovery of an over-bound S1 call or a legacy block (S3.6b-2); other reasons stay."""
         return self._operator(*routing.block_event(body), apply=routing.resolve_block)
+
+    def _reconcile_subscription(self, body):
+        """Operator reconciliation of an uncertain subscription hold (S3.6c): a host re-read or abandon."""
+        return self._operator(*subscription_reconcile.reconcile_event(body), apply=subscription_reconcile.reconcile)
 
     def _operator(self, event, reason='invalid_request', apply=None):
         require(event is not None, reason)
