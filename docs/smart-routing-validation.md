@@ -157,6 +157,8 @@ Results go to `tests/fixtures/smart-routing/probes/pilot-results.json` and to Re
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
 
+The live qualification runs are recorded in the [qualification report](smart-routing-qualification.md), not here, because they test gates rather than these criteria: the [stages 0–4 re-run](smart-routing-qualification.md#re-run-stages-04-harness-3f87159), the [descendants and S3.3d probes](smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4) and the [ChatGPT attempts](smart-routing-qualification.md#chatgpt-attempts-5-and-6).
+
 ### Pilot canary, run 1 (9 November 2026): aborted at admission 1
 
 Attempt 1 of the pilot.
