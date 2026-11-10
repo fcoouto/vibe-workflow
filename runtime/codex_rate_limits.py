@@ -192,28 +192,41 @@ class _Session:
             return message['result']
 
 
-def _stop(process):
-    """Close stdin and let Codex exit on its own; then SIGTERM the group, then SIGKILL it, STOP_GRACE apart. The
-    group signals also reach anything the app-server started."""
+def _exited(pid, seconds):
+    """Whether the leader exited within `seconds`, polled without reaping it: while it is unreaped its pid and
+    process group id cannot be reused, so a group signal reaches only its own group."""
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+                return True
+        except ChildProcessError:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(LOCK_POLL)
+
+
+def _stop(process, normal):
+    """Close stdin and let Codex exit on its own. After a normal read that exits within STOP_GRACE, nothing is
+    signalled. Otherwise (a timeout, any failure, or a leader still running) the group gets SIGTERM, then SIGKILL,
+    STOP_GRACE apart, both before the leader is reaped; the SIGKILL also reaches anything it started."""
     try:
         process.stdin.close()
     except OSError:
         pass
-    for sig in (None, signal.SIGTERM, signal.SIGKILL):
-        if sig is not None:
+    if not (_exited(process.pid, STOP_GRACE) and normal):
+        for sig in (signal.SIGTERM, signal.SIGKILL):
             try:
                 os.killpg(process.pid, sig)
             except OSError:
                 pass  # the group is already gone
-        try:
-            process.wait(STOP_GRACE if sig != signal.SIGKILL else 1)
-            if sig is None:
-                break
-        except subprocess.TimeoutExpired:
-            continue
+            if sig == signal.SIGTERM:
+                _exited(process.pid, STOP_GRACE)
+        _exited(process.pid, 1)
     try:
-        os.killpg(process.pid, signal.SIGKILL)  # anything the leader left in its group
-    except OSError:
+        process.wait(1)  # reap last: no group signal follows
+    except subprocess.TimeoutExpired:
         pass
     try:
         process.stdout.close()  # only now: a late write never meets a closed pipe
@@ -231,6 +244,7 @@ def exchange(command, environ, timeout=TIMEOUT, timing=None):
                                    env=env, cwd='/', start_new_session=True, close_fds=True)
     except OSError:
         raise ReadError('codex_unavailable') from None
+    normal = False
     try:
         session = _Session(process, started + timeout)
         session.send('initialize', 1)
@@ -240,8 +254,9 @@ def exchange(command, environ, timeout=TIMEOUT, timing=None):
         session.send('initialized')
         session.send('account/rateLimits/read', 2)
         result = session.response(2)
+        normal = True
     finally:
-        _stop(process)
+        _stop(process, normal)
         if timing is not None:
             timing['wall_ms'] = int((time.monotonic() - started) * 1000)
     if _auth_mark(env) != before:
