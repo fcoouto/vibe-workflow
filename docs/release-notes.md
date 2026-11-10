@@ -2,7 +2,7 @@
 
 ## 0.1.37
 
-- **Smaller logo.** `assets/logo.png` is now 512 × 512 (259 KB, from 867 KB); the image is otherwise unchanged. The package export stays within Codex's 8 MiB bundle scan with more room.
+- **Smaller logo.** `assets/logo.png` is now 512 × 512 (259 KB, from 867 KB); the image is otherwise unchanged. The package export shrinks by about 0.6 MB; it still uses over 75% of Codex's 8 MiB bundle scan.
 - **Workspace readiness on OpenCode.** `workflow.py workspace status` reads plugin names from OpenCode's configuration, so local-path plugins such as Caveman count, and reads MCP servers stored under `mcp.servers`. Both previously showed as missing.
 - **Smart Routing.** `scripts/routing.py` adds the one-shot operator op `seed_window` to record a subscription window's first reading. OpenCode accounting accepts `vendor/model` ids; per-launch provider options (endpoint pin, output cap, step count) are validated and applied to the launched server; recovery releases OpenRouter-worker runs that were prepared but never executed. API-funded OpenCode and OpenRouter-worker routes stay disabled, and routing is still not cut over.
 - The replay pre-registration in `docs/smart-routing-validation.md` now samples the available history of past sessions.
