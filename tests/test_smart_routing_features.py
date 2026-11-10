@@ -146,7 +146,8 @@ def managed_project_fixture(test, checkout, routes=()):
     temporary = tempfile.TemporaryDirectory()
     test.addCleanup(temporary.cleanup)
     base = Path(temporary.name).resolve()
-    settings, ledger = base / 'routing' / 'settings.json', base / 'usage' / 'organizations.sqlite3'
+    # The ledger has its own directory, so the default_ledger patch is observable apart from usage_settings'.
+    settings, ledger = base / 'routing' / 'settings.json', base / 'ledger' / 'organizations.sqlite3'
     root = Path(checkout).resolve()
 
     def patch(target, attribute, value):
@@ -164,6 +165,8 @@ def managed_project_fixture(test, checkout, routes=()):
                        ('runtime.openrouter_settings.BASIC_STORAGE', openrouter_settings.BASIC_STORAGE)):
         precondition(base in Path(path).resolve().parents,
                      'managed_project_fixture: %s resolves outside the fixture directory' % name)
+    precondition((command.default_settings(), command.default_ledger()) == (settings, ledger),
+                 'managed_project_fixture: the routing command defaults are not the fixture stores')
     # Rule 4: fund each billing class on those stores (the routing command's `set`, the Ledger API for balances).
     service = command.Service(settings, ledger)
     try:

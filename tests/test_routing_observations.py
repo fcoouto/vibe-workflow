@@ -359,6 +359,8 @@ class ManagedFixtureTests(unittest.TestCase):
                       features.fixture_route('openrouter:v/m@p', 'gateway'))
             with features.managed_project_fixture(self, checkout, routes=routes) as fixture:
                 base = Path(fixture['settings']).parents[1]
+                self.assertEqual((command.default_settings(), command.default_ledger()),
+                                 (fixture['settings'], fixture['ledger']))
                 for name, path in (('default_settings', command.default_settings()),
                                    ('default_ledger', command.default_ledger()),
                                    ('usage_settings.directory', usage_settings.directory()),
