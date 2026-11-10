@@ -30,6 +30,11 @@ LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it 
 # manifest declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and its
 # windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
 WINDOW_UNIT = 'utilization_thousandths'
+# The host's subscription windows in that unit, defined once here for routing: every window's limit (its full scale)
+# and each provider window's (id, length in seconds). The OpenCode launcher stores its observations with these values;
+# a test keeps its own copies equal until it re-exports these.
+WINDOW_UNITS = 1000
+RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
@@ -237,10 +242,9 @@ def store_window(settings_path, pool, window):
 
 
 def _host_windows():
-    """(full scale, {window id: length}) the host path stores subscription windows with: the OpenCode launcher's own
-    constants, so a seed is in exactly the unit, scale and length a host observation would have."""
-    from runtime import opencode_launcher  # it imports this module; read at call time
-    return opencode_launcher.WINDOW_UNITS, dict(opencode_launcher.RATE_WINDOWS.values())
+    """(full scale, {window id: length}) the host path stores subscription windows with, so a seed is in exactly
+    the unit, scale and length a host observation would have."""
+    return WINDOW_UNITS, dict(RATE_WINDOWS.values())
 
 
 def seed_event(value):
