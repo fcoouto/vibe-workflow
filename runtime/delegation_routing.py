@@ -17,7 +17,8 @@ after delegation's own reservation commits, bound to the planned job (`workflow`
 - One permit per assignment across the managed boundary (PR #217 review S1): each call reads `managed` once; a
   project that became managed during the call releases the fresh assignment with no permit; a replay of an
   assignment committed before the project was managed is refused; and `set managed_projects` refuses to add a
-  project while `open_unrouted_assignments` lists any prepared, unobserved native assignment.
+  project while `open_unrouted_assignments` lists any prepared, unobserved native assignment, checking again after
+  its write and writing the project back out on a hit. The check covers every enrolled client with runtime state.
 
 Design: docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md. Nothing here calls a model, the network,
 a secret store, an operator op or `set managed_projects`, and no request field selects a scope or observations.
@@ -30,6 +31,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 
 from runtime import delegation, evidence, routing, routing_launch, state
 
@@ -340,13 +342,33 @@ def settled(scope, record, reply):
     return dict(reply, routing=dict(closed=closed)) if closed else reply
 
 
-def _scope_for(checkout):
-    """The checkout's enrolled delegation scope through the workflow entry path, or None when it has no runtime."""
+def _enrolled_clients(cwd):
+    """The clients whose enrolment of this checkout keeps runtime state, from the canonical record. A checkout with
+    no canonical record keeps the legacy entry path's client; an unreadable or conflicting record raises."""
+    from runtime import startup
+    budget = dict(paths=0, bytes=0, deadline=time.monotonic() + startup.OBSERVATION_SECONDS)
+    acquired = startup._acquire_canonical_membership(cwd, authority_path=None, budget=budget)
+    if acquired.status == 'outside':
+        return ['codex']
+    if acquired.status != 'observed':
+        raise startup.RuntimeScopeError('Project authority is unavailable: ' + acquired.reason)
+    data, observed = startup._canonical_plain(acquired.record.data), startup._canonical_plain(acquired.observation)
+    selected = next((c for r in data['repositories'] if r['primary_root'] == observed['primary_root']
+                     for c in r['checkouts'] if c['root'] == observed['root']), dict(clients=[]))
+    return sorted(e['client'] for e in selected['clients'] if (e['configuration'] or {}).get('runtime'))
+
+
+def _scopes_for(checkout):
+    """The checkout's delegation scopes, one per enrolled client with runtime state, through the workflow entry
+    path; [] when no client keeps runtime state. A client that cannot be resolved raises (fails closed)."""
     from runtime import routing_gates
-    try:
-        return routing_gates._resolve_scope(dict(client='codex', cwd=str(Path(checkout).resolve())))
-    except LookupError:  # not enrolled, or no runtime state: no native assignment can exist
-        return None
+    cwd, scopes = Path(checkout).resolve(), []
+    for client in _enrolled_clients(cwd):
+        try:
+            scopes.append(routing_gates._resolve_scope(dict(client=client, cwd=str(cwd))))
+        except LookupError:  # not enrolled for this client, or no runtime state: no native assignment can exist
+            continue
+    return scopes
 
 
 def open_unrouted_assignments(checkout):
@@ -354,20 +376,21 @@ def open_unrouted_assignments(checkout):
     assignments, which may hold an unmanaged launch permit. Read-only and bounded (MAX_OPEN); fails closed with
     `['scope_unavailable']` or `['state_unavailable']` when the checkout's state cannot be read."""
     try:
-        scope = _scope_for(checkout)
+        scopes = _scopes_for(checkout)
     except Exception:  # noqa: BLE001 - e.g. RuntimeScopeError: unknown state never lets a project become managed
         return ['scope_unavailable']
-    if scope is None:
-        return []
+    found = set()
     try:
-        with state._database(scope) as db:
-            rows = [] if db is None else db.execute(
-                "select id from assignments where scope_id=? and json_extract(data,'$.status')='prepared' and "
-                "json_extract(data,'$.observation') is null and json_extract(data,'$.role') in ('worker','review') "
-                "order by id limit ?", (state._scope_id(scope), MAX_OPEN)).fetchall()
+        for scope in scopes:
+            with state._database(scope) as db:
+                rows = [] if db is None else db.execute(
+                    "select id from assignments where scope_id=? and json_extract(data,'$.status')='prepared' and "
+                    "json_extract(data,'$.observation') is null and json_extract(data,'$.role') in ('worker','review') "
+                    "order by id limit ?", (state._scope_id(scope), MAX_OPEN)).fetchall()
+            found.update(row[0] for row in rows)
     except Exception:  # noqa: BLE001 - sqlite3.Error, StateError
         return ['state_unavailable']
-    return [row[0] for row in rows]
+    return sorted(found)[:MAX_OPEN]
 
 
 # -- continuations (spec F11) and Workstreams dispatch --------------------------------------------------------------
