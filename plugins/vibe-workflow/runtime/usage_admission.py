@@ -1,7 +1,8 @@
 """Validate evidence supplied by a trusted in-process host before a live send.
 
-The types separate host evidence from JSON. The host still owns provenance,
-approval capture and trusted observations. Digests bind inputs to that evidence.
+The types separate host evidence from JSON. The host owns activation, provenance
+and trusted observations. Digests bind inputs to that evidence. The historical
+approval_* field names also carry activation-backed admission identity/deadlines.
 """
 from dataclasses import asdict, dataclass
 import hashlib
@@ -72,7 +73,7 @@ def canary_budget_only(config, policy):
 
 
 def live_consent_current(config, policy, now):
-    """Check saved consent within the caller's current scope and policy revision."""
+    """Check saved consent; legacy manual records share the active behavior."""
     return (config.get('live_consent') is True and config['enabled'] is True
             and config['disabled'] is False and config['requested_mode'] in ('manual', 'smart')
             and config['binding'].get('storage_kind') == 'macos_keychain'
@@ -81,7 +82,7 @@ def live_consent_current(config, policy, now):
 
 
 def validate_maximum(maximum, policy):
-    """Require a finite approval bound even when the policy omits its cumulative cap."""
+    """Require a finite admission bound even when the policy omits its cumulative cap."""
     limit = policy['pilot_limit']
     require(0 < integer(maximum) and (limit is None or maximum <= integer(limit)), 'live_approval_unqualified')
 
@@ -121,9 +122,9 @@ def _validate(evidence, scope, config, policy, task, now):
         (evidence.task_digest, task, 'live_task_changed'),
     ):
         require(type(observed) is str and observed == digest(value), reason)
-    require((task['provider'] == 'openai-api' or (mode == 'smart' and task['provider'] == 'auto'))
+    require(task['provider'] in ('openai-api', 'auto')
             and task['local_preferred'] is False and type(task['api_only']) is bool,
-            'explicit_api_selection_required')
+            'api_route_unavailable')
     require(name(task['class_name']) == config['class_name'], 'task_class_unqualified')
     require(task['reviewer_available'] is True and name(evidence.coordinator).strip() == evidence.coordinator
             and name(evidence.reviewer).strip() == evidence.reviewer and evidence.coordinator != evidence.reviewer,
@@ -152,18 +153,14 @@ def _validate(evidence, scope, config, policy, task, now):
             and price_start <= now < price_end, 'pricing_stale')
     integer(profile['count_maximum'])
     deadline = min(observed_at + FRESH_SECONDS, price_end, stop, evidence.approval_until)
-    if mode == 'smart':
-        if evidence.qualification_digest is None:
-            require(live_consent_current(config, policy, now), 'live_consent_required')
-        else:
-            # Retain admission for exact approvals issued under the legacy scope.
-            require(config.get('live_consent') is not True, 'qualification_changed')
-            record = smart_qualification(config, now)
-            require(evidence.qualification_digest == digest([config['qualification_revision'], record]),
-                    'qualification_changed')
-            deadline = min(deadline, record['valid_until'])
-    else:
-        require(evidence.qualification_digest is None, 'qualification_changed')
+    if 'canary_owner' not in config:
+        require(live_consent_current(config, policy, now), 'live_consent_required')
+    if evidence.qualification_digest is not None:
+        # Qualification is optional; an explicitly supplied pin still binds.
+        record = smart_qualification(config, now)
+        require(evidence.qualification_digest == digest([config['qualification_revision'], record]),
+                'qualification_changed')
+        deadline = min(deadline, record['valid_until'])
 
     native = task['native']
     fields(native, 'account task windows')

@@ -313,7 +313,7 @@ def implementation_task(task):
 def apply_completion(task, requirements, implementation_verified):
     """Called only by the completion writer, after all independent work is verified."""
     if 'qualification_attempt' in task:
-        if task['state'] in {'READY', 'DONE'}:
+        if task['state'] == 'DONE':
             task['state'] = 'REVIEW'
         return
     if not implementation_verified:
@@ -437,7 +437,7 @@ def _manual_delivery(scope, action, request, owner):
                              'Delivery operation identity was reused with changed inputs')
                     return dict(task=task, plan=plan, replay=True, **completion_requirements(scope, db, task))
         _require(task['revision'] == request['expected_revision'], 'Task revision conflict')
-        _require(task['state'] not in {'PAUSED', 'BLOCKED', 'CANCELLED'}, 'Explicit task condition prevents delivery')
+        _require(task['state'] not in {'PAUSED', 'CANCELLED'}, 'Explicit task condition prevents delivery')
         if action != 'reopen':
             _require(plan['policy']['merge'] == 'manual' and len(plan['publications']) == 1
                 and publication['required'] and not plan['companions'], 'Manual pilot needs its complete bounded scope')
@@ -491,7 +491,7 @@ def _manual_delivery(scope, action, request, owner):
             if action == 'ready':
                 state._ordinary_capability(scope, current, 'delivery-ready')
             _require(current['delivery']['plan'] == previous_plan
-                and current['state'] not in {'PAUSED', 'BLOCKED', 'CANCELLED'}, 'Delivery changed before publication')
+                and current['state'] not in {'PAUSED', 'CANCELLED'}, 'Delivery changed before publication')
             if action == 'ready':
                 _ready_verification(scope, db, current, publication, held.local_verification)
             def artifact(value):

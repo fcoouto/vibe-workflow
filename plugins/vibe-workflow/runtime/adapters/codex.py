@@ -170,7 +170,7 @@ def with_output_notice(payload, output):
 
 def runtime_diagnostic(kind, reason):
     """Errors never block an unvalidated scope or replace a completed tool result."""
-    return {"systemMessage": f"Vibe Coding Workflow {kind} runtime unavailable: {reason}. "
+    return {"systemMessage": f"Vibe Workflow {kind} runtime unavailable: {reason}. "
             "Execution coverage and workflow readiness remain unverified."}
 
 

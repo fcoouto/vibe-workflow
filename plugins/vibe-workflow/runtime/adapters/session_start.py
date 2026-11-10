@@ -28,6 +28,6 @@ def render(context):
 
 
 def diagnostic(reason):
-    message = f"Vibe Coding Workflow startup unavailable: {reason}. Resolve this before claiming workflow readiness."
+    message = f"Vibe Workflow startup unavailable: {reason}. Resolve this before claiming workflow readiness."
     return {"systemMessage": message,
             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": message}}

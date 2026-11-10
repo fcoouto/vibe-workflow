@@ -278,7 +278,7 @@ def drift_warning(package, client, environ=None):
     own = manifest_version(package, client)
     if expected is None or own is None or own == expected["version"]:
         return None
-    return (f"Vibe Coding Workflow package drift: {client} runs version {own} but this machine expects "
+    return (f"Vibe Workflow package drift: {client} runs version {own} but this machine expects "
             f"{expected['version']}. Next action: {NEXT_ACTION}.")
 
 

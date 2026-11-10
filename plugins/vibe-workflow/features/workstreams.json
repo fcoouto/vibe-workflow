@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "id": "workstreams",
+  "summary": "Automatic native child work for suitable tasks; explicit delegation and required review work either way.",
+  "skills": ["workstreams"],
+  "default": {"enabled": false},
+  "settings": {},
+  "scopes": ["project"],
+  "consent": "none",
+  "control": "settings",
+  "requires": [],
+  "procedure": "skills/workstreams/references/procedure.md"
+}

@@ -28,7 +28,7 @@ def _authority(scope, request, cleanup=False):
                 # Historical requests retain their original combined revision reader.
                 workstreams._feature_permission(scope, 'resource_admission', request['workstream_revision'])
                 workstreams._permission(scope, request['workstream_revision'])
-            d6._require(task['state'] in {'TRIAGE', 'READY', 'WORKING', 'REVIEW'} and
+            d6._require(task['state'] in {'TRIAGE', 'WORKING', 'REVIEW'} and
                 not any(c['status']=='pending' and c['kind'] in {'blocker','decision'} for c in task['conditions']),
                 'Resource task is paused, blocked or closed')
             d6._require(record['data']['status'] not in d6.TERMINAL_ASSIGNMENTS, 'Resource owner is settled')
@@ -76,7 +76,7 @@ def _eligible(owner):
                     d6.validate_dependencies(scope,task,plan,job,rows)
                 except state.StateError:
                     return False
-            return task['state'] in {'TRIAGE','READY','WORKING','REVIEW'} and not any(
+            return task['state'] in {'TRIAGE','WORKING','REVIEW'} and not any(
                 c['status']=='pending' and c['kind'] in {'blocker','decision'} for c in task['conditions'])
     except (ValueError,OSError,KeyError,TypeError):
         return True

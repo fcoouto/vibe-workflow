@@ -1,8 +1,8 @@
 # OpenRouter proposal procedure
 
-Use this only for the approved OpenRouter proposal route. The native coordinator owns the task, tools, edits, review and integration. Apply the normal delegation and verification rules; this procedure supplies selection data and one external proposal, not a separate agent lifecycle.
+Use this only for the enabled OpenRouter proposal route. The native coordinator owns the task, tools, edits, review and integration. Apply the normal delegation and verification rules; this procedure supplies selection data and one external proposal, not a separate agent lifecycle.
 
-Apply the [shared selection and consent contract](../../../clients/external-delegation.md) when considering automatic work or using reusable source permission.
+Apply the [shared selection contract](../../../clients/external-delegation.md) when considering automatic work or a saved restriction.
 
 ## Start with the available route
 
@@ -17,7 +17,7 @@ route; they do not require the `proposals` route or its call/settlement procedur
 
 Confirm that the current client exposes the existing authenticated OpenRouter MCP tools. Use `list-models`, `get-model`, `list-model-endpoints`, `list-benchmarks` and optionally `list-task-classifications` or `get-endpoint-uptime-history` for discovery; `send-message` for the proposal; and `get-generation` for reported execution facts. Use `get-credits` only when balance inspection is requested or relevant to diagnosis. Tool names may have a client prefix. Inspect the exposed schema rather than inventing arguments.
 
-Reuse the user's explicit approval within its scope. An installed connection does not approve sending unrelated project content. Preserve the native coordinator's settings and account authentication. Do not install a proxy, extract credentials, change OpenRouter limits or enable automatic routing. If the necessary tools or controls are unavailable, continue natively and report that limitation.
+Saved enablement is the only approval: it covers automatic selection and the checkout's task-relevant content within any saved restriction. An installed connection alone approves nothing. Preserve the native coordinator's settings and account authentication. Do not install a proxy, extract credentials, change OpenRouter limits or change enablement during ordinary dispatch. If the necessary tools or controls are unavailable, continue natively and report that limitation.
 
 The external model receives only a bounded task packet and returns text. It has no local tools or write permission. Native work remains the default when delegation adds little value or the result cannot be checked reliably.
 
@@ -137,13 +137,14 @@ OpenRouter enforces spending limits. Do not require a credit lookup before an as
 
 Normal completion responses report request usage and cost, not a remaining account balance. An explicit spending rejection returns work to the native path with a concise warning. A generic 402 is a budget or affordability rejection, not proof of zero balance; temporary in-flight limits and key/account limits are distinct. Keep unknown causes unknown. Do not repeatedly probe the same rejected call.
 
-Call `begin` with the stable task ID, full profile, selected `model`, canonical provider slug, supported `effort` or null, current `snapshot_digest`, `approval_ref`, `base_ref`, the actual `requirements`, `output_tokens`, and `timeout_seconds`. Supply `visibility` through the shared [role-preparation contract](../../../clients/worker-visibility.md#declare-before-dispatch). Use the same requirements shape as `triage`; its `output_tokens` must equal the call's top-level value. Admission rechecks the pinned route's capabilities before consuming the attempt. Legacy credit observations are ignored and not stored in new records. Output limits remain at most 8192 tokens and timeouts at most 120 seconds. These are bounded pilot-call controls, not OpenRouter spending settings.
+Call `begin` with the stable task ID, full profile, selected `model`, canonical provider slug, supported `effort` or null, current `snapshot_digest`, `base_ref`, the actual `requirements`, `output_tokens`, and `timeout_seconds`. Supply `visibility` through the shared [role-preparation contract](../../../clients/worker-visibility.md#declare-before-dispatch). Use the same requirements shape as `triage`; its `output_tokens` must equal the call's top-level value. Admission rechecks the pinned route's capabilities before consuming the attempt. Legacy credit observations are ignored and not stored in new records. Output limits remain at most 8192 tokens and timeouts at most 120 seconds. These are bounded pilot-call controls, not OpenRouter spending settings. `approval_ref` is optional: when omitted, the attempt records the enablement's activation reference; a supplied legacy value is kept as history.
 
-For legacy manually authorized proposals, only a newly returned attempt token permits this coordinator to make the proposal call. `begin` requires `--cwd` and rechecks saved enablement, selected route and configured store under a short guard through durable admission. Each admitted attempt records the scope and settings revision. Disable blocks new admissions; an issued token may finish its one call and be recorded afterward. A duplicate task ID never permits a second call. If the helper reports disabled/busy consent, a pending local attempt, stale discovery, invalid controls or storage capacity, use the native path. Do not create a different task ID or store directory to evade the original attempt limit.
+Only a newly returned attempt token permits this coordinator to make the proposal call. `begin` requires `--cwd` and rechecks saved enablement, selected route and configured store under a short guard through durable admission. Each admitted attempt records the scope and settings revision. Disable blocks new admissions; an issued token may finish its one call and be recorded afterward. A duplicate task ID never permits a second call. If the helper reports disabled/busy consent, a pending local attempt, stale discovery, invalid controls or storage capacity, use the native path. Do not create a different task ID or store directory to evade the original attempt limit.
 
-For scoped packets, include `external` from the shared packet procedure in `begin`.
-Immediately before the connector call, call `dispatch` with the identical request
-plus `attempt_token`. It rechecks source, current consent/revision and native
+Every `begin` includes `external` from the shared packet procedure; without it
+admission fails with `external_binding_required`. Immediately before the connector
+call, call `dispatch` with the identical request
+plus `attempt_token`. It rechecks source, current enablement/revision and native
 review readiness, returns the constructed `packet` and pins one dispatch. Send
 only that returned text and route. Changed source needs fresh preparation within
 the existing attempt/recovery rules, not a new task ID to evade a spent attempt.
@@ -169,7 +170,7 @@ Call `record` with the original attempt token and the appropriate disposition:
 | `transport_failure` | A known service/transport failure prevented a usable proposal |
 | `unresolved` | The local call ended or was interrupted, but outcome, upstream execution or cost remains unknown |
 
-For scoped packets, accepted/repaired records also require `reviewer` matching the independently observed reviewer named at admission.
+Accepted/repaired records also require `reviewer` matching the independently observed reviewer named at admission. Only attempts admitted before binding became mandatory may settle without one; they cannot send again.
 
 Accepted/repaired records require `native_review_ref` and `native_checks` containing references and successful results. References identify actual native work or existing task evidence; do not use the external model's self-report. For example:
 
@@ -177,6 +178,7 @@ Accepted/repaired records require `native_review_ref` and `native_checks` contai
 {
   "attempt_token": "<original attempt token>",
   "disposition": "repaired",
+  "reviewer": "<reviewer named at admission>",
   "native_review_ref": "<actual native review reference>",
   "native_checks": [{"ref": "<actual passing check reference>", "success": true}],
   "observations": {

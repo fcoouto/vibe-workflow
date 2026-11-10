@@ -1,6 +1,6 @@
-# Vibe Coding Workflow
+# Vibe Workflow
 
-<img src="assets/logo.png" alt="Vibe Coding Workflow logo: a gold W on a dark rounded square" width="160" height="160">
+<img src="assets/logo.png" alt="Vibe Workflow logo: a gold W on a dark rounded square" width="160" height="160">
 
 [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit), packaged for your coding agent.
 
@@ -10,7 +10,7 @@ Ordinary editing, checks, review and handoff use the [native workflow](clients/c
 
 Enable [Workstreams](skills/workstreams/SKILL.md) during project onboarding or ask
 the skill to **enable**, **disable** or show **status** for this project. Both use
-one saved Enabled/Disabled checkbox in project guidance. Enabled automatically
+one saved Enabled/Disabled choice in `.vibe-workflow/settings.json` ([feature settings](clients/features.md)). Enabled automatically
 uses suitable native child work; small tasks can stay with the coordinator. This
 choice needs no runtime database or separate activation. Resource admission and
 capacity recovery keep their separate advanced controls and prerequisites.
@@ -29,17 +29,15 @@ Use [Manage API Usage](skills/manage-usage-routing/SKILL.md) for OpenAI credit
 usage, spending limits and opt-in
 API proposals in enrolled Codex checkouts. Routing defaults to OFF.
 
-To opt in, open the project checkout in Codex and ask **“Enable Smart Balance
-for this project”** or **“Enable Manual Usage Routing for this project.”**
-Existing compatible account setup is reused. If several setups apply, select one;
-connect an OpenAI project key only when a new connection is needed. Each checkout
-needs explicit activation and its own task/data permission. The API project is
-separate from your local repository. Activation saves the selected mode,
-task scope and funding policy, including any spending caps you choose. Manual
-uses the API for tasks you select. Smart Balance chooses eligible tasks within
-the approved scope. Each live request
-checks funding, budget and independent review. Ask **“Disable Usage Routing for
-this project”** to stop new requests.
+To opt in, open the project checkout in Codex and ask **“Enable API Usage for
+this project.”** Existing compatible account setup is reused. If several setups
+apply, select one; connect an OpenAI project key only when a new connection is
+needed. Each checkout needs its own activation. The API project is separate from
+your local repository. Activation saves the task scope and funding policy,
+including any spending caps you choose, and is the only approval: the agent then
+routes eligible tasks to the API on its own, including the checkout's
+task-relevant files. Each live request checks funding, budget and independent
+review. Ask **“Disable API Usage for this project”** to stop new requests.
 
 See the [routing controls](skills/manage-usage-routing/references/procedure.md)
 and the [optional comparison template](docs/superpowers/specs/2026-10-31-usage-routing-design.md#paired-comparison-template).
@@ -58,7 +56,7 @@ For Codex releases, register the Git-backed marketplace:
 codex plugin marketplace add https://github.com/fcoouto/vibe-workflow.git --ref codex/marketplace-release
 ```
 
-In Codex Desktop, select **Vibe Coding Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
+In Codex Desktop, select **Vibe Workflow**, install `vibe-workflow`, and invoke `prepare-my-workspace`. For later releases, use **Upgrade** in the Marketplace tab or run `codex plugin marketplace upgrade vibe-workflow-local`. Start a new chat to load the updated plugin.
 
 For local plugin testing, install a clean export as described in [Development](#development), in a separate Codex profile. The local source uses the same marketplace ID, and Codex's **Upgrade** requires a Git source. See [OpenAI's marketplace guide](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli).
 
@@ -88,8 +86,8 @@ Start a new session in each client afterwards. To refresh after changes, rerun `
 
 To publish a release to the Codex Git marketplace, follow [Publish a release](docs/release.md).
 
-Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and `python3 -B -m unittest discover -s tests` (full suite; takes many minutes). Neither establishes live client behavior.
+Checks: `python3 -B scripts/validate.py` (package only, a minute or less) and the tests that the [development guide](docs/development.md#checks) selects for a change. `python3 -B scripts/test_sharded.py <module-or-glob>...` runs selected test modules in parallel; without names it runs the full suite, which `python3 -B -m unittest discover -s tests` runs serially. None of these establishes live client behavior.
 
 Setup record, decisions and undo location: [docs/setup.md](docs/setup.md).
 
-[Development guide](AGENTS.md)
+[Development guide](docs/development.md)

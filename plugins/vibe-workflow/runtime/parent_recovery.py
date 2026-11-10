@@ -108,7 +108,7 @@ def register(scope, directory, request):
         bound = state._task(db, state._scope_id(scope), 'codex', request['session_id'])
         _require(bound is not None and bound['task_id'] == task['task_id'], 'Parent is no longer the bound task')
         workstreams._feature_permission(scope, 'capacity_recovery', request['recovery_revision'])
-        _require(task['state'] in {'TRIAGE', 'READY', 'WORKING', 'REVIEW'}, 'Parent task is not in progress')
+        _require(task['state'] in {'TRIAGE', 'WORKING', 'REVIEW'}, 'Parent task is not in progress')
         plan = d6._task_plan(scope, task)
         parent = dict(thread_id=task['session_id'], cwd=str(scope.repository_root),
             identity={key:task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')},
@@ -140,7 +140,7 @@ def _authority(parent, package, *, reauthorize=False):
                         if any(mode[key] != original[key] for key in ('enabled', 'revision')):
                             return 'stopped', mode['revision']
                     eligible = (mode['enabled'] and (reauthorize or mode['revision'] == parent[revision_key]) and
-                        task['state'] in {'TRIAGE', 'READY', 'WORKING', 'REVIEW'} and not any(c['status'] == 'pending' and
+                        task['state'] in {'TRIAGE', 'WORKING', 'REVIEW'} and not any(c['status'] == 'pending' and
                         c['kind'] in {'blocker', 'decision'} for c in task['conditions']))
                     return ('eligible' if eligible else 'stopped'), mode['revision']
     except (StartupError, ValueError, OSError, KeyError, TypeError):

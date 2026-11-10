@@ -4,7 +4,7 @@ Load this contract for delivery preparation, publication, merge reconciliation o
 
 ## Prepare the destination
 
-Separate implementation worktrees are the default; preserve an explicit opt-out. Read-only inspection needs no new checkout. Inspect native attachments first and reuse a suitable task-owned worktree. Otherwise use the client's supported native creation tool, retain its returned operation and attachment identity, and continue at the returned directory. After a lost creation response, inspect native status/attachments; unresolved ownership never permits blind duplicate creation. Native client storage and cleanup remain client-owned.
+Separate implementation worktrees are the default of an adopted delivery policy, and a project's own instructions can select them too; preserve an explicit opt-out. Read-only inspection needs no new checkout. Inspect native attachments first and reuse a suitable task-owned worktree. Otherwise use the client's supported native creation tool, retain its returned operation and attachment identity, and continue at the returned directory. After a lost creation response, inspect native status/attachments; unresolved ownership never permits blind duplicate creation. Native client storage and cleanup remain client-owned. Edit, commit and push only in the prepared destination. If isolation is unavailable, report the prerequisite and use an explicitly accepted exception rather than silently editing the primary checkout.
 
 Discover the actual Git repository and common directory independently of the native attachment. Reload applicable instructions in the destination. For managed workflow tasks, admit that exact checkout/client through existing onboarding before starting its editable task; never transplant the source task's accepted identity. Ordinary unenrolled source development does not imply managed activation.
 
@@ -34,7 +34,7 @@ These controls call no provider, scan no checkout and perform no cleanup. Pendin
 
 Use `operate(scope, 'plan', request)` with the existing task identity/revision, complete revised `plan`, exact `previous_plan` artifact reference and accepted `change_decision_ref`. The revised plan's `decision_ref` must match that decision. Preserve existing publication identity, candidate, PR, companions and required obligations. The bounded revision path permits added obligations, not silent removal or replacement. It preserves the effective task policy unless an explicit accepted override changes it.
 
-An expanded scope with existing milestones must include revised accepted `milestones` in the same request. Store them before computing weighted progress; PR count never determines the meter. A previously `DONE` task reopens to `REVIEW`; preserve explicit `PAUSED`, `BLOCKED` and `WAITING` conditions. Historical plans remain managed dependencies.
+An expanded scope with existing milestones must include revised accepted `milestones` in the same request. Store them before computing weighted progress; PR count never determines the meter. A previously `DONE` task reopens to `REVIEW`; preserve explicit `PAUSED` and `WAITING` conditions. Historical plans remain managed dependencies.
 
 ## Observe an existing PR
 

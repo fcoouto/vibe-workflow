@@ -2,7 +2,7 @@
 
 import re
 
-from runtime.task_statuses import STATES
+from runtime.task_statuses import RETIRED_STATES, STATES
 
 
 # Do not import core validators: importing state also loads mutation-capable owners.
@@ -48,13 +48,13 @@ def _pins(value):
     return result
 
 
-def _task(value, gaps):
+def _task(value, gaps, *, historical=False):
     if value is None:
         gaps.append('task_unavailable')
         return None
     _object(value, ('client', 'session_id', 'task_id', 'state', 'revision', 'pins'), limit=32)
     client, status = _text(value['client']), _text(value['state'])
-    _require(client in ('codex', 'claude-code') and status in STATES)
+    _require(client in ('codex', 'claude-code') and (status in STATES or historical and status in RETIRED_STATES))
     result = dict(client=client, session_id=_text(value['session_id']), task_id=_text(value['task_id'], 128),
                   state=status, revision=_integer(value['revision'], 1), pins=_pins(value['pins']),
                   accepted_identity=None)
@@ -110,7 +110,7 @@ def prepare_task_status(report, *, enabled=False):
         _require(type(report[key]) is list and len(report[key]) <= 64)
     generation = _integer(report['generation'])
     gaps = list(_GAPS)
-    task = _task(report['task'], gaps)
+    task = _task(report['task'], gaps, historical='historical' in report)
     historical = _historical(report['historical'], task, gaps) if 'historical' in report else None
     return dict(preparation_only=True, source='runtime.state.task_status', task=task, generation=generation,
                 historical=historical, usage=None, charges=None, native_model=None, native_settings=None,

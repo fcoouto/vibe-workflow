@@ -97,27 +97,41 @@ direct path does not acquire the runtime event-repair guarantees below.
 
 OpenCode titles are supported only on this ordinary path; there is no
 runtime-bound OpenCode title sync until the Smart Routing S3 slice. Pass the
-`ses_` session ID, the formatted title and, once one exists, the last verified
-managed title as `baseline`:
+formatted title and, once one exists, the last verified managed title as
+`baseline`.
+
+To title your own session, run the command through your shell tool with
+`--proof` and a new token that you make up for this call: 16 to 64 letters,
+digits, `_` or `-`, such as `vibe-title-` followed by random characters. Type it
+literally, after `--proof` and a space, not through a variable or `$(…)` (one
+pair of quotes is fine; `--proof=` is not accepted). Never reuse a token, copy
+one from a brief or message, or put one in a prompt for another agent or
+`opencode run`. Leave `session_id` out:
 
 ```text
-python3 -I -B <package>/scripts/opencode_title.py < title.json
+python3 -I -B <package>/scripts/opencode_title.py --proof <new token> < title.json
 ```
 
 ```json
-{"session_id": "<ses_id>", "title": "<formatted title>", "baseline": "<last verified title>"}
+{"title": "<formatted title>", "baseline": "<last verified title>"}
 ```
 
-Use the session ID from the plugin hook context (the `sessionID` on the tool
-or model event for that session), or the ID recorded for a child in your task
-plan. Do not use the `OPENCODE_SESSION_ID` environment variable: OpenCode 2.2.6
-does not set it, so any value is inherited from whatever launched the server and
-can name an unrelated session. Until the routing plugin or a recorded handoff
-supplies an ID, an agent cannot title its own session; this path then does
-nothing. Never pick a session from
-`opencode session list` or by any other guess: the command only checks that
-OpenCode answered for the ID you passed, not that it is the right session, so a
-wrong ID could rename another chat.
+The command takes the session from `OPENCODE_SESSION_ID`. On the OpenCode
+Desktop server the shell tool sets it to the calling session; elsewhere it may be
+missing, or inherited from whatever started the server and then name another
+chat. So before it reads or writes anything, the command checks that this
+session is running a shell call whose command, as OpenCode recorded it, contains
+`--proof <token>`. `session_unknown` means the variable is missing or not a
+session ID; `session_unverified` means the check failed or the server does not
+know that session. With either, this session cannot be titled: do not retry it,
+and report the naming limitation. Fix an `invalid_request` before trying again.
+
+For a child session, pass the ID recorded for it in your task plan, for example
+the session ID a subagent result returned, as `session_id` without `--proof`.
+Never pick a session from
+`opencode session list` or by any other guess: without `--proof` the command only
+checks that OpenCode answered for the ID you passed, not that it is the right
+session, so a wrong ID could rename another chat.
 
 The command reads and writes only the session title through `opencode api`
 and never starts a model turn. It always exits successfully and prints at most
@@ -154,8 +168,11 @@ OpenCode has no compare-and-set title update, so a rename made between the
 command's read and its write, usually a fraction of a second, can be
 overwritten. Readback catches a rename that lands after the write.
 
-Only tests with a fake `opencode` executable check this command, not OpenCode
-itself.
+Tests with a fake `opencode` executable check this command. Against OpenCode
+2.2.6 (Desktop server) on 9 November 2026, only the `--proof` check was observed:
+it accepted the calling session with a quoted token, and refused a missing
+token, another session's ID and a session the server did not know. A title write through this command has not been observed on
+OpenCode.
 
 ## Record status and accepted progress
 
@@ -292,9 +309,9 @@ the original family/member binding.
 
 ## Update and qualification boundary
 
-The task vocabulary is a pinned runtime change. Legacy lowercase records remain
-historical; old `ready` meant completion, while new `READY` means eligible to
-begin. Do not translate old titles into task state or rewrite old records/pins.
+The task vocabulary is a pinned runtime change. A title applied before `READY`
+and `BLOCKED` were retired may still show them and stays recognized, but new
+titles never do.
 Reconcile affected owners with their original runtime and use the existing
 [approved runtime update](runtime.md#change-a-pinned-runtime) procedure with a fresh
 state authority. Existing ownership and unresolved assignments remain binding.

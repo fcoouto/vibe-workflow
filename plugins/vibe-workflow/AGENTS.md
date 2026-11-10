@@ -11,9 +11,9 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Repository constraints
 
-- Wrap the full Vibe Coding Toolkit; preserve its scope and requirements.
+- Wrap the full Vibe Coding Toolkit; preserve its scope and requirements, except local deviations recorded in [docs/policy-sources.md](docs/policy-sources.md).
 - Use Toolkit as the authoring, setup and update authority. Write complete local runtime contracts; do not copy prompts or require a Toolkit checkout, snapshot or fetch during routine tasks.
-- Keep environment preparation, project enrollment, and routine development distinct.
+- Keep environment preparation, project enrollment, and routine development distinct. Onboarding checks workspace readiness first and hands missing required items to preparation.
 - Make basic onboarding useful without a runtime database or repository-enforcement prerequisite. Ordinary development uses native editing, checks and review; advanced controls acquire their own prerequisites only when selected. Preserve explicitly selected protections and allow configuration recovery when qualification is unavailable.
 - When adding a client adapter, follow the [client interface layout](docs/onboard-my-project-plan.md#client-scope-and-adapter-organization).
 - Preserve the user's permissions, model choices, subscriptions, and customizations.
@@ -23,17 +23,10 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Where to look
 
+- Before the first edit of a task, and before selecting checks, committing, pushing, opening a PR, marking it `[READY]`, merging or creating a release archive, read the [development guide](docs/development.md): where to work, which checks to run and how changes reach `main`.
 - For client-specific work, use [Clients](clients/index.md) and load only the entry whose trigger applies.
 - For an explicit workflow operation, read its `skills/<name>/SKILL.md` entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation.
 - For setup decisions, maintenance and undo, read [Setup record](docs/setup.md).
-
-## Verification and delivery
-
-- Validate with `python3 -B scripts/validate.py`.
-- Run the full suite with `python3 -B -m unittest discover -s tests` when runtime, hook or policy behavior changes; it takes about two hours. `python3 -B scripts/test_sharded.py` runs the same modules in parallel shards (about a third of that time on a multi-core machine) and lists failing tests; rerun a failure alone before judging it, since timing-sensitive tests can fail on an overloaded machine.
-- Publish completed task changes by committing, pushing a task branch and opening a draft PR. Use `main` as the integration branch and PR destination. Merge only completed, independently reviewed slices against current `main`, in PRs marked `[READY]`, after local checks pass; the repository has no CI or branch protection. Preserve unfinished work separately and retain newer changes when reconciling older branches.
-- Create release archives only when requested.
-- Report package validation and observed client execution separately.
 
 ## Instruction authoring
 
@@ -46,9 +39,5 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Memory and project preferences
 
+- Feature settings: this project's choices (Workstreams on) are in `.vibe-workflow/settings.json`. Before work that depends on a feature, run `python3 -I -B scripts/workflow.py features status --cwd .`; change them only through its commands (`enable`, `disable`, `set`, `unset`, `undo`, `migrate`). Feature authors follow [feature settings](clients/features.md).
 - Memory: the user-level vault `~/ai-memory-vault` is plain files, with no vault software or MCP server. Before project work, read its `MEMORY.md` index and open topic files only when relevant. Before saving, updating, migrating or pruning, read its `INSTRUCTIONS.md` in full and follow its narrow test and growth policy. Keep this section intact; it is the vault's load path.
-
-<!-- vibe-workflow:workstreams:start -->
-- [x] Workstreams
-Follow the [Workstreams project preference](skills/workstreams/references/procedure.md).
-<!-- vibe-workflow:workstreams:end -->

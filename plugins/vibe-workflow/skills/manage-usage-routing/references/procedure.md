@@ -1,10 +1,9 @@
 # Manage API Usage
 
-Manual and Smart Balance share one runner and budget. Saving settings leaves
-routing Off. A Keychain connection and explicit activation make either mode
-available for the first eligible task. Other Codex work can continue. The public
-CLI records and shows consent. Only the trusted Codex host can send requests
-after live admission.
+Saving settings leaves routing Off. A Keychain connection and activation make
+the checkout active: the agent then routes eligible tasks on its own, with no
+further approval. Other Codex work can continue. The public CLI records and shows
+activation. Only the trusted Codex host can send requests after live admission.
 
 Warn at enablement/status that the provider may consume other credits or trigger
 auto-reload despite local controls. Routine decisions use a compact warning code.
@@ -12,15 +11,15 @@ Reserve the next request's full maximum against the selected grant and limits;
 stop earlier when coverage or expiry is doubtful and hand remaining work to native
 when permitted. Never initiate a purchase or silently switch to a paid API pool.
 
-## Set up and select a mode
+## Set up and activate
 
-1. Read `status` in the selected enrolled Codex checkout. Show the configured
-   mode and whether live consent is saved.
+1. Read `status` in the selected enrolled Codex checkout. Show whether the
+   checkout is active (`live_enabled`).
 2. For an unconfigured checkout, inspect `reusable_setups` and `reuse_reason`.
    Reuse an applicable existing connection, profile and funding policy without
    repeating account setup or asking the user to perform an internal binding step.
-   For an explicit mode, use `reuse_reason_by_mode[mode]`: otherwise identical
-   Manual/Smart source choices need no user selection. If effective setups differ,
+   A source saved under the retired Manual mode counts as active, so otherwise
+   identical setups need no user selection. If effective setups differ,
    explain the organization, API project, profile limits/rates/validity, task class,
    budget and stored connection differences and obtain only the unresolved choice.
    Different connection fingerprints mean different stored Keychain connections;
@@ -30,23 +29,24 @@ when permitted. Never initiate a purchase or silently switch to a paid API pool.
    requests at OpenAI; it is distinct from the user's local repository or checkout.
    For a new connection, use [Keychain setup](keychain-setup.md). Save needed
    settings changes with `configure`. Confirm only unresolved organization/key, profile, expiry,
-   cycle, funding or spending choices. Task/data permission stays local to this
-   checkout; another checkout's permission or qualification is never inherited.
-3. On the user's explicit enable request, pass the current `revision` as
-   `expected_revision` and select `mode: manual` or `mode: smart`. This
-   records this checkout's live consent for the approved configuration. An
+   cycle, funding or spending choices. Activation stays local to this checkout;
+   another checkout's activation, saved restriction or qualification is never
+   inherited.
+3. On the user's enable request, pass the current `revision` as
+   `expected_revision`; omit `mode` or pass `smart`, the only value. This records
+   this checkout's activation (`live_consent`) for the configuration. An
    unconfigured checkout uses revision `0`. Internally carry the selected status
    candidate's `scope` as `reuse_scope` and `setup_pin` as `reuse_pin`; choosing an
    arbitrary representative of equivalent effective setups requires no new user
    approval. Reuse needs this freshness pin even when selection is automatic.
    Use the existing
    approved regular-routing budget and expiry. Use `live_enabled` to verify
-   saved live consent. If status reports `routing_budget_required`, follow
+   the activation. If status reports `routing_budget_required`, follow
    [regular-routing budget setup](#regular-routing-budget).
-4. In Manual, route only tasks explicitly selected by the user. In Smart
-   Balance, use the standing consent for eligible tasks within the approved
-   scope and budget. Load [delegation](delegation.md) for either mode. Previews,
-   comparisons and canaries are optional.
+4. Once active, route eligible tasks within the saved scope and budget without
+   asking; a user's request to use the API for a task is an ordinary instruction.
+   Load [delegation](delegation.md) for proposals. Previews, comparisons and
+   canaries are optional.
 5. Use `disable` on an explicit stop request. Recheck status and report Off.
    On a stale revision, show current status before applying a changed selection.
 
@@ -60,8 +60,9 @@ python3 -I -B scripts/usage_routing.py quote < synthetic-quote.json
 python3 -I -B scripts/usage_routing.py evaluate --cwd /absolute/project/path < task.json
 ```
 
-Status creates no state or credentials. It distinguishes enrollment and saved
-live consent (`live_enabled`). `live_dispatch:false` describes the public CLI
+Status creates no state or credentials. It distinguishes enrollment and
+activation (`live_enabled`); `activation` is the reference the shared packet
+contract uses, or null when the checkout is not active. `live_dispatch:false` describes the public CLI
 boundary. If the source package is unavailable or untrusted, resolve that
 through the accepted workflow and preserve enrollment. Evaluate is an optional
 read-only preview. `eligible` never authorizes a send; status `reason` says why routing is not
@@ -87,8 +88,8 @@ may be Off or disabled; that local choice is never copied.
 candidates), `reuse_selection_required` for different setups,
 `reusable_setup_unavailable` when none is compatible, `already_configured` for a
 configured target, or `not_configured` when no existing state is available.
-`reuse_reason_by_mode` maps `manual` and `smart` to those outcomes after applying
-that target mode. Source identity/revision and pins prove freshness separately;
+`reuse_reason_by_mode` keeps one `smart` entry with the same outcome for
+compatibility. Source identity/revision and pins prove freshness separately;
 they do not make equivalent copied settings ambiguous.
 Enrollment/recovery errors retain `reason: configuration_or_scope_unavailable`;
 resolve that error before attempting activation. Existing canonical pins must
@@ -107,7 +108,7 @@ The quote uses the highest input rate and total output including reasoning.
 Counting has its own maximum charge. A digest binds inputs without authenticating
 counts/prices or granting spending permission. Use synthetic inputs for tests.
 
-For reusable coding-source or automatic-selection permission, use the [shared permission contract](../../../clients/external-delegation.md#reusable-permission); preserve the existing budget and funding choices.
+Activation authorizes coding-source packets and automatic selection; an optional saved restriction follows the [shared permission contract](../../../clients/external-delegation.md#saved-permission-optional). Preserve the existing budget and funding choices.
 
 ## Explicit local configuration
 
@@ -120,8 +121,9 @@ For reusable coding-source or automatic-selection permission, use the [shared pe
   32 lowercase hexadecimal digits. Configuration and status use metadata only.
 - `policy`: `cycle`, `start`, `end`, `expiry`, `stop_at`, `ceiling`, `amount`,
   `grant_amount`, `pilot_limit`, `task_limit`;
-- `profile` as above; `class_name`; `mode` (`manual` or `smart`).
-- Optional `external_permission` follows that shared contract; omission preserves it and null revokes it.
+- `profile` as above; `class_name`; `mode` (`smart`; `manual` is no longer
+  accepted, and records saved as Manual run as active).
+- Optional `external_permission` follows that shared contract; omission preserves it and null removes the restriction.
 - Optional `production_budget: true` for an existing smoke-test configuration
   in the same organization and accounting cycle.
 
@@ -133,36 +135,35 @@ not proof. Stop time precedes cycle end/expiry.
 
 Configuration requires the supported enrolled Codex scope. It explicitly creates
 owner-only feature state under `~/.local/state/vibe-workflow/usage/` and
-pins the one canonical database identity in checkout binding files. It saves a
-requested mode while leaving the feature OFF and acquires no account connection. A missing
+pins the one canonical database identity in checkout binding files. It saves the
+configuration while leaving the feature OFF and acquires no account connection. A missing
 or replaced pinned database requires recovery, not a new allowance. This feature
 state is separate from optional managed task runtime activation.
 
 `disable` takes `expected_revision`. `enable` takes `expected_revision` and an
-optional `mode` (`manual` or `smart`), `reuse_scope` (a source `scope` string
+optional `mode` (`smart` only), `reuse_scope` (a source `scope` string
 from status) and `reuse_pin` (that candidate's `setup_pin` SHA-256 string).
-Null is equivalent to omission. Omit `mode` to keep the saved choice. Disable
-blocks new admissions. Explicit enable on a Keychain configuration sets
-`live_consent` and returns the funding warning.
+Null is equivalent to omission. Disable blocks new admissions. Enable on a
+Keychain configuration sets `live_consent`, the activation, and returns the
+funding warning.
 For an unconfigured target, `expected_revision: 0` creates its configuration and
-records explicit consent atomically; the returned target revision is `1`.
+records the activation atomically; the returned target revision is `1`.
 `reuse_scope` selects an existing compatible setup, and omission automatically
 selects one distinct setup. Equivalent candidates must match binding, profile,
-class, effective target mode, organization revision and regular-budget conversion
-state. An explicit mode replaces source modes before comparison; omitted mode
-retains genuine saved-mode ambiguity. Source revisions/pins do not participate
-in this equivalence comparison.
+class, organization revision and regular-budget conversion state. Source
+revisions/pins do not participate in this equivalence comparison.
 Initial reuse requires `reuse_pin` even with a unique candidate or explicit scope.
 The pin binds the selected source scope, revision, enabled/disabled/live-consent
 state, binding, complete profile, class, saved mode, conversion state and current
 organization policy/revision. It is rechecked inside the existing transaction
-before binding or target consent. Unrelated checkout changes do not change this
+before binding or target activation. Unrelated checkout changes do not change this
 selected source pin. This is status-to-enable bookkeeping, never a separate
 mechanical approval prompt. Existing configured-target enable inputs need no pin.
-The target receives fresh consent, no external/source permission or qualification,
-and retains the existing ledger identity, funding policy, charges and reservations.
-No credential access, smoke test or new cap is required for reuse. Shared policies
-that validate unchanged keep their revision; real changes invalidate stale consent.
+The target receives its own fresh activation but no saved restriction or
+qualification, and retains the existing ledger identity, funding policy, charges
+and reservations. No credential access, smoke test or new cap is required for
+reuse. Shared policies that validate unchanged keep their revision; real changes
+invalidate a stale activation.
 
 Ambiguity fails with `reuse_selection_required`; read status and select
 `reuse_scope` explicitly. An unavailable, stale or expired selection fails with
@@ -172,7 +173,7 @@ An omitted initial pin returns `reuse_pin_required`; a mismatched pin returns
 before retrying; never activate the updated settings using an earlier selection.
 Missing
 state returns `not_configured`; a lost or replaced pinned ledger requires recovery.
-Failed reuse leaves target consent and the ledger unchanged. A configured or
+Failed reuse leaves the target's activation and the ledger unchanged. A configured or
 disabled target keeps its own settings and revision checks; reuse fields cannot
 replace them (`already_configured`). Disable never silently reattaches a setup.
 The public `run` path remains unavailable.
@@ -181,7 +182,7 @@ Live evidence belongs to the trusted host. `reconcile` takes `{}` and reports
 
 ### Regular-routing budget
 
-Manual and Smart Balance share the monthly ceiling and funding choice. Set
+Routing uses the monthly ceiling and funding choice. Set
 `pilot_limit` to a positive amount for a cumulative routing cap or JSON
 `null` to omit it. Set `task_limit` the same way for a cap on one task.
 These choices are independent of each other and of the monthly ceiling.
@@ -197,7 +198,7 @@ accounting cycle is still active, obtain the user's regular-routing budget
 choice and call `configure` with `production_budget: true`. Supply the approved
 policy, including `null` for any omitted extra cap, current price profile, and
 stop time. Keep the cycle ID and billing boundaries so costs and reservations
-still count. Then use the requested mode's normal enable procedure.
+still count. Then use the normal enable procedure.
 
 ## Optional preview and evaluation
 

@@ -218,7 +218,9 @@ class Store:
     def report(self):
         record = self.record
         worker = record is not None and 'workers' in record['routes']
-        renewal = worker and record['version'] == 1
+        activation = (dict(ref=f"activation:openrouter:{record['binding']['scope_id']}:r{record['revision']}",
+            funding_ref='openrouter-provider-limits', classes=None, destinations=None)
+            if record and record['enabled'] else None)
         readiness = 'not_configured'
         if record:
             try:
@@ -230,10 +232,11 @@ class Store:
         return dict(ok=True, control_scope='checkout', configured=record is not None,
             revision=record['revision'] if record else 0,
             external_permission=record.get('external_permission') if record else None, enabled=record['enabled'] if record else False,
+            activation=activation,
             routes=record['routes'] if record else [], scope_id=self.binding['scope_id'],
             consent_version=record['version'] if record else None,
-            worker_capability=('renewal_required' if renewal else 'read_only') if worker else 'not_applicable',
-            enablement_renewal_required=renewal,
+            worker_capability='read_only' if worker else 'not_applicable',
+            enablement_renewal_required=False,
             checkout=str(self.scope.repository_root), local_configuration=readiness,
             connection='not_checked', execution_qualification='not_checked',
             opencode=record['opencode'] if record else None, auth_data=record['auth_data'] if record else None,
@@ -344,13 +347,12 @@ def operate(cwd, action, request):
         else:
             if action == 'disable' and current is None: return owner.report()
             require(current is not None, 'openrouter_not_configured')
-            renew = action == 'enable' and 'workers' in current['routes'] and current['version'] == 1
-            require(not renew or request.get('consent_version') == 2, 'openrouter_worker_consent_required')
-            if action == 'enable' and 'workers' in current['routes']:
+            worker_enable = action == 'enable' and 'workers' in current['routes']
+            if worker_enable:
                 runtime_references(current['opencode'], current['auth_data'])
             wanted = action == 'enable'
-            if current['enabled'] == wanted and not renew: return owner.report()
-            updated = dict(current, version=2 if renew else current['version'], revision=revision + 1, enabled=wanted)
+            if current['enabled'] == wanted: return owner.report()
+            updated = dict(current, version=2 if worker_enable else current['version'], revision=revision + 1, enabled=wanted)
         owner.save(updated)
         return owner.report()
 
@@ -366,7 +368,6 @@ def admission(cwd, route, *, store=None, root=None, opencode=None, auth_data=Non
         record = owner.record
         require(record is not None and record['enabled'], 'openrouter_disabled')
         require(route in record['routes'], 'openrouter_route_disabled')
-        require(route != 'workers' or record['version'] == 2, 'openrouter_worker_consent_renewal_required')
         report = owner.report()
         require(report['local_configuration'] == 'ready', 'openrouter_configuration_unavailable')
         require(revision is None or type(revision) is int and revision == record['revision'],

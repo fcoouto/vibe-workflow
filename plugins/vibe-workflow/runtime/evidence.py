@@ -5165,7 +5165,7 @@ def _capture(scope, plan, *, pinned=None):
         if value['status'] == 'read':
             value['mode'] = stat.S_IMODE((scope.repository_root / name).lstat().st_mode)
         snapshot['fingerprints'][name] = value
-    _require(sum(v.get('bytes', 0) for v in snapshot['fingerprints'].values()) <= 8 * 1024 * 1024,
+    _require(sum(v.get('bytes', 0) for v in snapshot['fingerprints'].values()) <= 8 * 1024 * 1024,  # Own check-run bound; never MAX_TOTAL.
              'Candidate total byte limit exceeded')
     base = _git(scope.repository_root, 'rev-parse', '--verify', '--end-of-options', plan['base'] + '^{commit}').decode().strip()
     comparison_base = base
@@ -5389,7 +5389,7 @@ def _check_admission(scope, db, task, check, claims, records):
     admission = state._capability(scope, task, 'check-run')
     delegation._qualification_allocation(scope, task, admission, records, additional_attempts=1)
     # Exclusive bookkeeping for an unknown read footprint does not grant mutable command effects.
-    _require(task['state'] not in {'BLOCKED', 'WAITING', 'PAUSED'} and
+    _require(task['state'] not in {'WAITING', 'PAUSED'} and
         (task['mode'] == 'editable' or check['effects']['kind'] == 'read-only'), 'Task cannot reserve this check')
     _require(len(task['evidence']['attempts']) < MAX_ATTEMPTS, 'Evidence attempt bound reached')
     owner = dict(scope_id=state._scope_id(scope), **{key: task[key] for key in ('client', 'session_id', 'task_id')})
@@ -6249,7 +6249,7 @@ def _verify_member(scope, request, *, linked=False, _held=False):
             _require(admission.mode == 'ordinary' and 'qualification_attempt' not in task,
                 'Qualification verification cannot issue ordinary merge readiness')
         requirements = delivery.completion_requirements(scope, db, task)
-        _require(task['state'] not in {'WAITING', 'BLOCKED', 'PAUSED'}, 'Resolve the task status explicitly before verification')
+        _require(task['state'] not in {'WAITING', 'PAUSED'}, 'Resolve the task status explicitly before verification')
         _require('evidence' in task, 'Evidence plan is missing')
         plan = _read(scope, task['evidence']['plan'])
         _require(plan['version'] == 1 or linked and plan['version'] == 2, 'Linked acceptance requires linked verification owner integration')

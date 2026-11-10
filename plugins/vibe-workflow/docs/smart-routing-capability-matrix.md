@@ -1,6 +1,6 @@
 # Smart Routing — capability matrix and billing classification (Task 0.3, P0.0)
 
-Status on 2026-11-08. This is evidence for the [implementation plan](superpowers/plans/2026-11-08-smart-routing.md); it closes no gate by itself. A missing proof is **unverified**, never qualified. Probe data is in [tests/fixtures/smart-routing/probes/](../tests/fixtures/smart-routing/probes/) with prompts, tokens and account identifiers removed.
+Status on 2026-11-08; the "Session ID in the environment" row was updated on 2026-11-09. This is evidence for the [implementation plan](superpowers/plans/2026-11-08-smart-routing.md); it closes no gate by itself. A missing proof is **unverified**, never qualified. Probe data is in [tests/fixtures/smart-routing/probes/](../tests/fixtures/smart-routing/probes/) with prompts, tokens and account identifiers removed.
 
 Source confidence: **D** vendor documentation, **N** news or third-party only, **U** unverified. Anthropic help pages show "Updated over a week ago" without a date and OpenAI pages are undated, so every documented row needs a recheck before a route is enabled for the first time.
 
@@ -69,7 +69,7 @@ Probed on 2026-11-08 against OpenCode 2.2.6 with an isolated server (separate co
 | Auxiliary requests (P0.8) | partial | `model.request` reports `kind`; only `title` is in the committed fixtures, and `primary`, `compaction` and `generate` are † from the documentation and the raw dumps. Title requests create no message, so their tokens appear only in the session total. |
 | Retries (P0.8) † | unsupported | No retry was provoked, so the `retry` hook's silence proves nothing by itself; OpenCode's provider documentation says Claude retries internally and no attempt field was found. |
 | Event stream (P0.8) † | partial | Live-only, no replay or reconnection. Durable events carry `durable.seq`; a gap was seen once without a disconnect. Re-reading session and message state resyncs. |
-| Session ID in the environment (P0.8) | unsupported | OpenCode 2.2.6 does not set `OPENCODE_SESSION_ID`. Any value is inherited from the environment of whatever launched the server and can name an unrelated session; it was absent in the probed child and parent shells and present, with the launching session's ID, in another run. Take session IDs from hook context or a recorded handoff instead. |
+| Session ID in the environment (P0.8) | unsupported for routing | Not dependable on its own. The probe records conflict: `p0r2-results.json` notes that on a server started with `OPENCODE_*` removed no shell had `OPENCODE_SESSION_ID`, while `p0r2-mcp-codemode-messages.json` shows a subagent's shell printing its own session ID; in another run it held the launching session's ID, inherited. On the Desktop's `serve --service` server (9 November 2026), whose own environment lacks it, the shell tool set it per session: a parent shell and a subagent's shell each saw their own ID. Routing takes session IDs from hook context or a recorded handoff. Ordinary titles use it only after the [`--proof` check](../clients/workstreams-titles.md#opencode-sessions) binds it to the running command. |
 | Persistent child in a plugin (P0.1/P0.6) | qualified | After a kill the next hook respawned the child in about 16–18 ms; with respawn disabled the hook threw and nothing was sent; a stalled child timed out at about 500 ms and the hook threw. |
 
 ### Hooks S3 uses
@@ -119,24 +119,34 @@ Pilot attempt 2 (same day, harness `94f9e0e`, dedicated canary state):
 - **P0.8:** usage was accounted with `children` and `lineage`, the title was known by subtraction (admission 1) or zero (titled sessions), and 0 re-reads were needed. Every subscription hold settled as a window settlement with no charge, and `status` was clean at the end.
 - **Not covered:** subagents, compaction, retries and API-funded holds were not exercised. See the [validation results](smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort).
 
+Live probes (9 November 2026, harness 85ae5f4, `qualification-2`, 7 calls on `claude-agent/haiku#low`; [run](smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4)):
+
+- **P0.8 (S3.3c):** `routing.descendants` answered `complete: true` for a root with a tool subagent, a command child and an API child, and equalled the launcher's listing. A root created before `attach` answered `complete: false` with `root_creation_unobserved`. The answer was refused after `detach`. OpenCode emitted the root's `session.created` after `attach`.
+- **P0.6 (S3.3d):**
+  - model writes to `.opencode/command/x.md` and `sub/opencode.json` were denied, with relative resources;
+  - an ordinary `agents/ok.txt` write was allowed;
+  - a tool-call subagent spawn on the allowed route passed `tool.execute.before`;
+  - **a `` !`env` `` command shell under an attached root did not reach `shell.create.before` and saw a dummy credential-like variable**, so commands inside the shell stay unsupported and launchers must not invoke project commands in managed sessions;
+  - image generation was unobserved (no image model).
+
 Open P0.8 item: the live event stream flagged `version_changed` on every session aggregate. The resync gave zero deltas, so this errs on the safe side, but whether `durable.version` is a version per aggregate or per event type is not established.
 
 ## Gate status (P0)
 
 | Gate | Status | Basis |
 |---|---|---|
-| P0.0 Billing/terms | **partly established** | Route table above. The reference route stays disputed; ChatGPT-via-OpenCode and API grant debit order need live checks. |
+| P0.0 Billing/terms | **partly established** | Route table above. The reference route stays disputed. ChatGPT-via-OpenCode was observed live on 10 November 2026 for `gpt-6-luna` on the user's plan: subscription usage with no cost (null) and a window settlement. Whether it draws on Codex's pool, and the ChatGPT usage page entry, are unverified. The API grant debit order still needs a live check. |
 | P0.1 Source/runtime | **partly established** | Latency is in the committed fixtures; the loader and test-runner findings † are observed, not committed. The workflow baseline was recorded in Task 0.1. |
 | P0.2 Subscription telemetry | **partly established** | Claude Code reports `unifiedWindows` utilization (0–1) with reset times; Codex `account/rateLimits/read` reports `usedPercent` with window length and reset; OpenCode assistant messages carry `native.rateLimit` for Claude Agent. Account identity between a harness and the OpenCode route is unverified. |
 | P0.3, P0.4 API grants and key binding | unverified | Not probed. |
 | P0.5 Model/effort | **partly established** | Requested model and variant observed; resolved model unsupported. |
-| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure. The finished shim was observed live for the handshake, the blocked paths and the command-subagent path [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
+| P0.6 Mandatory routing | **partly established** | Qualified for model requests, subagent and nested spawns, and tool calls; unsupported for commands inside the shell and plugin load failure (live 9 November 2026: a command template's `` !`env` `` shell bypasses `shell.create.before`, so its environment is not stripped). The finished shim was observed live for the handshake, the blocked paths and the command-subagent path [above](#live-re-qualification-9-november-2026); command subagents are protected only by lineage. |
 | P0.7 Dispatch recovery | **qualified for the cases probed** | One run on one server; server restart was not tested. Duplicate IDs are deduplicated and lost acknowledgments are recoverable by ID. Re-qualified live on 9 November 2026 for derived ids, one request per derived message id, duplicates, read-back, id shapes, ordering and the lost-acknowledgment drill. Open: an uncertain subscription hold has no operator recovery path. |
 | P0.8 Lineage/accounting | **partly established** | Parent IDs and request kinds visible; title tokens by subtraction; no retry or resolved-model data; the event stream needs resync. Re-qualified live on 9 November 2026 for a worker attempt with a command-spawned child, its title, event tracking, resync and subscription settlement (#146); auxiliary kinds other than the title, retries and API-funded holds were not observed. |
 
 ## Live checks still open
 
-1. **OpenCode with ChatGPT** needs quota. The user's Codex weekly window is exhausted until about 2026-11-10, so no Codex or ChatGPT calls were made. Check the ChatGPT usage page for an OpenCode entry and its credits setting, and read the Codex rate limits before and after one request.
+1. **OpenCode with ChatGPT:** partly observed on 10 November 2026 ([report](smart-routing-qualification.md#chatgpt-attempts-5-and-6)). Sign in with ChatGPT through an isolated server works end to end for `gpt-6-luna`: one request, tokens recorded, window settlement, no dollar charge. `gpt-5.5`, listed by OpenCode, was refused with 400 `model_not_found`, so a listed model is not an entitled one. Still open: the ChatGPT usage page entry and its credits setting, whether the route shares Codex's pool (the Codex rate limits before and after one request; there is no reader), and `native.rateLimit`, which this route does not report.
 2. **Reference route billing.** Confirm in claude.ai usage that one request through the Claude Agent provider raised the plan meter and left extra usage unchanged. The `rate_limit_event` fields (`rateLimitType`, `overageStatus`) are the signals.
 3. **API grants.** Before any call, confirm purchased balance is zero and auto-reload is off. Make one tiny call with a key from the linked organization and check each vendor's billing page for the grant balance and expiry.
 4. **Plan tier.** Grant and sign-in eligibility depend on the exact plans, which should be recorded per account.

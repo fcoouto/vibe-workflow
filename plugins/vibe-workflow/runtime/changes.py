@@ -1673,7 +1673,7 @@ def _birth_store_inventory(context, db):
     total=0
     for name,digest in rows:
         metadata=task_state._metadata(db,name);total+=metadata['bytes']
-        d3._require(total<=d3.MAX_TOTAL,'Birth artifact inventory byte bound exceeded')
+        d3._require(total<=d3.LEGACY_MAX_TOTAL,'Birth artifact inventory byte bound exceeded')
         evidence._managed_artifact(None,dict(name=name,digest=digest),context=context,db=db)
 
 

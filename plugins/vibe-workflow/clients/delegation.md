@@ -2,7 +2,7 @@
 
 Ordinary native delegation follows [Agent Delegation](../policies/03-agent-delegation.md) for execution choice, worker selection, briefs, ownership and review. It does not require managed runtime enrollment. Load the controls below only for a selected managed assignment route. Use [task runtime](runtime.md#runtime-authority) for its shared state authority and [evidence](evidence.md) for its review, checks and completion. Direct checks and coordinator resource claims do not need native guidance. Startup alone needs none of this procedure.
 
-For automatic Workstreams coordination, first honor the saved [project preference](../skills/workstreams/references/procedure.md). Onboarding and the skill share that choice. It does not select the managed launch controls below or alter explicitly selected protections.
+For automatic Workstreams coordination, first honor the saved [project preference](../skills/workstreams/references/procedure.md) in `.vibe-workflow/settings.json`. Onboarding and the skill share that choice. It does not select the managed launch controls below or alter explicitly selected protections.
 
 The [cooperative D6 contract](../docs/d6-native-delegation-plan.md#normal-completion-and-uncertain-ownership) uses normal native completion and independent result inspection. The [Mac CLI pilot](../docs/superpowers/plans/2026-11-04-d6-successor-release-packet.md) qualified one bounded guarded canary. Preserve selected protections and historical proof meanings.
 

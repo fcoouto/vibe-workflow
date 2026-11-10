@@ -30,8 +30,8 @@ def status(cwd=None):
                   canary_active=False,
                   review_authority=False, enrolled=enrolled, enrollment=enrollment,
                   reason='live_adapter_unavailable', enabled=False, funding_policy='best_effort_grant',
-                  reusable_setups=[], reuse_reason='not_configured',
-                  reuse_reason_by_mode=dict(manual='not_configured', smart='not_configured'),
+                  reusable_setups=[], reuse_reason='not_configured', activation=None,
+                  reuse_reason_by_mode=dict(smart='not_configured'),
                   warnings=[FUNDING_WARNING])
     from runtime.usage_settings import controller, directory
     if cwd is not None and directory().exists():
@@ -149,7 +149,8 @@ class Controller:
             except usage_credentials.CredentialError as error:
                 raise BudgetError(str(error)) from None
         name(request['class_name'])
-        require(request['mode'] in ('manual', 'smart'), 'invalid_mode')
+        # Keep the existing schema's smart value; manual is read-only compatibility.
+        require(request['mode'] == 'smart', 'invalid_mode')
         profile = request['profile']
         # Validate the complete profile without transmitting a counting request.
         packet = dict(version=1, model=profile['model'], reasoning=profile['reasoning'],
@@ -207,7 +208,7 @@ class Controller:
                 require(config['requested_mode'] in ('manual', 'smart'), 'invalid_mode')
                 setups[scope] = dict(binding=binding.copy(), org_revision=org['revision'],
                     profile=profile.copy(), class_name=config['class_name'],
-                    requested_mode=config['requested_mode'], production_budget=config.get('production_budget', False))
+                    requested_mode='smart', production_budget=config.get('production_budget', False))
             except (ValueError, KeyError, TypeError):
                 continue
         return setups
@@ -242,7 +243,7 @@ class Controller:
         setups = self._reusable(data) if config is None else {}
         reuse_reason = 'already_configured' if config else self._reuse_reason(setups)
         by_mode = {mode: 'already_configured' if config else self._reuse_reason(setups, mode)
-                   for mode in ('manual', 'smart')}
+                   for mode in ('smart',)}
         reusable = [dict(scope=scope, organization=setup['binding']['organization'],
                         api_project=setup['binding']['project'], org_revision=setup['org_revision'],
                         model=setup['profile']['model'], reasoning=setup['profile']['reasoning'],
@@ -260,11 +261,12 @@ class Controller:
             reason = 'trusted_host_required'
         elif config and config['disabled']:
             reason = 'disabled'
-        return dict(version=1, mode=config['requested_mode'] if enabled else 'off', enabled=enabled,
+        return dict(version=1, mode='smart' if enabled else 'off', enabled=enabled,
                     live_enabled=live_enabled, live_dispatch=False, review_authority=False, funding_policy='best_effort_grant',
                     canary_active=canary_active,
                     warnings=[FUNDING_WARNING],
-                    requested_mode=config['requested_mode'] if config else None,
+                    requested_mode='smart' if config else None,
+                    activation=self._activation(config, org['policy']) if live_enabled else None,
                     revision=config['revision'] if config else 0,
                     reusable_setups=reusable, reuse_reason=reuse_reason,
                     reuse_reason_by_mode=by_mode,
@@ -272,7 +274,7 @@ class Controller:
 
     def enable(self, expected_revision, *, mode=None, reuse_scope=None, reuse_pin=None):
         integer(expected_revision)
-        require(mode in (None, 'manual', 'smart'), 'invalid_mode')
+        require(mode in (None, 'smart'), 'invalid_mode')
         if reuse_scope is not None:
             name(reuse_scope)
         with self.ledger.transaction() as data:
@@ -375,13 +377,29 @@ class Controller:
                     and path.is_file() and path.stat().st_size <= MAX_INPUT, 'snapshot_changed')
             require(hashlib.sha256(path.read_bytes()).hexdigest() == snapshot['sha256'], 'snapshot_changed')
 
-    def _external(self, config, task):
+    def _activation(self, config, policy):
+        """Derive checkout authority solely from saved settings and live consent."""
+        if not usage_admission.live_consent_current(config, policy, self.clock()):
+            return None
+        return dict(ref=f"activation:openai-api:{self.scope}:r{config['revision']}",
+            funding_ref=f"funding:openai-api:{config['binding']['organization']}:r{config['org_revision']}",
+            classes=[config['class_name']], destinations=[dict(service='openai-api', mode='proposal',
+                provider='openai', model=config['profile']['model'], effort=config['profile']['reasoning'])])
+
+    def _external(self, config, task, policy):
         if 'external' not in task:
+            require(not task['snapshots'] and config.get('external_permission') is None,
+                    'external_provenance_required')
             return
         try:
-            packet = external_delegation.check(self.root, config.get('external_permission'), task['external'],
-                service='openai-api', mode='proposal', model=config['profile']['model'], provider='openai',
-                effort=config['profile']['reasoning'], class_name=task['class_name'], now=self.clock())
+            assignment = dict(service='openai-api', mode='proposal', model=config['profile']['model'],
+                provider='openai', effort=config['profile']['reasoning'], class_name=task['class_name'])
+            permission = external_delegation.effective_permission(config.get('external_permission'),
+                self._activation(config, policy), **assignment)
+            require(task['provider'] != 'auto' or external_delegation.automatic_allowed(permission),
+                    'external_automatic_selection_denied')
+            packet = external_delegation.check(self.root, permission, task['external'],
+                **assignment, now=self.clock())
             require(task['packet']['text'] == packet['text'] and task['snapshots'] == packet['snapshots'],
                     'external_packet_changed')
         except ValueError as error:
@@ -404,7 +422,7 @@ class Controller:
         require(task['class_name'] == config['class_name'], 'task_class_unqualified')
         require(org['revision'] == config['org_revision'], 'policy_revision_changed')
         self._snapshots(task['snapshots'])
-        self._external(config, task)
+        self._external(config, task, org['policy'])
         bound = quote(task['packet'], config['profile'], self.clock())
         require(task['native'].get('task') == task['task_id'], 'native_task_mismatch')
         # Operate on a deserialized snapshot: selection must not reserve or write.
@@ -569,6 +587,10 @@ class Controller:
                     existing['task'] == task['task_id'], 'run_identity_changed')
             return dict(replayed=True, accepted=False,
                         requires_native_review=True, state=existing['calls'])
+        if evidence is not None:
+            require(not any(run['task'] == task.get('task_id')
+                    and (run.get('consent') or {}).get('scope') == self.scope
+                    for run in data['runs'].values()), 'live_task_already_attempted')
         live_gate = final_check = None
         pin_qualification = False
         if evidence is None:
@@ -594,7 +616,7 @@ class Controller:
                     denial = error
             if denial is not None:
                 raise denial
-            pin_qualification = self._config(data).get('live_consent') is not True
+            pin_qualification = evidence.qualification_digest is not None
             decision = self._evaluate(data, task, pin_qualification=pin_qualification, live=True)
 
             def live_gate(state, now):
@@ -604,7 +626,8 @@ class Controller:
                 if scope_check is not None:
                     scope_check()
                 self._snapshots(task['snapshots'])
-                self._external(self._config(data), task)
+                self._external(self._config(data), task,
+                               data['organizations'][self._config(data)['binding']['organization']]['policy'])
 
         require(decision['decision'] == 'eligible', decision['reason'])
         config = self._config(data)

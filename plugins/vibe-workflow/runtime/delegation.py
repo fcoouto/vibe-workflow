@@ -1659,7 +1659,7 @@ def _admission(scope, db, task, plan, job, claims, records, request):
         from runtime.workstreams import validate_admission
         validate_admission(scope, request)
     limits = plan['limits']
-    _require(task['state'] not in {'BLOCKED', 'WAITING', 'PAUSED', 'CANCELLED'} and not any(
+    _require(task['state'] not in {'WAITING', 'PAUSED', 'CANCELLED'} and not any(
         c['kind'] in {'blocker', 'decision'} and c['status'] == 'pending' for c in task['conditions']),
         'Task blockers or pending decisions prevent worker dispatch')
     _require(task['mode'] == 'editable' or all(c['mode'] == 'read' for c in claims), 'Read-only task cannot admit mutable worker claims')
@@ -1902,7 +1902,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
             'check-run' if role == 'check' else 'operation-coordinator')
         admission = state._capability(scope, task, operation)
         _qualification_allocation(scope, task, admission, records, additional_attempts=0 if _verification else 1)
-        _require((_verification or task['state'] not in {'BLOCKED', 'WAITING', 'PAUSED'}) and
+        _require((_verification or task['state'] not in {'WAITING', 'PAUSED'}) and
                  (task['mode'] == 'editable' or all(c['mode'] == 'read' for c in claims)), 'Task cannot reserve this operation')
         _resources_available(scope, db, claims, records, cooperative_task=cooperative_task(task, admission))
         d5_plan = task.get('evidence', {}).get('plan')
@@ -2636,7 +2636,7 @@ def _reconciliation_reply(record, artifact, replayed=False):
 def _confirm_cooperative_completion(scope, record, task, history, proof, assessment, original, candidate, changed):
     data = record['data']
     _require(data['status'] == 'observed' and data['binding']['client_surface'] == 'codex-cli' and
-             assessment['outcome'] == 'completed' and task['state'] not in {'BLOCKED', 'WAITING', 'PAUSED', 'CANCELLED'} and
+             assessment['outcome'] == 'completed' and task['state'] not in {'WAITING', 'PAUSED', 'CANCELLED'} and
              not (task['turn_uncertain'] and task['turn_id'] is not None) and
              not {'workstream_dispatch', 'workstream_continuation'} & data.keys() and
              'workstream_revision' not in record['body']['request'] and all(c['kind'] == 'path' for c in data['claims']),
@@ -2938,7 +2938,7 @@ def _continuation_owned(scope, db, request, records, *, allow_settled=False):
     _require(record['data']['status'] != COOPERATIVE_COMPLETED,
              'Cooperatively completed child requires new admission before further work')
     _require(allow_settled or record['data']['status'] != 'settled', 'Reconciled ownership cannot resume without reacquisition')
-    _require(task['state'] not in {'BLOCKED', 'WAITING', 'PAUSED', 'CANCELLED'} and not any(
+    _require(task['state'] not in {'WAITING', 'PAUSED', 'CANCELLED'} and not any(
         c['kind'] in {'blocker', 'decision'} and c['status'] == 'pending' for c in task['conditions']),
         'Task blockers, pauses or pending decisions prevent continuation')
     records = [r for r in records if r['id'] != record['id']]
@@ -3220,7 +3220,7 @@ CONTINUATION_LIMIT_FAILURES = {'rateLimitExceeded', 'usageLimitExceeded'}
 # Smart Routing dispatch gates (S3.5): read-only view of a planned job, its canonical semantic job and a cheap
 # change marker. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s35-fresh-gates-at-dispatch-rf3
 # ---------------------------------------------------------------------------------------------------
-ROUTING_PAUSED = {'BLOCKED', 'WAITING', 'PAUSED', 'CANCELLED'}
+ROUTING_PAUSED = {'WAITING', 'PAUSED', 'CANCELLED'}
 WORKSTREAM_REQUEST_FIELDS = {'workstream_revision', 'continuation_limits', 'workstream_context_id'}
 
 

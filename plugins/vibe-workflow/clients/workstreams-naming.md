@@ -58,7 +58,6 @@ include the leading character.
 ￻▰▰▱▱▱ [W1] P · Thread naming
 ￻▰▰▰▰▰ [W1] C · Naming rules
 ￻▰▰▰▰▱ REVIEW · [W1] C · Status tags
-￻▰▰▰▱▱ BLOCKED · [W1] C · Search support
 ￻▰▰▰▱▱ WAITING · [W1] C · Client check
 ￻▰▱▱▱▱ [W2] P · Solo fix
 ```
@@ -129,18 +128,20 @@ Use these canonical task states in the existing task plan:
 | Status | Use when |
 | --- | --- |
 | `TRIAGE` | A thread has just been created and scope needs assessment. |
-| `READY` | Scope and prerequisites are clear and work can start. |
 | `WORKING` | Work is underway. This describes active task effort. |
 | `REVIEW` | A result awaits review or review is underway. |
-| `WAITING` | Work awaits an expected reply, dependency or event. |
-| `BLOCKED` | Work cannot continue without intervention. |
+| `WAITING` | Work awaits a reply, decision, dependency, event or the user's intervention. |
 | `PAUSED` | Work was deliberately put aside. |
 | `DONE` | The thread's agreed scope is complete and verified, and the PR merge gate below holds. |
 | `CANCELLED` | Work was closed without completing its agreed scope. |
 
-Show `REVIEW` when the user is asked to review a result, `WAITING` when the
-user owes an action such as a reply, approval or manual merge, and `BLOCKED`
-when the user must intervene to unblock work. Hide the label for internal
+Once triage settles the scope, work moves straight to `WORKING`, or to `REVIEW`
+when the work is a review; a thread that cannot start yet is `WAITING` for what
+it needs. Record in the task plan what a waiting thread waits for.
+
+Show `REVIEW` when the user is asked to review a result and `WAITING` when the
+user owes an action such as a reply, approval, decision, manual merge or an
+intervention to unblock work. Hide the label for internal
 review, agent-owned next steps, background dependencies and all other states.
 Decide from the actual next action and its owner. Clear the label when the user
 has acted or the next action moves to someone else, even if the task state stays
@@ -149,11 +150,19 @@ the same.
 **PR merge gate.** `DONE` also requires every PR the thread opened or took over to
 be observed merged on the remote: provider state merged, with a merge commit (for
 example `gh pr view <PR> --json state,mergedAt,mergeCommit`). A local merge, an
-approval, a readiness marker such as `[READY]`, the user's statement or a title
-does not count. Until then show `WAITING` for the manual merge, or the actual
-`WORKING`/`REVIEW` state while other work remains. A PR closed unmerged keeps the
-thread out of `DONE` until the user chooses another scope or `CANCELLED`. If the
-remote state cannot be read, report it unverified and withhold `DONE`.
+approval, a `[READY]` prefix, the user's statement or a title does not count.
+Until then the task state is `WAITING` while a `[READY]` PR awaits the user's
+merge, or its actual `WORKING`/`REVIEW` state while other work remains. A PR's
+`[BLOCKED]` or `[READY]` prefix ([PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle))
+is not a thread status: a `[BLOCKED]` PR still in progress leaves the thread
+`WORKING` or `REVIEW`. A PR closed unmerged keeps the
+thread out of `DONE` until the user chooses another scope or `CANCELLED`. A PR
+closed as `[SUPERSEDED]` passes through its replacement instead: when the user
+decided it, that decision is the scope choice; when an agent replaced its own PR,
+the replacing PR must be merged. This does not cover a publication that selected
+managed delivery requires: it keeps the thread out of `DONE` until the user
+chooses another scope or `CANCELLED`. If the remote state cannot be read, report
+it unverified and withhold `DONE`.
 
 A thread that opened no PR needs no extra step when its recorded scope excludes
 publication, such as read-only, investigation or review work, or a child scoped
@@ -180,7 +189,7 @@ an empty meter in that case. At adoption, use the actual phase. Newly started
 implementation uses `WORKING`, not an automatic `TRIAGE` reset.
 Reserve `▰▰▰▰▰` for verified `DONE`.
 Show no numeric percentage or `% done`. Measured progress comes from accepted
-milestones. `BLOCKED`, `WAITING` and `PAUSED` retain
+milestones. `WAITING` and `PAUSED` retain
 accepted progress; `CANCELLED` retains partial progress and never implies completion.
 
 Update display titles on meaningful milestone, phase, blocker or next-action

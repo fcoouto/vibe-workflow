@@ -8,6 +8,7 @@
 import { spawn } from "node:child_process"
 import type { ChildProcess } from "node:child_process"
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
+import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -40,6 +41,20 @@ const MAX_DESCENDANTS_RESPONSE = 512  // entries in one `routing.descendants` an
 const KINDS = new Set(["primary", "title", "compaction", "generate"])
 const HARNESS: Record<string, string> = { "claude-agent": "claude-agent-sdk via opencode" }
 const DENY_MESSAGE = "Blocked by Smart Routing: this managed session may not use this action."
+// S3.3d, mirrored from runtime/adapters/opencode.py (see the comments there; tests/test_opencode_plugin.py checks parity).
+const IMAGE_ACTION = "experimental_image_generate"
+const EDIT_ACTIONS = new Set(["edit", "write", "patch"])
+const CONFIG_NAMES = new Set([".opencode", ".claude", ".agents", "opencode.json", "opencode.jsonc"])
+const CONFIG_DIRS = new Set(["agent", "agents", "command", "commands", "mode", "modes"])
+const SYSTEM_CONFIG = ["/etc/opencode", "/Library/Application Support/opencode"]
+const MANAGED_DENIES = ["config_edit", "image_generation"]  // what `routing.health` reports the shim applies
+const MAX_PATH = 4096
+const MAX_RESOURCES = 256
+const MAX_EXTRA = 32
+const MAX_EXTRA_SEGMENTS = 16
+const MAX_EXTRA_TEXT = 256
+const PATH_CONTROL = /[\x00-\x1f\x7f]/
+const DRIVE = /^[a-z]:/
 
 // Mirrors of the patterns in runtime/adapters/opencode.py; tests/test_opencode_plugin.py checks parity.
 const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
@@ -76,7 +91,8 @@ type Descendant = { root: string; overLimit: boolean; parent: string | null }
 // `onRefusal` is a code-only hook (never a plugin option) that sees attach's internal refusal reason; the RPC caller
 // only ever sees `attach_refused`.
 type Config = { argv?: string[]; timeoutMs?: number; spawnGraceMs?: number; failedLookupMs?: number; pendingMs?: number;
-  maxDescendantsResponse?: number; onRefusal?: (reason: string) => void }
+  maxDescendantsResponse?: number; onRefusal?: (reason: string) => void
+  environment?: { env: Record<string, string | undefined>; home: string | null } }  // code-only: config roots' source
 type Answer = "known" | "closed" | "no"
 
 class RoutingBlocked extends Error {
@@ -137,6 +153,114 @@ export function routeFacts(model: unknown): Facts | null {
 export function spawnModel(value: unknown): { provider: string; model: string; variant: string | null } | null {
   const match = typeof value === "string" ? SPAWN_MODEL.exec(value) : null
   return match ? { provider: match[1], model: match[2], variant: match[3] ?? null } : null
+}
+
+type ParsedPath = { absolute: boolean; raw: string[]; resolved: string[] }
+
+/** Python's `rstrip(". ")`, linear in the segment length (a `[. ]+$` regex backtracks on long runs of dots). */
+function trimTrailing(segment: string): string {
+  let end = segment.length
+  while (end > 0 && (segment[end - 1] === "." || segment[end - 1] === " ")) end--
+  return segment.slice(0, end)
+}
+
+/** The adapter's `_path`: NFKC, lower case, `\` as `/`, names before `:` with trailing dots and spaces ignored. */
+function parsePath(value: unknown, limit = MAX_PATH): ParsedPath | null {
+  if (typeof value !== "string" || !value || value.length > 2 * limit || [...value].length > limit) return null
+  const text = value.normalize("NFKC").toLowerCase().replaceAll("\\", "/")
+  if (PATH_CONTROL.test(text)) return null
+  const absolute = text.startsWith("/") || text.startsWith("~") || DRIVE.test(text)
+  const raw: string[] = []
+  for (const segment of text.split("/")) {
+    if (segment === "" || segment === ".") continue
+    if (segment === "..") { raw.push(segment); continue }
+    if (!trimTrailing(segment)) return null
+    raw.push(trimTrailing(segment.split(":")[0]) || trimTrailing(segment))
+  }
+  return { absolute, raw, resolved: resolveSegments(raw, absolute) }
+}
+
+function resolveSegments(raw: string[], absolute: boolean): string[] {
+  const resolved: string[] = []
+  for (const segment of raw) {
+    if (segment !== "..") resolved.push(segment)
+    else if (resolved.length && resolved[resolved.length - 1] !== "..") resolved.pop()
+    else if (!absolute) resolved.push(segment)
+  }
+  return resolved
+}
+
+/** The adapter's `config_roots`: system, `<home>/.config/opencode`, `$XDG_CONFIG_HOME/opencode`, `$OPENCODE_CONFIG_DIR`. */
+export function configRoots(env: Record<string, unknown>, home: unknown): string[][] {
+  const programData = typeof env?.ProgramData === "string" ? env.ProgramData : "C:\\ProgramData"
+  const candidates: unknown[] = [...SYSTEM_CONFIG, programData + "/opencode"]
+  if (typeof home === "string" && home) candidates.push(home + "/.config/opencode")
+  if (typeof env?.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME) candidates.push(env.XDG_CONFIG_HOME + "/opencode")
+  candidates.push(env?.OPENCODE_CONFIG_DIR)
+  const roots: string[][] = []
+  for (const candidate of candidates) {
+    const parsed = parsePath(candidate)
+    if (parsed?.absolute && parsed.resolved.length && !roots.some((root) => root.join("/") === parsed.resolved.join("/"))) {
+      roots.push(parsed.resolved)
+    }
+  }
+  return roots
+}
+
+const DEFAULT_ROOTS = configRoots({}, null)
+
+function configHit(segments: string[], absolute: boolean, extra: string[][], roots: string[][]): boolean {
+  if (segments.some((segment) => CONFIG_NAMES.has(segment))) return true
+  if (segments.some((segment, index) => segment === ".config" && segments[index + 1] === "opencode")) return true
+  if (absolute) {
+    if (roots.some((root) => root.length <= segments.length && root.every((part, index) => segments[index] === part))) return true
+  } else {
+    const first = segments.find((segment) => segment !== "..")
+    if (first !== undefined && CONFIG_DIRS.has(first)) return true
+  }
+  const joined = "/" + segments.join("/") + "/"
+  return extra.some((pattern) => joined.includes("/" + pattern.join("/") + "/"))
+}
+
+/** The `protected_paths` plugin option as segment lists: [] when absent, null when invalid (at most 32 x 16 segments). */
+export function extraPaths(value: unknown): string[][] | null {
+  if (value == null) return []
+  if (!Array.isArray(value) || value.length > MAX_EXTRA) return null
+  const paths: string[][] = []
+  for (const item of value) {
+    const parsed = parsePath(item, MAX_EXTRA_TEXT)
+    if (!parsed || !parsed.raw.length || parsed.raw.includes("..") || parsed.raw.length > MAX_EXTRA_SEGMENTS) return null
+    paths.push(parsed.raw)
+  }
+  return paths
+}
+
+/**
+ * Whether an edit resource may change OpenCode configuration; an unreadable one counts as protected. Relative
+ * resources resolve against `directory` (the instance's `ctx.location.directory`); when it is unknown the fail-closed
+ * relative rule applies.
+ */
+export function protectedPath(resource: unknown, extra: string[][] | null = [], directory: unknown = null,
+  roots: string[][] = DEFAULT_ROOTS): boolean {
+  const parsed = parsePath(resource)
+  if (!parsed || !extra) return true
+  let { absolute, raw, resolved } = parsed
+  const base = parsePath(directory)
+  if (!absolute && base?.absolute) {
+    absolute = true
+    raw = [...base.resolved, ...raw]
+    resolved = resolveSegments(raw, true)
+  }
+  return configHit(raw, absolute, extra, roots) || configHit(resolved, absolute, extra, roots)
+}
+
+/** The S3.3d denial for a managed session's permission request: "image_generation", "config_edit" or null. */
+export function managedDenial(action: unknown, resources: unknown, extra: string[][] | null = [], directory: unknown = null,
+  roots: string[][] = DEFAULT_ROOTS): string | null {
+  if (action === IMAGE_ACTION) return "image_generation"
+  if (typeof action !== "string" || !EDIT_ACTIONS.has(action)) return null
+  if (!Array.isArray(resources) || !resources.length || resources.length > MAX_RESOURCES) return "config_edit"
+  return resources.some((resource) => protectedPath(resource, extra, directory, roots)) ? "config_edit" : null
 }
 
 /** One persistent routing child speaking JSON lines; requests are multiplexed by id and each is bounded in time. */
@@ -294,6 +418,13 @@ export function createRoutingPlugin(config: Config = {}) {
       const child = new RoutingChild(config.argv ?? defaultArgv(options),
         config.timeoutMs ?? (configured > 0 && configured <= 5000 ? configured : DEFAULT_TIMEOUT_MS),
         config.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS)
+      // Extra protected paths only add to the built-in set; an invalid option denies every managed edit.
+      const extra = extraPaths(options.protected_paths)
+      // Where relative edit resources resolve (the same location FileAccess uses), and the global and system config
+      // directories; an unknown directory keeps the fail-closed relative rule.
+      const directory = ctx?.location?.directory
+      const environment = config.environment ?? { env: process.env, home: homedir() }
+      const roots = configRoots(environment.env, environment.home)
       // Instance-local state. Roots are the sessions a managed launcher attached here. Managed descendants are sessions
       // whose creation event named a parent that was already managed; they are never evicted. The lineage cache and
       // the failed-lookup cache only speed up questions about other sessions and may forget entries.
@@ -624,8 +755,19 @@ export function createRoutingPlugin(config: Config = {}) {
         await check(event.sessionID, attachment, facts, event.kind)
       })
 
-      // Only subagent spawns are checked; built-in, MCP and Code Mode tools are governed by policy deny rules.
+      /** False when the session cannot be managed here, so interactive hooks return without a lineage question. */
+      const mayBeManaged = (sessionID: unknown) => attached.size > 0 || derivedSession(sessionID)
+        || (text(sessionID, SESSION) && holderOf(sessionID as string) !== undefined)
+
+      // Subagent spawns are checked and image generation (a paid model call that never reaches `model.request`) is
+      // refused for any managed session; other built-in, MCP and Code Mode tools are governed by policy deny rules.
       await ctx.tool.hook("execute.before", async (event: any) => {
+        if (event?.tool === IMAGE_ACTION) {
+          if (mayBeManaged(event?.sessionID) && await managed(event.sessionID) !== null) {
+            throw new RoutingBlocked("image_generation_denied")
+          }
+          return
+        }
         if (event?.tool !== "subagent") return
         const attachment = await enforced(event?.sessionID)
         if (!attachment) return
@@ -639,16 +781,17 @@ export function createRoutingPlugin(config: Config = {}) {
         await check(event.sessionID, attachment, { ...requested, harness: harnessFor(requested.provider) }, "subagent")
       })
 
-      // Tightens only; a configured deny is final and never reaches this hook.
+      // Tightens only; a configured deny is final and never reaches this hook. Image generation and edits that may
+      // change OpenCode configuration are denied for attached, pending and closed sessions alike (S3.3d).
       await ctx.permission.hook("evaluate", async (event: any) => {
         if (typeof event?.action !== "string") return
-        if (attached.size === 0 && !derivedSession(event.sessionID)
-            && !(text(event.sessionID, SESSION) && holderOf(event.sessionID) !== undefined)) return
+        if (!mayBeManaged(event.sessionID)) return
         let tighten: boolean
         try {
           const governing = await managed(event.sessionID)
-          tighten = governing === "pending" ? event.action === "webfetch"
-            : governing !== null && governing !== "closed" && (event.action === "webfetch" || governing.deny.has(event.action))
+          tighten = governing !== null && (managedDenial(event.action, event.resources, extra, directory, roots) !== null
+            || (governing === "pending" ? event.action === "webfetch"
+              : governing !== "closed" && (event.action === "webfetch" || governing.deny.has(event.action))))
         } catch {
           tighten = true
         }
@@ -673,6 +816,8 @@ export function createRoutingPlugin(config: Config = {}) {
       } catch { /* outside OpenCode the plain definition is used */ }
       await ctx.rpc.register(definition, {
         health: async () => {
+          // The option fails closed (every managed edit is denied), so a launcher must not dispatch workers here.
+          if (extra === null) return { state: "not_ready", reason: "protected_paths_invalid", version: CONTRACT_VERSION }
           const { response, respawned } = await child.call("status", {})
           if (response.state !== "ok") throw new RoutingBlocked("routing_unhealthy")
           // Ready means a check can be answered: readable settings and an existing ledger (prepare creates it).
@@ -680,7 +825,8 @@ export function createRoutingPlugin(config: Config = {}) {
           const reason = response.settings_state !== "ok" ? "settings_unavailable"
             : ledger === "ready" ? null : ledger === "absent" ? "ledger_absent" : "ledger_unavailable"
           if (reason) return { state: "not_ready", reason, version: CONTRACT_VERSION }
-          return { state: "ok", child: respawned ? "respawned" : "up", version: CONTRACT_VERSION, respawn_ms: child.respawnMs }
+          return { state: "ok", child: respawned ? "respawned" : "up", version: CONTRACT_VERSION, respawn_ms: child.respawnMs,
+            managed_denies: [...MANAGED_DENIES] }
         },
         // Gated by the dispatch authority: attach records nothing until the child verified the token for this attempt
         // and session; detach needs the attached root's attempt and token. Neither ever returns or echoes the token.

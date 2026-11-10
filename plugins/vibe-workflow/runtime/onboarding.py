@@ -12,6 +12,8 @@ import stat
 import subprocess
 import uuid
 
+from runtime.entry_budget import observe_within
+from runtime.onboarding_coverage import coverage_problem
 from runtime.startup import PROJECT_FILE, StartupError, checkout, _checkout_identity, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
 from runtime.state import runtime_fingerprint
 
@@ -20,7 +22,8 @@ PACKAGE = Path(__file__).resolve().parents[1]
 MAX_REQUEST = 2 * 1024 * 1024
 MAX_PLAN = 4 * 1024 * 1024
 MAX_FILE = 1024 * 1024
-MAX_TOTAL = 8 * 1024 * 1024
+MAX_TOTAL = 16 * 1024 * 1024  # Project inventory only (user decision); startup observations keep the bundle bound.
+LEGACY_MAX_TOTAL = 8 * 1024 * 1024  # Every other aggregate that used to share MAX_TOTAL; see _bound().
 MAX_PATHS = 4096
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 CHECKOUT_INPUTS = ("repository_root", "git_common_dir", "head", "index_digest", "dirty_inventory", "paths")
@@ -329,13 +332,13 @@ def _sources(record):
     observed = {}
     total = 0
     for item in record["toolkit"]["files"]:
-        if total >= MAX_TOTAL:
+        if total >= LEGACY_MAX_TOTAL:
             observed[item["path"]] = {"status": "source_total_limit"}
             continue
         try:
-            raw = _read_file(Path(item["local_path"]), min(MAX_FILE, MAX_TOTAL - total), private=True)
+            raw = _read_file(Path(item["local_path"]), min(MAX_FILE, LEGACY_MAX_TOTAL - total), private=True)
             total += len(raw)
-            _require(total <= MAX_TOTAL, "Retained source total size limit exceeded")
+            _require(total <= LEGACY_MAX_TOTAL, "Retained source total size limit exceeded")
             observed[item["path"]] = {"sha256": hashlib.sha256(raw).hexdigest(), "status": "read",
                                       "bytes": len(raw)}
         except (OSError, StartupError):
@@ -422,6 +425,11 @@ def _inventory_fingerprint(root, relative, limit):
     except (OSError, StartupError):
         return {"status": "unreadable_or_link"}
 
+def _bound(budget):
+    """Only the project inventory's own budgets carry MAX_TOTAL; every other owner's budget keeps 8 MiB."""
+    _require(budget.get("total", LEGACY_MAX_TOTAL) in (LEGACY_MAX_TOTAL, MAX_TOTAL), "Invalid aggregate byte bound")
+    return budget.get("total", LEGACY_MAX_TOTAL)
+
 def _snapshot_targets(plan):
     names = {name for name in plan["identity"]["fingerprints"] if not name.startswith("instruction:")}
     return sorted(names | set(_file_targets(plan["actions"])))
@@ -431,10 +439,10 @@ def _snapshot(root, targets=(), *, budget=None, inventory=False, relevant=False)
         if budget is not None:
             _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
                      "Project aggregate path limit exceeded; inventory remains incomplete")
-            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= _bound(budget),
                      "Project aggregate byte limit exceeded; inventory remains incomplete")
             if reading:
-                _require(budget["bytes"] < MAX_TOTAL,
+                _require(budget["bytes"] < _bound(budget),
                          "Project aggregate byte limit exceeded; inventory remains incomplete")
             _check_observation_deadline(budget)
 
@@ -443,10 +451,10 @@ def _snapshot(root, targets=(), *, budget=None, inventory=False, relevant=False)
             return _git(root, *args)
         check(reading=True)
         try:
-            code, raw = _git(root, *args, limit=MAX_TOTAL - budget["bytes"], deadline=budget.get("deadline"))
+            code, raw = _git(root, *args, limit=_bound(budget) - budget["bytes"], deadline=budget.get("deadline"))
         except (StartupError, OSError, subprocess.SubprocessError):
             # Unknown partial output must not leave a reusable allowance.
-            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+            budget["bytes"] = max(budget["bytes"], _bound(budget) + 1)
             raise
         budget["bytes"] += len(raw)
         check()
@@ -457,12 +465,7 @@ def _snapshot(root, targets=(), *, budget=None, inventory=False, relevant=False)
     else:
         check(reading=True)
         _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
-        try:
-            identity = checkout(root, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
-                                deadline=budget.get("deadline"), budget=budget)
-        except (StartupError, OSError, subprocess.SubprocessError):
-            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
-            raise
+        identity = observe_within(budget, _bound(budget), checkout, root, limit=min(MAX_FILE, _bound(budget) - budget["bytes"]))
         check()
     _require(identity is not None and identity[0] == root, "Selected checkout identity changed")
     if relevant:
@@ -692,7 +695,7 @@ def _inspection_fingerprint(root, relative, budget, *, resources=None, inventory
     _check_observation_deadline(budget)
     _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
     budget["paths"] += 1
-    remaining = MAX_TOTAL - budget["bytes"]
+    remaining = _bound(budget) - budget["bytes"]
     _require(remaining >= 0, "Project aggregate byte limit exceeded; inventory remains incomplete")
     result = (_inventory_fingerprint(root, relative, min(MAX_FILE, remaining)) if inventory else
               _fingerprint(root, relative, min(MAX_FILE, remaining), resources=resources))
@@ -751,9 +754,9 @@ def _project_scope(value):
 def _checkout_observation(value, budget):
     budget.setdefault("bytes", 0)
     def git(root, *args):
-        code, raw = _git(root, *args, limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"))
+        code, raw = _git(root, *args, limit=max(0, _bound(budget) - budget["bytes"]), deadline=budget.get("deadline"))
         budget["bytes"] += len(raw)
-        _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
+        _require(budget["bytes"] <= _bound(budget), "Project aggregate byte limit exceeded")
         return code, raw
     root = Path(value)
     observed = {"root": str(root), "primary_root": None, "git_dir": None, "git_common_dir": None,
@@ -762,7 +765,7 @@ def _checkout_observation(value, budget):
         _check_observation_deadline(budget)
         _require(str(root.resolve(strict=True)) == str(root), "Member boundary contains a link or noncanonical root")
         observed["binding"]["root"] = _filesystem_binding(root)
-        identity = _checkout_identity(root, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
+        identity = observe_within(budget, _bound(budget), _checkout_identity, root, include_git_dir=True, limit=min(MAX_FILE, max(0, _bound(budget) - budget["bytes"])), total_limit=max(0, _bound(budget) - budget["bytes"]))
         _require(identity is not None and identity[0] == root, "Member must select an existing checkout root")
         common = identity[1]
         observed["git_common_dir"] = str(common)
@@ -795,8 +798,8 @@ def _checkout_observation(value, budget):
                 _require(not any(f == b"bare" or f.startswith(b"prunable") for f in fields)
                          and sum(f.startswith(b"HEAD ") for f in fields) == 1,
                          "Unsupported primary or selected worktree metadata")
-        primary_identity = _checkout_identity(primary, include_git_dir=True, limit=min(MAX_FILE, max(0, MAX_TOTAL - budget["bytes"])), total_limit=max(0, MAX_TOTAL - budget["bytes"]), deadline=budget.get("deadline"), budget=budget)
-        _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
+        primary_identity = observe_within(budget, _bound(budget), _checkout_identity, primary, include_git_dir=True, limit=min(MAX_FILE, max(0, _bound(budget) - budget["bytes"])), total_limit=max(0, _bound(budget) - budget["bytes"]))
+        _require(budget["bytes"] <= _bound(budget), "Project aggregate byte limit exceeded")
         _require(primary_identity is not None and primary_identity[:2] == (primary, common)
                  and os.fsdecode(primary_identity[2].rstrip(b"\n")) == str(common), "Primary worktree identity is ambiguous")
         observed["binding"]["primary_root"] = _filesystem_binding(primary)
@@ -804,7 +807,7 @@ def _checkout_observation(value, budget):
         _check_observation_deadline(budget)
         return observed, None
     except (StartupError, OSError, ValueError, subprocess.SubprocessError) as error:
-        if "Git inventory limit exceeded" in str(error) and MAX_TOTAL - budget["bytes"] < MAX_FILE:
+        if "Git inventory limit exceeded" in str(error) and _bound(budget) - budget["bytes"] < MAX_FILE:
             error = StartupError("Project aggregate byte limit exceeded; inventory remains incomplete")
         return observed, "Checkout/worktree observation incomplete: " + str(error)
 
@@ -823,9 +826,9 @@ def _authority_observation(root, budget, *, canonical_only=False, resources=None
         info = location.stat()
         _require(info.st_nlink == 1, "Authority record has physical aliases")
         observed["binding"] = {"device": info.st_dev, "inode": info.st_ino}
-        raw = _read_file(location, min(MAX_FILE, 128 * 1024, max(0, MAX_TOTAL - budget["bytes"])), expected_binding=observed["binding"], resources=resources, held=held)
+        raw = _read_file(location, min(MAX_FILE, 128 * 1024, max(0, _bound(budget) - budget["bytes"])), expected_binding=observed["binding"], resources=resources, held=held)
         budget["bytes"] += len(raw)
-        _require(budget["bytes"] <= MAX_TOTAL, "Project aggregate byte limit exceeded")
+        _require(budget["bytes"] <= _bound(budget), "Project aggregate byte limit exceeded")
         if resources is not None:
             owner = resources.current_acquisition()
             owner.reserve(requested=len(raw) + 64, live=512)
@@ -890,7 +893,7 @@ def _authority_observation(root, budget, *, canonical_only=False, resources=None
 
 def _project_observations(scope, sources, assessments=None):
     root = Path(scope["project_root"])
-    budget = {"paths": len(sources), "bytes": sum(value.get("bytes", 0) for value in sources.values())}
+    budget = {"paths": len(sources), "bytes": sum(value.get("bytes", 0) for value in sources.values()), "total": MAX_TOTAL}
     blockers = []
     def gap(owner, reason):
         blockers.append(_block(owner, reason, "Resolve the explicit scope/identity gap before proposing adoption"))
@@ -1014,7 +1017,7 @@ def _project_file_boundary(root, name, repositories, *, budget=None):
         if budget is not None:
             _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
                      "Project aggregate path limit exceeded; inventory remains incomplete")
-            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+            _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= _bound(budget),
                      "Project aggregate byte limit exceeded; inventory remains incomplete")
             _check_observation_deadline(budget)
     check()
@@ -1032,12 +1035,12 @@ def _project_file_boundary(root, name, repositories, *, budget=None):
         code, _ = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir")
     else:
         check()
-        _require(budget["bytes"] < MAX_TOTAL, "Project aggregate byte limit exceeded; inventory remains incomplete")
+        _require(budget["bytes"] < _bound(budget), "Project aggregate byte limit exceeded; inventory remains incomplete")
         try:
             code, raw = _git(existing, "-c", "safe.bareRepository=all", "rev-parse", "--absolute-git-dir",
-                             limit=MAX_TOTAL - budget["bytes"], deadline=budget.get("deadline"))
+                             limit=_bound(budget) - budget["bytes"], deadline=budget.get("deadline"))
         except (StartupError, OSError, subprocess.SubprocessError):
-            budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
+            budget["bytes"] = max(budget["bytes"], _bound(budget) + 1)
             raise
         budget["bytes"] += len(raw)
         check()
@@ -1089,7 +1092,7 @@ def _target_observations(assessment, fingerprints, repositories=(), *, budget):
     def check():
         _require(type(budget["paths"]) is int and 0 <= budget["paths"] <= MAX_PATHS,
                  "Project aggregate path limit exceeded; inventory remains incomplete")
-        _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= MAX_TOTAL,
+        _require(type(budget["bytes"]) is int and 0 <= budget["bytes"] <= _bound(budget),
                  "Project aggregate byte limit exceeded; inventory remains incomplete")
         _check_observation_deadline(budget)
     check()
@@ -1115,13 +1118,9 @@ def _target_observations(assessment, fingerprints, repositories=(), *, budget):
             existing = next(p for p in (parent, *parent.parents) if p.is_dir())
             check()
             _require(budget["paths"] < MAX_PATHS, "Project aggregate path limit exceeded; inventory remains incomplete")
-            _require(budget["bytes"] < MAX_TOTAL, "Project aggregate byte limit exceeded; inventory remains incomplete")
-            try:
-                identity = checkout(existing, limit=min(MAX_FILE, MAX_TOTAL - budget["bytes"]),
-                                    deadline=budget.get("deadline"), budget=budget)
-            except (StartupError, OSError, subprocess.SubprocessError):
-                budget["bytes"] = max(budget["bytes"], MAX_TOTAL + 1)
-                raise
+            _require(budget["bytes"] < _bound(budget), "Project aggregate byte limit exceeded; inventory remains incomplete")
+            identity = observe_within(budget, _bound(budget), checkout, existing,
+                                      limit=min(MAX_FILE, _bound(budget) - budget["bytes"]))
             check()
             _require(identity == (root, Path(owner["git_common_dir"])),
                      "Action target/cwd enters another checkout or Git tree")
@@ -1729,21 +1728,7 @@ def _validate_proposal(plan, *, shared=False, references=None):
         coverage_actions = references["coverage_actions"] if references is not None else action_ids
         for field, allowed in (("actions", coverage_actions), ("qualification_evidence", evidence_ids), ("decision_ids", decision_ids)):
             _require(set(_strings(row[field])) <= allowed, "Unknown coverage reference")
-        problem = None
-        if not row["reason"]:
-            problem = "Applicability/optional omission needs an explicit reason"
-        elif row["mandatory"] and row["outcome"] == "omit":
-            problem = "Mandatory adoption cannot be omitted by runtime inapplicability"
-        elif row["outcome"] == "planned" and not row["actions"]:
-            problem = "Planned adoption lacks exact proposed actions"
-        elif row["outcome"] == "blocked":
-            problem = row["blocker"] or "Required prerequisite is missing"
-        elif row["outcome"] == "reuse" and (row["current_adoption"] != "qualified" or not any(
-                evidence[ref]["kind"] == "behavior" and evidence[ref]["inputs"] for ref in row["qualification_evidence"])):
-            problem = "Equivalent integration lacks observed behavioral evidence on pinned inputs"
-        elif row["mandatory"] and any(decisions[ref]["conflict"] and decisions[ref]["mode"] == "preserve"
-                                       for ref in row["decision_ids"]):
-            problem = "Preserved conflicting behavior blocks mandatory adoption"
+        problem = coverage_problem(row, evidence, decisions)
         if problem:
             blockers.append(_block(row["id"], problem, row["resumption"] or "Resolve assessment/decision and supply evidence"))
     assessment = plan["semantic_assessment"]
@@ -2087,7 +2072,7 @@ def _record_project_plan(plan, request, path, directory, screening_authenticatio
              and (incoming["project"] is None) == (plan["assessments"]["project"] is None),
              "Every frozen owner assessment must be retained")
     previous = deepcopy(_project_decisions(plan))
-    budget = {"paths": 0, "bytes": 0}
+    budget = {"paths": 0, "bytes": 0, "total": MAX_TOTAL}
     for old, new in zip(_assessments(plan["assessments"]), _assessments(incoming)):
         _require(isinstance(new, dict), "Invalid owner assessment")
         new.setdefault('identity', deepcopy(old['identity']))
@@ -2391,13 +2376,13 @@ def _collect_onboarding_screening(run):
                     gap('exclusions', 'outside supported source-file types')
                     continue
                 try:
-                    _require(budget['bytes'] < MAX_TOTAL, 'Screening aggregate byte limit reached')
+                    _require(budget['bytes'] < LEGACY_MAX_TOTAL, 'Screening aggregate byte limit reached')
                     info = (root / name).lstat()
                     binding = dict(device=info.st_dev, inode=info.st_ino)
                     # Reserve two rereads for publication checks within the same byte/path allowance.
-                    _require(3 * (budget['bytes'] + info.st_size) <= MAX_TOTAL,
+                    _require(3 * (budget['bytes'] + info.st_size) <= LEGACY_MAX_TOTAL,
                              'Screening aggregate read allowance reached')
-                    data = _read_file(root / name, min(MAX_FILE, MAX_TOTAL - budget['bytes']), expected_binding=binding)
+                    data = _read_file(root / name, min(MAX_FILE, LEGACY_MAX_TOTAL - budget['bytes']), expected_binding=binding)
                     after = (root / name).lstat()
                     _require((after.st_dev, after.st_ino) == (info.st_dev, info.st_ino), 'Screening input path changed')
                     budget['bytes'] += len(data)
@@ -2453,13 +2438,13 @@ def _screening_checkout_inputs(root, budget):
     values = []
     for args in (('ls-files', '--cached', '--others', '--exclude-standard', '-z'),
                  ('ls-files', '--stage', '-z'), ('status', '--porcelain=v1', '-z', '--untracked-files=all')):
-        code, raw = _git(root, *args, limit=max(0, MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
+        code, raw = _git(root, *args, limit=max(0, LEGACY_MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
         budget['bytes'] += len(raw)
-        _require(budget['bytes'] <= MAX_TOTAL and code == 0, 'Screening checkout inputs unavailable or over limit')
+        _require(budget['bytes'] <= LEGACY_MAX_TOTAL and code == 0, 'Screening checkout inputs unavailable or over limit')
         values.append(raw)
-    code, head = _git(root, 'rev-parse', '--verify', 'HEAD', limit=max(0, MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
+    code, head = _git(root, 'rev-parse', '--verify', 'HEAD', limit=max(0, LEGACY_MAX_TOTAL - budget['bytes']), deadline=budget['deadline'])
     budget['bytes'] += len(head)
-    _require(budget['bytes'] <= MAX_TOTAL, 'Screening aggregate Git read limit reached')
+    _require(budget['bytes'] <= LEGACY_MAX_TOTAL, 'Screening aggregate Git read limit reached')
     _check_observation_deadline(budget)
     names = sorted(set(os.fsdecode(name) for name in values[0].split(b'\0') if name))
     _require(len(names) <= MAX_PATHS, 'Screening checkout inventory limit reached')
@@ -2478,7 +2463,7 @@ def _screening_inputs_match(payload, budget):
         for item in payload['inputs']['files']:
             _check_observation_deadline(budget)
             budget['paths'] += 1
-            _require(budget['paths'] <= MAX_PATHS and budget['bytes'] + item['bytes'] <= MAX_TOTAL,
+            _require(budget['paths'] <= MAX_PATHS and budget['bytes'] + item['bytes'] <= LEGACY_MAX_TOTAL,
                      'Screening verification allowance reached')
             path = Path(item['repository_root']) / item['path']
             data = _read_file(path, min(MAX_FILE, item['bytes']), expected_binding=item['binding'])

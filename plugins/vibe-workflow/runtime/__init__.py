@@ -1,1 +1,1 @@
-"""Shared Vibe Coding Workflow runtime."""
+"""Shared Vibe Workflow runtime."""
