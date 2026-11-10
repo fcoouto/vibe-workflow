@@ -1,0 +1,204 @@
+"""The `live_modes.py` entry point with doubles: every refusal before anything starts (no cap, no approval, too little
+remaining, `--out` placement, model arguments), and whole runs of each mode through `main` (sanitized output, the
+fail-closed leak check and withheld file, cleanup of the isolated dir, the ledger left without open reservations)."""
+import json
+from pathlib import Path
+
+from tests.qualification import live_modes, safety
+from tests.qualification.doubles import Temp
+from tests.qualification.launcher_doubles import FakeEnv
+from tests.test_qualification_drill import Env as DrillEnv
+from tests.test_qualification_gateway import Env as GatewayEnv
+
+APPROVAL = dict(by="the user", at="2026-11-10T12:00Z", scope="live session")
+
+
+def no_check(**_kwargs):
+    return None
+
+
+class Started(Exception):
+    pass
+
+
+class EntryTests(Temp):
+    def setUp(self):
+        super().setUp()
+        self.q = self.private(self.tmp / "q")
+        self.ledger_path = self.private(self.tmp / "state") / "calls.jsonl"
+        self.ledger = safety.CallLedger.initialize(self.ledger_path)
+        self.out = self.private(self.tmp / "results") / "out.json"
+
+    def argv(self, mode, *extra):
+        return [mode, "--isolated-dir", str(self.q), "--call-ledger", str(self.ledger_path), "--out", str(self.out), *extra]
+
+    def main(self, argv, factory=None):
+        def refuse(*_args, **_kwargs):
+            raise Started("an environment was created")
+        return live_modes.main(argv, env_factory=factory or refuse, home_check=lambda: None, version_check=no_check)
+
+    def test_nothing_starts_without_an_approved_cap(self):
+        for mode, extra in (("launcher-probes", ()), ("drill", ()), ("gateway", ("--gateway-model", "openrouter/m"))):
+            with self.subTest(mode):
+                self.assertEqual(self.main(self.argv(mode, *extra)), 2)
+                self.assertEqual(list(self.q.iterdir()), [])
+                self.assertFalse(self.out.exists())
+        self.assertEqual([e for e in self.ledger.export()["entries"] if e["kind"] == "reservation"], [])
+
+    def test_too_little_remaining_refuses(self):
+        self.ledger.set_cap("isolation", 3, "approved", approval=APPROVAL)
+        self.assertEqual(self.main(self.argv("launcher-probes")), 2)  # all probes need 4
+        with self.assertRaises(Started):  # zero-call probes need none
+            self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A4"))
+
+    def test_argument_refusals(self):
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+        cases = [self.argv("gateway"), self.argv("gateway", "--gateway-model", "anthropic/claude"),
+                 self.argv("drill", "--gateway-model", "openrouter/m"),
+                 self.argv("launcher-probes", "--a5-model", "openai/no-variant"),
+                 self.argv("launcher-probes", "--probes", "A9"),
+                 self.argv("launcher-probes", "--signin-timeout", "5")]
+        inside = [self.argv("drill")[:-1] + [str(self.q / "out.json")],
+                  self.argv("drill")[:-1] + [str(Path(__file__).resolve().parent / "x.json")]]
+        for argv in cases + inside:
+            with self.subTest(argv=argv[-2:]):
+                self.assertEqual(self.main(argv), 2)
+
+    def env_factory(self, kind, **knobs):
+        tmp = self.tmp
+
+        def factory(base, redact, signin_timeout):
+            env = kind(tmp / "env", **knobs)
+            env.redact, env.pgids = redact, []
+            return env
+        return factory
+
+    def test_a_launcher_probes_run_writes_sanitized_results_and_cleans_up(self):
+        self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+        code = self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A4"), self.env_factory(FakeEnv))
+        results = json.loads(self.out.read_text())
+        self.assertEqual(code, 0, results.get("blockers"))
+        self.assertEqual(sorted(results["probes"]), ["A1", "A2", "A3", "A4"])
+        self.assertTrue(all(probe["passed"] for probe in results["probes"].values()))
+        self.assertFalse(self.q.exists())
+        self.assertTrue(results["cleanup"]["verified_by_harness"])
+        self.assertEqual(results["_meta"]["purpose"], "isolation")
+        self.assertEqual((results["plan"]["expected_calls"], results["plan"]["servers"]), (0, 2))
+        self.assertEqual(results["measured"]["sent"], 0)
+        self.assertIn("wall_s", results["measured"])
+        self.assertEqual(results["demand"]["readings"], 0)
+        self.assertNotIn(str(self.q), self.out.read_text())
+
+    def test_a_drill_run_through_main(self):
+        self.ledger.set_cap("drill", 4, "approved", approval=APPROVAL)
+        code = self.main(self.argv("drill"), self.env_factory(DrillEnv))
+        results = json.loads(self.out.read_text())
+        self.assertEqual(code, 0, results.get("blockers"))
+        self.assertTrue(results["drill"]["passed"])
+        self.assertEqual(results["plan"]["expected_calls"], 1)
+        self.assertEqual(results["call_ledger"]["drill"]["spent"], 1)
+
+    def test_a_gateway_run_through_main(self):
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        from tests.test_qualification_gateway import isolation_file
+        isolation = isolation_file(self.out.parent)
+        code = self.main(self.argv("gateway", "--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor",
+                                   "--key-limit-usd", "1.00", "--isolation-result", isolation), self.env_factory(GatewayEnv))
+        results = json.loads(self.out.read_text())
+        self.assertEqual(code, 0, results.get("blockers"))
+        self.assertTrue(results["gateway"]["passed"])
+        self.assertEqual(results["call_ledger"]["gateway"]["spent"], 2)
+
+    def test_unsanitized_results_are_withheld_and_a_skeleton_written(self):
+        self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+
+        class Leaky(FakeEnv):
+            def signin(self, host, note):
+                note("leak", "sk-proj-abcdefghijklmnop1234567890")
+                return dict(status="complete")
+        self.private(self.tmp / "env")
+        factory = self.env_factory(Leaky, models=[dict(providerID="openai", id="gpt-6-luna", variants=["none"])])
+        code = self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A5", "--a5-model", "openai/gpt-6-luna#none"), factory)
+        self.assertEqual(code, 3)
+        skeleton = self.out.read_text()
+        self.assertNotIn("sk-proj", skeleton)
+        withheld = list((self.ledger_path.parent / "withheld").iterdir())
+        self.assertEqual(len(withheld), 1)
+        self.assertEqual(oct(withheld[0].stat().st_mode & 0o777), "0o600")
+        self.assertFalse(self.q.exists())
+
+
+class StructureTests(Temp):
+    def test_mode_env_calls_are_checked_against_the_live_env(self):
+        from tests.qualification import structure
+        (self.tmp / "live_modes.py").write_text("class LiveEnv:\n    def start(self, a):\n        pass\n\n\n"
+                                                "class GatewayEnv(LiveEnv):\n    def receipt(self, n):\n        pass\n")
+        (self.tmp / "drill.py").write_text("class Drill:\n    def run(self):\n        self.env.start(1)\n"
+                                           "        self.env.missing()\n        self.env.start(1, 2)\n")
+        (self.tmp / "gateway.py").write_text("class Gateway:\n    def run(self):\n        self.env.start(1)\n"
+                                             "        self.env.receipt(1)\n        self.env.balance()\n")
+        problems = structure.signature_problems(sorted(self.tmp.glob("*.py")))
+        self.assertEqual(sorted(problems), ["drill.py:4 LiveEnv.missing: no such method",
+                                            "drill.py:5 LiveEnv.start: too many positional arguments",
+                                            "gateway.py:5 GatewayEnv.balance: no such method"])
+
+    def gateway(self, ledger, env):
+        from tests.qualification import gateway
+        from tests.test_qualification_gateway import KEY, isolation_file
+        return gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m", **dict(KEY, isolation_result=isolation_file(self.tmp)))
+
+    def test_no_instance_attribute_shadows_a_method(self):
+        from tests.qualification import drill, gateway, launcher_probes
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        redact = safety.Redactor()
+        env = live_modes.LiveEnv(self.tmp, redact)
+        instances = [env, live_modes.GatewayEnv(self.tmp, redact),
+                     launcher_probes.LauncherProbes(self.tmp, ledger, "r", env, self.home, "u", redact),
+                     drill.Drill(self.tmp, ledger, "r", env), self.gateway(ledger, env),
+                     live_modes.Session("drill", self.tmp, ledger, None, env, home=self.home)]
+        for instance in instances:
+            cls = type(instance)
+            shadowed = [name for name in vars(instance) if callable(getattr(cls, name, None))
+                        or isinstance(getattr(cls, name, None), property)]
+            self.assertEqual(shadowed, [], cls.__name__)
+
+
+class GatewayEntryTests(EntryTests):
+    def good(self):
+        from tests.test_qualification_gateway import isolation_file
+        return ["--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor", "--key-limit-usd", "1.00",
+                "--isolation-result", isolation_file(self.out.parent)]
+
+    def test_gateway_refusals_with_the_real_f4_launcher(self):
+        good = self.good()
+        self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # no approved cap
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        for bad in (good[:4] + good[6:], good[:5] + ["1.50"] + good[6:], good[:2] + good[4:], good[:6]):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.main(self.argv("gateway", *bad)), 2)
+        with self.assertRaises(Started):
+            self.main(self.argv("gateway", *good))
+        self.assertEqual(list(self.q.iterdir()), [])
+
+    def test_without_launch_options_the_gateway_is_refused(self):
+        from tests.test_qualification_gateway import without_launch_options
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        with without_launch_options():
+            self.assertEqual(self.main(self.argv("gateway", *self.good())), 2)
+        self.assertEqual(list(self.q.iterdir()), [])
+
+    def test_a_launcher_probes_result_of_this_session_unlocks_the_gateway(self):
+        self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        self.assertEqual(self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A4"), self.env_factory(FakeEnv)), 0)
+        isolation = self.out.parent / "isolation.json"
+        self.out.rename(isolation)
+        self.assertEqual(json.loads(isolation.read_text())["probes"]["A1"]["server_version"], "2.2.6")
+        self.q.mkdir(mode=0o700)
+        good = self.good()[:6] + ["--isolation-result", str(isolation)]
+        code = self.main(self.argv("gateway", *good), self.env_factory(GatewayEnv))
+        results = json.loads(self.out.read_text())
+        self.assertEqual(code, 0, results.get("blockers"))
+        self.assertTrue(results["gateway"]["bounds"]["inline_config_honoured"].startswith(
+            "plugin, password and flags per A1 result isolation.json;"))

@@ -52,12 +52,12 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, outputs, probe_stages, safety, user_dirs  # noqa: E402
+from tests.qualification import canary, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
-                                        Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
-                                        check_opencode_version, compare_snapshots, id_shape,
-                                        latency_pairs, on_route, repo_snapshot, snapshot_tree,
+                                        Redactor, Refused, VARIANT, check_isolated_dir, check_real_home,
+                                        check_opencode_version, id_shape,
+                                        latency_pairs, on_route, repo_snapshot,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
 from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
@@ -72,7 +72,6 @@ DENY_ALL = [{"action": "*", "resource": "*", "effect": "deny"}]
 KEEP_WARNING = ("kept: the isolated dir still holds the server password, the login-method reference and any login OpenCode "
                 "stored there (a ChatGPT sign-in is an OAuth record with access and refresh tokens); the server was "
                 "stopped. Remove the dir when done.")
-REPORT_ONLY_HOME = (".claude", ".opencode")  # written by the claude CLI / OpenCode under HOME: reported, not compared
 
 
 class Interrupted(Exception):
@@ -101,6 +100,7 @@ class Run:
         if canary_project and not canary_state:
             raise Refused("canary mode needs the dedicated canary state")
         self.canary_state = canary_state
+        self.replay_dir = replay_export.default_dir()  # canary admission exports; HOME is read now, never at import
         if canary_project:
             self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
             self.routing = Routing(canary_state["settings"], canary_state["ledger"], project=canary_project)
@@ -752,19 +752,10 @@ class Run:
 
     # ------------------------------------------------------------ run, cleanup, output
     def snapshot_user_dirs(self):
-        home = Path.home()
-        return dict({name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}, watched=safety.watched_home(home))
+        return user_dirs.snapshot(Path.home())
 
     def report_only_home(self):
-        found = {}
-        for name in REPORT_ONLY_HOME:
-            try:
-                found[name] = snapshot_tree(Path.home() / name, max_depth=2)
-            except Refused:
-                found[name] = None
-        claude_json = Path.home() / ".claude.json"
-        found[".claude.json"] = {"": claude_json.stat().st_mtime_ns} if claude_json.exists() else {}
-        return found
+        return user_dirs.report_only(Path.home())
 
     def run(self):
         user_before, home_before = self.snapshot_user_dirs(), self.report_only_home()
@@ -824,6 +815,8 @@ class Run:
         step("stop_server", self.server.stop)
         config_removed = step("remove_project_config", self.server.project_config.remove) if self.server.project_config else None
         step("stop_routing", self.routing.stop)
+        if self.canary_project:  # after the server stopped, before the next write could prune the snapshot detail
+            self.results["replay_export"] = step("replay_export", lambda: replay_export.export(self.canary_state["ledger"], self.replay_dir))
         left = step("kill_leftovers", lambda: kill_leftovers(pgid, [str(self.base), os.path.realpath(self.base)]))
         hooks, unreadable = self.read_hooks()
         self.results["hooks_unreadable"] = unreadable
@@ -850,25 +843,9 @@ class Run:
         self.results["call_ledger"] = step("call_ledger", self.ledger.summary)
 
     def compare_user_dirs(self, before, home_before):
-        after = self.snapshot_user_dirs()
-        changes = {}
-        for name in USER_OPENCODE_DIRS:  # concurrent OpenCode sessions' churn is counted; credentials and config fail
-            changes[name], unexpected = user_dirs.user_dir_entry(name, before[name], after[name], Path.home() / name,
-                                                                 getattr(self, "own_ids", ()))
-            if unexpected:
-                self.results["blockers"].append("the user's %s changed during the run" % name)
-        codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(Path.home()))
-        if unexpected:
-            self.results["blockers"].append("the user's ~/.codex credentials or config changed during the run")
-        home_after = self.report_only_home()
-        report = {}
-        for name, snapshot in home_before.items():
-            if snapshot is None or home_after.get(name) is None:
-                report[name] = "not snapshotted (too many entries)"
-                continue
-            diff = compare_snapshots(snapshot, home_after[name])
-            report[name] = {key: len(value) for key, value in diff.items()}
-        self.results["user_dirs"] = dict(opencode=changes, codex=codex, home_report_only=report)
+        self.results["user_dirs"] = user_dirs.compare(Path.home(), before, home_before, self.results["blockers"],
+                                                      getattr(self, "own_ids", ()), self.snapshot_user_dirs(),
+                                                      self.report_only_home())
 
     def output(self, results):
         meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose,
@@ -902,7 +879,11 @@ def main(argv=None):
                         help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
                         help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
-    parser.add_argument("--admissions", type=int, default=canary.PILOT_MAX, help="canary: admissions (1-20)")
+    parser.add_argument("--admissions", type=int, default=None, help="canary: admissions (1 to the pilot max)")
+    parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
+    parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
+    parser.add_argument("--export-canary-admissions", action="store_true", help="0 calls: export the canary admissions")
+    parser.add_argument("--replay-dir", help="canary: the admission export dir (default under ~/.local/state)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
@@ -918,6 +899,10 @@ def main(argv=None):
             approval = dict(zip(("by", "at", "scope"), args.approval)) if args.approval else None
             print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or "", approval=approval),
                              indent=2))
+            return 0
+        if args.export_canary_admissions:
+            state = canary.check_canary_state(args.canary_state)
+            print(json.dumps(replay_export.export(state["ledger"], args.replay_dir and Path(args.replay_dir)), indent=2))
             return 0
         if args.reset_canary_state:
             print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
@@ -949,20 +934,24 @@ def main(argv=None):
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
         purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None
-        project = canary.check_project(args.project) if args.canary else None
+        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
+        project = canary.check_project(args.project, args.canary_allow, state and state["settings"]) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
-        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
-        if args.canary:
-            canary.plan_assignments(args.admissions, "check")
+            replay_export.require_fresh(state["ledger"], args.replay_dir and Path(args.replay_dir))  # every record exported
+            limit = canary.pilot_max(args.pilot_max, ledger)
+            args.admissions = limit if args.admissions is None else args.admissions
+            canary.plan_assignments(args.admissions, "check", limit=limit)
         check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
-    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep,
+    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
+    if args.replay_dir:
+        run.replay_dir = Path(args.replay_dir)
     results = run.run()
     clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)

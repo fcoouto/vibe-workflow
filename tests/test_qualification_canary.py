@@ -365,6 +365,7 @@ class SequencingTests(Temp):
         state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
         run = self.quiet(live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state))
+        run.replay_dir = self.tmp / "replay"  # the admission export stays in the test's tree
         if prepare_left:
             canary.initialize_state(run.routing)
             run.routing("prepare", **canary.plan_assignments(1, "left")[0]["body"])
@@ -409,6 +410,7 @@ class PilotHarness(Temp):
         ledger.set_cap("pilot", 28, "test")
         base = self.private(self.tmp / "iso")
         run = live.Run(base, ledger, canary_project=str(project), canary_state=state)
+        run.replay_dir = self.tmp / "replay"  # the admission export stays in the test's tree
         self.addCleanup(run.routing.stop)
         canary.initialize_state(run.routing)
         run.server = FakeOpenCode(run.routing, base / "hooks.jsonl")
