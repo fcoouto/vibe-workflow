@@ -435,6 +435,10 @@ class PilotDriver:
 
     def admit(self, item, first):
         env, label, current = self.env, item["label"], self.current
+        if callable(getattr(env, "export_if_due", None)):  # the 12-hour replay export, on the next routing step
+            exported = env.export_if_due()
+            if exported is not None:
+                self.results.setdefault("exports", []).append(dict(admission=label["index"], exported=exported.get("exported")))
         status = env.status()
         if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
             raise Abort("concurrency")

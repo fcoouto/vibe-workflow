@@ -2,12 +2,14 @@
 amendment, PR #230). The ledger drops each closed admission's `pressure` and `snapshot_id` 24 hours after it
 (`usage_budget.Ledger._prune`), so the canary exports them before that can happen:
 
-- at the end of every canary run (opencode_live.py cleanup, also after an abort), and
+- at the end of every canary run (opencode_live.py cleanup, also after an abort);
+- during a run, at the next admission once the last export is older than MAX_AGE_S (12 h, validation Edit 6 / PR
+  #230), with no timer or daemon (`export_if_due`, called by the pilot driver);
 - on demand with `--export-canary-admissions` (0 calls, no server).
 
-A new canary run is refused while the canary ledger holds admissions and the last export is missing or older than
-MAX_AGE_S, until it is exported (no daemon or timer; pruning happens only on a ledger write, so an export before the
-run's first write still finds the detail).
+A new canary run is refused while any admission record in the canary ledger is missing from the export (keys are
+compared, not timestamps), until it is exported. Pruning happens only on a ledger write, so an export before the
+run's first write still finds the detail.
 
 Read-only: one `mode=ro` SQLite connection and a single `SELECT body FROM ledger`; the live ledger is never written.
 The export directory (default ~/.local/state/vibe-workflow-replay/canary) is owner-only (0700, files 0600, no
@@ -25,8 +27,12 @@ import time
 from tests.qualification import outputs
 from tests.qualification.safety import Refused
 
-DEFAULT_DIR = Path.home() / ".local/state/vibe-workflow-replay/canary"
-MAX_AGE_S = 24 * 3600
+MAX_AGE_S = 12 * 3600
+
+
+def default_dir():
+    """~/.local/state/vibe-workflow-replay/canary, resolved from HOME when called (never at import)."""
+    return Path.home() / ".local/state/vibe-workflow-replay/canary"
 RECORDS, LAST = "admissions.jsonl", "last-export.json"
 DETAIL = ("pressure", "snapshot_id")
 
@@ -98,10 +104,10 @@ def last_export(directory):
     return value if isinstance(value, dict) and type(value.get("at")) is int else None
 
 
-def export(ledger_path, directory=DEFAULT_DIR, now=None):
+def export(ledger_path, directory=None, now=None):
     """Append every admission record not exported yet, verbatim with its snapshot detail; idempotent."""
     now = int(time.time()) if now is None else now
-    directory = check_dir(directory)
+    directory = check_dir(default_dir() if directory is None else directory)
     identity, records = read_admissions(ledger_path)
     known = exported_keys(directory)
     new = [record for record in records if _key(identity, record) not in known]
@@ -122,15 +128,26 @@ def export(ledger_path, directory=DEFAULT_DIR, now=None):
     return summary
 
 
-def require_fresh(ledger_path, directory=DEFAULT_DIR, now=None):
-    """Refuse a new canary run while the canary ledger has admissions and the last export is missing or older than
-    MAX_AGE_S. Reads only; never exports or writes by itself."""
+def export_if_due(ledger_path, directory=None, now=None):
+    """During a run: export when the last export is missing or older than MAX_AGE_S, else None (reads one file)."""
     now = int(time.time()) if now is None else now
-    _, records = read_admissions(ledger_path)
+    directory = default_dir() if directory is None else Path(directory)
+    last = last_export(check_dir(directory, create=False)) if directory.exists() else None
+    if last is not None and now - last["at"] <= MAX_AGE_S:
+        return None
+    return export(ledger_path, directory, now)
+
+
+def require_fresh(ledger_path, directory=None):
+    """Refuse a new canary run while any current admission record is not in the export (compared by key, not by
+    the export's age). Reads only; never exports or writes by itself."""
+    directory = default_dir() if directory is None else Path(directory)
+    identity, records = read_admissions(ledger_path)
     if not records:
         return None
-    last = last_export(check_dir(directory, create=False)) if Path(directory).exists() else None
-    if last is None or now - last["at"] > MAX_AGE_S:
-        raise Refused("the canary admissions were not exported in the last 24 h; export them first with "
-                      "--export-canary-admissions (0 calls) before a new canary run")
-    return last
+    known = exported_keys(check_dir(directory, create=False)) if directory.exists() else set()
+    missing = [record for record in records if _key(identity, record) not in known]
+    if missing:
+        raise Refused("%d canary admission records are not exported yet; export them first with "
+                      "--export-canary-admissions (0 calls) before a new canary run" % len(missing))
+    return dict(records=len(records), exported=True)

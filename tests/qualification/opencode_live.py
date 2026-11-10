@@ -83,8 +83,6 @@ def _interrupt(signum, _frame):
 
 
 class Run:
-    replay_dir = replay_export.DEFAULT_DIR  # canary: where every run's admission records are exported (cleanup)
-
     def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
                  canary_state=None, purpose=None, stages=None, chatgpt_model=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
@@ -102,6 +100,7 @@ class Run:
         if canary_project and not canary_state:
             raise Refused("canary mode needs the dedicated canary state")
         self.canary_state = canary_state
+        self.replay_dir = replay_export.default_dir()  # canary admission exports; HOME is read now, never at import
         if canary_project:
             self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
             self.routing = Routing(canary_state["settings"], canary_state["ledger"], project=canary_project)
@@ -884,7 +883,7 @@ def main(argv=None):
     parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
     parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
     parser.add_argument("--export-canary-admissions", action="store_true", help="0 calls: export the canary admissions")
-    parser.add_argument("--replay-dir", default=str(replay_export.DEFAULT_DIR), help="canary: the admission export dir")
+    parser.add_argument("--replay-dir", help="canary: the admission export dir (default under ~/.local/state)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
@@ -903,7 +902,7 @@ def main(argv=None):
             return 0
         if args.export_canary_admissions:
             state = canary.check_canary_state(args.canary_state)
-            print(json.dumps(replay_export.export(state["ledger"], Path(args.replay_dir)), indent=2))
+            print(json.dumps(replay_export.export(state["ledger"], args.replay_dir and Path(args.replay_dir)), indent=2))
             return 0
         if args.reset_canary_state:
             print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
@@ -939,7 +938,7 @@ def main(argv=None):
         project = canary.check_project(args.project, args.canary_allow, state and state["settings"]) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
-            replay_export.require_fresh(state["ledger"], Path(args.replay_dir))  # before any write could prune
+            replay_export.require_fresh(state["ledger"], args.replay_dir and Path(args.replay_dir))  # every record exported
             limit = canary.pilot_max(args.pilot_max, ledger)
             args.admissions = limit if args.admissions is None else args.admissions
             canary.plan_assignments(args.admissions, "check", limit=limit)
@@ -950,7 +949,8 @@ def main(argv=None):
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
-    run.chatgpt_timeout, run.chatgpt_methods, run.replay_dir = args.chatgpt_timeout, args.chatgpt_methods, Path(args.replay_dir)
+    run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
+    run.replay_dir = Path(args.replay_dir) if args.replay_dir else run.replay_dir
     results = run.run()
     clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)

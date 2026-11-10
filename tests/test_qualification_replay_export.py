@@ -65,18 +65,49 @@ class ExportTests(Temp):
                 replay_export.check_dir(path)
         self.assertFalse(repo.exists())
 
-    def test_a_new_canary_run_needs_an_export_within_24_hours(self):
+    def test_a_new_canary_run_needs_every_admission_exported(self):
         self.assertIsNone(replay_export.require_fresh(self.ledger, self.export_dir))  # no ledger yet
         canary.initialize_state(self.routing)
         self.assertIsNone(replay_export.require_fresh(self.ledger, self.export_dir))  # no admissions
         self.admit(1)
         with self.assertRaises(safety.Refused):
-            replay_export.require_fresh(self.ledger, self.export_dir, now=1000)  # never exported
-        replay_export.export(self.ledger, self.export_dir, now=1000)
-        self.assertEqual(replay_export.require_fresh(self.ledger, self.export_dir, now=1000 + 24 * 3600)["at"], 1000)
-        with self.assertRaises(safety.Refused):
-            replay_export.require_fresh(self.ledger, self.export_dir, now=1001 + 24 * 3600)
-        self.assertFalse((self.export_dir / "x").exists())
+            replay_export.require_fresh(self.ledger, self.export_dir)  # never exported
+        replay_export.export(self.ledger, self.export_dir, now=int(__import__("time").time()))
+        self.assertEqual(replay_export.require_fresh(self.ledger, self.export_dir), dict(records=1, exported=True))
+        self.admit(1, tag="later")  # a fresh export timestamp is not enough: this record is not in it
+        with self.assertRaises(safety.Refused) as refused:
+            replay_export.require_fresh(self.ledger, self.export_dir)
+        self.assertIn("1 canary admission records", str(refused.exception))
+
+    def test_during_a_run_the_export_runs_once_it_is_12_hours_old(self):
+        self.admit(1)
+        self.assertEqual(replay_export.MAX_AGE_S, 12 * 3600)
+        self.assertEqual(replay_export.export_if_due(self.ledger, self.export_dir, now=1000)["exported"], 1)  # none yet
+        self.assertIsNone(replay_export.export_if_due(self.ledger, self.export_dir, now=1000 + 12 * 3600))
+        self.admit(1, tag="later")
+        self.assertEqual(replay_export.export_if_due(self.ledger, self.export_dir, now=1001 + 12 * 3600)["exported"], 1)
+
+    def test_the_pilot_driver_exports_on_the_next_admission_when_due(self):
+        from tests.qualification.doubles import Fake
+
+        class Exporting(Fake):
+            def export_if_due(self):
+                self.calls.append("export_if_due")
+                return dict(exported=2) if self.calls.count("export_if_due") == 2 else None
+        env = Exporting()
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
+        results = canary.PilotDriver(env, ledger, n=3, run="t").run()
+        self.assertEqual(env.calls.count("export_if_due"), 3)  # once per admission, before its first routing step
+        self.assertEqual(env.calls[env.calls.index("export_if_due") + 1], "status")
+        self.assertEqual(results["exports"], [dict(admission=2, exported=2)])
+
+    def test_the_default_directory_follows_home_at_call_time(self):
+        self.assertFalse(hasattr(replay_export, "DEFAULT_DIR"))
+        with mock.patch.dict(os.environ, HOME=str(self.home)):
+            self.assertEqual(replay_export.default_dir(), self.home / ".local/state/vibe-workflow-replay/canary")
+            ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
+            run = live.Run(self.private(self.tmp / "iso"), ledger)
+            self.assertEqual(run.replay_dir, self.home / ".local/state/vibe-workflow-replay/canary")
 
     def test_the_export_keeps_records_a_later_prune_drops(self):
         self.admit(1)
