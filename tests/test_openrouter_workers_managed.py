@@ -102,7 +102,9 @@ class ManagedWorkerCase(ManagedRouting, unittest.TestCase):
         return json.loads((run / 'routing.json').read_text())['state']
 
     def files(self):
-        return b''.join(path.read_bytes() for path in self.root.rglob('*') if path.is_file())
+        """Every file under the test's folder and the worker runs (`worker_root`, in the scope's own state folder)."""
+        folders = [self.root] + [folder for folder in (self.runs,) if self.root not in folder.parents]
+        return b''.join(path.read_bytes() for folder in folders for path in folder.rglob('*') if path.is_file())
 
 
 class ManagedPrepareTests(ManagedWorkerCase):
@@ -355,6 +357,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
         self.assertEqual(len(tokens), 1)
         token = tokens.pop()
         self.assertNotIn(token, json.dumps(result))
+        self.assertTrue(any(path.is_file() for path in run.rglob('*')))  # the run folder itself is scanned
         self.assertNotIn(token.encode(), self.files())
 
     def test_an_openrouter_model_id_is_accounted_and_settles(self):
