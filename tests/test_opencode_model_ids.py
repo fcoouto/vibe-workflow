@@ -14,7 +14,8 @@ from runtime.adapters.opencode import AdapterError
 ROUTER_IDS = ["anthropic/claude-sonnet-4.5", "z-ai/glm-5", "openai/gpt-5.1:online", "meta-llama/llama-3.3-70b-instruct",
               "x/y", "a" * 64 + "/" + "b" * 63]
 HOSTILE_IDS = ["../x", "a/../b", "./x", "a/.", "a/..", "a/b/c", "a//b", "/b", "a/", "/", "", ".", "..",
-               "a/b\n", "a\n/b", "а/b", "a/K", "a/b​", "a\\b", "a /b", "a/b#c", "a/b?c",
+               "a/b\n", "a\n/b", "a\x00/b", "a/b\x00", "\x00", "a%2Fb", "a/b%2Fc", "..%2Fx",
+               "\u0430/b", "a/\u212a", "a/b\u200b", "a\\b", "a /b", "a/b#c", "a/b?c",
                "a" * 64 + "/" + "b" * 64, "a" * 129, "a" * 128 + "/b", "a/" + "b" * 128]
 
 
