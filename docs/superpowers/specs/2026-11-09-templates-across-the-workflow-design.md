@@ -62,13 +62,13 @@ Ranked by aggregated value (frequency × duplication × clarity, against cost):
 2. **B. Pull request.** Every task in projects that publish PRs, hand-composed today; low risk. Its value depends on PR publication.
 3. **C. Setup record.** Low frequency but clearer, and it touches onboarding lightly.
 
-Deferred:
-- **D.** Its value is Toolkit parity, which does not outweigh the license, drift and onboarding risk today. Revisit when setup must work without the Toolkit source.
+Deferred at the A–C decision:
+- **D.** Subsequently authorized by the user on 10 November 2026. The [implementation plan](../plans/2026-11-10-project-document-templates.md) adds local project-document shapes, subfolder reader support, the Toolkit license and source coverage. Setup/update still resolves current Toolkit guidance; ordinary tasks need no upstream source. Existing canonical documents, stack and selected clients remain authoritative.
 - **E and F.** Little to gain. Move them only if their owner is being rewritten anyway.
 
 ## Folder structure
 
-Stay flat. A to C bring the folder to five files: `worker-brief.md`, `task-record.md`, `review-report.md`, `pull-request.md`, `setup-record.md`.
+After A–C the five existing files stay flat: `worker-brief.md`, `task-record.md`, `review-report.md`, `pull-request.md`, `setup-record.md`. D adds the project-document family under `templates/project/`; it reuses the setup record instead of adding a second setup shape.
 
 Add subfolders and a `templates/README.md` index for authors when the folder passes about eight files, or when a family reaches three files (D would). The prepared instruction reader serves only top-level `templates/*.md` today. Subfolders need both its source discovery and its allowed-path rule extended, as for `skills/**`, the map regenerated and the nested-path test updated.
 
@@ -94,4 +94,4 @@ Acceptance:
 - Moving worked machine requests or `assets/harness-evaluation/`.
 - Format rules enforced by code (titles, role declarations).
 - Routing and OpenRouter procedures.
-- Candidates D to F.
+- Candidates E and F (D was subsequently authorized as recorded above).

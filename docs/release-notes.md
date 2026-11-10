@@ -1,5 +1,21 @@
 # Release notes
 
+## 0.1.35
+
+- **Escalation ladder.** A stuck repair escalates to a more capable worker, through a stronger model or higher reasoning effort, up to five levels within existing limits. The agent asks the user when escalation cannot continue or does not converge, with the attempts, remaining options, a recommendation and the decision needed.
+- **Activation is the only approval for an integration.** An active API Usage or OpenRouter integration may be used autonomously within its saved scope, funding and caps; a connected account alone grants nothing, and other paid or local routes still need approval. API Usage's Manual mode is retired: saved Manual setups run as active, and each task is sent live at most once per checkout. Smart Routing control-plane endpoints need known terms that allow confidential data.
+- **PR lifecycle.** Agents open every PR as a `[BLOCKED]` draft, set `[READY]` and mark it ready for review once checks and review pass, return it to `[BLOCKED]` when its evidence goes stale, and merge only with recorded permission or the user's explicit request; otherwise the user merges the `[READY]` PR. People never edit the prefix. A PR replaced by other work is retitled `[SUPERSEDED]` and closed with its branch kept. Onboarding's merge question describes this.
+- **Seven thread statuses.** `READY` and `BLOCKED` are retired: after triage, work moves to `WORKING` (or `REVIEW` for review work), and replies, decisions and interventions the user owes use `WAITING` with the label shown; a request for the user to review a result uses `REVIEW`. Updates naming a retired status are refused; records and titles written before this release stay readable.
+- **Workspace readiness.** `workflow.py workspace status` reports, read-only, whether Codex, Claude Code and OpenCode have the required tools; `prepare-my-workspace` has a verify mode that writes nothing and a prepare mode with numbered steps. Onboarding checks readiness first and hands missing required items to preparation.
+- **Project feature settings.** `workflow.py features status|enable|disable|set|unset|migrate|undo` manages per-project choices in `.vibe-workflow/settings.json`, starting with Workstreams. Existing `AGENTS.md` Workstreams choices remain effective; to move them, run `features migrate plan`, then `features migrate apply`, with the project's `--cwd` (a private backup is kept).
+- **Planning and handoff.** Task planning resolves where edits happen before the first edit, and a direct commit or push to a merge target counts as a merge. Templates for worker briefs, task records, review reports, pull requests and setup records, plus project-document shapes under `templates/project/` (product, overview, shared and Claude instructions, architecture, design, local preparation, quality) that onboarding links when adapting a project's documents; the policies keep the rules.
+- **OpenCode** agents can title their own session (`scripts/opencode_title.py --proof`).
+- **Smart Routing** gains reconciliation of uncertain subscription holds, a persisted strategy table from the maintenance refresh, image-generation and config-edit denial for managed sessions, and further qualification diagnostics. It is still not cut over.
+- **Packaging and maintenance.** One definition of package membership; a checkout is scanned as its export. `scripts/prune_state.py` reports and conservatively prunes stale transaction locks (dry run by default). The suite runs each shard with a private `HOME`.
+- **Re-onboard projects linking into a version-specific cache folder.** As with 0.1.34, links written into `.../vibe-workflow/0.1.34/...` read the old version after upgrading.
+- The displayed product name is now **Vibe Workflow**. Package and marketplace identifiers remain `vibe-workflow` and `vibe-workflow-local`, so nothing needs migrating.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.34
 
 - **Smaller installs.** Releases on the Codex Git marketplace now hold marketplace files at the root and the plugin under `plugins/vibe-workflow/`, so an install no longer copies the clone's `.git` or `tests/`: about 6.4 MB instead of 17 MB. Run `codex plugin marketplace upgrade vibe-workflow-local` and approve the changed hooks; Codex refreshes the installed copy in place.
