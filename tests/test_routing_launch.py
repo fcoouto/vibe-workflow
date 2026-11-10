@@ -104,8 +104,8 @@ class IdentityTests(unittest.TestCase):
         """C3-1b: `routing.attach` checks an admission with the shim's `harnessFor(provider)`, so every host that
         runs inside OpenCode must yield that name, or no admission could ever attach. This runs the real shim."""
         node = shutil.which('node')
-        if node is None:
-            self.skipTest('node is not installed; the shim harnessFor comparison was not run')
+        # A hard requirement, as in test_instruction_drain: a skipped comparison would hide a naming drift.
+        self.assertIsNotNone(node, 'the shim harnessFor comparison requires Node')
         providers = ['claude-agent', 'openrouter', 'openai', 'anthropic', 'z-ai']
         shim = Path(launcher.__file__).resolve().parent / 'adapters' / 'opencode_plugin.ts'
         script = ('const { harnessFor } = await import(process.argv[1]);'
