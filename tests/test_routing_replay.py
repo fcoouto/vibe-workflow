@@ -27,6 +27,12 @@ SCENARIOS = sorted(path.stem for path in FIXTURES.glob('*.json'))
 EPSILON = 1e-9
 
 
+def check(condition, *detail):
+    """An invariant check that, unlike a bare `assert`, still runs under `python -O`."""
+    if not condition:
+        raise AssertionError(*detail)
+
+
 def load(name):
     return json.loads((FIXTURES / (name + '.json')).read_text())
 
@@ -214,14 +220,14 @@ class Replay:
         """No funding violation: the protected allowance and every window stay inside their limits."""
         data = self.ledger.snapshot()
         self.checks += 1
-        assert budget.Ledger._credit_raw(data, ORG, now) >= 0, 'protected allowance breached'
+        check(budget.Ledger._credit_raw(data, ORG, now) >= 0, 'protected allowance breached')
         for pool in self.pools.values():
             for window in pool['windows']:
-                assert window['used'] + window['reserved'] <= 1 + EPSILON, 'window over-committed'
-                assert window['reserved'] >= -EPSILON, 'negative hold'
+                check(window['used'] + window['reserved'] <= 1 + EPSILON, 'window over-committed')
+                check(window['reserved'] >= -EPSILON, 'negative hold')
         open_runs = [r for r in data['runs'].values() if not r['closed']]
         total, per_account = data['caps']['total'], data['caps']['per_account']
-        assert len(open_runs) <= total and len(open_runs) <= per_account, 'concurrency cap exceeded'
+        check(len(open_runs) <= total and len(open_runs) <= per_account, 'concurrency cap exceeded')
 
 
 def replay(name, settings=None):
@@ -517,7 +523,7 @@ class AdmissionReplay:
     def dispatched(self, attempt, now):
         result = routing.record_event(self.ledger, dict(event_id='d-' + attempt, attempt_id=attempt,
                                                         kind='dispatched'), now)
-        assert result.get('state') != 'blocked', result
+        check(result.get('state') != 'blocked', result)
 
     def complete(self, attempt, now):
         """Settle at 80% of each reserved amount; subscription use reaches the collector's next snapshot."""
@@ -533,7 +539,7 @@ class AdmissionReplay:
         result = routing.record_event(self.ledger, dict(
             event_id='c-' + attempt, attempt_id=attempt, kind='complete',
             usage=dict(source='provider_receipt', requests=[request])), now)
-        assert result.get('state') != 'blocked', result
+        check(result.get('state') != 'blocked', result)
         for key, amount in units.items():
             pool, _, window = key[len(budget.WIN):].partition('/')
             next(w for w in self.pools[pool]['windows'] if w['id'] == window)['used'] += amount
@@ -564,19 +570,19 @@ class AdmissionReplay:
         for record in self.open.values():
             for key, amount in record['reserved'].items():
                 expected[key] = expected.get(key, 0) + amount
-        assert held == expected, ('held claims differ from open admissions', held, expected)
+        check(held == expected, ('held claims differ from open admissions', held, expected))
         for name, pool in self.pools.items():
             for window in pool['windows']:
                 if 'organization' not in window:
                     key = routing._window_key(name, window['id'])
-                    assert window['used'] + held.get(key, 0) <= window['limit'], 'window over-committed'
-        assert budget.Ledger._credit_raw(data, self.org, now) >= 0, 'organization credit overdrawn'
+                    check(window['used'] + held.get(key, 0) <= window['limit'], 'window over-committed')
+        check(budget.Ledger._credit_raw(data, self.org, now) >= 0, 'organization credit overdrawn')
         open_attempts = budget.Ledger.open_attempts(data)
-        assert sorted(open_attempts) == sorted(self.open), 'open attempts differ from open admissions'
+        check(sorted(open_attempts) == sorted(self.open), 'open attempts differ from open admissions')
         accounts = list(open_attempts.values())
         caps = self.settings['caps']
-        assert len(accounts) <= caps['total'], 'total concurrency cap exceeded'
-        assert all(accounts.count(a) <= caps['per_account'] for a in accounts), 'per-account cap exceeded'
+        check(len(accounts) <= caps['total'], 'total concurrency cap exceeded')
+        check(all(accounts.count(a) <= caps['per_account'] for a in accounts), 'per-account cap exceeded')
 
 
 def run_admission(scenario, runner=None):
@@ -738,6 +744,8 @@ class DependencyPlanReplayTests(unittest.TestCase):
         self.run_, self.snapshot = run_admission(self.scenario, self.schedule)
 
     def test_jobs_are_admitted_in_dependency_order(self):
+        """Checks the test's own `schedule`: the product does not order a DAG (Workstreams owns readiness). What it
+        contributes here is admitting each ready job alone, under the shared caps; see the fan-out test."""
         deps = {job['id']: set(job['depends_on']) for job in self.scenario['jobs']}
         admitted = [step for step in self.trace if step[0] == 'admit']
         self.assertEqual(sorted(step[1] for step in admitted), sorted(deps))
@@ -775,7 +783,9 @@ class DependencyPlanReplayTests(unittest.TestCase):
         self.assertEqual(self.run_.jev.calls, [])
 
     def test_the_counting_double_would_see_a_gap(self):
+        # The same CountingJev class the replay uses; a fresh instance keeps the run's own (empty) record untouched.
         jev = CountingJev()
+        self.assertEqual((type(jev), jev.calls), (type(self.run_.jev), []))
         job = dict(self.scenario['jobs'][0], profile=dict(task_family='implementation'))
         routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')}, jev=jev)
         self.assertEqual(jev.calls, [('job-1', ('complexity_band', 'risk_band'))])
