@@ -567,6 +567,36 @@ class StatusTests(WorldTestCase):
         self.world.write(xdg / "opencode/opencode.jsonc", '{\n // servers\n "mcp": {"context7": {"type": "remote", "url": "https://x//y",},},\n}')
         self.assertEqual(self.cell(self.world.status(XDG_CONFIG_HOME=str(xdg)), "context7", "opencode")["state"], "ready")
 
+    def test_opencode_plugins_configured_but_not_listed_count(self):
+        # `opencode plugin list` omits local-path plugins such as `./plugins/caveman`.
+        self.world.cli("opencode", "plugin list", "ID  VERSION  SOURCE\n-  0.3.0  opencode-next-prompt\n")
+        self.world.write(self.world.opencode / "opencode.json", json.dumps(
+            {"plugins": ["./plugins/caveman", "superpowers@git+https://x.invalid/obra/superpowers.git"],
+             "plugin": ["@dietrichgebert/ponytail"]}))
+        report = self.world.status()
+        self.assertEqual([self.cell(report, name, "opencode")["state"] for name in ("caveman", "superpowers", "ponytail")],
+                         ["ready", "ready", "ready"])
+        self.world.write(self.world.opencode / "opencode.json", json.dumps({"plugins": ["./plugins/caveman-extras"]}))
+        self.assertEqual(self.cell(self.world.status(), "caveman", "opencode")["state"], "missing")
+
+    def test_unreadable_opencode_plugin_configuration_is_unknown(self):
+        self.world.cli("opencode", "plugin list", "ID  VERSION  SOURCE\n")
+        self.world.write(self.world.opencode / "opencode.json", json.dumps({"plugins": "./plugins/caveman"}))
+        self.assertEqual(self.cell(self.world.status(), "caveman", "opencode"),
+                         dict(state="unknown", reason="the client configuration is not readable"))
+
+    def test_opencode_mcp_servers_nested_layout(self):
+        # OpenCode 2.2.6 on the user's machine stores servers under `mcp.servers`.
+        self.world.write(self.world.opencode / "opencode.json", json.dumps(
+            {"mcp": {"servers": {"context7": {"type": "remote", "url": "https://x.invalid/mcp"}}}}))
+        self.assertEqual(self.cell(self.world.status(), "context7", "opencode")["state"], "ready")
+        self.world.write(self.world.opencode / "opencode.json", json.dumps(
+            {"mcp": {"servers": {"context7": {"type": "remote", "url": "https://x.invalid/mcp", "enabled": False}}}}))
+        self.assertEqual(self.cell(self.world.status(), "context7", "opencode")["state"], "missing")
+        self.world.write(self.world.opencode / "opencode.json", json.dumps(
+            {"mcp": {"servers": {"type": "remote", "url": "https://x.invalid/mcp"}}}))
+        self.assertEqual(self.cell(self.world.status(), "context7", "opencode")["state"], "missing")
+
     def test_unreadable_mcp_configuration_is_unknown(self):
         (self.world.home / ".claude.json").write_text("{not json")
         self.world.write(self.world.opencode / "opencode.json", '{"mcp": ["not", "an", "object"]}')
