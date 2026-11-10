@@ -2,11 +2,11 @@
 servers started through the managed launcher (`opencode_launcher.start_server`: the launcher's environment
 allowlist, fixed PATH, flags, password and inline config) on temporary projects with temporary routing stores.
 
-Two server starts at most (user design rule: the fewest processes and calls). The temp-HOME server carries A1, A2,
-A3 and A5: a hostile project config and a hostile global config under the temp HOME, each with its own labelled
-names and markers, so every probe still reads its own evidence and the isolation is the same as on separate servers
-(the hostile payloads are the attack under test). The real-HOME server carries A4 (read before any launch), A6 and
-A7 on one temporary managed state with both routes.
+Three server starts at most (user design rule: the fewest processes and calls). One temp-HOME server carries A1, A2
+and A3 (zero calls), with a hostile project config and a hostile global config, each with its own labelled names and
+markers. A5 runs on its own clean temp-HOME server (no hostile payload: `share`, `permission: allow`, MCP and LSP
+must never meet a prompt), and only when A1, A2 and A3 passed in the same run. The real-HOME server carries A4
+(read before any launch), then A6 and A7 on one temporary managed state, only when A4 passed (review B1).
 
   A1  flags, password, inline config (temp HOME; 0 calls)
   A2  a hostile project `opencode.json` and `.opencode/` (temp HOME; 0 calls)
@@ -222,15 +222,31 @@ class LauncherProbes:
         status, body = host.request("GET", "/api/plugin")
         return plugin_ids(body) if status == 200 else []
 
-    # ------------------------------------------------------------ the temp-HOME server: A1, A2, A3 (0 calls), A5
+    # ------------------------------------------------------------ the temp-HOME servers: A1-A3 (0 calls), then A5
     def temp_group(self, chosen):
+        zero = [probe for probe in ("A1", "A2", "A3") if probe in chosen]
+        if zero:
+            self.hostile_server(zero)
+        if "A5" in chosen:
+            proven = all((self.results.get(probe) or {}).get("passed") is True for probe in ("A1", "A2", "A3"))
+            if not proven:  # never prompt a model while isolation is unproven (review B1)
+                return self.finish("A5", {}, dict(skipped="isolation_not_proven: A1, A2 and A3 must pass in this run"),
+                                   skipped=True)
+            if not self.a5_model:
+                return self.finish("A5", {}, dict(skipped="needs --a5-model openai/MODEL#VARIANT"), skipped=True)
+            self.a5(self.start("a5", self.project("a5")))  # its own clean server: no hostile payload anywhere
+
+    def hostile_server(self, zero):
+        """A1-A3 on one server holding both hostile payloads (each labelled), behind the zero-call wrapper; the
+        payloads are removed before anything may send."""
         project = self.project("temp")
         global_dir = self.temp_home / ".config" / "opencode"
-        if {"A2", "A5"} & set(chosen):
+        if "A2" in zero:
             write_hostile(project, self.marker_dir("project"), "project")
-        if {"A3", "A5"} & set(chosen):
+        if "A3" in zero:
             global_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
             write_hostile(global_dir, self.marker_dir("global"), "global")
+        host = None
         try:
             host = self.start("temp", project)
             wrapped = ZeroCallHost(host)
@@ -240,17 +256,20 @@ class LauncherProbes:
             session = self.worker_session(wrapped, "isolation probe")
             effects = {action: self.evaluate(wrapped, session, action, str(self.base / "outside" / "x.txt"))
                        for action in EVALUATED}
-            facts = dict(plugin_ids=ids, other_plugins=len(plugin_checks(ids)[1]), effects=effects, shared_server="temp")
-            zero = [probe for probe in ("A1", "A2", "A3") if probe in chosen]
+            facts = dict(plugin_ids=ids, other_plugins=len(plugin_checks(ids)[1]), effects=effects, server="temp")
             found = {probe: getattr(self, probe.lower())(host, wrapped, ids, texts, listing, effects) for probe in zero}
-            proof = zero_call_proof(wrapped, message_counts(wrapped))  # before A5 may send anything
+            proof = zero_call_proof(wrapped, message_counts(wrapped))
             for probe in zero:
                 checks, extra = found[probe]
                 self.finish(probe, dict(checks, zero_calls_proven=proof["proven"]), dict(facts, zero_call_proof=proof, **extra))
-            if "A5" in chosen:
-                self.a5(host, wrapped, session, proof)
         finally:
+            if host is not None:
+                host.stop()
+                self.hosts.remove(host)
             shutil.rmtree(global_dir, ignore_errors=True)
+            for name in ("opencode.json", ".opencode"):
+                shutil.rmtree(project / name, ignore_errors=True) if (project / name).is_dir() else \
+                    (project / name).unlink(missing_ok=True)
 
     def a1(self, host, wrapped, ids, texts, listing, effects):
         plugins = plugin_checks(ids)[0]
@@ -278,20 +297,21 @@ class LauncherProbes:
     def a3(self, host, wrapped, ids, texts, listing, effects):
         return self.hostile_checks("global", ids, texts, listing, effects)
 
-    def a5(self, host, wrapped, session, proof):
-        """Outside reads and permission precedence (both hostile payloads present), then one prompt (2 calls)."""
-        if not self.a5_model:
-            return self.finish("A5", {}, dict(skipped="needs --a5-model openai/MODEL#VARIANT"), skipped=True)
+    def a5(self, host):
+        """Outside reads on a clean server (A1-A3 passed): permission evaluation, then one prompt (2 calls)."""
         route = live_common.parse_model(self.a5_model)
+        wrapped = ZeroCallHost(host)
+        session = self.worker_session(wrapped, "outside reads")
         decoy_dir = self.base / "outside"
         decoy_dir.mkdir(mode=0o700, exist_ok=True)
         word = "QUALDECOY%s" % os.urandom(6).hex()
         (decoy_dir / "decoy.txt").write_text(word + " is the first word\n")
-        auth = self.base / "data-temp" / "opencode" / "auth.json"  # the path only; never read
-        facts = dict(shared_server="temp", evaluated=dict(
+        auth = self.base / "data-a5" / "opencode" / "auth.json"  # the path only; never read
+        facts = dict(server="a5", evaluated=dict(
             read_decoy=self.evaluate(wrapped, session, "read", str(decoy_dir / "decoy.txt")),
             read_auth=self.evaluate(wrapped, session, "read", str(auth)),
             external_decoy=self.evaluate(wrapped, session, "external_directory", str(decoy_dir))))
+        proof = zero_call_proof(wrapped, message_counts(wrapped))
         facts["signin"] = self.env.signin(host, lambda key, value: facts.__setitem__(key, value))
         entry = live_common.listed_model(host, route[0], route[1], self.env.sleep)
         if entry is None or route[2] not in live_common.variants_of(entry):
@@ -301,7 +321,9 @@ class LauncherProbes:
                                   self.run_id)
         try:
             prompted = self.prompted_session(host, route, A5_PROMPT % (decoy_dir / "decoy.txt"))
-            facts["sent"] = reservation.settle(message_counts(host, [prompted]))
+            tree = live_common.session_tree(host, prompted)  # child sessions count too
+            facts["sessions_counted"] = len(tree)
+            facts["sent"] = reservation.settle(message_counts(host, tree))
         finally:
             if reservation.settled is None:
                 reservation.settle_unknown()
@@ -314,7 +336,6 @@ class LauncherProbes:
         facts["outside_reads"] = "denied" if denied else "accepted_risk" if self.accept_outside_reads else "allowed"
         checks = dict(zero_calls_before_prompt=proof["proven"], outside_reads_denied_or_accepted=denied or self.accept_outside_reads,
                       session_external_deny=facts["evaluated"]["external_decoy"]["effect"] == "deny",
-                      no_marker_written=not any(self.marker_dir("project").iterdir()) and not any(self.marker_dir("global").iterdir()),
                       reply_read=reply is not None)
         return self.finish("A5", checks, facts)
 
@@ -357,10 +378,15 @@ class LauncherProbes:
             wrapped = ZeroCallHost(host)
             ids = self.plugin_list(wrapped)
             proof = zero_call_proof(wrapped, message_counts(wrapped))
-            self.finish("A4", dict(shim_listed_once=ids.count(SHIM_ID) == 1, zero_calls_proven=proof["proven"]),
-                        dict(global_config=read_global_plugins(self.real_home), plugin_ids=ids, shared_server="real",
+            self.finish("A4", dict(plugin_checks(ids)[0], zero_calls_proven=proof["proven"]),
+                        dict(global_config=read_global_plugins(self.real_home), plugin_ids=ids, server="real",
                              other_plugins=len(plugin_checks(ids)[1]), zero_call_proof=proof))
-        if not {"A6", "A7"} & set(chosen):
+        launches = [probe for probe in ("A6", "A7") if probe in chosen]
+        if not launches:
+            return
+        if (self.results.get("A4") or {}).get("passed") is not True:  # no launch beside an extra plugin (review B1)
+            for probe in launches:
+                self.finish(probe, {}, dict(skipped="isolation_not_proven: A4 must pass in this run"), skipped=True)
             return
         self.connect = live_common.connect_claude(host, self.env.sleep)
         if "A6" in chosen:
@@ -372,7 +398,7 @@ class LauncherProbes:
                 self.guarded(["A7"], lambda: self.a7(host, state, no_variant))
 
     def managed_launch(self, host, state, probe, route, prompt=PROMPT_TEXT):
-        facts = dict(claude_connect_http=self.connect, shared_server="real")
+        facts = dict(claude_connect_http=self.connect, server="real")
         entry = live_common.listed_model(host, route[0], route[1], self.env.sleep)
         facts["listed_variants"] = live_common.variants_of(entry) if entry else None
         if entry is None:
@@ -448,8 +474,10 @@ class LauncherProbes:
 
 
 def plan(probes):
-    """What a run of these probes costs at most: calls, server starts (each with the shim's routing child), wall time."""
-    servers = sum(1 for members in (TEMP_GROUP, REAL_GROUP) if set(members) & set(probes))
+    """What a run of these probes costs at most: calls, server starts (each with the shim's routing child), wall time.
+    A1-A3 share one server, A5 has its own clean one, A4/A6/A7 share the real-HOME one."""
+    chosen = set(probes)
+    servers = sum(1 for group in ({"A1", "A2", "A3"}, {"A5"}, set(REAL_GROUP)) if group & chosen)
     return dict(expected_calls=calls_needed(probes), servers=servers, processes=1 + 2 * servers,
                 processes_note="opencode --version once, then per server `opencode serve` and the shim's routing child",
                 wall_time="about 1 min plus the interactive ChatGPT sign-in when A5 runs (up to --signin-timeout)")

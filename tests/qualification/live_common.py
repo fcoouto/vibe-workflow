@@ -65,6 +65,19 @@ def sessions(host):
         if isinstance(listed, list) else None
 
 
+def session_tree(host, root):
+    """`root` and every listed session under it by `parentID` (child sessions send requests too)."""
+    parents = {item["id"]: item.get("parentID") for item in sessions(host) or []}
+    found, frontier = [root], [root]
+    while frontier:
+        current = frontier.pop()
+        for child, parent in parents.items():
+            if parent == current and child not in found:
+                found.append(child)
+                frontier.append(child)
+    return found
+
+
 def message_counts(host, session_ids=None):
     """`{sessions, user, assistant, readable}` over every listed session (or `session_ids`): each assistant message
     is one model request OpenCode transmitted. Titled sessions get no title request, and a launcher-started server

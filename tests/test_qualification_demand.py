@@ -82,16 +82,16 @@ class LaunchReadingTests(Temp):
         probes = launcher_probes.LauncherProbes(self.private(self.tmp / "q1"), self.ledger, "r", absent,
                                                 self.private(self.tmp / "real"), "u", safety.Redactor(),
                                                 a5_model="openai/gpt-6-luna#none", demand_log=self.log)
-        self.assertEqual(probes.run(["A5"])["A5"]["demand"], dict(measured=False, reason="codex_reader_unavailable"))
-        self.assertEqual(absent.hosts[0].prompts, 1)
+        self.assertEqual(probes.run(["A1", "A2", "A3", "A5"])["A5"]["demand"], dict(measured=False, reason="codex_reader_unavailable"))
+        self.assertEqual(absent.hosts[1].prompts, 1)
         windows = [[dict(id="5h", used=100, reset_at=9000, observed_at=1)], [dict(id="5h", used=130, reset_at=9000, observed_at=2)]]
         present = FakeEnv(self.tmp / "w2", models=list(models), codex_windows=windows)
         probes = launcher_probes.LauncherProbes(self.private(self.tmp / "q2"), self.ledger, "r", present,
                                                 self.private(self.tmp / "real"), "u", safety.Redactor(),
                                                 a5_model="openai/gpt-6-luna#none", demand_log=self.log)
-        self.assertEqual(probes.run(["A5"])["A5"]["demand"], dict(measured=True))
+        self.assertEqual(probes.run(["A1", "A2", "A3", "A5"])["A5"]["demand"], dict(measured=True))
         self.assertEqual(present.codex_reads, 2)
-        self.assertEqual(present.hosts[0].prompts, 1)
+        self.assertEqual(present.hosts[1].prompts, 1)
         self.assertEqual(demand.suggest(demand.measure(self.log.readings()))["chatgpt"]["5h"]["max_delta"], 30)
 
     def test_the_drill_logs_its_reread_reading(self):
