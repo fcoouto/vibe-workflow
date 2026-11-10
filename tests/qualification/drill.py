@@ -28,7 +28,7 @@ import time
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tests.qualification import live_common  # noqa: E402
+from tests.qualification import demand, live_common  # noqa: E402
 from tests.qualification.live_common import Reservation, message_counts  # noqa: E402
 from tests.qualification.managed_state import ManagedState, attempt_id  # noqa: E402
 from tests.qualification.safety import Blocker, BudgetExceeded, PROMPT_TEXT, Refused  # noqa: E402
@@ -40,6 +40,14 @@ PAUSE_LIMIT_S = 600
 PAUSED = "drill-paused"
 RESULT = "drill-result:"
 CALLS = 1  # drill 1's prompt; drill 2 sends nothing
+ROUTING_COMMANDS = 13  # one-shot scripts/routing.py runs: 8 status reads, record, reconcile_subscription x3, drop_debit
+
+
+def plan():
+    return dict(expected_calls=CALLS, servers=1, processes=1 + 2 + 2 + ROUTING_COMMANDS,
+                processes_note="opencode --version, `opencode serve` and the shim's routing child, two launcher children, "
+                               "and short one-shot routing commands",
+                wall_time="about 1-2 min (one haiku request)")
 
 
 class Interrupted(BaseException):
@@ -207,8 +215,9 @@ class Drill:
     `routing(state)` (one-shot `scripts/routing.py` on the drill state), `sleep` and `environ()` (the server's
     environment: the real HOME for the Claude login, a temporary data dir)."""
 
-    def __init__(self, base, ledger, run_id, env, pause_timeout=600):
+    def __init__(self, base, ledger, run_id, env, pause_timeout=600, demand_log=None):
         self.base, self.ledger, self.run_id, self.env, self.pause_timeout = Path(base), ledger, run_id, env, pause_timeout
+        self.demand_log = demand_log
         self.steps, self.facts, self.host = [], {}, None
 
     def step(self, name, expected, observed, passed):
@@ -231,7 +240,8 @@ class Drill:
         state = ManagedState(self.base / "drill-state", ROUTE, ACCOUNT)
         state.create()
         routing = self.env.routing(state)
-        self.step("state_clean_at_start", "clean", self.status(routing), clean(self.status(routing)))
+        view = self.status(routing)
+        self.step("state_clean_at_start", "clean", view, clean(view))
         self.host = self.env.start(state.project, state.settings, state.ledger, self.env.environ())
         try:
             self.facts["claude_connect_http"] = live_common.connect_claude(self.host, self.env.sleep)
@@ -271,6 +281,10 @@ class Drill:
         from runtime import opencode_launcher
         read = opencode_launcher.account(self.host, session, funding="subscription", attempt=attempt, authority=None)
         usage = read["result"].get("usage")
+        reading = demand.from_observation(read["result"].get("rate_limit"), "drill1", "sub")  # the re-read's own data
+        self.facts["demand_reading"] = reading is not None
+        if reading is not None and self.demand_log is not None:
+            self.demand_log.append(reading)
         self.step("1_reread", "host_message_totals usage", (usage or {}).get("source"),
                   (usage or {}).get("source") == "host_message_totals")
         body = dict(attempt_id=attempt, evidence=dict(kind="host_usage", session_id=session, usage=usage),

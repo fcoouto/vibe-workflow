@@ -36,13 +36,14 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import chatgpt, drill, gateway, launcher_probes, live_common, outputs, safety, user_dirs  # noqa: E402
+from tests.qualification import (chatgpt, demand, drill, gateway, launcher_probes, live_common, outputs,  # noqa: E402
+                                 safety, user_dirs)
 from tests.qualification.safety import (COUNTING, CallLedger, QUALIFIED_OPENCODE, Redactor, Refused,  # noqa: E402
                                         USER_OPENCODE_DIRS, check_isolated_dir, check_opencode_version,
                                         check_real_home, compare_snapshots, snapshot_tree)
 from tests.qualification.server import kill_leftovers  # noqa: E402
 
-MODES = {"launcher-probes": "isolation", "drill": "drill", "gateway": "gateway"}
+MODES = {"launcher-probes": "isolation", "drill": "drill", "gateway": "gateway", "measure-demand": None}
 REPORT_ONLY_HOME = (".claude", ".opencode")
 
 
@@ -62,10 +63,12 @@ class LiveEnv:
     def __init__(self, base, redact, signin_timeout=900, announce=print, ask=input):
         self.base, self.redact, self.signin_timeout, self.announce, self.ask = Path(base), redact, signin_timeout, announce, ask
         self.pgids, self.real_home = [], Path.home()
+        self.counts = dict(servers=0, children=0, routing_commands=0)
 
     def start(self, project, settings, ledger, environ):
         from runtime import opencode_launcher
         server = opencode_launcher.start_server(project, settings_path=settings, ledger_path=ledger, environ=environ)
+        self.counts["servers"] += 1
         self.pgids.append(server.process.pid)
         self.redact.add_secret(server._password)
         return server
@@ -90,6 +93,11 @@ class LiveEnv:
     def which(self, name, path):
         return shutil.which(name, path=path)
 
+    def codex_window(self):
+        """The Codex pool's windows through lane R7's read-only reader (branch smart-routing-codex-window-reader). It
+        is not on main yet, so the ChatGPT pool's demand stays unmeasured; no model call is ever made to measure."""
+        return None
+
     def signin(self, host, note):
         """"Sign in with ChatGPT" on this server (the qualified chatgpt.connect flow): the login lives in the probe's
         temporary data dir and is deleted with the isolated dir."""
@@ -99,11 +107,18 @@ class LiveEnv:
 
     # drill
     def child(self, spec, host):
+        self.counts["children"] += 1
         return drill.ChildLaunch(spec, host)
 
     def routing(self, state):
         from tests.qualification.server import Routing
-        return Routing(state.settings, state.ledger, project=state.project)
+        counts = self.counts
+
+        class Counted(Routing):
+            def __call__(self, op, **body):
+                counts["routing_commands"] += 1
+                return Routing.__call__(self, op, **body)
+        return Counted(state.settings, state.ledger, project=state.project)
 
     def environ(self):
         """The drill's server: the real HOME (the Claude login), a temporary data dir (its own sessions)."""
@@ -173,18 +188,19 @@ class Session:
         self.results = dict(mode=mode, purpose=self.purpose, blockers=[])
 
     def body(self):
+        log = demand.DemandLog(demand.log_path(self.ledger.path))
         if self.mode == "launcher-probes":
             probes = launcher_probes.LauncherProbes(
                 self.base, self.ledger, self.run_id, self.env, self.home, os.environ.get("USER", ""), self.redact,
                 a5_model=self.args.a5_model, no_variant_model=self.args.no_variant_model,
-                accept_outside_reads=self.args.accept_outside_reads)
+                accept_outside_reads=self.args.accept_outside_reads, demand_log=log)
             found = probes.run(launcher_probes.parse_probes(self.args.probes))
             self.results["probes"] = found
             failed = [probe for probe, result in found.items() if result.get("passed") is False]
             if failed:
                 self.results["blockers"].append("probes failed: %s" % ", ".join(failed))
         elif self.mode == "drill":
-            found = drill.run_drill(drill.Drill(self.base, self.ledger, self.run_id, self.env))
+            found = drill.run_drill(drill.Drill(self.base, self.ledger, self.run_id, self.env, demand_log=log))
             self.results["drill"] = found
             if not found.get("passed"):
                 self.results["blockers"].append(found.get("blocker") or "a drill step failed")
@@ -193,8 +209,12 @@ class Session:
             self.results["gateway"] = found
             if not found.get("passed"):
                 self.results["blockers"].append(found.get("blocker") or "a gateway check failed")
+        if self.mode != "gateway":
+            self.results["demand"] = demand.report(log)  # local file only: 0 calls, no process
 
     def run(self):
+        began = time.monotonic()
+        self.results["plan"] = plan(self.mode, self.args)
         user_before, home_before = snapshot_user_dirs(self.home), report_only_home(self.home)
         previous = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
         saved_tmp = tempfile.tempdir
@@ -214,6 +234,12 @@ class Session:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
         self.results["user_dirs"] = compare_user_dirs(self.home, user_before, home_before, self.results["blockers"])
+        counts = dict(getattr(self.env, "counts", {}) or {})
+        servers = counts.get("servers", 0)
+        self.results["measured"] = dict(counts, processes=1 + 2 * servers + counts.get("children", 0)
+                                        + counts.get("routing_commands", 0),
+                                        sent=(self.results.get("call_ledger") or {}).get(self.purpose, {}).get("spent"),
+                                        wall_s=round(time.monotonic() - began, 1))
         return self.results
 
     def cleanup(self):
@@ -279,16 +305,39 @@ def compare_user_dirs(home, before, home_before, blockers):
 
 # ---------------------------------------------------------------- the command
 
+def plan(mode, args):
+    """Per mode, before anything starts: expected model calls, processes started and wall time (user design rule)."""
+    if mode == "launcher-probes":
+        return launcher_probes.plan(launcher_probes.parse_probes(args.probes))
+    if mode == "drill":
+        return drill.plan()
+    if mode == "gateway":
+        return gateway.plan()
+    return dict(expected_calls=0, servers=0, processes=0, wall_time="under a second (reads one local file)")
+
+
+def measure_demand(args):
+    """`measure-demand`: the per-launch window demand from the readings the budgeted launches stored (0 calls, no
+    process, no server); written to `--out` with the manifest suggestion."""
+    CallLedger(args.call_ledger)  # the readings live next to a valid, owner-only ledger
+    outputs.check_out(args.out)
+    found = dict(mode="measure-demand", plan=plan("measure-demand", args),
+                 demand=demand.report(demand.DemandLog(demand.log_path(args.call_ledger))))
+    text = json.dumps(found, indent=2, sort_keys=True)
+    if Redactor().leaks(text):
+        raise Refused("the demand report did not pass the leak check")
+    Path(args.out).write_text(text + "\n")
+    print(json.dumps(found["demand"]["suggestion"], indent=2))
+    return 0
+
 def needed_calls(args):
-    if args.mode == "launcher-probes":
-        return launcher_probes.calls_needed(launcher_probes.parse_probes(args.probes))
-    return drill.CALLS if args.mode == "drill" else gateway.POSITIVE_CALLS
+    return plan(args.mode, args).get("reserved", plan(args.mode, args)["expected_calls"])
 
 
 def parser():
     parse = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parse.add_argument("mode", choices=sorted(MODES))
-    parse.add_argument("--isolated-dir", required=True)
+    parse.add_argument("--isolated-dir", help="every mode but measure-demand: the run's empty owner-only directory")
     parse.add_argument("--call-ledger", required=True)
     parse.add_argument("--out", required=True, help="the sanitized results (outside every repository and the isolated dir)")
     parse.add_argument("--probes", help="launcher-probes: a comma list of A1-A7 (default all)")
@@ -331,6 +380,12 @@ def preflight(args, home_check=check_real_home, version_check=check_opencode_ver
 def main(argv=None, env_factory=None, home_check=check_real_home, version_check=check_opencode_version):
     args = parser().parse_args(argv)
     try:
+        if args.mode == "measure-demand":
+            if args.isolated_dir:
+                raise Refused("measure-demand starts nothing and takes no --isolated-dir")
+            return measure_demand(args)
+        if not args.isolated_dir:
+            raise Refused("--isolated-dir is required")
         base, ledger = preflight(args, home_check, version_check)
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)

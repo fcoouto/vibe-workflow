@@ -84,6 +84,10 @@ class EntryTests(Temp):
         self.assertFalse(self.q.exists())
         self.assertTrue(results["cleanup"]["verified_by_harness"])
         self.assertEqual(results["_meta"]["purpose"], "isolation")
+        self.assertEqual((results["plan"]["expected_calls"], results["plan"]["servers"]), (0, 2))
+        self.assertEqual(results["measured"]["sent"], 0)
+        self.assertIn("wall_s", results["measured"])
+        self.assertEqual(results["demand"]["readings"], 0)
         self.assertNotIn(str(self.q), self.out.read_text())
 
     def test_a_drill_run_through_main(self):
@@ -92,6 +96,7 @@ class EntryTests(Temp):
         results = json.loads(self.out.read_text())
         self.assertEqual(code, 0, results.get("blockers"))
         self.assertTrue(results["drill"]["passed"])
+        self.assertEqual(results["plan"]["expected_calls"], 1)
         self.assertEqual(results["call_ledger"]["drill"]["spent"], 1)
 
     def test_a_gateway_run_through_main(self):

@@ -20,8 +20,10 @@ WINDOW_UNIT = "utilization_thousandths"
 
 
 class ManagedState:
-    def __init__(self, root, route, account, pool="sub", billing_class="included_subscription", real_home=None):
-        """`route`: (provider, model, variant or None). `root` must be a fresh directory under the isolated dir."""
+    def __init__(self, root, route, account, pool="sub", billing_class="included_subscription", real_home=None,
+                 extra_routes=()):
+        """`route`: (provider, model, variant or None); `extra_routes` share the state, the server and the pool (one
+        server start for several launches). `root` must be a fresh directory under the isolated dir."""
         self.root = Path(root)
         resolved = self.root.parent.resolve() / self.root.name
         home = Path(real_home or Path.home()).resolve()
@@ -34,11 +36,12 @@ class ManagedState:
         self.settings = self.root / "routing" / "settings.json"
         self.ledger = self.root / "usage" / "organizations.sqlite3"
         self.provider, self.model, self.variant = route
+        self.routes = [tuple(route)] + [tuple(item) for item in extra_routes]
         self.account, self.pool, self.billing_class = account, pool, billing_class
 
-    def choice(self, funding="subscription"):
+    def choice(self, funding="subscription", route=None):
         from runtime import opencode_launcher
-        return opencode_launcher.choice(self.provider, self.model, self.variant, funding)
+        return opencode_launcher.choice(*(route or self.routes[0]), funding)
 
     def create(self):
         """The project, the stores, `managed_projects` and `authority_required`. Returns the service's status."""
@@ -62,16 +65,17 @@ class ManagedState:
         from scripts import routing as command
         return command.Service(self.settings, self.ledger, project=self.project)
 
-    def spec(self):
+    def spec(self, route=None):
         from runtime import routing
-        picked = self.choice("subscription" if self.billing_class == "included_subscription" else "api")
-        return dict(route="live-" + self.pool, status="qualified", billing_class=self.billing_class, pool=self.pool,
+        picked = self.choice("subscription" if self.billing_class == "included_subscription" else "api", route)
+        index = self.routes.index(tuple(route or self.routes[0]))
+        return dict(route="live-%s-%d" % (self.pool, index), status="qualified", billing_class=self.billing_class, pool=self.pool,
                     account=self.account, demand={"5h": 1}, binding_enforceable=True, window_unit=WINDOW_UNIT,
                     **{key: picked[key] for key in routing.ROUTE_IDENTITY})
 
     def static_source(self):
         from runtime import routing_observations
-        return routing_observations.StaticSource([self.spec()], lambda pool, at: [dict(
+        return routing_observations.StaticSource([self.spec(route) for route in self.routes], lambda pool, at: [dict(
             id="5h", limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
             unit=WINDOW_UNIT)])
 
@@ -87,10 +91,10 @@ class ManagedState:
         finally:
             routing_observations.default_source = saved
 
-    def assignment(self, attempt, prompt):
+    def assignment(self, attempt, prompt, route=None):
         from runtime import routing_launch
         scope = routing_launch.assignment_scope(self.project)
-        assignment = dict(attempt_id=attempt, task="live-" + attempt, scope=scope, choice=self.choice())
+        assignment = dict(attempt_id=attempt, task="live-" + attempt, scope=scope, choice=self.choice(route=route))
         return assignment, routing_launch.unplanned_job("implementer", scope, prompt)
 
 

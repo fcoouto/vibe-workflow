@@ -38,8 +38,9 @@ class ProbeTests(Temp):
         self.assertTrue(all(host.stopped for host in self.env.hosts))
         self.assertEqual(self.reservations(), [])  # zero-call probes reserve nothing
         homes = [environ["HOME"] for environ in self.env.environs]
-        self.assertEqual(homes[:3], [str(self.base / "home")] * 3)
-        self.assertEqual(homes[3], str(self.real_home))
+        self.assertEqual(homes, [str(self.base / "home"), str(self.real_home)])  # two server starts for four probes
+        self.assertEqual(results["A1"]["shared_server"], "temp")
+        self.assertEqual(results["A4"]["shared_server"], "real")
         for host in self.env.hosts:  # the routing stores are the run's own, never the user's
             self.assertTrue(all(str(path).startswith(str(self.base)) for path in host.probe_stores))
             self.assertTrue(host.environ["XDG_DATA_HOME"].startswith(str(self.base)))
@@ -52,10 +53,14 @@ class ProbeTests(Temp):
                 checks = results[probe]["checks"]
                 self.assertIs(results[probe]["passed"], False)
                 self.assertFalse(checks["no_hostile_plugin"])
-                self.assertFalse(checks["no_other_plugin"])
                 self.assertFalse(checks["no_hostile_mcp"])
                 self.assertFalse(checks["no_marker_written"])
         self.assertFalse((self.base / "home" / ".config" / "opencode").exists())  # the global payload is removed
+        self.env.knobs["honour_hostile"] = "project"  # one source loading fails only its own probe (and A1)
+        results = self.probes().run(["A1", "A2", "A3"])
+        self.assertEqual({probe: results[probe]["passed"] for probe in results}, dict(A1=False, A2=False, A3=True))
+        self.assertFalse(results["A1"]["checks"]["no_other_plugin"])
+        self.assertEqual(len(self.env.hosts), 2)  # one server per run of the temp-HOME group
 
     def test_a_relaxed_permission_fails_the_session_deny(self):
         self.env.knobs["effects"] = dict(shell="allow")
@@ -150,7 +155,7 @@ class ProbeTests(Temp):
         result = self.probes(a5_model="openai/gpt-6-luna#none").run(["A5"])["A5"]
         self.assertIs(result["passed"], True, result)
         self.assertEqual(result["outside_reads"], "denied")
-        self.assertTrue(result["before_signin"]["proven"])
+        self.assertTrue(result["checks"]["zero_calls_before_prompt"])
         self.assertEqual(self.env.signins, 1)
         self.assertEqual([(r["reserved"], r["sent"]) for r in self.reservations()], [(2, 1)])
 

@@ -25,6 +25,7 @@ class FakeLauncherHost:
         self.models = [dict(providerID="claude-agent", id="haiku", variants=[dict(id="low"), dict(id="high")])]
         self.reply, self.text_key, self.honour_hostile, self.healthy, self.attach_ok = "OK", "content", False, True, True
         self.extra_assistants, self.cost, self.trust_attach = 0, 0, False
+        self.utilizations, self.resets_at = [], int(time.time()) + 3000  # native.rateLimit per prompt, in order
         self.attached, self.unobserved = set(), set()
         self.connections = {}
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -39,14 +40,15 @@ class FakeLauncherHost:
 
     def load_hostile(self):
         """What a server that honoured project and global config would do: list and load the hostile plugin."""
-        for root in (Path(self.directory), Path(self.environ.get("HOME", "/nonexistent")) / ".config" / "opencode"):
+        roots = dict(project=Path(self.directory), glob=Path(self.environ.get("HOME", "/nonexistent")) / ".config" / "opencode")
+        for name, root in roots.items():
             config = root / "opencode.json"
-            if config.is_file():
+            if config.is_file() and self.honour_hostile in (True, name):
                 value = json.loads(config.read_text())
-                self.plugins.append("hostile-plugin")
+                source = (Path(value["plugins"][0]["package"]) / "index.ts").read_text()
+                self.plugins.append(source.split('id: "', 1)[1].split('"', 1)[0])
                 self.mcp.update(value.get("mcp") or {})
-                marker = Path(json.loads(config.read_text())["plugins"][0]["package"]) / "index.ts"
-                path = marker.read_text().split("writeFileSync(", 1)[1].split(",", 1)[0]
+                path = source.split("writeFileSync(", 1)[1].split(",", 1)[0]
                 Path(json.loads(path)).write_text("loaded")
 
     def stop(self):
@@ -98,7 +100,7 @@ class FakeLauncherHost:
 
     # ------------------------------------------------------------ HTTP
     def request(self, method, path, body=None, query=None):
-        now, parts = int(time.time() * 1000), path.strip("/").split("/")
+        now, parts = int(time.time() * 1000) + 2000 * self.prompts, path.strip("/").split("/")  # launches seconds apart
         tokens = dict(input=3, output=1, reasoning=0, cache=dict(read=0, write=0))
         if path == "/api/info":
             return 200, dict(version=adapter.QUALIFIED_VERSION)
@@ -142,6 +144,12 @@ class FakeLauncherHost:
                                                        variant=model.get("variant")),
                              time=dict(created=now, completed=now + 1))
             assistant[self.text_key] = [dict(type="text", text=reply)]
+            if self.utilizations:
+                used = self.utilizations.pop(0)
+                assistant["native"] = dict(rateLimit=dict(status="allowed", rateLimitType="five_hour", resetsAt=self.resets_at,
+                                                          unifiedWindows=dict(five_hour=dict(utilization=used,
+                                                                                             resetsAt=self.resets_at,
+                                                                                             status="allowed"))))
             extra = [dict(assistant, id="msg_fakeextra%04d" % i) for i in range(self.extra_assistants)]
             self.sessions[sid]["messages"] += [dict(id=body.get("id") or "msg_fakeuser%04d" % self.prompts, type="user",
                                                     time=dict(created=now)), assistant, *extra,
@@ -162,7 +170,7 @@ class FakeEnv:
     def start(self, project, settings, ledger, environ):
         self.environs.append(dict(environ))
         probe = Path(project).name if Path(project).parent.name == "projects" else Path(project).parent.name
-        knobs = dict(self.knobs, **self.per_probe.get(probe, {}))
+        knobs = {k: v for k, v in dict(self.knobs, **self.per_probe.get(probe, {})).items() if k != "codex_windows"}
         host = FakeLauncherHost(project, self.base / ("workdir-%d" % len(self.hosts)), settings, ledger, environ, **knobs)
         host.probe_stores = (settings, ledger)
         self.hosts.append(host)
@@ -185,6 +193,12 @@ class FakeEnv:
 
     def which(self, name, path):
         return "/usr/local/bin/%s" % name
+
+    def codex_window(self):
+        """Lane R7's reader stand-in: a list of windows, or None (the reader is not on main yet)."""
+        self.codex_reads = getattr(self, "codex_reads", 0) + 1
+        windows = self.knobs.get("codex_windows")
+        return windows.pop(0) if windows else None
 
 
 class HttpFake:

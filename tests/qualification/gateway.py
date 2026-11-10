@@ -41,6 +41,12 @@ def price(entry):
     return None
 
 
+def plan():
+    return dict(expected_calls=2, reserved=POSITIVE_CALLS, servers=1, processes=3,
+                processes_note="opencode --version, `opencode serve` and the shim's routing child; routing runs in process",
+                wall_time="about 2 min plus the interactive OpenRouter sign-in and the receipt lookup")
+
+
 def check_model(entry):
     """Reasons the listed model may not be used (empty when it may). The launcher's accounting normalizes messages
     with the adapter's name pattern, which has no `/`: an id such as `vendor/model` would fail accounting after the
