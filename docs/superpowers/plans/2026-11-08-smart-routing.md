@@ -396,7 +396,7 @@ Open work that a status line names is tracked on that task's box. Open work from
 
 ### Task S2.7: Cutover criteria (A11)
 
-**Status (10 November 2026):** Done (#118; A14 in #114): [validation](../../smart-routing-validation.md) pre-registers the criteria and canary bounds, with each pilot edit recorded before its run (#145). [Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history) (10 November 2026, before any replay) replaces the 200-assignment replay minimum with the available history: an advisory historical replay before the canary and the strict replay at C.1.
+**Status (10 November 2026):** Done (#118; A14 in #114): [validation](../../smart-routing-validation.md) pre-registers the criteria and canary bounds, with each pilot edit recorded before its run (#145). [Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history) (10 November 2026, before any replay) replaces the 200-assignment replay minimum with the available history: before the canary, the strict replay over the exported pilot records must pass and an advisory historical replay must have run; the strict replay runs again at C.1.
 
 **Files:** create `docs/smart-routing-validation.md`.
 
@@ -406,7 +406,7 @@ Open work that a status line names is tracked on that task's box. Open work from
 
 ### Task S2.8: Allocator replay
 
-**Status (10 November 2026):** Done (#118, #195): `tests/test_routing_replay.py` replays about 50 synthetic arrivals (concurrent claims, resets, expiries, OFF toggles, exact class and route replay) and, through `AdmissionReplay` over the merged compile/refresh, profile, rank, admit and settle path, a catalog refresh and a six-job dependency plan with zero Jev calls. The cutover replay is split by [validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history): the advisory historical replay runs before the canary and the strict replay at C.1.
+**Status (10 November 2026):** Done (#118, #195): `tests/test_routing_replay.py` replays about 50 synthetic arrivals (concurrent claims, resets, expiries, OFF toggles, exact class and route replay) and, through `AdmissionReplay` over the merged compile/refresh, profile, rank, admit and settle path, a catalog refresh and a six-job dependency plan with zero Jev calls. The cutover replay is split by [validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history): before the canary the strict replay over the exported pilot records must pass and the advisory historical replay must have run; the strict replay runs again at C.1.
 
 **Files:** create `tests/test_routing_replay.py`, `tests/fixtures/smart-routing/arrivals/*.json`, `tests/fixtures/smart-routing/arrivals/admission/*.json`.
 
@@ -706,7 +706,7 @@ Before the canary project joins `managed_projects` ([S3.7](#task-s37-canary)), a
 4. **The S3.6c lost-acknowledgment drill observed live**: an uncertain subscription hold from a real managed launch is settled with `reconcile_subscription` ([S3.6c](#task-s36c-subscription-hold-reconcile-follow-up-required-before-c-and-before-any-production-use)).
 5. **The checklists already defined elsewhere:** the S3.1 [handshake pre-canary checklist](#task-s31-single-routing-command) (`authority_required`, `unstamped_open_holds: 0`), the S3.5 [wiring requirements](#task-s35-fresh-gates-at-dispatch-rf3), the S3.6 pre-canary resolutions ([S3.6](#task-s36-lineage-settlement-and-retention)) and the S3.3d [required live probe](../../../clients/opencode.md#image-generation-and-configuration-edits-s33d).
 6. **The canary project is enrolled for Codex**, with a configured or active entry, or the activation gate refuses it ([design §4.2](../specs/2026-11-10-smart-routing-c3-wiring-design.md#42-activation-gate) step 3). This holds for an OpenCode-coordinated canary too, because onboarding records only Codex and Claude Code entries today.
-7. **The historical replay has run**, after a route is qualified live (decision 5), and its advisory report is recorded; the pilot's admission records were exported on 10 November 2026 ([validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history)). Its disagreement rate blocks nothing.
+7. **The strict replay over the exported pilot records has passed, and the historical replay has run**, after a route is qualified live (decision 5), with its advisory report recorded; the canary harness exports canary admission records with their snapshot detail at least every 24 hours ([validation Edit 6](../../smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history)). Its disagreement rate blocks nothing.
 
 ### Task C.4: Default ON
 
