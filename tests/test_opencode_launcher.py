@@ -233,7 +233,8 @@ class LauncherBase(Stores):
         options.setdefault('assignment', self.assignment())
         options.setdefault('job', routing_launch.unplanned_job('implementer', SCOPE, 'Do the fixture task'))
         options.setdefault('prompt', 'Do the fixture task')
-        return launcher.launch(self.checkout, host=options.pop('host', self.host), service=self.service, **options)
+        return launcher.launch(self.checkout, host=options.pop('host', self.host),
+                               service=options.pop('service', self.service), **options)
 
     def holds(self):
         return self.service._ledger(False).snapshot()['holds']
@@ -704,10 +705,70 @@ class InterruptTests(LauncherBase):
             self.launch()
         self.assertEqual(self.holds()['a1']['state'], 'released')  # `complete` won; the late `uncertain` is refused
 
-    def test_an_interrupt_before_dispatch_leaves_only_an_admission(self):
+    def test_an_interrupt_before_prepare_leaves_nothing(self):
         with mock.patch.object(launcher, 'catalog', side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
             self.launch()
         self.assertNotIn('dispatch', self.order)
+        self.assertEqual(self.holds(), {})
+
+    def test_an_interrupt_after_admission_before_dispatch_closes_the_hold(self):
+        with mock.patch.object(routing_launch, 'admitted_check', side_effect=KeyboardInterrupt), \
+                self.assertRaises(KeyboardInterrupt):
+            self.launch()
+        self.assertNotIn('dispatch', self.order)
+        self.assertEqual(self.holds()['a1']['state'], 'released')  # `not_dispatched`, the core's event id
+        self.assertIn('record:not_dispatched', self.order)
+
+    def interrupting(self, on_dispatch):
+        """The managed service with one interrupt injected around `dispatch` (`on_dispatch(super_handle, raw)`)."""
+        service, order = self.service, self.order
+
+        class Interrupting(Logged):
+            fired = False
+
+            def handle(self, raw, op=None):
+                if json.loads(raw).get('op') == 'dispatch' and not Interrupting.fired:
+                    Interrupting.fired = True
+                    order.append('dispatch')
+                    return on_dispatch(lambda: command.Service.handle(self, raw, op))
+                return super().handle(raw, op)
+        interrupting = Interrupting(service.settings_path, service.ledger_path, project=self.checkout)
+        self.addCleanup(interrupting.close)
+        return interrupting
+
+    def test_an_interrupt_after_a_refused_dispatch_closes_the_hold_instead_of_uncertain(self):
+        def refused(handle):
+            raise KeyboardInterrupt  # the dispatch never ran: the hold is still only admitted
+        with self.assertRaises(KeyboardInterrupt):
+            self.launch(service=self.interrupting(refused))
+        self.assertEqual(self.holds()['a1']['state'], 'released')
+
+    def test_an_interrupt_after_a_refused_answer_closes_the_hold(self):
+        fired = []
+
+        def refused(handle):
+            return dict(v=1, state='blocked', reason='settings_revision_changed')
+
+        service = self.interrupting(refused)
+        real = Logged.handle
+
+        def interrupt_once(this, raw, op=None):
+            if json.loads(raw).get('op') == 'record' and not fired:
+                fired.append(True)
+                raise KeyboardInterrupt  # before the core's own `not_dispatched` reaches the ledger
+            return real(this, raw, op)
+        with mock.patch.object(Logged, 'handle', interrupt_once), self.assertRaises(KeyboardInterrupt):
+            self.launch(service=service)
+        self.assertEqual(self.holds()['a1']['state'], 'released')
+
+    def test_an_interrupt_after_the_dispatch_committed_records_uncertain(self):
+        def committed(handle):
+            handle()  # the ledger committed the dispatch; its answer (and token) is lost
+            raise KeyboardInterrupt
+        with self.assertRaises(KeyboardInterrupt):
+            self.launch(service=self.interrupting(committed))
+        self.assertEqual(self.holds()['a1']['state'], 'uncertain')
+        self.assertNotIn(('POST', '/api/session'), self.host.requests)
 
 
 class WindowUnitTests(LauncherBase):
@@ -746,7 +807,7 @@ class SignalTests(LauncherBase):
     """S2: SIGTERM and SIGHUP to the command become an exception, so its server is always stopped."""
 
     def test_sigterm_and_sighup_stop_the_server_and_leave_the_hold_uncertain(self):
-        for number, sig in enumerate((signal.SIGTERM, signal.SIGHUP)):
+        for number, sig in enumerate((signal.SIGTERM, signal.SIGHUP, signal.SIGINT)):
             with self.subTest(signal=sig):
                 attempt = 's%d' % number
                 self.order.clear()
@@ -754,6 +815,8 @@ class SignalTests(LauncherBase):
                 self.assertEqual((code, answer['state'], answer['reason']), (1, 'blocked', 'interrupted'))
                 server.stop.assert_called_once_with()
                 self.assertEqual(self.holds()[attempt]['state'], 'uncertain')
+                # a second Ctrl-C, SIGTERM or SIGHUP cannot interrupt the cleanup
+                self.assertEqual(self.during_stop, {item: signal.SIG_IGN for item in self.during_stop})
 
     def run_signal(self, sig, attempt):
         from scripts import opencode_launch
@@ -762,8 +825,10 @@ class SignalTests(LauncherBase):
                        job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
         server = mock.Mock(directory=str(self.checkout))
         server.request, server.rpc = self.host.request, self.host.rpc
+        watched = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        server.stop.side_effect = lambda: setattr(self, 'during_stop', {item: signal.getsignal(item) for item in watched})
         self.host.prompt_hook = lambda: os.kill(os.getpid(), sig)
-        before = {item: signal.getsignal(item) for item in (signal.SIGTERM, signal.SIGHUP)}
+        before = {item: signal.getsignal(item) for item in watched}
         with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
                 mock.patch.object(opencode_launch.command, 'managed_service', return_value=self.service):
             code = opencode_launch.main([], stdin=json.dumps(request).encode(), write=stdout.append)
