@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "decision": "pending: C.3 design 7.1 user decision 5",
+  "source": "docs/smart-routing-capability-matrix.md",
+  "note": "Production routes are added with their classification only after user decision 5. Until then no route is qualified, so the collector admits nothing from this file and the activation gate fails closed.",
+  "routes": [
+    {
+      "route": "test-only-subscription",
+      "status": "test_only",
+      "provider": "test",
+      "model": "test-model",
+      "effort": "none",
+      "harness": "test",
+      "billing_class": "included_subscription",
+      "pool": "test-only-subscription",
+      "account": "test-only-subscription",
+      "demand": {"5h": 1},
+      "binding_enforceable": true
+    }
+  ]
+}
