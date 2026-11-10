@@ -20,7 +20,7 @@ def instruction_name(name):
     path = Path(name)
     return (not path.is_absolute() and ".." not in path.parts and path.as_posix() == name
             and path.suffix == ".md" and len(path.parts) >= 2
-            and (path.parts[0] == "skills" or (len(path.parts) == 2 and path.parts[0] in {"clients", "policies", "templates"})))
+            and (path.parts[0] in {"skills", "templates"} or (len(path.parts) == 2 and path.parts[0] in {"clients", "policies"})))
 
 
 def source_path(root, name):
@@ -51,7 +51,7 @@ def source_entry(raw, name):
 def build_manifest(root):
     files = {}
     paths = sorted([*(root / "clients").glob("*.md"), *(root / "policies").glob("*.md"),
-                    *(root / "templates").glob("*.md"), *(root / "skills").rglob("*.md")])
+                    *(root / "templates").rglob("*.md"), *(root / "skills").rglob("*.md")])
     for path in paths:
         name = path.relative_to(root).as_posix()
         raw = source_path(root, name).read_bytes()

@@ -4,8 +4,8 @@ The project's record of its workflow setup, kept in its setup document or an equ
 
 ## Project
 
-- Project: [name, repository, remote and primary branch]
-- Clients: [selected clients]
+- Project: [name, repository, remote, primary branch and verification date]
+- Clients: [selected clients and versions, runtime, actual model/effort and observable authentication mode; no credentials or invented usage/cost]
 - Package: [installed package identity; exact machine and cache paths stay in private evidence]
 - Source: [Toolkit revision used for this setup]
 
@@ -23,7 +23,7 @@ The project's record of its workflow setup, kept in its setup document or an equ
 
 ## Components
 
-- Adopted: [component and scope]
+- Adopted: [component/source and version, package manager/lockfile, local/global scope and install/update method; installation, discovery and live result distinguished]
 - Reused or not applicable: [component and reason]
 - Pending: [component, its prerequisite and when to resume]
 
@@ -45,6 +45,8 @@ The project's record of its workflow setup, kept in its setup document or an equ
 
 ## Maintenance and recovery
 
+- Memory: [actual index/document location and loading mechanism; source, last verification, invalidation trigger and observed clean-context retrieval or limitation]
+- Harness: [selected native method and invocation; input/check identities, client/version/model, observed actions, elapsed time and unrun cases; any separately authorized lab/demo evidence kept distinct]
 - Plan, backups and journal: [private location]
 - Undo: [how to undo, and what it preserves]
 - Reapply: [how to reapply]

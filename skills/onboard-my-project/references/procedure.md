@@ -31,18 +31,18 @@ Present onboarding preference choices one at a time in the client’s native sin
 
 ## Adapt project documents
 
-Adapt pinned Toolkit templates to project facts; they authorize neither prompt execution nor a default stack. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames.
+Adapt the local shapes below to project facts; they authorize neither prompt execution nor a default stack. During setup/update, reconcile them with the Toolkit revision already resolved for that operation; do not silently ignore a material source change. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Read only shapes needed for authorized additions or repairs. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames. Replace author notes and placeholders with verified facts or explicit unresolved decisions; never copy package-relative links unchanged into another project.
 
 | Responsibility | Adaptation |
 | --- | --- |
-| Product (`PRODUCT.md`) | Objective, scope, flows and acceptance criteria in the canonical product document or overview; unknown decisions stay explicit. |
-| Overview (`README.md`) | Preserve introduction/commands; link canonical documents. |
-| Shared instructions (`AGENTS.md`) | Preserve custom and ancestor/directory rules, commands and nested ownership; [author an explicit policy entry point](#author-the-policy-entry-point). |
-| Client instructions (`CLAUDE.md`) | Supported shared-rule loading and existing customizations for selected clients; explain why an unselected client's file is unnecessary. |
-| Architecture | Observed code, boundaries, dependencies and data decisions in the established file, preserving capitalization. |
-| Design and accessibility | Relevant interface guidance, or a reason when no interface exists. |
-| Local preparation | Actual prerequisites and first-run/check commands in the contributor guide or equivalent; invent no package manager, service or database. |
-| Quality | Accepted checks, applicable review/security procedures and known baseline limits in their existing owner. |
+| Product (`PRODUCT.md`) | [Product shape](../../../templates/project/product.md), in the canonical product document or overview. |
+| Overview (`README.md`) | [Overview shape](../../../templates/project/overview.md), preserving useful introduction/commands. |
+| Shared instructions (`AGENTS.md`) | [Shared-instruction shape](../../../templates/project/shared-instructions.md); [author an explicit policy entry point](#author-the-policy-entry-point). |
+| Client instructions (`CLAUDE.md`) | [Client bridge shape](../../../templates/project/claude-instructions.md) for a selected client; record why it is unnecessary otherwise. |
+| Architecture | [Architecture shape](../../../templates/project/architecture.md), preserving the established filename and capitalization. |
+| Design and accessibility | [Design shape](../../../templates/project/design.md) when an interface exists; record a reason otherwise. |
+| Local preparation | [Preparation shape](../../../templates/project/local-preparation.md) in the contributor guide or equivalent. |
+| Quality | [Quality shape](../../../templates/project/quality.md) in its existing owner. |
 | Setup and evidence | The [setup record](../../../templates/setup-record.md) or an equivalent. |
 
 Preserve user-owned sections, selected clients, filenames, commands and stack; replace only authorized content. Missing information or access stays unresolved, not inapplicable. Document mapping, complete component-catalog assessment and relevant-file inspection remain distinct.
@@ -70,26 +70,7 @@ require reconciliation, not selection of the newest cache directory, a developme
 checkout or an upstream prompt. Preserve active-task pins and use the existing
 update/recovery procedure before changing references that affect them.
 
-Adapt this starting section to the project's actual instruction owner:
-
-```markdown
-## Start here
-
-1. Before substantive work, locate the accepted installed `vibe-workflow` package
-   through this client's startup pointers or installed workflow skill location.
-   Read its `policies/00-index.md` unless its complete, current text is already in
-   context. Follow its load triggers to read applicable full contracts and their
-   triggered procedures before acting. Resolve an unreadable direct policy link
-   through those same local pointers; do not fetch upstream prompts.
-2. Read applicable directory instructions. Reassess triggers when scope changes
-   and before implementation, delegation, completion or merge. On resume or
-   context loss, restore missing instructions and verify actual project state.
-3. Resolve missing, conflicting or truncated instructions before dependent work;
-   continue independent authorized work. Preserve instruction precedence and task pins.
-
-Hooks supplement this guidance; their presence or silence proves neither compliance
-nor readiness. Ordinary work needs no managed runtime; preserve selected controls.
-```
+Adapt the [template's starting section](../../../templates/project/shared-instructions.md#start-here) to the project's actual instruction owner.
 
 Keep the policy index's trigger table authoritative. Add only useful project
 navigation: actual commands, canonical product/architecture documents, conditional
