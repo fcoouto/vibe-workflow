@@ -21,11 +21,6 @@ from tests.test_opencode_launcher import FakeHost
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/openrouter_workers.py'
 READ_ONLY = ('read', 'glob', 'grep')
-# BLOCKER (C3-3 follow-up): the OpenCode adapter's name pattern refuses `/`, so OpenCode accounting cannot normalize a
-# message on an OpenRouter model (`vendor/model`) and the launch stays `uncertain`
-# (test_an_openrouter_model_id_is_not_yet_accountable). Tests of what happens after accounting simulate the adapter
-# fix: the fake server reports the message's model id without the slash.
-ACCOUNTABLE = dict(message_model=dict(providerID='openrouter', id='vendor-model', variant='low'))
 
 
 class TextHost(FakeHost):
@@ -84,14 +79,16 @@ class ManagedWorkerCase(ManagedRouting, unittest.TestCase):
                                          class_name='investigation', coordinator=brief['coordinator_chat_id'],
                                          reviewer='native-reviewer', integration_available=True))
 
-    def serve(self, **knobs):
-        """Every managed launch gets a fake OpenCode server in the run's private workspace copy."""
+    def serve(self, carry=lambda options: options, **knobs):
+        """Every managed launch gets a fake OpenCode server in the run's private workspace copy, carrying the launch
+        options it was started with (`carry` changes what it carries)."""
         shim = command.Service(self.stores['settings'], self.stores['ledger'], serving=True)
         self.addCleanup(shim.close)
 
         @contextmanager
-        def server(run, executable, auth_data, service):
+        def server(run, executable, auth_data, service, options):
             host = TextHost(shim, str(Path(run) / 'workspace'), [], **knobs)
+            host.options = carry(options)
             self.hosts.append(host)
             yield host
         self.enterContext(patch.object(self.api, '_server', server))
@@ -107,7 +104,9 @@ class ManagedWorkerCase(ManagedRouting, unittest.TestCase):
         return json.loads((run / 'routing.json').read_text())['state']
 
     def files(self):
-        return b''.join(path.read_bytes() for path in self.root.rglob('*') if path.is_file())
+        """Every file under the test's folder and the worker runs (`worker_root`, in the scope's own state folder)."""
+        folders = [self.root] + [folder for folder in (self.runs,) if self.root not in folder.parents]
+        return b''.join(path.read_bytes() for folder in folders for path in folder.rglob('*') if path.is_file())
 
 
 class ManagedPrepareTests(ManagedWorkerCase):
@@ -190,6 +189,45 @@ class ManagedPrepareTests(ManagedWorkerCase):
         self.assertEqual(self.holds(), {'admitted': 1})  # the new run's hold only
         self.assertTrue((run / 'brief.json').exists())
 
+    def test_a_prepared_run_never_executed_is_released_after_the_admission_ttl(self):
+        """F4 item 4: before, recovery skipped every `prepared` run, so its admitted hold was kept for good."""
+        from runtime import openrouter_worker_routing as state, routing
+        self.manage()
+        events = self.recorded()
+        first = self.api.prepare(self.runs, self.brief())
+        attempt = json.loads((first / 'brief.json').read_text())['routing']['attempt_id']
+        self.api.prepare(self.runs, self.brief('pilot-2'))  # within the TTL: kept
+        self.assertEqual((state.state(first), self.holds()), ('admitted', {'admitted': 2}))
+        path = first / state.ROUTING
+        path.write_text(json.dumps(dict(json.loads(path.read_text()),
+                                        admitted_at=json.loads(path.read_text())['admitted_at'] - routing.ADMISSION_TTL - 1)))
+        self.api.prepare(self.runs, self.brief('pilot-3'))
+        self.assertIn((attempt, 'not_dispatched'), [(event['attempt_id'], event['kind']) for event, _ in events])
+        self.assertEqual((state.state(first), self.holds()), ('settled', {'admitted': 2}))  # pilot-2 and pilot-3
+        result = json.loads((first / 'result.json').read_text())
+        self.assertEqual((result['state'], result['failure'], result['native_fallback_ready']),
+                         ('failed', dict(category='integration', reason='admission_expired'), True))
+        with self.assertRaisesRegex(ValueError, 'already_started'):  # never sent afterwards
+            self.execute(first)
+
+    def test_a_stale_run_whose_mark_fails_never_stops_another_run(self):
+        """Review NIT 2: a failing expiry mark on one stale run neither aborts an unrelated `prepare` nor makes the
+        current `execute` unresolved."""
+        from runtime import openrouter_worker_routing as state, routing
+        self.manage()
+        self.qualified()
+        self.serve(cost=0.000002)
+        stale = self.api.prepare(self.runs, self.brief())
+        current = self.api.prepare(self.runs, self.brief('pilot-2'))
+        path = stale / state.ROUTING
+        recorded = json.loads(path.read_text())
+        path.write_text(json.dumps(dict(recorded, admitted_at=recorded['admitted_at'] - routing.ADMISSION_TTL - 1)))
+        (stale / 'brief.json').unlink()  # the mark cannot be written
+        self.assertEqual(self.execute(current)['state'], 'awaiting_verification')
+        self.assertEqual(json.loads(path.read_text())['reason'], 'expiry_mark_failed')
+        self.assertEqual((state.state(stale), self.holds()), ('settled', {}))
+        self.assertTrue((self.api.prepare(self.runs, self.brief('pilot-3')) / 'brief.json').exists())
+
     def test_the_cli_prints_routings_fixed_refusal_reason(self):
         import contextlib
         import io
@@ -232,7 +270,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_the_read_only_profile_is_kept(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002, **ACCOUNTABLE)
+        self.serve(cost=0.000002)
         run = self.api.prepare(self.runs, self.brief())
         result = self.execute(run)
         self.assertEqual(result['state'], 'awaiting_verification', result)
@@ -268,7 +306,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
                                               'edit'), 'deny')
         self.assertEqual(launcher.rule_effect(launcher.WORKER_RULES, 'edit'), 'allow')  # never the worker's
         self.qualified()
-        self.serve(cost=0.000002, **ACCOUNTABLE)
+        self.serve(cost=0.000002)
         run = self.api.prepare(self.runs, self.brief('pilot-2'))
         self.assertEqual(self.execute(run)['state'], 'awaiting_verification')
         self.assertNotEqual(self.hosts[-1].created['permissions'], launcher.WORKER_RULES)
@@ -324,7 +362,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_a_reported_cost_is_charged_the_full_reservation(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002, **ACCOUNTABLE)
+        self.serve(cost=0.000002)
         calls, events = self.admissions(), self.recorded()
         self.execute(self.api.prepare(self.runs, self.brief()))
         [(_, answer)] = [item for item in events if item[0]['kind'] == 'complete']
@@ -338,7 +376,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_a_missing_cost_leaves_the_cost_unknown(self):
         self.manage()
         self.qualified()
-        self.serve(**ACCOUNTABLE)  # tokens with a zero cost: OpenCode's figure is no evidence
+        self.serve()  # tokens with a zero cost: OpenCode's figure is no evidence
         events = self.recorded()
         run = self.api.prepare(self.runs, self.brief())
         self.execute(run)
@@ -352,7 +390,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_the_token_never_appears_in_output_or_files(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002, **ACCOUNTABLE)
+        self.serve(cost=0.000002)
         run = self.api.prepare(self.runs, self.brief())
         result = self.execute(run)
         self.assertEqual(result['state'], 'awaiting_verification')
@@ -360,19 +398,76 @@ class ManagedExecuteTests(ManagedWorkerCase):
         self.assertEqual(len(tokens), 1)
         token = tokens.pop()
         self.assertNotIn(token, json.dumps(result))
+        self.assertTrue(any(path.is_file() for path in run.rglob('*')))  # the run folder itself is scanned
         self.assertNotIn(token.encode(), self.files())
 
-    def test_an_openrouter_model_id_is_not_yet_accountable_so_the_launch_stays_uncertain(self):
-        """Today's fail-closed behaviour until the adapter accepts `vendor/model`: the launch is unconfirmed, the hold
-        stays `uncertain` with its whole exposure for the operator's `reconcile_uncertain`, and nothing is returned."""
+    def test_the_endpoint_pin_output_cap_and_steps_reach_the_server(self):
+        """F4 item 2: the V1 configuration's pin, cap and steps are the launch options the server is started with."""
         self.manage()
         self.qualified()
         self.serve(cost=0.000002)
         run = self.api.prepare(self.runs, self.brief())
+        self.assertEqual(self.execute(run)['state'], 'awaiting_verification')
+        self.assertEqual(self.hosts[0].options, dict(provider='openrouter', model='vendor/model', endpoint='provider',
+                                                     max_output_tokens=2048, steps=3))
+        config = launcher.server_config('/s/settings.json', '/l/l.sqlite3', '/p', options=self.hosts[0].options)
+        self.assertEqual(config['providers']['openrouter']['models']['vendor/model']['body'],
+                         dict(provider=dict(only=['provider'], allow_fallbacks=False), max_tokens=2048))
+        self.assertEqual(config['agents'], dict(build=dict(steps=3)))
+
+    def test_a_server_without_the_options_is_refused_and_closes_the_hold(self):
+        self.manage()
+        self.qualified()
+        for number, carry in enumerate((lambda options: None, lambda options: dict(options, steps=8))):
+            with self.subTest(number=number):
+                self.serve(carry=carry)
+                run = self.api.prepare(self.runs, self.brief('pilot-%d' % number))
+                result = self.execute(run)
+                self.assertEqual((result['state'], result['failure']['reason']),
+                                 ('failed', 'launch_options_unexpressible'))
+                self.assertFalse(hasattr(self.hosts[-1], 'created'))
+                self.assertEqual((self.routing_state(run), self.holds()), ('settled', {}))
+
+    def test_options_that_cannot_be_expressed_start_no_server(self):
+        self.manage()
+        self.qualified()
+        self.serve()
+        run = self.api.prepare(self.runs, self.brief())  # three steps
+        with patch.object(launcher, 'MAX_STEPS', 2):
+            result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', 'launch_options_unexpressible'))
+        self.assertEqual((self.hosts, self.routing_state(run), self.holds()), ([], 'settled', {}))
+
+    def test_the_real_server_seam_starts_opencode_with_the_options(self):
+        self.manage()
+        self.qualified()
+        seen = []
+
+        def start(*args, **kwargs):
+            seen.append(kwargs.get('options'))
+            raise launcher.ServerUnavailable('server_not_started')
+        run = self.api.prepare(self.runs, self.brief())
+        with patch.object(launcher, 'start_server', start):
+            result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', 'server_unavailable'))
+        self.assertEqual(seen, [dict(provider='openrouter', model='vendor/model', endpoint='provider',
+                                     max_output_tokens=2048, steps=3)])
+        self.assertEqual(self.holds(), {})
+
+    def test_an_openrouter_model_id_is_accounted_and_settles(self):
+        """F4 item 1: the adapter accepts `vendor/model`, so the message on the admitted OpenRouter id is accounted and
+        the hold settles `complete` (before, the launch stayed `uncertain` with `launch_unconfirmed`)."""
+        self.manage()
+        self.qualified()
+        self.serve(cost=0.000002, message_model=dict(providerID='openrouter', id='vendor/model', variant='low'))
+        events = self.recorded()
+        run = self.api.prepare(self.runs, self.brief())
         result = self.execute(run)
-        self.assertEqual((result['state'], result['failure']['reason']), ('unresolved', 'launch_unconfirmed'))
-        self.assertEqual(result['routing']['recovery'], 'reconcile_uncertain')
-        self.assertEqual((result['response'], self.routing_state(run), self.holds()), ('', 'uncertain', {'uncertain': 1}))
+        self.assertEqual((result['state'], result['failure']), ('awaiting_verification', None), result)
+        [(event, answer)] = [item for item in events if item[0]['kind'] == 'complete']
+        self.assertEqual([request['model'] for request in event['usage']['requests']], ['vendor/model'])
+        self.assertEqual(answer['outcome'], 'complete')
+        self.assertEqual((self.routing_state(run), self.holds()), ('settled', {}))
 
     def test_a_kill_after_the_routing_dispatch_is_recovered_keeping_the_exposure(self):
         self.manage()

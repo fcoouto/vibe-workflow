@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -83,10 +84,12 @@ class LightweightTests(unittest.TestCase):
                               timeout=60)
         self.assertEqual((done.returncode, done.stdout.strip()), (0, 'False'), done.stderr)
 
-    def test_the_window_constants_equal_the_host_paths(self):
-        """routing_observations is the single source for routing; the launcher's copies must not drift."""
-        self.assertEqual(collector.WINDOW_UNITS, opencode_launcher.WINDOW_UNITS)
-        self.assertEqual(collector.RATE_WINDOWS, opencode_launcher.RATE_WINDOWS)
+    def test_the_launcher_re_exports_the_single_window_source(self):
+        """routing_observations is the single source; the launcher re-exports it and defines no copy."""
+        self.assertIs(opencode_launcher.RATE_WINDOWS, collector.RATE_WINDOWS)
+        self.assertIs(opencode_launcher.WINDOW_UNITS, collector.WINDOW_UNITS)
+        source = Path(opencode_launcher.__file__).read_text()
+        self.assertIsNone(re.search(r"^(RATE_WINDOWS|WINDOW_UNITS) = (?!routing_observations\.)", source, re.M))
 
 
 class ContractTests(SeedBase):

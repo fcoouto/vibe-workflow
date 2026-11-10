@@ -65,7 +65,10 @@ const CREDENTIAL_ENV = new RegExp("(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWOR
   + "|COOKIE|PRIVATE|JWT|PAT|OAUTH|CREDS|ACCESSKEY|SECRETKEY|DSN|CONNECTION_STRING"
   + "|(?:DATABASE|DB|REDIS|MONGO|MONGODB|POSTGRES|POSTGRESQL|PG|MYSQL|AMQP|RABBITMQ)_UR[LI])(?:_|$)"
   + "|(?:PASSWORD|PASSWD)$|_PWD$", "i")
-const SPAWN_MODEL = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/
+// A model id: one NAME, or an OpenRouter `vendor/model` (exactly one `/` between two NAME-charset parts), 128
+// characters at most in all. Mirrors the adapter's MODEL_ID and SPAWN_MODEL (parity cases in tests/test_opencode_plugin.py).
+const MODEL_ID = /^(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9._:@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:@+-]*)?$/
+const SPAWN_MODEL = /^([A-Za-z0-9][A-Za-z0-9._-]{0,127})\/((?=[A-Za-z0-9._:@+\/-]{1,128}(?:#|$))[A-Za-z0-9][A-Za-z0-9._:@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:@+-]*)?)(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?$/
 const REASON = /^[a-z][a-z0-9_]{0,63}$/
 const AUTHORITY = /^[A-Za-z0-9_-]{16,128}$/  // `dispatch` issues 43 URL-safe characters
 // Exactly the shape of `runtime.routing.derive_ids`. Assumed (not on record for 2.2.6) that OpenCode's own ids never
@@ -144,7 +147,7 @@ export function harnessFor(provider: string): string {
 export function routeFacts(model: unknown): Facts | null {
   if (model === null || typeof model !== "object" || Array.isArray(model)) return null
   const { providerID, id, variant } = model as Record<string, unknown>
-  if (!text(providerID, NAME) || !text(id, NAME) || (variant != null && !text(variant, NAME))) return null
+  if (!text(providerID, NAME) || !text(id, MODEL_ID) || (variant != null && !text(variant, NAME))) return null
   const provider = providerID as string
   return { provider, model: id as string, variant: (variant as string | undefined) ?? null, harness: harnessFor(provider) }
 }
