@@ -371,6 +371,125 @@ class ManagedReview(ManagedDelegation):
         self.assertEqual(kwargs['workflow']['locator']['job_id'], 'review')
 
 
+
+class ReviewS1DoubleLaunch(ManagedDelegation):
+    """PR #217 review S1: an assignment committed while the project was unmanaged never gets a second permit."""
+
+    def activate(self, settings):
+        with closing(command.Service(settings, Path(settings).parent / 'ledger.sqlite3', one_shot=True)) as service:
+            revision = service.handle(json.dumps(dict(v=1, op='status')).encode())['settings_revision'] or 0
+            return service.handle(json.dumps(dict(v=1, op='set', expected_revision=revision, change=dict(
+                managed_projects=[str(self.repo)]))).encode())
+
+    def test_a_replay_after_the_project_became_managed_gets_no_second_permit(self):
+        request = self.prepare_request()
+        first = self.api.prepare_assignment(self.scope, request)
+        self.assertTrue(first['launch_admitted'])
+        with self.managed(NATIVE), features.counted_admissions() as admit:
+            replay = self.api.prepare_assignment(self.scope, request)
+        self.assertFalse(replay['launch_admitted'])
+        self.assertEqual(replay['routing'], dict(state='blocked', reason='legacy_route_retired'))
+        self.assertEqual(admit.count, 0)
+
+    def test_a_project_managed_during_prepare_gets_no_second_permit(self):
+        request = self.inherit_request()  # inherit carries no pre-managed marker
+        with self.managed(NATIVE):
+            real, reads = delegation_routing.managed, []
+
+            def managed(scope):  # the project becomes managed after the call's one read, before the reservation
+                reads.append(scope)
+                return False if len(reads) == 1 else real(scope)
+            with mock.patch.object(delegation_routing, 'managed', managed):
+                first = self.api.prepare_assignment(self.scope, request)
+            self.assertFalse(first['launch_admitted'])
+            self.assertEqual(first['routing'], dict(state='blocked', reason='managed_during_prepare'))
+            self.assertEqual(self.raw_assignment(first['attempt_id'])['status'], 'settled')
+            replay = self.api.prepare_assignment(self.scope, request)
+        self.assertFalse(replay['launch_admitted'])
+        self.assertEqual(self.raw_assignment(first['attempt_id'])['result'], dict(outcome='cancelled'))
+
+    def test_activation_is_refused_with_an_open_unrouted_assignment_and_allowed_after_reconcile(self):
+        settings = Path(tempfile.mkdtemp()).resolve() / 'routing' / 'settings.json'
+        self.addCleanup(shutil.rmtree, settings.parents[1])
+        prepared = self.prepare(**self.inherit_request())
+        self.assertTrue(prepared['launch_admitted'])
+        with mock.patch.object(command, 'activation_gate', return_value=[]), \
+                mock.patch.object(delegation_routing, '_scope_for', return_value=self.scope):
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [prepared['attempt_id']])
+            refused = self.activate(settings)
+            self.assertEqual((refused['state'], refused['reason']), ('blocked', 'open_unrouted_assignments'))
+            self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(prepared, outcome='cancelled'))
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])
+            allowed = self.activate(settings)
+        self.assertEqual(allowed['state'], 'updated', allowed)
+        self.assertEqual(allowed['settings']['managed_projects'], [str(Path(self.repo).resolve())])
+
+    def test_open_unrouted_assignments_fails_closed(self):
+        from runtime.startup import RuntimeScopeError
+        with mock.patch.object(delegation_routing, '_scope_for', side_effect=RuntimeScopeError('qualification')):
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), ['scope_unavailable'])
+        with mock.patch.object(delegation_routing, '_scope_for', return_value=None):  # not enrolled: no native state
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])
+
+
+class ReviewS2Guards(ManagedDelegation):
+    """PR #217 review S2: the guards that keep a launched assignment from being routed or released again."""
+
+    def test_an_observed_assignment_is_never_routed_again(self):
+        request = self.prepare_request()
+        with self.managed(NATIVE):
+            prepared = self.api.prepare_assignment(self.scope, request)
+            self.observe_worker(prepared)
+            with features.counted_admissions() as admit:
+                replay = self.api.prepare_assignment(self.scope, request)
+        self.assertEqual(admit.count, 0)
+        self.assertFalse(replay['launch_admitted'])
+        self.assertNotIn('routing', replay)
+
+    def test_a_consumed_workstream_dispatch_is_never_routed_again(self):
+        from runtime import workstreams
+        current = workstreams.control(self.scope, 'status', dict(client='codex'))
+        enabled = workstreams.control(self.scope, 'enable', dict(client='codex', expected_revision=current['revision']))
+        limits = dict(context_id='WS42.01', rationale='One bounded outcome', output_tokens=12000, context_tokens=64000,
+                      max_steps=40, max_seconds=1200, max_continuations=3, backoff_seconds=0)
+        request = self.prepare_request(workstream_revision=enabled['revision'], workstream_limits=limits)
+        with self.managed(NATIVE):
+            prepared = self.api.prepare_assignment(self.scope, request)
+            workstreams.consume_dispatch(self.scope, self.request(attempt_id=prepared['attempt_id'],
+                                                                  workstream_revision=enabled['revision']))
+            with features.counted_admissions() as admit, \
+                    mock.patch.object(delegation_routing, '_hold', side_effect=AssertionError('routed again')):
+                replay = self.api.prepare_assignment(self.scope, request)
+        self.assertEqual(admit.count, 0)
+        self.assertFalse(replay['dispatch_prepared'])
+        self.assertNotIn('routing', replay)
+
+    def test_release_refuses_a_dispatched_attempt(self):
+        request = self.prepare_request()
+        with self.managed(NATIVE):
+            prepared = self.api.prepare_assignment(self.scope, request)
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
+            with self.assertRaisesRegex(state.StateError, 'dispatched routing attempt'):
+                delegation_routing.release(self.scope, request, prepared['attempt_id'], 'catalog_mismatch')
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
+        self.assertEqual(self.raw_assignment(prepared['attempt_id'])['status'], 'prepared')
+
+
+class ReviewS3Unmanaged(ManagedDelegation):
+    """PR #217 review S3: holds close by the record's routing admission, not by the current managed state."""
+
+    def test_unmanaging_after_prepare_still_closes_the_hold_at_settlement(self):
+        with self.managed(NATIVE):
+            prepared = self.prepare()
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
+            from runtime import routing_settings
+            with mock.patch.object(routing_settings, 'managed_project', lambda *args, **kwargs: False):
+                settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
+                    prepared, outcome='cancelled'))
+            self.assertEqual(settled['routing']['closed'], [dict(attempt_id=prepared['attempt_id'], kind='complete',
+                                                                 state='recorded')])
+            self.assertEqual(self.hold(prepared['attempt_id']), 'released')
+
 class SelfCheck(unittest.TestCase):
     def test_managed_self_check_passes_in_a_sandbox(self):
         workdir = Path(tempfile.mkdtemp()).resolve() / 'check'
