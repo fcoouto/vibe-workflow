@@ -71,7 +71,12 @@ CREDENTIAL_ENV = re.compile(r"(?:^|_)(?:API_?KEY|KEY|TOKEN|SECRETS?|PASSWORD|PAS
                             r"|(?:PASSWORD|PASSWD)$|_PWD$", re.IGNORECASE)
 CAMEL_CASE = re.compile(r"([a-z0-9])([A-Z])")
 ORIGIN = re.compile(r"(https?)://(?:[^/?#@\s]*@)?([A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])(?::(\d{1,5}))?(?:[/?#]|$)")
-SPAWN_MODEL = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/([A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}?)"
+# A model id: one NAME, or an OpenRouter `vendor/model` (exactly one `/` between two NAME-charset parts), 128
+# characters at most in all. Mirrored by the shim's MODEL_ID; parity cases in tests/test_opencode_plugin.py.
+_MODEL_PART = r"[A-Za-z0-9][A-Za-z0-9._:@+-]*"
+MODEL_ID = re.compile(rf"(?=.{{1,128}}\Z){_MODEL_PART}(?:/{_MODEL_PART})?")
+SPAWN_MODEL = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]{0,127})/"
+                         rf"((?=[A-Za-z0-9._:@+/-]{{1,128}}(?:#|\Z)){_MODEL_PART}(?:/{_MODEL_PART})?)"
                          r"(?:#([A-Za-z0-9][A-Za-z0-9._-]{0,63}))?")
 # Best effort only: commands inside the shell cannot be enforced (capability matrix).
 LAUNCH_MARKERS = re.compile(r"(?<![A-Za-z0-9_.-])(opencode|claude|codex|curl|wget)(?![A-Za-z0-9_-])"
@@ -174,7 +179,7 @@ def _model(value, families):
         return None, None
     model = _object(value, "invalid model")
     requested = {"provider_id": _text(model, "providerID", reason="invalid model"),
-                 "model_alias": _text(model, "id", reason="invalid model"),
+                 "model_alias": _text(model, "id", MODEL_ID, reason="invalid model"),
                  "variant": _text(model, "variant", reason="invalid model")}
     if requested["provider_id"] is None or requested["model_alias"] is None:
         raise AdapterError("invalid model")
