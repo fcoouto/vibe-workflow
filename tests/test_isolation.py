@@ -346,5 +346,34 @@ class StateNamedTreeTests(unittest.TestCase):
                 self.assertIn('path(s) left in the temporary HOME', err)
 
 
+class PackageSiblingTests(unittest.TestCase):
+    def test_package_parent_listing_is_frozen_and_other_listings_stay_live(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            (parent / 'checkout' / 'child').mkdir(parents=True)
+            charged = []
+
+            def listing(path, budget):
+                charged.append(path)
+                return list(Path(path).iterdir())
+            module = types.SimpleNamespace(_children=listing)
+            tests.freeze_package_siblings(module, parent=str(parent))
+            names = lambda path: sorted(e.name for e in module._children(path, {}) if e.is_dir())  # noqa: E731
+            self.assertEqual(names(parent), ['checkout'])
+            (parent / 'other-worktree').mkdir()
+            self.assertEqual(names(parent), ['checkout'])
+            (parent / 'checkout' / 'second').mkdir()
+            self.assertEqual(names(parent / 'checkout'), ['child', 'second'])
+            self.assertEqual(len(charged), 3)
+
+    def test_setup_observation_is_frozen_only_when_imported(self):
+        code = ("import sys, tests\nloaded = 'runtime.setup_observation' in sys.modules\n"
+                "from runtime import setup_observation\n"
+                "print(loaded, setup_observation._children.__qualname__)")
+        status, out, err = run(code)
+        self.assertEqual(status, 0, err)
+        self.assertEqual(out.split(), ['False', 'freeze_package_siblings.<locals>.children'])
+
+
 if __name__ == '__main__':
     unittest.main()
