@@ -9,13 +9,21 @@ after delegation's own reservation commits, bound to the planned job (`workflow`
 - A committed assignment whose routing answer is pending or blocked is not launched (`launch_admitted: false`). A
   replay of the same request re-runs `prepare` (idempotent by attempt id) and grants the one launch permit only on
   the call that obtains the admission. A catalog or host mismatch releases it through `reconcile_assignment`.
+- `release()` records routing `not_dispatched` before it calls `reconcile_assignment`. If that reconcile fails, the
+  assignment stays `prepared` with no launch permit until the coordinator reconciles it (fail closed).
 - Codex native subagents are an advisory host: `dispatch` runs at the last pre-spawn step, and its token is dropped
-  unread; the coordinator spawns with the returned route. Reconciliation closes the routing hold.
+  unread; the coordinator spawns with the returned route. Reconciliation closes the routing holds of every record
+  that has a routing admission, whether or not the project is still managed.
+- One permit per assignment across the managed boundary (PR #217 review S1): each call reads `managed` once; a
+  project that became managed during the call releases the fresh assignment with no permit; a replay of an
+  assignment committed before the project was managed is refused; and `set managed_projects` refuses to add a
+  project while `open_unrouted_assignments` lists any prepared, unobserved native assignment.
 
 Design: docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md. Nothing here calls a model, the network,
 a secret store, an operator op or `set managed_projects`, and no request field selects a scope or observations.
 """
 from contextlib import closing
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -30,6 +38,11 @@ ROLES = dict(worker='implementer', review='reviewer')
 MODES = ('explicit', 'inherit', 'routed')
 REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
 PROOF_REF = 'delegation_routing:never-dispatched'
+PRE_MANAGED = 'legacy_route_retired'  # a replay of an assignment committed before the project was managed
+RACED = 'managed_during_prepare'
+MAX_OPEN = 64
+# The one `managed` answer of the current `prepare` call, passed down to the `_discovery` and binding hooks.
+_MANAGED = ContextVar('delegation_routing_managed', default=None)
 LIMITATION = 'Codex native subagents are an advisory host: routing chooses and accounts but cannot block a send'
 
 
@@ -39,20 +52,26 @@ def _command():
 
 
 def managed(scope):
-    """Whether this checkout is a managed project in the default routing settings (fails closed when unreadable)."""
+    """Whether this checkout is a managed project in the default routing settings. Fails closed: a corrupt routing
+    `settings.json` counts as managed (C3-0b), and native delegation then blocks with `settings_unavailable`."""
     return routing_launch.managed(scope.repository_root, _command().default_settings())
+
+
+def _managed_now(scope):
+    found = _MANAGED.get()
+    return managed(scope) if found is None else found
 
 
 # -- line-neutral hooks in runtime/delegation.py -------------------------------------------------------------------
 def routed(scope, selection):
     """`_discovery`: a managed project's `routed` selection names no model or effort yet; routing chooses them."""
-    return type(selection) is dict and selection.get('mode') == 'routed' and managed(scope)
+    return type(selection) is dict and selection.get('mode') == 'routed' and _managed_now(scope)
 
 
 def records_model(scope, selection):
     """`binding.requested_model`: only an unmanaged explicit selection records its model. In a managed project the
     routing admission is the only record of the requested model (`admitted_route`)."""
-    return selection['mode'] == 'explicit' and not managed(scope)
+    return selection['mode'] == 'explicit' and not _managed_now(scope)
 
 
 def _call(service, request):
@@ -171,10 +190,21 @@ def _committed(scope, attempt_id):
 
 def prepare(scope, request, role, inner):
     """`prepare_assignment` / `prepare_review`: delegation's reservation, then routing in a managed project."""
-    if not managed(scope):
-        return inner(scope, request, role=role)
-    reply = inner(scope, request, role=role)
+    current = managed(scope)  # read once per call (review S1a); the hooks inside `inner` see the same answer
+    token = _MANAGED.set(current)
+    try:
+        reply = inner(scope, request, role=role)
+    finally:
+        _MANAGED.reset(token)
     workstream = 'dispatch_prepared' in reply
+    if not current:
+        if reply['replayed'] or reply['status'] != 'prepared' or not managed(scope):
+            return reply  # unmanaged: today's behaviour, unchanged
+        reply = dict(reply, launch_admitted=False, routing=dict(state='blocked', reason=RACED))
+        if workstream:
+            reply['dispatch_prepared'] = False
+        reply['release'] = release(scope, request, reply['attempt_id'], RACED)  # this call handed out no permit
+        return reply
     if reply['status'] != 'prepared':
         return reply
     reply = dict(reply, launch_admitted=False, limitations=[*reply['limitations'], LIMITATION])
@@ -184,6 +214,8 @@ def prepare(scope, request, role, inner):
     record = _committed(scope, attempt)
     if record['data']['observation'] is not None or 'workstream_dispatch' in record['data']:
         return reply  # already launched or consumed: a replay never grants a second permit
+    if reply['replayed'] and record['data']['binding']['requested_model'] is not None:
+        return dict(reply, routing=dict(state='blocked', reason=PRE_MANAGED))  # committed unmanaged: reconcile first
     selection = record['body']['request']['selection']
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         constraints = None
@@ -286,15 +318,17 @@ def _require_unlaunched(service, attempt_id):
 def settled(scope, record, reply):
     """`reconcile_assignment`: close the routing holds of a settled managed assignment and its continuations. A
     dispatched hold records `complete` (the coordinator never spawned, or the child finished); an admitted one
-    records `not_dispatched`. Unmanaged projects and non-native roles are unchanged."""
-    if record['data']['role'] not in ROLES or not managed(scope):
+    records `not_dispatched`. It goes by the record's routing holds, not by whether the project is still managed
+    (review S3); a record with no routing hold, and so every unmanaged one, gets today's reply unchanged."""
+    if record['data']['role'] not in ROLES:
         return reply
     closed = []
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         try:
             holds = _holds(service).get('holds', {})
         except state.StateError:  # the assignment is settled; its holds close at the next reconcile or by the operator
-            return dict(reply, routing=dict(state='unavailable', reason='ledger_unavailable'))
+            return dict(reply, routing=dict(state='unavailable', reason='ledger_unavailable')) if managed(scope) \
+                else reply
         for attempt, hold in sorted(holds.items()):
             if hold['closed'] or not (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
                 continue
@@ -304,6 +338,36 @@ def settled(scope, record, reply):
                 answer = _record(service, attempt, kind, '%s:%s' % (kind, attempt))
                 closed.append(dict(attempt_id=attempt, kind=kind, state=answer.get('state')))
     return dict(reply, routing=dict(closed=closed)) if closed else reply
+
+
+def _scope_for(checkout):
+    """The checkout's enrolled delegation scope through the workflow entry path, or None when it has no runtime."""
+    from runtime import routing_gates
+    try:
+        return routing_gates._resolve_scope(dict(client='codex', cwd=str(Path(checkout).resolve())))
+    except LookupError:  # not enrolled, or no runtime state: no native assignment can exist
+        return None
+
+
+def open_unrouted_assignments(checkout):
+    """Activation precondition (review S1c): ids of the checkout's prepared, unobserved native worker and review
+    assignments, which may hold an unmanaged launch permit. Read-only and bounded (MAX_OPEN); fails closed with
+    `['scope_unavailable']` or `['state_unavailable']` when the checkout's state cannot be read."""
+    try:
+        scope = _scope_for(checkout)
+    except Exception:  # noqa: BLE001 - e.g. RuntimeScopeError: unknown state never lets a project become managed
+        return ['scope_unavailable']
+    if scope is None:
+        return []
+    try:
+        with state._database(scope) as db:
+            rows = [] if db is None else db.execute(
+                "select id from assignments where scope_id=? and json_extract(data,'$.status')='prepared' and "
+                "json_extract(data,'$.observation') is null and json_extract(data,'$.role') in ('worker','review') "
+                "order by id limit ?", (state._scope_id(scope), MAX_OPEN)).fetchall()
+    except Exception:  # noqa: BLE001 - sqlite3.Error, StateError
+        return ['state_unavailable']
+    return [row[0] for row in rows]
 
 
 # -- continuations (spec F11) and Workstreams dispatch --------------------------------------------------------------
