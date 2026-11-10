@@ -11,9 +11,9 @@ Hooks supplement these instructions. Their presence or silence does not establis
 
 ## Repository constraints
 
-- Wrap the full Vibe Coding Toolkit; preserve its scope and requirements.
+- Wrap the full Vibe Coding Toolkit; preserve its scope and requirements, except local deviations recorded in [docs/policy-sources.md](docs/policy-sources.md).
 - Use Toolkit as the authoring, setup and update authority. Write complete local runtime contracts; do not copy prompts or require a Toolkit checkout, snapshot or fetch during routine tasks.
-- Keep environment preparation, project enrollment, and routine development distinct.
+- Keep environment preparation, project enrollment, and routine development distinct. Onboarding checks workspace readiness first and hands missing required items to preparation.
 - Make basic onboarding useful without a runtime database or repository-enforcement prerequisite. Ordinary development uses native editing, checks and review; advanced controls acquire their own prerequisites only when selected. Preserve explicitly selected protections and allow configuration recovery when qualification is unavailable.
 - When adding a client adapter, follow the [client interface layout](docs/onboard-my-project-plan.md#client-scope-and-adapter-organization).
 - Preserve the user's permissions, model choices, subscriptions, and customizations.

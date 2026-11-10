@@ -194,11 +194,11 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "b3e7acf87334698e39d5b6d15d810ff0bd2c2d899f7a70f05b8bdc26677aa05a",
+      "sha256": "b2782b65e0787938e8e6217f3f5a214e7e2749d50a33aea76f34d49b9b07304d",
       "ranges": [
         [
           1,
-          15
+          17
         ]
       ]
     },
@@ -469,29 +469,29 @@
       ]
     },
     "policies/09-workflow-maintenance.md": {
-      "sha256": "ecbb2748d3bb88f5da726d925f7b4f62dd1b5af6ec5d8c13eb98c819fec18f1e",
+      "sha256": "40a2b2bfa418112207f3ceafbb8552a0ea30298c94a9312ea8350254bd121909",
       "ranges": [
         [
           1,
-          51
+          53
         ]
       ]
     },
     "policies/10-project-onboarding.md": {
-      "sha256": "4ecd701b405870fe14b4864058ed2dab8a4b10b47b7d9664b32a0671fec1c4f5",
+      "sha256": "db4be84aa0c27702592670b463807f9727ee92502e113045decd5a6ccc6d33b4",
       "ranges": [
         [
           1,
-          52
+          51
         ],
         [
-          53,
-          67
+          52,
+          69
         ]
       ]
     },
     "policies/11-tool-integrations.md": {
-      "sha256": "7f49d8aeaccf32743e82768f54c97528b7bbf701bc1f6b5c7ca87f2734c72f30",
+      "sha256": "653faf3000c4d92939e07012753708eda323e4004e493634d102587ec1943fdd",
       "ranges": [
         [
           1,
@@ -619,7 +619,7 @@
       ]
     },
     "skills/onboard-my-project/SKILL.md": {
-      "sha256": "1f003ca257145beafef3e722e80279665a1001d25fe0bcab5c1618bff0c0a771",
+      "sha256": "965efd07c297c4f3b3f214fbaf9ab2bae6bcb5af61d65c141dea90c6cec7e263",
       "ranges": [
         [
           1,
@@ -637,7 +637,7 @@
       ]
     },
     "skills/onboard-my-project/references/managed-plan.md": {
-      "sha256": "8506fbeddca264aad8300e857568e77adaa2b908ded194311d16f06999f9f472",
+      "sha256": "0d18981493d7fec16e95683cc2304c13855ac0dfefb609b322db054cd6f43240",
       "ranges": [
         [
           1,
@@ -650,19 +650,19 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "7c7bcb7488dcbb434b86f79d8ddf161cde3db88374de3a8ac8509fb373679187",
+      "sha256": "a83b888f11f090adedcf69e69127398b66b89b1b83b1090b76799f53ba4703bf",
       "ranges": [
         [
           1,
-          60
+          33
         ],
         [
-          61,
-          183
+          34,
+          135
         ],
         [
-          184,
-          192
+          136,
+          206
         ]
       ]
     },
@@ -737,16 +737,25 @@
       ]
     },
     "skills/prepare-my-workspace/SKILL.md": {
-      "sha256": "a1eb5a8864d5f33b302dea0ca0cacc237c94e0f7c9a65d0086e78e06eb8a3c05",
+      "sha256": "fe2e384ec7a6fdf03ff1030fce4739fd971f7e78ebdb37270f3b8981a0761942",
       "ranges": [
         [
           1,
-          12
+          18
+        ]
+      ]
+    },
+    "skills/prepare-my-workspace/references/procedure.md": {
+      "sha256": "2d38a143322bb5d4caf5a76f33c6e177a46a97a82782d10d69ccf4e32ead4ecb",
+      "ranges": [
+        [
+          1,
+          41
         ]
       ]
     },
     "skills/prepare-my-workspace/references/upgrade.md": {
-      "sha256": "7f65f0f02a53990183abd915e05e5a2001e5ef519a0c636aaac0406d6a116cec",
+      "sha256": "dada72b7c69a7214d5c394e7acf255792bf81674cae70f342fecfbbf257c2c35",
       "ranges": [
         [
           1,
