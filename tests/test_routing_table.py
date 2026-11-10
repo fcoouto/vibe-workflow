@@ -401,6 +401,23 @@ class PreviousTableTests(Base):
         self.assertEqual(self.rollback('--table', str(other))[0], 0)
         self.assertEqual(other.read_bytes(), old)
 
+    def test_previous_name_keeps_the_table_suffix(self):
+        other = self.root / 'other' / 'table'
+        self.refresh('--table', str(other), now='2026-11-01T00:00:00Z')
+        old = other.read_bytes()
+        self.change_inputs()
+        self.refresh('--table', str(other), now='2026-11-09T00:00:00Z')
+        self.assertEqual(sorted(p.name for p in other.parent.iterdir()), ['table', 'table.previous'])
+        self.assertEqual((other.parent / 'table.previous').read_bytes(), old)
+        self.assertEqual(self.rollback('--table', str(other))[0], 0)
+        self.assertEqual(other.read_bytes(), old)
+
+    def test_rollback_refuses_a_world_readable_previous_version(self):
+        old, new = self.two_versions()
+        self.previous.chmod(0o644)
+        self.assertEqual(self.rollback(), (1, dict(v=1, state='blocked', reason='unsafe_previous_table')))
+        self.assertEqual((self.table.read_bytes(), self.previous.read_bytes()), (new, old))
+
     def test_rollback_without_a_previous_version_is_refused(self):
         self.assertEqual(self.rollback(), (1, dict(v=1, state='blocked', reason='no_previous_table')))
         self.refresh()
@@ -448,11 +465,15 @@ class PreviousTableTests(Base):
     def test_rollback_over_an_unverified_or_missing_table_installs_the_previous_version(self):
         old, _ = self.two_versions()
         self.table.write_text('{"rows": NaN}')
-        self.assertEqual(self.rollback()[1]['state'], 'rolled_back')
+        code, report = self.rollback()
+        self.assertEqual((code, report['state'], report['replaced_version'], report['warnings']),
+                         (0, 'rolled_back', None, ['current_table_unverified_discarded']))
         self.assertEqual(self.table.read_bytes(), old)
         self.assertEqual(self.previous.read_bytes(), old)  # an unverified table is never kept
         self.table.unlink()
-        self.assertEqual(self.rollback()[1]['state'], 'rolled_back')
+        code, report = self.rollback()
+        self.assertEqual((code, report['state'], report['replaced_version']), (0, 'rolled_back', None))
+        self.assertNotIn('warnings', report)  # nothing was discarded
         self.assertEqual(self.table.read_bytes(), old)
 
     def test_interrupted_rollback_never_leaves_no_table(self):

@@ -22,6 +22,7 @@ A refresh that writes a table of a new version first keeps the verified table it
 with `no_previous_table`, `unsafe_previous_table`, `invalid_previous_table` or `unsafe_table_path` and changes
 nothing. It installs the previous version first; if keeping the replaced table then fails, the warning
 `newer_table_not_kept` means the rollback still happened and a refresh recreates the newer table.
+`current_table_unverified_discarded` means the replaced table was unverified, so it was not kept.
 """
 import errno
 import hashlib
@@ -247,11 +248,13 @@ def rollback(table_path):
     if prior is None:
         raise Blocked('invalid_previous_table')
     warnings = _write(path, prior[1])  # the table first: an interruption never leaves no table
-    if current:  # an unverified table is never kept
+    if current:
         try:
             warnings += [item for item in _write(other, current[1]) if item not in warnings]
         except Blocked:
             warnings.append('newer_table_not_kept')
+    elif os.path.lexists(path):  # an unverified table is never kept
+        warnings.append('current_table_unverified_discarded')
     table = prior[0]
     report = dict(v=VERSION, state='rolled_back', version=table['version'], compiled_at=table['compiled_at'],
                   rows=len(table['rows']), replaced_version=current[0].get('version') if current else None)
