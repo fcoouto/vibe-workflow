@@ -173,22 +173,27 @@ MCP_PARSERS = {"codex": ob.codex_mcp, "claude-code": ob.claude_mcp, "opencode": 
 
 
 def check_plugin(context, client, spec):
-    text, reason = ob.listing(context.observer, client, "plugin")
-    if text is None:
-        return _unobserved(reason)
-    entries = PLUGIN_PARSERS[client](text)
+    entries, reason = _plugins(context, client)
     if entries is None:
-        return _unobserved("unrecognized-output")
+        return _unobserved(reason)
     return cell(*ob.plugin_state(entries, spec["names"]))
 
 
 def _plugins(context, client):
-    """`(entries, None)` from the client's plugin listing or `(None, reason)`."""
+    """`(entries, None)` from the client's plugin listing or `(None, reason)`. OpenCode adds the plugins
+    named in its config, which its listing omits for local paths."""
     text, reason = ob.listing(context.observer, client, "plugin")
     if text is None:
         return None, reason
     entries = PLUGIN_PARSERS[client](text)
-    return (entries, None) if entries is not None else (None, "unrecognized-output")
+    if entries is None:
+        return None, "unrecognized-output"
+    if client == "opencode":
+        try:
+            entries = entries + ob.opencode_config_plugins(context.environ)
+        except ValueError:
+            return None, "the client configuration is not readable"
+    return entries, None
 
 
 def check_mcp(context, client, spec):
