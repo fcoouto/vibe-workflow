@@ -296,10 +296,14 @@
       ]
     },
     "clients/startup.md": {
-      "sha256": "72ee66fc3a439f2ec28bcb070958f97ab0464eda7dc9a7486c8236263559296b",
+      "sha256": "4d5678b2d3c1c3ce354a8da36c25db337fbd6b427f011d5e168086b53e2a338d",
       "ranges": [
         [
           1,
+          40
+        ],
+        [
+          41,
           41
         ]
       ]

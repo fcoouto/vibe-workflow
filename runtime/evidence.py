@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 
-from runtime import state
+from runtime import persisted_binding, state
 from runtime.startup import MAX_INPUT, StartupError, AcceptedScope, ProjectScope, RuntimeSettings, json_object, policy_digest, _canonical_freeze, _canonical_plain
 
 VERSION = 1
@@ -1240,7 +1240,7 @@ def _ordinary_peer_census(context,task,budget):
             identity=json_object(row[5])
             _require(row[1]==identity['project_id']==project and row[2:4]==(identity['repository_root'],identity['git_common_dir'])
                 and identity['project_root']==task['accepted_identity']['project_root']
-                and identity['project_binding']==task['accepted_identity']['project_binding']
+                and persisted_binding.matches(task['accepted_identity']['project_binding'],identity['project_binding'])
                 and type(row[4]) is int and row[4]>=0 and row[0]==state._digest([3,project,identity['repository_id'],identity['checkout_id']]),
                 'Ordinary peer checkout identity differs')
             bindings={identity['project_root']:identity['project_binding']}
@@ -1248,7 +1248,7 @@ def _ordinary_peer_census(context,task,budget):
                 (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
             for path,binding in bindings.items():
                 info=observe(path)
-                _require(info is not None and stat.S_ISDIR(info[2]) and dict(device=info[0],inode=info[1])==binding,
+                _require(info is not None and stat.S_ISDIR(info[2]) and persisted_binding.matches(binding,dict(device=info[0],inode=info[1])),
                     'Ordinary peer checkout physical binding changed')
             canonical=observe(Path(identity['project_root'])/PROJECT_FILE)
             _require(canonical is not None and stat.S_ISREG(canonical[2]),'Ordinary peer canonical authority is unavailable')
@@ -1529,7 +1529,7 @@ def _stop_input_files(task,candidate):
     for path in sorted(paths):
         value=_closure_file_stat(path) if os.path.lexists(path) else None
         if path in bindings:
-            _require(value is not None and stat.S_ISDIR(value[2]) and dict(device=value[0],inode=value[1])==bindings[path],
+            _require(value is not None and stat.S_ISDIR(value[2]) and persisted_binding.matches(bindings[path],dict(device=value[0],inode=value[1])),
                 'Accepted Project or primary-root physical binding changed')
         # Ancestor/tool sibling activity is not a candidate change; their identity still binds lookup.
         if value is not None and stat.S_ISDIR(value[2]) and not any(path.is_relative_to(base) for base in (root,git,common,policy,runtime)):
@@ -1633,7 +1633,7 @@ def _closure_facts(context, task_ref, db, recovery, *, recovery_files=None, ordi
     original=task['accepted_identity']
     bindings={original['project_root']:original['project_binding']}
     bindings.update({original[k]:original['bindings'][label] for k,label in (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
-    _require(all(_binding(Path(path))==binding for path,binding in bindings.items()),'Historical checkout physical identity changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in bindings.items()),'Historical checkout physical identity changed')
     facts=dict(version=1,task_ref=task_ref,task=task,certificate=certificate,bindings=bindings,recovery_files=recovery_files or {},
         observed=normalized,physical=physical,ready_files=ready_files,requirements=sorted(requirements,key=_raw),recovery=recovery,
         artifacts=sorted(own_refs,key=_raw),projection=projection,guidance=guidance)
@@ -2065,7 +2065,7 @@ def _check_closure_observation(context, db, task_ref, observations, *, new_compa
         expected['turns']=[row for row in expected['turns'] if tuple(row[:4]) not in removed_turns]
         expected['receipts']=[row for row in expected['receipts'] if tuple(row[:4]) not in removed_turns]
     _require(current==expected,'Closure rows, source heads, generation or metadata changed')
-    _require(all(_binding(Path(path))==binding for path,binding in facts['bindings'].items()),'Closure checkout binding changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in facts['bindings'].items()),'Closure checkout binding changed')
     for item in facts['physical']:
         if item['stat'] is None:
             _require(_historical_inventory(context,db,[item])==[item],'Historical diagnostic absence changed')
@@ -3524,7 +3524,7 @@ class _CapInputControl:
         identity=self.trigger['subject']['identity']
         _require(all(accounting['checkout'][key]==identity[field] for key,field in
             (('root','repository_root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir')))
-            and accounting['checkout']['binding']==identity['bindings'],
+            and persisted_binding.all_match(identity['bindings'],accounting['checkout']['binding']),
             'Cap acquisition selected a different triggering Repository checkout')
         current=canonical_scope_projection(decode_project_record(project),repository_id=identity['repository_id'],
             checkout_id=identity['checkout_id'],client=identity['client'])
@@ -4073,7 +4073,7 @@ def _source_current_permission_files(context,source,subject,*,resources=None,hel
     bindings={identity['project_root']:identity['project_binding']}
     bindings.update({identity[k]:identity['bindings'][label] for k,label in
         (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
-    _require(all(_binding(Path(path))==binding for path,binding in bindings.items()),'Current source physical enrollment changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in bindings.items()),'Current source physical enrollment changed')
     path=project/state.PROJECT_FILE
     raw=(onboarding._read_file(path,onboarding.MAX_REQUEST,expected_binding=observed['target']['binding']) if resources is None else
         onboarding._read_file(path,onboarding.MAX_REQUEST,expected_binding=observed['target']['binding'],resources=resources,held=held))
@@ -5119,8 +5119,8 @@ def _canonical_inputs(scope):
 def _observe_pinned_identity(identity):
     from runtime.onboarding import _checkout_observation, _filesystem_binding, _fingerprint
     observed, error = _checkout_observation(identity['repository_root'], {'paths': 0})
-    _require(error is None and _filesystem_binding(Path(identity['project_root'])) == identity['project_binding'] and
-        observed['binding'] == identity['bindings'] and
+    _require(error is None and persisted_binding.matches(identity['project_binding'], _filesystem_binding(Path(identity['project_root']))) and
+        persisted_binding.all_match(identity['bindings'], observed['binding']) and
         all(observed[key] == identity['repository_root' if key == 'root' else key]
             for key in ('root', 'primary_root', 'git_dir', 'git_common_dir')), 'Accepted checkout physical identity changed')
     for shared in identity['shared_policy']:
