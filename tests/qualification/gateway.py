@@ -289,9 +289,9 @@ class Gateway:
 
     def check_server(self, state):
         """Before any sign-in or reservation: the same OpenCode version as the A1 result, and the step count on every
-        agent the server lists (a session or its children may run any of them), else `steps_not_universal`. Each
-        agent's steps come from the server's own listing when it reports them; otherwise from the inline config the
-        launcher builds, and the results say so."""
+        agent the server lists (a session or its children may run any of them), else `steps_not_universal`. The rule
+        is the launcher's `uncapped_agents`: an agent's steps come from the server's own listing when it reports them;
+        otherwise from the inline config the launcher builds, and the results say so."""
         from runtime import opencode_launcher
         status, info = self.host.request("GET", "/api/info")
         version = info.get("version") if status == 200 and isinstance(info, dict) else None
@@ -299,26 +299,19 @@ class Gateway:
             raise Blocker("server_version_differs: not the OpenCode the A1 result was taken on")
         status, body = self.host.request("GET", "/api/agent")
         listed = data(body) if status == 200 else None
-        items = list(listed.values()) if isinstance(listed, dict) else listed if isinstance(listed, list) else None
-        entries = {}
-        for item in items or []:
-            name = (item.get("name") or item.get("id")) if isinstance(item, dict) else item
-            if isinstance(name, str):
-                steps = item.get("steps") if isinstance(item, dict) else None
-                entries[name] = steps if type(steps) is int else None
-        names = sorted(entries) or None
-        if names and all(steps is not None for steps in entries.values()):
+        config = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}
+        missing = opencode_launcher.uncapped_agents(listed, config, STEPS)  # the launcher's own rule
+        unreadable = missing == [opencode_launcher.LISTING_UNREADABLE]
+        names = None if unreadable else sorted(agent.get("id") if isinstance(agent.get("id"), str) else agent["name"]
+                                                for agent in listed)
+        if not unreadable and all("steps" in agent for agent in listed):
             source = "server"
-            capped = {name for name, steps in entries.items() if 1 <= steps <= STEPS}
         else:
             source = "config: the agent listing reports no steps, so the launcher's inline config is read instead"
-            agents = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}
-            capped = {name for name, value in agents.items() if (value or {}).get("steps") == STEPS}
-        missing = None if not names else [name for name in names if name not in capped]
-        self.results["bounds"]["agents"] = dict(listed=names, capped=sorted(capped), steps_source=source)
-        if missing is None or missing:
-            raise Blocker("steps_not_universal: the step count does not cover every agent (%s)" % (
-                "agent listing unreadable" if missing is None else ", ".join(map(str, missing))))
+        capped = [] if unreadable else [name for name in names if name not in missing]
+        self.results["bounds"]["agents"] = dict(listed=names, capped=capped, steps_source=source)
+        if missing:
+            raise Blocker("steps_not_universal: the step count does not cover every agent (%s)" % ", ".join(missing))
 
     def observed_bounds(self, tree):
         """What the run itself shows of the soft bounds; never assumed. `observed` is True only when a bound visibly

@@ -89,12 +89,13 @@ WINDOW_UNIT = routing_observations.WINDOW_UNIT
 # `providers.<p>.models.<m>.body` request fields and `agents.<name>.steps` for every BUILTIN_AGENTS name. Only
 # OpenRouter can pin an endpoint (its request body's `provider.only` with `allow_fallbacks: false`). V2 has no
 # default step limit, so an agent the config does not name would run uncapped: the launch reads the host's agent
-# listing once and refuses unless every listed agent carries the cap. Whether 2.2.6 honours each key, whether its
+# listing once and refuses unless `uncapped_agents` finds none. Whether 2.2.6 honours each key, whether its
 # listing includes the hidden agents, and that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6),
 # are live items (clients/opencode.md).
 PRIMARY_AGENT = 'build'
 # The V2 built-in agents: the visible `build`, `plan`, `general` and `explore`, and the hidden maintenance agents.
 BUILTIN_AGENTS = (PRIMARY_AGENT, 'plan', 'general', 'explore', 'compaction', 'title', 'summary')
+LISTING_UNREADABLE = 'agent listing unreadable'
 ENDPOINT_PIN_PROVIDERS = ('openrouter',)
 MAX_OUTPUT_TOKENS = 1_000_000
 MAX_STEPS = 64
@@ -158,6 +159,40 @@ def launch_options(provider, model, *, endpoint, max_output_tokens, steps):
     return dict(provider=provider, model=model, endpoint=endpoint, max_output_tokens=max_output_tokens, steps=steps)
 
 
+def agents_config(steps):
+    """The inline config's `agents`: every built-in agent capped at `steps`."""
+    return {name: dict(steps=steps) for name in BUILTIN_AGENTS}
+
+
+def uncapped_agents(listing, config_agents, steps):
+    """The agents in a host's listing (`GET /api/agent` data) that are not capped at exactly `steps`; an empty list
+    means every listed agent is. The one rule the launcher and the gateway harness share. An agent's name is its
+    `id`, else its `name`. When it reports `steps`, they must equal `steps` (a bool never counts). When it does not,
+    it is capped only if `config_agents` (the inline config's `agents`) sets exactly `steps` for that name. An empty,
+    malformed or unreadable (None) listing answers `[LISTING_UNREADABLE]`, so a non-empty answer always refuses."""
+    def exact(value):
+        return type(value) is int and value == steps
+
+    if not isinstance(listing, list) or not listing:
+        return [LISTING_UNREADABLE]
+    config_agents = config_agents if isinstance(config_agents, dict) else {}
+    found = []
+    for agent in listing:
+        if not isinstance(agent, dict):
+            return [LISTING_UNREADABLE]
+        name = agent.get('id') if isinstance(agent.get('id'), str) else agent.get('name')
+        if not isinstance(name, str):
+            return [LISTING_UNREADABLE]
+        if 'steps' in agent:
+            capped = exact(agent['steps'])
+        else:
+            configured = config_agents.get(name)
+            capped = isinstance(configured, dict) and exact(configured.get('steps'))
+        if not capped:
+            found.append(name)
+    return found
+
+
 def server_config(settings_path, ledger_path, plugin, options=None):
     """The inline server config (`OPENCODE_CONFIG_CONTENT`): the routing shim as the only plugin, pinned to the
     managed service's own stores with the routing state directories protected from model edits; no MCP server,
@@ -174,7 +209,7 @@ def server_config(settings_path, ledger_path, plugin, options=None):
         body = dict(provider=dict(only=[options['endpoint']], allow_fallbacks=False),
                     max_tokens=options['max_output_tokens'])
         config.update(providers={options['provider']: dict(models={options['model']: dict(body=body)})},
-                      agents={name: dict(steps=options['steps']) for name in BUILTIN_AGENTS})
+                      agents=agents_config(options['steps']))
     return config
 
 
@@ -324,16 +359,12 @@ def enforcement(host, answer):
 
 
 def agents_capped(host, steps):
-    """Whether the host lists at least one agent and every listed agent carries exactly `steps` (one
-    `GET /api/agent`). An unreadable or malformed listing is not capped."""
+    """Whether every agent the host lists is capped at `steps` (`uncapped_agents`; one `GET /api/agent`)."""
     try:
         status, body = host.request('GET', '/api/agent')
     except Exception:  # noqa: BLE001 - an unreadable listing proves no cap
         return False
-    listed = _data(body) if status == 200 else None
-    return isinstance(listed, list) and bool(listed) and all(
-        isinstance(agent, dict) and isinstance(agent.get('id'), str) and type(agent.get('steps')) is int
-        and agent['steps'] == steps for agent in listed)
+    return not uncapped_agents(_data(body) if status == 200 else None, agents_config(steps), steps)
 
 
 def catalog(host):
