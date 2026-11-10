@@ -224,11 +224,11 @@ class DebitClearingTests(Subscription):
     def test_the_debit_counts_against_window_headroom_until_a_later_window_is_observed(self):
         debit = self.abandoned()
         reserve, mark = debit['units'], debit['at']
-        later = mark + 6 * HOUR
+        later = mark + 2 * HOUR
         # Room for exactly one reserve without the debit, none with it.
         tight = dict(used=1000 - 2 * reserve + 1)
         same = self.window(later, mark - HOUR, **tight)  # the window the request may have consumed
-        self.assertEqual(self.prepare_at('b1', later, same)['reason'], 'insufficient_headroom')
+        self.assertIn('insufficient_headroom', self.prepare_at('b1', later, same)['reasons'])
         self.assertIn(KEY, self.debits())
         fresh = self.window(later, mark + HOUR, **tight)  # began an hour after the abandon
         result = self.prepare_at('b2', later, fresh)
@@ -246,7 +246,7 @@ class DebitClearingTests(Subscription):
     def test_a_merely_newer_observation_never_clears_the_debit(self):
         debit = self.abandoned()
         mark = debit['at']
-        later = mark + 30 * 24 * HOUR  # much later observation time and snapshot epoch
+        later = mark + 2 * HOUR  # a newer observation time and snapshot epoch, the same window
         cases = dict(
             same_window=self.window(later, mark - 1),
             within_clock_margin=self.window(later, mark + routing.MAX_CLOCK_DRIFT - 1),
@@ -265,13 +265,17 @@ class DebitClearingTests(Subscription):
                 obs.update(epoch_at=later, snapshot_id='newer')
                 self.call(prepare('x%d' % i, observations=obs, constraints=dict(allowed_strategy_ids=['s-sub'])))
                 self.assertEqual(self.debits(), {KEY: debit})
+        # A window that began after the mark but has already reset is a stale observation, not evidence.
+        late = mark + 7 * HOUR
+        self.prepare_at('y1', late, self.window(late, mark + HOUR))
+        self.assertEqual(self.debits(), {KEY: debit})
         self.assertEqual(self.cleared_rows(), [])
 
     def test_a_pending_prepare_still_clears_a_qualifying_debit_once(self):
         debit = self.abandoned()
-        later = debit['at'] + 6 * HOUR
+        later = debit['at'] + 2 * HOUR
         full = self.window(later, debit['at'] + HOUR, used=1000)  # no room at all
-        self.assertEqual(self.prepare_at('b1', later, full)['reason'], 'insufficient_headroom')
+        self.assertIn('insufficient_headroom', self.prepare_at('b1', later, full)['reasons'])
         self.assertEqual(self.debits(), {})
         self.assertEqual(len(self.cleared_rows()), 1)
 
@@ -284,7 +288,7 @@ class DebitClearingTests(Subscription):
         reasons, settled, credit = self.reasons(), self.settled(), self.credit()
         self.assertEqual(reasons, ['legacy', 'over_bound'])
         debit = self.abandoned()
-        later = debit['at'] + 6 * HOUR
+        later = debit['at'] + 2 * HOUR
         self.prepare_at('b1', later, self.window(later, debit['at'] + HOUR))
         self.assertEqual((self.reasons(), self.settled(), self.credit()), (reasons, settled, credit))
         self.assertEqual(self.hold('d1')['state'], 'dispatched')
@@ -418,6 +422,8 @@ class MalformedTests(Subscription):
         self.assertEqual(self.call(reconcile('a1', ABANDON))['state'], 'recorded')  # refusals were not remembered
 
     def test_the_audit_event_carries_no_receipts_session_ids_tokens_or_content(self):
+        """The event row only; the root aggregate keeps receipt digests and the hold its session id, as for any
+        completion (S3.6a, S3.4)."""
         self.sub_uncertain('a1')
         session = self.session('a1')
         self.call(reconcile('a1', self.usage_of('a1')))
@@ -425,13 +431,16 @@ class MalformedTests(Subscription):
         self.assertEqual((body['kind'], body['attempt_id'], body['funding']), (sub.KIND, 'a1', 'subscription'))
         self.assertEqual(body['outcome']['settlement']['resolution'], dict(basis='host_usage'))
         self.assertEqual(set(body) - set(budget.EVENT_BODY_FIELDS), set())
-        stored = json.dumps(self.ledger_bytes())
-        for absent in ('msg_fixture30', session, self.tokens['a1'], SECRET):
+        stored = json.dumps([row for row in self.ledger_bytes()[1] if row[0] == 's1'])
+        for absent in ('msg_fixture30', 'msg_fixture28', session, self.tokens['a1'], SECRET):
             self.assertNotIn(absent, stored)
 
 
 class StatusTests(Subscription):
     def test_status_lists_uncertain_subscription_holds_and_window_debits(self):
+        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=32, per_account=32))))
+        with self.open_ledger() as ledger:
+            ledger.set_caps(32, 32)
         for i in range(18):
             self.sub_uncertain('s%02d' % i)
         ledger = self.status()
