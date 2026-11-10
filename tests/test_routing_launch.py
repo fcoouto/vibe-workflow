@@ -1,4 +1,5 @@
 """C3-1: the host-neutral launcher core (C.3 design 3.1 steps 1-6, 3.4, 3.6, 4.2 self-check)."""
+import inspect
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,16 @@ class ManagedStub(command.Service):
                                       ledger_path=self.ledger_path)
         response = super().handle(json.dumps(dict(value, observations=collected['observations'])).encode(), op)
         return dict(response, seen=collected['seen'])
+
+
+class Reconciling(ManagedStub):
+    """A ledger whose `status` asks for operator reconciliation of dollar holds."""
+
+    def handle(self, raw, op=None):
+        response = super().handle(raw, op)
+        if json.loads(raw).get('op') == 'status' and type(response.get('ledger')) is dict:
+            response['ledger']['reconcile_hint'] = 'use reconcile_uncertain'
+        return response
 
 
 class Transport:
@@ -264,6 +275,27 @@ class LaunchTests(Stores):
                                                  settings_path=self.settings, source=self.source),
                          (None, 'route_not_entitled'))
 
+    def test_a_dollar_admission_always_runs_the_dollar_preflight(self):
+        """S4: the dollar checks follow the admitted billing class; no caller flag can skip them."""
+        from runtime import openrouter_settings
+        from tests.test_routing_observations import gateway_route, gateway_window
+        self.assertNotIn('dollar', inspect.signature(launcher.launch).parameters)
+        self.fund()
+        self.source = collector.StaticSource([gateway_route(), sub_route()],
+                                             dict(gw=[gateway_window(self.now)], sub=[sub_window(self.now)]), ready)
+        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=1)
+        gateway = launcher.route_identity('openrouter_proposal', model='model/v1', provider='p', effort=None)
+        service = Reconciling(self.settings, self.ledger_path, project=self.checkout)
+        self.addCleanup(service.close)
+        with mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
+            refused = launcher.launch(service, host='openrouter_proposal', catalog=[gateway], transport=Transport(),
+                                      assignment=dict(attempt_id='g1', task='task-g1', scope=SCOPE,
+                                                      choice=dict(gateway, funding='api')),
+                                      job=launcher.unplanned_job('researcher', SCOPE, 'proposal'))
+        self.assertEqual(refused, dict(state='blocked', reason='ledger_reconcile_pending', attempt_id='g1'))
+        self.assertEqual(self.holds()['g1']['state'], 'released')  # the admitted dollar hold sent nothing
+        self.assertEqual(self.launch(service=service)['state'], 'recorded')  # a subscription admission proceeds
+
     def test_a_pending_assignment_holds_nothing_and_never_falls_back(self):
         self.source = collector.StaticSource([sub_route()], {}, ready)  # no telemetry yet
         result = self.launch()
@@ -310,12 +342,28 @@ class SelfCheckTests(unittest.TestCase):
         self.assertLess(elapsed, 10)
 
     def test_the_self_check_proves_the_managed_path_with_c3_0b_stood_in(self):
-        """The same check in-process, with the test stand-in for C3-0b's managed `prepare`."""
+        """The same check body in-process, as its child entry point runs it, with the stand-in for C3-0b."""
         with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(launcher, '_SELF_CHECK_CHILD', True), \
                 mock.patch.object(command, 'Service', ManagedStub), \
                 mock.patch.object(routing_settings, 'managed_project', create=True,
                                   new=lambda path, settings_path=None: False):
-            self.assertEqual(launcher.managed_self_check(Path(temp) / 'check'), [])
+            self.assertEqual(launcher._self_check_in_child(Path(temp) / 'check'), [])
+
+    def test_the_self_check_body_refuses_to_run_outside_its_child(self):
+        """S5: the body swaps module globals, so a long-lived process can never run it; the public entry point runs
+        it in a child process of its own and leaves the caller's globals untouched."""
+        predicate = getattr(routing_settings, 'managed_project', None)
+        source = collector.default_source
+        with tempfile.TemporaryDirectory() as temp:
+            self.assertEqual(launcher._self_check_in_child(Path(temp) / 'body'), ['self_check_not_in_child'])
+            self.assertFalse((Path(temp) / 'body').exists())  # refused before it created anything
+            with mock.patch.object(launcher, '_self_check_in_child', side_effect=AssertionError('ran in-process')):
+                codes = launcher.managed_self_check(Path(temp) / 'check')
+        self.assertTrue(type(codes) is list and codes != ['self_check_not_in_child'], codes)
+        self.assertIs(getattr(routing_settings, 'managed_project', None), predicate)
+        self.assertIs(collector.default_source, source)
+        self.assertIs(launcher._SELF_CHECK_CHILD, False)
 
     def test_the_self_check_refuses_a_workdir_it_did_not_create(self):
         with tempfile.TemporaryDirectory() as temp:

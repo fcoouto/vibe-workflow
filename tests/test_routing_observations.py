@@ -220,6 +220,30 @@ class CollectorTests(Stores):
         self.assertEqual(set(kept(result)), {'sub'})
 
 
+    def test_the_shipped_test_only_route_stays_excluded_with_fresh_telemetry_and_funding(self):
+        """The shipped manifest's `test_only` route is never a candidate, however good its observations are."""
+        self.fund()
+        test_only = [route for route in collector.load_manifest()['routes'] if route['status'] == 'test_only']
+        self.assertTrue(test_only)
+        for route in test_only:
+            for window_id in route['demand']:
+                collector.store_window(self.settings, route['pool'], sub_window(self.now, id=window_id))
+        result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                   ledger_path=self.ledger_path)
+        self.assertEqual(result['observations']['routes'], [])
+        self.assertEqual(result['observations']['pools'], {})
+        self.assertEqual(excluded(result), {route['route']: 'route_unqualified' for route in test_only})
+
+    def test_a_future_dated_window_observation_is_refused(self):
+        """A record dated beyond now plus the clock margin could shadow every later observation."""
+        with self.assertRaisesRegex(ValueError, 'invalid_window_observation'):
+            collector.store_window(self.settings, 'sub', sub_window(now() + collector.CLOCK_MARGIN + 3600))
+        self.assertFalse(collector.window_path(self.settings).exists())
+        collector.store_window(self.settings, 'sub', sub_window(now() + collector.CLOCK_MARGIN // 2))  # drift
+        collector.store_window(self.settings, 'sub', sub_window(now() + collector.CLOCK_MARGIN, used=5))
+        self.assertEqual([window['used'] for window in collector.default_source(self.settings).windows('sub', now())],
+                         [5])
+
     def test_only_the_given_stores_are_read_and_never_the_defaults(self):
         """Coordinator decision (C3-0b review): the collector reads the service's own settings and ledger paths, so
         the two can never disagree; a default path is never opened."""
@@ -307,14 +331,59 @@ class GatewayDerivationTests(Stores):
         self.assertLess(elapsed, 5)
 
 
-class ManagedFixtureHomeTests(unittest.TestCase):
-    """C.3 design 6.4 A4 rule 3: the four managed-fixture contracts, under plain unittest with a fresh HOME and no
-    test_sharded wrapper, leave HOME empty."""
+class ManagedFixtureTests(unittest.TestCase):
+    """The managed-project fixture past its slice check (C.3 design 6.4 A4 rule 3), with C3-0b stood in while it is
+    absent: every default path the fixture patches resolves inside the fixture's temporary directory."""
 
-    CONTRACTS = ('C2bNativeDelegationThroughRouting.test_native_worker_admission_calls_routing_prepare_once',
-                 'C2bNativeDelegationThroughRouting.test_native_worker_admission_is_bound_to_its_workflow_job',
-                 'C2cProposalThroughRouting.test_proposal_begin_obtains_one_routing_admission',
-                 'C2cWorkerThroughRouting.test_worker_prepare_obtains_one_routing_admission')
+    def stand_in(self):
+        from runtime import routing_settings
+
+        def managed_service(checkout, scope=None):  # C.3 design 3.3: default paths, read at call time
+            return command.Service(command.default_settings(), command.default_ledger(),
+                                   project=os.path.realpath(checkout))
+
+        for target, name, value in ((routing_settings, 'managed_project', lambda path, settings_path=None: False),
+                                    (command, 'managed_service', managed_service)):
+            if not callable(getattr(target, name, None)):
+                patcher = mock.patch.object(target, name, create=True, new=value)
+                patcher.start()
+                self.addCleanup(patcher.stop)
+
+    def test_the_fixture_redirects_every_default_path(self):
+        from runtime import usage_settings
+        from tests import test_smart_routing_features as features
+        self.stand_in()
+        with tempfile.TemporaryDirectory() as temp:
+            checkout = Path(temp).resolve()
+            routes = (features.fixture_route('native:m#high', 'included_subscription'),
+                      features.fixture_route('openrouter:v/m@p', 'gateway'))
+            with features.managed_project_fixture(self, checkout, routes=routes) as fixture:
+                base = Path(fixture['settings']).parents[1]
+                for name, path in (('default_settings', command.default_settings()),
+                                   ('default_ledger', command.default_ledger()),
+                                   ('usage_settings.directory', usage_settings.directory()),
+                                   ('BASIC_STORAGE', openrouter_settings.BASIC_STORAGE)):
+                    with self.subTest(default=name):
+                        self.assertIn(base, Path(path).resolve().parents, name)
+                service = command.managed_service(checkout)
+                try:
+                    status = service.handle(b'{"v":1,"op":"status"}')
+                finally:
+                    service.close()
+                self.assertEqual((status['ledger']['state'], status['ledger']['authority_required']), ('ready', True))
+
+
+class ManagedFixtureHomeTests(unittest.TestCase):
+    """C.3 design 6.4 A4 rule 3: the four managed-fixture contracts and the fixture past its slice check, under plain
+    unittest with a fresh HOME and no test_sharded wrapper, leave HOME empty."""
+
+    CONTRACTS = ('test_smart_routing_features.C2bNativeDelegationThroughRouting'
+                 '.test_native_worker_admission_calls_routing_prepare_once',
+                 'test_smart_routing_features.C2bNativeDelegationThroughRouting'
+                 '.test_native_worker_admission_is_bound_to_its_workflow_job',
+                 'test_smart_routing_features.C2cProposalThroughRouting.test_proposal_begin_obtains_one_routing_admission',
+                 'test_smart_routing_features.C2cWorkerThroughRouting.test_worker_prepare_obtains_one_routing_admission',
+                 'test_routing_observations.ManagedFixtureTests.test_the_fixture_redirects_every_default_path')
 
     def test_the_managed_contracts_leave_a_fresh_home_empty(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -323,14 +392,14 @@ class ManagedFixtureHomeTests(unittest.TestCase):
             env = {key: value for key, value in os.environ.items()
                    if key not in ('HOME', 'CODEX_HOME') and not key.startswith(('XDG_', 'PYTHON'))}
             env['HOME'] = str(home)
-            names = ['tests.test_smart_routing_features.' + name for name in self.CONTRACTS]
+            names = ['tests.' + name for name in self.CONTRACTS]
             # Plain unittest: `-I` keeps the checkout off sys.path, so only the package root is put back.
             runner = 'import sys, unittest; sys.path.insert(0, sys.argv[1]); unittest.main(module=None, argv=sys.argv[1:])'
             done = subprocess.run([sys.executable, '-I', '-B', '-c', runner, str(ROOT), *names], cwd=temp, env=env,
                                   capture_output=True, timeout=600)
             output = done.stderr.decode()[-3000:]
             self.assertEqual(done.returncode, 0, output)
-            self.assertIn('Ran 4 tests', output)
+            self.assertIn('Ran %d tests' % len(names), output)
             self.assertEqual(sorted(str(path.relative_to(home)) for path in home.rglob('*')), [], output)
 
 
