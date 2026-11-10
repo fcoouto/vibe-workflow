@@ -162,8 +162,9 @@ def check_hooks(context, client):
             untrusted += sum(1 for key in keys if not _approved(approvals.get(prefix + key), content=True))
         if untrusted:
             return cell("needs-user", f"{untrusted} hook approvals are missing or disabled; the user must approve them in {client}")
-    if hook_delivery.delivered(context.package, client, context.environ):
-        return cell("ready")
+    seen = hook_delivery.delivery(context.package, client, context.environ)
+    if seen:
+        return cell("ready", f"hooks ran {seen}")
     return _unobserved("start a new session")
 
 
@@ -379,20 +380,21 @@ def read_record(path):
 READINESS_ACTION = "run prepare-my-workspace"
 READINESS_LISTED = 3
 CHECKED_AT = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
-ITEM_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 
-def readiness_warning(client, environ=None):
+def readiness_warning(package, client, environ=None):
     """One short line for startup when the last record lists required items missing for this client or the machine.
 
-    Reads one small private file; absent, corrupt or ready records give None."""
+    Reads one small private file and the requirements catalog; only item IDs the catalog lists are named, so a
+    record cannot put its own text into the startup message. Absent, corrupt or ready records give None."""
     record = read_record(record_path(environ))
     if record is None or not CHECKED_AT.fullmatch(record["observed_at"]):
         return None
+    known = {item["id"] for item in load_catalog(package)["items"]}
     found = []
     for entry in record["not_ready"]:
         parts = entry.split(":") if isinstance(entry, str) else []
-        if len(parts) == 3 and ITEM_ID.fullmatch(parts[0]) and parts[1] in ("machine", client) and parts[2] in NOT_READY:
+        if len(parts) == 3 and parts[0] in known and parts[1] in ("machine", client) and parts[2] in NOT_READY:
             found.append(f"{parts[0]} {parts[2]}")
     if not found:
         return None

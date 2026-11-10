@@ -4,10 +4,9 @@
 import hashlib
 import json
 from pathlib import Path
-import os
 import re
-import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -244,36 +243,44 @@ def release_pathspecs():
     return [".", *[f":(exclude){item.rstrip('/')}" for item in EXCLUDED]]
 
 
-def _git(root, *args):
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env["GIT_CEILING_DIRECTORIES"] = str(root.parent)
+def _tracked_changes(root, *revisions):
+    """Shipped paths that differ between the revisions (the working tree against HEAD for none or one)."""
+    from runtime.package_manifest import PackageManifestError, _git
     try:
-        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, timeout=60,
-                              stdin=subprocess.DEVNULL, env=env)
-    except (OSError, subprocess.SubprocessError):
-        raise ValueError("Release check: cannot run Git here") from None
+        output = _git(root, "diff", "--name-only", "-z", *revisions, "--", *release_pathspecs(), deadline=time.monotonic() + 60)
+    except PackageManifestError:
+        raise ValueError("Release check: cannot compare shipped content with Git; run it inside the repository") from None
+    return [name for name in output.decode("utf-8", "replace").split("\0") if name]
+
+
+def _listed(names):
+    return ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
 
 
 def release_check(root=ROOT):
-    """Fail when the package version is already a release tag and shipped content differs from that tag.
+    """Fail when shipped paths have uncommitted changes, or the package version is already a release tag and
+    HEAD's shipped content differs from that tag.
 
-    A version without a tag is unreleased and passes. The comparison is the working tree against the tag,
-    limited to the paths scripts/package.py exports, so development-only changes need no version bump."""
+    A version without a tag is unreleased and passes. The comparison is HEAD against the tag, which is what
+    `scripts/package.py --release` ships, limited to the paths it exports, so development-only changes need no
+    version bump."""
+    from runtime.package_manifest import PackageManifestError, _git
     root = Path(root).resolve(strict=True)
     version = read_json(root / ".codex-plugin/plugin.json")["version"]
-    tag = _git(root, "rev-parse", "-q", "--verify", f"refs/tags/{version}^{{commit}}")
-    if tag.returncode == 1:
+    uncommitted = _tracked_changes(root, "HEAD")
+    if uncommitted:
+        raise ValueError(f"Shipped paths have uncommitted changes ({_listed(uncommitted)}); commit them first, "
+                         "because a release ships the committed tree")
+    try:
+        tags = _git(root, "tag", "--list", version, deadline=time.monotonic() + 60).decode("utf-8").split()
+    except (PackageManifestError, UnicodeDecodeError):
+        raise ValueError("Release check: cannot read this checkout's Git tags; run it inside the repository") from None
+    if version not in tags:
         return {"release_tag": "absent", "version": version}
-    if tag.returncode != 0:
-        raise ValueError("Release check: cannot read this checkout's Git tags; run it inside the repository")
-    changed = _git(root, "diff", "--name-only", f"refs/tags/{version}", "--", *release_pathspecs())
-    if changed.returncode != 0:
-        raise ValueError(f"Release check: cannot compare with tag {version}")
-    names = changed.stdout.split()
-    if names:
-        listed = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+    changed = _tracked_changes(root, f"refs/tags/{version}", "HEAD")
+    if changed:
         raise ValueError(f"Version {version} is already released as a tag, but shipped content changed since "
-                         f"({listed}); raise the version in both plugin manifests before releasing")
+                         f"({_listed(changed)}); raise the version in both plugin manifests before releasing")
     return {"release_tag": "unchanged", "version": version}
 
 

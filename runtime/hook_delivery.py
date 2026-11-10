@@ -21,6 +21,8 @@ SCHEMA_VERSION = 1
 MAX_NOTE = 1024
 MAX_HOOKS = 65536
 MAX_AGE = 24 * 3600
+MAX_EVIDENCE_AGE = 7 * 24 * 3600
+MIN_REMAINING = 0.5
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 DIGEST = re.compile(r"[0-9a-f]{64}")
 
@@ -62,17 +64,26 @@ def _matches(note, client, wanted):
     return note is not None and note["client"] == client and (note["version"], note["hook_sha256"]) == wanted
 
 
-def delivered(package, client, environ=None):
-    """True only when this client's note matches the package version and hook definitions it runs now."""
+def delivery(package, client, environ=None, now=None):
+    """The time of this client's note when it matches the package version and hook definitions it runs now and
+    is at most seven days old (active sessions rewrite it daily); otherwise None."""
     wanted = current(package, client)
-    return wanted is not None and _matches(read_note(note_path(client, environ)), client, wanted)
+    note = read_note(note_path(client, environ)) if wanted is not None else None
+    now = int(time.time() if now is None else now)
+    if _matches(note, client, wanted) and 0 <= now - note["delivered_epoch"] <= MAX_EVIDENCE_AGE:
+        return note["delivered_at"]
+    return None
+
+
+def delivered(package, client, environ=None, now=None):
+    return delivery(package, client, environ, now) is not None
 
 
 def record_delivery(package, client, environ=None, deadline=None, now=None):
-    """Write the note when it is absent, differs from the current version or hook hash, or is older than a day.
+    """Write the note, unless less than half a second remains before the deadline, when it is absent, differs from the current version or hook hash, or is older than a day.
 
     Returns whether it wrote. Failures to write raise OSError or ValueError; the startup caller stays silent."""
-    if deadline is not None and time.monotonic() >= deadline:
+    if deadline is not None and deadline - time.monotonic() < MIN_REMAINING:
         return False
     wanted = current(package, client)
     if wanted is None:

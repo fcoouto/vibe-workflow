@@ -393,7 +393,11 @@ def main():
                     pass
             try:
                 from runtime import startup_notes
-                output = startup_notes.apply(PACKAGE, start.client, output, deadline)
+                try:
+                    restricted = qualification_only(_entry_scope(acquisition, managed=False))
+                except Exception:
+                    restricted = True
+                output = startup_notes.apply(PACKAGE, start.client, output, deadline, restricted)
             except Exception:
                 # The optional delivery note and warnings must preserve the startup result.
                 pass

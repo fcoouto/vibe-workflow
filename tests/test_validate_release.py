@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 from scripts import validate
 
@@ -72,16 +73,48 @@ class ReleaseCheckTests(unittest.TestCase):
         for text in ("1.2.3", "runtime/code.py", "version"):
             self.assertIn(text, message)
 
-    def test_uncommitted_and_added_packaged_changes_fail_too(self):
+    def test_uncommitted_packaged_changes_fail_with_their_own_message(self):
         self.tag()
         self.write("runtime/code.py", "print('two')\n")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(ValueError) as caught:
             self.check()
+        self.assertIn("uncommitted", str(caught.exception))
+        self.assertIn("runtime/code.py", str(caught.exception))
+        self.assertNotIn("already released", str(caught.exception))
         self.git("checkout", "--", "runtime/code.py")
         self.write("runtime/new.py", "x\n")
         self.git("add", "runtime/new.py")
+        with self.assertRaises(ValueError) as caught:
+            self.check()
+        self.assertIn("uncommitted", str(caught.exception))
+
+    def test_uncommitted_changes_fail_even_without_a_tag_but_development_only_ones_do_not(self):
+        self.write("tests/test_code.py", "dirty\n")
+        self.write("CLAUDE.md", "dirty\n")
+        self.assertEqual(self.check()["release_tag"], "absent")
+        self.write("runtime/code.py", "dirty\n")
         with self.assertRaises(ValueError):
             self.check()
+
+    def test_the_comparison_is_the_committed_tree_not_the_working_tree(self):
+        self.tag()
+        self.write("runtime/code.py", "print('two')\n")
+        self.commit("change")
+        with self.assertRaises(ValueError) as caught:
+            self.check()
+        self.assertIn("already released", str(caught.exception))
+        self.write("runtime/code.py", "print('one')\n")
+        with self.assertRaises(ValueError) as caught:
+            self.check()
+        self.assertIn("uncommitted", str(caught.exception))
+
+    def test_git_runs_with_the_package_manifest_environment(self):
+        from runtime import package_manifest
+        calls = []
+        real = package_manifest._git
+        with unittest.mock.patch.object(package_manifest, "_git", side_effect=lambda *a, **k: calls.append(a) or real(*a, **k)):
+            self.check()
+        self.assertTrue(calls)
 
     def test_a_new_version_passes_even_when_the_old_tag_differs(self):
         self.tag()

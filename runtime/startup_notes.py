@@ -26,7 +26,7 @@ def _drift(package, client):
 
 def _readiness(package, client):
     from runtime import workspace
-    return workspace.readiness_warning(client)
+    return workspace.readiness_warning(package, client)
 
 
 def _append(output, text):
@@ -34,11 +34,13 @@ def _append(output, text):
     return package_versions.append_warning(output, text)
 
 
-def apply(package, client, output, deadline):
-    """Write the delivery note, then append the package drift and workspace readiness warnings as one text."""
+def apply(package, client, output, deadline, restricted=False):
+    """Write the delivery note, then append the package drift and workspace readiness warnings as one text.
+
+    The restricted qualification-only context gets no warnings."""
     if time.monotonic() < deadline:
         _optional(_deliver, package, client, deadline)
-    if output is None:
+    if output is None or restricted:
         return output
     warnings = []
     for step in (_drift, _readiness):

@@ -378,7 +378,9 @@ class StatusTests(WorldTestCase):
             with self.subTest(client=client):
                 self.assertEqual(self.hooks(client), dict(state="unknown", reason="start a new session"))
                 self.deliver(client)
-                self.assertEqual(self.hooks(client), dict(state="ready"))
+                value = self.hooks(client)
+                self.assertEqual(value["state"], "ready")
+                self.assertRegex(value["reason"], r"^hooks ran \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         report = self.world.status()
         self.assertEqual(self.world.states(report)["vibe-workflow-hooks"], dict(codex="ready", **{"claude-code": "ready"}, opencode="not-supported"))
 
@@ -402,6 +404,19 @@ class StatusTests(WorldTestCase):
         self.deliver("claude-code")
         self.world.cli("claude", "plugin list --json", claude_plugins(vibe=[claude_entry("vibe-workflow", "vibe-workflow-local", VERSION, enabled=False)]))
         self.assertEqual(self.hooks("claude-code")["state"], "missing")
+
+    def test_an_old_or_future_note_leaves_hooks_unknown(self):
+        self.deliver("codex")
+        path = hd.note_path("codex", self.world.environ())
+        note = json.loads(path.read_text())
+        for days, expected in ((6, "ready"), (8, "unknown"), (-1, "unknown")):
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days * 86400))
+            path.write_text(json.dumps(dict(note, delivered_at=stamp)))
+            with self.subTest(days=days):
+                value = self.hooks()
+                self.assertEqual(value["state"], expected)
+                if expected == "unknown":
+                    self.assertEqual(value["reason"], "start a new session")
 
     def test_checking_hooks_writes_nothing(self):
         self.deliver("codex")
