@@ -41,6 +41,10 @@ DEFAULT_STATE = Path.home() / ".local/state/vibe-workflow-qualification/canary"
 PRODUCTION_STATE_ROOT = ".local/state/vibe-workflow"
 RESET_ADVICE = ("The canary routing state is not clean. It belongs to the pilot only: after confirming no harness run is "
                 "alive, the operator may reset it by deleting the canary directory; the production state is untouched.")
+PRODUCTION_ADVICE = ("The production routing state is not clean or not ready, and the harness never deletes, resets or "
+                     "initializes it. Fix the named condition through scripts/routing.py: activate the project with the "
+                     "one-shot `set managed_projects`, settle or reconcile open holds with the one-shot operator ops, "
+                     "then run again.")
 CHOICE = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME, funding="subscription")
 # Profile role -> explicit assignment role; `researcher` is explicit on a worker job (routing_settings.EXPLICIT_ROLES).
 ROLES = (("implementer", "worker", None), ("reviewer", "review", "reviewer"), ("researcher", "worker", "researcher"))
@@ -172,11 +176,20 @@ def check_canary_state(path, home=None, production=None, isolated=None):
 
 
 def check_approval(values):
-    """`--approval BY AT SCOPE` in the call ledger's approval shape (`APPROVAL_FIELDS`), or `Refused`."""
+    """`--approval BY AT SCOPE` in the call ledger's approval shape (`APPROVAL_FIELDS`), recorded verbatim, or
+    `Refused`. The scope must name the canary: the approval covers the canary only."""
     if type(values) not in (list, tuple) or len(values) != len(APPROVAL_FIELDS) or \
-            not all(type(value) is str and value.strip() for value in values):
-        raise Refused("the production-ledger canary needs --approval BY AT SCOPE: who approved, when and the scope")
-    return {key: value.strip()[:200] for key, value in zip(APPROVAL_FIELDS, values)}
+            not all(type(value) is str and value.strip() and len(value) <= 200 for value in values):
+        raise Refused("the production-ledger canary needs --approval BY AT SCOPE: who approved, when and the scope "
+                      "(each at most 200 characters)")
+    if "canary" not in values[2].lower():
+        raise Refused("the production-ledger approval's SCOPE must name the canary")
+    return dict(zip(APPROVAL_FIELDS, values))
+
+
+def refusal_advice(state):
+    """What the operator does about an unclean state: delete the dedicated canary state, never the production one."""
+    return PRODUCTION_ADVICE if (state or {}).get("production") else RESET_ADVICE
 
 
 def resolve_state(path, production=False, approval=None, home=None, isolated=None):

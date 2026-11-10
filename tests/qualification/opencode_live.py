@@ -118,7 +118,7 @@ class Run:
         self.account_progress = None
         self.results = dict(mode=self.purpose, stages={}, ledger=[], blockers=[], deviations=[])
         if production:  # --production-ledger: the user's recorded approval travels with the results
-            self.results["production_ledger"] = dict(approval=canary_state["approval"], scope="canary only")
+            self.results["production_ledger"] = dict(approval=canary_state["approval"])
         self.redact = Redactor(paths=[str(base), os.path.realpath(base), str(base).replace("/private/", "/", 1), str(ROOT),
                                       str(Path.home())], names=[os.environ.get("USER", "")])
         self.events = None
@@ -733,7 +733,7 @@ class Run:
         self.note(s, "status_at_start", status_view(before))
         refusals = canary.preflight(before)
         if refusals:
-            raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.RESET_ADVICE))
+            raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
         canary.check_ancestor_configs(self.canary_project)
         if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")

@@ -700,7 +700,7 @@ class ManagedCanaryTests(PilotHarness):
             self.assertIsNone(run.routing.admission_ids("never-admitted"))
 
 
-APPROVED = ["the user", "2026-11-10", "canary only on the production routing ledger"]
+APPROVED = ["the user", "2026-11-10", "Canary only, on the production routing ledger "]
 
 
 class ProductionLedgerTests(Temp):
@@ -730,6 +730,8 @@ class ProductionLedgerTests(Temp):
     def test_refused_without_the_flag_or_the_approval(self):
         cases = [dict(production=True), dict(production=True, approval=["the user", "2026-11-10"]),
                  dict(production=True, approval=["the user", " ", "canary"]),
+                 dict(production=True, approval=["the user", "2026-11-10", "the production routing ledger"]),  # N3
+                 dict(production=True, approval=["the user", "2026-11-10", "canary " + "x" * 200]),
                  dict(production=False, approval=APPROVED),
                  dict(production=True, approval=APPROVED, path=str(self.tmp / "canary"))]
         for case in cases:
@@ -742,7 +744,7 @@ class ProductionLedgerTests(Temp):
         self.assertEqual((state["settings"], state["ledger"]), (self.settings.resolve(), self.ledger.resolve()))
         self.assertIs(state["production"], True)
         self.assertEqual(state["approval"], dict(by="the user", at="2026-11-10",
-                                                 scope="canary only on the production routing ledger"))
+                                                 scope="Canary only, on the production routing ledger "))  # verbatim
         with self.assertRaises(safety.Refused):  # the production state is never reset
             canary.reset_state(state["settings"].parent, processes="")
 
@@ -855,6 +857,20 @@ class ProductionLedgerTests(Temp):
         self.assertIn("managed_projects", "".join(str(c) for c in err.write.call_args_list))
         self.assertFalse(self.ledger.exists())
 
+    def test_main_requires_managed_projects_for_the_default_allowlist_too(self):
+        """S1: without --canary-allow, the allowlisted project still has to be on the production managed_projects."""
+        ledger = self.private(self.tmp / "state") / "calls.jsonl"
+        safety.CallLedger.initialize(ledger)
+        project = self.private(self.tmp / "project")
+        subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--canary",
+                "--project", str(project), "--production-ledger", "--approval", *APPROVED]
+        with mock.patch.object(canary, "ALLOWLIST", str(project)), mock.patch("sys.stderr") as err:
+            self.assertEqual(live.main(argv), 2)
+        written = "".join(str(c) for c in err.write.call_args_list)
+        self.assertIn("managed_projects", written)
+        self.assertFalse(self.ledger.exists())
+
     def test_the_run_pins_the_production_paths_records_the_approval_and_writes_nothing_itself(self):
         before = self.production_ledger()
         project = self.private(self.tmp / "project")
@@ -864,12 +880,18 @@ class ProductionLedgerTests(Temp):
         run = live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state)
         pins = dict(zip(run.routing.argv[::2], run.routing.argv[1::2]))
         self.assertEqual((pins["--settings"], pins["--ledger"]), (str(self.settings.resolve()), str(self.ledger.resolve())))
-        self.assertEqual(run.results["production_ledger"], dict(approval=state["approval"], scope="canary only"))
+        self.assertEqual(run.results["production_ledger"], dict(approval=dict(zip(("by", "at", "scope"), APPROVED))))
         ops = []
         run.routing = self.routing_double(ops)
         run.start = lambda stage: ops.append("start")
-        with self.assertRaises(safety.Refused):
+        with self.assertRaises(safety.Refused) as refused:
             run.canary_run()  # the recording double's status is not clean: refused before any write or server
+        message = str(refused.exception)
+        self.assertNotIn(canary.RESET_ADVICE, message)  # S2: there is no canary directory to delete in production
+        self.assertNotIn("deleting the canary directory", message)
+        self.assertIn("never deletes", message)
+        self.assertIn(canary.PRODUCTION_ADVICE, message)
+        self.assertIn("status_unavailable", message)
         self.assertEqual(ops, ["status"])  # no `set`: the production state is never initialized by the harness
         self.assertEqual((self.ledger.read_bytes(), self.ledger.stat().st_mtime_ns), before)
 
