@@ -4,6 +4,120 @@
 
 **Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
+## Live session runbook
+
+The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) need. The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.
+
+### Before the session
+
+- Run in a quiet window: no other lanes, workers or OpenCode sessions using the same logins, because another session's use inflates every window reading.
+- Work from a checkout of current `main` that has #228, #229, #231, #234 and #239. Run each harness file as a script path, never with `python3 -m`.
+- Set the shell variables once. Every path is outside every repository; the commands below guard each variable with `${…:?}` so an unset one stops the command:
+
+```sh
+L=~/.local/state/vibe-workflow-qualification/calls.jsonl   # the durable call ledger
+OUT=~/.local/state/vibe-workflow-qualification/runs/$(date +%F)
+mkdir -p -m 700 "$OUT"
+```
+
+Exit codes for every `live_modes.py` mode: `0` passed, `1` ran with blockers, `2` refused before anything started, `3` output withheld by the leak check (the full results are kept owner-only next to the ledger in `withheld/`; read them, then delete them).
+
+### 1. Open each purpose's cap (user approval)
+
+Each purpose is closed in code (cap 0) until a recorded approval opens it. Open only the purposes the user approved, with the user's own words for who, when and scope:
+
+```sh
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap isolation 8 \
+  --reason "live-session runbook A1-A7" --approval "<who>" "<when, ISO 8601>" "<scope the user approved>"
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap drill 4 \
+  --reason "live-session runbook S3.6c drill" --approval "<who>" "<when>" "<scope>"
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap gateway 8 \
+  --reason "live-session runbook OpenRouter gateway" --approval "<who>" "<when>" "<scope>"
+```
+
+The caps shown are the code's maximums (`isolation` 8, `drill` 4, `gateway` 8); a smaller approved cap works if it covers the mode's reservation. No calls, no process beyond the command. Pass: the printed totals show the new cap. A run later refuses before starting if its purpose lacks the calls it reserves or has an open reservation.
+
+### 2. Launcher probes (A1–A7, purpose `isolation`)
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py launcher-probes --isolated-dir "${Q:?}" --call-ledger "${L:?}" \
+  --out "${OUT:?}/launcher-probes.json" --a5-model openai/<MODEL>#<VARIANT> --no-variant-model <PROVIDER>/<MODEL>
+```
+
+- **Proves** pre-canary item 3: A1 the launcher's flags, password and inline config are honoured; A2 and A3 a hostile project or global config adds no plugin, MCP, formatter or LSP and relaxes no permission; A4 no second routing plugin from the real global config; A5 outside reads and server- vs session-permission precedence, with the permission answer's shape; A6 the fixed `PATH` reaches the Claude tool, and the reply's text-part key; A7 a model listed without variants is admitted, launched and settled. A6 and A7 also store the window readings `measure-demand` uses.
+- **Order it enforces:** A5 only after A1–A3 pass in the same run; A6 and A7 only after A4 passes.
+- **Expect:** 4 model calls (A5 2, A6 1, A7 1; A1–A4 send none), 7 processes (`opencode --version`, then three servers each with its routing child), about 1 minute plus the interactive ChatGPT sign-in for A5. `--accept-outside-reads` records allowed outside reads as the user's accepted risk; pass it only on the user's say-so.
+- **Pass:** exit 0, every probe `passed: true`, no blockers, `cleanup.verified_by_harness: true`. **Fail:** any probe `passed: false` or a blocker; do not run the gateway (step 5).
+
+### 3. Lost-acknowledgment drill (S3.6c, purpose `drill`)
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py drill --isolated-dir "${Q:?}" --call-ledger "${L:?}" --out "${OUT:?}/drill.json"
+```
+
+- **Proves** pre-canary item 4: drill 1 stops the real launcher after the prompt went idle, so it records `uncertain`, and the one-shot `reconcile_subscription` settles it from a re-read of the session (a replay is a `duplicate`); drill 2 stops it before the prompt, `abandon` leaves one window debit, `drop_debit` clears it and `status` is clean. It runs on a temporary managed state, never the production ledger.
+- **Expect:** 1 model call, 9 processes (version check, one server and its routing child, two launcher children, four one-shot operator ops), about 1–2 minutes.
+- **Pass:** exit 0, `drill.passed: true`, clean `status`, cleanup verified. **Fail:** any step's blocker.
+
+### 4. Codex window reader, one read
+
+```sh
+T=$(mktemp -d) && chmod 700 "${T:?}"
+stat -f '%m %z' ~/.codex/auth.json                      # metadata only; never open the file
+python3 -B scripts/codex_rate_limits.py --settings "${T:?}/settings.json"
+stat -f '%m %z' ~/.codex/auth.json
+```
+
+- **Proves** pre-canary item 9: Codex accepts the reader's handshake, the real spawn and read time (`timing.spawn_ms`, `timing.wall_ms`), whether a read rewrote `auth.json` (the two `stat` lines, and the reader's own `codex_auth_changed`), and which windows this plan reports. `--settings` points at a temporary directory so the production routing state is untouched. The [reader's contract](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#codex-window-reader) defines the reasons.
+- **Expect:** 0 tokens, 1 process (`codex app-server`), at most about 5.6 s.
+- **Pass:** without the production manifest (#227 unmerged) the answer is `failed` with `codex_pool_undeclared`, which the reader reaches only after a complete, well-formed read, with timing present; it does not show which windows were read. With the manifest it is `stored` with the plan's windows (only `7d` expected). The `auth.json` times are unchanged. **Fail:** any other `codex_*` reason, such as `codex_protocol_unexpected` or `codex_auth_changed`. The account check is manual: the user confirms the Codex login and OpenCode's Sign in with ChatGPT are the same account; the reader never prints an account id.
+
+### 5. OpenRouter gateway (purpose `gateway`)
+
+Run it only after a clean `launcher-probes` run on the same day: the gateway refuses an `--isolation-result` that does not show A1–A4 passed, no blockers and verified cleanup, that is older than 12 hours or not from today, or that comes from another OpenCode version or mode. It also needs the user's decision 4, because it spends real API dollars, and an OpenRouter key the user creates with its own credit limit of at most $1.00.
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py gateway --isolated-dir "${Q:?}" --call-ledger "${L:?}" \
+  --out "${OUT:?}/gateway.json" --gateway-model openrouter/<VENDOR>/<MODEL> --gateway-endpoint <ENDPOINT> \
+  --key-limit-usd <LIMIT, at most 1.00> --isolation-result "${OUT:?}/launcher-probes.json"
+```
+
+- **Proves** pre-canary item 8: the inline config's endpoint pin, `max_tokens` and steps on every listed agent are honoured (`GET /api/agent` read before any reservation; `steps_not_universal` otherwise); an OpenRouter `vendor/model` id end to end through attach, `check`, a request, accounting with a cost and a dollar settlement; and, for user decision 4, the S3.6 positive and negative descendants runs with real costs.
+- **The user** enters the key in OpenCode's own sign-in under the run's temporary data directory, and types the run's total cost from the OpenRouter activity page when asked. The harness never reads the key.
+- **Admission:** the positive run needs an OpenRouter organization, the cached OpenRouter status and the gateway credential; without them it stops at `prepare` with 0 calls and nothing reserved.
+- **Expect:** 2 model calls (3 reserved), output cap 500, 2 steps; 3 processes; about 2 minutes plus the sign-in and the receipt lookup. The hard bound is the key's own limit; the output cap, steps and the running-cost abort are soft bounds until the run reports them `observed`.
+- **Pass:** positive run: every cost known and equal to the receipt, a dollar settlement, `descendants` refused after `detach`, clean `status`; negative run: `complete: false` with `root_creation_unobserved` and 0 calls. **Fail:** any blocker, an unknown cost or a bound violation.
+
+### 6. Measure demand (no calls)
+
+```sh
+python3 -B tests/qualification/live_modes.py measure-demand --call-ledger "${L:?}" --out "${OUT:?}/demand.json"
+```
+
+- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. It suggests the largest delta plus 50% (at least 1) as the manifest `demand`. Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool has no readings until the harness's Codex hook is wired ([plan follow-up](superpowers/plans/2026-11-08-smart-routing.md#follow-ups-from-merged-work)).
+- **Expect:** 0 calls, 0 processes, under 1 s.
+- **Pass:** a measured delta for every window a manifest route demands. **Fail:** a window reported with a reason instead of a value; that route's demand stays unmeasured and #227 does not merge with it.
+
+### 7. Canary admission export (no calls)
+
+```sh
+python3 -B tests/qualification/opencode_live.py --export-canary-admissions
+```
+
+- **Proves:** every canary admission record, with its snapshot detail, is in the owner-only export (`~/.local/state/vibe-workflow-replay/canary/`) before the ledger prunes the detail after 24 hours. The canary also exports at the end of each run and at the next admission once the last export is 12 hours old, and refuses a new run while any record is missing. Rules: [validation Edit 6](smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history).
+- **Expect:** 0 calls, no server, one read-only ledger connection, under a second.
+- **Limit:** it reads the dedicated canary state (`--canary-state`), which refuses the production routing state; the canary on the production ledger needs the harness change in [pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements).
+
+### After the session
+
+- **Revoke sign-ins.** Delete or disable the OpenRouter key at openrouter.ai. The ChatGPT login used by A5 lives in the run's temporary data directory and goes with it; the user may also sign that session out in the ChatGPT account settings.
+- **Remove temporary directories.** The harness removes each run's `$Q` itself; after each run, confirm with `test ! -e "${Q:?}"`. Remove the reader's directory with `rm -rf -- "${T:?}"`. Delete any `withheld/` file after reading it.
+- **Verify no processes.** `pgrep -fl 'codex app-server'` prints nothing, `pgrep -fl -- "${Q:?}"` prints nothing after each run, and each result file shows `cleanup.processes_left: 0`.
+- **Record results** in a new dated section of this document, with the call-ledger totals, and update the pre-canary items they close.
+
 ## Live probes: descendants, S3.3d and the ChatGPT route (pre-registered, not yet run)
 
 These probes are fixed here **before any run**. No numbers in this section change after a run starts; results go in the "Observed" lines. The existing qualification (9 of 14) and pilot (23 of 28) budgets and thresholds are untouched.
