@@ -29,13 +29,13 @@ LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it 
 # The unit of stored subscription window observations: a thousandth of the provider's utilisation (limit 1000). The
 # manifest declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and its
 # windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
-WINDOW_UNIT = 'per_mille'
+WINDOW_UNIT = 'utilization_thousandths'
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
                 'next_request_bound')
 WINDOW_FIELDS = ('id', 'limit', 'used', 'length', 'reset_at', 'rolling', 'protected', 'organization',
-                 'organization_revision')
+                 'organization_revision', 'unit')
 
 
 class StaticSource:
@@ -200,7 +200,7 @@ def _write(path, value):
 
 
 def _valid_window(window):
-    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'unit'}:
+    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at'}:
         return False
     if 'unit' in window and not routing._text(window['unit']):
         return False
@@ -339,7 +339,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         marks_reason = None
     except (OSError, ValueError, KeyError, TypeError):
         marks, marks_reason = set(), 'entitlement_unavailable'
-    routes, pools, units, excluded, cache = [], {}, {}, [], {}
+    routes, pools, excluded, cache = [], {}, [], {}
     seen = dict(openrouter_revision=None)
 
     def leave(route, reason):
@@ -382,13 +382,12 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
             leave(spec, 'window_unit_undeclared')  # its demand's unit is unknown: fail closed
             continue
         if spec['pool'] not in pools:
-            windows, units[spec['pool']] = [], {}
+            windows = []
             for window in source.windows(spec['pool'], now):
                 if not _valid_window(window):
                     continue
                 item = {key: window[key] for key in WINDOW_FIELDS if key in window}
                 item['fresh'] = 0 <= now - window['observed_at'] <= FRESH_SECONDS
-                units[spec['pool']][window['id']] = window.get('unit')  # kept apart: never in the snapshot
                 organization = (data or {}).get('organizations', {}).get(item.get('organization'))
                 if item.get('organization') and 'organization_revision' not in item and organization is not None:
                     item['organization_revision'] = organization['revision']
@@ -400,8 +399,8 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None):
         if not pool['windows'] or not set(spec['demand']) <= {window['id'] for window in pool['windows']}:
             leave(spec, 'window_unobserved')  # enabled, but no telemetry yet (C.3 design 7.1 decision 6)
             continue
-        if billing == 'included_subscription' and any(units[spec['pool']].get(key) != spec['window_unit']
-                                                       for key in spec['demand']):
+        if billing == 'included_subscription' and any(window['id'] in spec['demand'] and window.get('unit')
+                                                       != spec['window_unit'] for window in pool['windows']):
             leave(spec, 'window_unit_mismatch')  # a stored window in another unit, or in none
             continue
         if dollar:

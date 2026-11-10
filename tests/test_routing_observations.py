@@ -165,7 +165,7 @@ class CollectorTests(Stores):
     def test_subscription_windows_must_carry_the_manifest_window_unit(self):
         """C3-1b: a route's `demand` is in its manifest's window unit, so a stored window in another unit, or in none,
         would misadmit silently: the route is left out instead. A route that declares no unit fails closed."""
-        self.assertEqual(collector.WINDOW_UNIT, 'per_mille')
+        self.assertEqual(collector.WINDOW_UNIT, 'utilization_thousandths')
         unitless = {key: value for key, value in sub_window(self.now).items() if key != 'unit'}
         cases = (('matching', sub_route(), sub_window(self.now), None),
                  ('mismatch', sub_route(), sub_window(self.now, unit='percent'), 'window_unit_mismatch'),
@@ -177,9 +177,10 @@ class CollectorTests(Stores):
                 result = self.collect([route], dict(sub=[window]))
                 self.assertEqual(excluded(result), {} if reason is None else dict(sub=reason))
                 self.assertEqual(set(kept(result)), {'sub'} if reason is None else set())
-                if reason is None:  # the unit stays out of the snapshot `routing.admit` validates
-                    self.assertNotIn('unit', result['observations']['pools']['sub']['windows'][0])
+                if reason is None:  # the stored field passes through; the manifest declaration does not
+                    self.assertEqual(result['observations']['pools']['sub']['windows'][0]['unit'], collector.WINDOW_UNIT)
                     self.assertNotIn('window_unit', kept(result)['sub'])
+        self.assertIn('unit', collector.WINDOW_FIELDS)  # C3-3 detects the stored-window schema by this name
         # One unitless window among the demanded ones is enough to leave the route out.
         result = self.collect([sub_route(demand={'5h': 10, '7d': 1})],
                               dict(sub=[sub_window(self.now), dict(unitless, id='7d')]))
