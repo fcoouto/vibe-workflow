@@ -253,6 +253,16 @@ class ManagedRelease(ManagedDelegation):
                                                                  state='recorded')])
             self.assertEqual(self.hold(prepared['attempt_id']), 'released')  # a window-only hold releases its claims
 
+    def test_an_unavailable_routing_ledger_never_undoes_a_committed_reconciliation(self):
+        with self.managed(NATIVE):
+            prepared = self.prepare()
+            with mock.patch.object(command.Service, '_ledger', side_effect=routing.BudgetError('ledger_busy')):
+                settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
+                    prepared, outcome='cancelled'))
+            self.assertEqual(settled['routing'], dict(state='unavailable', reason='ledger_unavailable'))
+            self.assertEqual(self.raw_assignment(prepared['attempt_id'])['status'], 'settled')
+            self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')  # closed later, never guessed
+
 
 class ManagedGraph(ManagedDelegation):
     planned = False
