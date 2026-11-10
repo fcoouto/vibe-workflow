@@ -66,6 +66,11 @@ class ManagedDelegation(AdmissionFixture, unittest.TestCase):
         self.assertEqual(answer['state'], 'updated', answer)
 
     @staticmethod
+    def retry(prepared):
+        return dict(retry_of=prepared['attempt_id'], diagnostic=dict(prior_attempt_id=prepared['attempt_id'],
+            cause='routing', evidence=['routing:released'], change='Retry after routing released the attempt'))
+
+    @staticmethod
     def native(model='new-native-model', effort='high'):
         return routing_launch.route_identity('codex_native', model=model, effort=effort)
 
@@ -105,7 +110,7 @@ class ManagedSelectionModes(ManagedDelegation):
         self.assertEqual(prepared['routing']['state'], 'admitted')
         self.assertIsNone(prepared['requested_model'])  # the routing admission is the only record of the model
         self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')  # the last pre-spawn step ran
-        self.assertNotIn('authority', json.dumps(prepared))
+        self.assertFalse({'authority', 'session_id', 'message_id'} & (set(prepared) | set(prepared['routing'])))
         binding = self.admission(prepared['attempt_id'])['binding']['job']
         self.assertEqual((binding['locator']['job_id'], binding['locator']['attempt_id']),
                          ('edit', prepared['attempt_id']))
@@ -120,7 +125,7 @@ class ManagedSelectionModes(ManagedDelegation):
                 with self.subTest(mode=name):
                     request = build(dispatch_id=name + '-1', **previous)
                     prepared = self.api.prepare_assignment(self.scope, request)
-                    previous = dict(retry_of=prepared['attempt_id'])
+                    previous = self.retry(prepared)
                     self.assertFalse(prepared['launch_admitted'])
                     self.assertEqual(prepared['routing'], dict(state='pending', reason='explicit_choice_unavailable'))
                     self.assertNotIn('route', prepared)
@@ -132,7 +137,8 @@ class ManagedSelectionModes(ManagedDelegation):
         with self.managed(NATIVE):
             prepared = self.api.prepare_assignment(self.scope, self.inherit_request())
         self.assertTrue(prepared['launch_admitted'], prepared)
-        self.assertEqual(self.admission(prepared['attempt_id'])['route_identity'], self.native())
+        self.assertEqual(self.admission(prepared['attempt_id'])['route_identity'],
+                         routing.route_identity(*self.native().values()))
 
     def test_routed_mode_lets_routing_choose(self):
         with self.managed(OTHER, NATIVE):
@@ -201,7 +207,7 @@ class ManagedRelease(ManagedDelegation):
             self.assertEqual(prepared['release']['status'], 'settled')
             self.worker_choices(self.native())
             again = self.api.prepare_assignment(self.scope, self.routed_request(
-                dispatch_id='request-2', retry_of=prepared['attempt_id']))
+                dispatch_id='request-2', **self.retry(prepared)))
         self.assertTrue(again['launch_admitted'], again)  # claims and resource units were free again
 
     def test_an_advisory_host_never_gets_a_dollar_route(self):
@@ -223,8 +229,9 @@ class ManagedRelease(ManagedDelegation):
             self.assertEqual(self.hold(prepared['attempt_id']), 'dispatched')
             settled = self.api.reconcile_assignment(self.scope, self.worker_reconciliation_request(
                 prepared, outcome='cancelled'))
-            self.assertEqual(settled['routing']['closed'][0]['kind'], 'complete')
-            self.assertEqual(self.hold(prepared['attempt_id']), 'complete')
+            self.assertEqual(settled['routing']['closed'], [dict(attempt_id=prepared['attempt_id'], kind='complete',
+                                                                 state='recorded')])
+            self.assertEqual(self.hold(prepared['attempt_id']), 'released')  # a window-only hold releases its claims
 
 
 class ManagedGraph(ManagedDelegation):
@@ -304,7 +311,7 @@ class ManagedGates(ManagedDelegation):
                 prompt='Finish the original accepted scope', human_continue=False, host_proof=proof['host_proof']))
             self.assertEqual(intent['routing']['state'], 'admitted', intent)
             fresh = intent['routing']['attempt_id']
-            self.assertEqual(self.hold(prepared['attempt_id']), 'complete')  # the previous turn ended
+            self.assertEqual(self.hold(prepared['attempt_id']), 'released')  # the previous turn completed
             first, second = self.admission(prepared['attempt_id']), self.admission(fresh)
             self.assertNotEqual(fresh, prepared['attempt_id'])
             self.assertEqual(first['ranking']['profile_digest'], second['ranking']['profile_digest'])

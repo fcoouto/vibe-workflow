@@ -1,0 +1,369 @@
+"""Native delegation and review through Smart Routing `prepare` in a managed project (C.3 design 3.1-3.2, 6.3 C3-2).
+
+Phase W only: a checkout that is not on `managed_projects` keeps today's caller-supplied `selection` unchanged. In a
+managed project every selection mode is admitted by the in-process routing service (`scripts.routing.managed_service`)
+after delegation's own reservation commits, bound to the planned job (`workflow`) and the delegation attempt id:
+
+- `explicit` and `inherit` become `assignment.choice`, a hard constraint: routing admits that route or answers
+  `explicit_choice_unavailable`, never a substitute. `routed` names no model and lets routing choose.
+- A committed assignment whose routing answer is pending or blocked is not launched (`launch_admitted: false`). A
+  replay of the same request re-runs `prepare` (idempotent by attempt id) and grants the one launch permit only on
+  the call that obtains the admission. A catalog or host mismatch releases it through `reconcile_assignment`.
+- Codex native subagents are an advisory host: `dispatch` runs at the last pre-spawn step, and its token is dropped
+  unread; the coordinator spawns with the returned route. Reconciliation closes the routing hold.
+
+Design: docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md. Nothing here calls a model, the network,
+a secret store, an operator op or `set managed_projects`, and no request field selects a scope or observations.
+"""
+from contextlib import closing
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+
+from runtime import delegation, evidence, routing, routing_launch, state
+
+HOST = 'codex_native'
+ROLES = dict(worker='implementer', review='reviewer')
+MODES = ('explicit', 'inherit', 'routed')
+REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
+PROOF_REF = 'delegation_routing:never-dispatched'
+LIMITATION = 'Codex native subagents are an advisory host: routing chooses and accounts but cannot block a send'
+
+
+def _command():
+    from scripts import routing as command  # the plugin package root is on sys.path wherever runtime is imported
+    return command
+
+
+def managed(scope):
+    """Whether this checkout is a managed project in the default routing settings (fails closed when unreadable)."""
+    return routing_launch.managed(scope.repository_root, _command().default_settings())
+
+
+# -- line-neutral hooks in runtime/delegation.py -------------------------------------------------------------------
+def routed(scope, selection):
+    """`_discovery`: a managed project's `routed` selection names no model or effort yet; routing chooses them."""
+    return type(selection) is dict and selection.get('mode') == 'routed' and managed(scope)
+
+
+def records_model(scope, selection):
+    """`binding.requested_model`: only an unmanaged explicit selection records its model. In a managed project the
+    routing admission is the only record of the requested model (`admitted_route`)."""
+    return selection['mode'] == 'explicit' and not managed(scope)
+
+
+def _call(service, request):
+    return service.handle(json.dumps(request).encode())
+
+
+def _hold(service, attempt_id):
+    """(hold state or None, admission record or None) for a routing attempt, read-only."""
+    ledger = service._ledger(False)
+    if ledger is None:
+        return None, None
+    data = ledger.snapshot()
+    hold = data['holds'].get(attempt_id)
+    return (None if hold is None else hold['state']), _admission(data, attempt_id)
+
+
+def _admission(data, attempt_id):
+    return next((record for record in data.get('admissions', []) if record.get('attempt_id') == attempt_id), None)
+
+
+def _route(scope, record, admission):
+    """`{model, effort}` of an admission, matched by its route-identity digest against the record's native catalog."""
+    digest = (admission or {}).get('route_identity')
+    for entry in _catalog(scope, record) if digest else ():
+        if routing.route_identity(*(entry[field] for field in routing.ROUTE_IDENTITY)) == digest:
+            return dict(model=entry['model'], effort=entry['effort'])
+    return None
+
+
+def admitted_route(scope, attempt_id):
+    """Read-only accessor for observation: `{model, effort}` routing admitted for a delegation attempt, or None."""
+    record = _committed(scope, attempt_id)
+    with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
+        found = _hold(service, attempt_id)[1]
+    return _route(scope, record, found)
+
+
+def _record(service, attempt_id, kind, event_id):
+    return _call(service, dict(v=1, op='record', event=dict(event_id=event_id[:128], attempt_id=attempt_id, kind=kind)))
+
+
+# -- admission ----------------------------------------------------------------------------------------------------
+def _locator(scope, request, attempt_id):
+    return dict(client=request['client'], cwd=str(scope.repository_root), session_id=request['session_id'],
+                task_id=request['task_id'], job_id=request['job_id'], attempt_id=attempt_id)
+
+
+def _choice(selection):
+    if selection['mode'] == 'routed':
+        return None
+    chosen = selection.get('inheritance') if selection['mode'] == 'inherit' else selection
+    return routing_launch.choice(HOST, 'subscription', model=chosen['model'], effort=chosen['effort'])
+
+
+def _writer_models(service, scope, request, attempt_id):
+    """Review independence (F13): the models routing admitted to this task's worker assignments, from delegation's
+    own records and the routing ledger, never from the request."""
+    with state._database(scope) as db:
+        records = delegation._ledger(scope, db, task=request)
+    models = set()
+    for record in records:
+        if record['data']['role'] != 'worker' or record['id'] == attempt_id:
+            continue
+        model = (_route(scope, record, _hold(service, record['id'])[1]) or {}).get('model') or \
+            record['data']['binding'].get('requested_model')
+        if model:
+            models.add(model)
+    return sorted(models)
+
+
+def admit(service, scope, request, *, attempt_id, routing_attempt, role, choice, constraints=None):
+    """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt."""
+    preflight = routing_launch.preflight(_call(service, dict(v=1, op='status')))
+    if preflight is not None:
+        return dict(state='blocked', reason=preflight)
+    locator = _locator(scope, request, attempt_id)
+    assignment = dict(attempt_id=routing_attempt, task=request['task_id'], role=ROLES[role],
+                      scope=routing_launch.assignment_scope(scope.repository_root))
+    if choice is not None:
+        assignment['choice'] = choice
+    try:
+        body = routing_launch.prepare_request(assignment, delegation.routing_job(scope, locator), workflow=locator,
+                                              constraints=constraints, planned=True)
+    except routing_launch.Refused as error:
+        return dict(state='blocked', reason=error.reason)
+    answer = _call(service, body)
+    if answer.get('state') == 'blocked' and answer.get('reason') == 'workflow_changed':
+        answer = _call(service, body)  # D6Workflow.view raced a commit: retry once, then report it
+    return answer
+
+
+def _catalog(scope, record):
+    """The host's actual catalog: every (model, supported effort) native discovery observed for this assignment."""
+    observed = evidence._read(scope, record['body']['discovery'])
+    return [routing_launch.route_identity(HOST, model=item['model'], effort=effort)
+            for item in observed['catalog'] for effort in item['supported_efforts']]
+
+
+def _committed(scope, attempt_id):
+    with state._database(scope) as db:
+        found = None if db is None else next((r for r in delegation._ledger(scope, db, assignment_id=attempt_id)
+                                              if r['owner']['scope_id'] == state._scope_id(scope)), None)
+    if found is None:
+        raise state.StateError('Exact supported assignment is absent')
+    return found
+
+
+def prepare(scope, request, role, inner):
+    """`prepare_assignment` / `prepare_review`: delegation's reservation, then routing in a managed project."""
+    if not managed(scope):
+        return inner(scope, request, role=role)
+    reply = inner(scope, request, role=role)
+    workstream = 'dispatch_prepared' in reply
+    if reply['status'] != 'prepared':
+        return reply
+    reply = dict(reply, launch_admitted=False, limitations=[*reply['limitations'], LIMITATION])
+    if workstream:
+        reply['dispatch_prepared'] = False
+    attempt = reply['attempt_id']
+    record = _committed(scope, attempt)
+    if record['data']['observation'] is not None or 'workstream_dispatch' in record['data']:
+        return reply  # already launched or consumed: a replay never grants a second permit
+    selection = record['body']['request']['selection']
+    with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
+        constraints = None
+        if role == 'review':
+            excluded = _writer_models(service, scope, record['body']['request'], attempt)
+            constraints = dict(excluded_models=excluded) if excluded else None
+        answer = admit(service, scope, request, attempt_id=attempt, routing_attempt=attempt, role=role,
+                       choice=_choice(selection), constraints=constraints)
+        if answer.get('state') != 'admitted':
+            reply['routing'] = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
+            return reply
+        if answer.get('duplicate'):
+            reply['routing'] = dict(state='admitted', duplicate=True)
+            return reply  # the one permit was granted on the call that obtained this admission
+        admission = answer['admission']
+        facts, reason = routing_launch.admitted_check(admission, host=HOST, catalog=_catalog(scope, record),
+                                                      settings_path=service.settings_path)
+        if reason is None and not workstream:
+            sent = _call(service, dict(v=1, op='dispatch', attempt_id=attempt, request=facts))
+            if sent.get('state') != 'dispatched':
+                reason = sent.get('reason') if routing._text(sent.get('reason')) else 'dispatch_refused'
+            sent.pop('authority', None)  # advisory host: the token is never stored, logged or returned
+        if reason is not None:
+            reply['routing'] = dict(state='blocked', reason=reason)
+            reply['release'] = release(scope, request, attempt, reason, service=service)
+            return reply
+    reply.update(routing=dict(state='admitted', mode=admission.get('mode')),
+                 route=dict(model=facts['model'], effort=facts['variant'], attempt_id=attempt))
+    if workstream:
+        reply['dispatch_prepared'] = True
+    else:
+        reply['launch_admitted'] = True
+    return reply
+
+
+# -- release and settlement -----------------------------------------------------------------------------------------
+def release(scope, request, attempt_id, reason, *, service=None):
+    """Release a committed, never-launched managed assignment: record routing `not_dispatched` (closing any admitted
+    hold), then settle the assignment through delegation's own `reconcile_assignment` with a not-started proof."""
+    if not REASON.fullmatch(reason or ''):
+        raise state.StateError('Invalid routing release reason')
+    if service is None:
+        with closing(_command().managed_service(scope.repository_root, scope=scope)) as owned:
+            return release(scope, request, attempt_id, reason, service=owned)
+    _require_unlaunched(service, attempt_id)
+    _record(service, attempt_id, 'not_dispatched', '%s:%s' % (reason, attempt_id))
+    identity = {key: request[key] for key in evidence.IDENTITY}
+    with state._database(scope) as db:
+        record = delegation._assignment(scope, db, dict(identity, attempt_id=attempt_id), roles=('worker', 'review'))
+        task = delegation._assignment_task(scope, db, dict(identity, attempt_id=attempt_id), revision=False)
+    state_ = record['data']
+    if state_['status'] != 'prepared' or state_['observation'] is not None or 'workstream_dispatch' in state_ or \
+            'workstream_continuation' in state_:
+        raise state.StateError('Only a never-launched managed assignment can be released by routing')
+    plan = delegation._assignment_plan(scope, record, task)
+    candidate = evidence.capture_candidate(scope, plan)
+    original = evidence._read(scope, state_['candidate'])
+    changed = sorted(name for name in original['fingerprints'].keys() | candidate['fingerprints'].keys()
+                     if not name.startswith('instruction:')
+                     and original['fingerprints'].get(name) != candidate['fingerprints'].get(name))
+    binding = state_['binding']
+    proof = dict(version=2, kind='assignment-writer-reconciliation',
+                 identity={key: task[key] for key in evidence.IDENTITY[:4]}, expected_pins=task['pins'],
+                 expected_revision=task['revision'], scope_id=state._scope_id(scope), attempt_id=attempt_id,
+                 dispatch_id=record['owner']['dispatch_id'], assignment_digest=state_['assignment']['digest'],
+                 claims_digest=evidence._digest(state_['claims']), candidate_digest=state_['candidate']['digest'],
+                 current_candidate_digest=evidence._digest(candidate), d6_plan_digest=state_['plan_digest'],
+                 observation_digest=None, result_digest=None, launch_state='not-started', stopped=True,
+                 descendants_stopped=True, observation_ref='%s:%s' % (PROOF_REF, reason),
+                 coordinator_ref='delegation_routing:release',
+                 native_identity=dict({key: binding[key] for key in
+                                       ('client_surface', 'native_version', 'parent_session_id', 'task_name')},
+                                      **dict.fromkeys(('parent_turn_id', 'spawn_item_id', 'worker_id',
+                                                       'worker_turn_id', 'result_item_id'))))
+    assessment = dict(outcome='cancelled', changed_paths=changed[:64],
+                      result_assessment='Routing released the assignment before launch: ' + reason,
+                      partial_change_assessment='No worker was launched; candidate changes are not its effects',
+                      evidence=['routing:not_dispatched:' + reason], coordinator_ref='delegation_routing:release')
+    with tempfile.TemporaryDirectory(prefix='routing-release-') as directory:
+        path = Path(directory).resolve() / 'proof.json'
+        raw = evidence._raw(proof)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(raw)
+        settled = delegation.reconcile_assignment(scope, dict(identity, expected_revision=task['revision'],
+            attempt_id=attempt_id, host_proof=dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest()),
+            assessment=assessment))
+    return dict(settled, routing=dict(state='released', reason=reason))
+
+
+def _require_unlaunched(service, attempt_id):
+    hold, _ = _hold(service, attempt_id)
+    if hold not in (None, 'admitted', 'released'):
+        raise state.StateError('A dispatched routing attempt needs host reconciliation, not a routing release')
+
+
+def settled(scope, record, reply):
+    """`reconcile_assignment`: close the routing holds of a settled managed assignment and its continuations. A
+    dispatched hold records `complete` (the coordinator never spawned, or the child finished); an admitted one
+    records `not_dispatched`. Unmanaged projects and non-native roles are unchanged."""
+    if record['data']['role'] not in ROLES or not managed(scope):
+        return reply
+    closed = []
+    with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
+        ledger = service._ledger(False)
+        holds = {} if ledger is None else ledger.snapshot()['holds']
+        for attempt, hold in sorted(holds.items()):
+            if hold['closed'] or not (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
+                continue
+            kind = 'complete' if hold['state'] == 'dispatched' else 'not_dispatched' if hold['state'] == 'admitted' \
+                else None
+            if kind is not None:
+                answer = _record(service, attempt, kind, '%s:%s' % (kind, attempt))
+                closed.append(dict(attempt_id=attempt, kind=kind, state=answer.get('state')))
+    return dict(reply, routing=dict(closed=closed)) if closed else reply
+
+
+# -- continuations (spec F11) and Workstreams dispatch --------------------------------------------------------------
+def _continuation_attempt(record, value):
+    return '%s.c%d' % (record['id'], value['used'])
+
+
+def _close_turns(service, record):
+    """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
+    ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`."""
+    ledger = service._ledger(False)
+    for attempt, hold in sorted(({} if ledger is None else ledger.snapshot()['holds']).items()):
+        if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
+            kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
+            if kind is not None:
+                _record(service, attempt, kind, 'turn:%s:%s' % (kind, attempt))
+
+
+def continuation(scope, request, record, value, reply):
+    """`prepare_continuation`: the same child and profile, with a fresh admission on the child's own route."""
+    if record['data']['role'] not in ROLES or not managed(scope):
+        return reply
+    original, attempt = record['body']['request'], _continuation_attempt(record, value)
+    identity = dict({key: original[key] for key in ('client', 'session_id', 'task_id')}, job_id=record['data']['job_id'])
+    with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
+        route = _route(scope, record, _hold(service, record['id'])[1])
+        choice = routing_launch.choice(HOST, 'subscription', model=route['model'], effort=route['effort']) \
+            if route else _choice(original['selection'])
+        if _hold(service, attempt)[0] is None:
+            _close_turns(service, record)
+        answer = admit(service, scope, identity, attempt_id=record['id'], routing_attempt=attempt,
+                       role=record['data']['role'], choice=choice)
+    if answer.get('state') != 'admitted':
+        return dict(reply, routing=dict(state=answer.get('state', 'blocked'), reason=answer.get('reason')))
+    return dict(reply, routing=dict(state='admitted', attempt_id=attempt))
+
+
+def _owned(record, request):
+    if any(record['owner'][key] != request.get(key) for key in ('client', 'session_id', 'task_id')):
+        raise state.StateError('Exact supported assignment is absent')
+
+
+def consume(scope, request):
+    """`consume_continuation`: routing `dispatch` for the prepared continuation before delegation consumes it."""
+    if not managed(scope):
+        return request
+    record = _committed(scope, request['attempt_id'])
+    _owned(record, request)
+    value = delegation._continuation_intent(scope, record)
+    if value is not None and value['token'] == request['token'] and value['state'] == 'prepared':
+        dispatch(scope, request, _continuation_attempt(record, value), record=record)
+    return request
+
+
+def dispatch(scope, request, routing_attempt=None, *, record=None):
+    """The last pre-send step of a managed Workstreams dispatch or continuation: routing `dispatch`. A refusal raises
+    before delegation consumes anything; the token is dropped unread (advisory host). A dispatched attempt whose
+    send delegation then refuses was never sent, and `settled` closes it at reconciliation."""
+    if not managed(scope):
+        return None
+    record = record or _committed(scope, request['attempt_id'])
+    _owned(record, request)
+    routing_attempt = routing_attempt or record['id']
+    with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
+        hold, admission = _hold(service, routing_attempt)
+        if admission is None or hold != 'admitted':
+            raise state.StateError('Managed native launch needs a current routing admission (%s)'
+                                   % ('routing_not_admitted' if admission is None else 'routing_' + str(hold)))
+        facts, reason = routing_launch.admitted_check(admission, host=HOST, catalog=_catalog(scope, record),
+                                                      settings_path=service.settings_path)
+        sent = None if reason else _call(service, dict(v=1, op='dispatch', attempt_id=routing_attempt, request=facts))
+        if sent is not None:
+            sent.pop('authority', None)
+            reason = None if sent.get('state') == 'dispatched' else sent.get('reason') or 'dispatch_refused'
+        if reason is not None:
+            raise state.StateError('Managed native launch refused by routing: ' + str(reason))
+    return routing_attempt

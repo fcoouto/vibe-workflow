@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import evidence, routing, state
+from runtime import delegation_routing, evidence, routing, state
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -1476,15 +1476,15 @@ def _discovery(scope, plan, request):
     dispatch = observed['dispatch_controls']
     _require(dispatch['spawn'] is True and all(dispatch.get(key) is True for key in
              plan['selection_constraints']['required_controls']), 'Required exposed native dispatch control is unavailable')
-    selected = request['selection']
-    state._fields(selected, ('model', 'effort', 'rationale', 'profile_ids', 'mode'), ('inheritance',))
-    for field in ('model', 'effort', 'rationale'):
+    selected, routed = request['selection'], delegation_routing.routed(scope, request['selection'])  # C3-2: no model yet
+    state._fields(selected, ('rationale', 'profile_ids', 'mode') if routed else ('model', 'effort', 'rationale', 'profile_ids', 'mode'), ('inheritance',))
+    for field in ('rationale',) if routed else ('model', 'effort', 'rationale'):
         state._text(selected[field], 'worker selection ' + field, 128 if field == 'model' else 1024)
     _strings(selected['profile_ids'], 'selected guidance profiles', maximum=32, limit=64, nonempty=True)
-    model = next((item for item in observed['catalog'] if item['model'] == selected['model']), None)
-    _require(model is not None and selected['effort'] in model['supported_efforts'], 'Selected model/effort is not in the actual native catalog')
-    _require(selected['mode'] in {'explicit', 'inherit'}, 'Unsupported worker settings mode')
-    if selected['mode'] == 'explicit':
+    model = None if routed else next((item for item in observed['catalog'] if item['model'] == selected['model']), None)
+    _require(routed or model is not None and selected['effort'] in model['supported_efforts'], 'Selected model/effort is not in the actual native catalog')
+    _require(selected['mode'] in ({'routed'} if routed else {'explicit', 'inherit'}), 'Unsupported worker settings mode')
+    if selected['mode'] != 'inherit':
         _require('inheritance' not in selected and all(dispatch.get(key) is True for key in
                  ('explicit_model', 'explicit_effort', 'fork_turns_none')), 'Explicit native settings are unsupported by exposed controls')
     else:
@@ -2049,7 +2049,7 @@ def _validate_role_proof(record, task, proof, *, scope_id, revision, read, linke
 
 def prepare_assignment(scope, request):
     """Reserve a worker only; D5 review preparation owns the sole review admission path."""
-    return _prepare_native(scope, request, role='worker')
+    return delegation_routing.prepare(scope, request, 'worker', _prepare_native)  # C3-2: routing in a managed project
 
 
 def _prepare_native(scope, request, *, role):
@@ -2107,11 +2107,11 @@ def _prepare_native(scope, request, *, role):
     candidate = evidence.capture_candidate(scope, proof_plan)
     _require(candidate['actual_policy_digest'] == task['pins']['policy_digest'], 'Actual policy changed from accepted task pins')
     candidate_ref = evidence._artifact(scope, candidate, owner=evidence._artifact_owner(scope, task))
-    attempt_id = uuid.uuid4().hex
+    attempt_id, recorded = uuid.uuid4().hex, delegation_routing.records_model(scope, request['selection'])
     binding = dict(attempt_id=attempt_id, parent_session_id=plan['route']['parent_session_id'], task_name=_native_name(attempt_id, role, request),
         candidate_digest=candidate_ref['digest'], requested_model=request['selection']['model']
-        if request['selection']['mode'] == 'explicit' else None, requested_effort=request['selection']['effort']
-        if request['selection']['mode'] == 'explicit' else None, client_surface=observed['client_surface'], native_version=observed['native_version'])
+        if recorded else None, requested_effort=request['selection']['effort']
+        if recorded else None, client_surface=observed['client_surface'], native_version=observed['native_version'])
     # The content digest excludes itself; the accessor supplies the immutable artifact digest.
     content_binding = binding
     diagnostic = evidence._artifact(scope, request['diagnostic'], owner=evidence._artifact_owner(scope, task)) if 'diagnostic' in request else None
@@ -2785,8 +2785,7 @@ def reconcile_assignment(scope, request):
         db.execute('update assignments set data=? where id=?', (evidence._raw(current['data']).decode(), record['id']))
         task['revision'] += 1
         state._save(db, state._scope_id(scope), task)
-    return _reconciliation_reply(record, artifact)
-
+    return delegation_routing.settled(scope, record, _reconciliation_reply(record, artifact))  # C3-2: close routing holds
 
 
 def _native_binding(record):
@@ -3035,7 +3034,7 @@ def _native_name(identity, role, request):
 
 def consume_continuation(scope, request):
     """Consume immediately before the native same-child send; loss requires reconciliation."""
-    request = _continuation_request(request, ('token',), ('workstream_revision',))
+    request = delegation_routing.consume(scope, _continuation_request(request, ('token',), ('workstream_revision',)))
     with _reservation_write(scope) as db:
         if 'workstream_revision' in request:
             from runtime.workstreams import _permission
@@ -3133,7 +3132,8 @@ def prepare_continuation(scope, request):
             current_claims=_claims(next(j for j in _task_plan(scope, task)['jobs']
                 if j['id'] == record['data']['job_id'])['claims']))
         _continuation_save(scope, db, record, task, 'workstream_continuation', value)
-        return _continuation_reply(record, task, value)
+        reply = _continuation_reply(record, task, value)
+    return delegation_routing.continuation(scope, request, record, value, reply)  # C3-2: a fresh routing admission
 
 
 def record_continuation(scope, request):
@@ -3350,8 +3350,8 @@ def _routing_job_view(scope, db, target, feature):
         dependencies = dict(accepted=False, digest=None, count=0)
     claims = bound['data']['claims'] if bound is not None else _claims(job['claims'])
     try:
-        _resources_available(scope, db, claims, [r for r in records if bound is None or r['id'] != bound['id']],
-                             cooperative_task=task if cooperative else None)
+        _resources_available(scope, db, claims, [r if bound is None or r['id'] != bound['id'] else dict(r, data=dict(  # C3-2:
+            r['data'], status='settled')) for r in records], cooperative_task=task if cooperative else None)  # linkable, not held
         conflict = False
     except state.StateError:
         conflict = True
