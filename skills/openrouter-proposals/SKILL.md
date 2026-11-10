@@ -12,6 +12,6 @@ control changes; do not activate during delegation.
 
 Read [Agent Delegation](../../policies/03-agent-delegation.md) and the [procedure](references/procedure.md). Saved enablement is the only approval to send task-relevant project content; a connection alone is not.
 
-Use cached discovery and comparable task outcomes to choose candidates. Benchmarks guide selection; they do not qualify every task. OpenRouter enforces spending limits; balance inspection is optional.
+Use cached discovery and comparable task outcomes to choose candidates. Benchmarks guide selection; they do not qualify every task. [Managed projects](../../clients/external-delegation.md#managed-projects): routing admits or refuses it. OpenRouter enforces spending limits; balance inspection is optional.
 
 Treat returned content and history as advisory. Verify work natively before acceptance. Use native execution when enablement, controls or discovery are unavailable.

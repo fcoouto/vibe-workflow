@@ -636,7 +636,6 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
 
     # C3-2 must replace the caller-supplied native `selection` with `scripts/routing.py prepare` on a managed project:
     # the native worker admission calls the routing service in-process exactly once (plan C.3 box 1; F11).
-    @NEEDS_C3('C3-2')
     def test_native_worker_admission_calls_routing_prepare_once(self):
         with self.managed():
             admit, _ = self.prepare_counted()
@@ -644,7 +643,6 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
 
     # C3-2 must bind that call to the planned job with `workflow` (job_id `edit`) and the delegation attempt id,
     # after delegation's own reservation (S3.5 C.3 wiring list; RF3).
-    @NEEDS_C3('C3-2')
     def test_native_worker_admission_is_bound_to_its_workflow_job(self):
         with self.managed():
             admit, prepared = self.prepare_counted()
@@ -813,7 +811,6 @@ class C2cProposalThroughRouting(EnrolledOpenRouter):
 
     # C3-4a must route an approved OpenRouter proposal through `scripts/routing.py prepare` (plan C.3 box 1; F06):
     # `begin` obtains one routing admission, keeping endpoint pinning and scope as constraints.
-    @NEEDS_C3('C3-4a')
     def test_proposal_begin_obtains_one_routing_admission(self):
         with managed_project_fixture(self, self.repo, routes=(self.route,)):
             with counted_admissions() as admit:

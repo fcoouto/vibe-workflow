@@ -5691,7 +5691,7 @@ def _review_response(scope, db, request, record, admitted=False):
 def prepare_review(scope, request):
     """The sole native review admission path: one D5 round and one D6 launch permit."""
     from runtime import delegation
-    return delegation._prepare_native(scope, request, role='review')
+    return delegation.delegation_routing.prepare(scope, request, 'review', delegation._prepare_native)  # C3-2
 
 
 def prepared_native_review(scope, attempt_id):

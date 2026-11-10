@@ -25,14 +25,29 @@ turned automatic selection off or narrowed its scope. An account connection
 alone grants nothing. Use saved preference and comparable verified outcomes
 including native preparation, supervision, repair and review. If eligible routes
 remain unresolved, continue natively; preserve explicit API-only limits.
-`runtime.external_delegation.select` expresses this offline precedence; callers
-supply observed eligibility, not guessed capability, and take each route's
-`automatic` from `automatic_allowed`. Consideration never performs inference,
-paid discovery, activation or account changes.
+Outside managed projects, `runtime.external_delegation.select` expresses this
+offline precedence; callers supply observed eligibility, not guessed capability,
+and take each route's `automatic` from `automatic_allowed`. Consideration never
+performs inference, paid discovery, activation or account changes.
 
 Start with isolated fixes/tests and strong independent checks. Broad architecture,
 security-sensitive decisions and weakly verifiable work stay native. Load only the
 selected executor's procedure. Proposal qualification does not qualify tool use.
+
+## Managed projects
+
+In a project on Smart Routing's `managed_projects` list, routing `prepare` makes
+the external choice and no caller-owned selector runs. The executor's launcher
+sends the coordinator's explicit route, model and effort as the assignment's
+`choice`: routing admits exactly that route or answers `pending`, and never
+substitutes another. The user's scope stays a set of constraints:
+`runtime.external_delegation.constraints` turns the effective permission into
+routing constraints and refuses local preference or a saved `automatic: false`
+before routing is asked. A `pending` or `blocked` answer returns the task to
+native work; do not fall back to `select` or try another route. Endpoint pinning,
+source, permission, packet and independent-review checks are unchanged, and
+activation and funding stay each route's own. OpenRouter proposals do this inside
+`begin` ([procedure](../skills/openrouter-proposals/references/procedure.md#managed-projects)).
 
 ## Saved permission (optional)
 
