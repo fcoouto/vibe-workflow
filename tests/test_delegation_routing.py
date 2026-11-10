@@ -210,6 +210,26 @@ class ManagedRelease(ManagedDelegation):
                 dispatch_id='request-2', **self.retry(prepared)))
         self.assertTrue(again['launch_admitted'], again)  # claims and resource units were free again
 
+    def test_a_replay_mismatch_closes_the_hold_and_leaves_release_to_the_coordinator(self):
+        spent = dict(value=True)
+
+        def windows(pool, now):
+            if spent['value']:
+                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
+                             observed_at=now)]
+            return None
+        request = self.routed_request()
+        with self.managed(NATIVE, windows=windows):  # worker_choices list the fixture CHOICE first
+            waiting = self.api.prepare_assignment(self.scope, request)
+            self.assertEqual(waiting['routing']['state'], 'pending', waiting)
+            spent['value'] = False
+            replay = self.api.prepare_assignment(self.scope, request)
+            self.assertEqual(replay['routing'], dict(state='blocked', reason='catalog_mismatch'))
+            self.assertFalse(replay['launch_admitted'])
+            self.assertNotIn('release', replay)  # a replay never asserts that nothing was launched
+            self.assertEqual(self.hold(replay['attempt_id']), 'released')
+            self.assertEqual(self.raw_assignment(replay['attempt_id'])['status'], 'prepared')
+
     def test_an_advisory_host_never_gets_a_dollar_route(self):
         gateway = dict(state='admitted', duplicate=False, admission=dict(
             attempt_id='x', route='gateway-route', billing_class='gateway', pool='p', mode='worker_choice',
@@ -272,7 +292,7 @@ class ManagedGates(ManagedDelegation):
         self.assertEqual(stored['resource'], view['resource']['marker'])  # the bound assignment's resource units
         self.assertIsNotNone(self.admission(prepared['attempt_id'])['pool'])
 
-    def test_a_workflow_change_after_prepare_sends_nothing(self):
+    def test_a_dependency_reopened_after_prepare_sends_nothing(self):
         from runtime import workstreams
         current = workstreams.control(self.scope, 'status', dict(client='codex'))
         enabled = workstreams.control(self.scope, 'enable', dict(client='codex', expected_revision=current['revision']))
