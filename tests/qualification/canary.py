@@ -15,8 +15,8 @@ pre-registered canary measures (C3-3; plan Task S3.7). The harness never changes
 The environment (`opencode_live.CanaryEnv` in a live run, a fake in tests) provides: `status()`, `health()`,
 `prepare(body)`, `dispatch(attempt)`, `attach(session, attempt, token)`, `detach(...)`, `launch(session, message,
 allow_title)`, `account(session, titles_sent)`, `record(event)`, `repo_changes()` and `kill_switch()`; optionally
-`quiesce()`, `diagnostics(session)` (payload shapes for an aborted admission) and `progress()` (how far the last
-accounting read got).
+`quiesce()`, `diagnostics(session)` (payload shapes for an aborted admission), `progress()` (how far the last
+accounting read got) and `export_if_due()` (the 12-hour replay export of the canary admissions).
 """
 import os
 from pathlib import Path
