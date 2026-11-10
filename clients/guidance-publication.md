@@ -60,6 +60,17 @@ JSON line: `refreshed` (exit 0) wrote a new table; `kept` (exit 1) kept the last
 verified table; `blocked` (exit 1) wrote nothing, for example on a symlinked or
 shared target or input; a usage error exits 2. A `dir_sync_failed` warning
 means the table was written but may not survive a crash; rerun the refresh.
+
+A refresh that writes a table of a new version keeps the table it replaces,
+unchanged, as `strategy-table.previous.json` (`<name>.previous.json` beside
+`--table`). Only one previous version is kept, and only a verified table. To
+return to it, run `python3 -B scripts/routing_table.py rollback [--settings
+SETTINGS.json] [--table TABLE.json]`. It swaps the two files, so running it again
+returns to the newer table. It prints `rolled_back` (exit 0), or `blocked`
+(exit 1) and changes nothing: `no_previous_table`, `unsafe_previous_table`,
+`invalid_previous_table` or `unsafe_table_path`. A `newer_table_not_kept` warning
+means the rollback happened but the replaced table was not kept; a refresh
+recreates it. Rollback never contacts the network, a model or a secret store.
 Report a `kept`, `blocked` or warning result as a maintenance finding; it never
 blocks delegation. Code drops rows naming unavailable models,
 unsupported efforts or harnesses, and rows without cited evidence. Profiling or

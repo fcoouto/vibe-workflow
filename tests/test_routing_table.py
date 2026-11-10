@@ -470,7 +470,7 @@ class PreviousTableTests(Base):
             return real_replace(src, dst)
         with mock.patch.object(routing_table.os, 'replace', second_fails):
             code, report = self.rollback()
-        self.assertEqual((code, report['reason']), (1, 'write_failed'))
+        self.assertEqual((code, report['state'], report['warnings']), (0, 'rolled_back', ['newer_table_not_kept']))
         self.assertEqual(self.table.read_bytes(), old)  # the table is installed first
         self.assertEqual(len(list(self.table.parent.iterdir())), 2)
 

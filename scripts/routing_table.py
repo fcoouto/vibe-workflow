@@ -4,6 +4,7 @@
 Usage:
   routing_table.py refresh --guidance PATH --catalog PATH --benchmarks PATH --terms PATH
                            [--settings PATH] [--table PATH]
+  routing_table.py rollback [--settings PATH] [--table PATH]
 
 The four inputs are the JSON shapes `runtime.routing_evidence` documents. The table goes where
 `scripts/routing.py` reads it: `--table`, or `strategy-table.json` beside the settings file. The command
@@ -14,6 +15,13 @@ Inputs must be regular files, not symlinks, FIFOs or devices (`unsafe_input`). I
 Exit 0 when a fresh table was written (`refreshed`); 1 when the last verified table was kept (`kept`, marked
 `refresh_failed` with its original `compiled_at`) or nothing was written (`blocked`); 2 for a usage error.
 A `dir_sync_failed` warning means the table was written but the folder sync after the rename failed.
+
+A refresh that writes a table of a new version first keeps the verified table it replaces, byte for byte, as
+`strategy-table.previous.json` (`<stem>.previous<suffix>` for `--table`); only one previous version is kept.
+`rollback` swaps the two (exit 0, `rolled_back`), so a second rollback returns to the newer table. It refuses
+with `no_previous_table`, `unsafe_previous_table`, `invalid_previous_table` or `unsafe_table_path` and changes
+nothing. It installs the previous version first; if keeping the replaced table then fails, the warning
+`newer_table_not_kept` means the rollback still happened and a refresh recreates the newer table.
 """
 import errno
 import hashlib
@@ -95,20 +103,27 @@ def _read_input(path):
     return raw
 
 
-def _previous(path):
-    """The last verified table, or None. A target the reader would refuse is never replaced."""
+def _folder(path):
+    """Whether the table's folder exists; a folder the reader would refuse is never written to."""
     try:
         usage_budget.private(path.parent, True)
     except FileNotFoundError:
-        return None
+        return False
     except BudgetError:
         raise Blocked('unsafe_table_path') from None
+    return True
+
+
+def _stored(path, unsafe):
+    """The verified table at ``path`` and its exact bytes, or None when absent or unverified.
+
+    A path the reader would refuse raises ``Blocked(unsafe)``: it is never replaced or kept."""
     if not os.path.lexists(path):
         return None
     try:
         info = usage_budget.private(path)
     except BudgetError:
-        raise Blocked('unsafe_table_path') from None
+        raise Blocked(unsafe) from None
     if info.st_size > reader.MAX_TABLE:
         return None
     try:
@@ -118,7 +133,12 @@ def _previous(path):
         return None
     compiled = (type(value) is dict and reader._table_shape(value) and value.get('schema') == routing_evidence.SCHEMA
                 and type(value.get('sources')) is list and type(value.get('compiled_at')) is str)
-    return value if compiled else None
+    return (value, raw) if compiled else None
+
+
+def previous_path(path):
+    """Where the one previous version lives: `strategy-table.previous.json` beside `strategy-table.json`."""
+    return path.with_name(path.stem + '.previous' + path.suffix)
 
 
 def _encode(table):
@@ -169,7 +189,8 @@ def _write(path, data):
 def refresh(table_path, sources, now=None):
     """Compile from local files and write the table; returns the one-line report."""
     path = reader._resolved(table_path)
-    previous = _previous(path)
+    stored = _stored(path, 'unsafe_table_path') if _folder(path) else None
+    previous = stored[0] if stored else None
     digests, problem = {}, {}
 
     def load():
@@ -201,7 +222,11 @@ def refresh(table_path, sources, now=None):
                 table, data = dict(previous, refresh_failed=True), None
     except ValueError:
         raise Blocked(problem.get('reason', 'no_verified_table')) from None
-    warnings = _write(path, data) if data is not None else []
+    warnings = []
+    if data is not None and not table.get('refresh_failed') and stored and previous.get('version') != table['version']:
+        warnings += _write(previous_path(path), stored[1])  # before the table: a failure leaves the table as it was
+    if data is not None:
+        warnings += [item for item in _write(path, data) if item not in warnings]
     report = dict(v=VERSION, state='refreshed', version=table['version'], compiled_at=table['compiled_at'],
                   rows=len(table['rows']), dropped=len(table.get('dropped', [])))
     if table.get('refresh_failed'):
@@ -211,31 +236,60 @@ def refresh(table_path, sources, now=None):
     return report
 
 
+def rollback(table_path):
+    """Swap the previous version into place; a second rollback returns to the newer table."""
+    path = reader._resolved(table_path)
+    other = previous_path(path)
+    if not _folder(path) or not os.path.lexists(other):
+        raise Blocked('no_previous_table')
+    current = _stored(path, 'unsafe_table_path')
+    prior = _stored(other, 'unsafe_previous_table')
+    if prior is None:
+        raise Blocked('invalid_previous_table')
+    warnings = _write(path, prior[1])  # the table first: an interruption never leaves no table
+    if current:  # an unverified table is never kept
+        try:
+            warnings += [item for item in _write(other, current[1]) if item not in warnings]
+        except Blocked:
+            warnings.append('newer_table_not_kept')
+    table = prior[0]
+    report = dict(v=VERSION, state='rolled_back', version=table['version'], compiled_at=table['compiled_at'],
+                  rows=len(table['rows']), replaced_version=current[0].get('version') if current else None)
+    if warnings:
+        report['warnings'] = warnings
+    return report
+
+
 def _arguments(argv):
     items, paths = list(argv), {}
-    if not items or items.pop(0) != 'refresh':
-        return None
-    allowed = {'--settings', '--table', *('--' + name for name in INPUTS)}
+    if not items or items[0] not in ('refresh', 'rollback'):
+        return None, None
+    command = items.pop(0)
+    inputs = INPUTS if command == 'refresh' else ()
+    allowed = {'--settings', '--table', *('--' + name for name in inputs)}
     while items:
         item = items.pop(0)
         if item not in allowed or item in paths or not items or items[0].startswith('-'):
-            return None
+            return None, None
         paths[item] = items.pop(0)
-    if not {'--' + name for name in INPUTS} <= set(paths):
-        return None
-    return paths
+    if not {'--' + name for name in inputs} <= set(paths):
+        return None, None
+    return command, paths
 
 
 def main(argv=None):
-    paths = _arguments(sys.argv[1:] if argv is None else argv)
+    command, paths = _arguments(sys.argv[1:] if argv is None else argv)
     if paths is None:
         report, code = dict(v=VERSION, state='blocked', reason='usage_error'), USAGE
     else:
         settings = paths.get('--settings') or reader.default_settings()
         table = paths.get('--table') or Path(settings).absolute().parent / 'strategy-table.json'
         try:
-            report = refresh(table, {name: Path(paths['--' + name]) for name in INPUTS})
-            code = 0 if report['state'] == 'refreshed' else 1
+            if command == 'rollback':
+                report = rollback(table)
+            else:
+                report = refresh(table, {name: Path(paths['--' + name]) for name in INPUTS})
+            code = 0 if report['state'] in ('refreshed', 'rolled_back') else 1
         except Blocked as error:
             report, code = dict(v=VERSION, state='blocked', reason=str(error)), 1
         except Exception:  # noqa: BLE001 - fixed reason; never echo evidence or a traceback
