@@ -176,11 +176,11 @@
       ]
     },
     "clients/habblaud-receiver.md": {
-      "sha256": "090bd7a5ed5e778a42bb0196f1c13d6c20a97e833c473738992cb50d382c2acb",
+      "sha256": "be208cfb816d0b4f23df199481c023771abf33f5e16cbea0a84d7ee5ebc24c5a",
       "ranges": [
         [
           1,
-          120
+          119
         ]
       ]
     },
