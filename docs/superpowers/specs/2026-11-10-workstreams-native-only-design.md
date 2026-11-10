@@ -70,5 +70,5 @@ Resource admission, capacity recovery, the managed task runtime itself, worker r
 
 ## 8. Risks
 
-- **Coordinator lost.** Claude Code resumes subagents with the same session (documented). Continuing an OpenCode or Codex child from a new coordinator is not yet observed. The child record and per-child branches keep the work recoverable; the plan includes one live check on OpenCode.
+- **Coordinator lost.** A new coordinator cannot continue another session's child: OpenCode 2.2.6 refuses with "is not a child of the current session" (observed 10 November 2026), and Claude Code resumes subagents only within the same session (documented). Recovery resumes the original coordinator session; the child record and per-child branches keep the work recoverable.
 - **Fewer visible names.** Children lose their family tag in sidebars that list them flat; managed Codex children show only the attempt name and role badge.
