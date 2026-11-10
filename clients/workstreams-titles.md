@@ -5,24 +5,22 @@ task progress, resolving a manual rename, or diagnosing missed title updates.
 The [naming contract](workstreams-naming.md) owns the format, attention rules
 and adoption trigger.
 
-## Adopt a parent or child
+## Adopt the coordinator title
 
-First apply the [new-thread scope](workstreams-naming.md#new-thread-scope), then
-resolve the [display-family association](workstreams-naming.md#resolve-the-display-family),
-then inspect the existing title and recorded presentation ownership. Reuse the
-adopted mapping, reconcile manual edits before writing, and
-retain any manual-title pause. A known user-selected title is an override even
+Only the coordinator's thread is adopted; its workers and reviewers get no
+managed title. Inspect the existing title and recorded presentation ownership,
+reconcile manual edits before writing, and retain any manual-title pause. A known user-selected title is an override even
 before managed adoption; preserve it until the user explicitly requests adoption.
 Explicit title instructions and recorded pauses also take precedence over
 automatic adoption.
 
 At the [implementation naming trigger](workstreams-naming.md#automatic-implementation-naming),
-the naming policy authorizes a first managed title for an eligible context even
-if earlier turns were planning. This permission applies to the current
-implementation family and does not establish who set the current title.
+the naming policy authorizes a first managed title for the coordinator's thread
+even if earlier turns were planning. This permission does not establish who set
+the current title.
 Do not require a native title-author signal. Outside this trigger, preserve an
 existing title of unknown ownership unless the user explicitly requests adoption.
-An eligible context's independently observed automatic/default title also
+The thread's independently observed automatic/default title also
 permits adoption when no known override or pause applies.
 
 Observe the initial title, then re-read it after preparation immediately before
@@ -32,7 +30,7 @@ managed title. Retain an uncertain write as pending and reconcile it against tha
 same native identity; do not restart adoption or reset the baseline to each new
 observation.
 
-When a workflow task is already bound, configure an eligible title once through
+When a workflow task is already bound, configure the title once through
 the enrolled package, using the naming rule as the workflow decision
 reference. Use the current task identity and revision:
 
@@ -40,7 +38,7 @@ reference. Use the current task identity and revision:
 python3 -I -B <package>/scripts/workflow.py task title configure --cwd <checkout> < title.json
 ```
 
-Parent request:
+Request:
 
 ```json
 {
@@ -56,27 +54,16 @@ Parent request:
 
 Use `workflow_topic` for text chosen by the coordinator. Use `topic` for an
 explicit user choice. Supply only one. The saved presentation records workflow
-ownership when established. Older records without that observation retain their
-topic during an automatic switch. `workflow_topic` is a configure input only.
+ownership when established. `workflow_topic` is a configure input only.
 
-For an explicitly associated member, supply its recorded root coordinator UUID as
-`parent_session_id` and `member: "C"`. Store and display the same literal `P` or
-`C` role; the actual native UUID identifies the context.
-Title controls use `parent_session_id` for the display root; delegation and worker
-visibility use that field for the actual native parent. This display binding must
-satisfy the selected runtime's validation; it never changes native lineage,
-ownership or dispatch authority. Existing delegation admission remains required.
-
-Configuration resolves the declared root's shared family code, records the current
-title, then synchronizes the managed format. The same bound task cannot be configured twice. After an authorized task
+Configuration records the current title, then synchronizes the managed format. The same bound task cannot be configured twice. After an authorized task
 replacement in the same native thread, an explicit configuration or resumption
 request rebinds presentation to the new task and archives the old presentation.
-The family/member binding remains stable; an existing manual-title pause survives
+An existing manual-title pause survives
 configuration until the user explicitly requests resumption. Unmanaged threads and unrelated chats stay outside
 automatic title synchronization.
 
-Choose the path per native thread: a bound parent does not bind its workers or
-reviewers. For an already-adopted bound thread, use `task title sync` rather than
+For an already-adopted bound thread, use `task title sync` rather than
 configure again. A failed runtime synchronization retains its pending state;
 do not bypass it with a direct write.
 
@@ -84,7 +71,7 @@ For ordinary native work without a bound runtime task, reuse known supported
 client title controls after observing the actual native identity. If discovery
 is needed, list tool names within the current client's namespace, then inspect
 only the selected read/write definitions; do not print cross-service metadata.
-Keep the family/member mapping, last verified managed title, pending delivery, topic
+Keep the last verified managed title, pending delivery, topic
 ownership and any manual-title pause in the existing task plan. Record workflow
 ownership only for a topic the workflow chose. Apply the manual-title rules below
 before every write and acknowledge delivery by readback. Resolve an uncertain
@@ -126,13 +113,6 @@ session ID; `session_unverified` means the check failed or the server does not
 know that session. With either, this session cannot be titled: do not retry it,
 and report the naming limitation. Fix an `invalid_request` before trying again.
 
-For a child session, pass the ID recorded for it in your task plan, for example
-the session ID a subagent result returned, as `session_id` without `--proof`.
-Never pick a session from
-`opencode session list` or by any other guess: without `--proof` the command only
-checks that OpenCode answered for the ID you passed, not that it is the right
-session, so a wrong ID could rename another chat.
-
 The command reads and writes only the session title through `opencode api`
 and never starts a model turn. It always exits successfully and prints at most
 one JSON line. `{"ok": true}` means readback confirmed the title; record its
@@ -149,8 +129,8 @@ Keep the plan unchanged and deliver the title again at the next update. The
 
 Without a baseline, the command writes only over an empty title, OpenCode's
 default `New session - <time>` or `Child session - <time>` title, or a title in
-the managed format. A managed-format title may belong to another family, such
-as `W2`; replacing it re-adopts the session after a lost baseline. Any other
+the managed format; replacing a managed-format title re-adopts the session after
+a lost baseline. Any other
 existing title counts as a manual title.
 
 Add `"adopt": true` to one request without a baseline when the
@@ -187,7 +167,7 @@ every PR the thread opened or took over; for required PR delivery also use
 [delivery completion](delivery.md#completion-and-retention).
 The existing `WAITING` state covers merge waits; its reason identifies the dependency.
 One or several PRs do not change the title format. A child's wait never assigns
-the parent's state or progress; the parent follows its own accepted scope.
+the coordinator's state or progress.
 
 For direct display controls, use the same phase meanings and next-action owner
 in the existing task plan without creating runtime state. For runtime-bound
@@ -219,8 +199,7 @@ delegation.
 - **Continue or correct the same objective.** Record the actual phase, normally
   `WORKING`. Keep accepted milestones that still apply, add the agreed
   remaining work and recalculate the meter.
-- **Clearly start a different objective here.** Switch automatically. Keep the
-  same family and member. Start the new objective with zero accepted milestones
+- **Clearly start a different objective here.** Switch automatically. Start the new objective with zero accepted milestones
   and retain the old objective and evidence in history.
 - **Ask about the completed result or acknowledge it.** Keep the full meter.
 - **The requested work could belong to either objective.** Ask which one before
@@ -283,17 +262,16 @@ automation may have changed the title.
 - If only the topic changed and the format is unambiguous, adopt the topic,
   clear workflow topic ownership and continue meter/status updates. Queued
   updates use the new topic.
-- If meter, family, member, status or overall format changed, preserve the title
+- If meter, status or overall format changed, preserve the title
   and pause title synchronization for that thread. Announce the pause once.
 - Resume only after an explicit user request. For runtime-bound titles, use
   `task title resume` with the current task identity, revision and decision
   reference. Optional `topic` supplies the user's intended wording; other managed
-  fields come from authority. For direct controls, retain the recorded
-  family/member identity and accepted plan progress, read the current title as
+  fields come from authority. For direct controls, retain accepted plan progress, read the current title as
   the new baseline, and clear the recorded pause only for that explicit request.
 
 Pausing title synchronization does not pause the task. A manually typed `DONE`
-cannot complete work or change family identity or permissions. New turns, runtime
+cannot complete work or change permissions. New turns, runtime
 restarts and milestones do not silently resume title synchronization. A concurrent
 manual edit can still race a native write; the client currently provides no
 verified compare-and-set operation. Detect observed conflicts and preserve them.
@@ -304,23 +282,13 @@ read-to-write race also remains; baseline comparison does not eliminate it.
 
 For a runtime-bound presentation read, use `task title status`; for explicit
 repair, use `task title sync`. These take only `{client, session_id}`. Configuration and
-resumption require the complete identity/revision request above. Resume retains
-the original family/member binding.
+resumption require the complete identity/revision request above.
 
 ## Update and qualification boundary
 
-The task vocabulary is a pinned runtime change. A title applied before `READY`
-and `BLOCKED` were retired may still show them and stays recognized, but new
-titles never do.
-Reconcile affected owners with their original runtime and use the existing
+The task vocabulary and title format are pinned runtime changes. Reconcile affected owners with their original runtime and use the existing
 [approved runtime update](runtime.md#change-a-pinned-runtime) procedure with a fresh
 state authority. Existing ownership and unresolved assignments remain binding.
-
-An authorized display-format update can reconcile saved titles with earlier
-status layouts or without the leading meter character. Preserve the family/member
-binding, topic-only edits and manual-title pauses. A user changing the layout
-or meter remains a whole-format override. Do not bulk-rewrite titles, replace
-original runtime readers or silently repin active tasks for a format change.
 
 Formatting, state, command and hook-boundary tests qualify source behavior.
 Installed hook trust and callback delivery, rendering and literal title search

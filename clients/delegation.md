@@ -8,8 +8,6 @@ The [cooperative D6 contract](../docs/d6-native-delegation-plan.md#normal-comple
 
 The launch and observation controls below apply to native children. For an authorized Usage Routing proposal, use the [Usage Routing delegation procedure](../skills/manage-usage-routing/references/delegation.md).
 
-Load the [display naming rules](workstreams-naming.md) for native parent/child eligibility, including ordinary delegation and review. Follow their implementation trigger and applicable [title synchronization](workstreams-titles.md) procedure without changing prepared creation markers or launch permissions.
-
 ## Observe the route and select settings
 
 The package provides Codex CLI/Desktop native observation. Qualify the actual surface and required controls under [capability-based compatibility](../policies/11-tool-integrations.md#qualify-the-actual-workflow) before relying on them. Recorded version numbers are provenance, not support gates. Package validation does not establish observed native execution. Approval alone cannot make an unsupported route executable.

@@ -212,8 +212,8 @@ readers retain their historical fields.
 
 Optional retry fields: `retry_of` is the original attempt; `diagnostic` records
 `prior_attempt_id`, `cause`, `evidence`, `change` after diagnosis.
-Never reset original attempts/resources/deadline. Managed child naming and delivery
-use the [dispatch protocol](workstreams-protocol.md); do not add a combined
+Never reset original attempts/resources/deadline. Managed child delivery
+uses the [dispatch protocol](workstreams-protocol.md); do not add a combined
 Workstreams revision to ordinary delegation or continuation.
 Native review admission uses D5's [review preparation](evidence-review-prepare.md)
 and [common request fields](evidence.md#request-fields),
