@@ -24,7 +24,7 @@ The evaluator imports and executes candidate JavaScript: inspect it before indep
 
 ## Run the selected case
 
-Follow existing [delegation](../policies/03-agent-delegation.md), [role preparation](worker-visibility.md#declare-before-dispatch) and [title](workstreams-naming.md) owners for native execution. A selected boundary case uses a fresh context and its assigned finite budget. Run only the selected case; selecting one does not require its counterpart or authorize a retry.
+Follow existing [delegation](../policies/03-agent-delegation.md) and [role preparation](worker-visibility.md#declare-before-dispatch) owners for native execution. A selected boundary case uses a fresh context and its assigned finite budget. Run only the selected case; selecting one does not require its counterpart or authorize a retry.
 
 | Case | Worker scope and acceptance |
 | --- | --- |

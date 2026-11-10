@@ -116,11 +116,15 @@ shared [role preparation](worker-visibility.md#declare-before-dispatch).
 `control_observation` comes from exposed native controls. `discovery_expectation`
 comes from current compatible discovery; it binds the fresh dispatch reader, not
 a version allowlist. `guidance` copies snapshot reference/digest/time/freshness from
-compatible cached guidance status. Profile IDs must exist there. Select model and
-supported effort from the actual native catalog. Explicit mode requires explicit
-model/effort and fork isolation controls; inherit mode adds
-`inheritance:{model,effort,reference}` matching verified suitable settings. Preserve
-coordinator settings/authentication. Examples are illustrative, not native evidence.
+compatible cached guidance status. Profile IDs must exist there. Outside a managed
+project, select model and supported effort from the actual native catalog. Explicit
+mode requires explicit model/effort and fork isolation controls; inherit mode adds
+`inheritance:{model,effort,reference}` matching verified suitable settings. In a
+[managed project](../policies/03-agent-delegation.md#managed-projects), policy sets
+the mode: `routed` omits `model` and `effort`, and routing checks the admitted route
+against the same catalog; explicit and inherit settings become hard routing
+constraints. Preserve coordinator settings/authentication. Examples are
+illustrative, not native evidence; the example below is unmanaged explicit mode.
 
 <!-- example:prepare -->
 ```json
@@ -208,8 +212,8 @@ readers retain their historical fields.
 
 Optional retry fields: `retry_of` is the original attempt; `diagnostic` records
 `prior_attempt_id`, `cause`, `evidence`, `change` after diagnosis.
-Never reset original attempts/resources/deadline. Managed child naming and delivery
-use the [dispatch protocol](workstreams-protocol.md); do not add a combined
+Never reset original attempts/resources/deadline. Managed child delivery
+uses the [dispatch protocol](workstreams-protocol.md); do not add a combined
 Workstreams revision to ordinary delegation or continuation.
 Native review admission uses D5's [review preparation](evidence-review-prepare.md)
 and [common request fields](evidence.md#request-fields),

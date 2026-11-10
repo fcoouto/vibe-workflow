@@ -25,7 +25,7 @@ class LocalOwnership:
 
 def _acquire(cwd, *, deadline=None, settings=False):
     """Reobserve canonical membership without qualification or installed-source pins."""
-    budget = dict(paths=0, bytes=0, deadline=time.monotonic() + 4)
+    budget = dict(paths=0, bytes=0, deadline=time.monotonic() + startup.OBSERVATION_SECONDS)
     if deadline is not None: budget['deadline'] = min(budget['deadline'], deadline)
     acquired = startup._acquire_canonical_membership(Path(cwd), authority_path=None, budget=budget)
     if acquired.status != 'observed' or acquired.observation['membership'] != 'included':

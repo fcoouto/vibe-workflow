@@ -10,7 +10,7 @@ Apply with the [shared contract rules](00-index.md).
 | --- | --- |
 | Trigger | When considering or dispatching a worker; reassess after failed attempts, stalled repair/validation progress, or scope/capacity changes affecting delegated work. |
 | Decision | Use deterministic tooling or direct execution when sufficient. Delegate for useful context isolation, specialization, required independence or genuinely independent parallel work. Select worker capability and verification by complexity, ambiguity, consequences and total effort, including retries and review. |
-| Required action | When delegating, define a bounded worker brief, select an authorized worker model/effort using applicable platform guidance, reserve writable files and mutable resources, and verify returned work before integration. Apply the procedures below. |
+| Required action | When delegating, define a bounded worker brief, select an authorized worker model/effort using applicable platform guidance (in a [managed project](#managed-projects), routing selects it), reserve writable files and mutable resources, and verify returned work before integration. Apply the procedures below. |
 | Evidence | Record the rationale, task/worker identity, guidance version/freshness, requested/configured/observed worker model and reasoning, ownership, actual checks, verified outcome and limitations. Unknown settings remain unknown; do not invent usage or savings measurements. |
 | Blocking condition | No suitable authorized execution option, unresolved ownership or exhausted task budget. Use a qualified, already-approved fallback when available; otherwise block dependent work. |
 
@@ -18,7 +18,7 @@ Apply with the [shared contract rules](00-index.md).
 
 - Preserve the user's chosen coordinator model, reasoning and authentication. Native agents and models are automatically approved across all current and future platforms/providers and versions. Discover available native capabilities through existing account access, without approval prompts or a static allowlist.
 - Activating an integration, such as API Usage or OpenRouter, authorizes autonomous use of its models and routes within its saved scope, funding and limits; no further approval is needed. An account connection alone is not activation. Any other non-native model or execution route, including local models, proxies and separately billed API routes, requires explicit user approval before first use. Local models also require capability assessment, even when a client supports them natively.
-- Select each worker's model and reasoning from that platform's current official recommendations, the task's requirements and locally available controls. Prefer the lightest capable option by total effort; do not downgrade solely for price. Set worker choices through supported dispatch controls without changing the coordinator or global defaults. When only inheritance/configuration is supported, record the limitation and use it only if it satisfies the assignment. Keep commercial model names out of portable rules.
+- Select each worker's model and reasoning from that platform's current official recommendations, the task's requirements and locally available controls. Prefer the lightest capable option by total effort; do not downgrade solely for price. In a [managed project](#managed-projects), routing makes these two selections; the rest of this item still applies. Set worker choices through supported dispatch controls without changing the coordinator or global defaults. When only inheritance/configuration is supported, record the limitation and use it only if it satisfies the assignment. Keep commercial model names out of portable rules.
 - Read a concise local copy of the relevant platform guidance. Store source URLs, checked time, applicability and a content/version digest. Refresh during periodic environment maintenance, on relevant capability/catalog changes, missing/corrupt guidance or user request, outside hooks; apply [capability-based compatibility](11-tool-integrations.md#qualify-the-actual-workflow) to client updates and do not query upstream on every task. Cache age is a maintenance signal, not a correctness guarantee or automatic dispatch blocker. A failed refresh retains the last verified copy with stale freshness; suppress repeated attempts for the same trigger until a later maintenance run, relevant change or explicit retry. Reuse guidance only while its applicability and available controls remain compatible; otherwise hold dependent dispatch and continue independent work. Discover actual model availability separately. When Smart Routing is in use, follow a successful refresh with the [strategy table refresh](../clients/guidance-publication.md#strategy-table-refresh).
 - Write each worker's assignment from the [worker brief template](../templates/worker-brief.md) and apply [handoff and supervision](#progress-and-result-retrieval). Grant only necessary tools and permissions; avoid copying the whole conversation or loading an unused specialist roster.
 - Apply the test-first and self-review procedure in [Task Planning](02-task-planning.md#planning-and-verification) to each assignment; parallel dispatch preserves it.
@@ -30,11 +30,33 @@ When considering a Usage Routing proposal on an active scope, load its [proposal
 
 Before optional automatic native delegation, honor the [project preference](../skills/workstreams/references/procedure.md), read with `features status`. Onboarding and the Workstreams skill manage this same Enabled/Disabled choice. It needs no managed runtime. Explicit delegation and required independent review remain available when disabled or not configured. Preserve explicitly selected protections.
 
-For native delegation, load the [display naming rules](../clients/workstreams-naming.md) to assess parent/child eligibility, including ordinary workers and independent reviewers. Follow their implementation trigger; dispatch alone does not authorize title adoption. This route is independent of Workstreams feature preferences and does not select managed task controls.
-
 For role preparation, follow the [shared contract](../clients/worker-visibility.md#declare-before-dispatch) and its applicable native or external procedure.
 
 Resource admission and capacity recovery are independent preferences. A new supported scope with no saved choice starts with both enabled; preserve each existing choice, including a legacy combined choice where separate settings do not exist. The [Workstreams skill](../skills/workstreams/SKILL.md) routes naming, feature controls, heavy resource work and parent recovery. Ordinary delegation and its shared dependency, continuation, ownership and acceptance checks apply in all four preference combinations. Resource-managed coordinator, worker and reviewer phases require current resource authority; parent recovery registration requires current recovery authority and no resource lease. A stale/disabled feature permission never authorizes the other feature. Uncertain recovery state does not block ordinary delegation or resource admission. Saved preferences grant no route, ownership, budget or native capability; load only the applicable operation procedure.
+
+## Managed projects
+
+A managed project is a checkout listed in, or inside a checkout listed in, the Smart Routing settings' `managed_projects`; `python3 -I -B scripts/routing.py status --project <checkout>` shows the list. Settings that exist but cannot be read count as managed. Only the user's explicit one-shot routing change adds or removes a project; coordinators and workers never change the list or call routing operator ops. A project whose coordinator delegates through a host with no managed launcher, today Claude Code native subagents, is not added until the user decides whether advisory hosts get automatic selection; it keeps the unmanaged instructions. `scripts/routing.py set` enforces this when a project is added, counting only the project's configured or active enrolment entries. It refuses with `advisory_host_unmanaged` when none of those clients has a managed launcher (Codex or OpenCode), with `not_enrolled` when the checkout was never onboarded, and with `enrolment_unavailable` when its enrolment cannot be read; report the refusal and keep the unmanaged instructions. Onboarding records only Codex and Claude Code today, so an OpenCode-coordinated project joins only when it is also enrolled for Codex. Codex native delegation has a managed path, because routing chooses through `prepare`, but it is advisory, because routing cannot block a send before it happens; advisory hosts may join, and hosts with no managed launcher cannot. A project with a mix of clients may join; the next rule covers its Claude Code coordinator. If a coordinator that delegates through a host with no managed launcher is already in a managed project, it does not spawn workers or reviewers itself: it holds the dependent delegation, including required independent review, which self-review never replaces, and reports it so the user can continue from a host with a managed launcher or remove the project from `managed_projects`. In every other checkout, worker selection above applies unchanged.
+
+In a managed project, routing selects each native worker's and reviewer's model and effort, and the coordinator never chooses them. Native [delegation preparation](../clients/delegation.md#prepare-and-launch-once) and [review preparation](../clients/evidence-review-prepare.md) call `scripts/routing.py prepare` in-process for the planned job after the reservation commits; the routing service builds observations itself. OpenCode workers run through the [managed launcher](../clients/opencode.md#managed-launcher). Never supply routing observations, constraints or workflow bindings by hand. Set the request's `selection.mode`:
+
+- `routed` by default: the rationale and guidance `profile_ids`, with no model or effort.
+- `explicit` only for a model and effort the user explicitly chose.
+- `inherit` only when the host supports only inheritance and the inherited settings suit the assignment.
+
+Explicit and inherited settings are hard constraints: routing admits exactly that route or answers `explicit_choice_unavailable`, never a substitute. Report that answer; do not pick another model.
+
+Launch only on `launch_admitted:true`, or a Workstreams `dispatch_prepared:true` and its consume step, with exactly the returned `route` model and effort. Any other reply launches nothing: report its `routing{state, reason}`, continue independent work, and act on it once:
+
+- A reply that carries a `release`, such as after `catalog_mismatch`: the assignment is already settled.
+- `legacy_route_retired`, with `routing.reconcile_required: true`, the field that marks a reply to reconcile: the assignment was prepared before the project became managed. Reconcile it through `delegation reconcile`; never retry it.
+- `routing{state:'admitted', duplicate:true}`: an earlier response, possibly lost, carried the one permit. Follow the [lost-response inspection](../clients/delegation.md#prepare-and-launch-once); never respawn blindly.
+- `replayed:true` and `routing.reconcile_required: true` with `catalog_mismatch`, `route_not_entitled`, `dollar_route_needs_enforced_host` or a `dispatch` refusal: routing recorded `not_dispatched`. Reconcile the assignment.
+- Any other `pending` or `blocked`: retry with the same request and `dispatch_id`. The permit comes only with the call that obtains the admission.
+
+Codex native subagents are an advisory host: routing chooses and accounts but cannot block a send, so record that limitation. Review independence constraints come from the task's admitted worker models, never from the request.
+
+Platform guidance still supplies the request's `guidance` evidence and `profile_ids`; its refresh feeds routing through the [strategy table refresh](../clients/guidance-publication.md#strategy-table-refresh). To raise capability, prepare a planned job whose task `profile` raises the floor, and let routing choose. External delegation and OpenRouter proposals follow [their managed-project rule](../clients/external-delegation.md#managed-projects), and API Usage follows [its own](../skills/manage-usage-routing/references/procedure.md#managed-projects).
 
 ## Outcome ownership
 
@@ -50,15 +72,16 @@ integration. Small integration fixes are reasonable. Keeping most feature
 implementation in the coordinator needs a task-specific reason.
 
 Outcome ownership is responsibility; a native child is its reusable execution
-context. A worktree separates checkout files. A user-owned sidebar chat is a
-separate conversation: create one only on explicit user request. Prefer separate
+context. Delegated work runs only in native children that one coordinator starts;
+children start none of their own. A separate chat the user asks for is an
+independent conversation, outside the task's delegation. A worktree separates
+checkout files. Prefer separate
 worktrees for independent concurrent reviewable outcomes when useful. Preserve
 partial work in place rather than migrate it merely for presentation.
 
 Owners are not simultaneous workers. Decide dependent interfaces before affected
 work; start ready independent outcomes just in time within actual host capacity
-and the original budgets. A backlog does not establish capacity. Keep outcome-to-child bindings and the
-[family/member mapping](../clients/workstreams-naming.md) in the existing task
+and the original budgets. A backlog does not establish capacity. Keep outcome-to-child bindings in the existing task
 record. Use [handoff and supervision](#progress-and-result-retrieval) for checkpoint
 receipt and continuation.
 
@@ -74,9 +97,8 @@ receipt and continuation.
 Children report to the brief's one coordinator through its permitted route, using the
 [compact child report](07-context-and-handoff.md#lifecycle-record-and-reports)
 and its report triggers rather than repeating the assignment.
-Use native completion/attention delivery. Separate sidebar peer chats may push
-only with direct human authorization to message the recipient; a coordinator's
-brief grants none. Otherwise report locally for coordinator retrieval.
+Use native completion/attention delivery; otherwise report locally for
+coordinator retrieval.
 
 The coordinator collects and records receipt in the existing plan, then applies
 [review and integration](#review-integration-and-recovery) before acceptance.
@@ -116,7 +138,7 @@ Applies to coordinator work and delegated work. A stuck pattern includes recurri
 Climb a capability ladder before involving the user:
 
 1. On detection, immediately stop the affected repair cycle and notify the coordinator. Do not try one more fix at the current level, wait for a fixed retry count, or treat fresh findings as permission to continue.
-2. Escalate to an independent worker more capable than every earlier level on this target: the lightest authorized option with stronger task-relevant capability, through a stronger model or higher reasoning effort, selected through [worker selection](#select-capability-and-dispatch). Routes of activated integrations are authorized options. Provide the target, acceptance criteria, attempted fixes, finding history, check results, earlier escalations and remaining budget. Request a root-cause diagnosis and bounded recovery plan before further edits.
+2. Escalate to an independent worker more capable than every earlier level on this target: the lightest authorized option with stronger task-relevant capability, through a stronger model or higher reasoning effort, selected through [worker selection](#select-capability-and-dispatch), or in a [managed project](#managed-projects) through a raised task profile. Routes of activated integrations are authorized options. Provide the target, acceptance criteria, attempted fixes, finding history, check results, earlier escalations and remaining budget. Request a root-cause diagnosis and bounded recovery plan before further edits.
 3. Resume affected repairs only after the coordinator accepts an evidence-backed diagnosis, a changed approach and a focused verification plan. If no diagnosis can be accepted or the stuck pattern recurs, return to step 1 and climb one level.
 4. Escalate at most five times per target. Renaming, splitting or re-scoping the same failing criteria does not reset the count. Stop and ask the user to decide when the fifth escalation does not converge, no more capable authorized option remains, or an original limit would be exceeded. Hold the affected work and continue only independent work. The user's decision sets what follows, such as further escalations, another approach, a changed budget or stopping; the recorded history carries forward.
 5. Make the request decidable without rereading the history: the goal and acceptance criteria; the current candidate and check results; each level's worker, model and effort, diagnosis, approach and outcome; remaining root-cause hypotheses with their evidence; viable options with cost, risk and expected effect; a recommendation; and the exact decision needed.

@@ -7,6 +7,7 @@ How to work on this repository: where to make changes, which checks to run and h
 - Sessions start in the primary checkout on `main`; use it only to read, coordinate and fast-forward. Before creating or changing files for a task, move to a task worktree on its own branch from current `main`, created with the client's native worktree tool when it has one, and edit, commit and push only there. Setup records, documentation and one-line fixes are task changes too.
 - `main` is the merge target and the base for task branches, never a working branch: do not commit on it or push to it; it changes only when a PR merges.
 - Preserve unfinished work separately and retain newer changes when reconciling older branches.
+- After a merge, or when synchronizing merges made elsewhere, run [Graphify maintenance](../clients/graphify-maintenance.md) for Graphify-enabled projects. Its ignored generated output is the only maintenance write allowed in the primary checkout; tracked task changes still belong in task worktrees.
 
 ## Checks
 
@@ -22,4 +23,4 @@ How to work on this repository: where to make changes, which checks to run and h
 - Publish completed task changes by committing, pushing the task branch and opening a draft PR against `main`. The [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) sets its title prefix: `[BLOCKED]`, `[READY]` or `[SUPERSEDED]`.
 - Agents may merge here (see the [setup record](setup.md#decisions)). Merge only completed, independently reviewed slices against current `main`, in PRs marked `[READY]`, after local checks pass.
 - The repository has no CI or branch protection, so these rules are not enforced mechanically.
-- Create release archives only when requested.
+- Create release archives only when requested, and run `python3 -B scripts/validate.py --release` first: it fails when the package version already has a release tag but shipped content changed since, so raise the version first.
