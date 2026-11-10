@@ -51,7 +51,7 @@
       ]
     },
     "clients/delegation.md": {
-      "sha256": "3b0155017790c10e47357200e9c8b512dd8fd1bdc535efa019af782c1884e0d3",
+      "sha256": "da8d58ec3b8a9a001b2fabefcbce14309a31490c73f26cb0065f3f40cc5e888b",
       "ranges": [
         [
           1,
@@ -122,7 +122,7 @@
       ]
     },
     "clients/evidence-review-prepare.md": {
-      "sha256": "158572b219fc90081ebb15c5409b7b10d07cef9e1205abccfb9b618710d51a13",
+      "sha256": "6cf7c1287d922584ca169a02f69e82a2270c572784f64d57edd7af632e8e3956",
       "ranges": [
         [
           1,
@@ -424,7 +424,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "8e726a11a782ff16b57f2032335bdfa235f9646af45efc66149b790f3332ff2b",
+      "sha256": "ad5de49589be7e60cebb9be03f6a5c9aa19bcacda21e8ded7a0a1bfcd7b0dc35",
       "ranges": [
         [
           1,
@@ -432,11 +432,11 @@
         ],
         [
           41,
-          116
+          118
         ],
         [
-          117,
-          139
+          119,
+          147
         ]
       ]
     },

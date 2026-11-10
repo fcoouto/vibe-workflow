@@ -38,9 +38,9 @@ Resource admission and capacity recovery are independent preferences. A new supp
 
 ## Managed projects
 
-A managed project is a checkout listed in, or inside a checkout listed in, the Smart Routing settings' `managed_projects`; `python3 -I -B scripts/routing.py status --project <checkout>` shows the list. Settings that exist but cannot be read count as managed. Only the user's explicit one-shot routing change adds or removes a project; coordinators and workers never change the list or call routing operator ops. In every other checkout, worker selection above applies unchanged.
+A managed project is a checkout listed in, or inside a checkout listed in, the Smart Routing settings' `managed_projects`; `python3 -I -B scripts/routing.py status --project <checkout>` shows the list. Settings that exist but cannot be read count as managed. Only the user's explicit one-shot routing change adds or removes a project; coordinators and workers never change the list or call routing operator ops. A project whose coordinator delegates through a host with no managed launcher, today Claude Code native subagents, is not added until the user decides whether advisory hosts get automatic selection; it keeps the unmanaged instructions. In every other checkout, worker selection above applies unchanged.
 
-In a managed project, routing selects each native worker's and reviewer's model and effort, and the coordinator never chooses them. Native [delegation preparation](../clients/delegation.md#prepare-and-launch-once) and [review preparation](../clients/evidence-review-prepare.md) call `scripts/routing.py prepare` in-process for the planned job after the reservation commits; the routing service builds observations itself. Never supply routing observations, constraints or workflow bindings by hand. Set the request's `selection.mode`:
+In a managed project, routing selects each native worker's and reviewer's model and effort, and the coordinator never chooses them. Native [delegation preparation](../clients/delegation.md#prepare-and-launch-once) and [review preparation](../clients/evidence-review-prepare.md) call `scripts/routing.py prepare` in-process for the planned job after the reservation commits; the routing service builds observations itself. OpenCode workers run through the [managed launcher](../clients/opencode.md#managed-launcher). Never supply routing observations, constraints or workflow bindings by hand. Set the request's `selection.mode`:
 
 - `routed` by default: the rationale and guidance `profile_ids`, with no model or effort.
 - `explicit` only for a model and effort the user explicitly chose.
@@ -48,9 +48,17 @@ In a managed project, routing selects each native worker's and reviewer's model 
 
 Explicit and inherited settings are hard constraints: routing admits exactly that route or answers `explicit_choice_unavailable`, never a substitute. Report that answer; do not pick another model.
 
-Launch only on `launch_admitted:true`, or a Workstreams `dispatch_prepared:true` and its consume step, with exactly the returned `route` model and effort. `launch_admitted:false` with `routing{state, reason}` launches nothing: report the reason, continue independent work, and retry with the same request and `dispatch_id`, which grants the one permit only when routing admits. A reply that already carries a `release`, such as after `catalog_mismatch`, is settled; release any other never-launched assignment through `delegation reconcile`. Codex native subagents are an advisory host: routing chooses and accounts but cannot block a send, so record that limitation. Review independence constraints come from the task's admitted worker models, never from the request. A host with no launcher, such as Claude Code native subagents today, has no managed path: work directly or hold the dependent delegation and report the limitation.
+Launch only on `launch_admitted:true`, or a Workstreams `dispatch_prepared:true` and its consume step, with exactly the returned `route` model and effort. Any other reply launches nothing: report its `routing{state, reason}`, continue independent work, and act on it once:
 
-Platform guidance still supplies the request's `guidance` evidence and `profile_ids`; its refresh feeds routing through the [strategy table refresh](../clients/guidance-publication.md#strategy-table-refresh). To raise capability, prepare a planned job whose task `profile` raises the floor, and let routing choose. API Usage follows its own [managed-project rule](../skills/manage-usage-routing/references/procedure.md#managed-projects).
+- A reply that carries a `release`, such as after `catalog_mismatch`: the assignment is already settled.
+- `legacy_route_retired`: the assignment was prepared before the project became managed. Reconcile it through `delegation reconcile`; never retry it.
+- `routing{state:'admitted', duplicate:true}`: an earlier response, possibly lost, carried the one permit. Follow the [lost-response inspection](../clients/delegation.md#prepare-and-launch-once); never respawn blindly.
+- `replayed:true` with `catalog_mismatch`, `route_not_entitled`, `dollar_route_needs_enforced_host` or a `dispatch` refusal: routing recorded `not_dispatched`. Reconcile the assignment.
+- Any other `pending` or `blocked`: retry with the same request and `dispatch_id`. The permit comes only with the call that obtains the admission.
+
+Codex native subagents are an advisory host: routing chooses and accounts but cannot block a send, so record that limitation. Review independence constraints come from the task's admitted worker models, never from the request.
+
+Platform guidance still supplies the request's `guidance` evidence and `profile_ids`; its refresh feeds routing through the [strategy table refresh](../clients/guidance-publication.md#strategy-table-refresh). To raise capability, prepare a planned job whose task `profile` raises the floor, and let routing choose. External delegation and OpenRouter proposals follow [their managed-project rule](../clients/external-delegation.md#managed-projects), and API Usage follows [its own](../skills/manage-usage-routing/references/procedure.md#managed-projects).
 
 ## Outcome ownership
 
