@@ -1,0 +1,24 @@
+# Keep secrets, generated files and local agent state out of the code map.
+.env*
+*.pem
+*.key
+secrets/
+credentials/
+.git/
+.vibe-workflow/
+.superpowers/
+.agents/
+.claude/
+.codex/
+.opencode/
+.venv/
+venv/
+node_modules/
+__pycache__/
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+graphify-out/

@@ -226,3 +226,6 @@ __marimo__/
 /.vibe-workflow/project.json
 /.vibe-workflow/.d4-*
 /.vibe-workflow/private/
+
+# Generated local code map
+/graphify-out/
