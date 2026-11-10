@@ -213,10 +213,27 @@ def assignment_role(profile_role, explicit=None):
     return explicit
 
 
+def _identity(path):
+    """(st_dev, st_ino) of an existing path, None when it does not exist; any other error propagates."""
+    try:
+        info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return info.st_dev, info.st_ino
+
+
 def managed_project(path, settings_path=None):
-    """Whether `path` (realpath) is a managed project or lies inside one. `settings_path` defaults to the routing
-    command's settings (`scripts.routing.default_settings`). A missing file has no managed project. Settings that
-    exist but cannot be read count as managed (fail closed): the managed path then blocks on `settings_unavailable`,
+    """Whether `path` is a managed project or lies inside one. `settings_path` defaults to the routing command's
+    settings (`scripts.routing.default_settings`).
+
+    Paths compare by file identity, not spelling: `path` (realpath) and each of its existing parents are matched
+    against each registered root's (st_dev, st_ino), so a differently cased spelling on a case-insensitive
+    filesystem, `..` and symlinks all match. A path that does not exist yet matches through its nearest existing
+    parent, so a new path under a managed root is managed. A registered root that no longer exists still matches
+    by its stored path.
+
+    Fail closed: a missing settings file has no managed project, but settings that exist and cannot be read, or a
+    path or root that cannot be inspected, count as managed. The managed path then blocks (`settings_unavailable`)
     and every legacy spending entry point refuses, so a corrupt settings file also stops legacy API Usage spending
     (once C3-5 lands) until it is repaired."""
     if settings_path is None:
@@ -224,10 +241,14 @@ def managed_project(path, settings_path=None):
         settings_path = command.default_settings()
     try:
         projects = read(settings_path)['managed_projects']
-    except (SettingsError, usage_budget.BudgetError, OSError):
+        target = Path(path).resolve()
+        chain = [target, *target.parents]
+        if any(item in map(str, chain) for item in projects):
+            return True
+        roots = {found for found in map(_identity, projects) if found is not None}
+        return any(found in roots for found in map(_identity, chain) if found is not None)
+    except (SettingsError, usage_budget.BudgetError, OSError, RuntimeError, ValueError):
         return True
-    target = Path(path).resolve()
-    return any(target == Path(item) or Path(item) in target.parents for item in projects)
 
 
 def workstreams_enabled(scope, *, load=None):
