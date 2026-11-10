@@ -243,7 +243,7 @@ def rollback(table_path):
     other = previous_path(path)
     if not _folder(path) or not os.path.lexists(other):
         raise Blocked('no_previous_table')
-    current = _stored(path, 'unsafe_table_path')
+    existed, current = os.path.lexists(path), _stored(path, 'unsafe_table_path')
     prior = _stored(other, 'unsafe_previous_table')
     if prior is None:
         raise Blocked('invalid_previous_table')
@@ -253,7 +253,7 @@ def rollback(table_path):
             warnings += [item for item in _write(other, current[1]) if item not in warnings]
         except Blocked:
             warnings.append('newer_table_not_kept')
-    elif os.path.lexists(path):  # an unverified table is never kept
+    elif existed:  # an unverified table is never kept
         warnings.append('current_table_unverified_discarded')
     table = prior[0]
     report = dict(v=VERSION, state='rolled_back', version=table['version'], compiled_at=table['compiled_at'],
