@@ -273,12 +273,15 @@ class LauncherProbes:
 
     def a1(self, host, wrapped, ids, texts, listing, effects):
         plugins = plugin_checks(ids)[0]
+        status, info = wrapped.request("GET", "/api/info")
+        version = info.get("version") if status == 200 and isinstance(info, dict) else None
         unauthenticated = self.env.unauthenticated(host, "/api/info")
         log = Path(getattr(host, "workdir", "") or "/nonexistent") / "server.log"
         text = log.read_text(errors="replace") if log.is_file() else None
         mentions = len(FETCH_MENTIONS.findall(text)) if text is not None else None
         return dict(plugins, password_required=unauthenticated == 401, log_read=text is not None,
                     no_fetch_mentioned=mentions == 0), dict(unauthenticated_http=unauthenticated, fetch_mentions=mentions,
+                                                            server_version=version if isinstance(version, str) else None,
                                                             limit="a fetch the server log does not mention is not detected")
 
     def hostile_checks(self, source, ids, texts, listing, effects):

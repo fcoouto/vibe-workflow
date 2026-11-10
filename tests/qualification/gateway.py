@@ -17,14 +17,21 @@ to the redactor's secrets in memory). Settings never hold it.
 Hard ceiling (review B2), every part required:
 - (a) the launch carries F4's per-launch output cap and step count (`opencode_launcher.launch_options` and
   `start_server(options=)`, PR #229), detected by capability; without them the mode refuses
-  (`launch_options_unavailable`), and a server that does not report the options it was given is a blocker;
+  (`launch_options_unavailable`). The step count must cover every agent the server lists (`steps_not_universal`
+  otherwise), and the run needs this session's launcher-probes result showing A1 passed on the same OpenCode
+  (`--isolation-result`): only that shows the inline config is honoured;
 - (b) the harness waits itself: on an idle timeout or an unreadable count it aborts every session of the attempt
   through the API, re-counts from the server and settles the actual count (more than reserved is recorded as sent);
   a count still unreadable settles the full reservation; the run fails either way;
 - (c) the operator types `--key-limit-usd N` (0 < N <= 1.00) confirming the OpenRouter key's own limit, and the
   reserved estimate must fit in it;
 - (d) the run aborts as soon as the running cost exceeds the reserved estimate (reserved requests times the
-  model's price for INPUT_TOKENS in and the output cap out).
+  model's price for INPUT_TOKENS in and the output cap out); the harness's own prompt is checked against INPUT_TOKENS
+  (by bytes) before it is sent.
+
+Stated honestly in the results: the only hard bound is the OpenRouter key's own limit (`hard_bound:
+key_limit_usd`); the output cap, the step count and the cost abort are soft bounds that hold only when OpenCode
+honours the inline config, as the A1 result shows (`soft_bounds`).
 
 The launcher's own `launch` refuses an API-funded admission until these runs are observed (`API_FUNDING_QUALIFIED`),
 so the harness drives the same steps with the launcher's module parts (`health`, `enforcement`, the worker profile,
@@ -32,6 +39,7 @@ so the harness drives the same steps with the launcher's module parts (`health`,
 """
 import json
 import math
+from pathlib import Path
 import time
 
 from tests.qualification import live_common
@@ -42,6 +50,7 @@ from tests.qualification.safety import Blocker, BudgetExceeded, PROMPT_TEXT, Ref
 PROVIDER = "openrouter"
 MAX_OUTPUT_TOKENS, STEPS, INPUT_TOKENS = 500, 2, 10_000
 KEY_LIMIT_MAX = 1.0
+ISOLATION_MAX_AGE_S = 12 * 3600
 IDLE_S, POLL_S = 900, 1.0
 POOL, ACCOUNT = "openrouter", "openrouter:gateway-qual"
 MAX_INPUT_PER_M, MAX_OUTPUT_PER_M = 1.0, 4.0
@@ -71,7 +80,7 @@ def check_model(entry):
     from runtime.adapters import opencode as adapter
     if entry is None:
         return ["model_not_listed"]
-    if not isinstance(entry.get("id"), str) or not adapter.NAME.fullmatch(entry["id"]):
+    if not isinstance(entry.get("id"), str) or not adapter.MODEL_ID.fullmatch(entry["id"]):
         return ["model_id_not_normalizable"]
     found = price(entry)
     if found is None:
@@ -82,6 +91,37 @@ def check_model(entry):
     if found[1] > MAX_OUTPUT_PER_M:
         reasons.append("output_price_above_limit")
     return reasons
+
+
+def prompt_tokens(text):
+    """An upper bound on the tokens of the harness's own prompt: its UTF-8 bytes (a token is at least one byte)."""
+    return len(text.encode("utf-8"))
+
+
+def read_isolation(path, now=None):
+    """The launcher-probes result of this session, or `Refused`: A1 passed (OpenCode honoured the inline config), on
+    the qualified OpenCode version, written today and at most ISOLATION_MAX_AGE_S ago."""
+    from tests.qualification.safety import QUALIFIED_OPENCODE
+    now = time.time() if now is None else now
+    if not path:
+        raise Refused("--isolation-result is required: the launcher-probes result of this session (A1 passed)")
+    try:
+        file = Path(path)
+        value = json.loads(file.read_text())
+        age = now - file.stat().st_mtime
+    except (OSError, ValueError):
+        raise Refused("--isolation-result is unreadable") from None
+    meta = value.get("_meta") if isinstance(value, dict) else None
+    a1 = ((value.get("probes") if isinstance(value, dict) else None) or {}).get("A1") or {}
+    if not isinstance(meta, dict) or meta.get("mode") != "launcher-probes":
+        raise Refused("--isolation-result is not a launcher-probes result")
+    if a1.get("passed") is not True:
+        raise Refused("--isolation-result does not show A1 passed: the inline config is not shown honoured")
+    if a1.get("server_version") != QUALIFIED_OPENCODE:
+        raise Refused("--isolation-result's server is not OpenCode %s" % QUALIFIED_OPENCODE)
+    if meta.get("date") != time.strftime("%Y-%m-%d", time.localtime(now)) or not 0 <= age <= ISOLATION_MAX_AGE_S:
+        raise Refused("--isolation-result is not from this session (today, at most 12 h old)")
+    return dict(file=file.name, server_version=a1["server_version"])
 
 
 def launch_options_supported():
@@ -177,8 +217,9 @@ class Gateway:
     OpenRouter receipt total in micro-dollars, or None), `balance()` (the cached OpenRouter status balance, or None)
     and `sleep`."""
 
-    def __init__(self, base, ledger, run_id, env, model_ref, key_limit_usd=None, endpoint=None):
+    def __init__(self, base, ledger, run_id, env, model_ref, key_limit_usd=None, endpoint=None, isolation_result=None):
         self.base, self.ledger, self.run_id, self.env = base, ledger, run_id, env
+        self.isolation = read_isolation(isolation_result)
         provider, model, variant = live_common.parse_model(model_ref, variant_required=False)
         if provider != PROVIDER:
             raise Refused("the gateway mode allows only openrouter/MODEL")
@@ -197,7 +238,11 @@ class Gateway:
         self.route = (provider, model, variant)
         self.clock = getattr(env, "clock", time.monotonic)
         self.estimate = None
-        self.results = dict(positive=None, negative=None)
+        self.results = dict(positive=None, negative=None, bounds=dict(
+            hard_bound="key_limit_usd", key_limit_usd=self.key_limit, soft_bounds=["output_cap", "steps", "cost_abort"],
+            output_cap=MAX_OUTPUT_TOKENS, steps=STEPS, input_limit=INPUT_TOKENS,
+            input_note="the harness's own prompt is checked; OpenCode's system prompt and tool schemas are outside it",
+            inline_config_honoured="per A1 result %s" % self.isolation["file"]))
         self.host, self.checks = None, {}
 
     def run(self):
@@ -206,8 +251,7 @@ class Gateway:
         routing = self.env.routing(state)
         self.host = self.env.start(state.project, state.settings, state.ledger, self.env.environ(), options=self.options)
         try:
-            if getattr(self.host, "options", None) != self.options:
-                raise Blocker("launch_options_not_applied: the server does not carry the output cap and step count")
+            self.check_server(state)
             self.results["signin"] = self.env.await_signin(self.host)
             entry = live_common.listed_model(self.host, PROVIDER, self.route[1], self.env.sleep)
             reasons = check_model(entry)
@@ -230,6 +274,27 @@ class Gateway:
         self.results["passed"] = bool(self.results["positive"] and self.results["positive"]["passed"]
                                       and self.results["negative"] and self.results["negative"]["passed"])
         return self.results
+
+    def check_server(self, state):
+        """Before any sign-in or reservation: the same OpenCode version as the A1 result, and the step count on every
+        agent the server lists (a session or its children may run any of them), else `steps_not_universal`."""
+        from runtime import opencode_launcher
+        status, info = self.host.request("GET", "/api/info")
+        version = info.get("version") if status == 200 and isinstance(info, dict) else None
+        if version != self.isolation["server_version"]:
+            raise Blocker("server_version_differs: not the OpenCode the A1 result was taken on")
+        status, body = self.host.request("GET", "/api/agent")
+        listed = data(body) if status == 200 else None
+        names = sorted({(item.get("name") or item.get("id")) if isinstance(item, dict) else item
+                        for item in (listed.values() if isinstance(listed, dict) else listed or [])} - {None}) \
+            if isinstance(listed, (list, dict)) else None
+        agents = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}
+        capped = {name for name, value in agents.items() if (value or {}).get("steps") == STEPS}
+        missing = None if not names else [name for name in names if name not in capped]
+        self.results["bounds"]["agents"] = dict(listed=names, capped=sorted(capped))
+        if missing is None or missing:
+            raise Blocker("steps_not_universal: the step count does not cover every agent (%s)" % (
+                "agent listing unreadable" if missing is None else ", ".join(map(str, missing))))
 
     def admitted(self, state, routing, label):
         attempt = attempt_id("gw-" + label)
@@ -276,6 +341,8 @@ class Gateway:
         checks["profile_enforced"] = answer is not None and opencode_launcher.enforcement(self.host, answer) == "enforced"
         if not all(checks.values()):
             raise Blocker("the launcher's server is not healthy and enforced")
+        if prompt_tokens(PROMPT_TEXT) > INPUT_TOKENS:
+            raise Blocker("prompt_above_input_limit: the harness's prompt exceeds %d tokens" % INPUT_TOKENS)
         attempt, token = self.admitted(state, routing, "positive")
         reservation = Reservation(self.ledger, "gateway", "gateway positive: root, API child, continuation",
                                   POSITIVE_CALLS, self.run_id)

@@ -18,19 +18,29 @@ APPROVAL = dict(by="the user", at="2026-11-10T12:00Z", scope="runbook part C")
 KEY = dict(key_limit_usd="1.00", endpoint="vendor")
 
 
-@contextlib.contextmanager
-def launch_options():
-    """F4's per-launch options (PR #229) as the gateway detects them: `launch_options` and `start_server(options=)`."""
-    def options(provider, model, *, endpoint, max_output_tokens, steps):
-        if not (isinstance(endpoint, str) and endpoint and type(max_output_tokens) is int and type(steps) is int):
-            raise ValueError("launch_options_unexpressible")
-        return dict(provider=provider, model=model, endpoint=endpoint, max_output_tokens=max_output_tokens, steps=steps)
+def isolation_file(directory, passed=True, version="2.2.6", date=None, mode="launcher-probes"):
+    """A launcher-probes result as live_modes.py writes it, with A1's outcome and server version."""
+    import time
+    path = Path(directory) / ("isolation-%d.json" % len(list(Path(directory).glob("isolation-*.json"))))
+    path.write_text(json.dumps(dict(_meta=dict(mode=mode, date=date or time.strftime("%Y-%m-%d")),
+                                    probes=dict(A1=dict(passed=passed, server_version=version)))))
+    return str(path)
 
-    def start_server(checkout, *, settings_path, ledger_path, opencode="opencode", environ=None, timeout=30, options=None):
+
+@contextlib.contextmanager
+def without_launch_options():
+    """The launcher as it was before F4 (#229): no `launch_options`, `start_server` without `options`."""
+    def start_server(checkout, *, settings_path, ledger_path, opencode="opencode", environ=None, timeout=30):
         raise AssertionError("tests never start a server")
-    with mock.patch.object(opencode_launcher, "launch_options", options, create=True), \
+    with mock.patch.object(opencode_launcher, "launch_options", None), \
             mock.patch.object(opencode_launcher, "start_server", start_server):
         yield
+
+
+@contextlib.contextmanager
+def launch_options():
+    """Kept for callers: the real F4 launcher now provides the capability, so nothing is patched."""
+    yield
 
 
 MODEL = dict(providerID="openrouter", id="vendor-small", variants=["none"], cost=[dict(input=0.5, output=2.0)])
@@ -68,9 +78,7 @@ class Env:
 
     def start(self, project, settings, ledger, environ, options=None):
         knobs = dict(dict(models=[MODEL], cost=0.000024, trust_attach=True), **self.knobs)
-        apply = knobs.pop("apply_options", True)
         host = FakeLauncherHost(project, self.base / "workdir", settings, ledger, environ, **knobs)
-        host.options = options if apply else None
         self.started_options = options
         self.hosts.append(host)
         return host
@@ -105,10 +113,12 @@ class GatewayBase(Temp):
         self.ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
         self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
 
+    def key(self, **change):
+        return dict(KEY, isolation_result=isolation_file(self.private(self.tmp / "results")), **change)
+
     def run_gateway(self, env, model="openrouter/vendor-small", **kwargs):
         base = self.private(self.tmp / ("q%d" % len(list(self.tmp.glob("q*")))))
-        with launch_options():
-            return gateway.run_gateway(gateway.Gateway(base, self.ledger, "gw-test", env, model, **dict(KEY, **kwargs)))
+        return gateway.run_gateway(gateway.Gateway(base, self.ledger, "gw-test", env, model, **self.key(**kwargs)))
 
     def reservations(self):
         return [(e["reserved"], e["sent"]) for e in self.ledger.export()["entries"]
@@ -147,14 +157,13 @@ class GatewayTests(GatewayBase):
         cases = dict(not_admitted=dict(routing=FakeRouting(admitted=False)),
                      price=dict(models=[dict(MODEL, cost=[dict(input=3.0, output=15.0)])]),
                      price_unknown=dict(models=[dict(MODEL, cost=[])]),
-                     unlisted=dict(models=[]),
-                     slash_id=dict(models=[dict(MODEL, id="vendor/small")]))
+                     unlisted=dict(models=[]))
         reasons = dict(not_admitted="no_funded_organization", price="input_price_above_limit",
-                       price_unknown="price_unknown", unlisted="model_not_listed", slash_id="model_id_not_normalizable")
+                       price_unknown="price_unknown", unlisted="model_not_listed")
         for name, change in cases.items():
             with self.subTest(name):
                 env = Env(self.tmp, **change)
-                result = self.run_gateway(env, "openrouter/vendor/small" if name == "slash_id" else "openrouter/vendor-small")
+                result = self.run_gateway(env)
                 self.assertIs(result["passed"], False)
                 self.assertIn("Blocker", result["blocker"])
                 self.assertIn(reasons[name], result["blocker"])
@@ -163,8 +172,8 @@ class GatewayTests(GatewayBase):
         self.assertEqual(self.reservations(), [])
 
     def test_only_openrouter_models(self):
-        with launch_options(), self.assertRaises(safety.Refused):
-            gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "anthropic/claude", **KEY)
+        with self.assertRaises(safety.Refused):
+            gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "anthropic/claude", **self.key())
 
     def test_the_signin_wait_is_bounded_and_records_no_label(self):
         host = FakeLauncherHost(self.tmp / "p", self.tmp / "w")
@@ -182,26 +191,84 @@ class CeilingTests(GatewayBase):
     """Review B2: the gateway's hard ceiling (launch options, abort and actual count, key limit, running cost)."""
 
     def test_no_launch_options_capability_refuses_before_anything(self):
-        self.assertNotIn("options", inspect.signature(opencode_launcher.start_server).parameters)  # main today
-        with self.assertRaises(safety.Refused) as refused:
-            gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small", **KEY)
+        with without_launch_options(), self.assertRaises(safety.Refused) as refused:
+            gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small", **self.key())
         self.assertIn("launch_options_unavailable", str(refused.exception))
 
-    def test_the_launch_carries_the_output_cap_and_step_count(self):
+    def test_with_the_real_f4_launcher_the_launch_carries_the_output_cap_and_step_count(self):
+        self.assertTrue(gateway.launch_options_supported())  # F4 (#229) is on main: detected by capability
         env = Env(self.tmp)
-        self.assertTrue(self.run_gateway(env)["passed"])
-        self.assertEqual(env.started_options, dict(provider="openrouter", model="vendor-small", endpoint="vendor",
-                                                   max_output_tokens=gateway.MAX_OUTPUT_TOKENS, steps=gateway.STEPS))
-        env = Env(self.tmp, apply_options=False)
         result = self.run_gateway(env)
-        self.assertIn("launch_options_not_applied", result["blocker"])
+        self.assertTrue(result["passed"], json.dumps(result)[:1500])
+        self.assertEqual(env.started_options, opencode_launcher.launch_options(
+            "openrouter", "vendor-small", endpoint="vendor", max_output_tokens=gateway.MAX_OUTPUT_TOKENS,
+            steps=gateway.STEPS))
+        self.assertEqual(result["bounds"]["agents"], dict(listed=["build"], capped=[opencode_launcher.PRIMARY_AGENT]))
+
+    def test_the_bounds_are_stated_honestly(self):
+        result = self.run_gateway(Env(self.tmp))
+        bounds = result["bounds"]
+        self.assertEqual((bounds["hard_bound"], bounds["soft_bounds"]), ("key_limit_usd", ["output_cap", "steps", "cost_abort"]))
+        self.assertRegex(bounds["inline_config_honoured"], r"^per A1 result isolation-\d+\.json$")
+        self.assertEqual(bounds["key_limit_usd"], 1.0)
+
+    def test_steps_must_cover_every_agent(self):
+        for agents in (["build", "plan", "general"], []):
+            with self.subTest(agents=agents):
+                env = Env(self.tmp, agents=agents)
+                result = self.run_gateway(env)
+                self.assertIn("steps_not_universal", result["blocker"])
+                self.assertEqual(env.hosts[0].prompts, 0)
+                self.assertEqual(env.signins, 0)
+        self.assertEqual(self.reservations(), [])
+
+    def test_the_gateway_needs_this_sessions_passing_A1_result(self):
+        results = self.private(self.tmp / "results")
+        bad = [None, str(results / "missing.json"), isolation_file(results, passed=False),
+               isolation_file(results, version="2.3.0"), isolation_file(results, date="2026-01-01"),
+               isolation_file(results, mode="drill")]
+        old = isolation_file(results)
+        os.utime(old, (1, 1))
+        for path in bad + [old]:
+            with self.subTest(path=path), self.assertRaises(safety.Refused):
+                gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small",
+                                **dict(KEY, isolation_result=path))
+        original = FakeLauncherHost.request
+
+        def other_version(host, method, path, body=None, query=None):
+            return (200, dict(version="2.2.7")) if path == "/api/info" else original(host, method, path, body=body, query=query)
+        env = Env(self.tmp)
+        with mock.patch.object(FakeLauncherHost, "request", other_version):
+            result = self.run_gateway(env)
+        self.assertIn("server_version_differs", result["blocker"])
         self.assertEqual(env.hosts[0].prompts, 0)
+
+    def test_the_harness_prompt_is_checked_against_the_input_limit(self):
+        self.assertLessEqual(gateway.prompt_tokens(gateway.PROMPT_TEXT), gateway.INPUT_TOKENS)
+        env = Env(self.tmp)
+        with mock.patch.object(gateway, "PROMPT_TEXT", "x" * (gateway.INPUT_TOKENS + 1)):
+            result = self.run_gateway(env)
+        self.assertIn("prompt_above_input_limit", result["blocker"])
+        self.assertEqual(env.hosts[0].prompts, 0)
+        self.assertEqual(self.reservations(), [])
+
+    def test_a_vendor_slash_model_runs_end_to_end(self):
+        env = Env(self.tmp, models=[dict(MODEL, id="vendor/small")])
+        result = self.run_gateway(env, "openrouter/vendor/small")
+        self.assertTrue(result["passed"], json.dumps(result)[:1500])
+        self.assertEqual(env.started_options["model"], "vendor/small")
+
+    def test_model_ids_follow_the_adapter_pattern(self):
+        self.assertEqual(gateway.check_model(dict(MODEL, id="vendor/small")), [])
+        for hostile in ("../etc", "vendor//small", "a/b/c", "/lead", "trail/", "x" * 129, "a b", "v\nx", ""):
+            with self.subTest(hostile=hostile):
+                self.assertEqual(gateway.check_model(dict(MODEL, id=hostile)), ["model_id_not_normalizable"])
 
     def test_the_key_limit_must_be_typed_and_at_most_one_dollar(self):
         for value in (None, "", "1.01", "0", "-1", "abc", "nan"):
-            with self.subTest(value=value), launch_options(), self.assertRaises(safety.Refused):
+            with self.subTest(value=value), self.assertRaises(safety.Refused):
                 gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small",
-                                key_limit_usd=value, endpoint="vendor")
+                                **self.key(key_limit_usd=value))
         result = self.run_gateway(Env(self.tmp), key_limit_usd="0.000001")  # below the reserved estimate
         self.assertIn("key_limit_below_estimate", result["blocker"])
         self.assertEqual(self.reservations(), [])

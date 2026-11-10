@@ -101,10 +101,10 @@ class EntryTests(Temp):
 
     def test_a_gateway_run_through_main(self):
         self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
-        from tests.test_qualification_gateway import launch_options
-        with launch_options():
-            code = self.main(self.argv("gateway", "--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor",
-                                       "--key-limit-usd", "1.00"), self.env_factory(GatewayEnv))
+        from tests.test_qualification_gateway import isolation_file
+        isolation = isolation_file(self.out.parent)
+        code = self.main(self.argv("gateway", "--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor",
+                                   "--key-limit-usd", "1.00", "--isolation-result", isolation), self.env_factory(GatewayEnv))
         results = json.loads(self.out.read_text())
         self.assertEqual(code, 0, results.get("blockers"))
         self.assertTrue(results["gateway"]["passed"])
@@ -145,9 +145,8 @@ class StructureTests(Temp):
 
     def gateway(self, ledger, env):
         from tests.qualification import gateway
-        from tests.test_qualification_gateway import KEY, launch_options
-        with launch_options():
-            return gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m", **KEY)
+        from tests.test_qualification_gateway import KEY, isolation_file
+        return gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m", **dict(KEY, isolation_result=isolation_file(self.tmp)))
 
     def test_no_instance_attribute_shadows_a_method(self):
         from tests.qualification import drill, gateway, launcher_probes
@@ -166,16 +165,39 @@ class StructureTests(Temp):
 
 
 class GatewayEntryTests(EntryTests):
-    def test_gateway_refusals_with_launch_options_present(self):
-        from tests.test_qualification_gateway import launch_options
-        good = ["--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor", "--key-limit-usd", "1.00"]
-        with launch_options():
-            self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # no approved cap
-            self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
-            for bad in (good[:4], good[:5] + ["1.50"], good[:2] + good[4:]):
-                with self.subTest(bad=bad):
-                    self.assertEqual(self.main(self.argv("gateway", *bad)), 2)
-            with self.assertRaises(Started):
-                self.main(self.argv("gateway", *good))
-        self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # main today: launch_options_unavailable
+    def good(self):
+        from tests.test_qualification_gateway import isolation_file
+        return ["--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor", "--key-limit-usd", "1.00",
+                "--isolation-result", isolation_file(self.out.parent)]
+
+    def test_gateway_refusals_with_the_real_f4_launcher(self):
+        good = self.good()
+        self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # no approved cap
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        for bad in (good[:4] + good[6:], good[:5] + ["1.50"] + good[6:], good[:2] + good[4:], good[:6]):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.main(self.argv("gateway", *bad)), 2)
+        with self.assertRaises(Started):
+            self.main(self.argv("gateway", *good))
         self.assertEqual(list(self.q.iterdir()), [])
+
+    def test_without_launch_options_the_gateway_is_refused(self):
+        from tests.test_qualification_gateway import without_launch_options
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        with without_launch_options():
+            self.assertEqual(self.main(self.argv("gateway", *self.good())), 2)
+        self.assertEqual(list(self.q.iterdir()), [])
+
+    def test_a_launcher_probes_result_of_this_session_unlocks_the_gateway(self):
+        self.ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+        self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+        self.assertEqual(self.main(self.argv("launcher-probes", "--probes", "A1"), self.env_factory(FakeEnv)), 0)
+        isolation = self.out.parent / "isolation.json"
+        self.out.rename(isolation)
+        self.assertEqual(json.loads(isolation.read_text())["probes"]["A1"]["server_version"], "2.2.6")
+        self.q.mkdir(mode=0o700)
+        good = self.good()[:6] + ["--isolation-result", str(isolation)]
+        code = self.main(self.argv("gateway", *good), self.env_factory(GatewayEnv))
+        results = json.loads(self.out.read_text())
+        self.assertEqual(code, 0, results.get("blockers"))
+        self.assertEqual(results["gateway"]["bounds"]["inline_config_honoured"], "per A1 result isolation.json")

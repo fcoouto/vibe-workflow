@@ -208,7 +208,8 @@ class Session:
                 self.results["blockers"].append(found.get("blocker") or "a drill step failed")
         else:
             found = gateway.run_gateway(gateway.Gateway(self.base, self.ledger, self.run_id, self.env, self.args.gateway_model,
-                                                        self.args.key_limit_usd, self.args.gateway_endpoint))
+                                                        self.args.key_limit_usd, self.args.gateway_endpoint,
+                                                        self.args.isolation_result))
             self.results["gateway"] = found
             if not found.get("passed"):
                 self.results["blockers"].append(found.get("blocker") or "a gateway check failed")
@@ -321,6 +322,7 @@ def parser():
     parse.add_argument("--gateway-model", help="gateway: openrouter/MODEL[#VARIANT] (at most $1/M in, $4/M out)")
     parse.add_argument("--gateway-endpoint", help="gateway: the OpenRouter endpoint the launch pins (launch options)")
     parse.add_argument("--key-limit-usd", help="gateway: the OpenRouter key's own credit limit you set, at most 1.00")
+    parse.add_argument("--isolation-result", help="gateway: this session's launcher-probes results file (A1 passed)")
     parse.add_argument("--signin-timeout", type=int, default=900, help="seconds to wait for an interactive sign-in")
     return parse
 
@@ -339,10 +341,12 @@ def preflight(args, home_check=check_real_home, version_check=check_opencode_ver
             live_common.parse_model(args.a5_model)
         if args.no_variant_model:
             live_common.parse_model(args.no_variant_model, variant_required=False)
-    elif args.gateway_model or args.key_limit_usd or args.gateway_endpoint or args.mode == "gateway":
+    elif args.gateway_model or args.key_limit_usd or args.gateway_endpoint or args.isolation_result or args.mode == "gateway":
         if args.mode != "gateway":
-            raise Refused("--gateway-model, --gateway-endpoint and --key-limit-usd belong to the gateway mode")
-        gateway.Gateway(base, ledger, "check", None, args.gateway_model or "", args.key_limit_usd, args.gateway_endpoint)
+            raise Refused("--gateway-model, --gateway-endpoint, --key-limit-usd and --isolation-result belong to the "
+                          "gateway mode")
+        gateway.Gateway(base, ledger, "check", None, args.gateway_model or "", args.key_limit_usd, args.gateway_endpoint,
+                        args.isolation_result)
     if not 60 <= args.signin_timeout <= 1800:
         raise Refused("--signin-timeout is 60 to 1800 seconds")
     live_common.require_cap(ledger, MODES[args.mode], needed_calls(args))

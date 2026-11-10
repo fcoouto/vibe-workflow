@@ -28,6 +28,7 @@ class FakeLauncherHost:
         self.utilizations, self.resets_at = [], int(time.time()) + 3000  # native.rateLimit per prompt, in order
         self.attached, self.unobserved = set(), set()
         self.hang, self.aborted, self.options = False, [], None  # hang: prompts never go idle until aborted
+        self.agents = ["build"]  # what GET /api/agent lists
         self.connections = {}
         self.workdir.mkdir(parents=True, exist_ok=True)
         (self.workdir / "server.log").write_text("server password %s\nserver listening\n" % self._password)
@@ -107,6 +108,8 @@ class FakeLauncherHost:
             return 200, dict(version=adapter.QUALIFIED_VERSION)
         if path == "/api/plugin":
             return 200, dict(data=[dict(id=plugin) for plugin in self.plugins])
+        if path == "/api/agent":
+            return 200, dict(data=[dict(name=name) for name in self.agents])
         if path == "/api/mcp":
             return 200, dict(data=self.mcp)
         if path == "/api/config":
