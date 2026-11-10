@@ -52,7 +52,7 @@ Three things stand in the way today:
 
 - **Lightweight rule (binding).** On-demand reads only, no timers, polling or daemons, no model call to measure usage, short bounded processes that fail closed, cheap `prepare` and `check`. Each added cost is stated in section 5.8 with its lighter alternative.
 - **Exact replay.** The strict replay must reproduce every admission record. It never calls a model and never reads live data.
-- **File size.** `runtime/routing.py`, `runtime/usage_budget.py` and `runtime/evidence.py` are over the 1,000-line limit with fixed ceilings. New logic goes into new modules; changes to those three files must not add lines.
+- **File size.** Seven files are over the 1,000-line limit with fixed ceilings in `scripts/validate.py`: `runtime/routing.py`, `runtime/usage_budget.py`, `runtime/evidence.py`, `runtime/delegation.py`, `runtime/changes.py`, `runtime/state.py` and `runtime/adapters/codex.py`. New logic goes into new modules; changes to those files must not add lines.
 - **No API keys before release**, except the OpenRouter key the user approved for the gateway check.
 - **Model names** may appear only in downloaded data in user state, in learning records, in the user's own settings, in test fixtures with invented names, and in dated evidence records.
 
@@ -108,6 +108,46 @@ Each entry has:
 
 **Proposal (coordinator): the shipped roster** is the toolkit's representative roster of 23 specialists with a display label for each: `orchestrator`, `code-reviewer`, `security-reviewer`, `typescript-reviewer`, `react-reviewer`, `react-build-resolver`, `test-engineer`, `qa-automation-engineer`, `database-architect`, `devops-engineer`, `backend-specialist`, `frontend-specialist`, `seo-specialist`, `performance-optimizer`, `product-manager`, `product-owner`, `project-planner`, `code-archaeologist`, `debugger`, `explorer-agent`, `documentation-writer`, `penetration-tester`, `security-auditor`. One entry is added: `software-engineer` ("Software Engineer"), for implementation that no narrower specialist covers, because the toolkit list has no general implementer.
 
+**Proposal (coordinator): work kinds and attributes.** Six work kinds: `implementation`, `review`, `investigation`, `planning`, `testing`, `writing`.
+
+| Specialist | Label | Work kind | Writes | Reviews |
+|---|---|---|---|---|
+| `orchestrator` | Orchestrator | planning | no | no |
+| `code-reviewer` | Code Reviewer | review | no | yes |
+| `security-reviewer` | Security Reviewer | review | no | yes |
+| `typescript-reviewer` | TypeScript Reviewer | review | no | yes |
+| `react-reviewer` | React Reviewer | review | no | yes |
+| `react-build-resolver` | React Build Resolver | implementation | yes | no |
+| `test-engineer` | Test Engineer | testing | yes | no |
+| `qa-automation-engineer` | QA Automation Engineer | testing | yes | no |
+| `database-architect` | Database Architect | implementation | yes | no |
+| `devops-engineer` | DevOps Engineer | implementation | yes | no |
+| `backend-specialist` | Backend Specialist | implementation | yes | no |
+| `frontend-specialist` | Frontend Specialist | implementation | yes | no |
+| `seo-specialist` | SEO Specialist | implementation | yes | no |
+| `performance-optimizer` | Performance Optimizer | implementation | yes | no |
+| `software-engineer` | Software Engineer | implementation | yes | no |
+| `product-manager` | Product Manager | planning | no | no |
+| `product-owner` | Product Owner | planning | no | no |
+| `project-planner` | Project Planner | planning | no | no |
+| `code-archaeologist` | Code Archaeologist | investigation | no | no |
+| `debugger` | Debugger | investigation | no | no |
+| `explorer-agent` | Explorer Agent | investigation | no | no |
+| `documentation-writer` | Documentation Writer | writing | yes | no |
+| `penetration-tester` | Penetration Tester | review | no | yes |
+| `security-auditor` | Security Auditor | review | no | yes |
+
+The `when_to_use` sentences are the toolkit's, kept in the template.
+
+**How today's structural roles map onto this (coordinator's call).**
+
+- `worker` and `review` disappear as names. Code that branches on them reads `writes` and `reviews`.
+- `coordinator` becomes `orchestrator`. As today, the orchestrator is never routed: the user's coordinator keeps its own model.
+- `check` is not a specialist. A check run uses no model, and delegation already identifies it by its operation kind (`check`). That field stays; the role value goes.
+- `researcher` and `repair` in the routing settings disappear. Research is done by an investigation specialist. Repair is done by the specialist that did the work.
+
+**Explicit choices in settings (coordinator's call).** `worker_choices` is keyed by specialist identifier. This machine has no production routing settings file, and the package has no release yet, so nothing is migrated. A settings file that still has an old key is left untouched; its old entries match nothing, and `check` reports them for a one-time re-key.
+
 **Stored history.** Records written before the change keep their old role names. They are read as history only: shown as written, never written again and never used for learning. The rename covers code, policies, client contracts, skills, templates and tests in one change, with the old values still accepted when reading stored state.
 
 ### 5.3 Task Profile template
@@ -117,7 +157,8 @@ Each entry has:
 - Code validates profiles against it. A test pins the constants in `runtime/routing.py` to it, since that file cannot grow.
 - The Task Profile section of `templates/worker-brief.md` is generated from it, and `scripts/validate.py` fails on drift.
 - The coordinator fills the profile from the template when it writes the brief.
-- When a field is missing, `prepare` returns the list of missing fields together with the floors it applied. The coordinator fills them from the template and calls `prepare` again. No model fills a profile.
+- When complexity, risk or the review policy is missing, `prepare` does not block. It applies the floors, as today, and returns the list of missing fields. The coordinator can fill them from the template and call `prepare` again before dispatch; if it launches as is, the profile counts as floor-filled (section 5.9). No model fills a profile.
+- The specialist is required and has no floor. `prepare` refuses a profile without a roster specialist, as it refuses an unknown role today. The work kind comes from the specialist, so it is never missing.
 - The installed package must ship `templates/`, because routing reads it at run time for the first time. The plan confirms this.
 
 ### 5.4 Paths and generated routes
@@ -136,13 +177,17 @@ The route manifest splits in two.
 
 The ranking table keeps its shape: rows per kind of task, each with ordered candidates. A row is now `work_kind`, complexity and risk.
 
+The row shape changes, so the vendor guidance already published is turned into rows once more before the canary, through the existing guidance publication procedure. That is one model read per guide page and a pre-canary item in the plan.
+
 **Who qualifies for a row ("Similar or Better Capability").**
 
 1. The vendor guide names a model and effort for that kind of work. Those are the row's reference candidates.
 2. A model from any vendor also qualifies when public benchmark data for that kind of work shows it scoring at least as well as a reference candidate, within a stated tolerance.
 3. Nothing else qualifies. A row never holds a model below the bar, and bands only rise, as today.
 
-**How the row is ordered.** By expected cost for an accepted result, lowest first. The public list price from the catalog is the common yardstick, because window units cannot be compared across providers. Before a project has results, that is the list price alone. Once learned scores apply (section 5.9), it is the list price times the rework factor, divided by first-pass success.
+Rule 2 is new logic, not an extension. Today a benchmark only supports a candidate that a guidance row already names, and benchmark records carry no score. Score-based qualification arrives with the importer in slice L2. Until then rows hold only the candidates the vendor guides name, which is what the canary runs on.
+
+**How the row is ordered.** By expected cost for an accepted result, lowest first. The public list price from the catalog is the common yardstick, because window units cannot be compared across providers. The catalog input gains a price field for this. Before a project has results, that is the list price alone. Once learned scores apply (section 5.9), it is the list price times the rework factor, divided by first-pass success.
 
 **The shortlist** for one assignment is the row's order after the context-size and constraint filters, cut to 10. It is never padded.
 
@@ -159,7 +204,14 @@ Admission walks the shortlist in this order:
    - every subscription pool that serves the shortlist has a fresh reading at or above the high-pressure threshold `H`.
 4. **Otherwise the assignment waits** and reports why. This replaces the old separate fallback step.
 
-An unread or stale window never opens OpenRouter: an unknown is not a full window. In code, OpenRouter leaves the shared dollar class and becomes its own last class. Explicit choices in the user's settings keep working as today.
+Details (coordinator's calls unless marked):
+
+- **Within the subscription class the allocator is unchanged**, which is the user's decision to keep the window-pressure logic. Value order decides between candidates in one pool. Between two pools, the pool with more room for its window wins, even when its best candidate costs more by list price.
+- **"At or above `H`"** means the window's fresh reading, used plus currently held over the limit. It is not the pace-projected value the API Usage arithmetic uses, so a fast-burning but half-empty window does not open a dollar route.
+- **"Every subscription pool"** means the pools qualified on this machine.
+- **OpenRouter is a strict last pass.** It takes no part in the share accounting between subscription and API Usage. It stays a dollar route under the existing organization and ledger gates.
+- An unread or stale window never opens OpenRouter: an unknown is not a full window.
+- Explicit choices in the user's settings keep working as today.
 
 ### 5.7 New models and model families
 
@@ -213,7 +265,8 @@ A task without a canonical acceptance is recorded as incomplete and not scored. 
 
 - Each admission record stores the shortlist order it used, the score version and the generated-routes version. The strict replay feeds the recorded order back in, so it is exact and needs no data files.
 - This needs a dated pre-registration edit in `docs/smart-routing-validation.md` and new fields in `tests/qualification/replay_export.py` before the canary.
-- Scores are recorded from the start but not applied. A chronological replay trains on the earlier half of the history and tests on the later half. Scores are promoted only if the learned order picks the better realised candidate at least as often as the table order, over a minimum sample fixed in the plan.
+- Scores are recorded from the start but not applied. A chronological replay trains on the earlier half of the history and tests on the later half.
+- **The promotion test (coordinator's call).** Each task ran one candidate, so candidates are compared by their rates per kind of task, not task by task. For every kind of task where at least two candidates have enough results in the later half, the test takes the candidate the learned order puts first and the candidate the table order puts first, and compares their realised cost per accepted result in the later half. Scores are promoted only if the learned pick is at least as good in a stated share of those kinds of task. The share and the minimum samples are pre-registered in the plan before slice L3 reads the later half.
 - Promotion and rollback are one-shot operator commands.
 
 ### 5.11 Optional ranking model
@@ -226,14 +279,15 @@ Worker guidance stops being a separate reading path. In every project the coordi
 
 ### 5.13 Removing Jev
 
-Remove the `jev` parameter of `ensure_profile`, the `'jev'` provenance value, the `profiler` control role, their tests and fixtures, and the Jev text in the 8 November design and the plan. Production never passed a Jev function, so no stored record carries the value.
+Remove the `jev` parameter of `ensure_profile`, the `'jev'` provenance value, both control roles (`profiler` and `ranker`) with the control rows the table refresh handles for them, their tests and fixtures, and the Jev text in the 8 November design and the plan. Production never passed a Jev function, so no stored record carries the value. No ranking model runs under approach C; slice L4 adds its own control call if it is ever built. (Removing `ranker` now is the coordinator's call.)
 
 ### 5.14 No model names
 
 - `runtime/usage_canary.py` and its reference take the lightest model the catalog lists for the provider instead of a fixed one.
 - The display-name correction in `runtime/adapters/codex.py` moves to catalog data.
 - The live-session runbook takes the model as a parameter.
-- `scripts/validate.py` fails when a file in the covered areas contains a model name from the downloaded catalog. On a machine with no catalog it reports the check as not run instead of passing. (Coordinator's call: a shipped list of names to search for would break the rule it enforces.)
+- The covered areas are `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/`, `templates/`, `AGENTS.md` and shipped JSON files. `docs/` is outside the check; its one procedure, the runbook, is fixed by hand. Tests are outside it and use invented names. (Coordinator's call.)
+- `scripts/validate.py` fails when a file in the covered areas contains a model name from the downloaded catalog. The repository has no CI, so the check runs where the catalog is. On a machine with no catalog it reports the check as not run instead of passing. (Coordinator's call: a shipped list of names to search for would break the rule it enforces.)
 
 ## 6. Build order
 
@@ -245,7 +299,7 @@ Remove the `jev` parameter of `ensure_profile`, the `'jev'` provenance value, th
 | F2 | Roster rename across code, policies, contracts, skills, templates and tests; old values readable in stored state | Full suite |
 | F3 | Jev removal | Affected modules |
 | F4 | Path rules and generated routes; runbook qualifies paths | Full suite |
-| F5 | Shortlist with value order; OpenRouter as the last class; new replay fields and the pre-registration edit | Full suite |
+| F5 | New row shape and catalog price; shortlist with value order; OpenRouter as the last class; new replay fields and the pre-registration edit; guidance rows published again | Full suite |
 | F6 | Model names removed and the `validate.py` check | Affected modules |
 
 Then one live session and the canary, on the lasting shape. Until the due jobs exist, the catalog and guides are refreshed by hand as today.
@@ -267,13 +321,18 @@ Each slice is one PR with non-overlapping files, built and reviewed as the earli
 
 **The coordinator proposes, for the user to accept or change:**
 
-1. The `work_kind`, `writes` and `reviews` attributes, and dropping `task_family` (5.2).
+1. The `work_kind`, `writes` and `reviews` attributes, the six work kinds, each specialist's values, and dropping `task_family` (5.2).
 2. The roster of 23 plus `software-engineer`, with no per-project customization (5.2).
-3. Old role names stay readable as history and are excluded from learning (5.2).
-4. List price as the common cost yardstick (5.5).
-5. The two cases that open OpenRouter, with `H` as the "nearly full" threshold, and waiting in place of the old fallback step (5.6).
-6. An inherited score worth at most 5 results (5.7).
-7. The learning thresholds: 5, 20, 60 days, half weight, 10 for borrowing (5.9).
+3. `coordinator` becomes `orchestrator`; a check run is an operation kind, not a specialist; `researcher` and `repair` disappear (5.2).
+4. `worker_choices` keyed by specialist, with no migration (5.2).
+5. Old role names stay readable as history and are excluded from learning (5.2).
+6. List price as the common cost yardstick (5.5).
+7. The two cases that open OpenRouter, `H` on the fresh reading as "nearly full", and waiting in place of the old fallback step (5.6).
+8. An inherited score worth at most 5 results (5.7).
+9. The learning thresholds: 5, 20, 60 days, half weight, 10 for borrowing (5.9).
+10. The promotion test (5.10).
+11. Removing the `ranker` control role now (5.13).
+12. The areas the model-name check covers (5.14).
 
 **Not decided here:** which API Usage switch wins, whether Claude Code becomes an advisory host, the glossary, and the OpenCode client scope. They belong to the unification and client designs.
 
