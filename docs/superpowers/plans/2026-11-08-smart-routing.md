@@ -180,15 +180,32 @@ The feature-by-feature matrix is [design Appendix A](../specs/2026-11-08-usage-r
 
 Read the owning spec section and amendment before each task. Do not invent provider methods to make tests pass. Commit checkpoints apply only when the execution workflow authorizes commits. Every task ends with `python3 -B scripts/validate.py` passing; observed host/provider results are reported separately from package and unit checks.
 
+**Status lines.** On 10 November 2026 each task got a status line from a check of this plan against the merged PRs, the tests on `main` and the recorded live runs. A box is ticked only when its work is merged and the proof the box names has been seen: tests on `main` for package work, a recorded live run where the box asks for host or provider observation. The states are:
+
+- **Done:** ticked.
+- **Package only:** merged and tested, but the live observation the box asks for has not happened. Left unticked. A box that does not ask for live observation is ticked on package evidence, even when its text says "package only".
+- **Partial:** the status line names what is missing.
+- **Not started.**
+- **Changed:** the decision moved; the status line cites where.
+- **Waiting on the user:** the canary, cutover, billing pages, plan tier and API Usage. On 9 November 2026 the user deferred these until after the router is released.
+
+A "write failing tests" or "expected: the new tests fail" step is ticked with its task: on the recorded test-first commits where the PR shows them, otherwise on the passing tests on `main` alone.
+
+Open work that a status line names is tracked on that task's box. Open work from PR descriptions and reviews that no box asks for is listed once under [Follow-ups from merged work](#follow-ups-from-merged-work).
+
 ### Task 0.1: Reconcile the baseline
+
+**Status (10 November 2026):** Done (#112): the [feasibility record](../../smart-routing-feasibility.md) holds baseline `a4e0f1b`, the F01–F17 owners, the toolchain and a passing `validate.py`.
 
 **Files:** create `docs/smart-routing-feasibility.md`.
 
-- [ ] Choose the implementation baseline (inspected `main` was `d73252a77d1e784f8a7d6f637bc661467485178d`; this checkout lacks `runtime/usage_*.py`, `runtime/external_delegation.py` and `skills/manage-usage-routing/`). Record the chosen revision and how the local branch changes are reconciled.
-- [ ] Record the owner of every F01–F17 row on that baseline and the actual test toolchain.
-- [ ] Run `python3 -B scripts/validate.py`; expected PASS.
+- [x] Choose the implementation baseline (inspected `main` was `d73252a77d1e784f8a7d6f637bc661467485178d`; this checkout lacks `runtime/usage_*.py`, `runtime/external_delegation.py` and `skills/manage-usage-routing/`). Record the chosen revision and how the local branch changes are reconciled.
+- [x] Record the owner of every F01–F17 row on that baseline and the actual test toolchain.
+- [x] Run `python3 -B scripts/validate.py`; expected PASS.
 
 ### Task 0.2: Amend the spec
+
+**Status (10 November 2026):** Done: spec v1.5 with A1–A13; A14 added in #114 and case 7 corrected in #120.
 
 **Files:** modify `docs/superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md`.
 
@@ -197,6 +214,8 @@ Read the owning spec section and amendment before each task. Do not invent provi
 - [x] Run `python3 -B scripts/validate.py`; expected PASS.
 
 ### Task 0.3: Classify billing and terms (P0.0)
+
+**Status (10 November 2026):** Partial (#125, #182): the [capability matrix](../../smart-routing-capability-matrix.md) classifies every route from vendor terms with sanitized probes, and ChatGPT via OpenCode ran live for `gpt-6-luna`. The per-route manifest `tests/fixtures/smart-routing/capabilities.json` was never created; the matrix stands in for it. Observed billing (usage pages, Codex pool sharing), plan tier and the API grant debit order wait on the user.
 
 **Files:** create `docs/smart-routing-capability-matrix.md`, `tests/fixtures/smart-routing/capabilities.json`.
 
@@ -210,131 +229,155 @@ Read the owning spec section and amendment before each task. Do not invent provi
 
 ### Task 0.4: Probe the remaining P0 gates per slice
 
+**Status (10 November 2026):** Partial: P0.1 done (plugins load in OpenCode's embedded Bun; `node --test` runs `tests/opencode_plugin/`; `--serve` `check` p95 0.27 ms in #130, live shim check p95 1.18 ms over 20 pilot admissions in #145); probe output sanitized (#125, #128). P0.2 is partly established: on the ChatGPT route OpenCode's `native.rateLimit` is absent and no standalone reader of Codex's `account/rateLimits/read` exists, so whether it shares Codex's pool is unknown (#161, #182). P0.3 and P0.4 wait on the user's API Usage decision, and P0.5–P0.8 are tracked under S3.3–S3.6 and the [gate table](../../smart-routing-capability-matrix.md#gate-status-p0).
+
 **Files:** extend the capability matrix and fixtures.
 
-- [ ] P0.1: pin the OpenCode plugin loader and shim test runner; measure the median and p95 latency of a no-op `scripts/routing.py` call from a plugin hook.
+- [x] P0.1: pin the OpenCode plugin loader and shim test runner; measure the median and p95 latency of a no-op `scripts/routing.py` call from a plugin hook.
 - [ ] P0.2–P0.3: record telemetry and grant observations for each route classified `included_subscription` or `api_grant`, within authorized bounds.
 - [ ] P0.4–P0.8: probe only once S3 is next; record requested versus observed behavior.
-- [ ] Sanitize the earlier scratch probe output before reusing any of it.
+- [x] Sanitize the earlier scratch probe output before reusing any of it.
 
 ### Task S1.1: Allowance policy replaces the 20% floor
+
+**Status (10 November 2026):** Done (#113): allowance tests in `tests/test_usage_budget.py`; the floor is gone.
 
 **Files:** modify `runtime/usage_budget.py`, `tests/test_usage_budget.py`.
 
 **Interface:** the organization policy stores `allowance_bp` (0–10000, default 9800) or `allowance: "no-limit"`, plus the verified issued allowance `G`. `Ledger.credit_headroom(org)` returns `max(0, B − ceil((10000 − allowance_bp) × G / 10000) − R − U)` in integer micro-units; `no-limit` uses protected = 0 and `B` across verified eligible lots.
 
-- [ ] Write failing tests: `G=100_000_000`, 9800 bp, `B=30_000_000`, `R=5_000_000`, `U=0` → `23_000_000`; 0 bp → 0; 10000 bp → `25_000_000`; `no-limit` excludes unverified lots; a billing-date change without an observed issuance mints nothing.
-- [ ] Run `python3 -B -m unittest tests.test_usage_budget`; expected: the new tests fail.
-- [ ] Remove the `(balance + 4) // 5` floor paths in `usage_budget.py` and `usage_routing.py`; implement the policy.
-- [ ] Re-run; expected PASS.
+- [x] Write failing tests: `G=100_000_000`, 9800 bp, `B=30_000_000`, `R=5_000_000`, `U=0` → `23_000_000`; 0 bp → 0; 10000 bp → `25_000_000`; `no-limit` excludes unverified lots; a billing-date change without an observed issuance mints nothing.
+- [x] Run `python3 -B -m unittest tests.test_usage_budget`; expected: the new tests fail.
+- [x] Remove the `(balance + 4) // 5` floor paths in `usage_budget.py` and `usage_routing.py`; implement the policy.
+- [x] Re-run; expected PASS.
 
 ### Task S1.2: Per-task claims replace the slot
+
+**Status (10 November 2026):** Done (#113): state v2 without `slot`; repeated-`run_id` and two-ledger thread-race tests in `tests/test_usage_budget.py`.
 
 **Files:** modify `runtime/usage_budget.py`, `tests/test_usage_budget.py`.
 
 **Interface:** `begin(...)` no longer reads or writes `data['slot']`; the state version increments and the `slot` key is removed. Each run holds its own claim.
 
-- [ ] Write failing tests: two affordable distinct runs both begin; a repeated `run_id` returns the existing run without adding a hold; two `Ledger` instances on one file, racing distinct runs from two threads for the last headroom, admit at most what fits.
-- [ ] Rewrite every test that expects `request_in_flight` for an affordable second task into a shared-headroom assertion.
-- [ ] Run `python3 -B -m unittest tests.test_usage_budget`; expected: the new tests fail.
-- [ ] Remove the `slot` checks from `begin`, `reserve_generation` and `dispatch`; re-run; expected PASS.
+- [x] Write failing tests: two affordable distinct runs both begin; a repeated `run_id` returns the existing run without adding a hold; two `Ledger` instances on one file, racing distinct runs from two threads for the last headroom, admit at most what fits.
+- [x] Rewrite every test that expects `request_in_flight` for an affordable second task into a shared-headroom assertion.
+- [x] Run `python3 -B -m unittest tests.test_usage_budget`; expected: the new tests fail.
+- [x] Remove the `slot` checks from `begin`, `reserve_generation` and `dispatch`; re-run; expected PASS.
 
 ### Task S1.3: Padded reservations, top-ups and safe release
+
+**Status (10 November 2026):** Done (#113): padding, top-up, timeout and provision-transfer tests. Padding lives in the ledger only; `Controller._run` does not use it yet (#113).
 
 **Files:** modify `runtime/usage_budget.py`, `tests/test_usage_budget.py`.
 
 **Interface:** `begin(..., estimate, next_request_bound, margin_bp=2000, ...)` reserves `max(ceil(estimate × (10000 + margin_bp) / 10000), next_request_bound)`. `top_up(run_id, added, revision, now)` admits atomically or raises `insufficient_headroom`. `complete(...)` charges the actual cost and releases unused padding; `uncertain(...)` retains exposure.
 
-- [ ] Write failing tests for the spec §7.4 example in micro-units: with `30_000_000` available, estimates 5/10/8 reserve `6_000_000`/`12_000_000`/`9_600_000`; a fourth reserve of `3_600_000` fails; completing the first at `4_000_000` releases `2_000_000` and the fourth then fits. A timeout keeps its full hold, and a top-up beyond headroom fails without changing state.
-- [ ] Write a failing test that a parent review provision transferred to a child is not counted twice.
-- [ ] Run the module tests (expected FAIL), implement, re-run (expected PASS).
+- [x] Write failing tests for the spec §7.4 example in micro-units: with `30_000_000` available, estimates 5/10/8 reserve `6_000_000`/`12_000_000`/`9_600_000`; a fourth reserve of `3_600_000` fails; completing the first at `4_000_000` releases `2_000_000` and the fourth then fits. A timeout keeps its full hold, and a top-up beyond headroom fails without changing state.
+- [x] Write a failing test that a parent review provision transferred to a child is not counted twice.
+- [x] Run the module tests (expected FAIL), implement, re-run (expected PASS).
 
 ### Task S1.4: Concurrency caps (A10)
 
+**Status (10 November 2026):** Done (#113): `concurrency_cap` tests; open holds count toward the caps since #123.
+
 **Files:** modify `runtime/usage_budget.py`, `tests/test_usage_budget.py`.
 
-- [ ] Write failing tests: with caps 4 total and 2 per account, the third open run on one account fails with `concurrency_cap`, a run on another account succeeds, and closing a run frees a place.
-- [ ] Implement the caps as admission checks reading open runs inside the same transaction; re-run; expected PASS.
+- [x] Write failing tests: with caps 4 total and 2 per account, the third open run on one account fails with `concurrency_cap`, a run on another account succeeds, and closing a run frees a place.
+- [x] Implement the caps as admission checks reading open runs inside the same transaction; re-run; expected PASS.
 
 ### Task S1.5: Slot-free routing, recovery and instructions
 
+**Status (10 November 2026):** Done (#113): second-task and enumeration tests in `tests/test_usage_routing.py`; the serial rule and `simulation_only` are removed.
+
 **Files:** modify `runtime/usage_routing.py`, `tests/test_usage_routing.py`, `skills/manage-usage-routing/references/*.md` and `SKILL.md` if it states the serial rule.
 
-- [ ] Write failing tests: `_evaluate` admits an affordable second task; recovery enumerates every pending attempt, not just the slot owner.
-- [ ] Remove `require(data['slot'] is None, 'request_in_flight')` and the slot-owned dispatch, completion and recovery paths; implement the enumeration.
-- [ ] Remove the serial-execution rule from the skill references; keep the entry point within 150 words.
-- [ ] Run `python3 -B -m unittest tests.test_usage_routing tests.test_usage_budget` and `python3 -B scripts/validate.py`; expected PASS.
+- [x] Write failing tests: `_evaluate` admits an affordable second task; recovery enumerates every pending attempt, not just the slot owner.
+- [x] Remove `require(data['slot'] is None, 'request_in_flight')` and the slot-owned dispatch, completion and recovery paths; implement the enumeration.
+- [x] Remove the serial-execution rule from the skill references; keep the entry point within 150 words.
+- [x] Run `python3 -B -m unittest tests.test_usage_routing tests.test_usage_budget` and `python3 -B scripts/validate.py`; expected PASS.
 - [x] Removing `simulation_only` must not remove a gate. Live API funding stays blocked until API Usage is explicitly enabled, a secure key binding is ready, qualification is recorded and admission evidence is present, and until P0.3/P0.4 pass for the route. Regression coverage: `tests/test_openai_api.py` (`live_admission_required`, `credential_unavailable`) and `tests/test_usage_live.py` (`test_off_and_json_evidence_never_resolve_a_credential`) check that no provider request is transmitted without admission evidence or a valid key binding, and that OFF never resolves a credential. Extend them if a gate combination is found uncovered.
 
 ### Task S2.1: Routing settings
+
+**Status (10 November 2026):** Done (#118): `tests/test_routing_settings.py`.
 
 **Files:** create `runtime/routing_settings.py`, `tests/test_routing_settings.py`.
 
 **Interface:** `resolve(stored: dict) -> dict` and `update(path, change, expected_revision) -> dict`. Defaults: `smart_routing=True`, `api_usage_enabled=False`, `L=0.65`, `H=0.85`, `T_hours=72`, `min_elapsed_fraction=0.10`, `lookback_hours=72`, `margin_bp=2000`, the caps from A10 and `worker_choices={}`. Reads the Workstreams preference from its existing authority without copying it.
 
-- [ ] Write failing tests: `resolve({})["smart_routing"] is True`; `resolve({})["api_usage_enabled"] is False`; an explicit `smart_routing=False` survives a write/read cycle; `0 <= L < H <= 1` and `T_hours > 0` are enforced; `worker_choices` entries with unknown roles or missing fields are rejected; a stale `expected_revision` is refused.
-- [ ] Run `python3 -B -m unittest tests.test_routing_settings` (expected FAIL), implement, re-run (expected PASS).
+- [x] Write failing tests: `resolve({})["smart_routing"] is True`; `resolve({})["api_usage_enabled"] is False`; an explicit `smart_routing=False` survives a write/read cycle; `0 <= L < H <= 1` and `T_hours > 0` are enforced; `worker_choices` entries with unknown roles or missing fields are rejected; a stale `expected_revision` is refused.
+- [x] Run `python3 -B -m unittest tests.test_routing_settings` (expected FAIL), implement, re-run (expected PASS).
 
 ### Task S2.2: Profiles in Workstreams jobs (A4)
+
+**Status (10 November 2026):** Done (#121): `tests/test_routing_profiles.py`; plan jobs accept an optional validated `profile`.
 
 **Files:** create `runtime/routing.py`, `tests/test_routing_profiles.py`; modify `runtime/delegation.py` and the Workstreams job/brief contract in `clients/workstreams-protocol.md`.
 
 **Interface:** `ensure_profile(job: dict, *, jev=None) -> dict` returns a `TaskProfile` with per-field provenance (`coordinator | metadata | floor | jev`), a contract version and a semantic digest over objective, role, scope, tools, review/risk requirements and contract version.
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - A complete coordinator profile makes zero `jev` calls.
   - Balance, progress or retry changes keep the same digest.
   - A changed role, scope or tools changes the digest.
   - Another project's scope cannot reuse a profile (RF2).
   - Missing fields with `jev=None` take conservative floors with `floor` provenance.
   - Requirement floors cannot be lowered by supplied or Jev values.
-- [ ] Run, implement, re-run; expected PASS. Keep existing `selection.profile_ids` guidance references separate from task profiles.
+- [x] Run, implement, re-run; expected PASS. Keep existing `selection.profile_ids` guidance references separate from task profiles.
 
 ### Task S2.3: Evidence compiler and strategy table (A2, A5)
+
+**Status (10 November 2026):** Partial (#121): compiler, lookup and `tests/test_routing_evidence.py` are done, and the [maintenance procedure](../../../clients/guidance-publication.md#strategy-table-refresh) is written. Nothing writes `strategy-table.json` yet, so `prepare` always falls back to worker choices (`table_unavailable`, #130); the pilot used no table. The maintenance refresh must write the table, or the launcher passes `--table`; the owning procedure is linked only from managed delegation controls (#183).
 
 **Files:** create `runtime/routing_evidence.py`, `tests/test_routing_evidence.py`, fixtures under `tests/fixtures/smart-routing/`.
 
 **Interface:** `compile_table(guidance: list, catalog: list, benchmarks: list, terms: list) -> dict` produces versioned rows keyed by `(role, task_family, complexity_band, risk_band)`, each an ordered list of `{strategy_id, model, effort, harness, evidence_refs}`. `lookup(table, profile) -> list | blocked`.
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - Rows naming models absent from the catalog, or unsupported efforts, are dropped.
   - A new catalog model qualifies only with cited evidence.
   - A failed refresh keeps the last verified table with its original age.
   - Control-plane candidates without zero-retention/no-training terms are excluded (RF7).
   - The source tree contains no hard-coded commercial model ID.
 - [ ] Hook compilation into the existing maintenance guidance refresh (`policies/03-agent-delegation.md`, worker selection), outside spawn paths.
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Run, implement, re-run; expected PASS.
 
 ### Task S2.4: Deterministic ranker (A2, A3)
+
+**Status (10 November 2026):** Done (#121): `tests/test_routing_ranker.py`.
 
 **Files:** modify `runtime/routing.py`; create `tests/test_routing_ranker.py`.
 
 **Interface:** `rank(profile: dict, table: dict, constraints: dict) -> dict` returns `{strategy_ids, reason_codes, table_version, profile_digest}`; no spending authority.
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - An exact row returns its order.
   - A missing row uses the next stricter band, then `ranking_conservative`.
   - Explicit user constraints narrow the candidates and never widen them.
   - Ranking makes zero network or model calls.
   - A table refresh re-ranks without re-profiling.
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Run, implement, re-run; expected PASS.
 
 ### Task S2.5: Pure allocation functions (A6–A9)
+
+**Status (10 November 2026):** Done (#118; case 7 corrected to 55 in #120): `tests/test_routing_allocator.py`.
 
 **Files:** create `runtime/routing_allocator.py`, `tests/test_routing_allocator.py`.
 
 **Interface:** `projected_utilization(windows, reserve_new, now, min_elapsed_fraction) -> (float | None, reasons)`; `expiry_pressure(remaining, expected_spend, hours_to_expiry, T_hours) -> float`; `api_share(u, e, L=0.65, H=0.85) -> float`; `choose_class(shares, admissions, bucket, epoch, feasible) -> str | None`; `choose_route(candidates, now, minimum_horizon) -> str | None`. Both return `None` when nothing is eligible or fundable; `api_share` raises `ValueError` for unknown utilization; bad numbers raise `ValueError` with a fixed reason.
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - `api_share(0.40, 0) == 0`; `api_share(0.75, 0) ≈ 0.5`; `api_share(0.80, 0) ≈ 0.75`; `api_share(0.90, 0) == 1`; `api_share(0.40, 2/3) ≈ 2/3`; `api_share(0.75, 2/3) ≈ 0.833`.
   - `expiry_pressure(remaining=50, expected_spend=0, hours=24, T=72) ≈ 2/3`; `expected_spend=50` gives 0; no grant gives 0.
   - A weekly window at 30% after 10% of its length projects above the bare 30%; a 5-hour window at 80% resetting in 10 minutes projects about 83%; before `min_elapsed_fraction`, the pace term is omitted with `pace_unavailable`.
   - A healthier alternative subscription sets `u`; stale observations return `None`.
   - Class choice from recorded admissions matches the shares over 20 sequential decisions, API wins ties, and a rejected decision leaves no record.
   - Within class, the amended case 7 sends the first 55 to the 75-pool; case 8 picks the 1-hour pool for the first 17 admissions; zero-demand candidates never divide by zero.
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Run, implement, re-run; expected PASS.
 
 ### Task S2.6: Allocate and reserve in one transaction
+
+**Status (10 November 2026):** Partial. Done for 7 of the 8 listed tests (#123, #124: `tests/test_routing_admission.py`, `tests/test_routing_funding*.py`); the model-ranker timeout test (RF8) waits for S4, where the ranker is introduced; the fallback when the ranking is empty or the strategy table is missing is tested instead.
 
 **Files:** modify `runtime/routing.py`, `runtime/usage_budget.py`; create `tests/test_routing_admission.py`.
 
@@ -349,32 +392,38 @@ Read the owning spec section and amendment before each task. Do not invent provi
   - With identical fixtures for Claude and OpenAI, both providers produce the same candidate kinds and decisions. Each provider's subscription and API routes compete under section 7.2, and API Usage OFF leaves both providers' subscription routes available (RF6).
   - OFF mode admits the first feasible `worker_choices` entry or returns `worker_choice_unavailable`.
   - A model-ranker timeout falls back to the deterministic ranking (RF8).
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Run, implement, re-run; expected PASS.
 
 ### Task S2.7: Cutover criteria (A11)
 
+**Status (10 November 2026):** Done (#118; A14 in #114): [validation](../../smart-routing-validation.md) pre-registers the criteria and canary bounds, with each pilot edit recorded before its run (#145).
+
 **Files:** create `docs/smart-routing-validation.md`.
 
-- [ ] Write the cutover criteria before any canary starts: minimum canary sample, the disagreement rate that triggers quality re-execution, zero funding violations in allocator replay, latency budgets for warm and cold preparation, and the canary bounds (below). A disagreement is a recorded historical assignment whose accepted model/effort or funding class differs from the strategy the new ranker and allocator choose for it; S2.8 replays those recorded assignments to produce the rate.
-- [ ] Define the canary bounds in the same document: one named project allowlist, a spend cap per funding pool, a maximum duration, concurrency caps (A10), an abort condition (any funding violation, unresolved launch or recovery error) and the Smart Routing OFF kill switch (spec §3), which stops new automatic admissions without a model call.
-- [ ] There is no shadow or simulation mode and no decision-only hook at the current selectors. Current selectors keep dispatching until C.3 replaces them.
+- [x] Write the cutover criteria before any canary starts: minimum canary sample, the disagreement rate that triggers quality re-execution, zero funding violations in allocator replay, latency budgets for warm and cold preparation, and the canary bounds (below). A disagreement is a recorded historical assignment whose accepted model/effort or funding class differs from the strategy the new ranker and allocator choose for it; S2.8 replays those recorded assignments to produce the rate.
+- [x] Define the canary bounds in the same document: one named project allowlist, a spend cap per funding pool, a maximum duration, concurrency caps (A10), an abort condition (any funding violation, unresolved launch or recovery error) and the Smart Routing OFF kill switch (spec §3), which stops new automatic admissions without a model call.
+- [x] There is no shadow or simulation mode and no decision-only hook at the current selectors. Current selectors keep dispatching until C.3 replaces them.
 
 ### Task S2.8: Allocator replay
+
+**Status (10 November 2026):** Partial (#118): `tests/test_routing_replay.py` replays about 50 synthetic arrivals (concurrent claims, resets, expiries, OFF toggles, exact class and route replay). The catalog-refresh and six-job zero-Jev cases, deferred in #118, are still missing. The cutover replay of at least 200 recorded assignments belongs to C.1 and has not run.
 
 **Files:** create `tests/test_routing_replay.py`, `tests/fixtures/smart-routing/arrivals/*.json`.
 
 - [ ] Write replay cases over isolated ledgers: identical chronological arrivals, concurrent claims, resets and expiries, catalog refresh, OFF toggles, and a six-job dependency plan with zero Jev calls.
-- [ ] Assert: no funding violation, no resurrected capacity, exact replay of class and route decisions from admission records.
-- [ ] Run `python3 -B -m unittest tests.test_routing_replay`; expected PASS once S2.5–S2.6 are complete.
+- [x] Assert: no funding violation, no resurrected capacity, exact replay of class and route decisions from admission records.
+- [x] Run `python3 -B -m unittest tests.test_routing_replay`; expected PASS once S2.5–S2.6 are complete.
 
 ### Task S3.1: Single routing command
+
+**Status (10 November 2026):** Done (#130; later ops in #135, #142, #144): `tests/test_routing_command.py`.
 
 **Files:** create `scripts/routing.py`, `tests/test_routing_command.py`.
 
 **Interface:** JSON on stdin and stdout; subcommands `prepare` (profile, ranking, admission), `check` (pre-transmission envelope and route check), `record` (lifecycle event), `status` (local only, no inference), `set` (settings, including OFF). Every response is versioned and either an admission/decision or `{"state": "blocked", "reason": …}`.
 
-- [ ] Write failing tests: malformed input is blocked; `status` and `set` make zero model, network or secret-store calls (RF5); `set smart_routing=false` invalidates unsent automatic admissions under the old revision.
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Write failing tests: malformed input is blocked; `status` and `set` make zero model, network or secret-store calls (RF5); `set smart_routing=false` invalidates unsent automatic admissions under the old revision.
+- [x] Run, implement, re-run; expected PASS.
 
 **Contract (v1).** `scripts/routing.py <op>` reads one request on stdin. `scripts/routing.py --serve` reads one request per line and writes one response per line, for the OpenCode shim's persistent child. Both accept `--settings`, `--ledger` and `--table` paths. A request is `{"v":1,"op":…,"id"?,…}`; a valid `id` is echoed back. A response is `{"v":1,"state":…}`: either a result or `{"state":"blocked","reason":<fixed code>}`. Blocked is an outcome, so the exit code is 0; only a usage error exits 2. Malformed, oversized (1 MiB) or unknown input is blocked with no traceback, input text or secret in the output. Consumers ignore unknown response fields: S3.4 adds `authority` to `check` results without changing `v`.
 
@@ -421,45 +470,53 @@ Rules the command applies:
 
 ### Task S3.2: OpenCode adapter and client contract
 
+**Status (10 November 2026):** Done (#129): `tests/test_opencode_adapter.py` over the sanitized `p0-hook-event-excerpt.json` and `s3-3-shim-live.json` payloads.
+
 **Files:** create `runtime/adapters/opencode.py`, `clients/opencode.md`, `tests/test_opencode_adapter.py`; modify `clients/index.md`, `clients/instruction-map.json` and the support targets in `docs/onboard-my-project-plan.md#client-scope-and-adapter-organization`.
 
-- [ ] Write failing tests against recorded, sanitized OpenCode V2 hook and event payloads: normalization yields task, parent, stage, attempt, session/message IDs, requested model/effort and route identity; unknown fields stay unknown.
-- [ ] Run, implement, re-run; expected PASS.
+- [x] Write failing tests against recorded, sanitized OpenCode V2 hook and event payloads: normalization yields task, parent, stage, attempt, session/message IDs, requested model/effort and route identity; unknown fields stay unknown.
+- [x] Run, implement, re-run; expected PASS.
 
 ### Task S3.3: Pre-transmission shim
+
+**Status (10 November 2026):** Partial (#132, #140, #152, #154; live in #145 and #163): the shim, handshake, descendants RPC and S3.3d denies are on `main` and observed live. Changed in #132: tools other than subagent spawns (MCP, Code Mode, built-ins) are governed by policy deny rules, not `check`, as the S3.1 contract states. Missing: the global plugin install with enforced worker profiles, and the rest of the P0.6 re-qualification (last box): MCP and Code Mode calls, a real `webfetch` execution, a failed plugin load making `routing.health` fail, the S3.3d image-generation probe and a tool-call spawn on another model. The `routing.health` box rests on the qualification harness (`tests/qualification/opencode_live.py`) refusing to send when health fails; no production launcher exists until C.3.
 
 **Files:** create `runtime/adapters/opencode_plugin.ts`; extend `tests/test_opencode_adapter.py`.
 
 - [ ] Use the hooks recorded in the [capability matrix](../../smart-routing-capability-matrix.md#opencode-enforcement-p01-p05p08): `model.request` for every model request, `tool.execute.before` for subagent, MCP and nested tool calls, `permission.evaluate` for `webfetch`, and `shell.create.before` to strip credentials from the command environment. Each forwards to `scripts/routing.py check` and blocks unless it returns an admission. A missing, failing or slow command blocks (fail closed). The shim contains no selection or funding logic.
 - [x] Run one persistent child over stdio per plugin instance with a timeout of about 500 ms on every check; kill and respawn on a stall, and throw if the respawn fails.
-- [ ] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
+- [x] Register a `routing.health` plugin RPC. A managed launch calls it for the session's canonical directory (symlinks resolved) and refuses to send when it fails. Interactive sessions are not blocked by a plugin failure (user decision).
 - [ ] Worker profiles are enforced only when policy rules deny `shell`, MCP tools, Code Mode `execute` and `webfetch` (or allow a narrow list). Profiles that keep full shell access run advisory-only, with no funding guarantee. Install the plugin globally; it enforces nothing outside the bounded canary project until C.4.
-- [ ] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.
+- [x] Record route identity as alias + requested variant + catalog family; the resolved model is `unknown`.
 - [x] S3.3b: the shim sends `attempt_id`, the hook's `session_id` and the `authority` token on every `check` for attached sessions and their children; `routing.attach` accepts only the attempt's own derived session, verifies the token and that ownership through the child before recording anything, and answers every refusal with `attach_refused`; `routing.detach` needs the same attempt and token; derived session IDs an open attempt owns are blocked until attached (expiring after 5 minutes), a finished attempt's session and the sessions recorded under it stay blocked, also after detach, and only attached roots strip shells or start lookups. The contract is in [clients/opencode.md](../../../clients/opencode.md#handshake).
-- [x] S3.3c: `routing.descendants {session_id, attempt_id, authority}` returns the shim's recorded managed descendants of an attached root (IDs and parent links only, at most 512, `truncated`), with `complete: false` and a fixed `reason` when the shim cannot vouch for the set (no or a failed event stream, the root's creation not seen while attached, the descendant budget exceeded, an undetermined parent chain); the same authority rules as `routing.detach`, answering only while attached. `runtime/opencode_accounting.py` cross-checks it against the launcher's listing (`shim_descendants`, `cross_check_lineage`). The launcher order and contract are in [clients/opencode.md](../../../clients/opencode.md#plugin-rpc). Tested with a fake event stream and the real `routing.py --serve`; observed live on 9 November 2026 ([run](../../smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4), 5 calls). Positive run: `complete: true` with a tool subagent, a `subagent: true` command child and an API-created child, equal to the launcher's listing; accounting with `shim_descendants` had no unknowns; refused after `detach`. Negative run (root created before `attach`): `complete: false`, `root_creation_unobserved`, accounting `shim_lineage_incomplete`. Not observed: `truncated`, the descendant budget, an API-funded attempt with real costs. Review of PR #152: every shim-recorded session must be included (S1); a repeated root creation event never vouches again (S3); only spend paths (`model.request`, subagent spawns) mark roots for an undetermined chain (S2, partial). Follow-up (not done): replace the sticky per-root `lineage_lookup_failed` flag with a bounded per-root set of undetermined sessions that decays and is cleared when a later lookup proves the session belongs to another tree.
+- [x] S3.3c: `routing.descendants {session_id, attempt_id, authority}` returns the shim's recorded managed descendants of an attached root (IDs and parent links only, at most 512, `truncated`), with `complete: false` and a fixed `reason` when the shim cannot vouch for the set (no or a failed event stream, the root's creation not seen while attached, the descendant budget exceeded, an undetermined parent chain); the same authority rules as `routing.detach`, answering only while attached. `runtime/opencode_accounting.py` cross-checks it against the launcher's listing (`shim_descendants`, `cross_check_lineage`). The launcher order and contract are in [clients/opencode.md](../../../clients/opencode.md#plugin-rpc). Tested with a fake event stream and the real `routing.py --serve`; observed live on 9 November 2026 ([run](../../smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4), 5 calls). Positive run: `complete: true` with a tool subagent, a `subagent: true` command child and an API-created child, equal to the launcher's listing; accounting with `shim_descendants` had no unknowns; refused after `detach`. Negative run (root created before `attach`): `complete: false`, `root_creation_unobserved`, accounting `shim_lineage_incomplete`. Not observed: `truncated`, the descendant budget, an API-funded attempt with real costs. Review of PR #152: every shim-recorded session must be included (S1); a repeated root creation event never vouches again (S3); only spend paths (`model.request`, subagent spawns) mark roots for an undetermined chain (S2, partial). Follow-up: the per-root incompleteness set under [follow-ups](#follow-ups-from-merged-work).
 - [x] S3.3d: for every non-interactive session (attached, pending or closed) the shim denies image generation (`experimental_image_generate`, a paid model call that never reaches `model.request`; permission action and tool) and every `edit`, `write` or `patch` whose resources include an OpenCode config path (`.opencode`, `.claude`, `.agents`, `opencode.json(c)` anywhere; `.config/opencode`; the global and system config roots; plus the `protected_paths` option, which only adds) or are missing or unreadable; `routing.health` lists `managed_denies`, and `probe` is `enforced` only with `image_generation` denied and `config_edit` denied or narrowed. Launchers never invoke project commands inside a managed session. Established by read-only inspection of the 2.2.6 binary and package-tested with a fake context; config-path writes and the command-shell environment were observed live (below), image generation was not. Before cutover, run the [required live probe](../../../clients/opencode.md#image-generation-and-configuration-edits-s33d) (image request denied with no `model.request`, model write to `.opencode/command/x.md` denied, whether a `` !`env` `` command under an attached root sees credential-like names stripped). Live probe on 9 November 2026 ([run](../../smart-routing-qualification.md#live-probe-run-descendants-and-s33d-harness-85ae5f4), 2 calls):
   - **Config edits, observed:** model `write`s to `.opencode/command/x.md` and `sub/opencode.json` were denied and the files stayed absent; a relative `agents/ok.txt` write was allowed.
   - **Shell environment, observed: not stripped.** A `` !`env` `` command under an attached root saw the dummy credential-like variable. That command shell never reached `shell.create.before`, so the rule that launchers never invoke project commands inside a managed session is load-bearing.
   - **Image request, unobserved:** there was no image model.
-  Review of PR #154: edits resolve against the instance directory (`ctx.location.directory`), so `agent(s)`, `command(s)` and `mode(s)` directories are protected only inside config directories (fail closed when the directory is unknown); absolute paths are protected only through the config names, `.config/opencode` and the computed global and system config roots; an invalid `protected_paths` option (at most 32 entries of 16 segments) makes `routing.health` `not_ready` (`protected_paths_invalid`). Follow-up (not done): tighten `websearch` for managed sessions, which sends query text to a third-party provider like `webfetch`.
+  Review of PR #154: edits resolve against the instance directory (`ctx.location.directory`), so `agent(s)`, `command(s)` and `mode(s)` directories are protected only inside config directories (fail closed when the directory is unknown); absolute paths are protected only through the config names, `.config/opencode` and the computed global and system config roots; an invalid `protected_paths` option (at most 32 entries of 16 segments) makes `routing.health` `not_ready` (`protected_paths_invalid`). Follow-up: `websearch` under [follow-ups](#follow-ups-from-merged-work).
 - [ ] Re-qualify P0.6 on the finished shim: model requests, subagent and nested spawns, tool and MCP calls, and `webfetch` are blocked before transmission, and a failed plugin load makes the health check fail. Record any unblockable path as unsupported in the capability matrix. Partly observed live on 9 November 2026 ([live report](../../smart-routing-qualification.md)): the handshake, blocked unattached and wrong-token sessions, `webfetch` evaluation, shell stripping and a command subagent child on another model; `subagent: true` commands skip `tool.execute.before` and are stopped only by lineage. Tool-call spawns, MCP, Code Mode and a failed plugin load were not re-run. The re-run also observed a finished attempt's session blocked (reason `attach_required` within the 5-minute pending window) and an interactive session untouched with the routing child killed. The live probes (9 November 2026, harness 85ae5f4) observed a tool-call subagent spawn on the allowed route: it passed `tool.execute.before`, and its child's request was checked and allowed. A spawn on another model through the tool was not attempted. A `` !`env` `` command shell under an attached root did not reach `shell.create.before`.
 
 ### Task S3.4: Single-use dispatch authority
+
+**Status (10 November 2026):** Partial (#135; live in #145): the first two boxes are done. The third (P0.7 re-qualification) is unticked: live runs observed derived ids accepted, one request per message id, a duplicate message id deduplicated and the lost-acknowledgment drill, but not racing launchers against the host or a server restart.
 
 **Files:** modify `runtime/usage_budget.py`, `runtime/routing.py`; create `tests/test_routing_dispatch.py`.
 
 - [x] Write failing tests: 15 callers racing for one attempt produce at most one authority; distinct affordable attempts run concurrently; a lost acknowledgment leaves the claim `unknown` and is not retried without proven host deduplication or proof of non-launch.
 - [x] Derive the session and message IDs from the attempt ID. The server deduplicates them (observed), but the `prompt` hook can run more than once for one message, so key the ledger on the message ID and recover an unknown attempt by reading the message by ID.
-- [x] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request, and that OpenCode's own session ids never have the derived shape (`ses_` + 32 lowercase hex), which the S3.3b shim assumes when it decides which sessions to ask the ledger about. Observed live on 9 November 2026 ([live report](../../smart-routing-qualification.md)): derived ids accepted, one request per derived message id, no request on a duplicate send (an extra `idle` record appears), read-back by id, OpenCode ids are 26 mixed-case characters, insertion-ordered listing; the re-run observed the lost-acknowledgment drill (hold stays counted, `record uncertain` keeps exposure; an uncertain subscription hold has no operator path). Racing launchers on the host and server restart were not run.
+- [ ] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request, and that OpenCode's own session ids never have the derived shape (`ses_` + 32 lowercase hex), which the S3.3b shim assumes when it decides which sessions to ask the ledger about. Observed live on 9 November 2026 ([live report](../../smart-routing-qualification.md)): derived ids accepted, one request per derived message id, no request on a duplicate send (an extra `idle` record appears), read-back by id, OpenCode ids are 26 mixed-case characters, insertion-ordered listing; the re-run observed the lost-acknowledgment drill (hold stays counted, `record uncertain` keeps exposure; an uncertain subscription hold has no operator path). Racing launchers on the host and server restart were not run.
 
 The contract (dispatch, derived ids, the shim handshake, `authority_required`, `unmanaged` and lost acknowledgments) is defined once in the [S3.1 contract](#task-s31-single-routing-command).
 
 ### Task S3.5: Fresh gates at dispatch (RF3)
 
+**Status (10 November 2026):** Package only (#141): the gates and `tests/test_routing_gates.py` are done, but no live `prepare` has used `workflow` with `--project`, so the former P0.10 exit on the OpenCode host is unobserved. This audit unticked the second box, which had been ticked on package evidence.
+
 **Files:** create `runtime/routing_gates.py`, `tests/test_routing_gates.py`; modify `runtime/routing.py`, `runtime/usage_budget.py`, `scripts/routing.py` and the read-only accessors `runtime/delegation.py` (`routing_view`, `routing_etag`), `runtime/state.py` (`ChangeWatch`), `runtime/workstreams.py` (`setting_marker`).
 
 - [x] Write failing tests: reopening a dependency, changing writer ownership, losing a resource claim, disabling API Usage or changing the credential binding after `prepare` produces zero sends, even on a profile/ranking cache hit.
-- [x] Run, implement, re-run; expected PASS (done on the package; not yet observed on the OpenCode host). This is the former P0.10 exit on the OpenCode host.
+- [ ] Run, implement, re-run; expected PASS (done on the package; not yet observed on the OpenCode host). This is the former P0.10 exit on the OpenCode host.
 
 **Contract.** Smart Routing ON, OFF and explicit choices all use it.
 
@@ -488,6 +545,8 @@ The contract (dispatch, derived ids, the shim handshake, `authority_required`, `
 - **Capacity.** `MAX_ADMISSION_BYTES` is 6,656 (4,096 plus `MAX_BINDING_BYTES`). The worst-case ledger in the capacity tests is 10.53M of the 12M hard limit (87.8%, within the 90% margin). Python 3.11+ as for the rest of the runtime; 3.9 cannot import it.
 
 ### Task S3.6: Lineage, settlement and retention
+
+**Status (10 November 2026):** Partial (#142, #143, #144, #146): the accounting core, OpenCode accounting and operator reconciliation are done, and subscription settlement through `opencode_accounting` was observed live (re-run and the 20-admission pilot). Missing (S3.6b box): retiring reflected settled charges, which needs balance observations carrying a provider-declared `reflects_through` watermark bound to the organization and pool epoch, plus a settlement time per charge; until then headroom errs low on API-funded routes (#144). Missing (last box, P0.8): `generate` requests, compaction, retries, message paging with deletion or revert, a real sequence gap, coordinator, review and repair stages, API-funded holds, and what `durable.version` counts, since every live aggregate flagged `version_changed` with zero resync deltas (#143, #145).
 
 **Files:** modify `runtime/routing.py`, `runtime/usage_budget.py`, `scripts/routing.py`, `runtime/routing_gates.py` and the read-only accessor `runtime/delegation.py` (`routing_acceptances`, over delegation's evidence-backed reconciliation records); create `tests/test_routing_accounting.py` and (S3.6b-2) `tests/test_routing_reconcile.py`.
 
@@ -529,20 +588,28 @@ The contract (dispatch, derived ids, the shim handshake, `authority_required`, `
 
 ### Task S3.6c: Subscription hold reconcile (follow-up, required before C and before any production use)
 
+**Status (10 November 2026):** Not started (task added in #145).
+
 An uncertain subscription (window) hold has no operator recovery path today: `reconcile_uncertain` covers dollar holds only (`hold_state_forbidden`, observed in the live re-qualification). Such a hold therefore keeps its concurrency place for good.
 
 - [ ] Define and implement an operator path that settles an uncertain subscription hold, releasing its claims with the observation recorded and never charging dollars. It must be idempotent by event id and one-shot only, like the other operator ops. It is required before cutover (Task C) and before any production use of enforced routing; until then the pilot runs on a dedicated canary ledger.
 
 ### Task S3.7: Canary
 
+**Status (10 November 2026):** Pilot done (#145): attempt 2 ran 20 of 20 admissions with no abort ([results](../../smart-routing-validation.md#pilot-canary-attempt-2-9-november-2026-20-of-20-admissions-no-abort)); pre-registered Edit 4 raised its cap from 24 to 28 before that attempt. The pre-registered canary waits on the user and needs S3.6c, C.3 wiring and the replay minimum first.
+
 - [ ] Enable enforced routing for one explicitly chosen project on OpenCode within the S2.7 canary bounds; record admissions, blocks, latency and settlement against the S2.7 criteria, and abort on any bound or abort condition. Other projects and clients continue on current selectors.
-- [ ] Bounded pilot (approved 9 November 2026, pre-registered in [validation](../../smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary)): up to 20 subscription-only `claude-agent/haiku#low` admissions in the allowlisted project, with a durable cap of 24 requests and the Smart Routing OFF kill switch on abort. It runs through `tests/qualification/opencode_live.py --canary` and does not satisfy this task; cutover stays blocked.
+- [x] Bounded pilot (approved 9 November 2026, pre-registered in [validation](../../smart-routing-validation.md#pilot-canary-bounded-not-the-pre-registered-canary)): up to 20 subscription-only `claude-agent/haiku#low` admissions in the allowlisted project, with a durable cap of 24 requests and the Smart Routing OFF kill switch on abort. It runs through `tests/qualification/opencode_live.py --canary` and does not satisfy this task; cutover stays blocked.
 
 ### Task C.1: Confirm the cutover criteria
+
+**Status (10 November 2026):** Waiting on the user (cutover). It also needs the replay of at least 200 recorded assignments and the S3.7 canary.
 
 - [ ] Confirm that S2.8 replay and S3.7 canary meet the S2.7 pre-registered criteria; re-execute flagged disagreement samples within the recorded budget. If the criteria fail, stop and report; current selectors remain.
 
 ### Task C.2: Feature contracts, one group per task
+
+**Status (10 November 2026):** Not started: `tests/test_smart_routing_features.py` does not exist.
 
 **Files:** create `tests/test_smart_routing_features.py` with adapter doubles, extended by each group.
 
@@ -555,6 +622,8 @@ An uncertain subscription (window) hold has no operator recovery path today: `re
 
 ### Task C.3: Replace callers and retire selectors
 
+**Status (10 November 2026):** Not started. Merged work adds launcher requirements defined elsewhere: the [S3.5 wiring list](#task-s35-fresh-gates-at-dispatch-rf3) (`--project` mandatory, `workflow` binding), the S3.1 handshake pre-canary checklist (`authority_required`, `unstamped_open_holds: 0`), the S3.6 pre-canary descendants cross-check for API-funded attempts, and the S3.3d rule that launchers never invoke project commands in a managed session.
+
 **Files:** modify `runtime/delegation.py`, `runtime/external_delegation.py`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py`, `policies/03-agent-delegation.md`, `docs/policy-sources.md`, `clients/instruction-map.json` and affected skill entry points.
 
 - [ ] Route every native, external, API and OpenRouter selection through `prepare_assignment` (`scripts/routing.py prepare`). Keep endpoint, scope, permission, acceptance and explicit user controls as constraints.
@@ -565,18 +634,39 @@ An uncertain subscription (window) hold has no operator recovery path today: `re
 
 ### Task C.4: Default ON
 
+**Status (10 November 2026):** Waiting on the user (cutover and default ON).
+
 - [ ] Install with Smart Routing ON by default and explicit OFF honored; API Usage, OpenRouter, Jev and observability unchanged. Unready routes report enabled-but-blocked/unsupported, and ranker unavailability uses the deterministic path.
 - [ ] Rollback is explicit OFF (worker choices through the same allocator) or the previous strategy-table version; ledger limits and claims are preserved.
 
 ### Task S4.1: Routing benchmark (former P0.9)
 
+**Status (10 November 2026):** Not started.
+
 - [ ] Pre-register the routing-role benchmark (selection quality against the deterministic ranker, structured-output validity, high-risk handling, unsupported-option avoidance, latency and availability) and the sample strength, before seeing results.
 
 ### Task S4.2: Quality evaluation and promotion
 
+**Status (10 November 2026):** Not started.
+
 - [ ] Re-execute the pre-registered, budgeted historical sample under the deterministic and model-ranked policies with fixed acceptance checks; measure accepted deliveries per budget, cost per accepted delivery including failures, review/repair burden and overhead.
 - [ ] Promote the model ranker (A2) only if it meets the pre-registered margins; it keeps the A3 fallback, the A5 data rules and spec §5.3 router selection. Otherwise record the result and keep the deterministic ranker.
 - [ ] Learned routing weights stay deferred (spec §11).
+
+### Follow-ups from merged work
+
+Open work that merged PRs recorded in their descriptions or reviews and that no box above asks for. Each item names its source PR.
+
+- [ ] **Per-root incompleteness set** (#152). Replace the sticky per-root `lineage_lookup_failed` flag with a bounded per-root set of undetermined sessions. Entries decay, and a later lookup that proves a session belongs to another tree clears it.
+- [ ] **`websearch`** (#154). Tighten it for managed sessions, like `webfetch`: it sends query text to a third-party provider.
+- [ ] **Explicit owner field** (#140). Have the command name the owner, for example `owner_attempt` on a session-only answer or `session_owned: true` on a strict allow. That would replace the shim's two-answer inference at `attach`.
+- [ ] **Listed is not entitled** (#182). After Sign in with ChatGPT, OpenCode lists a fixed set of 18 models without consulting the account: `gpt-5.5` was refused (400 `model_not_found`) and `gpt-6-luna` was accepted. Routing must not treat a catalog listing as eligibility on a subscription route. The router-side rule is not designed yet.
+- [ ] **Operator op access** (#144). One-shot operator ops have no caller authentication. They rely on worker profiles being unable to run the command, so they depend on the S3.3 deny rules.
+- [ ] **Smaller items** recorded as non-blocking in reviews and not re-checked on `main` by this audit:
+  - #113: `credit_headroom` without `now` skips lot expiry in `no-limit` mode; `observe(issued=)` has no bound; `top_up` on an unknown run raises `KeyError`.
+  - #118: `projected_utilization` accepts a negative `reserve_new`; `expiry_pressure` reads NaN as 0; a constraint with `resets_at <= now` is scored rather than stale.
+  - #121: a corrupt persisted table can make `rank` raise.
+  - #123: S1 never prunes `runs`, so a ledger refuses new runs at `MAX_RUNS`; organizations and lots are unbounded; every write re-serializes the whole body under the lock; S1 entry sizes ignore escaped characters.
 
 ## Appendix C — Self-review
 

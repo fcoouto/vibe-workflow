@@ -176,11 +176,11 @@
       ]
     },
     "clients/habblaud-receiver.md": {
-      "sha256": "090bd7a5ed5e778a42bb0196f1c13d6c20a97e833c473738992cb50d382c2acb",
+      "sha256": "be208cfb816d0b4f23df199481c023771abf33f5e16cbea0a84d7ee5ebc24c5a",
       "ranges": [
         [
           1,
-          120
+          119
         ]
       ]
     },
@@ -341,7 +341,7 @@
       ]
     },
     "clients/workstreams-titles.md": {
-      "sha256": "0a56982ed16d8415903482783fa58a0242200e50bc12360aaa5c08d712b7213e",
+      "sha256": "5671d11025245f349f39b67ce6fd14563a58a344d947e3280423893ffc1927e1",
       "ranges": [
         [
           1,
@@ -353,7 +353,7 @@
         ],
         [
           281,
-          330
+          328
         ]
       ]
     },

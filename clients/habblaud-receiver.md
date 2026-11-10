@@ -65,12 +65,11 @@ badge rendering and regression tests. The patch is qualified against Habblaud
    npm run build
    ```
 
-6. Deploy the verified build through the installation's existing launch method.
-   For Docker, rebuild the Habblaud service with its selected Compose files,
-   then replace only that service while retaining its configured volumes.
-   For a source installation, restart the existing process using its configured
-   service manager. Verify health and that the running bundle or image is the
-   one just built. Record the recovery location and deployed identity.
+6. Deploy the verified build through the installation's existing launch method
+   (for a source installation, its configured service manager), replacing only
+   the Habblaud service and keeping its configured data. Verify
+   health and that the running build is the one just built. Record the recovery
+   location and deployed identity.
 
 ## Restore previously saved declarations
 

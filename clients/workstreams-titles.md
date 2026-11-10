@@ -309,11 +309,9 @@ the original family/member binding.
 
 ## Update and qualification boundary
 
-The task vocabulary is a pinned runtime change. Legacy lowercase records remain
-historical; old `ready` meant completion. The uppercase `READY` and `BLOCKED`
-were retired later: a title applied before then may still show them and stays
-recognized, but new titles never do. Do not translate old titles into task state
-or rewrite old records/pins.
+The task vocabulary is a pinned runtime change. A title applied before `READY`
+and `BLOCKED` were retired may still show them and stays recognized, but new
+titles never do.
 Reconcile affected owners with their original runtime and use the existing
 [approved runtime update](runtime.md#change-a-pinned-runtime) procedure with a fresh
 state authority. Existing ownership and unresolved assignments remain binding.
