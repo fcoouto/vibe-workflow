@@ -16,6 +16,24 @@ HANDOFF_REASONS = frozenset(('insufficient_headroom', 'balance_stale_or_missing'
     'concurrency_cap'))
 
 
+def refuse_managed(path):
+    """Phase W (C.3 design 4.3): refuse a legacy API Usage spending entry for a managed project, as its first action.
+
+    Its only read is the routing settings' `managed_projects`; nothing here opens Usage Routing settings, a
+    credential, a configuration or the ledger. Fail closed: settings that exist but cannot be read count as managed
+    (`routing_settings.managed_project`), so a corrupt routing settings file also stops legacy API Usage spending
+    until it is repaired. A missing settings file manages nothing. A `None` path has no project to check; every
+    caller then refuses it on its own. Setup and report actions never call this: they open no spending."""
+    if path is None:
+        return
+    from runtime import routing_settings
+    try:
+        managed = routing_settings.managed_project(path) is not False
+    except Exception:  # noqa: BLE001 - an uninspectable path is treated as managed
+        managed = True
+    require(not managed, routing_settings.LEGACY_ROUTE_RETIRED)
+
+
 def status(cwd=None):
     """Read enrollment only, without creating runtime state or observing billing."""
     enrollment = 'unknown'
@@ -66,6 +84,7 @@ def _run_live(cwd, task, evidence):
     from runtime import usage_admission, usage_settings
 
     require(type(evidence) is usage_admission.Admission, 'trusted_live_evidence_required')
+    refuse_managed(cwd)
     with usage_settings.controller(cwd) as control:
         def check_scope():
             require(usage_settings.scope(cwd) == (control.scope, control.root), 'scope_changed')
@@ -406,6 +425,7 @@ class Controller:
             raise BudgetError(str(error)) from None
 
     def _evaluate(self, data, task, *, pin_qualification=False, live=False):
+        refuse_managed(self.root)  # backstop for a caller that skipped its entry point's refusal
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
         for field in ('local_preferred','api_only','reviewer_available'):
@@ -449,6 +469,7 @@ class Controller:
     def request_handoff(self, task, reason):
         """Queue remaining work for existing native dispatch; never clears API exposure."""
         import copy
+        refuse_managed(self.root)  # backstop
         require(reason in HANDOFF_REASONS, 'unsupported_handoff_reason')
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
@@ -575,6 +596,7 @@ class Controller:
         import copy
         from runtime import openai_api
 
+        refuse_managed(self.root)  # backstop, before any decision and before Ledger.begin
         require(evidence is not None or (callable(connection_factory) and callable(credential_resolver)),
                 'live_execution_unavailable')
         task = copy.deepcopy(task)
@@ -699,6 +721,7 @@ def disable(cwd, request):
 
 
 def evaluate(cwd, task):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     try:
         with controller(cwd) as control:
@@ -715,6 +738,7 @@ def reconcile(cwd, request):
 
 
 def handoff(cwd, request):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     fields(request, 'task reason')
     with controller(cwd) as control:
@@ -722,6 +746,7 @@ def handoff(cwd, request):
 
 
 def claim_handoff(cwd, request):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     fields(request, 'task_id attempt_id')
     with controller(cwd) as control:

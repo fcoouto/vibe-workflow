@@ -116,6 +116,7 @@ def _funding_pool(policy, pool):
 def freeze(cwd, proposals, *, thread_snapshot, native_limits=None, reviewer, expires_at,
            maximum_usd_micros=None, pool='benefit'):
     """Pin the exact proposals and limits without dispatching or writing settings."""
+    usage_routing.refuse_managed(cwd)  # first: a managed project never reaches legacy settings (C.3 design 4.3)
     now = int(time.time())
     try:
         with usage_settings.controller(cwd) as control:
@@ -210,6 +211,7 @@ def execute(plan, proposal, *, thread_snapshot, reviewer,
     """Issue exact, short-lived admission from current trusted Codex observations."""
     now = int(time.time())
     require(type(plan) is Plan, 'invalid_codex_host_plan')
+    usage_routing.refuse_managed(plan.checkout)  # before the package digest, settings and credential binding
     try:
         require(_reviewer(reviewer, plan.thread_id) == plan.reviewer, 'independent_review_unavailable')
         require(package_digest() == plan.package_digest, 'codex_package_changed')
