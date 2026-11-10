@@ -30,12 +30,23 @@ LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it 
 # manifest declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and its
 # windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
 WINDOW_UNIT = 'utilization_thousandths'
+# The host's subscription windows in that unit, defined once here for routing: every window's limit (its full scale)
+# and each provider window's (id, length in seconds). The OpenCode launcher stores its observations with these values;
+# a test keeps its own copies equal until it re-exports these.
+WINDOW_UNITS = 1000
+RATE_WINDOWS = dict(five_hour=('5h', 5 * 3600), seven_day=('7d', 7 * 86400))
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
                 'next_request_bound')
 WINDOW_FIELDS = ('id', 'limit', 'used', 'length', 'reset_at', 'rolling', 'protected', 'organization',
                  'organization_revision', 'unit')
+# User decision 6 (C.3 design 7.1): the one-shot operator op `seed_window` stores a subscription window no host has
+# reported yet, marked with this `source`. Only `seed_window` writes it; the host path (`store_window`) never can.
+SEED_KIND = 'seed_window'
+SEED_SOURCE = 'operator'
+SEED_FIELDS = ('pool', 'window', 'used', 'limit', 'reset_at', 'length', 'event_id')
+STORE_ERRORS = ('observation_store_unsafe', 'observation_store_invalid', 'observation_store_full')
 
 
 class StaticSource:
@@ -200,7 +211,8 @@ def _write(path, value):
 
 
 def _valid_window(window):
-    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at'}:
+    if type(window) is not dict or not set(window) <= {*WINDOW_FIELDS, 'observed_at', 'source'} \
+            or window.get('source', SEED_SOURCE) != SEED_SOURCE:
         return False
     if 'unit' in window and not routing._text(window['unit']):
         return False
@@ -215,16 +227,120 @@ def _valid_window(window):
 def store_window(settings_path, pool, window):
     """Record one window observation for `pool` (the launcher stores what it read after settlement). An older
     observation never replaces a newer one, and one dated beyond now plus CLOCK_MARGIN is refused, so a future-dated
-    record can never shadow later ones."""
-    if not routing._part(pool) or not _valid_window(window) or window['observed_at'] > time.time() + CLOCK_MARGIN:
+    record can never shadow later ones. A host observation always replaces an operator seed (`seed_window`), and
+    it can never carry a `source` itself."""
+    if not routing._part(pool) or not _valid_window(window) or 'source' in window \
+            or window['observed_at'] > time.time() + CLOCK_MARGIN:
         raise ValueError('invalid_window_observation')
     with _locked(window_path(settings_path)) as path:
         value = _read(path) or dict(version=1, pools={})
         windows = value['pools'].setdefault(pool, {})
         current = windows.get(window['id'])
-        if current is None or window['observed_at'] > current['observed_at']:
+        if current is None or current.get('source') == SEED_SOURCE or window['observed_at'] > current['observed_at']:
             windows[window['id']] = {key: item for key, item in window.items() if key != 'id'}
             _write(path, value)
+
+
+def _host_windows():
+    """(full scale, {window id: length}) the host path stores subscription windows with, so a seed is in exactly
+    the unit, scale and length a host observation would have."""
+    return WINDOW_UNITS, dict(RATE_WINDOWS.values())
+
+
+def seed_event(value):
+    """The operator's `seed_window` request as a ledger event, or None when malformed: `used`, `limit`, `length` and
+    `reset_at` are integers (never bools or floats) with `0 <= used <= limit`, `limit > 0` and `length > 0`, and
+    `limit` is the host's full scale (1000 in utilization_thousandths): a larger one would multiply the headroom.
+    The window's length and the clock bounds on `reset_at` are checked when it is applied, after a replay is
+    recognised."""
+    if type(value) is not dict or set(value) != set(SEED_FIELDS) or \
+            not routing._bounded_id(value['event_id'], usage_budget.MAX_EVENT_ID):
+        return None
+    if not (routing._part(value['pool']) and routing._part(value['window'])
+            and all(routing._amount(value[key]) for key in ('used', 'limit', 'length', 'reset_at'))):
+        return None
+    if not (0 < value['limit'] == _host_windows()[0] and value['used'] <= value['limit'] and 0 < value['length']):
+        return None
+    return dict(value, kind=SEED_KIND)
+
+
+def _subscription_window(settings_path, pool, window, length):
+    """Whether `window` of `pool` is a subscription window of that `length`: a qualified `included_subscription`
+    route of the manifest names it in its `demand` (plans differ in which windows they have), the host stores that
+    window id with exactly that length, and no dollar route of any status draws on the pool."""
+    if _host_windows()[1].get(window) != length:
+        return False
+    try:
+        routes = [route for route in manifest_routes(default_source(settings_path))
+                  if type(route) is dict and route.get('pool') == pool]
+    except (OSError, ValueError):
+        raise usage_budget.BudgetError('route_manifest_invalid') from None
+    return not any(route.get('billing_class') in routing.FUNDED for route in routes) and any(
+        route.get('status') == 'qualified' and route.get('billing_class') == 'included_subscription'
+        and type(route.get('demand')) is dict and window in route['demand'] for route in routes)
+
+
+def _store_seed(settings_path, event, now):
+    """Write the seed unless a fresh (or future-dated) host observation of the window exists; an organization window
+    is never seeded. A stale host observation or an earlier seed is replaced."""
+    with _locked(window_path(settings_path)) as path:
+        value = _read(path) or dict(version=1, pools={})
+        windows = value['pools'].setdefault(event['pool'], {})
+        current = windows.get(event['window'])
+        if current is not None:
+            usage_budget.require(type(current) is dict and routing._amount(current.get('observed_at')),
+                                 'observation_store_invalid')
+            usage_budget.require(current.get('organization') is None, 'invalid_request')
+            usage_budget.require(current.get('source') == SEED_SOURCE or now - current['observed_at'] > FRESH_SECONDS,
+                                 'fresh_observation_exists')
+        windows[event['window']] = dict({key: event[key] for key in ('used', 'limit', 'reset_at', 'length')},
+                                        rolling=False, unit=WINDOW_UNIT, source=SEED_SOURCE, observed_at=now)
+        _write(path, value)
+
+
+def seed_window(ledger, event, now, settings_path):
+    """Apply one `seed_event` inside one ledger write transaction, idempotent by event id in the S3.6a event table:
+    the same payload returns the first outcome with `duplicate: true`, another is `event_conflict`, and refusals are
+    not remembered. The audit is the event row: the pool and window labels and the seed's integers only."""
+    try:
+        usage_budget.integer(now)
+        digest = routing.event_digest(event)
+        with ledger.transaction() as data:
+            usage_budget._create_tables(ledger.db)
+            known = ledger._event(data, event['event_id'], now)
+            if known is not None:
+                usage_budget.require(known[0] == digest, 'event_conflict')
+                return dict(json.loads(known[1])['outcome'], duplicate=True)
+            usage_budget.require(now < event['reset_at'] <= now + event['length'], 'invalid_request')
+            usage_budget.require(_subscription_window(settings_path, event['pool'], event['window'], event['length']),
+                                 'invalid_request')
+            _store_seed(settings_path, event, now)
+            outcome = dict({key: event[key] for key in ('pool', 'window', 'used', 'limit', 'reset_at', 'length')},
+                           state='recorded', duplicate=False, outcome='window_seeded', observed_at=now)
+            label = json.dumps([event['pool'], event['window']]).encode()
+            body = dict(attempt_id='seed:' + hashlib.sha256(label).hexdigest()[:16], kind=SEED_KIND, recorded_at=now,
+                        outcome=dict(outcome))
+            ledger._store_event(data, event['event_id'], digest, body, now, effect=True)
+            return outcome
+    except usage_budget.BudgetError as error:
+        return dict(state='blocked', reason=str(error))
+    except ValueError as error:
+        return dict(state='blocked', reason=str(error) if str(error) in STORE_ERRORS else 'observation_store_invalid')
+
+
+def window_status(settings_path, now):
+    """What `status` shows of the window store: each stored window's pool, id, `source` (`operator` for a seed in
+    use, else `host`), observation time and freshness, 16 at most plus `more`; never the store's other content."""
+    try:
+        pools = _read(window_path(settings_path)).get('pools', {})
+        items = [dict(pool=pool, window=key, source=window.get('source', 'host'), observed_at=window['observed_at'],
+                      fresh=0 <= now - window['observed_at'] <= FRESH_SECONDS)
+                 for pool, windows in sorted(pools.items()) for key, window in sorted(windows.items())]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        reason = str(error) if str(error) in STORE_ERRORS else 'observation_store_invalid'
+        return dict(state='unavailable', reason=reason)
+    limit = usage_budget.SUMMARY_IDS
+    return dict(state='ok', windows=items[:limit], more=max(0, len(items) - limit))
 
 
 def entitlement_marks(settings_path):

@@ -284,7 +284,7 @@ class ActivationGateTests(Base):
             spawned.append((argv, kwargs))
             return real(argv, **kwargs)
         capabilities = command.CAPABILITIES + (('simulated_missing', 'module', 'runtime.c3_0b_absent:managed_self_check'),)
-        with mock.patch.object(command.subprocess, 'Popen', spy), \
+        with mock.patch.object(subprocess, 'Popen', spy), \
                 mock.patch.object(command, 'CAPABILITIES', capabilities):
             response = self.add()
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
@@ -335,7 +335,7 @@ class ActivationGateTests(Base):
             made.append(real(*args, **kwargs))
             return made[-1]
         with self.gate(('slow', 'module', 'gate_sleep:managed_self_check')), \
-                mock.patch.object(command, 'SELF_CHECK_TIMEOUT', 1), mock.patch.object(command.tempfile, 'mkdtemp',
+                mock.patch.object(command, 'SELF_CHECK_TIMEOUT', 1), mock.patch.object(tempfile, 'mkdtemp',
                                                                                         record):
             response = self.add()
         self.assertEqual(response['codes'], {'slow': ['self_check_timeout']})
