@@ -27,6 +27,7 @@ class FakeLauncherHost:
         self.extra_assistants, self.cost, self.trust_attach = 0, 0, False
         self.utilizations, self.resets_at = [], int(time.time()) + 3000  # native.rateLimit per prompt, in order
         self.attached, self.unobserved = set(), set()
+        self.hang, self.aborted, self.options = False, [], None  # hang: prompts never go idle until aborted
         self.connections = {}
         self.workdir.mkdir(parents=True, exist_ok=True)
         (self.workdir / "server.log").write_text("server password %s\nserver listening\n" % self._password)
@@ -120,7 +121,9 @@ class FakeLauncherHost:
             self.connections.setdefault(parts[2], []).append(dict(label="connected"))
             return 200, dict(data={})
         if path == "/api/session/active":
-            return 200, dict(data={})
+            busy = {sid: dict(type="busy") for sid, item in self.sessions.items()
+                    if self.hang and item["messages"] and sid not in self.aborted}
+            return 200, dict(data=busy)
         if path == "/api/session":
             if method == "POST":
                 self.created += 1
@@ -133,6 +136,11 @@ class FakeLauncherHost:
             spent = self.cost * sum(1 for m in self.sessions[sid]["messages"] if m.get("type") == "assistant")
             return 200, dict(data=dict(id=sid, parentID=self.sessions[sid]["parent"], tokens=self.session_tokens(sid),
                                        cost=spent))
+        if parts[3] == "abort":
+            self.aborted.append(sid)
+            self.sessions[sid]["messages"].append(dict(id="msg_fakeabortidle%04d" % len(self.aborted), type="idle",
+                                                       outcome="aborted", time=dict(created=now)))
+            return 200, dict(data=True)
         if parts[3] == "permission":
             return 200, dict(data=dict(effect=self.effects.get(body["action"], "deny")))
         if parts[3] in ("prompt", "command", "shell"):
@@ -152,9 +160,10 @@ class FakeLauncherHost:
                                                                                              status="allowed"))))
             extra = [dict(assistant, id="msg_fakeextra%04d" % i) for i in range(self.extra_assistants)]
             self.sessions[sid]["messages"] += [dict(id=body.get("id") or "msg_fakeuser%04d" % self.prompts, type="user",
-                                                    time=dict(created=now)), assistant, *extra,
-                                               dict(id="msg_fakeidle%04d" % self.prompts, type="idle", outcome="succeeded",
-                                                    time=dict(created=now + 2))]
+                                                    time=dict(created=now)), assistant, *extra]
+            if not self.hang:
+                self.sessions[sid]["messages"].append(dict(id="msg_fakeidle%04d" % self.prompts, type="idle",
+                                                           outcome="succeeded", time=dict(created=now + 2)))
             return 200, dict(data=dict(id=body.get("id")))
         page = [] if query and "cursor" in query else list(self.sessions.get(sid, {}).get("messages", []))
         return 200, dict(data=page, cursor=dict(previous=None, next=None if not page else "n"))

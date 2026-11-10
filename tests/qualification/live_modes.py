@@ -63,9 +63,11 @@ class LiveEnv:
         self.pgids, self.real_home = [], Path.home()
         self.counts = dict(servers=0, children=0, routing_commands=0)
 
-    def start(self, project, settings, ledger, environ):
+    def start(self, project, settings, ledger, environ, options=None):
         from runtime import opencode_launcher
-        server = opencode_launcher.start_server(project, settings_path=settings, ledger_path=ledger, environ=environ)
+        extra = {} if options is None else dict(options=options)  # F4's per-launch options (gateway only)
+        server = opencode_launcher.start_server(project, settings_path=settings, ledger_path=ledger, environ=environ,
+                                                **extra)
         self.counts["servers"] += 1
         self.pgids.append(server.process.pid)
         self.redact.add_secret(server._password)
@@ -205,7 +207,8 @@ class Session:
             if not found.get("passed"):
                 self.results["blockers"].append(found.get("blocker") or "a drill step failed")
         else:
-            found = gateway.run_gateway(gateway.Gateway(self.base, self.ledger, self.run_id, self.env, self.args.gateway_model))
+            found = gateway.run_gateway(gateway.Gateway(self.base, self.ledger, self.run_id, self.env, self.args.gateway_model,
+                                                        self.args.key_limit_usd, self.args.gateway_endpoint))
             self.results["gateway"] = found
             if not found.get("passed"):
                 self.results["blockers"].append(found.get("blocker") or "a gateway check failed")
@@ -314,6 +317,8 @@ def parser():
     parse.add_argument("--accept-outside-reads", action="store_true",
                        help="launcher-probes A5: record allowed outside reads as the user's accepted risk")
     parse.add_argument("--gateway-model", help="gateway: openrouter/MODEL[#VARIANT] (at most $1/M in, $4/M out)")
+    parse.add_argument("--gateway-endpoint", help="gateway: the OpenRouter endpoint the launch pins (launch options)")
+    parse.add_argument("--key-limit-usd", help="gateway: the OpenRouter key's own credit limit you set, at most 1.00")
     parse.add_argument("--signin-timeout", type=int, default=900, help="seconds to wait for an interactive sign-in")
     return parse
 
@@ -332,10 +337,10 @@ def preflight(args, home_check=check_real_home, version_check=check_opencode_ver
             live_common.parse_model(args.a5_model)
         if args.no_variant_model:
             live_common.parse_model(args.no_variant_model, variant_required=False)
-    elif args.gateway_model or args.mode == "gateway":
+    elif args.gateway_model or args.key_limit_usd or args.gateway_endpoint or args.mode == "gateway":
         if args.mode != "gateway":
-            raise Refused("--gateway-model belongs to the gateway mode")
-        gateway.Gateway(base, ledger, "check", None, args.gateway_model or "")
+            raise Refused("--gateway-model, --gateway-endpoint and --key-limit-usd belong to the gateway mode")
+        gateway.Gateway(base, ledger, "check", None, args.gateway_model or "", args.key_limit_usd, args.gateway_endpoint)
     if not 60 <= args.signin_timeout <= 1800:
         raise Refused("--signin-timeout is 60 to 1800 seconds")
     live_common.require_cap(ledger, MODES[args.mode], needed_calls(args))

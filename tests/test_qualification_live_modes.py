@@ -101,7 +101,10 @@ class EntryTests(Temp):
 
     def test_a_gateway_run_through_main(self):
         self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
-        code = self.main(self.argv("gateway", "--gateway-model", "openrouter/vendor-small"), self.env_factory(GatewayEnv))
+        from tests.test_qualification_gateway import launch_options
+        with launch_options():
+            code = self.main(self.argv("gateway", "--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor",
+                                       "--key-limit-usd", "1.00"), self.env_factory(GatewayEnv))
         results = json.loads(self.out.read_text())
         self.assertEqual(code, 0, results.get("blockers"))
         self.assertTrue(results["gateway"]["passed"])
@@ -116,7 +119,7 @@ class EntryTests(Temp):
                 return dict(status="complete")
         self.private(self.tmp / "env")
         factory = self.env_factory(Leaky, models=[dict(providerID="openai", id="gpt-6-luna", variants=["none"])])
-        code = self.main(self.argv("launcher-probes", "--probes", "A5", "--a5-model", "openai/gpt-6-luna#none"), factory)
+        code = self.main(self.argv("launcher-probes", "--probes", "A1,A2,A3,A5", "--a5-model", "openai/gpt-6-luna#none"), factory)
         self.assertEqual(code, 3)
         skeleton = self.out.read_text()
         self.assertNotIn("sk-proj", skeleton)
@@ -140,6 +143,12 @@ class StructureTests(Temp):
                                             "drill.py:5 LiveEnv.start: too many positional arguments",
                                             "gateway.py:5 GatewayEnv.balance: no such method"])
 
+    def gateway(self, ledger, env):
+        from tests.qualification import gateway
+        from tests.test_qualification_gateway import KEY, launch_options
+        with launch_options():
+            return gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m", **KEY)
+
     def test_no_instance_attribute_shadows_a_method(self):
         from tests.qualification import drill, gateway, launcher_probes
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
@@ -147,10 +156,26 @@ class StructureTests(Temp):
         env = live_modes.LiveEnv(self.tmp, redact)
         instances = [env, live_modes.GatewayEnv(self.tmp, redact),
                      launcher_probes.LauncherProbes(self.tmp, ledger, "r", env, self.home, "u", redact),
-                     drill.Drill(self.tmp, ledger, "r", env), gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m"),
+                     drill.Drill(self.tmp, ledger, "r", env), self.gateway(ledger, env),
                      live_modes.Session("drill", self.tmp, ledger, None, env, home=self.home)]
         for instance in instances:
             cls = type(instance)
             shadowed = [name for name in vars(instance) if callable(getattr(cls, name, None))
                         or isinstance(getattr(cls, name, None), property)]
             self.assertEqual(shadowed, [], cls.__name__)
+
+
+class GatewayEntryTests(EntryTests):
+    def test_gateway_refusals_with_launch_options_present(self):
+        from tests.test_qualification_gateway import launch_options
+        good = ["--gateway-model", "openrouter/vendor-small", "--gateway-endpoint", "vendor", "--key-limit-usd", "1.00"]
+        with launch_options():
+            self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # no approved cap
+            self.ledger.set_cap("gateway", 8, "approved", approval=APPROVAL)
+            for bad in (good[:4], good[:5] + ["1.50"], good[:2] + good[4:]):
+                with self.subTest(bad=bad):
+                    self.assertEqual(self.main(self.argv("gateway", *bad)), 2)
+            with self.assertRaises(Started):
+                self.main(self.argv("gateway", *good))
+        self.assertEqual(self.main(self.argv("gateway", *good)), 2)  # main today: launch_options_unavailable
+        self.assertEqual(list(self.q.iterdir()), [])
