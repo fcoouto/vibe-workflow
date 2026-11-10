@@ -416,14 +416,14 @@
       ]
     },
     "policies/04-security-review.md": {
-      "sha256": "8b7d4a1a2f754ac225b0ddbcafa23a570138851301a437f32bc4399aaf591d5d",
+      "sha256": "13c47785cc1b43a440a83dd5c36edfef7869d38eac74245ef4fe6ea24c8c569e",
       "ranges": [
         [
           1,
-          52
+          54
         ],
         [
-          53,
+          55,
           57
         ]
       ]
@@ -438,7 +438,7 @@
       ]
     },
     "policies/06-code-review.md": {
-      "sha256": "ab7924aa8b9d293e905e1655bd76f9056e8e18ec360e71c7ab010a3670e3dfd3",
+      "sha256": "cfd3c62fb9612ffcaf8805f0723088a33cc0afba8df5a0ac187c5cc6c10f69e0",
       "ranges": [
         [
           1,
@@ -456,7 +456,7 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "402328adc6874075a1173526a1f1c282a7ea96305f4f6126c949e0331479763c",
+      "sha256": "392652b94da94c6d237b831d7392a8fc06612da4336691718aa3929a30797b4d",
       "ranges": [
         [
           1,
@@ -646,19 +646,19 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "cddd509c204826edf8201c66e53e58b32650cdad70d127f80f794ffa6701c3d7",
+      "sha256": "7c7bcb7488dcbb434b86f79d8ddf161cde3db88374de3a8ac8509fb373679187",
       "ranges": [
         [
           1,
-          58
+          60
         ],
         [
-          59,
-          181
+          61,
+          183
         ],
         [
-          182,
-          194
+          184,
+          192
         ]
       ]
     },
@@ -760,7 +760,7 @@
       ]
     },
     "skills/review-my-project/references/procedure.md": {
-      "sha256": "bdda960054041a8db0e5d66232fe0543b566f3baef65d9b5cc5c851e3221c539",
+      "sha256": "876ef45aadab70d1acb714869f4a491350f579ec9de3bf4691496f463869a8fb",
       "ranges": [
         [
           1,
@@ -810,6 +810,33 @@
         [
           1,
           61
+        ]
+      ]
+    },
+    "templates/pull-request.md": {
+      "sha256": "5c30a4678dce0673be692d4a2f6647c9996baf42603732e298cd47469847e0f5",
+      "ranges": [
+        [
+          1,
+          29
+        ]
+      ]
+    },
+    "templates/review-report.md": {
+      "sha256": "e71fc3f18448a4ef5f44f7ca4d9014832b75dfebba71e15461d17c2d2f37ee5d",
+      "ranges": [
+        [
+          1,
+          41
+        ]
+      ]
+    },
+    "templates/setup-record.md": {
+      "sha256": "6094d6e4e4db6b15d8c9fdb730f63c8202c5da3606d36c0229fa3232e6fe7bf5",
+      "ranges": [
+        [
+          1,
+          50
         ]
       ]
     },
