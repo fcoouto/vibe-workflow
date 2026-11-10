@@ -1,4 +1,5 @@
 """Real disposable canonical births with explicit software-only qualification."""
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
@@ -70,3 +71,14 @@ def configure(repo, *, executable=None, auth=None, routes=('proposals', 'workers
     if 'workers' in routes:
         request['consent_version'] = 2
     return settings.enable(repo, request)
+
+
+@contextmanager
+def managed_gateway(testcase, repo, *endpoints):
+    """C.3 phase W: `repo` is a managed project whose qualified OpenRouter gateway routes are `endpoints`
+    (`(model, provider)` pairs), funded on temporary routing stores. It is the C.2 `managed_project_fixture`
+    (C.3 design 6.4), so default paths never reach real user state. Yields `{routes, settings, ledger}`."""
+    from tests.test_smart_routing_features import fixture_route, managed_project_fixture
+    routes = [fixture_route('openrouter:%s@%s' % pair, 'gateway') for pair in endpoints]
+    with managed_project_fixture(testcase, repo, routes=routes) as stores:
+        yield stores

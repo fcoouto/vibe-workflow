@@ -1,4 +1,5 @@
 """Behavioral boundaries: replay, cache lifecycle, attribution and private storage."""
+import copy
 import importlib.util
 import json
 import os
@@ -8,15 +9,16 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from runtime import openrouter_settings as settings
-from tests.openrouter_fixtures import enroll, configure, fixture_command
+from runtime import openrouter_settings as settings, routing, routing_observations
+from scripts import routing as command
+from tests.openrouter_fixtures import enroll, configure, fixture_command, managed_gateway
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/openrouter_proposals.py'
 PROFILE = dict(family='coding', language='Python', framework=None, difficulty='small', scope='one file', verification='unit tests')
 METADATA = dict(models=[dict(id='model/v1', context_length=10000, max_output_tokens=1000)], endpoints=[dict(model='model/v1', provider='p', context_length=9000, max_output_tokens=1000, modalities=['text'], supported_parameters=['reasoning'], pricing={'output': '0.01'}, health=None)], benchmarks=[dict(model='model/v1', coding=None, native_reference='native')], task_usage=[], coverage={'complete': True, 'source': 'fixture'})
 
 
-class ProposalTests(unittest.TestCase):
+class ProposalCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if SCRIPT.exists():
@@ -59,6 +61,32 @@ class ProposalTests(unittest.TestCase):
             class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
             integration_available=True))
 
+    def publish(self):
+        token = self.call('claim')['refresh_token']
+        return self.call('publish', dict(refresh_token=token, metadata=METADATA))
+
+    def bind_request(self, request):
+        from runtime import external_delegation as external
+        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
+            service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
+            effort=request['effort'], class_name='investigation')
+        packet = external.prepare(self.repo, consent, [dict(kind='text', text='Source-free fixture objective', sources=[])])
+        return dict(request, external=dict(packet['binding'], automatic=True, local_preferred=False,
+            class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
+            integration_available=True))
+
+    def begin_request(self, task='task-1'):
+        return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
+                    snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
+                    output_tokens=500, timeout_seconds=60,
+                    visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
+                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
+
+    def cli(self, action, request):
+        return subprocess.run(fixture_command(self, SCRIPT, action, '--store', self.store, '--cwd', self.repo), input=json.dumps(request), text=True, capture_output=True)
+
+
+class ProposalTests(ProposalCase):
     def test_enabled_proposal_without_approval_ref_dispatches_once(self):
         request = self.scoped_request()
         del request['approval_ref']
@@ -253,27 +281,6 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         finally:
             if child.poll() is None: child.kill(); child.wait()
             for stream in (child.stdin, child.stdout, child.stderr): stream.close()
-
-    def publish(self):
-        token = self.call('claim')['refresh_token']
-        return self.call('publish', dict(refresh_token=token, metadata=METADATA))
-
-    def bind_request(self, request):
-        from runtime import external_delegation as external
-        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
-            service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
-            effort=request['effort'], class_name='investigation')
-        packet = external.prepare(self.repo, consent, [dict(kind='text', text='Source-free fixture objective', sources=[])])
-        return dict(request, external=dict(packet['binding'], automatic=True, local_preferred=False,
-            class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
-            integration_available=True))
-
-    def begin_request(self, task='task-1'):
-        return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
-                    snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
-                    output_tokens=500, timeout_seconds=60,
-                    visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
-                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
 
     def test_begin_keeps_valid_roles_and_ignores_missing_or_invalid_metadata(self):
         self.publish()
@@ -626,9 +633,6 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
             with self.assertRaises(ValueError):
                 self.call('status', {'invalid': value})
 
-    def cli(self, action, request):
-        return subprocess.run(fixture_command(self, SCRIPT, action, '--store', self.store, '--cwd', self.repo), input=json.dumps(request), text=True, capture_output=True)
-
     def test_cli_json_errors_and_real_process_contention(self):
         bad = self.cli('unknown', {})
         self.assertNotEqual(bad.returncode, 0)
@@ -646,6 +650,278 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
             results.append(json.loads(output))
         self.assertEqual(sum('refresh_token' in result for result in results), 1)
         self.assertEqual(os.stat(self.store).st_mode & 0o777, 0o600)
+
+
+class _Funding:
+    """A source double over the fixture's: `organization` renames the dollar windows' organization and `extra`
+    routes come first in the manifest (so they shape a shared pool)."""
+    def __init__(self, source, organization=None, extra=()):
+        self.source, self.organization, self.extra = source, organization, list(extra)
+
+    def manifest(self):
+        return self.extra + self.source.manifest()
+
+    def windows(self, pool, now):
+        return [dict(window, organization=self.organization) if self.organization and window.get('organization')
+                else window for window in self.source.windows(pool, now)]
+
+    def credential(self, route, scope):
+        return self.source.credential(route, scope)
+
+
+class ManagedProposalTests(ProposalCase):
+    """C3-4a (C.3 design 3.3, 6.3): in a managed project `begin` is one routing admission on the `gateway` route,
+    prepared before the OpenRouter admission lock; `dispatch` checks it in process; `record` closes it."""
+
+    def setUp(self):
+        super().setUp()
+        folder = Path(self.tmp.name).resolve() / 'routing-defaults'
+        self.enterContext(patch.object(command, 'default_settings', lambda: folder / 'settings.json'))
+
+    def manage(self, *endpoints):
+        self.stores = self.enterContext(managed_gateway(self, self.repo, *(endpoints or [('model/v1', 'p')])))
+
+    def holds(self):
+        service = command.Service(self.stores['settings'], self.stores['ledger'])
+        try:
+            return service.handle(b'{"v":1,"op":"status"}')['ledger']['holds']
+        finally:
+            service.close()
+
+    def admissions(self):
+        calls, real = [], routing.admit
+
+        def admit(assignment, *args, **kwargs):
+            result = real(assignment, *args, **kwargs)
+            calls.append((assignment, result))
+            return result
+        self.enterContext(patch.object(routing, 'admit', admit))
+        return calls
+
+    def prepared(self, then=None):
+        bodies, real = [], command.Service._prepare
+
+        def prepare(service, body):
+            bodies.append(copy.deepcopy(body))
+            answer = real(service, body)
+            if then is not None:
+                then(answer)
+            return answer
+        self.enterContext(patch.object(command.Service, '_prepare', prepare))
+        return bodies
+
+    def source(self, **options):
+        original = routing_observations.default_source
+        self.enterContext(patch.object(routing_observations, 'default_source',
+                                       lambda *args, **kwargs: _Funding(original(*args, **kwargs), **options)))
+
+    def test_begin_prepares_through_routing_before_the_openrouter_admission(self):
+        self.manage()
+        self.publish()
+        order, real = [], settings.admission
+
+        def admission(*args, **kwargs):
+            order.append(('admission', kwargs.get('revision')))
+            return real(*args, **kwargs)
+        self.prepared(then=lambda answer: order.append(('prepare', answer['state'], answer.get('seen'))))
+        with patch.object(settings, 'admission', admission):
+            begun = self.call('begin', self.begin_request())
+        self.assertIn('attempt_token', begun)
+        revision = self.settings['revision']
+        self.assertEqual(order, [('prepare', 'admitted', dict(openrouter_revision=revision)), ('admission', revision)])
+
+    def test_a_settings_change_after_prepare_fails_closed_and_closes_the_hold(self):
+        self.manage()
+        self.publish()
+        request = self.begin_request()
+
+        def change(answer):
+            disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
+            settings.enable(self.repo, dict(expected_revision=disabled['revision']))
+        self.prepared(then=change)
+        events, real = [], routing.record_event
+
+        def record(ledger, event, now):
+            events.append(event['kind'])
+            return real(ledger, event, now)
+        with patch.object(routing, 'record_event', record):
+            begun = self.call('begin', request)
+        self.assertEqual(begun['fallback'], 'openrouter_preparation_stale')
+        self.assertEqual(events, ['not_dispatched'])
+        self.assertEqual(self.holds(), {})
+        self.assertEqual(self.call('history')['records'], [])
+
+    def test_begin_obtains_exactly_one_routing_admission_on_the_gateway_route(self):
+        self.manage()
+        self.publish()
+        calls = self.admissions()
+        bodies = self.prepared()
+        self.assertIn('attempt_token', self.call('begin', self.begin_request()))
+        [(assignment, result)] = calls
+        self.assertEqual((result['status'], result['billing_class']), ('admitted', 'gateway'))
+        self.assertEqual(assignment['role'], 'researcher')
+        self.assertEqual(assignment['choice'], dict(provider='openrouter', model='model/v1', effort='none',
+                                                    harness='openrouter-proposal', funding='api'))
+        self.assertNotIn('workflow', bodies[0])
+        self.assertNotIn('observations', bodies[0])
+        self.assertEqual(self.holds(), {'admitted': 1})
+        self.assertIn('routing', self.call('history')['records'][0])
+
+    def test_openrouter_is_a_candidate_only_with_its_own_activation_and_funding(self):
+        self.manage()
+        self.publish()
+        calls = self.admissions()
+        request = self.begin_request()
+        disabled = settings.disable(self.repo, dict(expected_revision=self.settings['revision']))
+        self.assertEqual(self.call('begin', request)['fallback'], 'openrouter_disabled')
+        self.assertEqual(calls, [])
+        self.settings = settings.enable(self.repo, dict(expected_revision=disabled['revision']))
+        self.source(organization='unfunded-organization')
+        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'explicit_choice_unavailable')
+        [(_, result)] = calls
+        self.assertEqual(result['status'], 'pending')
+        self.assertEqual(self.holds(), {})
+
+    def test_a_direct_api_grant_never_funds_the_gateway(self):
+        self.manage()
+        self.publish()
+        service = command.Service(self.stores['settings'], self.stores['ledger'])
+        try:
+            revision = service.handle(b'{"v":1,"op":"status"}')['settings_revision']
+            enabled = service.handle(json.dumps(dict(v=1, op='set', expected_revision=revision,
+                                                     change=dict(api_usage_enabled=True))).encode())
+        finally:
+            service.close()
+        self.assertEqual(enabled['state'], 'updated', enabled)
+        grant = dict(route='direct-grant', status='qualified', provider='openai', model='direct/model', effort='none',
+                     harness='api', billing_class='api_grant', pool='fixture-openrouter', account='fixture-openrouter',
+                     demand={'credit': 1_000_000})
+        self.source(extra=[grant])
+        calls = self.admissions()
+        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'explicit_choice_unavailable')
+        [(_, result)] = calls
+        self.assertIn('pool_funding_mismatch', result['reason_codes'])
+        self.assertEqual(self.holds(), {})
+
+    def test_proposals_gain_no_file_or_tool_permission(self):
+        self.manage()
+        request = self.scoped_request()
+        (self.repo / 'secret.txt').write_text('outside the permission\n')
+        bodies = self.prepared()
+        begun = self.call('begin', request)
+        [body] = bodies
+        self.assertEqual((body['job']['tools'], body['assignment']['role']), ([], 'researcher'))
+        result = self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))
+        self.assertIn('source bytes', result['packet'])
+        self.assertNotIn('outside the permission', result['packet'])
+        self.assertEqual((result['requires_native_review'], result['accepted']), (True, False))
+        self.assertFalse({'tools', 'permission', 'authority', 'files'} & set(result))
+        calls = self.admissions()
+        part = dict(kind='source', path='secret.txt')
+        with self.assertRaisesRegex(ValueError, 'source_denied'):
+            self.call('begin', dict(request, task_id='task-2', external=dict(request['external'], parts=[part])))
+        self.assertEqual(calls, [])
+
+    def test_an_explicit_choice_narrows_candidates_and_never_widens_them(self):
+        self.manage(('model/v1', 'p'), ('model/v2', 'p'))
+        request = self.scoped_request()
+        calls = self.admissions()
+        bodies = self.prepared()
+        self.assertIn('attempt_token', self.call('begin', request))
+        [body] = bodies
+        self.assertEqual(body['assignment']['choice']['model'], 'model/v1')
+        self.assertEqual(body['constraints'], dict(allowed_models=['model/v1'], allowed_efforts=['none']))
+        self.assertEqual(calls[0][1]['route_identity']['model'], 'model/v1')
+        with self.assertRaisesRegex(ValueError, 'destination_denied'):
+            self.call('begin', dict(request, task_id='task-2', model='model/v2'))
+        self.assertEqual(len(calls), 1)
+
+    def test_dispatch_checks_the_admitted_route_in_process_before_returning_the_packet(self):
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        dispatch = dict(request, attempt_token=begun['attempt_token'])
+        checks, real = [], routing.check
+
+        def check(data, facts, current, now, **options):
+            answer = real(data, facts, current, now, **options)
+            checks.append((facts, options, answer))
+            return answer
+        with patch.object(routing, 'check', check):
+            result = self.call('dispatch', dispatch)
+            self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'already_dispatched')
+        self.assertIn('source bytes', result['packet'])
+        [(facts, options, answer)] = checks
+        self.assertEqual(answer['state'], 'allow')
+        self.assertEqual((facts['model'], facts['harness']), ('model/v1', 'openrouter-proposal'))
+        self.assertTrue(options['authority'])
+        self.assertNotIn(options['authority'], json.dumps(result) + self.store.read_text())
+        self.assertEqual(self.holds(), {'dispatched': 1})
+
+    def test_record_closes_the_routing_hold(self):
+        self.manage()
+        self.publish()
+        begun = self.call('begin', self.begin_request())
+        self.assertTrue(self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))['recorded'])
+        self.assertEqual(self.holds(), {})
+        for task, usage, expected in (('task-2', None, {'cost_unknown': 1}), ('task-3', 1200, {'cost_unknown': 1})):
+            request = self.begin_request(task)
+            begun = self.call('begin', request)
+            self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
+            outcome = dict(attempt_token=begun['attempt_token'], disposition='rejected')
+            if usage is not None:
+                outcome['usage'] = dict(source='provider_receipt', requests=[dict(
+                    kind='primary', model='model/v1', cost_usd_micros=usage,
+                    tokens=dict(input=10, output=5, reasoning=0, cache_read=0, cache_write=0))])
+            self.assertTrue(self.call('record', outcome)['recorded'])
+            self.assertEqual(self.holds(), expected)
+        self.assertNotIn('usage', json.dumps(self.call('history')['records']))
+
+    def test_a_store_refusal_after_admission_closes_the_hold(self):
+        self.manage()
+        self.publish()
+        calls = self.admissions()
+        self.assertEqual(self.call('begin', dict(self.begin_request(), snapshot_digest='old'))['fallback'],
+                         'stale_discovery')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.holds(), {})
+
+    def test_an_unmanaged_project_never_reaches_routing(self):
+        self.publish()
+        request = self.begin_request()
+        with patch.object(command, 'managed_service', side_effect=AssertionError('routing reached')), \
+                patch.object(routing, 'admit', side_effect=AssertionError('routing reached')):
+            begun = self.call('begin', request)
+            self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
+            self.assertTrue(self.call('record', dict(attempt_token=begun['attempt_token'],
+                                                     disposition='rejected'))['recorded'])
+        self.assertNotIn('routing', self.call('history')['records'][0])
+
+    def test_a_managed_project_never_dispatches_an_attempt_begun_outside_routing(self):
+        self.publish()
+        request = self.begin_request()
+        begun = self.call('begin', request)
+        self.manage()
+        self.assertEqual(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['fallback'],
+                         'legacy_route_retired')
+        self.assertNotIn('dispatched_at', self.call('history')['records'][0])
+
+    def test_managed_self_check_admits_one_gateway_proposal_in_a_sandbox(self):
+        work = Path(self.tmp.name).resolve() / 'self-check'
+        self.assertEqual(self.api.managed_self_check(work), [])
+        self.assertEqual(command._self_check('script', 'scripts/openrouter_proposals.py'), [])
+
+    def test_the_self_check_flag_refuses_an_unsafe_workdir(self):
+        crowded = Path(self.tmp.name).resolve() / 'crowded'
+        crowded.mkdir(mode=0o700)
+        (crowded / 'file').write_text('x')
+        for unsafe in (crowded, self.repo / 'inside-repository'):
+            with self.subTest(workdir=unsafe):
+                done = subprocess.run([sys.executable, '-I', '-B', str(SCRIPT), '--managed-self-check', str(unsafe)],
+                                      capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertEqual(json.loads(done.stdout), dict(codes=['self_check_workdir_unsafe']))
+        self.assertFalse((self.repo / 'inside-repository').exists())
 
 
 if __name__ == '__main__':

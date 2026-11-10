@@ -810,7 +810,6 @@ class C2cProposalThroughRouting(EnrolledOpenRouter):
 
     # C3-4a must route an approved OpenRouter proposal through `scripts/routing.py prepare` (plan C.3 box 1; F06):
     # `begin` obtains one routing admission, keeping endpoint pinning and scope as constraints.
-    @NEEDS_C3('C3-4a')
     def test_proposal_begin_obtains_one_routing_admission(self):
         with managed_project_fixture(self, self.repo, routes=(self.route,)):
             with counted_admissions() as admit:
