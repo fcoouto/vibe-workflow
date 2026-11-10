@@ -239,6 +239,21 @@ class ManagedProjectRefusalTests(unittest.TestCase):
         self.tripwires()
         self.assert_every_entry_refuses()
 
+    def test_a_failing_managed_project_check_counts_as_managed(self):
+        from runtime import routing_settings
+        self.tripwires()
+        for error in (ImportError, TypeError, ValueError, OSError):
+            with self.subTest(error=error.__name__), \
+                    patch.object(routing_settings, 'managed_project', side_effect=error('unreadable')):
+                self.assert_every_entry_refuses()
+
+    def test_a_missing_path_is_refused(self):
+        self.tripwires()
+        with self.assertRaisesRegex(BudgetError, '^' + RETIRED + '$'):
+            routing.refuse_managed(None)
+        with self.assertRaisesRegex(BudgetError, '^' + RETIRED + '$'):
+            routing.evaluate(None, candidate('managed'))
+
     def test_unmanaged_projects_pass_the_refusal_unchanged(self):
         from runtime import routing_settings
         other = self.root / 'other'

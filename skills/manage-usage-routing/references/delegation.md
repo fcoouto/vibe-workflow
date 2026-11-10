@@ -66,7 +66,8 @@ replay returns the stored state. A host transport result proving no send can rej
 attempt with zero cost and close its claim. Sent or uncertain failures retain
 maximum reservations and unresolved exposure; do not infer zero cost from
 elapsed time, process death or a refreshed balance. No automatic retry, provider
-switch, new purchases or paid funding is permitted.
+switch, new purchases or paid funding is permitted. A `legacy_route_retired`
+refusal is not uncertain exposure; see [managed projects](procedure.md#managed-projects).
 
 Count completion does not authorize generation. If later activation, reviewer readiness,
 source, price or affordability checks fail before sending generation, retain the

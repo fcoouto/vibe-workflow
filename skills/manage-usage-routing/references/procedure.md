@@ -55,12 +55,14 @@ when permitted. Never initiate a purchase or silently switch to a paid API pool.
 A checkout listed in, or inside a checkout listed in, the Smart Routing
 settings' `managed_projects` (`python3 -I -B scripts/routing.py status --project
 /absolute/project/path`) is a managed project. There, every legacy API Usage
-spending entry refuses with `legacy_route_retired` before it reads any setting,
-credential or ledger: the Codex host's `freeze` and `execute`, the foreground
+spending entry refuses with `legacy_route_retired` before it reads any API Usage
+setting, credential or ledger: the Codex host's `freeze` and `execute`, the foreground
 canary, `evaluate`, `handoff` and `claim_handoff`. Routing settings that exist
 but cannot be read count as managed, so a corrupt settings file also stops
-these sends until it is repaired. After this refusal, continue the work
-natively; do not retry or switch provider.
+these sends until it is repaired. `legacy_route_retired` proves nothing was
+sent, because it comes before `Ledger.begin` and any send, so it is not uncertain
+exposure even when the host reports `uncertain`; continue the work natively and
+do not retry or switch provider.
 
 `status`, `configure`, `enable`, `disable` and Keychain setup stay available
 and open no spending. In a managed project, saved activation, Smart Balance or

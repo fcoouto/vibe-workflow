@@ -27,13 +27,11 @@ def refuse_managed(path):
     Its only read is the routing settings' `managed_projects`; nothing here opens Usage Routing settings, a
     credential, a configuration or the ledger. Fail closed: settings that exist but cannot be read count as managed
     (`routing_settings.managed_project`), so a corrupt routing settings file also stops legacy API Usage spending
-    until it is repaired. A missing settings file manages nothing. A `None` path has no project to check; every
-    caller then refuses it on its own. Setup and report actions never call this: they open no spending."""
-    if path is None:
-        return
+    until it is repaired. A missing settings file manages nothing. A `None` path cannot be checked, so it is refused
+    too. Setup and report actions never call this: they open no spending."""
     from runtime import routing_settings
     try:
-        managed = routing_settings.managed_project(path) is not False
+        managed = path is None or routing_settings.managed_project(path) is not False
     except Exception:  # noqa: BLE001 - an uninspectable path is treated as managed
         managed = True
     require(not managed, routing_settings.LEGACY_ROUTE_RETIRED)
@@ -143,6 +141,12 @@ class Controller:
         self.root = Path(root).resolve() if root is not None else None
         self._bind = bind
         self._check_authority = check_authority
+
+    def _backstop(self):
+        """Refuse a managed project again, for a caller that skipped its entry point's refusal. Production
+        controllers (`usage_settings.controller`) always carry a root; a rootless one has no project to check."""
+        if self.root is not None:
+            refuse_managed(self.root)
 
     def _config(self, data):
         config = data.get('routing', {}).get(self.scope)
@@ -430,7 +434,7 @@ class Controller:
             raise BudgetError(str(error)) from None
 
     def _evaluate(self, data, task, *, pin_qualification=False, live=False):
-        refuse_managed(self.root)  # backstop for a caller that skipped its entry point's refusal
+        self._backstop()
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
         for field in ('local_preferred','api_only','reviewer_available'):
@@ -474,7 +478,7 @@ class Controller:
     def request_handoff(self, task, reason):
         """Queue remaining work for existing native dispatch; never clears API exposure."""
         import copy
-        refuse_managed(self.root)  # backstop
+        self._backstop()
         require(reason in HANDOFF_REASONS, 'unsupported_handoff_reason')
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
@@ -601,7 +605,7 @@ class Controller:
         import copy
         from runtime import openai_api
 
-        refuse_managed(self.root)  # backstop, before any decision and before Ledger.begin
+        self._backstop()  # before any decision and before Ledger.begin
         require(evidence is not None or (callable(connection_factory) and callable(credential_resolver)),
                 'live_execution_unavailable')
         task = copy.deepcopy(task)
