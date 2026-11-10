@@ -1,6 +1,6 @@
 # Development guide
 
-How to work on this repository: where to make changes, which checks to run and how changes reach `main`. [AGENTS.md](../AGENTS.md#where-to-look) says when to read it. Local setup and installing the plugin are in the README's [Development](../README.md#development) section.
+How to work on this repository: where to make changes, which checks to run and how changes reach `main`. [AGENTS.md](../AGENTS.md#start-here) says when to read it. Local setup and installing the plugin are in the README's [Development](../README.md#development) section.
 
 ## Where to work
 

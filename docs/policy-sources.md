@@ -1,5 +1,36 @@
 # Policy source map
 
+## Repository `AGENTS.md` on the Toolkit template — 10 November 2026
+
+This repository's own [AGENTS.md](../AGENTS.md) now follows the section layout of the Toolkit's [`AGENTS.md` template][agents-current] (revision `7ef68dd7b00ddfc5cd464458855e4ab66dd2128f`, SHA-256 `ccc115e84c9b4b28f979d1480dcd52e1bd9d76bca0383f33d538ddab24a6cfc8`), at the user's request of 10 November 2026: make the instructions clearer and check with lightweight models that agents follow them. Only this repository's entry point changes. The [shared instructions](../templates/project/shared-instructions.md) that onboarding writes for other projects, and every policy, are unchanged.
+
+| Requirement | Owner and source |
+| --- | --- |
+| Template sections kept and filled with this repository's facts: Product and stack, Canonical commands, Working agreements, Execution continuity, Tools and style, Git and collaboration | The template at the revision above. Each section states the rule in a line and links the owning policy or guide; the [policy index](../policies/00-index.md) and the [development guide](development.md) still own the full contracts |
+| Template sections left out: Standards and documentation, Skills for Next.js and Project capabilities (no JS/TS, database, UI or adopted capability here); Conventions and context (its place is taken by the existing Repository constraints and Instruction authoring sections, kept with every rule); Delegation and review (one gate in Start here that loads [Agent Delegation](../policies/03-agent-delegation.md), which owns those rules) | The template's own instruction to remove what does not apply and keep the file short; [Setup record](setup.md) for what is not applicable |
+| **Local deviation.** The template's Git section says not to require branches or worktrees by default. This repository requires a task worktree and branch for every change | Existing local rule in the [development guide](development.md#where-to-work), restated, not new |
+| Every rule of the previous `AGENTS.md` is kept. The "Where to look" list became the gate table under Start here; the memory paragraph is unchanged, and the Feature settings line no longer names the current choice ("Workstreams on"), which the settings file owns | Previous `AGENTS.md` at `a97614b4`; the memory vault's `INSTRUCTIONS.md`, which requires that paragraph to stay |
+| **Local change (question-only requests).** A request that changes nothing and dispatches no worker needs the memory read but not the policy index | This change. The index's own loading rule ties contracts to triggered actions; observed runs answered such questions correctly without it |
+| **Local clarification (publishing).** Agents finish a change by committing, pushing the task branch and opening a draft `[BLOCKED]` PR without asking again; a request that says only "edit" or "commit" does not narrow that | The recorded publishing choice in the [setup record](setup.md#decisions) and "reuse existing authorization" in the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) |
+| **Local clarification (delegation and settings).** Agent Delegation is read before every worker call, including a read-only one the user asks for by name; feature-setting commands run in the task worktree because `.vibe-workflow/settings.json` is tracked | The index's trigger "when considering or dispatching a worker"; the development guide's rule that the primary checkout is not edited |
+
+Evidence: real OpenCode sessions (`opencode run`, OpenCode 2 on macOS) in disposable copies of the repository at `a97614b4`, each with a local bare remote and no GitHub access, eight short tasks (documentation edit, policy edit, feature setting, question, stale handoff, a request to raise a line ceiling, a requested subagent, and "take it as far as the rules allow"). 80 runs in total: 70 on `claude-agent/haiku`, of which 6 were harness trials or discarded because they shared one OpenCode project, and 10 on `openai/gpt-6-luna`. Counts are runs that showed the behavior.
+
+| Behavior | Previous file (haiku, 16) | This file (haiku, 16) | Previous (luna, 5) | This file (luna, 5) |
+| --- | --- | --- | --- | --- |
+| Memory index read as the first action | 0/16 | 16/16 | 0/5 (read later in 4) | 5/5 |
+| Policy index read on change tasks | 5/8 | 8/8 | 3/3 | 3/3 |
+| Change made on a named task branch | 3/8 | 8/8 | 1/3 | 3/3 |
+| Primary checkout left unchanged on change tasks | 6/8 | 8/8 | 2/3 | 3/3 |
+| Task branch pushed | 2/8 | 8/8 | 0/3 | 2/3 |
+| Draft PR attempted (it cannot succeed without GitHub) | 1/8 | 8/8 | 0/3 | 1/3 |
+| Agent Delegation read before the requested subagent | 0/2 | 2/2 | 1/1 | 1/1 |
+| Refused to raise a legacy line ceiling | 2/2 | 2/2 | not run | not run |
+
+Limits: two runs per task on haiku and one on luna, so the counts show direction, not rates. Only OpenCode was observed; Codex and Claude Code were not. The table's "This file" columns are the third candidate; after its runs, four wording edits were made without rerunning (the reason given for the memory read, the development guide added to the PR and merge gate, "commit or push to `main`" removed from that gate, and "push" added to the checks gate). The file grew from 691 to about 1,500 words, and haiku sessions used more tool calls on average (5.4 to 9.6) because they now read the files the rules name. Working agreements and Execution continuity were not shown to change behavior: the stale-handoff and line-ceiling tasks already passed with the previous file.
+
+[agents-current]: https://github.com/soumatheusgomes/vibe-coding-toolkit/blob/7ef68dd7b00ddfc5cd464458855e4ab66dd2128f/templates/AGENTS.md.template
+
 ## Graphify post-merge maintenance — 10 November 2026
 
 | Requirement | Owner and source |
