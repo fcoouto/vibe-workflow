@@ -1,8 +1,10 @@
 """Workspace readiness: one state per requirement and client, and the last-result record.
 
 `status` is read-only and bounded in time. It reads each client's own listings and documented config
-files; it never installs, edits or starts anything. A state is `ready` only when its own evidence was
-seen. `record` stores a compact copy of the last result privately, outside every repository."""
+files; it never installs, edits or starts anything. The only check that may use the network is the
+GitHub sign-in (`gh auth status`). A state is `ready` only when its own evidence was seen; for an MCP
+server that means configured, not connected. `record` stores a compact copy of the last result
+privately, outside every repository."""
 
 import json
 import os
@@ -26,6 +28,7 @@ STATES = ("ready", "missing", "outdated", "needs-user", "not-supported", "unknow
 NOT_READY = ("missing", "outdated", "needs-user")
 EXIT = {"ready": 0, "not-ready": 1, "undetermined": 2}
 REASONS = {"cli-missing": "command not found on PATH", "timeout": "command timed out",
+           "output-too-large": "command output was too large",
            "time-budget": "time budget used up before this check finished", "cli-failed": "command failed",
            "unrecognized-output": "command output not recognized"}
 SIGNED_OUT = re.compile(r"not logged in", re.IGNORECASE)
@@ -35,7 +38,8 @@ def load_catalog(package):
     """The requirements the command checks; ValueError when the file is unusable."""
     catalog = pv._read_json(Path(package) / CATALOG, MAX_CATALOG)
     items = catalog.get("items")
-    if catalog.get("schema_version") != SCHEMA_VERSION or catalog.get("clients") != list(CLIENTS) or not isinstance(items, list):
+    if (catalog.get("schema_version") != SCHEMA_VERSION or catalog.get("clients") != list(CLIENTS) or not isinstance(items, list) or
+            not re.fullmatch(r"[0-9a-f]{40}", str(catalog.get("toolkit_revision")))):
         raise ValueError("The workspace requirements file is not usable")
     for item in items:
         checks = item.get("check") if isinstance(item, dict) else None
@@ -99,14 +103,36 @@ def check_package(context, client):
     return cell("ready")
 
 
+def _snake(event):
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", event).lower()
+
+
 def _hook_keys(package):
     """The trust keys Codex keeps for this package's hooks: `<event>:<group>:<handler>`."""
     groups = pv._read_json(Path(package) / "hooks" / "codex.json", MAX_CATALOG).get("hooks")
     if not isinstance(groups, dict):
         raise ValueError("Unreadable hook definitions")
-    return [f"{re.sub(r'(?<!^)(?=[A-Z])', '_', event).lower()}:{group}:{handler}"
-            for event, entries in groups.items() for group, entry in enumerate(entries)
-            for handler in range(len(entry["hooks"]))]
+    return [f"{_snake(event)}:{group}:{handler}" for event, entries in groups.items()
+            for group, entry in enumerate(entries) for handler in range(len(entry["hooks"]))]
+
+
+def _approvals(home):
+    """The hook approvals in Codex's config; `{}` when it has none or the file is absent, ValueError when unusable."""
+    try:
+        hooks = ob.read_toml(home / "config.toml").get("hooks", {})
+    except FileNotFoundError:
+        return {}
+    approvals = hooks.get("state", {}) if isinstance(hooks, dict) else None
+    if not isinstance(approvals, dict):
+        raise ValueError("Unrecognized hook approvals")
+    return approvals
+
+
+def _approved(entry, content):
+    """An approval counts when it is not disabled and carries its hash (and, for a plugin's hooks, its content hash),
+    as runtime/setup_observation.py requires."""
+    return (isinstance(entry, dict) and entry.get("enabled") is not False and bool(entry.get("trusted_hash")) and
+            (not content or bool(entry.get("trusted_content_hash"))))
 
 
 def check_hooks(context, client):
@@ -126,20 +152,15 @@ def check_hooks(context, client):
     except (OSError, ValueError, KeyError, TypeError):
         return _unobserved("the package hook definitions are not readable")
     try:
-        approvals = ob.read_toml(ob.client_home(client, context.environ) / "config.toml").get("hooks", {}).get("state", {})
-    except FileNotFoundError:
-        approvals = {}
-    except (ValueError, AttributeError):
-        return _unobserved("the client configuration is not readable")
-    if not isinstance(approvals, dict):
+        approvals = _approvals(ob.client_home(client, context.environ))
+    except ValueError:
         return _unobserved("the client configuration is not readable")
     untrusted = 0
     for install in enabled:
         prefix = f"{pv.PLUGIN}@{install['marketplace']}:hooks/codex.json:"
-        untrusted += sum(1 for key in keys if not isinstance(approvals.get(prefix + key), dict) or
-                         not approvals[prefix + key].get("trusted_hash"))
+        untrusted += sum(1 for key in keys if not _approved(approvals.get(prefix + key), content=True))
     if untrusted:
-        return cell("needs-user", f"{untrusted} hook approvals are missing; the user must approve them in {client}")
+        return cell("needs-user", f"{untrusted} hook approvals are missing or disabled; the user must approve them in {client}")
     return _unobserved("approvals are recorded, but whether they match the current hooks is only visible in a new session")
 
 
@@ -154,25 +175,53 @@ def check_plugin(context, client, spec):
     entries = PLUGIN_PARSERS[client](text)
     if entries is None:
         return _unobserved("unrecognized-output")
-    found = ob.match_plugins(entries, spec["names"], exact=client != "opencode")
-    if not found:
-        return cell("missing", f"not installed in {client}")
-    return cell("ready") if any(entry["enabled"] for entry in found) else cell("missing", "installed but disabled")
+    return cell(*ob.plugin_state(entries, spec["names"]))
+
+
+def _plugins(context, client):
+    """`(entries, None)` from the client's plugin listing or `(None, reason)`."""
+    text, reason = ob.listing(context.observer, client, "plugin")
+    if text is None:
+        return None, reason
+    entries = PLUGIN_PARSERS[client](text)
+    return (entries, None) if entries is not None else (None, "unrecognized-output")
 
 
 def check_mcp(context, client, spec):
-    text, reason = ob.listing(context.observer, client, "mcp")
-    if text is None:
-        return _unobserved(reason)
-    entries = MCP_PARSERS[client](text)
-    if entries is None:
-        return _unobserved("unrecognized-output")
-    state, detail = ob.mcp_state(entries, spec["names"])
-    return cell(state, detail)
+    """A server configured under its exact name. Codex lists its configuration; Claude Code and OpenCode are
+    read from their config files, plus plugins that declare the server. Nothing is started or contacted."""
+    names = spec["names"]
+    plugin_names = spec.get("plugin_names")
+    plugins, plugin_reason = _plugins(context, client) if client == "claude-code" or plugin_names else (None, None)
+    try:
+        if client == "codex":
+            text, reason = ob.listing(context.observer, client, "mcp")
+            entries = ob.codex_mcp(text) if text is not None else None
+            if entries is None:
+                return _unobserved(reason or "unrecognized-output")
+        elif client == "claude-code":
+            entries = ob.claude_mcp(context.environ, plugins)
+        else:
+            entries = ob.opencode_mcp(context.environ)
+    except ValueError:
+        return _unobserved("the client configuration is not readable")
+    state, detail = ob.mcp_state(entries, names)
+    if state != "missing" or detail != "not configured in this client":
+        return cell(state, detail)
+    if plugin_names:
+        if plugins is None:
+            return _unobserved(plugin_reason)
+        state, detail = ob.plugin_state(plugins, plugin_names)
+        if state == "ready" or detail == "installed but disabled":
+            return cell(state, detail)
+    elif client == "claude-code" and plugins is None:
+        return _unobserved(plugin_reason)
+    return cell("missing", "not configured in this client")
 
 
 def _rtk_codex(home):
-    """RTK's Codex setup is files: RTK.md, a reference to it in AGENTS.md and a hook in hooks.json."""
+    """RTK's Codex setup is files: RTK.md, a reference to it in AGENTS.md and a hook in hooks.json, and the
+    hook must be approved. Returns `(absent, unapproved)`."""
     absent = []
     try:
         ob.read_text(home / "RTK.md")
@@ -183,13 +232,22 @@ def _rtk_codex(home):
             absent.append("the AGENTS.md reference")
     except FileNotFoundError:
         absent.append("the AGENTS.md reference")
+    positions = []
     try:
-        hooks = json.dumps(ob.read_json(home / "hooks.json"))
-        if "rtk hook" not in hooks:
-            absent.append("the hook")
+        groups = ob.read_json(home / "hooks.json").get("hooks", {})
+        positions = [f"{_snake(event)}:{group}:{handler}" for event, entries in groups.items()
+                     for group, entry in enumerate(entries) for handler, hook in enumerate(entry["hooks"])
+                     if "rtk hook" in hook.get("command", "")]
     except FileNotFoundError:
+        pass
+    except (KeyError, TypeError, AttributeError):
+        raise ValueError("Unrecognized hooks file") from None
+    if not positions:
         absent.append("the hook")
-    return absent
+        return absent, False
+    approvals = _approvals(home)
+    paths = {str(home / "hooks.json"), str((home / "hooks.json").resolve())}
+    return absent, not all(any(_approved(approvals.get(f"{path}:{position}"), content=False) for path in paths) for position in positions)
 
 
 def check_rtk(context, client):
@@ -200,10 +258,12 @@ def check_rtk(context, client):
         return _unobserved(version.get("reason", "cli-failed"))
     if client == "codex":
         try:
-            absent = _rtk_codex(ob.client_home(client, context.environ))
+            absent, unapproved = _rtk_codex(ob.client_home(client, context.environ))
         except (ValueError, OSError):
             return _unobserved("the client configuration is not readable")
-        return cell("missing", f"RTK is missing {', '.join(absent)} in codex") if absent else cell("ready")
+        if absent:
+            return cell("missing", f"RTK is missing {', '.join(absent)} in codex")
+        return cell("needs-user", "RTK's hook is not approved in codex; the user must approve it") if unapproved else cell("ready")
     shown = context.observer.run(("rtk", "init", "--show"))
     if "reason" in shown or shown["code"] != 0:
         return _unobserved(shown.get("reason", "cli-failed"))
@@ -216,10 +276,10 @@ def check_rtk(context, client):
 
 
 def check_skill(context, client, spec):
-    home = ob.client_home(client, context.environ)
-    if any((home / path).is_file() for path in spec["paths"]):
-        return cell("ready")
-    return cell("missing", f"skill not installed in {client}")
+    """The skill file in the client's config directory or in a shared home location the client also reads."""
+    home, shared = ob.client_home(client, context.environ), ob.home_dir(context.environ)
+    paths = [home / path for path in spec["paths"]] + [shared / path for path in spec.get("home_paths", [])]
+    return cell("ready") if any(path.is_file() for path in paths) else cell("missing", f"skill not installed in {client}")
 
 
 def run_check(context, spec, client):

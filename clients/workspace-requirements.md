@@ -1,6 +1,6 @@
 # Workspace requirements
 
-What this workflow needs on a machine before it can load its rules and do its work, and why. `python3 -B scripts/workflow.py workspace status` checks every row for each installed client: Codex, Claude Code and OpenCode, plus the client running the session. [workspace-requirements.json](workspace-requirements.json) is the source the command reads; this page is its readable view.
+What this workflow needs on a machine before it can load its rules and do its work, and why. `python3 -B scripts/workflow.py workspace status` checks every row for each installed client: Codex, Claude Code and OpenCode, plus the client running the session. [workspace-requirements.json](workspace-requirements.json) is the source the command reads; this page is its readable view. The list was written from Toolkit revision `7ef68dd7b00ddfc5cd464458855e4ab66dd2128f`.
 
 | Item | Id | Scope | Why |
 | --- | --- | --- | --- |
@@ -22,6 +22,10 @@ Machine items are checked once. Client items are checked once per client.
 ## States
 
 Each check ends in one state: `ready`, `missing`, `outdated`, `needs-user` (a sign-in, trust approval or password only the user can give), `not-supported` or `unknown`. A reason accompanies every state but `ready`. A check is `ready` only when its own evidence was seen; what the command cannot see is `unknown`.
+
+## What the checks touch
+
+Checks read each client's own listings and documented config files, and nothing is installed, edited or started. MCP servers are read from configuration as names and flags only, never values; `ready` means configured, not connected. The only check that may use the network is the GitHub sign-in (`gh auth status`). A plugin or server counts only under its exact name, and a disabled or signed-out copy is not hidden by a working one.
 
 ## Not supported
 

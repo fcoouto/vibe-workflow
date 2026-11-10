@@ -91,18 +91,18 @@ def features_main(args):
 
 
 def workspace_main(args):
-    """Workspace readiness: exit 0 ready, 1 not ready (or not recorded), 2 undetermined; see clients/workspace-requirements.md."""
+    """Workspace readiness: exit 0 ready, 1 not ready, 2 could not determine (undetermined, unusable requirements, bad arguments or an unwritable record)."""
     from runtime import workspace
     try:
         report = (workspace.status if args.action == "status" else workspace.record)(PACKAGE, client=args.client)
     except (ValueError, OSError) as error:
         print(json.dumps({"ok": False, "error": str(error)}))
-        return 1
+        return 2
     if args.json or args.action == "record":
         print(json.dumps(report))
     else:
         print(workspace.render(report))
-    return report["exit_code"] if args.action == "status" else 0 if report["ok"] else 1
+    return report["exit_code"] if args.action == "status" else 0 if report["ok"] else 2
 
 
 def control_main():
@@ -341,7 +341,7 @@ def control_main():
     except (ImportError, ValueError, TypeError, KeyError, OSError, RecursionError, subprocess.TimeoutExpired):
         reason = "Invalid task input, enrollment or local runtime"
     print(json.dumps({"ok": False, "error": reason}))
-    return 1
+    return 2 if sys.argv[1:2] == ["workspace"] else 1
 
 
 def main():
@@ -349,7 +349,7 @@ def main():
     if sys.version_info < (3, 11):
         print(json.dumps({"ok": False, "error": "Vibe Workflow requires Python 3.11+"} if control else
                          {"systemMessage": "Vibe Workflow requires Python 3.11+ on the hook PATH."}))
-        return 1 if control else 0
+        return (2 if sys.argv[1] == "workspace" else 1) if control else 0
     if control:
         return control_main()
     requested_event = sys.argv[2] if len(sys.argv) == 3 else None

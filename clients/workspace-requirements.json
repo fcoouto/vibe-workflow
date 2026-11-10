@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "toolkit_revision": "7ef68dd7b00ddfc5cd464458855e4ab66dd2128f",
   "clients": ["codex", "claude-code", "opencode"],
   "items": [
     {
@@ -115,7 +116,7 @@
       "check": {
         "codex": {"kind": "mcp", "names": ["context7"]},
         "claude-code": {"kind": "mcp", "names": ["context7"]},
-        "opencode": {"kind": "mcp", "names": ["context7"]}
+        "opencode": {"kind": "mcp", "names": ["context7"], "plugin_names": ["context7-opencode"]}
       },
       "install_ref": "https://github.com/upstash/context7",
       "user_actions": ["Complete the sign-in if the client asks for one."]
@@ -135,9 +136,10 @@
       "why": "Lets each client use the code map.",
       "scope": "client",
       "check": {
-        "codex": {"kind": "skill", "paths": ["skills/graphify/SKILL.md"]},
+        "codex": {"kind": "skill", "paths": ["skills/graphify/SKILL.md"], "home_paths": [".agents/skills/graphify/SKILL.md"]},
         "claude-code": {"kind": "skill", "paths": ["skills/graphify/SKILL.md"]},
-        "opencode": {"kind": "skill", "paths": ["skills/graphify/SKILL.md", "skill/graphify/SKILL.md"]}
+        "opencode": {"kind": "skill", "paths": ["skills/graphify/SKILL.md", "skill/graphify/SKILL.md"],
+                     "home_paths": [".agents/skills/graphify/SKILL.md", ".claude/skills/graphify/SKILL.md"]}
       },
       "install_ref": "https://github.com/Graphify-Labs/graphify",
       "user_actions": []

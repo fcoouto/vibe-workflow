@@ -293,11 +293,11 @@
       ]
     },
     "clients/workspace-requirements.md": {
-      "sha256": "25641cef066fffe1041838866e6514fa45d9d36eeba3bf6c9fe76a4055cb53bf",
+      "sha256": "8424be01e7ae783132137ce6ca23a7d8693b9d3d7aa18171eb176f26c14e99c4",
       "ranges": [
         [
           1,
-          34
+          38
         ]
       ]
     },

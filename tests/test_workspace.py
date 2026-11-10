@@ -67,14 +67,14 @@ def claude_plugins(*extra, vibe=None, skip=()):
 CODEX_MCP = json.dumps([
     {"name": "chrome-devtools", "enabled": True, "transport": {"type": "stdio", "command": "node", "args": ["chrome-devtools-mcp"]}, "auth_status": "unsupported"},
     {"name": "context7", "enabled": True, "transport": {"type": "streamable_http", "url": "https://mcp.context7.com/mcp"}, "auth_status": "o_auth"}])
-CLAUDE_MCP = ("Checking MCP server health…\n\nclaude.ai Claude Docs: https://api.example.invalid/mcp - ✔ Connected\n"
-              "plugin:postman:postman: https://mcp.postman.com/mcp (HTTP) - ! Needs authentication\n"
-              "context7: https://mcp.context7.com/mcp (HTTP) - ✔ Connected\n"
-              "chrome-devtools: npx -y chrome-devtools-mcp@1.11.0 - ✔ Connected\n")
+SECRET = "sk-live-do-not-print"
+CLAUDE_STATE = {"numStartups": 3, "mcpServers": {
+    "context7": {"type": "http", "url": "https://mcp.context7.com/mcp", "headers": {"Authorization": "Bearer " + SECRET}},
+    "chrome-devtools": {"type": "stdio", "command": "npx", "args": ["chrome-devtools-mcp"], "env": {"TOKEN": SECRET}}}}
+OPENCODE_CONFIG = {"plugins": [], "mcp": {"context7": {"type": "remote", "url": "https://mcp.context7.com/mcp", "headers": {"X-Key": SECRET}}}}
 OPENCODE_PLUGINS = ("ID                              VERSION  SOURCE\n-                               0.3.0    opencode-next-prompt\n"
                     "superpowers                     7.0.2    git+https://github.com/obra/superpowers.git\n"
                     "ponytail                        5.3.3    ponytail\ncaveman                         2.7.0    caveman\n")
-OPENCODE_MCP = "●  ✓ context7 connected\n│  https://mcp.context7.com/mcp\n"
 
 
 GENERIC = """#!/bin/sh
@@ -126,15 +126,15 @@ class World:
         self.cli("codex", "mcp list --json", CODEX_MCP)
         self.cli("claude", "--version", "2.1.311 (Claude Code)")
         self.cli("claude", "plugin list --json", claude_plugins())
-        self.cli("claude", "mcp list", CLAUDE_MCP)
         self.cli("opencode", "--version", "v2.2.6")
         self.cli("opencode", "plugin list", OPENCODE_PLUGINS)
-        self.cli("opencode", "mcp list", OPENCODE_MCP)
         self.codex, self.claude, self.opencode = self.home / ".codex", self.home / ".claude", self.home / ".config" / "opencode"
         self.write(self.codex / "RTK.md", "rtk")
         self.write(self.codex / "AGENTS.md", "@RTK.md\n")
         self.write(self.codex / "hooks.json", json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": "rtk hook codex"}]}]}}))
         self.trust()
+        self.write(self.home / ".claude.json", json.dumps(CLAUDE_STATE))
+        self.write(self.opencode / "opencode.json", json.dumps(OPENCODE_CONFIG))
         for home in (self.codex, self.claude):
             self.write(home / "skills/graphify/SKILL.md", "graphify")
         self.write(self.opencode / "skill/graphify/SKILL.md", "graphify")
@@ -164,9 +164,12 @@ class World:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def trust(self, skip=(), marketplace="vibe-workflow-local"):
+    def trust(self, skip=(), marketplace="vibe-workflow-local", extra="", rtk=True):
+        """Codex's hook approvals: the plugin's hooks (both hashes) and, optionally, RTK's user hook (trusted_hash)."""
         lines = [f'[hooks.state."vibe-workflow@{marketplace}:hooks/codex.json:{name}:0:0"]\ntrusted_hash = "sha256:abc"\n'
-                 for name in HOOK_EVENTS.values() if name not in skip]
+                 f'trusted_content_hash = "sha256:def"\n{extra}' for name in HOOK_EVENTS.values() if name not in skip]
+        if rtk:
+            lines.append(f'[hooks.state."{self.codex / "hooks.json"}:pre_tool_use:0:0"]\ntrusted_hash = "sha256:rtk"\n')
         self.write(self.codex / "config.toml", "\n".join(lines))
 
     def environ(self, **extra):
@@ -235,12 +238,20 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(set(events), set(HOOK_EVENTS))
         self.assertEqual(sorted(ws._hook_keys(PACKAGE)), sorted(f"{name}:0:0" for name in HOOK_EVENTS.values()))
 
+    def test_toolkit_revision_is_a_full_hash_shown_in_the_markdown_view(self):
+        revision = ws.load_catalog(PACKAGE)["toolkit_revision"]
+        self.assertRegex(revision, r"^[0-9a-f]{40}$")
+        self.assertIn(f"`{revision}`", (PACKAGE / "clients/workspace-requirements.md").read_text())
+
     def test_unusable_catalogs_are_refused(self):
         with tempfile.TemporaryDirectory() as temp:
             package = Path(temp)
             (package / "clients").mkdir()
             for text in ("{", "[]", json.dumps({"schema_version": 2, "clients": [], "items": []}),
-                         json.dumps({"schema_version": 1, "clients": ["codex", "claude-code", "opencode"], "items": ["x"]})):
+                         json.dumps({"schema_version": 1, "clients": ["codex", "claude-code", "opencode"], "items": ["x"]}),
+                         json.dumps(dict(json.loads((PACKAGE / "clients/workspace-requirements.json").read_text()), toolkit_revision="7ef68dd")),
+                         json.dumps({k: v for k, v in json.loads((PACKAGE / "clients/workspace-requirements.json").read_text()).items()
+                                     if k != "toolkit_revision"})):
                 (package / "clients/workspace-requirements.json").write_text(text)
                 with self.assertRaises(ValueError):
                     ws.load_catalog(package)
@@ -249,58 +260,84 @@ class CatalogTests(unittest.TestCase):
 class ParserTests(unittest.TestCase):
     def test_codex_plugin_listing_keeps_installed_entries(self):
         entries = ob.codex_plugins(codex_plugins(codex_entry("gone", installed=False), codex_entry("off", enabled=False)))
-        self.assertEqual([(entry["name"], entry["enabled"]) for entry in entries],
-                         [("superpowers", True), ("ponytail", True), ("caveman", True), ("documents", True),
-                          ("vibe-workflow", True), ("off", False)])
+        self.assertEqual([(sorted(entry["names"]), entry["enabled"]) for entry in entries],
+                         [(["superpowers"], True), (["ponytail"], True), (["caveman"], True), (["documents"], True),
+                          (["vibe-workflow"], True), (["off"], False)])
 
-    def test_claude_plugin_listing_and_opencode_table(self):
-        self.assertEqual([entry["name"] for entry in ob.claude_plugins(claude_plugins())][:3], ["superpowers", "ponytail", "caveman"])
+    def test_claude_plugin_listing_keeps_the_servers_a_plugin_declares(self):
+        entries = ob.claude_plugins(claude_plugins(dict(claude_entry("mirror"), mcpServers={"Context7": {"url": "https://x"}})))
+        self.assertEqual([sorted(entry["names"]) for entry in entries][:3], [["superpowers"], ["ponytail"], ["caveman"]])
+        self.assertEqual(entries[-1]["servers"], ["context7"])
+
+    def test_spec_names_use_the_last_path_segment_without_git_suffix_or_version(self):
+        cases = {"superpowers@git+https://github.com/obra/superpowers.git": "superpowers", "@dietrichgebert/ponytail": "ponytail",
+                 "@upstash/context7-opencode": "context7-opencode", "ponytail@1.2.3": "ponytail", "git+https://x.invalid/a/Caveman.git#main": "caveman",
+                 "git@github.com:obra/superpowers.git": "superpowers", "not-superpowers.git": "not-superpowers", "caveman-extras": "caveman-extras",
+                 "@scope/pkg@2.0.0": "pkg"}
+        for spec, name in cases.items():
+            self.assertEqual(ob.spec_name(spec), name, spec)
+
+    def test_opencode_table_rows_match_by_exact_id_or_source_name(self):
         rows = ob.opencode_plugins(OPENCODE_PLUGINS)
         self.assertEqual(len(rows), 4)
-        self.assertEqual([bool(ob.match_plugins(rows, [name], exact=False)) for name in ("superpowers", "ponytail", "caveman", "context7")],
-                         [True, True, True, False])
-        self.assertEqual(ob.opencode_plugins("No plugins installed\n"), [])
+        self.assertEqual([ob.plugin_state(rows, [name])[0] for name in ("superpowers", "ponytail", "caveman", "context7")],
+                         ["ready", "ready", "ready", "missing"])
         self.assertEqual(ob.opencode_plugins("ID  VERSION  SOURCE\n"), [])
 
-    def test_plugin_names_match_exactly_for_json_listings(self):
-        entries = ob.codex_plugins(codex_plugins(codex_entry("caveman-extras")))
-        self.assertEqual(len(ob.match_plugins(entries, ["caveman"], exact=True)), 1)
+    def test_lookalike_plugins_do_not_count(self):
+        table = ("ID  VERSION  SOURCE\ncaveman-extras  1.0.0  caveman-extras\nnot-superpowers.git  1.0.0  git+https://x.invalid/not-superpowers.git\n"
+                 "my-context7-mirror  1.0.0  my-context7-mirror\n")
+        rows = ob.opencode_plugins(table)
+        for name in ("caveman", "superpowers", "context7"):
+            self.assertEqual(ob.plugin_state(rows, [name])[0], "missing", name)
+        entries = ob.codex_plugins(codex_plugins(codex_entry("caveman-extras"), skip=("caveman",)))
+        self.assertEqual(ob.plugin_state(entries, ["caveman"])[0], "missing")
+
+    def test_a_disabled_copy_is_not_hidden_by_an_enabled_one(self):
+        entries = ob.codex_plugins(codex_plugins(codex_entry("ponytail", "other", enabled=False)))
+        self.assertEqual(ob.plugin_state(entries, ["ponytail"]), ("missing", "installed but disabled"))
 
     def test_unrecognized_plugin_output_is_none_never_empty(self):
         for text in ("", "oops", "null", "{}", '{"installed": {}}', '{"installed": [5]}', '{"installed": [{"pluginId": "a@b"}]}', "{" * 5000):
             self.assertIsNone(ob.codex_plugins(text), text[:20])
         for text in ("", "oops", "{}", "[5]", '[{"id": "a@b"}]', '[{"id": 5, "enabled": true}]'):
             self.assertIsNone(ob.claude_plugins(text), text[:20])
-        for text in ("", "   \n", "NAME  STATUS\nx  y\n", "garbled \x00"):
+        for text in ("", "   \n", "NAME  STATUS\nx  y\n", "garbled \x00", "Error: database is locked\n", "No plugins installed\n", "ID  VERSION  SOURCE\nbroken\n"):
             self.assertIsNone(ob.opencode_plugins(text), text[:20])
 
-    def test_mcp_listings(self):
-        self.assertEqual([entry["status"] for entry in ob.codex_mcp(CODEX_MCP)], ["ok", "ok"])
+    def test_codex_mcp_listing(self):
+        self.assertEqual([(entry["name"], entry["status"]) for entry in ob.codex_mcp(CODEX_MCP)], [("chrome-devtools", "ok"), ("context7", "ok")])
         disabled = json.dumps([{"name": "context7", "enabled": False, "transport": {}}])
         self.assertEqual(ob.codex_mcp(disabled)[0]["status"], "disabled")
         signed_out = json.dumps([{"name": "context7", "enabled": True, "transport": {}, "auth_status": "not_logged_in"}])
         self.assertEqual(ob.codex_mcp(signed_out)[0]["status"], "needs-auth")
-        self.assertEqual([entry["status"] for entry in ob.claude_mcp(CLAUDE_MCP)], ["ok", "needs-auth", "ok", "ok"])
-        self.assertEqual(ob.claude_mcp("No MCP servers configured. Use `claude mcp add`.\n"), [])
-        self.assertEqual(ob.opencode_mcp("No MCP servers configured\n"), [])
-        self.assertEqual(ob.opencode_mcp(OPENCODE_MCP)[0]["status"], "ok")
-
-    def test_unrecognized_mcp_output_is_none(self):
-        for text in ("", "null", "{}", '[{"name": 1, "enabled": true}]', '[{"name": "x"}]'):
+        self.assertEqual(ob.codex_mcp("[]"), [])
+        for text in ("", "null", "{}", '[{"name": 1, "enabled": true}]', '[{"name": "x"}]', "Error: boom"):
             self.assertIsNone(ob.codex_mcp(text), text)
-        for text in ("Error: something broke\n", "context7 connected\n"):
-            self.assertIsNone(ob.claude_mcp(text), text)
-        self.assertIsNone(ob.opencode_mcp(""))
 
-    def test_mcp_state_never_calls_unrecognized_lines_absent(self):
-        self.assertEqual(ob.mcp_state([dict(haystack="mystery line", status=None)], ["context7"])[0], "unknown")
-        self.assertEqual(ob.mcp_state([dict(haystack="other", status="ok")], ["context7"])[0], "missing")
-        self.assertEqual(ob.mcp_state([], ["context7"])[0], "missing")
+    def test_mcp_servers_match_the_exact_name_only(self):
+        names = ["context7"]
+        for lookalike in ("my-context7-mirror", "context7-mcp-fork", "context7-extra", "not-context7"):
+            self.assertEqual(ob.mcp_state([dict(name=lookalike, status="ok")], names)[0], "missing", lookalike)
+        self.assertEqual(ob.mcp_state([dict(name="context7", status="ok")], names), ("ready", None))
+        self.assertEqual(ob.mcp_state([], names)[0], "missing")
+
+    def test_a_failing_server_is_not_hidden_by_a_passing_one_of_the_same_name(self):
+        both = lambda status: [dict(name="context7", status="ok"), dict(name="context7", status=status)]
+        self.assertEqual(ob.mcp_state(both("disabled"), ["context7"])[0], "missing")
+        self.assertEqual(ob.mcp_state(both("needs-auth"), ["context7"])[0], "needs-user")
+
+    def test_jsonc_comments_and_trailing_commas_are_tolerated(self):
+        text = '{\n // note\n "mcp": {"context7": {"url": "https://x//y", /* c */ "enabled": true,},},\n}'
+        self.assertEqual(json.loads(ob.strip_jsonc(text))["mcp"]["context7"]["url"], "https://x//y")
+        with self.assertRaises(ValueError):
+            ob.strip_jsonc("{ /* never closed }")
 
     def test_rtk_marks_require_the_header(self):
         self.assertEqual(ob.rtk_marks(RTK_SHOW)["Hook"], True)
         self.assertEqual(ob.rtk_marks(RTK_SHOW)["Cursor hook"], False)
         self.assertIsNone(ob.rtk_marks("error: unrecognized subcommand"))
+        self.assertIsNone(ob.rtk_marks("rtk Configuration:\n\nnothing recognizable\n"))
 
 
 class OverallTests(unittest.TestCase):
@@ -329,7 +366,7 @@ class StatusTests(WorldTestCase):
         self.assertEqual([entry["client"] for entry in report["clients"]], ["codex", "claude-code", "opencode"])
         self.assertEqual(report["clients"][0], dict(client="codex", installed=True, cli_version="0.167.0", config_dir=True, session=True))
 
-    def test_hook_trust_and_startup_are_never_ready(self):
+    def test_hook_trust_is_never_ready(self):
         report = self.world.status()
         for key, value in next(item for item in report["items"] if item["id"] == "vibe-workflow-hooks")["cells"].items():
             self.assertNotEqual(value["state"], "ready", key)
@@ -390,6 +427,21 @@ class StatusTests(WorldTestCase):
         self.assertEqual(self.cell(report, "graphify-skill", "codex")["state"], "missing")
         self.assertEqual(self.cell(report, "graphify-skill", "opencode")["state"], "ready")
 
+    def test_graphify_skill_is_also_found_in_the_shared_home_locations(self):
+        for client in ("codex", "opencode"):
+            for path in (self.world.codex, self.world.claude, self.world.opencode):
+                for found in path.glob("skill*/graphify/SKILL.md"):
+                    found.unlink()
+        report = self.world.status()
+        self.assertEqual([self.cell(report, "graphify-skill", key)["state"] for key in ("codex", "claude-code", "opencode")], ["missing"] * 3)
+        self.world.write(self.world.home / ".agents/skills/graphify/SKILL.md", "graphify")
+        report = self.world.status()
+        self.assertEqual([self.cell(report, "graphify-skill", key)["state"] for key in ("codex", "claude-code", "opencode")], ["ready", "missing", "ready"])
+        (self.world.home / ".agents/skills/graphify/SKILL.md").unlink()
+        self.world.write(self.world.home / ".claude/skills/graphify/SKILL.md", "graphify")
+        report = self.world.status()
+        self.assertEqual([self.cell(report, "graphify-skill", key)["state"] for key in ("codex", "claude-code", "opencode")], ["missing", "ready", "ready"])
+
     def test_rtk_per_client(self):
         self.world.cli("rtk", "init --show", RTK_SHOW.replace("[ok] OpenCode", "[--] OpenCode").replace("[ok] settings.json", "[--] settings.json"))
         (self.world.codex / "hooks.json").write_text("{}")
@@ -401,15 +453,74 @@ class StatusTests(WorldTestCase):
         self.world.drop("rtk")
         self.assertEqual(self.cell(self.world.status(), "rtk", "claude-code"), dict(state="missing", reason="rtk is not on PATH"))
 
-    def test_context7_states(self):
-        self.world.cli("claude", "mcp list", CLAUDE_MCP.replace("context7: https://mcp.context7.com/mcp (HTTP) - ✔ Connected",
-                                                                "context7: https://mcp.context7.com/mcp (HTTP) - ! Needs authentication"))
-        self.world.cli("codex", "mcp list --json", json.dumps([]))
-        self.world.cli("opencode", "mcp list", "No MCP servers configured\n")
+    def test_rtk_codex_hook_counts_only_when_approved(self):
+        self.world.trust(rtk=False)
+        value = self.cell(self.world.status(), "rtk", "codex")
+        self.assertEqual(value["state"], "needs-user")
+        self.assertIn("hook is not approved", value["reason"])
+        self.world.trust(rtk=False, extra="")
+        (self.world.codex / "config.toml").write_text((self.world.codex / "config.toml").read_text() +
+            f'\n[hooks.state."{self.world.codex / "hooks.json"}:pre_tool_use:0:0"]\nenabled = false\ntrusted_hash = "sha256:rtk"\n')
+        self.assertEqual(self.cell(self.world.status(), "rtk", "codex")["state"], "needs-user")
+        (self.world.codex / "config.toml").unlink()
+        self.assertEqual(self.cell(self.world.status(), "rtk", "codex")["state"], "needs-user")
+        (self.world.codex / "config.toml").write_text("[broken\n")
+        self.assertEqual(self.cell(self.world.status(), "rtk", "codex")["state"], "unknown")
+
+    def test_context7_is_read_from_configuration_never_from_a_connection(self):
         report = self.world.status()
-        self.assertEqual(self.cell(report, "context7", "claude-code")["state"], "needs-user")
-        self.assertEqual(self.cell(report, "context7", "codex")["state"], "missing")
-        self.assertEqual(self.cell(report, "context7", "opencode")["state"], "missing")
+        self.assertEqual({key: value["state"] for key, value in next(i for i in report["items"] if i["id"] == "context7")["cells"].items()},
+                         dict(codex="ready", **{"claude-code": "ready"}, opencode="ready"))
+        for name in ("claude", "opencode"):
+            self.assertFalse([line for line in self.world.calls(name) if "mcp" in line], name)
+        self.world.cli("codex", "mcp list --json", json.dumps([]))
+        (self.world.home / ".claude.json").write_text(json.dumps({"mcpServers": {"my-context7-mirror": {"url": "x"}, "context7-mcp-fork": {}}}))
+        self.world.write(self.world.opencode / "opencode.json", json.dumps({"mcp": {}}))
+        report = self.world.status()
+        for key in ("codex", "claude-code", "opencode"):
+            self.assertEqual(self.cell(report, "context7", key), dict(state="missing", reason="not configured in this client"), key)
+
+    def test_context7_disabled_or_signed_out_is_not_ready(self):
+        self.world.cli("codex", "mcp list --json", json.dumps([{"name": "context7", "enabled": True, "transport": {}, "auth_status": "not_logged_in"}]))
+        state = dict(CLAUDE_STATE, mcpServers={"context7": {"url": "x", "enabled": False}})
+        self.world.write(self.world.home / ".claude.json", json.dumps(state))
+        self.world.write(self.world.opencode / "opencode.json", json.dumps({"mcp": {"context7": {"enabled": False}}}))
+        report = self.world.status()
+        self.assertEqual([self.cell(report, "context7", key)["state"] for key in ("codex", "claude-code", "opencode")], ["needs-user", "missing", "missing"])
+
+    def test_context7_may_come_from_a_claude_plugin_or_an_opencode_plugin(self):
+        (self.world.home / ".claude.json").write_text("{}")
+        self.world.cli("claude", "plugin list --json", claude_plugins(dict(claude_entry("context7-plugin"), mcpServers={"context7": {"url": "x"}})))
+        self.world.write(self.world.opencode / "opencode.json", "{}")
+        self.world.cli("opencode", "plugin list", OPENCODE_PLUGINS + "@upstash/context7-opencode  1.0.0  @upstash/context7-opencode\n")
+        report = self.world.status()
+        self.assertEqual(self.cell(report, "context7", "claude-code")["state"], "ready")
+        self.assertEqual(self.cell(report, "context7", "opencode")["state"], "ready")
+        self.world.cli("claude", "plugin list --json", "garbage")
+        self.assertEqual(self.cell(self.world.status(), "context7", "claude-code"), dict(state="unknown", reason="unrecognized-output"))
+
+    def test_claude_and_opencode_configuration_locations_are_honored(self):
+        other = self.world.root / "other-claude"
+        self.world.write(other / ".claude.json", json.dumps({"mcpServers": {"context7": {"url": "x"}}}))
+        (self.world.home / ".claude.json").write_text("{}")
+        self.assertEqual(self.cell(self.world.status(), "context7", "claude-code")["state"], "missing")
+        self.assertEqual(self.cell(self.world.status(CLAUDE_CONFIG_DIR=str(other)), "context7", "claude-code")["state"], "ready")
+        xdg = self.world.root / "xdg"
+        self.world.write(xdg / "opencode/opencode.jsonc", '{\n // servers\n "mcp": {"context7": {"type": "remote", "url": "https://x//y",},},\n}')
+        self.assertEqual(self.cell(self.world.status(XDG_CONFIG_HOME=str(xdg)), "context7", "opencode")["state"], "ready")
+
+    def test_unreadable_mcp_configuration_is_unknown(self):
+        (self.world.home / ".claude.json").write_text("{not json")
+        self.world.write(self.world.opencode / "opencode.json", '{"mcp": ["not", "an", "object"]}')
+        report = self.world.status()
+        self.assertEqual(self.cell(report, "context7", "claude-code"), dict(state="unknown", reason="the client configuration is not readable"))
+        self.assertEqual(self.cell(report, "context7", "opencode")["state"], "unknown")
+
+    def test_no_secret_value_reaches_the_report_or_the_record(self):
+        report = self.world.status()
+        self.assertNotIn(SECRET, json.dumps(report))
+        ws.record(PACKAGE, self.world.environ())
+        self.assertNotIn(SECRET, ws.record_path(self.world.environ()).read_text())
 
     def test_codex_hook_trust_reports_only_what_the_config_shows(self):
         self.world.trust(skip=("stop", "interrupt"))
@@ -421,6 +532,18 @@ class StatusTests(WorldTestCase):
         self.world.trust(marketplace="another-market")
         self.assertEqual(self.cell(self.world.status(), "vibe-workflow-hooks", "codex")["state"], "needs-user")
         (self.world.codex / "config.toml").write_text("[broken\n")
+        self.assertEqual(self.cell(self.world.status(), "vibe-workflow-hooks", "codex")["state"], "unknown")
+
+    def test_a_disabled_approval_or_one_without_a_content_hash_is_not_approved(self):
+        self.world.trust(extra="enabled = false\n")
+        value = self.cell(self.world.status(), "vibe-workflow-hooks", "codex")
+        self.assertEqual(value["state"], "needs-user")
+        self.assertIn("5 hook approvals", value["reason"])
+        config = (self.world.codex / "config.toml")
+        self.world.trust()
+        config.write_text(config.read_text().replace('trusted_content_hash = "sha256:def"\n', ""))
+        self.assertEqual(self.cell(self.world.status(), "vibe-workflow-hooks", "codex")["state"], "needs-user")
+        self.world.trust(extra="enabled = true\n")
         self.assertEqual(self.cell(self.world.status(), "vibe-workflow-hooks", "codex")["state"], "unknown")
 
     def test_session_client_without_a_command_is_unknown_not_assumed_ready(self):
@@ -453,27 +576,30 @@ class StatusTests(WorldTestCase):
         self.assertEqual([str(ob.client_home(name, environ)) for name in ws.CLIENTS], ["/c", "/cl", "/x/opencode"])
         self.assertEqual([str(ob.client_home(name, {"HOME": "/h"})) for name in ws.CLIENTS], ["/h/.codex", "/h/.claude", "/h/.config/opencode"])
 
-    def test_each_listing_runs_once_per_status(self):
+    def test_each_command_runs_once_per_status_and_no_mcp_listing_is_run(self):
         self.world.status()
-        self.assertEqual(self.world.calls("codex").count("plugin list --json"), 1)
-        self.assertEqual(self.world.calls("claude").count("plugin list --json"), 1)
-        self.assertEqual(self.world.calls("claude").count("mcp list"), 1)
-        self.assertEqual(self.world.calls("rtk").count("init --show"), 1)
-        self.assertEqual(self.world.calls("opencode").count("plugin list"), 1)
-        for name in ("codex", "claude", "opencode"):
-            self.assertEqual(self.world.calls(name).count("--version"), 1)
+        used = {}
+        for name in ("codex", "claude", "opencode", "rtk", "gh", "git", "python3", "graphify"):
+            calls = self.world.calls(name)
+            self.assertEqual(len(calls), len(set(calls)), (name, calls))
+            used[name] = set(calls)
+        self.assertEqual(used["codex"], {"--version", "plugin list --json", "mcp list --json"})
+        self.assertEqual(used["claude"], {"--version", "plugin list --json"})
+        self.assertEqual(used["opencode"], {"--version", "plugin list"})
+        self.assertEqual(used["rtk"], {"--version", "init --show"})
+        self.assertEqual(used["gh"], {"--version", "auth status"})
 
     def test_malformed_outputs_are_unknown_never_missing(self):
         self.world.cli("codex", "plugin list --json", "garbage")
         self.world.cli("claude", "plugin list --json", "{}")
         self.world.cli("opencode", "plugin list", "")
-        self.world.cli("claude", "mcp list", "Error: boom\n")
         report = self.world.status()
         for client in ("codex", "claude-code"):
             for item in ("vibe-workflow-plugin", "superpowers", "ponytail", "caveman"):
                 self.assertEqual(self.cell(report, item, client), dict(state="unknown", reason="unrecognized-output"), (item, client))
         self.assertEqual(self.cell(report, "superpowers", "opencode")["state"], "unknown")
-        self.assertEqual(self.cell(report, "context7", "claude-code")["state"], "unknown")
+        self.world.cli("opencode", "plugin list", "Error: database is locked\n")
+        self.assertEqual(self.cell(self.world.status(), "ponytail", "opencode"), dict(state="unknown", reason="unrecognized-output"))
 
     def test_failing_listing_is_unknown(self):
         self.world.cli("codex", "plugin list --json", "boom", code=3)
@@ -481,7 +607,7 @@ class StatusTests(WorldTestCase):
 
     def test_oversized_output_and_unlaunchable_commands_are_unknown(self):
         with patch.object(ob, "MAX_OUTPUT", 10):
-            self.assertEqual(self.cell(self.world.status(), "ponytail", "codex"), dict(state="unknown", reason="unrecognized-output"))
+            self.assertEqual(self.cell(self.world.status(), "ponytail", "codex"), dict(state="unknown", reason="output-too-large"))
         self.world.drop("claude")
         (self.world.bin / "claude").write_bytes(b"\x00\x01 not a program")  # executable bit set, but it cannot start
         (self.world.bin / "claude").chmod(0o755)
@@ -489,12 +615,25 @@ class StatusTests(WorldTestCase):
         self.assertEqual(self.cell(report, "ponytail", "claude-code"), dict(state="unknown", reason="cli-failed"))
         self.assertEqual(self.cell(report, "ponytail", "codex")["state"], "ready")
 
+    def test_endless_output_is_stopped_at_the_cap_not_read_to_the_end(self):
+        self.world.drop("claude")
+        (self.world.bin / "claude").write_text("#!/bin/sh\nexec yes 0123456789\n")
+        (self.world.bin / "claude").chmod(0o755)
+        (self.world.bin / "yes").symlink_to(shutil.which("yes"))
+        started = time.monotonic()
+        report = self.world.status()
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertEqual(self.cell(report, "ponytail", "claude-code"), dict(state="unknown", reason="output-too-large"))
+        self.assertEqual(self.cell(report, "ponytail", "codex")["state"], "ready")
+        self.assertFalse(subprocess.run(["pgrep", "-f", "yes 0123456789"], capture_output=True).stdout)
+
     def test_unusable_config_files_are_unknown_not_missing(self):
         (self.world.codex / "RTK.md").unlink()
         (self.world.codex / "RTK.md").mkdir()
         self.assertEqual(self.cell(self.world.status(), "rtk", "codex")["state"], "unknown")
+        self.world.trust()
         with patch.object(ob, "MAX_CONFIG", 4):
-            self.assertEqual(self.cell(self.world.status(), "vibe-workflow-hooks", "codex")["state"], "unknown")
+            self.assertEqual(self.cell(self.world.status(), "rtk", "codex")["state"], "unknown")
 
     def test_reasons_carry_no_local_paths(self):
         self.world.cli("codex", "plugin list --json", codex_plugins(skip=("caveman",)))
@@ -519,7 +658,7 @@ class StatusTests(WorldTestCase):
         self.assertLess(time.monotonic() - started, 4)
         self.assertEqual(self.cell(report, "superpowers", "codex"), dict(state="unknown", reason="time-budget"))
         self.assertEqual(self.cell(report, "superpowers", "claude-code"), dict(state="unknown", reason="time-budget"))
-        self.assertEqual(self.cell(report, "context7", "opencode"), dict(state="unknown", reason="time-budget"))
+        self.assertEqual(self.cell(report, "superpowers", "opencode"), dict(state="unknown", reason="time-budget"))
         self.assertEqual(report["result"], "undetermined")
 
     def test_status_writes_nothing(self):
@@ -628,7 +767,7 @@ class CommandTests(WorldTestCase):
     def test_client_argument_marks_the_session_client(self):
         result = self.run_cli("status", "--json", "--client", "claude-code")
         self.assertEqual(json.loads(result.stdout)["session_client"], "claude-code")
-        self.assertEqual(self.run_cli("status", "--client", "other").returncode, 1)
+        self.assertEqual(self.run_cli("status", "--client", "other").returncode, 2)
 
     def test_record_writes_once_and_exits_zero(self):
         result = self.run_cli("record")
@@ -636,12 +775,32 @@ class CommandTests(WorldTestCase):
         self.assertTrue(json.loads(result.stdout)["recorded"])
         self.assertEqual(ws.read_record(ws.record_path(self.world.environ()))["result"], "undetermined")
 
-    def test_record_exits_one_when_it_cannot_write(self):
+    def test_record_exits_two_when_it_cannot_write(self):
         self.world.state.parent.mkdir(exist_ok=True)
         self.world.state.write_text("a file, not a directory")
         result = self.run_cli("record")
-        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.returncode, 2)
         self.assertFalse(json.loads(result.stdout)["recorded"])
+
+    def test_unusable_requirements_or_bad_arguments_exit_two_not_one(self):
+        with tempfile.TemporaryDirectory(prefix="vibe broken package ") as temp:
+            package = Path(temp)
+            (package / "scripts").mkdir()
+            (package / "clients").mkdir()
+            (package / "runtime").symlink_to(PACKAGE / "runtime")
+            (package / "scripts/workflow.py").write_bytes((PACKAGE / "scripts/workflow.py").read_bytes())
+            for text in ("{", json.dumps(dict(json.loads((PACKAGE / "clients/workspace-requirements.json").read_text()), toolkit_revision="7ef68dd"))):
+                (package / "clients/workspace-requirements.json").write_text(text)
+                for action in ("status", "record"):
+                    result = subprocess.run([sys.executable, "-B", str(package / "scripts/workflow.py"), "workspace", action, "--json"],
+                                            capture_output=True, text=True, timeout=60, env=self.world.environ(), stdin=subprocess.DEVNULL)
+                    self.assertEqual(result.returncode, 2, (text[:20], action, result.stdout, result.stderr))
+                    self.assertFalse(json.loads(result.stdout)["ok"])
+        self.assertFalse(self.world.state.exists())
+        for args in (("bogus",), ("status", "--unknown-flag"), ()):
+            result = self.run_cli(*args)
+            self.assertEqual(result.returncode, 2, args)
+            self.assertFalse(json.loads(result.stdout)["ok"])
 
     def test_workspace_is_a_control_command_that_needs_no_enrollment(self):
         result = self.run_cli("status", "--json")
