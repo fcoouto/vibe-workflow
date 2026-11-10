@@ -1554,7 +1554,12 @@ test("the live-recorded hook payloads drive the shim for an attached session", a
 
 test("helper extraction matches the documented adapter shapes", () => {
   assert.deepEqual(routeFacts(HAIKU), { provider: "claude-agent", model: "haiku", variant: "low", harness: "claude-agent-sdk via opencode" })
-  assert.deepEqual(routeFacts({ providerID: "openrouter", id: "x/y" }), null)
+  assert.deepEqual(routeFacts({ providerID: "openrouter", id: "x/y" })?.model, "x/y")
+  for (const id of ["a/b/c", "../x", "a//b", "a/", "/b", "a/..", "a/" + "b".repeat(128)]) {
+    assert.equal(routeFacts({ providerID: "openrouter", id }), null, id)
+  }
+  assert.deepEqual(spawnModel("openrouter/z-ai/glm-5#high"), { provider: "openrouter", model: "z-ai/glm-5", variant: "high" })
+  assert.equal(spawnModel("openrouter/a/b/c"), null)
   assert.deepEqual(routeFacts({ providerID: "openrouter", id: "glm-5" })?.harness, "opencode provider openrouter")
   assert.deepEqual(spawnModel("claude-agent/haiku#low"), { provider: "claude-agent", model: "haiku", variant: "low" })
   assert.equal(spawnModel("haiku"), null)

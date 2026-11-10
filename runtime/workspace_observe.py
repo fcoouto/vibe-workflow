@@ -345,9 +345,9 @@ def claude_mcp(environ, plugin_entries):
     return entries
 
 
-def opencode_mcp(environ):
-    """OpenCode servers from the `mcp` key of its `opencode.json` or `opencode.jsonc`."""
-    entries = []
+def _opencode_configs(environ):
+    """The parsed `opencode.json` and `opencode.jsonc` that exist; an unreadable one raises ValueError."""
+    configs = []
     for name in ("opencode.json", "opencode.jsonc"):
         try:
             data = read_jsonc(client_home("opencode", environ) / name)
@@ -355,7 +355,35 @@ def opencode_mcp(environ):
             continue
         if not isinstance(data, dict):
             raise ValueError("Unrecognized client configuration")
-        entries += _servers(data.get("mcp"))
+        configs.append(data)
+    return configs
+
+
+def opencode_config_plugins(environ):
+    """Plugins named in OpenCode's `plugin` and `plugins` lists as `dict(names, enabled)`. The
+    `opencode plugin list` table omits local-path plugins such as `./plugins/caveman`."""
+    entries = []
+    for data in _opencode_configs(environ):
+        for key in ("plugin", "plugins"):
+            specs = data.get(key)
+            if specs is None:
+                continue
+            if not isinstance(specs, list) or not all(isinstance(spec, str) for spec in specs):
+                raise ValueError("Unrecognized client configuration")
+            entries += [dict(names={spec_name(spec)} - {""}, enabled=True) for spec in specs]
+    return entries
+
+
+def opencode_mcp(environ):
+    """OpenCode servers from the `mcp` key of its config: `mcp.<name>`, or `mcp.servers.<name>`
+    as OpenCode 2.2.6 writes it."""
+    entries = []
+    for data in _opencode_configs(environ):
+        table = data.get("mcp")
+        if (isinstance(table, dict) and set(table) == {"servers"} and isinstance(table["servers"], dict)
+                and all(isinstance(entry, dict) for entry in table["servers"].values())):
+            table = table["servers"]
+        entries += _servers(table)
     return entries
 
 

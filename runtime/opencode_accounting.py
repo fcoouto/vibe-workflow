@@ -155,7 +155,7 @@ def _message(record):
     if requested is not None:
         if type(requested) is not dict:
             _fail("invalid message")
-        requested = (_name(requested.get("model_alias"), opencode.NAME, "invalid message", nullable=False),
+        requested = (_name(requested.get("model_alias"), opencode.MODEL_ID, "invalid message", nullable=False),
                      _name(requested.get("variant"), opencode.NAME, "invalid message"))
     finish = record.get("finish")
     if finish is not None and (type(finish) is not str or len(finish) > opencode.MAX_TEXT):
