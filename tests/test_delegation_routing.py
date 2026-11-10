@@ -7,12 +7,13 @@ from contextlib import closing, contextmanager
 import json
 import shutil
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from runtime import delegation, delegation_routing, evidence, routing, routing_gates, routing_launch, \
-    routing_observations, state
+    routing_observations, routing_settings, state
 from scripts import routing as command
 from tests import test_smart_routing_features as features
 from tests.fixture_delegation import AdmissionFixture
@@ -427,7 +428,8 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         with self.managed(NATIVE), features.counted_admissions() as admit:
             replay = self.api.prepare_assignment(self.scope, request)
         self.assertFalse(replay['launch_admitted'])
-        self.assertEqual(replay['routing'], dict(state='blocked', reason='legacy_route_retired'))
+        self.assertEqual(replay['routing'], dict(state='blocked', reason='legacy_route_retired',
+                                                 reconcile_required=True))  # #222 follow-up: reconcile, not retry
         self.assertEqual(admit.count, 0)
 
     def test_a_project_managed_during_prepare_gets_no_second_permit(self):
@@ -511,6 +513,27 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         self.assertTrue(prepared['launch_admitted'])
         self.assertEqual(len(calls), 2)
 
+    def test_the_rollback_keeps_an_already_managed_project(self):
+        # #222 mutation M1: the rollback writes out only the added projects, never the whole list.
+        settings, committed = self.settings_path(), []
+        other = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, other)
+        routing_settings.update(settings, dict(managed_projects=[str(other)]), 0)
+
+        def gate():
+            committed.append(self.prepare(**self.inherit_request()))
+            return []
+        with mock.patch.object(command, 'activation_gate', side_effect=gate), \
+                mock.patch.object(delegation_routing, '_scopes_for', return_value=[self.scope]):
+            with closing(command.Service(settings, settings.parent / 'ledger.sqlite3', one_shot=True)) as service:
+                refused = service.handle(json.dumps(dict(v=1, op='set', expected_revision=1, change=dict(
+                    managed_projects=[str(other), str(self.repo)]))).encode())
+        self.assertEqual((refused['state'], refused['reason'], refused['rolled_back']),
+                         ('blocked', 'open_unrouted_assignments', True), refused)
+        self.assertIn('invalidated_attempts', refused)
+        stored = json.loads(settings.read_bytes())
+        self.assertEqual((stored['revision'], stored['values']['managed_projects']), (3, [str(other)]))
+
 
 class RealScopeResolver(ManagedDelegation):
     """PR #217 follow-up: `open_unrouted_assignments` through the real entry path, not a mocked `_scopes_for`.
@@ -548,13 +571,127 @@ class RealScopeResolver(ManagedDelegation):
         self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])
 
     def test_another_client_with_runtime_state_fails_closed(self):
+        # Qualified, so the refusal comes from the other client's lookup, not from an unqualified runtime.
         self.enrol_as('claude-code', runtime=True)
-        self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), ['scope_unavailable'])
+        with self.qualified():
+            self.assertEqual(delegation_routing._enrolled_clients(Path(self.repo).resolve()), ['claude-code'])
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), ['scope_unavailable'])
+
+    def test_a_runtime_client_whose_scope_cannot_be_looked_up_fails_closed(self):
+        # #222 follow-up: the record says the client keeps runtime state, so a failed lookup is not "no state".
+        with self.qualified(), mock.patch.object(routing_gates, '_resolve_scope', side_effect=LookupError('gone')):
+            with self.assertRaises(LookupError):
+                delegation_routing._scopes_for(self.repo)
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), ['scope_unavailable'])
+
+    def test_an_observed_record_without_the_checkout_fails_closed(self):
+        from runtime import startup
+        acquired = startup._acquire_canonical_membership(Path(self.repo).resolve(), authority_path=None, budget=dict(
+            paths=0, bytes=0, deadline=float('inf')))
+        self.assertEqual(acquired.status, 'observed')
+        data = startup._canonical_plain(acquired.record.data)
+        for repository in data['repositories']:
+            repository['checkouts'] = [c for c in repository['checkouts'] if c['root'] != str(Path(self.repo).resolve())]
+        missing = types.SimpleNamespace(status='observed', reason=None, observation=acquired.observation,
+                                        record=types.SimpleNamespace(data=data))
+        with mock.patch.object(startup, '_acquire_canonical_membership', return_value=missing):
+            for read in (delegation_routing._enrolled_clients, delegation_routing.enrolled_hosts):
+                with self.subTest(read), self.assertRaises(startup.RuntimeScopeError):
+                    read(Path(self.repo).resolve())
+            self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), ['scope_unavailable'])
 
     def test_an_unenrolled_checkout_has_no_native_state(self):
         outside = Path(tempfile.mkdtemp()).resolve()
         self.addCleanup(shutil.rmtree, outside)
         self.assertEqual(delegation_routing.open_unrouted_assignments(outside), [])
+        # #222 mutation M7: with no enrolment the legacy entry path's client is codex, not "no client".
+        self.assertEqual(delegation_routing._enrolled_clients(outside), ['codex'])
+        with mock.patch.object(routing_gates, '_resolve_scope', side_effect=LookupError('none')) as resolve:
+            self.assertEqual(delegation_routing._scopes_for(outside), [])
+        self.assertEqual(resolve.call_args.args[0]['client'], 'codex')
+
+    def test_an_unenrolled_directory_is_not_a_codex_host(self):
+        # #224 review: a never-onboarded directory (a Claude-only project, say) must not pass as legacy codex.
+        outside = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, outside)
+        with self.assertRaises(delegation_routing.NotEnrolled):
+            delegation_routing.enrolled_hosts(outside)
+        for error in (LookupError('no runtime'), RuntimeError('unreadable')):
+            with self.subTest(error), mock.patch.object(routing_gates, '_resolve_scope', side_effect=error), \
+                    self.assertRaises(delegation_routing.NotEnrolled):
+                delegation_routing.enrolled_hosts(outside)
+
+    def test_a_confirmed_legacy_codex_checkout_is_a_codex_host(self):
+        outside = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, outside)
+        legacy = types.SimpleNamespace(repository_root=outside, runtime=object())
+        with mock.patch.object(routing_gates, '_resolve_scope', return_value=legacy) as resolve:
+            self.assertEqual(delegation_routing.enrolled_hosts(outside), ['codex'])  # M7 where it applies
+        self.assertEqual(resolve.call_args.args[0], dict(client='codex', cwd=str(outside)))
+
+    def test_only_configured_or_active_entries_are_hosts(self):
+        # #224 review: a pending or suspended codex entry is no managed path; an unknown status fails closed.
+        record = json.loads(self.scope.authority_path.read_bytes())
+        for status, expected in (('configured', ['codex']), ('active', ['codex']), ('pending', []),
+                                 ('suspended', []), ('retired', None)):
+            with self.subTest(status):
+                entries = [dict(entry, activation=dict(entry['activation'], status=status))
+                           for repository in record['repositories'] for checkout in repository['checkouts']
+                           for entry in checkout['clients']]
+                with mock.patch.object(delegation_routing, '_enrolment', return_value=entries):
+                    if expected is None:
+                        from runtime.startup import RuntimeScopeError
+                        with self.assertRaises(RuntimeScopeError):
+                            delegation_routing.enrolled_hosts(self.repo)
+                    else:
+                        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), expected)
+
+    def test_a_suspended_codex_entry_does_not_let_a_claude_project_join(self):
+        record = json.loads(self.scope.authority_path.read_bytes())
+        for repository in record['repositories']:
+            for checkout in repository['checkouts']:
+                entry = json.loads(json.dumps(checkout['clients'][0]))
+                entry['client'], entry['configuration']['runtime'] = 'claude-code', None
+                checkout['clients'][0]['activation'] = dict(status='suspended', qualification='pending',
+                    accepted_scope_digest=None, transaction_id=None, evidence=[], qualification_binding=None)
+                checkout['clients'].append(entry)
+        self.scope.authority_path.write_text(json.dumps(record))
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
+        refused = self.activate()
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'advisory_host_unmanaged'))
+
+    def activate(self):
+        settings = Path(tempfile.mkdtemp()).resolve() / 'settings.json'
+        self.addCleanup(shutil.rmtree, settings.parent)
+        with mock.patch.object(command, 'activation_gate', return_value={}), \
+                closing(command.Service(settings, settings.parent / 'ledger.sqlite3', one_shot=True)) as service:
+            return service.handle(json.dumps(dict(v=1, op='set', expected_revision=0, change=dict(
+                managed_projects=[str(self.repo)]))).encode())
+
+    def test_the_activation_host_check_reads_the_real_enrolment(self):
+        # #222 follow-up: policy 03's Claude Code rule, enforced from the canonical record.
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['codex'])
+        with self.qualified():
+            self.assertEqual(self.activate()['state'], 'updated')
+        self.enrol_as('claude-code', runtime=True)
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
+        refused = self.activate()
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'advisory_host_unmanaged'))
+        self.enrol_as('opencode', runtime=False)  # no runtime state, but its managed launcher is a managed path
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['opencode'])
+        self.assertEqual(self.activate()['state'], 'updated')
+
+    def test_a_mixed_enrolment_may_be_activated(self):
+        record = json.loads(self.scope.authority_path.read_bytes())
+        for repository in record['repositories']:
+            for checkout in repository['checkouts']:
+                entry = json.loads(json.dumps(checkout['clients'][0]))
+                entry['client'], entry['configuration']['runtime'] = 'claude-code', None
+                checkout['clients'].append(entry)
+        self.scope.authority_path.write_text(json.dumps(record))
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code', 'codex'])
+        with self.qualified():  # policy 03's hold covers the Claude Code coordinator here
+            self.assertEqual(self.activate()['state'], 'updated')
 
 
 class ReviewS2Guards(ManagedDelegation):
