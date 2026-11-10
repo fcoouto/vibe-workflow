@@ -206,13 +206,16 @@ class RoundTwoMaskTests(Temp):
         self.assertEqual(record["sha256"], hashlib.sha256(record["text"].encode()).hexdigest()[:12])
 
     def test_adversarial_inputs_stay_fast_and_long_inputs_are_still_checked(self):
+        # CPU time, not wall time, so a loaded machine cannot fail it: each input takes at most 0.4 s of CPU idle or
+        # under 32 busy processes (wall time reached 3.5 s), while a quadratic pattern such as an unbounded email
+        # without its lookbehind takes over 12 s of CPU on the first two inputs.
         for text in ("a" * 10 ** 6, "a." * 500000, "a-" * 500000, "1" * 10 ** 6, "@" * 10 ** 6, "org-" * 250000,
                      ("QWxh" * 4 + "=") * 60000, "a@" * 500000, "::" * 500000):
-            began = time.perf_counter()
+            began = time.process_time()
             sanitize.text(text)
             sanitize.message(text)
             sanitize.leaks(text)
-            self.assertLess(time.perf_counter() - began, 1.0, text[:10])
+            self.assertLess(time.process_time() - began, 2.0, text[:10])
         self.assertIn("email", sanitize.leaks("a " * 500000 + "alice@example.com"))
 
 
