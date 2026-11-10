@@ -7,6 +7,8 @@ For foreground work, load [Codex host admission](codex-host.md). For optional
 local tests, drive the private runner with a connection factory and credential resolver fixture.
 
 For external consideration and saved restrictions, apply the [shared contract](../../../clients/external-delegation.md).
+In a Smart Routing managed project, proposals and handoffs refuse; follow
+[managed projects](procedure.md#managed-projects).
 
 ## Admission and execution
 
