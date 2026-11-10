@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.1.37
+
+- **Smaller logo.** `assets/logo.png` is now 512 × 512 (259 KB, from 867 KB); the image is otherwise unchanged. The package export stays within Codex's 8 MiB bundle scan with more room.
+- **Workspace readiness on OpenCode.** `workflow.py workspace status` reads plugin names from OpenCode's configuration, so local-path plugins such as Caveman count, and reads MCP servers stored under `mcp.servers`. Both previously showed as missing.
+- **Smart Routing.** `scripts/routing.py` adds the one-shot operator op `seed_window` to record a subscription window's first reading. OpenCode accounting accepts `vendor/model` ids; per-launch provider options (endpoint pin, output cap, step count) are validated and applied to the launched server; recovery releases OpenRouter-worker runs that were prepared but never executed. API-funded OpenCode and OpenRouter-worker routes stay disabled, and routing is still not cut over.
+- The replay pre-registration in `docs/smart-routing-validation.md` now samples the available history of past sessions.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.36
 
 - **Workstreams uses native children only.** Delegated workers and reviewers run as native child sessions that one coordinator starts; a chat you ask for is an independent conversation. Only the coordinator's thread gets a managed title, `￻<meter> [STATUS · ]<topic>`: the `[W…]` family code, `P`/`C` roles and the shared family register are retired, and children get no managed title. `workstream_context_id` is rejected; children are named `worker_<attempt>` or `review_<attempt>`. Earlier titles and saved title records are left as they are and no longer synced.
