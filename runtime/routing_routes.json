@@ -1,10 +1,33 @@
 {
   "version": 1,
-  "decision": "pending: C.3 design 7.1 user decision 5",
+  "decision": "accepted: C.3 design 7.1 user decision 5 (2026-11-10): use the capability matrix, subscription routes only",
   "source": "docs/smart-routing-capability-matrix.md",
-  "note": "Production routes are added with their classification only after user decision 5. Until then no route is qualified, so the collector admits nothing from this file and the activation gate fails closed.",
+  "note": "Only subscription-window routes are listed; dollar, API and gateway routes are added later, each after a live qualification with real costs. A route is `qualified` only when its model was observed working and its per-launch `demand` is justified by committed evidence; otherwise it is `unverified` with a fixed `reason`. Routes that draw on one provider usage pool name the same `pool` and `account`, so the collector reads one set of windows for them and their holds count together.",
   "window_unit": "utilization_thousandths",
   "endpoint_rule": "Gateway routes name their pinned OpenRouter endpoint in `endpoint`. The route identity (provider, model, effort, harness) has no endpoint yet, so two qualified routes with the same identity must name the same endpoint, or the whole manifest is refused (routing_observations.validate_routes).",
+  "reasons": {
+    "demand_unjustified": "No committed evidence bounds one launch's use of this pool's windows. The only measured readings bound tiny probe requests, not a worker launch (docs/smart-routing-capability-matrix.md, Route manifest).",
+    "model_unobserved": "No committed evidence shows a model working on this route."
+  },
+  "pools": {
+    "claude-subscription": {
+      "account": "claude-plan",
+      "provider_pool": "the user's Claude plan usage limits, shared by Claude Code and Claude through OpenCode (user confirmation, 2026-11-10)",
+      "windows": [
+        {"id": "5h", "length": 18000},
+        {"id": "7d", "length": 604800}
+      ],
+      "basis": "unifiedWindows five_hour and seven_day (tests/fixtures/smart-routing/probes/claude_code_subscription.json, p0-5-model-variant-messages.json); runtime/opencode_launcher.py RATE_WINDOWS"
+    },
+    "chatgpt-subscription": {
+      "account": "chatgpt-plan",
+      "provider_pool": "the user's ChatGPT plan Codex usage limits, shared by Codex and ChatGPT through OpenCode (user confirmation, 2026-11-10)",
+      "windows": [
+        {"id": "7d", "length": 604800}
+      ],
+      "basis": "Codex account/rateLimits/read primary window, windowDurationMins 10080; secondary null (tests/fixtures/smart-routing/probes/codex_rate_limits_exhausted.json). No other window was observed."
+    }
+  },
   "routes": [
     {
       "route": "test-only-subscription",
@@ -18,6 +41,55 @@
       "account": "test-only-subscription",
       "demand": {"5h": 1},
       "binding_enforceable": true
+    },
+    {
+      "route": "opencode-claude-agent-haiku-low",
+      "status": "unverified",
+      "reason": "demand_unjustified",
+      "host": "opencode",
+      "provider": "claude-agent",
+      "model": "haiku",
+      "effort": "low",
+      "harness": "claude-agent-sdk via opencode",
+      "billing_class": "included_subscription",
+      "pool": "claude-subscription",
+      "account": "claude-plan",
+      "demand": null,
+      "binding_enforceable": true,
+      "observed": "claude-agent/haiku#low through the managed handshake, window settlement, cost 0 (docs/smart-routing-qualification.md; probes qual-rerun-results.json, pilot-results.json)"
+    },
+    {
+      "route": "opencode-openai-gpt-6-luna-none",
+      "status": "unverified",
+      "reason": "demand_unjustified",
+      "host": "opencode",
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "effort": "none",
+      "harness": "opencode provider openai",
+      "billing_class": "included_subscription",
+      "pool": "chatgpt-subscription",
+      "account": "chatgpt-plan",
+      "demand": null,
+      "binding_enforceable": true,
+      "observed": "openai/gpt-6-luna#none through Sign in with ChatGPT and the managed handshake, window settlement, cost null (probes chatgpt-attempt7-results.json). gpt-5.5 was refused (400 model_not_found) and is not listed."
+    },
+    {
+      "route": "codex-native",
+      "status": "unverified",
+      "reason": "model_unobserved",
+      "host": "codex_native",
+      "advisory": true,
+      "provider": "openai",
+      "model": null,
+      "effort": null,
+      "harness": "codex-native",
+      "billing_class": "included_subscription",
+      "pool": "chatgpt-subscription",
+      "account": "chatgpt-plan",
+      "demand": null,
+      "binding_enforceable": true,
+      "observed": "Codex signed in with ChatGPT reports a weekly window (probes codex_rate_limits_exhausted.json); no model request is in the committed evidence. Advisory host: routing chooses and accounts but cannot block a send."
     }
   ]
 }

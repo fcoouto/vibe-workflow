@@ -260,7 +260,7 @@ class CollectorTests(Stores):
 
     def test_the_shipped_manifest_qualifies_no_route_until_user_decision_5(self):
         manifest = json.loads(collector.MANIFEST.read_text())
-        self.assertEqual(manifest['decision'], 'pending: C.3 design 7.1 user decision 5')
+        self.assertTrue(manifest['decision'].startswith('accepted: C.3 design 7.1 user decision 5'))
         self.assertEqual(collector.manifest_check(), ['route_manifest_unqualified'])
         result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
                                    ledger_path=self.ledger_path)
@@ -293,7 +293,9 @@ class CollectorTests(Stores):
                                    ledger_path=self.ledger_path)
         self.assertEqual(result['observations']['routes'], [])
         self.assertEqual(result['observations']['pools'], {})
-        self.assertEqual(excluded(result), {route['route']: 'route_unqualified' for route in test_only})
+        reasons = excluded(result)
+        self.assertEqual({route['route']: reasons.get(route['route']) for route in test_only},
+                         {route['route']: 'route_unqualified' for route in test_only})
 
     def test_a_future_dated_window_observation_is_refused(self):
         """A record dated beyond now plus the clock margin could shadow every later observation."""
