@@ -42,10 +42,23 @@ settings separate, and preserve the coordinator's model and authentication.
 ## Strategy table refresh
 
 After a successful guidance record, or a relevant catalog or benchmark change, a
-maintenance run may recompile the Smart Routing strategy table with
-`runtime.routing_evidence.refresh_table`. Run it only during that maintenance
-session, never from a spawn path, hook or startup check. Extract prose guidance
-into structured rows first; code then drops rows naming unavailable models,
+maintenance run recompiles the Smart Routing strategy table. Run it only during
+that maintenance session, never from a spawn path, hook or startup check. Extract
+prose guidance into structured rows first and save the four inputs as local JSON
+files in the shapes `runtime/routing_evidence.py` documents, then run:
+
+```sh
+python3 -B scripts/routing_table.py refresh --guidance GUIDANCE.json \
+  --catalog CATALOG.json --benchmarks BENCHMARKS.json --terms TERMS.json \
+  [--settings SETTINGS.json] [--table TABLE.json]
+```
+
+It writes `strategy-table.json` beside the routing settings file (or `--table`),
+where `scripts/routing.py` reads it, and makes no network, model or secret
+access. It prints one JSON line: `refreshed` (exit 0) wrote a new table; `kept`
+(exit 1) kept the last verified table; `blocked` (exit 1) wrote nothing, for
+example on a symlinked or shared target. Report a `kept` or `blocked` result as a
+maintenance finding; it never blocks delegation. Code drops rows naming unavailable models,
 unsupported efforts or harnesses, and rows without cited evidence. Profiling or
 ranking models also need known endpoint terms that allow confidential data
 (`forbids_confidential: false`). An active integration covers endpoints that may

@@ -181,10 +181,20 @@ class FailureTests(Base):
     def test_oversized_compiled_table_is_not_written(self):
         self.refresh(now='2026-11-01T00:00:00Z')
         good = self.stored()
-        with mock.patch.object(command, 'MAX_TABLE', 10):
+        larger = inputs()
+        larger[2].append(dict(larger[2][0], id='bench-extra', sha256='e' * 64))
+        self.write_inputs(larger)
+        before = self.table.read_bytes()
+        with mock.patch.object(command, 'MAX_TABLE', len(before)):  # not even the failure mark fits
             code, report = self.refresh(now='2026-11-09T00:00:00Z')
         self.assertEqual((code, report['state']), (1, 'kept'))
-        self.assertEqual(self.stored()['rows'], good['rows'])
+        self.assertEqual(self.table.read_bytes(), before)
+        with mock.patch.object(command, 'MAX_TABLE', len(before) + 64):
+            code, report = self.refresh(now='2026-11-09T00:00:00Z')
+        self.assertEqual((code, report['state']), (1, 'kept'))
+        kept = self.stored()
+        self.assertTrue(kept['refresh_failed'])
+        self.assertEqual((kept['rows'], kept['compiled_at']), (good['rows'], good['compiled_at']))
 
     def test_an_unreadable_previous_table_is_not_treated_as_verified(self):
         self.table.parent.mkdir(mode=0o700, parents=True)
@@ -247,13 +257,13 @@ class RoundTripTests(Base):
             strategies=[dict(model='m', effort='high', harness='h', evidence_refs=['g1'])])])]
         self.write_inputs([guidance, [dict(model='m', supported_efforts=['high'])], [], []])
 
-    def prepare(self, ledger):
+    def prepare(self, ledger, strategy_id):
         choice = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')
         setting = dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[choice])))
         profile = dict(task_family='code', complexity_band='medium', risk_band='medium', review_policy='independent',
                        context_tokens=100, tools=['edit'], uncertainty='low')
         job = dict(id='job-1', role='worker', scope_ref='scope1', objective='o', context='c', profile=profile)
-        route = dict(route='sub', strategy_id='s-sub', provider='anthropic', model='m', effort='high', harness='h',
+        route = dict(route='sub', strategy_id=strategy_id, provider='anthropic', model='m', effort='high', harness='h',
                      account='anthropic:acct', billing_class='included_subscription', pool='sub', demand={'5h': 10},
                      capable=True, permitted=True, binding_enforceable=True)
         window = dict(id='5h', limit=1000, used=100, length=18000, reset_at=None, rolling=True, fresh=True)
@@ -273,11 +283,13 @@ class RoundTripTests(Base):
         self.write_evidence()
         code, report = self.refresh()
         self.assertEqual(code, 0, report)
-        response = self.prepare(self.root / 'usage' / 'ledger.sqlite3')
+        strategy = self.stored()['rows']['worker|code|medium|medium'][0]['strategy_id']
+        response = self.prepare(self.root / 'usage' / 'ledger.sqlite3', strategy)
+        self.assertEqual(response['state'], 'admitted', response)
         ranking = response['ranking']
-        self.assertNotIn('table_unavailable', ranking['reason_codes'], response)
+        self.assertNotIn('table_unavailable', ranking['reason_codes'])
         self.assertEqual(ranking['table_version'], self.stored()['version'])
-        self.assertEqual(ranking['strategy_ids'], [self.stored()['rows']['worker|code|medium|medium'][0]['strategy_id']])
+        self.assertEqual(ranking['strategy_ids'], [strategy])
 
     def test_cli_runs_one_shot_and_exits_by_state(self):
         self.write_evidence()
