@@ -215,7 +215,7 @@ class ActivationGateTests(Base):
             removal = self.add([], service=serving)
         self.assertEqual(response['reason'], 'operator_op_not_served')
         self.assertEqual(removal['reason'], 'operator_op_not_served')
-        self.assertEqual(routing_settings.revision(self.settings), 0)
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
     def test_the_real_gate_refuses_while_capabilities_are_missing(self):
         """At C3-0b's base no phase W capability exists yet: the real checks run in children and fail."""
@@ -230,7 +230,7 @@ class ActivationGateTests(Base):
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
         self.assertIn('collector_and_launcher', response['failing'])
         self.assertEqual(sorted(response['failing']), sorted(response['codes']))
-        self.assertEqual(routing_settings.revision(self.settings), 0)
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
         self.assertEqual(len(spawned), len(command.CAPABILITIES))
         for argv, kwargs in spawned:
             self.assertEqual(argv[:4], [sys.executable, '-I', '-B', '-c'])
@@ -247,8 +247,8 @@ class ActivationGateTests(Base):
                        ('env', 'module', 'gate_env:managed_self_check')):
             response = self.add([str(link)])
         self.assertEqual(response['state'], 'updated', response)
-        self.assertEqual(routing_settings.read(self.settings)['managed_projects'], [str(self.project)])
-        self.assertIs(routing_settings.managed_project(self.project, settings_path=self.settings), True)
+        self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [str(self.project)])
+        self.assertIs(routing_settings.managed_project(self.project, settings_path=self.service.settings_path), True)
 
     def test_a_failing_or_missing_check_refuses_and_writes_nothing(self):
         cases = [(('bad', 'module', 'gate_fail:managed_self_check'), ['fixture_failed']),
@@ -262,7 +262,7 @@ class ActivationGateTests(Base):
                 response = self.add()
                 self.assertEqual(response, dict(v=1, state='blocked', reason='managed_path_incomplete',
                                                 failing=[capability[0]], codes={capability[0]: codes}))
-                self.assertEqual(routing_settings.revision(self.settings), 0)
+                self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
     def test_a_slow_check_times_out_and_its_sandbox_is_deleted(self):
         made = []
@@ -284,14 +284,14 @@ class ActivationGateTests(Base):
         with self.gate(('bad', 'module', 'gate_fail:managed_self_check')):
             response = self.add([], revision=1)
         self.assertEqual(response['state'], 'updated', response)
-        self.assertEqual(routing_settings.read(self.settings)['managed_projects'], [])
+        self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [])
 
     def test_an_invalid_list_is_refused_before_the_gate(self):
         with self.gate(('bad', 'module', 'gate_sleep:managed_self_check')):
             for bad in (['relative/path'], 'not-a-list', [7]):
                 with self.subTest(bad):
                     self.assertEqual(self.add(bad)['reason'], 'invalid_managed_projects')
-        self.assertEqual(routing_settings.revision(self.settings), 0)
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
 
 class ManagedServiceTests(unittest.TestCase):
