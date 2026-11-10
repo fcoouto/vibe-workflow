@@ -1239,9 +1239,8 @@ def _acquire_canonical_membership(cwd: Path, *, authority_path: Path | None, bud
             conflicting_authorities=[], dependencies=[], qualification=None, runtime_location=None)
         _check_observation_deadline(budget)
         return result("observed", "authority_observed")
-    except ObservationDeadline: return result("conflict", "observation_deadline")
-    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
-        return result("conflict", "observation_unavailable")
+    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError) as error:
+        return result("conflict", "observation_deadline" if isinstance(error, ObservationDeadline) else "observation_unavailable")
 
 
 def acquire_canonical_project(event, package, *, authority_path=None, qualifier=None, deadline=None, budget=None, managed=True):
@@ -1364,9 +1363,8 @@ def acquire_canonical_project(event, package, *, authority_path=None, qualifier=
                 client=event.client, installed=basic_installed, managed=False)
         _check_observation_deadline(budget)
         return CanonicalAcquisition(resolution, pointer)
-    except ObservationDeadline: return result("conflict", "observation_deadline")
-    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
-        return result("conflict", "observation_unavailable")
+    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError) as error:
+        return result("conflict", "observation_deadline" if isinstance(error, ObservationDeadline) else "observation_unavailable")
 
 
 def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budget=None, managed=True):
@@ -1413,7 +1411,6 @@ def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budg
 
     pointer = None
     try:
-        # The cap and deadline validation above already bound this budget.
         _entry_budget_check(budget)
         root = repository_root(event.cwd, budget=budget)
         _entry_budget_check(budget)
