@@ -94,7 +94,10 @@ def child_env(environ):
 
 
 def default_command(environ):
-    """`[<absolute codex>, 'app-server']` found on the absolute PATH entries only, or `codex_unavailable`."""
+    """`[<absolute codex>, 'app-server']` found on the absolute PATH entries only, or `codex_unavailable`. Under the
+    test runner's private home (`VCW_TEST_HOME`, tests/__init__.py) the real Codex is never started."""
+    if environ.get('VCW_TEST_HOME'):
+        raise ReadError('codex_unavailable')
     for folder in _absolute_path(environ.get('PATH')).split(':'):
         candidate = os.path.join(folder, 'codex') if folder else ''
         if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):

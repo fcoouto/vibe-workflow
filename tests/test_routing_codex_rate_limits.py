@@ -223,6 +223,9 @@ class ExchangeTests(Sandbox):
         codex.write_text('#!/bin/sh\n')
         codex.chmod(0o700)
         self.assertEqual(reader.default_command(dict(PATH=str(bin_dir))), [str(codex), 'app-server'])
+        with self.assertRaises(reader.ReadError):  # the test runner's home never starts a real Codex
+            reader.default_command(dict(PATH=str(bin_dir), VCW_TEST_HOME=str(self.home)))
+        self.assertTrue(os.environ.get('VCW_TEST_HOME'))  # tests/__init__.py set it for this run
         with self.assertRaises(reader.ReadError) as caught:
             reader.default_command(dict(PATH='relative-bin:.'))
         self.assertEqual(str(caught.exception), 'codex_unavailable')
