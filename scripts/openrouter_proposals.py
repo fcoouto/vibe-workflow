@@ -187,10 +187,11 @@ def triage(state, request, now):
     return result
 
 
-def act(action, state, request, now, *, activation_ref=None, authorize=None, settle=None, own=None):
-    """`authorize(row)` and `settle(row, request)` run under the store lock just before a dispatch or an outcome is
-    stored; a returned reason refuses it and stores nothing (the routing hold's dispatch and closing event). A
-    write-ahead routing entry (`routing_pending`) is a pending attempt for every `begin` but its `own`."""
+def act(action, state, request, now, *, activation_ref=None, authorize=None, settle=None, own=None, persist=None):
+    """`authorize(row, persist, now)` and `settle(row, request)` run under the store lock just before a dispatch or an
+    outcome is stored; a returned reason refuses it (the routing hold's dispatch and closing event). `persist()`
+    durably writes the state so far (the write-ahead record of a routing dispatch). A write-ahead routing entry
+    (`routing_pending`) is a pending attempt for every `begin` but its `own`, which must still be present."""
     current = status(state, now)
     if action == 'status':
         if request.get('include_metadata') is True:
@@ -246,6 +247,8 @@ def act(action, state, request, now, *, activation_ref=None, authorize=None, set
             return dict(fallback='task_already_attempted')
         if not current['fresh'] or request.get('snapshot_digest') != current['snapshot_digest']:
             return dict(fallback='stale_discovery')
+        if own is not None and not any(entry['attempt_id'] == own for entry in state.get('routing_pending', [])):
+            return dict(fallback='routing_reservation_lost')  # recovery closed this begin's hold meanwhile
         if any('outcome' not in row for row in state['attempts']) or any(
                 entry['attempt_id'] != own for entry in state.get('routing_pending', [])):
             return dict(fallback='pending_attempt')
@@ -297,16 +300,23 @@ def act(action, state, request, now, *, activation_ref=None, authorize=None, set
             if key not in ('attempt_token', 'visibility')})
         if row['external_digest'] != expected:
             raise ValueError('external_attempt_changed')
+        # Capacity first: every state this dispatch can store (a routed row's write-ahead marker and unsent outcome
+        # too) must fit before any routing authority is taken.
+        probe = dict(row)
         row['dispatched_at'] = now
-        try:  # capacity first: a stored dispatch must fit before any routing authority is taken
+        if 'routing' in row:
+            row.update(routing_state='dispatching', outcome=dict(disposition=ROUTED_UNSENT, recorded_at=now))
+        try:
             encoded(state, MAX_STATE)
         except ValueError:
-            del row['dispatched_at']
             return dict(fallback='capacity')
-        refused = authorize(row) if authorize is not None else None
+        finally:
+            row.clear()
+            row.update(probe)
+        refused = authorize(row, persist, now) if authorize is not None else None
         if refused is not None:
-            del row['dispatched_at']
             return dict(fallback=refused)
+        row['dispatched_at'] = now
         return dict(dispatched=True, attempt_token=row['attempt_token'])
     if action == 'record':
         row = next((r for r in state['attempts'] if r['attempt_token'] == request.get('attempt_token')), None)
@@ -362,12 +372,12 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
                     result = _run(action, store, request, now=now,
                         management=dict(scope_id=report['scope_id'], revision=report['revision']),
                         activation_ref=report['activation']['ref'],
-                        authorize=lambda row: _authorize(row, managed, granted))
+                        authorize=lambda row, persist, moment: _authorize(row, managed, granted, persist, moment))
             except BaseException:
-                _unsent(granted)
+                _unsent(granted, store, now)
                 raise
             if not result.get('dispatched'):
-                _unsent(granted)
+                _unsent(granted, store, now)
             elif action == 'dispatch':
                 result.update(packet=packet['text'], model=request['model'], provider=request['provider'],
                               effort=request.get('effort'), requires_native_review=True, accepted=False)
@@ -382,13 +392,19 @@ def run(action: str, store: Path, request: dict, *, now: float | None = None, cw
 # admission lock; `dispatch` takes the routing authority and checks it in process before the packet is returned (the
 # caller sends only after that); `record` closes the hold. Unmanaged projects keep the path above unchanged.
 #
-# Holds are never stranded. `begin` writes its routing attempt id to the store (`routing_pending`) BEFORE `prepare`,
-# so a crash between `prepare` and the stored attempt leaves a record: it blocks new attempts like any pending one
-# for LEASE seconds, then the next `begin` closes its hold (`not_dispatched`) and drops it. A failure after the
-# routing `dispatch` (the ledger never accepts `not_dispatched` once dispatched) completes the hold with no usage, so
-# its whole reservation stays held as `cost_unknown` for the operator; the packet was never returned.
+# Holds and rows are never stranded; every recovery settles only the row's OWN attempt id.
+# - `begin` writes its routing attempt id to the store (`routing_pending`) BEFORE `prepare`. A crash before the
+#   attempt is stored leaves that entry: it blocks new attempts like any pending one for LEASE seconds, then the next
+#   `begin` closes its hold (`not_dispatched`) and drops it. A `begin` whose entry was recovered meanwhile refuses.
+# - `dispatch` writes `routing_state: dispatching` on the row BEFORE the routing `dispatch`. If the packet is then
+#   not returned (a `check` refusal, an exception, a killed process), the row gets the outcome `routed_unsent` and
+#   its hold is settled: still admitted, it is released; dispatched (the ledger never accepts `not_dispatched` after
+#   that), it completes with no usage, keeping its whole reservation as `cost_unknown` for the operator. A row left
+#   `dispatching` by a dead process is found under the store lock (which a live dispatch holds throughout) and
+#   settled by the next `begin`, `dispatch` or `record`. Nothing is sent on any of these paths.
 HOST = 'openrouter_proposal'
 RECOVERED = ('unknown_attempt', 'attempt_closed')  # no admitted hold is left behind for this id
+ROUTED_UNSENT = 'routed_unsent'
 
 
 def _managed(cwd):
@@ -410,6 +426,42 @@ def _close(service, attempt):
     return answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED
 
 
+def _settle_own(service, attempt, usage=None, *, dispatched):
+    """Settle one row's own hold; True once nothing of it is left open. Not dispatched by this row's record: release
+    it, or, if routing had dispatched it after all, complete it with no usage (its whole reservation stays held as
+    `cost_unknown`). Dispatched: complete, with `usage` when given. A closed or forgotten hold, or a conflicting
+    replay of this same attempt's `complete`, means an earlier call for this row already settled it."""
+    _, launch = _routing()
+    if not dispatched:
+        answer = launch._record(service, attempt, 'not_dispatched')
+        if answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED:
+            return True
+        if answer.get('reason') != 'hold_state_forbidden':
+            return False
+        usage = None
+    answer = launch._record(service, attempt, 'complete', **({} if usage is None else dict(usage=usage)))
+    return answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED + ('event_conflict',)
+
+
+def _mark_unsent(row, moment):
+    row.pop('dispatched_at', None)
+    row.pop('routing_state', None)
+    row['outcome'] = dict(disposition=ROUTED_UNSENT, recorded_at=moment)
+
+
+def _settle_dead(row, moment):
+    """A row left `dispatching` by a dead process: settle its hold and mark it `routed_unsent`; True when done."""
+    command, _ = _routing()
+    service = command.managed_service(row['routing']['checkout'])
+    try:
+        settled = _settle_own(service, row['routing']['attempt_id'], dispatched=False)
+    finally:
+        service.close()
+    if settled:
+        _mark_unsent(row, moment)
+    return settled
+
+
 def _forget(state, attempt):
     kept = [entry for entry in state.get('routing_pending', []) if entry['attempt_id'] != attempt]
     if kept:
@@ -425,7 +477,11 @@ def _release(service, store, attempt, now):
 
 
 def _recover(state, moment):
-    """Under the store lock: close and drop write-ahead entries older than LEASE (their begin died)."""
+    """Under the store lock: settle rows a dead dispatch left `dispatching`, then close and drop write-ahead
+    entries older than LEASE (their begin died)."""
+    for row in state['attempts']:
+        if row.get('routing_state') == 'dispatching' and 'outcome' not in row:
+            _settle_dead(row, moment)
     command, _ = _routing()
     for entry in [entry for entry in state.get('routing_pending', []) if moment >= entry['at'] + LEASE]:
         service = command.managed_service(entry['checkout'])
@@ -436,16 +492,31 @@ def _recover(state, moment):
             service.close()
 
 
-def _unsent(granted):
-    """Routed holds dispatched for a packet that was never returned: completed with no usage (`cost_unknown`)."""
-    command, launch = _routing()
+def _unsent(granted, store, now):
+    """Routed holds dispatched for a packet that was never returned: completed with no usage (`cost_unknown`), and
+    their rows marked `routed_unsent` so the store stays usable. A row that cannot be marked now keeps its write-ahead
+    marker and is settled by the next recovery."""
+    command, _ = _routing()
+    settled = set()
     for checkout, attempt in granted:
         service = command.managed_service(checkout)
         try:
-            launch._record(service, attempt, 'complete')
+            if _settle_own(service, attempt, dispatched=True):
+                settled.add(attempt)
         finally:
             service.close()
     granted.clear()
+
+    def mark(state, moment):
+        for row in state['attempts']:
+            if (row.get('routing') or {}).get('attempt_id') in settled and 'outcome' not in row:
+                _mark_unsent(row, moment)
+        return {}
+    if settled:
+        try:
+            _run('record', store, {}, now=now, hook=mark)
+        except ValueError:
+            pass
 
 
 def _endpoint(settings_path, route, provider):
@@ -505,10 +576,11 @@ def _begin_managed(store, request, now, cwd):
         """Recover dead write-ahead entries, run every local `begin` refusal on a copy (nothing reaches routing
         unless the attempt could be stored), then record this attempt id before `prepare`."""
         _recover(state, moment)
+        state.setdefault('routing_pending', []).append(dict(attempt_id=attempt, checkout=str(checkout), at=moment))
         trial = act('begin', json.loads(encoded(state, MAX_STATE)), request, moment, own=attempt)
         if 'attempt_token' not in trial:
+            _forget(state, attempt)
             return trial
-        state.setdefault('routing_pending', []).append(dict(attempt_id=attempt, checkout=str(checkout), at=moment))
         return dict(reserved=True)
     reserved = _run('begin', store, request, now=now, hook=reserve)
     if not reserved.get('reserved'):
@@ -535,33 +607,42 @@ def _begin_managed(store, request, now, cwd):
             service.close()
 
 
-def _authorize(row, managed, granted):
+def _authorize(row, managed, granted, persist, now):
     """Before a dispatch is stored: the dollar preflight again, the routing authority and an in-process `check` for
     a routed attempt. The token stays here; it is never stored or returned. A managed project never dispatches an
-    unrouted attempt. Before the routing dispatch a refusal closes the hold; after it, `run` keeps the exposure."""
+    unrouted attempt. Before the routing dispatch a refusal closes the hold; the row is marked `dispatching` (and
+    persisted) first, so a failure after it is always recoverable, and `run` keeps the exposure."""
     bound = row.get('routing')
     if bound is None:
         from runtime import routing_settings
         return routing_settings.LEGACY_ROUTE_RETIRED if managed else None
+    if row.get('routing_state') == 'dispatching':  # a dead dispatch under this lock: settle it, never resend
+        return ROUTED_UNSENT if _settle_dead(row, now) else 'routing_recovery_pending'
     command, launch = _routing()
     service = command.managed_service(bound['checkout'])
     try:
         attempt, facts = bound['attempt_id'], bound['facts']
         reason = launch.preflight(launch._call(service, dict(v=1, op='status')), dollar=True)
-        sent = {} if reason is not None else launch._call(service, dict(v=1, op='dispatch', attempt_id=attempt,
-                                                                         request=facts))
-        if sent.get('state') == 'already_dispatched':
-            return 'already_dispatched'  # an earlier grant's send is unknown: reconcile, never close or resend
-        authority = sent.pop('authority', None)
-        if reason is None and not (sent.get('state') == 'dispatched' and authority):
-            reason = sent.get('reason') or 'dispatch_refused'
         if reason is not None:
             _close(service, attempt)  # still admitted: nothing was dispatched
             return reason
+        row['routing_state'] = 'dispatching'
+        persist()  # write-ahead: from here on the row can never be stranded
+        sent = launch._call(service, dict(v=1, op='dispatch', attempt_id=attempt, request=facts))
+        if sent.get('state') == 'already_dispatched':
+            return 'already_dispatched'  # never resent; the marked row is settled with no usage by recovery
+        authority = sent.pop('authority', None)
+        if not (sent.get('state') == 'dispatched' and authority):
+            _close(service, attempt)
+            row.pop('routing_state')
+            return sent.get('reason') or 'dispatch_refused'
         granted.append((bound['checkout'], attempt))
         checked = launch._call(service, dict(v=1, op='check', attempt_id=attempt, authority=authority,
                                              request=facts))
-        return None if checked.get('state') == 'allow' else checked.get('reason') or 'check_refused'
+        if checked.get('state') != 'allow':
+            return checked.get('reason') or 'check_refused'  # `run` settles the hold and marks the row
+        row.pop('routing_state')
+        return None
     finally:
         service.close()
 
@@ -589,18 +670,19 @@ def _charged_usage(usage, reserved):
 def _settle(row, request):
     """Before an outcome is stored: close the routed hold. A dispatched attempt completes; a self-reported `usage`
     is charged as `_charged_usage` says, and without one the dollar exposure stays held as `cost_unknown`."""
-    command, launch = _routing()
-    dispatched = 'dispatched_at' in row
+    command, _ = _routing()
+    dispatched = 'dispatched_at' in row  # a `dispatching` row (a dead dispatch) never has it
     usage = _charged_usage(request['usage'], row['routing'].get('reserved')) \
         if dispatched and 'usage' in request else None
     service = command.managed_service(row['routing']['checkout'])
     try:
-        recorded = launch._record(service, row['routing']['attempt_id'],
-                                  'complete' if dispatched else 'not_dispatched',
-                                  **({} if usage is None else dict(usage=usage)))
+        settled = _settle_own(service, row['routing']['attempt_id'], usage, dispatched=dispatched)
     finally:
         service.close()
-    return None if recorded.get('state') == 'recorded' else recorded.get('reason') or 'record_refused'
+    if not settled:
+        return 'record_refused'
+    row.pop('routing_state', None)
+    return None
 
 
 # -- activation-gate self-check (C.3 design 4.2: "External choice and proposals") ---------------------------------
@@ -778,9 +860,17 @@ def _run(action: str, store: Path, request: dict, *, now: float | None = None, m
                 row = next((row for row in state['attempts'] if row['attempt_token'] == request.get('attempt_token')), None)
                 if row is not None and row.get('management') != management:
                     raise ValueError('openrouter_preparation_stale')
+            written = [before]
+
+            def persist():
+                raw = encoded(state, MAX_STATE)
+                if raw != written[0]:
+                    _save(store, raw)
+                    written[0] = raw
             own = routing['attempt_id'] if routing is not None else None
             result = hook(state, now) if hook is not None else act(
-                action, state, request, now, activation_ref=activation_ref, authorize=authorize, settle=settle, own=own)
+                action, state, request, now, activation_ref=activation_ref, authorize=authorize, settle=settle, own=own,
+                persist=persist)
             if action == 'begin' and 'attempt_token' in result:
                 state['attempts'][-1]['management'] = management
                 if routing is not None:
@@ -790,25 +880,29 @@ def _run(action: str, store: Path, request: dict, *, now: float | None = None, m
                 after = encoded(state, MAX_STATE)
             except ValueError:
                 return dict(fallback='capacity', advisory=True)
-            if after != before:
-                fd, temporary = tempfile.mkstemp(prefix='.proposal-', dir=store.parent)
-                try:
-                    with os.fdopen(fd, 'wb') as output:
-                        output.write(after)
-                        output.flush()
-                        os.fsync(output.fileno())
-                    os.replace(temporary, store)
-                    directory = os.open(store.parent, os.O_RDONLY)
-                    try:
-                        os.fsync(directory)
-                    finally:
-                        os.close(directory)
-                finally:
-                    if os.path.exists(temporary):
-                        os.unlink(temporary)
+            if after != written[0]:
+                _save(store, after)
             return dict(result, advisory=True)
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise ValueError('unsafe, unreadable or corrupt proposal store: ' + str(exc)) from exc
+
+
+def _save(store, raw):
+    fd, temporary = tempfile.mkstemp(prefix='.proposal-', dir=store.parent)
+    try:
+        with os.fdopen(fd, 'wb') as output:
+            output.write(raw)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, store)
+        directory = os.open(store.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def main():
