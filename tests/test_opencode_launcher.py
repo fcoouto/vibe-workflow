@@ -2,8 +2,10 @@
 command on temporary stores. No model call, no OpenCode server, no network."""
 import inspect
 import json
+import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -54,6 +56,7 @@ class FakeHost:
                        dict(providerID='openrouter', id='vendor/model', variants=['low'])]
         self.attach_ok, self.prompt_status, self.prompt_raises, self.descendants_ok = True, 200, None, True
         self.upstream_error, self.rate_limit, self.child, self.health_after = None, None, False, None
+        self.child_error, self.message_model, self.descendants_raises, self.prompt_hook = None, None, False, None
         self.__dict__.update(knobs)
 
     def _id(self, prefix):
@@ -93,6 +96,8 @@ class FakeHost:
         if method == 'detach':
             del self.attached[session]
             return 200, dict(state='detached', session_id=session)
+        if method == 'descendants' and self.descendants_raises:
+            raise ConnectionResetError('descendants call lost')
         if method == 'descendants' and self.descendants_ok:
             children = [dict(session_id=sid, parent_session_id=item['record']['parentID'])
                         for sid, item in sorted(self.sessions.items()) if item['record']['parentID'] == session]
@@ -111,6 +116,8 @@ class FakeHost:
         model = session['record']['model']
         message = dict(id=self._id('msg'), type='assistant', agent='build', finish='stop', cost=0, model=dict(model),
                        tokens=json.loads(json.dumps(TOKENS)), time=dict(created=now, completed=now + 1))
+        if self.message_model is not None:
+            message['model'] = dict(self.message_model)
         if self.upstream_error is not None:
             message.update(finish='error', tokens=dict(input=0, output=0, reasoning=0, cache=dict(read=0, write=0)),
                            error=dict(self.upstream_error))
@@ -149,6 +156,8 @@ class FakeHost:
             return 200, dict(data=list(session['messages']), cursor=dict(previous=None, next='n'))
         if method == 'POST' and parts[3] == 'prompt':
             self.order.append('prompt')
+            if self.prompt_hook is not None:
+                self.prompt_hook()
             if self.prompt_raises is not None:
                 raise self.prompt_raises
             sid, held = parts[2], self.attached.get(parts[2])
@@ -160,6 +169,12 @@ class FakeHost:
                 if self.child:
                     child = self._session(self._id('ses'), parent=sid, model=session['record']['model'])
                     child_id = child['id']
+                    if self.child_error is not None:
+                        self.sessions[child_id]['messages'].append(dict(
+                            id=self._id('msg'), type='assistant', agent='build', finish='error', cost=0,
+                            model=dict(session['record']['model']), error=dict(self.child_error),
+                            tokens=dict(input=0, output=0, reasoning=0, cache=dict(read=0, write=0)),
+                            time=dict(created=now, completed=now + 1)))
                     self.sessions[child_id]['messages'].append(dict(id=self._id('msg'), type='idle', outcome='succeeded',
                                                                     time=dict(created=now + 1)))
             session['messages'].append(dict(id=self._id('msg'), type='idle', outcome='succeeded' if allowed else 'failed',
@@ -461,11 +476,32 @@ class StaticTests(unittest.TestCase):
         self.assertIn('managed_service(', source)
         self.assertNotIn('Service(default_settings', source)
 
-    def test_the_server_environment_strips_credential_like_names(self):
-        environ = dict(PATH='/usr/bin', HOME='/h', ANTHROPIC_API_KEY='k', GITHUB_TOKEN='t', DB_PASSWORD='p',
-                       OPENROUTER_API_KEY='o', LANG='C')
-        cleaned = launcher.host_environment(environ)
-        self.assertEqual({key for key in cleaned if key in environ}, {'PATH', 'HOME', 'LANG'})
+    HOSTILE = dict(PATH='/project/node_modules/.bin:/usr/bin', HOME='/h', USER='u', LANG='C.UTF-8', TMPDIR='/t',
+                   XDG_DATA_HOME='/h/.data', ANTHROPIC_API_KEY='k', GITHUB_TOKEN='t', DB_PASSWORD='p',
+                   OPENROUTER_API_KEY='o', NODE_OPTIONS='--require /project/x.js', BUN_INSTALL='/b', BUN_OPTIONS='x',
+                   PYTHONPATH='/project', PYTHONHOME='/p', PYTHONSTARTUP='/project/s.py', LD_PRELOAD='/x.so',
+                   DYLD_INSERT_LIBRARIES='/x.dylib', OPENCODE_CONFIG='/project/c.json', OPENCODE_CONFIG_DIR='/p',
+                   XDG_CONFIG_HOME='/project/.config', GIT_DIR='/project', SHELL='/bin/zsh', EDITOR='vim')
+
+    def test_the_server_environment_is_exactly_the_allowlist(self):
+        cleaned = launcher.host_environment(self.HOSTILE)
+        self.assertEqual(set(cleaned), {'PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME'})
+        self.assertEqual(cleaned['PATH'], launcher.SERVER_PATH)  # fixed, never the caller's (project-local) PATH
+        self.assertEqual({key: cleaned[key] for key in ('HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME')},
+                         {key: self.HOSTILE[key] for key in ('HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME')})
+        self.assertFalse([name for name in launcher.ENV_ALLOWED if adapter.credential_name(name)])
+        self.assertEqual(set(launcher.host_environment(dict(HOME='/h'))), {'HOME', 'PATH'})  # absent names stay absent
+
+    def test_the_inline_config_pins_the_plugin_and_disables_mcp_formatters_and_lsp(self):
+        config = launcher.server_config(Path('/x/state/routing/settings.json'),
+                                        Path('/x/state/usage/organizations.sqlite3'), Path('/plugins/routing'))
+        self.assertEqual([item['package'] for item in config['plugins']], ['/plugins/routing'])
+        self.assertEqual(config['mcp'], {})
+        self.assertIs(config['formatter'], False)
+        self.assertIs(config['lsp'], False)
+        self.assertEqual(config['permissions'], launcher.WORKER_RULES)
+        self.assertEqual(launcher.rule_effect(config['permissions'], 'external_directory'), 'deny')
+        self.assertEqual(set(config), {'$schema', 'plugins', 'mcp', 'formatter', 'lsp', 'permissions'})
 
     def test_the_server_config_protects_the_routing_state(self):
         settings, ledger = Path('/x/state/routing/settings.json'), Path('/x/state/usage/organizations.sqlite3')
@@ -497,14 +533,19 @@ class ServerStartTests(unittest.TestCase):
             checkout = root / 'checkout'
             checkout.mkdir()
             settings, ledger = root / 'state' / 'routing' / 'settings.json', root / 'state' / 'usage' / 'l.sqlite3'
-            environ = dict(PATH='/usr/bin:/bin', HOME=str(root), GITHUB_TOKEN='secret-value', LANG='C')
+            environ = dict(StaticTests.HOSTILE, HOME=str(root), GITHUB_TOKEN='secret-value', TMPDIR=str(root))
             server = launcher.start_server(checkout, settings_path=settings, ledger_path=ledger, opencode=str(fake),
                                            environ=environ, timeout=10)
             try:
                 seen = json.loads(record.read_text())
             finally:
                 server.stop()
-            self.assertNotIn('GITHUB_TOKEN', seen['env'])
+            allowed = {'PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME', 'OPENCODE_CONFIG_CONTENT',
+                       'OPENCODE_SERVER_PASSWORD', *launcher.SERVER_FLAGS}
+            # macOS adds __CF_USER_TEXT_ENCODING to every process; nothing else may appear
+            self.assertEqual(set(seen['env']) - allowed - {'__CF_USER_TEXT_ENCODING'}, set())
+            for name in ('NODE_OPTIONS', 'BUN_INSTALL', 'PYTHONPATH', 'GITHUB_TOKEN', 'OPENCODE_CONFIG'):
+                self.assertNotIn(name, seen['env'])
             self.assertEqual(seen['cwd'], str(checkout))
             self.assertEqual(seen['argv'][:3], ['serve', '--hostname', '127.0.0.1'])
             config = json.loads(seen['env']['OPENCODE_CONFIG_CONTENT'])
@@ -570,6 +611,174 @@ class CommandLineTests(LauncherBase):
         self.assertEqual(answer['state'], 'recorded', answer)
         token = [item for item in self.host.tokens_seen if item][0]
         self.assertNotIn(token, stdout[0])
+        server.stop.assert_called_once_with()
+
+
+REFUSED = dict(type='APIError', status=400, message='upstream refused', response=dict(
+    body=json.dumps(dict(error=dict(type='invalid_request_error', code='model_not_found')))))
+
+
+class FlakySource:
+    """A manifest that answers the core's entitlement check, then cannot be read (the account lookup)."""
+
+    def __init__(self, routes):
+        self.routes, self.calls = routes, 0
+
+    def manifest(self):
+        self.calls += 1
+        if self.calls > 1:
+            raise OSError('manifest unreadable')
+        return [dict(item) for item in self.routes]
+
+
+class NotEntitledTests(LauncherBase):
+    """S3 (review of #218): only the primary session's own 400 `model_not_found` on the admitted route is a mark."""
+
+    def assert_no_mark(self, result, mark=None):
+        self.assertEqual(result['state'], 'recorded', result)
+        self.assertIs(result['not_entitled'], False)
+        self.assertEqual(collector.entitlement_marks(self.settings), [])
+        self.assertEqual(result.get('entitlement_mark'), mark)
+
+    def test_a_child_sessions_refusal_writes_no_mark(self):
+        self.host.child, self.host.child_error = True, REFUSED
+        self.assert_no_mark(self.launch())
+
+    def test_a_refusal_for_another_model_writes_no_mark(self):
+        self.host.upstream_error = REFUSED
+        self.host.message_model = dict(id=MODEL, providerID=PROVIDER, variant='high')
+        self.assert_no_mark(self.launch())
+
+    def test_a_400_without_model_not_found_writes_no_mark(self):
+        self.host.upstream_error = dict(REFUSED, response=dict(body=json.dumps(dict(error=dict(code='rate_limited')))))
+        self.assert_no_mark(self.launch())
+
+    def test_an_unknown_account_writes_no_mark_and_says_why(self):
+        self.host.upstream_error = REFUSED
+        result = self.launch(source=FlakySource(self.routes))
+        self.assertEqual(result['state'], 'recorded', result)
+        self.assertIs(result['not_entitled'], True)
+        self.assertEqual(result['entitlement_mark'], 'account_unknown')
+        self.assertEqual(collector.entitlement_marks(self.settings), [])
+
+
+class DescendantsRaiseTests(LauncherBase):
+    def test_a_descendants_call_that_raises_passes_none(self):
+        """S4: the RPC raising (not answering non-200) still gives `shim_descendants: None`, never `{}`."""
+        self.host.descendants_raises = True
+        captured = {}
+        real = launcher.opencode_accounting.usage_from_messages
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return real(*args, **kwargs)
+        with mock.patch.object(launcher.opencode_accounting, 'usage_from_messages', spy):
+            self.assertEqual(self.launch()['state'], 'recorded')
+        self.assertIn('shim_descendants', captured)
+        self.assertIsNone(captured['shim_descendants'])
+
+
+class Terminated(BaseException):
+    pass
+
+
+class InterruptTests(LauncherBase):
+    """S2: an interrupt past the core's `except Exception` never leaves a dispatched hold without a record."""
+
+    def test_an_interrupt_during_the_prompt_records_uncertain_and_re_raises(self):
+        self.host.prompt_raises = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.launch()
+        self.assertEqual(self.holds()['a1']['state'], 'uncertain')
+        self.assertEqual(self.host.attached, {})  # still detached
+
+    def test_an_interrupt_after_record_complete_changes_nothing(self):
+        real = launcher._Attempt.detach
+
+        def interrupted(attempt):
+            real(attempt)
+            raise Terminated()
+        with mock.patch.object(launcher._Attempt, 'detach', interrupted), self.assertRaises(Terminated):
+            self.launch()
+        self.assertEqual(self.holds()['a1']['state'], 'released')  # `complete` won; the late `uncertain` is refused
+
+    def test_an_interrupt_before_dispatch_leaves_only_an_admission(self):
+        with mock.patch.object(launcher, 'catalog', side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.launch()
+        self.assertNotIn('dispatch', self.order)
+
+
+class WindowUnitTests(LauncherBase):
+    """S5: every stored window carries the launcher's declared unit once the collector accepts the field."""
+
+    def rate_limited(self):
+        resets = self.now + 3000
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=resets,
+                                    unifiedWindows=dict(five_hour=dict(utilization=0.25, resetsAt=resets,
+                                                                       status='allowed')))
+
+    def test_the_unit_is_declared_on_every_window(self):
+        self.rate_limited()
+        for window in launcher.windows(dict(observed_ms=self.now * 1000, windows=dict(
+                five_hour=dict(utilization_fraction=0.5, resets_at_s=self.now + 10)))):
+            self.assertEqual(window['unit'], launcher.WINDOW_UNIT)
+        self.assertEqual(launcher.WINDOW_UNIT, 'utilization_thousandths')
+
+    def test_a_collector_that_accepts_the_unit_stores_it(self):
+        self.rate_limited()
+        with mock.patch.object(collector, 'WINDOW_FIELDS', collector.WINDOW_FIELDS + ('unit',)):
+            result = self.launch()
+            stored = json.loads(collector.window_path(self.settings).read_text())['pools'][POOL]['5h']
+        self.assertEqual(stored['unit'], 'utilization_thousandths')
+        self.assertIs(result['window_unit_recorded'], True)
+
+    def test_until_the_collector_accepts_it_the_window_is_stored_without_and_reported(self):
+        self.rate_limited()
+        result = self.launch()
+        stored = json.loads(collector.window_path(self.settings).read_text())['pools'][POOL]['5h']
+        self.assertNotIn('unit', stored)
+        self.assertIs(result['window_unit_recorded'], False)
+
+
+class SignalTests(LauncherBase):
+    """S2: SIGTERM and SIGHUP to the command become an exception, so its server is always stopped."""
+
+    def test_sigterm_and_sighup_stop_the_server_and_leave_the_hold_uncertain(self):
+        for number, sig in enumerate((signal.SIGTERM, signal.SIGHUP)):
+            with self.subTest(signal=sig):
+                attempt = 's%d' % number
+                self.order.clear()
+                code, answer, server = self.run_signal(sig, attempt)
+                self.assertEqual((code, answer['state'], answer['reason']), (1, 'blocked', 'interrupted'))
+                server.stop.assert_called_once_with()
+                self.assertEqual(self.holds()[attempt]['state'], 'uncertain')
+
+    def run_signal(self, sig, attempt):
+        from scripts import opencode_launch
+        stdout = []
+        request = dict(v=1, op='launch', checkout=str(self.checkout), assignment=self.assignment(attempt),
+                       job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+        server = mock.Mock(directory=str(self.checkout))
+        server.request, server.rpc = self.host.request, self.host.rpc
+        self.host.prompt_hook = lambda: os.kill(os.getpid(), sig)
+        before = {item: signal.getsignal(item) for item in (signal.SIGTERM, signal.SIGHUP)}
+        with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
+                mock.patch.object(opencode_launch.command, 'managed_service', return_value=self.service):
+            code = opencode_launch.main([], stdin=json.dumps(request).encode(), write=stdout.append)
+        self.assertEqual(before, {item: signal.getsignal(item) for item in before})  # handlers restored
+        return code, json.loads(stdout[0]), server
+
+    def test_a_keyboard_interrupt_stops_the_server(self):
+        from scripts import opencode_launch
+        server = mock.Mock(directory=str(self.checkout))
+        request = dict(v=1, op='launch', checkout=str(self.checkout), assignment=self.assignment(),
+                       job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+        stdout = []
+        with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
+                mock.patch.object(opencode_launch.command, 'managed_service', return_value=self.service), \
+                mock.patch.object(opencode_launch.opencode_launcher, 'launch', side_effect=KeyboardInterrupt):
+            code = opencode_launch.main([], stdin=json.dumps(request).encode(), write=stdout.append)
+        self.assertEqual((code, json.loads(stdout[0])['reason']), (1, 'interrupted'))
         server.stop.assert_called_once_with()
 
 
