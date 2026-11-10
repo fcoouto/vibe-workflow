@@ -413,7 +413,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
         config = launcher.server_config('/s/settings.json', '/l/l.sqlite3', '/p', options=self.hosts[0].options)
         self.assertEqual(config['providers']['openrouter']['models']['vendor/model']['body'],
                          dict(provider=dict(only=['provider'], allow_fallbacks=False), max_tokens=2048))
-        self.assertEqual(config['agents'], dict(build=dict(steps=3)))
+        self.assertEqual(config['agents'], {name: dict(steps=3) for name in launcher.BUILTIN_AGENTS})
 
     def test_a_server_without_the_options_is_refused_and_closes_the_hold(self):
         self.manage()
@@ -427,6 +427,17 @@ class ManagedExecuteTests(ManagedWorkerCase):
                                  ('failed', 'launch_options_unexpressible'))
                 self.assertFalse(hasattr(self.hosts[-1], 'created'))
                 self.assertEqual((self.routing_state(run), self.holds()), ('settled', {}))
+
+    def test_an_agent_without_the_step_cap_is_refused_and_closes_the_hold(self):
+        """Lane F5: an agent outside the inline config, listed without the cap, refuses before anything is sent."""
+        self.manage()
+        self.qualified()
+        self.serve(agents=[dict(id='build', steps=3), dict(id='reviewer')])
+        run = self.api.prepare(self.runs, self.brief())
+        result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', launcher.AGENT_STEPS_UNCAPPED))
+        self.assertFalse(hasattr(self.hosts[-1], 'created'))
+        self.assertEqual((self.routing_state(run), self.holds()), ('settled', {}))
 
     def test_options_that_cannot_be_expressed_start_no_server(self):
         self.manage()

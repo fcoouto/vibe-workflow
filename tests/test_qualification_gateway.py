@@ -199,14 +199,15 @@ class CeilingTests(GatewayBase):
 
     def test_with_the_real_f4_launcher_the_launch_carries_the_output_cap_and_step_count(self):
         self.assertTrue(gateway.launch_options_supported())  # F4 (#229) is on main: detected by capability
-        env = Env(self.tmp)
+        env = Env(self.tmp, agents=list(opencode_launcher.BUILTIN_AGENTS))
         result = self.run_gateway(env)
         self.assertTrue(result["passed"], json.dumps(result)[:1500])
         self.assertEqual(env.started_options, opencode_launcher.launch_options(
             "openrouter", "vendor-small", endpoint="vendor", max_output_tokens=gateway.MAX_OUTPUT_TOKENS,
             steps=gateway.STEPS))
         agents = result["bounds"]["agents"]
-        self.assertEqual((agents["listed"], agents["capped"]), (["build"], [opencode_launcher.PRIMARY_AGENT]))
+        everyone = sorted(opencode_launcher.BUILTIN_AGENTS)  # all seven, capped by the inline config
+        self.assertEqual((agents["listed"], agents["capped"]), (everyone, everyone))
         self.assertTrue(agents["steps_source"].startswith("config:"))
 
     def test_the_bounds_are_stated_honestly(self):
@@ -224,11 +225,12 @@ class CeilingTests(GatewayBase):
         self.assertEqual(bounds["key_limit_usd"], 1.0)
 
     def test_steps_must_cover_every_agent(self):
-        for agents in (["build", "plan", "general"], []):
+        for agents in (["build", "plan", "reviewer"], []):  # `reviewer`: outside the seven built-ins
             with self.subTest(agents=agents):
                 env = Env(self.tmp, agents=agents)
                 result = self.run_gateway(env)
                 self.assertIn("steps_not_universal", result["blocker"])
+                self.assertIn("(reviewer)" if agents else "(agent listing unreadable)", result["blocker"])
                 self.assertEqual(env.hosts[0].prompts, 0)
                 self.assertEqual(env.signins, 0)
         self.assertEqual(self.reservations(), [])

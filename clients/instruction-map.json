@@ -216,7 +216,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "e45ead8896b8a7b6e0ca13a9a1d31d66e093965c562e8a0377035668ae97e038",
+      "sha256": "e871ce8559617e6c25e080b227f5e7bbfacd28048644b1db6c24b1f064d6c11b",
       "ranges": [
         [
           1,
@@ -260,7 +260,7 @@
         ],
         [
           340,
-          348
+          350
         ]
       ]
     },

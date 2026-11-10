@@ -57,6 +57,8 @@ class FakeHost:
         self.attach_ok, self.prompt_status, self.prompt_raises, self.descendants_ok = True, 200, None, True
         self.upstream_error, self.rate_limit, self.child, self.health_after = None, None, False, None
         self.child_error, self.message_model, self.descendants_raises, self.prompt_hook = None, None, False, None
+        # `GET /api/agent`: None lists every built-in agent with the carried step cap, as the inline config sets it
+        self.agents, self.agent_status, self.agent_raises = None, 200, None
         self.__dict__.update(knobs)
 
     def _id(self, prefix):
@@ -136,6 +138,15 @@ class FakeHost:
             return 200, dict(version=self.version)
         if (method, path) == ('GET', '/api/model'):
             return 200, dict(data=self.models)
+        if (method, path) == ('GET', '/api/agent'):
+            if self.agent_raises is not None:
+                raise self.agent_raises
+            agents = self.agents
+            if agents is None:
+                steps = (getattr(self, 'options', None) or {}).get('steps')
+                agents = [dict(id=name, name=name, mode='primary', hidden=False, permissions=[], request={},
+                               **({} if steps is None else dict(steps=steps))) for name in launcher.BUILTIN_AGENTS]
+            return self.agent_status, dict(data=agents)
         if (method, path) == ('POST', '/api/session'):
             self.order.append('create')
             self.created = dict(body)
