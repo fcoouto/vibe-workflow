@@ -135,6 +135,17 @@ class StateFailureTests(unittest.TestCase):
         self.assertEqual(str(failure), str(error))
         self.assertIs(failure.__cause__, error)
 
+    def test_d4_busy_matches_only_the_exact_constant(self):
+        # PR #219 follow-up: text around the D4 constant may carry input, so it never surfaces as busy.
+        from runtime.state_errors import D4_BUSY, UNAVAILABLE
+        for error in (startup.StartupError(D4_BUSY + ': /Users/someone/private-input'),
+                      startup.StartupError('private-input ' + D4_BUSY), startup.StartupError(D4_BUSY + ' '),
+                      startup.RuntimeScopeError(D4_BUSY)):
+            with self.subTest(str(error)):
+                failure = self.failure(error)
+                self.assertNotIsInstance(failure, (state.StateBusy, state.StateDeadline))
+                self.assertEqual(str(failure), UNAVAILABLE)
+
     def test_other_startup_errors_never_surface_their_text(self):
         # Many StartupError messages embed input (setting keys, client names, joined blockers).
         from runtime import openrouter_settings
