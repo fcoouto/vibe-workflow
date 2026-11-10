@@ -1,6 +1,6 @@
 # Templates across the workflow
 
-- **Status:** draft, 9 November 2026. Independently reviewed (Astra/xhigh, one round: no blocking finding, priority A → B → C agreed; its three corrections and one optional point are applied). Not yet approved by the user; changes no behavior.
+- **Status:** draft, 9 November 2026. Independently reviewed (Astra/xhigh, one round: no blocking finding, priority A → B → C agreed; its three corrections and one optional point are applied). Approved by the user on 10 November 2026 and implemented for A, B and C in the same PR.
 - **Goal:** decide which recurring artifacts gain from a template in the root `templates/` folder, what that gains, and in what order to do it.
 - **Starting point:** `templates/worker-brief.md` and `templates/task-record.md` (PR #179). Their owners, `policies/03-agent-delegation.md` and `policies/07-context-and-handoff.md`, now keep the rules and link to the templates for the fields.
 

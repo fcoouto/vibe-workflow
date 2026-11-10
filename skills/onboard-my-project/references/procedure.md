@@ -31,7 +31,7 @@ Adapt pinned Toolkit templates to project facts; they authorize neither prompt e
 | Design and accessibility | Relevant interface guidance, or a reason when no interface exists. |
 | Local preparation | Actual prerequisites and first-run/check commands in the contributor guide or equivalent; invent no package manager, service or database. |
 | Quality | Accepted checks, applicable review/security procedures and known baseline limits in their existing owner. |
-| Setup and evidence | Adopted components, decisions, actual checks, pending observations and maintenance/recovery pointers in the setup record or equivalent. |
+| Setup and evidence | The [setup record](../../../templates/setup-record.md) or an equivalent. |
 
 Preserve user-owned sections, selected clients, filenames, commands and stack; replace only authorized content. Missing information or access stays unresolved, not inapplicable. Document mapping, complete component-catalog assessment and relevant-file inspection remain distinct.
 
@@ -108,10 +108,8 @@ to the generated instructions, not just the onboarding agent's loaded context:
    bounded, disposable evaluation method. A static walkthrough or fresh worker is
    not proof of a restarted client's startup delivery. Record unavailable or skipped
    observations explicitly; basic onboarding does not require a maintainer campaign.
-4. In the existing setup record, distinguish **guidance written**, **local paths and
-   preservation checked**, **client startup integration** (registration, trust,
-   handler execution and native delivery), and **agent routing observed**. Record
-   each selected case, actual evidence, limitations and next action. Report only the
+4. Record the four evidence layers separately in the existing
+   [setup record](../../../templates/setup-record.md#evidence-layers). Report only the
    layers established; hooks and package checks cannot stand in for observed routing.
 
 ## Project preference questions
