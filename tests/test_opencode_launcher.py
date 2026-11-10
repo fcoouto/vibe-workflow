@@ -31,7 +31,7 @@ STATIC_PROJECT_COMMAND = re.compile(r"""['"][^'"\n]*/command\b|\.command\(|sessi
 def route(**extra):
     value = dict(route='claude-haiku-low', status='qualified', provider=PROVIDER, model=MODEL, effort=VARIANT,
                  harness=HARNESS, billing_class='included_subscription', pool=POOL, account=ACCOUNT,
-                 demand={'5h': 10}, binding_enforceable=True)
+                 demand={'5h': 10}, binding_enforceable=True, window_unit=collector.WINDOW_UNIT)
     value.update(extra)
     return value
 
@@ -227,7 +227,9 @@ class LauncherBase(Stores):
     def assignment(self, attempt='a1', **choice):
         identity = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS, funding='subscription')
         identity.update(choice)
-        return dict(attempt_id=attempt, task='task-' + attempt, scope=SCOPE, choice=identity)
+        # The scope gateway credentials are bound to (the collector derives it from the OpenRouter report).
+        return dict(attempt_id=attempt, task='task-' + attempt, scope=routing_launch.assignment_scope(self.checkout),
+                    choice=identity)
 
     def launch(self, **options):
         options.setdefault('assignment', self.assignment())
@@ -380,7 +382,8 @@ class RefusalTests(LauncherBase):
         self.routes = [gateway()]
         self.windows['gw'] = [dict(id='credit', limit=10**12, used=0, length=None, reset_at=None, rolling=False,
                                    observed_at=self.now, organization='gw-org')]
-        report = dict(enabled=True, routes=['workers'], local_configuration='ready', revision=3)
+        report = dict(enabled=True, routes=['workers'], local_configuration='ready', revision=3,
+                      checkout=str(self.checkout), activation=dict(ref='activation:openrouter:s:r3'))
         choice = dict(provider='openrouter', model='vendor/model', effort='low', harness=gateway()['harness'],
                       funding='api')
         with mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
@@ -772,7 +775,7 @@ class InterruptTests(LauncherBase):
 
 
 class WindowUnitTests(LauncherBase):
-    """S5: every stored window carries the launcher's declared unit once the collector accepts the field."""
+    """S5: every stored window carries the launcher's declared unit, the collector's own name for it."""
 
     def rate_limited(self):
         resets = self.now + 3000
@@ -785,22 +788,26 @@ class WindowUnitTests(LauncherBase):
         for window in launcher.windows(dict(observed_ms=self.now * 1000, windows=dict(
                 five_hour=dict(utilization_fraction=0.5, resets_at_s=self.now + 10)))):
             self.assertEqual(window['unit'], launcher.WINDOW_UNIT)
-        self.assertEqual(launcher.WINDOW_UNIT, 'utilization_thousandths')
+        self.assertEqual((launcher.WINDOW_UNIT, collector.WINDOW_UNIT), ('utilization_thousandths',) * 2)
 
-    def test_a_collector_that_accepts_the_unit_stores_it(self):
-        self.rate_limited()
-        with mock.patch.object(collector, 'WINDOW_FIELDS', collector.WINDOW_FIELDS + ('unit',)):
-            result = self.launch()
-            stored = json.loads(collector.window_path(self.settings).read_text())['pools'][POOL]['5h']
-        self.assertEqual(stored['unit'], 'utilization_thousandths')
-        self.assertIs(result['window_unit_recorded'], True)
-
-    def test_until_the_collector_accepts_it_the_window_is_stored_without_and_reported(self):
+    def test_the_launcher_always_stores_the_unit_and_the_collector_admits_on_it(self):
         self.rate_limited()
         result = self.launch()
+        self.assertEqual(result['state'], 'recorded', result)
+        self.assertNotIn('window_unit_recorded', result)  # no fallback path is left
         stored = json.loads(collector.window_path(self.settings).read_text())['pools'][POOL]['5h']
-        self.assertNotIn('unit', stored)
-        self.assertIs(result['window_unit_recorded'], False)
+        self.assertEqual(stored['unit'], 'utilization_thousandths')
+        # The stored window is what the production source reads; the collector admits on it.
+        local = collector.default_source(self.settings)
+        found = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
+                                  ledger_path=self.ledger_path,
+                                  source=collector.StaticSource([route()], local.windows, ready))
+        self.assertEqual([item['route'] for item in found['observations']['routes']], ['claude-haiku-low'])
+        mismatched = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
+                                       ledger_path=self.ledger_path, source=collector.StaticSource(
+                                           [route(window_unit='percent')], local.windows, ready))
+        self.assertEqual(mismatched['observations']['excluded'],
+                         [dict(route='claude-haiku-low', reason='window_unit_mismatch')])
 
 
 class SignalTests(LauncherBase):
@@ -855,6 +862,26 @@ class SignalTests(LauncherBase):
 
 
 class ChoiceTests(unittest.TestCase):
+    def test_choice_and_catalog_entries_are_route_identity(self):
+        """C3-1b: the launcher's identities come from `routing_launch.route_identity('opencode', ...)`, with the same
+        values its former identity()/harness() helpers gave."""
+        self.assertFalse(hasattr(launcher, 'identity') or hasattr(launcher, 'harness'))
+        for provider in (PROVIDER, 'openrouter', 'openai', 'anthropic', 'other'):
+            for variant in (VARIANT, None):
+                with self.subTest(provider=provider, variant=variant):
+                    former = dict(provider=provider, model=MODEL, effort='none' if variant is None else variant,
+                                  harness=adapter.HARNESS.get(provider, 'opencode provider %s' % provider))
+                    self.assertEqual(routing_launch.route_identity('opencode', provider=provider, model=MODEL,
+                                                                   effort=variant), former)
+                    self.assertEqual(launcher.choice(provider, MODEL, variant), dict(former, funding='subscription'))
+        models = [dict(providerID=PROVIDER, id=MODEL, variants=[VARIANT, dict(id='high')]),
+                  dict(providerID='openrouter', id='vendor/model'), dict(providerID='', id='m')]
+        host = mock.Mock(request=mock.Mock(return_value=(200, dict(data=models))))
+        entries = launcher.catalog(host)  # the malformed entry is left out: it could never match an admission
+        self.assertEqual(entries, [routing_launch.route_identity('opencode', provider=PROVIDER, model=MODEL, effort=e)
+                                   for e in (VARIANT, 'high')]
+                         + [routing_launch.route_identity('opencode', provider='openrouter', model='vendor/model')])
+
     def test_choice_uses_the_shims_harness_naming(self):
         self.assertEqual(launcher.choice(PROVIDER, MODEL, VARIANT),
                          dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS, funding='subscription'))
