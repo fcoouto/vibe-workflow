@@ -10,7 +10,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from runtime import local_ownership, package_manifest, review_storage, setup_observation, startup, state
+# changes binds startup helpers at import; import it before any test patches them.
+from runtime import changes, local_ownership, package_manifest, review_storage, setup_observation, startup, state  # noqa: F401
 
 
 def expired():
@@ -48,7 +49,7 @@ class DeadlineTypeTests(unittest.TestCase):
 class AcquisitionReasonTests(unittest.TestCase):
     def test_membership_deadline_is_reported_as_a_deadline(self):
         with tempfile.TemporaryDirectory() as base:
-            result = startup._acquire_canonical_membership(Path(base), authority_path=None, budget=expired())
+            result = startup._acquire_canonical_membership(Path(base).resolve(), authority_path=None, budget=expired())
         self.assertEqual((result.status, result.reason), ('conflict', 'observation_deadline'))
 
     def test_canonical_project_deadline_is_reported_as_a_deadline(self):
@@ -73,7 +74,7 @@ class AcquisitionReasonTests(unittest.TestCase):
 class QualificationDeadlineTests(unittest.TestCase):
     def require(self, reason):
         scope = Mock(spec=startup.AcceptedScope)
-        scope.qualification = dict(reference={})
+        scope.qualification, scope.client, scope.repository_root = dict(reference={}), 'codex', Path('/nonexistent')
         acquisition = startup.CanonicalAcquisition(startup.ScopeResolution('conflict', None, reason), None)
         with patch.object(startup, 'acquire_project_entry', return_value=acquisition):
             setup_observation.require_capability(scope, ['startup-context'], task={}, operation='observe-cli-basic')
