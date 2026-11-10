@@ -271,6 +271,61 @@ class DebitClearingTests(Subscription):
         self.assertEqual(self.debits(), {KEY: debit})
         self.assertEqual(self.cleared_rows(), [])
 
+    def test_only_an_explicitly_fixed_window_clears_the_debit(self):
+        """Review S1: clearing is a release, so it fails closed: `rolling` must be exactly False. A missing key, None
+        or 0 never clears (admission's own default for a missing key is unchanged)."""
+        debit = self.abandoned()
+        later = debit['at'] + 2 * HOUR
+        good = self.window(later, debit['at'] + HOUR)
+        missing = {k: v for k, v in good.items() if k != 'rolling'}
+        for i, window in enumerate((missing, dict(good, rolling=None), dict(good, rolling=0),
+                                    dict(good, rolling=0.0), dict(good, rolling='false'))):
+            with self.subTest(rolling=window.get('rolling', 'missing')):
+                self.prepare_at('r%d' % i, later, window)
+                self.assertEqual(self.debits(), {KEY: debit})
+        self.assertEqual(self.cleared_rows(), [])
+        self.prepare_at('r-ok', later, good)
+        self.assertEqual(self.debits(), {})
+
+    def test_duplicate_window_ids_never_clear_the_debit(self):
+        """Review NIT 2: the snapshot shape check does not reject duplicate window ids, so an ambiguous window (one
+        qualifying copy and another, or two qualifying copies) reaches clearing and fails closed."""
+        debit = self.abandoned()
+        later = debit['at'] + 2 * HOUR
+        good = self.window(later, debit['at'] + HOUR)
+        same = self.window(later, debit['at'] - HOUR)
+        for i, windows in enumerate(([good, same], [same, good], [good, dict(good)])):
+            with self.subTest(case=i):
+                obs = observations(at=later, account='acct-d%d' % i)
+                obs['pools']['sub']['windows'] = windows
+                self.call(prepare('d%d' % i, observations=obs, constraints=dict(allowed_strategy_ids=['s-sub'])))
+                self.assertEqual(self.debits(), {KEY: debit})
+        self.assertEqual(self.cleared_rows(), [])
+
+    def test_the_clearing_audit_row_never_overwrites_an_event(self):
+        """Review NIT 1: the audit row's id is longer than any client `event_id` may be, it is inserted without
+        replacement, and a second clearing of the same key at the same mark gets its own row."""
+        debit = self.abandoned()
+        mark, later = debit['at'], debit['at'] + 2 * HOUR
+        before = dict(self.events())
+        self.prepare_at('b1', later, self.window(later, mark + HOUR))
+        self.call(record('b1', 'not_dispatched'))
+        added = [event_id for event_id, _ in self.events() if event_id not in before]
+        self.assertEqual(len(added), 2)  # the clearing row and b1's not_dispatched
+        cleared = [event_id for event_id, body in self.events() if body['kind'] == 'window_debit_cleared']
+        self.assertEqual(len(cleared), 1)
+        self.assertGreater(len(cleared[0]), budget.MAX_EVENT_ID)  # no client event id can take this shape
+        self.assertEqual(routing.event_error(dict(event_id=cleared[0], attempt_id='a1', kind='complete')),
+                         'invalid_request')
+        # The same key debited again at the same mark and cleared again: a distinct row, the first one kept.
+        with self.open_ledger() as ledger, ledger.transaction() as data:
+            data[sub.DEBITS] = {KEY: dict(debit)}
+        self.prepare_at('b2', later, self.window(later, mark + HOUR))
+        rows = [(event_id, body) for event_id, body in self.events() if body['kind'] == 'window_debit_cleared']
+        self.assertEqual(len(rows), 2)
+        self.assertIn(cleared[0], dict(rows))
+        self.assertEqual([body['outcome']['at'] for _, body in rows], [mark, mark])
+
     def test_a_pending_prepare_still_clears_a_qualifying_debit_once(self):
         debit = self.abandoned()
         later = debit['at'] + 2 * HOUR
