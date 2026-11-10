@@ -210,6 +210,24 @@ class ManagedPrepareTests(ManagedWorkerCase):
         with self.assertRaisesRegex(ValueError, 'already_started'):  # never sent afterwards
             self.execute(first)
 
+    def test_a_stale_run_whose_mark_fails_never_stops_another_run(self):
+        """Review NIT 2: a failing expiry mark on one stale run neither aborts an unrelated `prepare` nor makes the
+        current `execute` unresolved."""
+        from runtime import openrouter_worker_routing as state, routing
+        self.manage()
+        self.qualified()
+        self.serve(cost=0.000002)
+        stale = self.api.prepare(self.runs, self.brief())
+        current = self.api.prepare(self.runs, self.brief('pilot-2'))
+        path = stale / state.ROUTING
+        recorded = json.loads(path.read_text())
+        path.write_text(json.dumps(dict(recorded, admitted_at=recorded['admitted_at'] - routing.ADMISSION_TTL - 1)))
+        (stale / 'brief.json').unlink()  # the mark cannot be written
+        self.assertEqual(self.execute(current)['state'], 'awaiting_verification')
+        self.assertEqual(json.loads(path.read_text())['reason'], 'expiry_mark_failed')
+        self.assertEqual((state.state(stale), self.holds()), ('settled', {}))
+        self.assertTrue((self.api.prepare(self.runs, self.brief('pilot-3')) / 'brief.json').exists())
+
     def test_the_cli_prints_routings_fixed_refusal_reason(self):
         import contextlib
         import io

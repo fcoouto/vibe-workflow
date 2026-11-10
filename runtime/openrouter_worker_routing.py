@@ -28,6 +28,7 @@ PENDING, ROOT_LOCK, ROUTING = '.routing', '.routing.lock', 'routing.json'
 OPEN_STATES = ('admitted', 'dispatching', 'dispatched')
 READ_ONLY = ('read', 'glob', 'grep')
 RECONCILIATION = 'reconciliation_required'  # an `uncertain` hold: only the operator settles it
+EXPIRY_MARK_FAILED = 'expiry_mark_failed'  # its hold is closed but the run's result could not be marked
 
 
 def session_rules(permission):
@@ -189,7 +190,8 @@ def _started(run):
 def recover(root, settle_at, expired=None):
     """Under `root_lock`: settle what dead processes left. `settle_at(checkout, attempt)` closes one attempt's own hold
     and answers None once nothing of it is open, else routing's fixed reason. A run still `prepared` keeps its
-    admission until it is older than ADMISSION_TTL; then its hold is released and `expired(run)` marks the run.
+    admission until it is older than ADMISSION_TTL; then its hold is released and `expired(run)` marks the run (a
+    failing mark is recorded on that run as EXPIRY_MARK_FAILED and recovery goes on).
     A write-ahead entry or a run whose lock another process holds is alive and never touched."""
     root, now = Path(root), int(time.time())
     for path in sorted((root / PENDING).glob('*.json')) if (root / PENDING).is_dir() else []:
@@ -221,7 +223,20 @@ def recover(root, settle_at, expired=None):
             reason = settle_at(current['checkout'], current['attempt_id'])
             settled(run, reason)
             if not started and reason is None and expired is not None:
-                expired(run)  # never executed: nothing ran, so native takeover is ready
+                _mark_expired(run, expired)
+
+
+def _mark_expired(run, expired):
+    """`expired(run)` for one released run (never executed: native takeover is ready). A failure stays with that run:
+    a fixed reason in its routing file, never an exception to the caller, so other runs and the caller go on."""
+    try:
+        expired(run)
+    except Exception:  # noqa: BLE001 - the hold is already closed; a later execute of this run cannot send
+        try:
+            path = Path(run) / ROUTING
+            _save(path, dict(json.loads(path.read_text()), reason=EXPIRY_MARK_FAILED))
+        except (OSError, ValueError):
+            pass
 
 
 def response(host, session, limit):

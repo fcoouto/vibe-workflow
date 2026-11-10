@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from runtime import openrouter_worker_routing as state, routing
 
@@ -148,6 +149,41 @@ class ExpiredPreparedRuns(RecoveryCase):
         self.recover(spy)
         self.assertEqual((spy.calls, self.expired), ([], []))
         self.assertEqual([state.state(run) for run in runs], ['settled', 'uncertain', 'settled'])
+
+    def test_an_execute_that_finished_between_the_read_and_the_lock_is_left_alone(self):
+        """Review S1: recovery read `prepared`, then an `execute` took the lock, finished and released it before
+        recovery's own lock attempt. The re-read under the lock sees it started: no settlement, no expiry mark."""
+        run = self.run_folder('pilot', age=routing.ADMISSION_TTL + 1)
+        real = state._unlocked
+
+        def raced(path):
+            if path == run / 'execution.lock':
+                (run / 'result.json').write_text(json.dumps(dict(state='awaiting_verification', task_id='pilot')))
+                state.set_state(run, 'settled')
+            return real(path)
+        spy = Spy()
+        with mock.patch.object(state, '_unlocked', raced):
+            self.recover(spy)
+        self.assertEqual((spy.calls, self.expired, self.result(run)), ([], [], 'awaiting_verification'))
+
+    def test_a_failing_expiry_mark_is_recorded_on_its_run_and_recovery_continues(self):
+        """Review NIT 2: one stale run whose mark fails never stops recovery of the others or its caller."""
+        first = self.run_folder('first', age=routing.ADMISSION_TTL + 1)
+        second = self.run_folder('second', age=routing.ADMISSION_TTL + 1)
+        marked = []
+
+        def expired(run):
+            if run == first:
+                raise OSError('disk full')
+            marked.append(run)
+        spy = Spy()
+        state.recover(self.root, spy, expired=expired)  # never raises
+        self.assertEqual(len(spy.calls), 2)
+        self.assertEqual(marked, [second])
+        recorded = json.loads((first / state.ROUTING).read_text())
+        self.assertEqual((recorded['state'], recorded['reason']), ('settled', state.EXPIRY_MARK_FAILED))
+        self.assertNotIn('disk full', json.dumps(recorded))
+        self.assertEqual(self.result(first), 'prepared')  # its hold is closed: a later execute cannot send
 
     def test_admitted_records_the_admission_time(self):
         before = int(time.time())
