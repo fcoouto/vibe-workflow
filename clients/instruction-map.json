@@ -465,7 +465,7 @@
       ]
     },
     "policies/09-workflow-maintenance.md": {
-      "sha256": "54a707e45fe64352e978c86d018ea466e56d74b17bdc88ba1bf0fa40ec46d86e",
+      "sha256": "40a2b2bfa418112207f3ceafbb8552a0ea30298c94a9312ea8350254bd121909",
       "ranges": [
         [
           1,
@@ -487,7 +487,7 @@
       ]
     },
     "policies/11-tool-integrations.md": {
-      "sha256": "17b295de8e874f39f1d16e34c6a8785881b9ef69a8e7d35af25f0d48b420ef97",
+      "sha256": "653faf3000c4d92939e07012753708eda323e4004e493634d102587ec1943fdd",
       "ranges": [
         [
           1,
@@ -733,20 +733,20 @@
       ]
     },
     "skills/prepare-my-workspace/SKILL.md": {
-      "sha256": "365208105727268c954583ab45cf033ddae2a6881910fa0cd150703d6c7de536",
+      "sha256": "fe2e384ec7a6fdf03ff1030fce4739fd971f7e78ebdb37270f3b8981a0761942",
       "ranges": [
         [
           1,
-          20
+          18
         ]
       ]
     },
     "skills/prepare-my-workspace/references/procedure.md": {
-      "sha256": "5101f243642c6a84f407a73060066f064c298a33986acc82dd1e149b45f81b7a",
+      "sha256": "6f3786d272b654dd4215608b1c71b9b29ca896422bd689ca30ca8e52e713f57f",
       "ranges": [
         [
           1,
-          36
+          41
         ]
       ]
     },
