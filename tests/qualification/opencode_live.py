@@ -950,7 +950,8 @@ def main(argv=None):
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
-    run.replay_dir = Path(args.replay_dir) if args.replay_dir else run.replay_dir
+    if args.replay_dir:
+        run.replay_dir = Path(args.replay_dir)
     results = run.run()
     clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)
