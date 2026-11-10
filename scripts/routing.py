@@ -405,11 +405,12 @@ class Service:
     def _collect(self, assignment):
         """The collector's snapshot and `seen` revisions for a managed project; `seen` passes through as an opaque
         mapping. The collector reads this service's own stores, never the defaults. A missing or failing collector
-        admits nothing (`observations_unavailable`)."""
+        admits nothing (`observations_unavailable`). Under `--serve` it never starts the Codex window reader (R7)."""
         try:
             result = importlib.import_module(COLLECTOR).collect(str(self.project), assignment,
                                                                 settings_path=self.settings_path,
-                                                                ledger_path=self.ledger_path)
+                                                                ledger_path=self.ledger_path,
+                                                                refresh_windows=not self.serving)
         except Exception:  # noqa: BLE001 - missing module (before C3-1) or a collector failure
             raise Blocked('observations_unavailable') from None
         require(type(result) is dict and {'observations', 'seen'} <= set(result) and type(result['seen']) is dict,
