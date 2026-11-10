@@ -147,6 +147,7 @@ class StateFailureTests(unittest.TestCase):
         self.assertIs(failure.__cause__, interrupted)
         failure = self.failure(startup.ObservationDeadline('Canonical acquisition deadline exceeded'))
         self.assertIsInstance(failure, state.StateDeadline)
+        self.assertEqual(str(failure), 'Canonical acquisition deadline exceeded')
 
     def test_the_progress_handler_deadline_is_a_deadline(self):
         query = 'with recursive c(x) as (select 1 union all select x+1 from c) select count(*) from c'
