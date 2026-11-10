@@ -804,23 +804,6 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertNotIn(options['authority'], json.dumps(result) + self.store.read_text())
         self.assertEqual(self.holds(), {'dispatched': 1})
 
-    def settled(self, cost):
-        """Begin, dispatch and record one proposal with a self-reported `cost` (None: no usage). Returns the
-        routing `complete` answer and the hold's reservation."""
-        calls, events = self.admissions(), self.recorded()
-        request = self.begin_request('cost-%s' % cost)
-        begun = self.call('begin', request)
-        self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
-        outcome = dict(attempt_token=begun['attempt_token'], disposition='rejected')
-        if cost is not None:  # a coordinator's claim: no receipt the helper can verify
-            outcome['usage'] = dict(source='provider_receipt', requests=[dict(
-                kind='primary', model='model/v1', cost_usd_micros=cost,
-                tokens=dict(input=10, output=5, reasoning=0, cache_read=0, cache_write=0))])
-        self.assertTrue(self.call('record', outcome)['recorded'])
-        [(_, answer)] = [item for item in events if item[0]['kind'] == 'complete']
-        reserved = max(value for key, value in calls[-1][1]['reserved'].items() if key.startswith('org:'))
-        return answer, reserved
-
     def test_record_closes_the_routing_hold(self):
         self.manage()
         self.publish()
@@ -856,11 +839,7 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         settlement = answer['settlement']
         self.assertEqual((settlement['charged'], settlement['overrun'], settlement['overrun_state']),
                          (reserved, 10**9 - reserved, 'unconfirmed'))
-        service = command.Service(self.stores['settings'], self.stores['ledger'])
-        try:
-            blocked = service.handle(b'{"v":1,"op":"status"}')['ledger']['blocked_organizations']
-        finally:
-            service.close()
+        blocked = self.ledger()['blocked_organizations']
         self.assertEqual([(item['id'], sorted(item['reasons'])) for item in blocked],
                          [('fixture-openrouter', ['overrun'])])  # until the operator's one-shot resolve_overrun
         self.assertEqual(self.call('begin', self.begin_request('task-4'))['fallback'], 'ledger_reconcile_pending')
@@ -936,6 +915,45 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertEqual((dispatches, self.holds()), ([], {'admitted': 1}))  # refused before the routing dispatch
         self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))
         self.assertEqual(self.holds(), {})
+
+    def test_a_check_refusal_after_the_routing_dispatch_never_sticks_the_store(self):
+        refused = patch.object(routing, 'check', return_value=dict(state='blocked', reason='route_changed'))
+        self.assertEqual(self.unsent(refused)['fallback'], 'route_changed')
+        self.assert_recovered()
+
+    def test_an_exception_after_the_routing_dispatch_never_sticks_the_store(self):
+        writes, real = [], os.replace
+        def replace(source, target, *args, **kwargs):  # noqa: E306 - the store write after the routing dispatch fails
+            writes.append(target)
+            if Path(target) == self.store and writes.count(target) == 2:
+                raise OSError('disk full')
+            return real(source, target, *args, **kwargs)
+        self.assertEqual(self.unsent(patch.object(os, 'replace', replace)), dict(raised='ValueError'))
+        self.assert_recovered()
+
+    def test_a_kill_around_the_routing_dispatch_is_recovered(self):
+        with patch.object(self.api, '_unsent', lambda *args, **kwargs: None):  # the process dies after the dispatch
+            self.assertEqual(self.unsent(patch.object(routing, 'check', side_effect=KeyboardInterrupt)), dict(raised='KeyboardInterrupt'))
+        self.assertEqual((self.call('history')['records'][0]['routing_state'], self.holds()),
+                         ('dispatching', {'dispatched': 1}))
+        self.assertEqual(self.call('begin', self.begin_request('task-3'))['fallback'], 'ledger_reconcile_pending')
+        self.assert_recovered()
+
+    def test_a_kill_before_the_routing_dispatch_releases_the_hold_on_record(self):
+        killed = patch.object(command.Service, '_dispatch', side_effect=KeyboardInterrupt)
+        self.assertEqual(self.unsent(killed), dict(raised='KeyboardInterrupt'))
+        self.assertEqual(self.holds(), {'admitted': 1})
+        [row] = self.call('history')['records']
+        self.assertTrue(self.call('record', dict(attempt_token=row['attempt_token'], disposition='unresolved'))['recorded'])
+        self.assert_recovered('unresolved', holds={})
+
+    def test_begin_refuses_when_recovery_closed_its_own_reservation(self):
+        self.manage()
+        self.publish()
+        recover = lambda state, moment: self.api._recover(state, moment) or {}  # noqa: E731 - after a long sleep
+        self.prepared(then=lambda answer: self.api._run('begin', self.store, {}, now=221, hook=recover))
+        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'routing_reservation_lost')
+        self.assertEqual((self.holds(), self.call('history')['records']), ({}, []))
 
     def test_an_unmanaged_project_never_reaches_routing(self):
         self.publish()
