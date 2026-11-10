@@ -256,13 +256,15 @@ During phase W, two code paths open exposure in one ledger: routing admissions, 
 
 ### 4.2 Activation gate
 
-A project may be added to `managed_projects` only through the one-shot `scripts/routing.py set` with `managed_projects`. `--serve` and every in-process service, `managed_service` included, refuse it with `operator_op_not_served`, as they refuse operator ops ([3.5](#35-operator-recovery)); entries are stored as realpaths. Adding a project then passes three checks in `scripts/routing.py:Service._managed_change`, in this order, and writes nothing if any fails:
+A project may be added to `managed_projects` only through the one-shot `scripts/routing.py set` with `managed_projects`. `--serve` and every in-process service, `managed_service` included, refuse it with `operator_op_not_served`, as they refuse operator ops ([3.5](#35-operator-recovery)); entries are stored as realpaths. Adding a project passes three checks in `scripts/routing.py:Service._managed_change`, in this order, and writes nothing if any fails, then a fourth after the write:
 
-1. **Activation precondition (coordinator decision, #217).** `delegation_routing.open_unrouted_assignments(checkout)` must list nothing: no prepared, unobserved native worker or review assignment, which may hold a permit granted before the project became managed. Otherwise the answer is `open_unrouted_assignments`. The check is read-only, bounded to 64 ids, and fails closed (`scope_unavailable`, `state_unavailable`). It and the settings write are not atomic with delegation's reservation; re-checking after the write is a follow-up.
+1. **Activation precondition (coordinator decision, #217).** `delegation_routing.open_unrouted_assignments(checkout)` must list nothing: no prepared, unobserved native worker or review assignment, which may hold a permit granted before the project became managed. Otherwise the answer is `open_unrouted_assignments`. The check is read-only, bounded to 64 ids, and fails closed (`scope_unavailable`, `state_unavailable`). It resolves one scope per enrolled client that keeps runtime state (`runtime/delegation_routing.py:_enrolled_clients`, `_scopes_for`, #222); without a canonical enrolment record it falls back to `codex`. It is not atomic with delegation's reservation, so step 4 repeats it after the write.
 2. **Activation gate**, defined once in C3-0b as a fixed list of required capabilities (`scripts/routing.py:CAPABILITIES`). A capability counts only when its behavioural self-check passes; the code merely being present is not enough.
-3. **Host rule (instructions, C3-6, #221).** No code checks it: the user does not add a project whose coordinator delegates through a host with no managed launcher, today Claude Code native subagents, until [user decision 2](#71-for-the-user). [Policy 03](../../../policies/03-agent-delegation.md#managed-projects) defines it, and also what such a coordinator does in a project that is already managed.
+3. **Host rule (C3-6, #221).** Instruction-only today; a follow-up enforces it in the gate. The user does not add a project whose coordinator delegates through a host with no managed launcher, today Claude Code native subagents, until [user decision 2](#71-for-the-user). [Policy 03](../../../policies/03-agent-delegation.md#managed-projects) defines it, and also what such a coordinator does in a project that is already managed.
 
-Removal skips all three.
+4. **Re-check after the write (#222).** `Service._recheck_activation` runs `open_unrouted_assignments` again for each added project. If it finds one, a second ordered write removes only the added projects (keeping any concurrent settings change) and the command refuses with `open_unrouted_assignments` and `rolled_back: true`. The rollback retries up to `MAX_ROLLBACK = 3` times on `stale_revision`; if they run out, it refuses with `rolled_back: false`, and C3-2's pre-managed replay refusal is the backstop. This closes the inherit-mode activation race.
+
+Removal skips all four.
 
 **Self-check contract.** Each owning phase W slice adds `managed_self_check(workdir) -> list[str]` to a file it owns. It returns an empty list when the check passes, or fixed failure codes otherwise. The check:
 - runs the slice's managed path end to end against stores created in `workdir`: a temporary routing settings file, a ledger, a workflow double and a test source through the [source seam](#33-observation-collector);
@@ -290,9 +292,9 @@ A self-check that nests its own child (C3-1's `routing_launch.managed_self_check
 | API Usage | `usage_routing.managed_self_check`: every entry refuses before reading settings, and `Ledger.begin` is never reached | C3-5 |
 | Instructions | `policies/03-agent-delegation.md` contains the heading `Managed projects` (a text check) | C3-6 |
 
-If any check is missing or fails, the change is refused with `managed_path_incomplete`, with `failing` (the names) and `codes` (`{name: codes}`), and nothing is written. Removing a project is always allowed, and it is also one-shot only. C3-7 deletes the gate, the self-checks, the activation precondition and `managed_projects` together.
+If any check is missing or fails, the change is refused with `managed_path_incomplete`, with `failing` (the names) and `codes` (`{name: codes}`), and nothing is written. Removing a project is always allowed, and it is also one-shot only. C3-7 deletes the gate, the self-checks, the activation precondition and re-check, and `managed_projects` together.
 
-On `main` at `07219d2`, `scripts/routing.py:activation_gate()` answers `{route_manifest: [no_qualified_route], openrouter_workers: [self_check_missing]}`: the manifest qualifies no route until user decision 5, and C3-4b is not built. So no project can be activated yet.
+On `main` at `6fe269c` (after #222), `scripts/routing.py:activation_gate()`, run with a temporary `HOME` and only the self-checks' own sandboxes, answers `{route_manifest: [no_qualified_route], openrouter_workers: [self_check_missing]}`: the manifest qualifies no route until user decision 5, and C3-4b is not built. So no project can be activated yet.
 
 ### 4.3 Stop legacy admissions
 
@@ -568,7 +570,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
     - whether the project is managed is read **once per call** (`runtime/delegation_routing.py`, the `_MANAGED` `ContextVar`), and every hook of that call sees the same answer;
     - a replay of an assignment committed before the project became managed (its `binding.requested_model` is set and it has no routing admission) answers `legacy_route_retired` and gets no permit;
     - a project that becomes managed during an unmanaged call releases the new assignment (`managed_during_prepare`) with no permit;
-    - the [activation precondition](#42-activation-gate) refuses to add a project with an open, unrouted native assignment;
+    - the [activation precondition](#42-activation-gate) refuses to add a project with an open, unrouted native assignment, and re-checks after the write (#222);
     - `settled()` closes the routing holds named in the record, whatever the current managed state, so removing a project after `prepare` still closes its hold.
   - **Settlement.** `reconcile_assignment` closes a settled managed assignment's routing holds: `complete` if dispatched, `not_dispatched` if only admitted. An unreadable routing ledger never undoes a committed reconciliation; it is reported as `routing{state: 'unavailable'}`.
 - **Tests:**
@@ -686,7 +688,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
     C3-6 creates the `Managed projects` section that the link targets;
   - leaves the unmanaged-project text unchanged until C3-7;
   - covers C1 (Claude Code native subagents) through policy 03, as two rules decided by the coordinator (#221): an **activation rule**, under which a project whose coordinator delegates through a host with no managed launcher is not added to `managed_projects` until [user decision 2](#71-for-the-user) and keeps the unmanaged instructions; and a **hold** for such a coordinator in a project that is already managed, which spawns no worker or reviewer itself, holds the dependent delegation, including required independent review (never replaced by self-review), and reports it. So policy 03's "required independent review remains available" and policy 06 stay true;
-  - gives each non-admitted native reply exactly one action, matching `runtime/delegation_routing.py` ([policy 03](../../../policies/03-agent-delegation.md#managed-projects)). Tagging the replayed `dispatch` refusal in code, so the policy can name it, is a follow-up.
+  - gives each non-admitted native reply exactly one action, matching `runtime/delegation_routing.py` ([policy 03](../../../policies/03-agent-delegation.md#managed-projects)). The code now tags a replayed launch-check or `dispatch` refusal with `routing.reconcile_required: true` (#222); having policy 03 name that field is a follow-up.
 - **Tests:** `tests.test_prepared_instructions` and the affected instruction tests; walkthroughs for Workstreams, API Usage, OpenRouter, Council and project review, reported separately.
 - **Markers:** `test_project_review_routes_delegated_reviewers_through_the_routing_command`.
 - **Shared core:** no, but instruction changes reach many tests, so run the affected modules. **Size:** M.
@@ -773,7 +775,7 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 
 [Appendix B](#appendix-b--contract-walk) walks each one step by step.
 
-**Status at `07219d2`.** Five markers are removed, each by its own slice: C3-0b (#212), both C3-2 contracts (#217), C3-4a (#216) and C3-6 (#221). Three remain: `test_worker_prepare_obtains_one_routing_admission` (C3-4b) and the two C3-7 deletions.
+**Status at `6fe269c`.** Five markers are removed, each by its own slice: C3-0b (#212), both C3-2 contracts (#217), C3-4a (#216) and C3-6 (#221). Three remain: `test_worker_prepare_obtains_one_routing_admission` (C3-4b) and the two C3-7 deletions.
 
 ## 7. Open decisions
 
@@ -810,7 +812,7 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 ## 8. Revision history
 
 - **1.0** (`bd01a22`): first draft.
-- **1.6:** brought in line with the merged phase W slices at `07219d2`; each change is stated in the section that defines the rule:
+- **1.6:** brought in line with the merged phase W slices and #222 at `6fe269c`; each change is stated in the section that defines the rule:
   - **Header and slices (§6.3):** each merged slice is marked with its PR and "package only"; C3-1b (#220) is added; C3-4b and C3-7 are not built.
   - **Collector (§3.3, #212, #213, #220):** `collect(project, assignment, *, settings_path, ledger_path, source=None)` with required store paths and never the defaults; the manifest is an object `{version: 1, window_unit, routes}`; `WINDOW_UNIT = 'utilization_thousandths'` with `unit` on stored windows; endpoint uniqueness for qualified routes; `route_identity` names the OpenCode hosts' harness exactly as the shim's `harnessFor`, which fixes v1.5.1's `opencode` harness for `openrouter_worker`; the gateway credential comes from the cached status report; missing telemetry is `window_unobserved`; `seen` is also echoed on a workflow-binding `blocked`.
   - **C3-0b (§1, §4.2, #212):** `managed_project(path, settings_path=None)` by file identity, with unreadable settings counting as managed; the gate's process-group kill.
@@ -819,7 +821,8 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
   - **C3-4a (§6.3, #216):** without a verified provider receipt the full reservation is charged (a receipt re-read is a post-release follow-up); write-ahead attempt and dispatch state; the dollar preflight at dispatch.
   - **C3-5 (§2, §4.3, §6.3, #214):** the managed API Usage send path moves to a post-release follow-up, so managed projects have no API Usage route in phase W; the procedure, not `enable`, sets `api_usage_enabled`.
   - **C3-3 (§5.3, §6.3, #218):** the allowlisted environment, the inline config, interrupt handling; its live probes are pre-canary requirements.
-  - **C3-6 (§4.2, §6.3, §7.1, #221):** the Claude Code activation rule and the hold in an already-managed project; decision 2 also decides Claude Code projects.
+  - **C3-6 (§4.2, §6.3, §7.1, #221):** the Claude Code activation rule (instruction-only) and the hold in an already-managed project; decision 2 also decides Claude Code projects.
+  - **Review follow-ups (§4.2, §6.3 C3-6, #222):** the post-write activation re-check with rollback; the real scope resolver; the replayed-refusal tag `routing.reconcile_required`.
   - **Rollback (§5.1, #211):** `scripts/routing_table.py rollback` swaps the previous table into place.
   - **Startup errors (§3.3, §5.2, #219):** deadline and busy reasons are distinct, and still fail closed.
   - **Markers (§6.4):** five removed, three remaining.
