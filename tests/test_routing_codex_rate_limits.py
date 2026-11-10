@@ -325,11 +325,12 @@ class RefreshTests(Sandbox):
         self.assertEqual(self.refresh('exit_at_once'), dict(state='failed', reason='codex_exited'))
         self.assertEqual(self.refresh(), dict(state='backoff', reason='codex_exited'))
         self.assertEqual(self.spawns(), 1)
-        later = time.time() + reader.FAILURE_BACKOFF + 1
-        with mock.patch.object(reader.time, 'time', return_value=later):
-            self.assertEqual(self.refresh()['state'], 'stored')
+        folder = collector.window_path(self.settings).parent
+        reader._record(folder, dict(at=int(time.time()) - reader.FAILURE_BACKOFF, reason='codex_exited'))
+        self.assertEqual(self.refresh()['state'], 'stored')  # the backoff has passed
         self.assertEqual(self.spawns(), 2)
-        self.assertEqual(self.refresh(force=True)['state'], 'fresh')  # a success clears the backoff
+        self.assertIsNone(reader._state(collector.window_path(self.settings).parent))  # a success clears it
+        self.assertEqual(self.refresh()['state'], 'fresh')
 
     def test_an_operator_read_ignores_the_backoff_but_not_the_lock(self):
         self.refresh('exit_at_once')
@@ -375,7 +376,13 @@ class CommandTests(Sandbox):
     def test_the_one_shot_command_prints_windows_and_timing_only(self):
         from scripts import codex_rate_limits as script
         output = []
-        with mock.patch.object(script.reader, 'refresh', wraps=lambda *a, **k: self.refresh(force=True)), \
+        original = reader.refresh
+
+        def refresh(settings, **options):
+            self.assertEqual((settings, options['force']), (self.settings, True))
+            return original(settings, force=True, command=self.command(), environ=self.environ,
+                            manifest=self.manifest, timing=options['timing'])
+        with mock.patch.object(script.reader, 'refresh', side_effect=refresh), \
                 mock.patch('builtins.print', side_effect=lambda text: output.append(text)):
             code = script.main(['--settings', str(self.settings)])
         self.assertEqual(code, 0)
