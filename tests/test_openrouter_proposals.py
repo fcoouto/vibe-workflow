@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 from runtime import openrouter_settings as settings, routing, routing_observations
 from scripts import routing as command
-from tests.openrouter_fixtures import enroll, configure, fixture_command, managed_gateway
+from tests.openrouter_fixtures import ManagedRouting, enroll, configure, fixture_command
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/openrouter_proposals.py'
 PROFILE = dict(family='coding', language='Python', framework=None, difficulty='small', scope='one file', verification='unit tests')
@@ -652,24 +652,7 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         self.assertEqual(os.stat(self.store).st_mode & 0o777, 0o600)
 
 
-class _Funding:
-    """A source double over the fixture's: `organization` renames the dollar windows' organization and `extra`
-    routes come first in the manifest (so they shape a shared pool)."""
-    def __init__(self, source, organization=None, extra=()):
-        self.source, self.organization, self.extra = source, organization, list(extra)
-
-    def manifest(self):
-        return self.extra + self.source.manifest()
-
-    def windows(self, pool, now):
-        return [dict(window, organization=self.organization) if self.organization and window.get('organization')
-                else window for window in self.source.windows(pool, now)]
-
-    def credential(self, route, scope):
-        return self.source.credential(route, scope)
-
-
-class ManagedProposalTests(ProposalCase):
+class ManagedProposalTests(ManagedRouting, ProposalCase):
     """C3-4a (C.3 design 3.3, 6.3): in a managed project `begin` is one routing admission on the `gateway` route,
     prepared before the OpenRouter admission lock; `dispatch` checks it in process; `record` closes it."""
 
@@ -677,43 +660,6 @@ class ManagedProposalTests(ProposalCase):
         super().setUp()
         folder = Path(self.tmp.name).resolve() / 'routing-defaults'
         self.enterContext(patch.object(command, 'default_settings', lambda: folder / 'settings.json'))
-
-    def manage(self, *endpoints):
-        self.stores = self.enterContext(managed_gateway(self, self.repo, *(endpoints or [('model/v1', 'p')])))
-
-    def holds(self):
-        service = command.Service(self.stores['settings'], self.stores['ledger'])
-        try:
-            return service.handle(b'{"v":1,"op":"status"}')['ledger']['holds']
-        finally:
-            service.close()
-
-    def admissions(self):
-        calls, real = [], routing.admit
-
-        def admit(assignment, *args, **kwargs):
-            result = real(assignment, *args, **kwargs)
-            calls.append((assignment, result))
-            return result
-        self.enterContext(patch.object(routing, 'admit', admit))
-        return calls
-
-    def prepared(self, then=None):
-        bodies, real = [], command.Service._prepare
-
-        def prepare(service, body):
-            bodies.append(copy.deepcopy(body))
-            answer = real(service, body)
-            if then is not None:
-                then(answer)
-            return answer
-        self.enterContext(patch.object(command.Service, '_prepare', prepare))
-        return bodies
-
-    def source(self, **options):
-        original = routing_observations.default_source
-        self.enterContext(patch.object(routing_observations, 'default_source',
-                                       lambda *args, **kwargs: _Funding(original(*args, **kwargs), **options)))
 
     def test_begin_prepares_through_routing_before_the_openrouter_admission(self):
         self.manage()
@@ -858,34 +804,137 @@ class ManagedProposalTests(ProposalCase):
         self.assertNotIn(options['authority'], json.dumps(result) + self.store.read_text())
         self.assertEqual(self.holds(), {'dispatched': 1})
 
+    def settled(self, cost):
+        """Begin, dispatch and record one proposal with a self-reported `cost` (None: no usage). Returns the
+        routing `complete` answer and the hold's reservation."""
+        calls, events = self.admissions(), self.recorded()
+        request = self.begin_request('cost-%s' % cost)
+        begun = self.call('begin', request)
+        self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
+        outcome = dict(attempt_token=begun['attempt_token'], disposition='rejected')
+        if cost is not None:  # a coordinator's claim: no receipt the helper can verify
+            outcome['usage'] = dict(source='provider_receipt', requests=[dict(
+                kind='primary', model='model/v1', cost_usd_micros=cost,
+                tokens=dict(input=10, output=5, reasoning=0, cache_read=0, cache_write=0))])
+        self.assertTrue(self.call('record', outcome)['recorded'])
+        [(_, answer)] = [item for item in events if item[0]['kind'] == 'complete']
+        reserved = max(value for key, value in calls[-1][1]['reserved'].items() if key.startswith('org:'))
+        return answer, reserved
+
     def test_record_closes_the_routing_hold(self):
         self.manage()
         self.publish()
         begun = self.call('begin', self.begin_request())
         self.assertTrue(self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))['recorded'])
-        self.assertEqual(self.holds(), {})
-        for task, usage, expected in (('task-2', 1200, {}), ('task-3', None, {'cost_unknown': 1})):
-            request = self.begin_request(task)
-            begun = self.call('begin', request)
-            self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
-            outcome = dict(attempt_token=begun['attempt_token'], disposition='rejected')
-            if usage is not None:
-                outcome['usage'] = dict(source='provider_receipt', requests=[dict(
-                    kind='primary', model='model/v1', cost_usd_micros=usage,
-                    tokens=dict(input=10, output=5, reasoning=0, cache_read=0, cache_write=0))])
-            self.assertTrue(self.call('record', outcome)['recorded'])
-            self.assertEqual(self.holds(), expected)
+        self.assertEqual(self.holds(), {})  # never dispatched: not_dispatched releases it
         self.assertNotIn('usage', json.dumps(self.call('history')['records']))
+
+    def test_a_self_reported_cost_is_charged_the_full_reservation(self):
+        self.manage()
+        self.publish()
+        answer, reserved = self.settled(1)
+        self.assertEqual(answer['outcome'], 'complete')
+        settlement = answer['settlement']
+        self.assertEqual((settlement['charged'], settlement['released'], settlement['overrun']), (reserved, 0, 0))
+        self.assertEqual(settlement['cost_source'], 'estimate')  # never recorded as a provider receipt
+        self.assertEqual(self.holds(), {})
+
+    def test_missing_usage_leaves_the_cost_unknown(self):
+        self.manage()
+        self.publish()
+        answer, _ = self.settled(None)
+        self.assertEqual(answer['outcome'], 'cost_unknown')
+        self.assertEqual(self.holds(), {'cost_unknown': 1})
         # An unknown dollar cost keeps its exposure and stops new dollar launches until the operator resolves it.
         self.assertEqual(self.call('begin', self.begin_request('task-4'))['fallback'], 'ledger_reconcile_pending')
 
-    def test_a_store_refusal_after_admission_closes_the_hold(self):
+    def test_a_reported_cost_above_the_reservation_is_an_unconfirmed_overrun(self):
+        self.manage()
+        self.publish()
+        answer, reserved = self.settled(10**9)
+        self.assertEqual(answer['outcome'], 'overrun')
+        settlement = answer['settlement']
+        self.assertEqual((settlement['charged'], settlement['overrun'], settlement['overrun_state']),
+                         (reserved, 10**9 - reserved, 'unconfirmed'))
+        service = command.Service(self.stores['settings'], self.stores['ledger'])
+        try:
+            blocked = service.handle(b'{"v":1,"op":"status"}')['ledger']['blocked_organizations']
+        finally:
+            service.close()
+        self.assertEqual([(item['id'], sorted(item['reasons'])) for item in blocked],
+                         [('fixture-openrouter', ['overrun'])])  # until the operator's one-shot resolve_overrun
+        self.assertEqual(self.call('begin', self.begin_request('task-4'))['fallback'], 'ledger_reconcile_pending')
+
+    def test_local_refusals_are_checked_before_routing(self):
         self.manage()
         self.publish()
         calls = self.admissions()
         self.assertEqual(self.call('begin', dict(self.begin_request(), snapshot_digest='old'))['fallback'],
                          'stale_discovery')
-        self.assertEqual(len(calls), 1)
+        begun = self.call('begin', self.begin_request())
+        self.assertEqual(self.call('begin', self.begin_request('task-2'))['fallback'], 'pending_attempt')
+        self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))
+        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'task_already_attempted')
+        self.assertEqual(len(calls), 1)  # only the one begin that passed every local check reached routing
+        self.assertEqual(self.holds(), {})
+
+    def test_a_crash_after_prepare_leaves_a_pending_attempt_that_recovery_closes(self):
+        self.manage()
+        self.publish()
+        events = self.recorded()
+        with patch.object(self.api, '_release', lambda *args, **kwargs: None), \
+                patch.object(settings, 'admission', side_effect=KeyboardInterrupt):  # the process dies here
+            with self.assertRaises(KeyboardInterrupt):
+                self.call('begin', self.begin_request())
+        [pending] = json.loads(self.store.read_text())['routing_pending']
+        self.assertEqual(self.holds(), {'admitted': 1})
+        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'pending_attempt')  # within the lease
+        begun = self.call('begin', self.begin_request(), now=100 + self.api.LEASE + 1)
+        self.assertIn('attempt_token', begun)
+        self.assertIn((pending['attempt_id'], 'not_dispatched'),
+                      [(event['attempt_id'], event['kind']) for event, _ in events])
+        self.assertNotIn('routing_pending', json.loads(self.store.read_text()))
+        self.assertEqual(self.holds(), {'admitted': 1})  # the new attempt's hold only
+
+    def test_dispatch_reruns_the_dollar_preflight_and_closes_the_hold(self):
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        real = command.Service._status
+
+        def status(service, body):
+            answer = real(service, body)
+            answer['ledger']['reconcile_hint'] = 'reconcile_uncertain'
+            return answer
+        with patch.object(command.Service, '_status', status):
+            refused = self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))
+        self.assertEqual(refused['fallback'], 'ledger_reconcile_pending')
+        self.assertNotIn('packet', refused)
+        self.assertEqual(self.holds(), {})
+        self.assertNotIn('dispatched_at', self.call('history')['records'][0])
+
+    def test_a_failure_after_the_routing_dispatch_keeps_the_exposure(self):
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        dispatch = dict(request, attempt_token=begun['attempt_token'])
+        with patch.object(routing, 'check', return_value=dict(state='blocked', reason='route_changed')):
+            self.assertEqual(self.call('dispatch', dispatch)['fallback'], 'route_changed')
+        self.assertEqual(self.holds(), {'cost_unknown': 1})  # nothing was sent, but dispatch is never undone
+
+    def test_a_store_capacity_failure_never_strands_a_dispatched_hold(self):
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        dispatches = []
+        real = command.Service._dispatch
+        with patch.object(self.api, 'MAX_STATE', len(self.store.read_bytes()) + 4), \
+                patch.object(command.Service, '_dispatch', lambda service, body: dispatches.append(body) or
+                             real(service, body)):
+            self.assertEqual(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['fallback'],
+                             'capacity')
+        self.assertEqual((dispatches, self.holds()), ([], {'admitted': 1}))  # refused before the routing dispatch
+        self.call('record', dict(attempt_token=begun['attempt_token'], disposition='unresolved'))
         self.assertEqual(self.holds(), {})
 
     def test_an_unmanaged_project_never_reaches_routing(self):
@@ -923,7 +972,9 @@ class ManagedProposalTests(ProposalCase):
                                       capture_output=True, text=True, timeout=30)
                 self.assertNotEqual(done.returncode, 0)
                 self.assertEqual(json.loads(done.stdout), dict(codes=['self_check_workdir_unsafe']))
-        self.assertFalse((self.repo / 'inside-repository').exists())
+                self.assertEqual(self.api.managed_self_check(unsafe), ['self_check_workdir_unsafe'])
+        self.assertFalse((self.repo / 'inside-repository').exists())  # the parent creates nothing either
+        self.assertEqual(sorted(path.name for path in crowded.iterdir()), ['file'])
 
 
 if __name__ == '__main__':

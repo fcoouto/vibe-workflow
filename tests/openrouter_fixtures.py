@@ -1,11 +1,13 @@
 """Real disposable canonical births with explicit software-only qualification."""
 from contextlib import contextmanager
+import copy
 import json
 from pathlib import Path
 import sys
 from unittest.mock import patch
 
-from runtime import changes, review_storage, startup
+from runtime import changes, review_storage, routing, routing_observations, startup
+from scripts import routing as command
 from tests.fixture_canonical_birth import fresh_canonical
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -82,3 +84,72 @@ def managed_gateway(testcase, repo, *endpoints):
     routes = [fixture_route('openrouter:%s@%s' % pair, 'gateway') for pair in endpoints]
     with managed_project_fixture(testcase, repo, routes=routes) as stores:
         yield stores
+
+
+class Funding:
+    """A source double over the fixture's: `organization` renames the dollar windows' organization and `extra`
+    routes come first in the manifest (so they shape a shared pool)."""
+    def __init__(self, source, organization=None, extra=()):
+        self.source, self.organization, self.extra = source, organization, list(extra)
+
+    def manifest(self):
+        return self.extra + self.source.manifest()
+
+    def windows(self, pool, now):
+        return [dict(window, organization=self.organization) if self.organization and window.get('organization')
+                else window for window in self.source.windows(pool, now)]
+
+    def credential(self, route, scope):
+        return self.source.credential(route, scope)
+
+
+class ManagedRouting:
+    """Spies and stores for managed-project tests; the class also needs `self.repo` and `enterContext`."""
+
+    def manage(self, *endpoints):
+        self.stores = self.enterContext(managed_gateway(self, self.repo, *(endpoints or [('model/v1', 'p')])))
+
+    def holds(self):
+        service = command.Service(self.stores['settings'], self.stores['ledger'])
+        try:
+            return service.handle(b'{"v":1,"op":"status"}')['ledger']['holds']
+        finally:
+            service.close()
+
+    def admissions(self):
+        calls, real = [], routing.admit
+
+        def admit(assignment, *args, **kwargs):
+            result = real(assignment, *args, **kwargs)
+            calls.append((assignment, result))
+            return result
+        self.enterContext(patch.object(routing, 'admit', admit))
+        return calls
+
+    def recorded(self):
+        """Every routing lifecycle event as (event, answer)."""
+        events, real = [], routing.record_event
+
+        def record(ledger, event, now):
+            answer = real(ledger, event, now)
+            events.append((event, answer))
+            return answer
+        self.enterContext(patch.object(routing, 'record_event', record))
+        return events
+
+    def prepared(self, then=None):
+        bodies, real = [], command.Service._prepare
+
+        def prepare(service, body):
+            bodies.append(copy.deepcopy(body))
+            answer = real(service, body)
+            if then is not None:
+                then(answer)
+            return answer
+        self.enterContext(patch.object(command.Service, '_prepare', prepare))
+        return bodies
+
+    def source(self, **options):
+        original = routing_observations.default_source
+        self.enterContext(patch.object(routing_observations, 'default_source',
+                                       lambda *args, **kwargs: Funding(original(*args, **kwargs), **options)))
