@@ -1,5 +1,15 @@
 # Release notes
 
+## 0.1.36
+
+- **Workstreams uses native children only.** Delegated workers and reviewers run as native child sessions that one coordinator starts; a chat you ask for is an independent conversation. Only the coordinator's thread gets a managed title, `￻<meter> [STATUS · ]<topic>`: the `[W…]` family code, `P`/`C` roles and the shared family register are retired, and children get no managed title. `workstream_context_id` is rejected; children are named `worker_<attempt>` or `review_<attempt>`. Earlier titles and saved title records are left as they are and no longer synced.
+- **Smart Routing managed projects (phase W).** A checkout the user explicitly adds to `managed_projects` has native workers, reviewers, OpenRouter proposals and OpenRouter workers selected through `scripts/routing.py prepare`, with an OpenCode launcher and a code-enforced activation rule (Codex or OpenCode coordinators; refusals `advisory_host_unmanaged`, `not_enrolled`, `enrolment_unavailable`). API Usage refuses managed projects before spending. Projects not listed behave as before. Routing is still not cut over.
+- **Strategy-table rollback.** `scripts/routing_table.py` keeps the previous verified table on refresh and `rollback` swaps the two.
+- **Workspace readiness (R5).** Codex and Claude Code startup write a small private hook-delivery note that `workspace status` uses to report hooks; enrolled startup adds one line when the last readiness record shows missing items; `validate.py --release` fails when a released version's shipped content changed.
+- **Graphify refresh after merges** for projects that enabled Graphify: code-only extraction with no model calls, reported separately from the merge.
+- **Startup diagnostics.** A startup deadline is reported as `observation_deadline` instead of a generic observation failure; development worktrees are no longer fingerprinted.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.35
 
 - **Escalation ladder.** A stuck repair escalates to a more capable worker, through a stronger model or higher reasoning effort, up to five levels within existing limits. The agent asks the user when escalation cannot continue or does not converge, with the attempts, remaining options, a recommendation and the decision needed.
