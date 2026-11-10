@@ -174,6 +174,24 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertEqual(self.holds(), {})  # never dispatched: not_dispatched releases it
         self.assertNotIn('usage', json.dumps(self.call('history')['records']))
 
+    def test_record_passes_routings_fixed_refusal_reason_through(self):
+        """PR #216 follow-up: a refused settlement answers routing's own reason, never a generic one."""
+        self.manage()
+        request = self.scoped_request()
+        begun = self.call('begin', request)
+        self.assertTrue(self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))['dispatched'])
+        outcome = dict(attempt_token=begun['attempt_token'], disposition='unresolved')
+        for reason in ('ledger_busy', 'invalid_request'):
+            with self.subTest(reason=reason), \
+                    patch.object(command.Service, '_record', return_value=dict(state='blocked', reason=reason)):
+                self.assertEqual(self.call('record', outcome)['fallback'], reason)
+        [row] = self.call('history')['records']
+        uncertain = self.ledger(dict(v=1, op='record', event=dict(event_id='uncertain:x', kind='uncertain',
+                                                                  attempt_id=row['routing']['attempt_id'])))
+        self.assertEqual(uncertain['state'], 'recorded', uncertain)
+        self.assertEqual(self.call('record', outcome)['fallback'], 'reconciliation_required')
+        self.assertNotIn('outcome', self.call('history')['records'][0])  # nothing stored while routing refuses
+
     def test_a_self_reported_cost_is_charged_the_full_reservation(self):
         self.manage()
         self.publish()
