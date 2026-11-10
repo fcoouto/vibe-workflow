@@ -85,7 +85,7 @@ Acceptance:
 1. **Requirement preservation.** Every removed field appears in a template, and every rule stays in its owner. The PR shows this as a table for review.
 2. **Links.** Every owner links its template at the point of use, and all links resolve.
 3. **Size.** Words removed from owners and added in templates are reported.
-4. **Checks.** `validate.py`, affected modules, `--fast` and independent review all pass.
+4. **Checks.** `validate.py`, tests selected under the [development guide](../../development.md#checks) and independent review all pass.
 5. **Harness cases.** Read-only review with the new template runs in a native Codex or Claude Code session, with its report inspected as above, or is recorded as not run. The static walkthroughs listed under "Harness improvement" are recorded with their results.
 
 ## Out of scope
