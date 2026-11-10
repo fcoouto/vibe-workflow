@@ -41,8 +41,9 @@ def _git(root, *args, deadline):
     Output is capped at MAX_LISTING and bounded in time by deadline; it is not charged to a caller's entry budget.
     """
     unavailable = PackageManifestError("Package membership is unavailable")
+    expired = PackageManifestError("Package membership deadline exceeded")
     if deadline - time.monotonic() <= 0:
-        raise PackageManifestError("Package membership deadline exceeded")
+        raise expired
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update(GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", GIT_CEILING_DIRECTORIES=str(root.parent))
     try:
@@ -57,7 +58,7 @@ def _git(root, *args, deadline):
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not selector.select(remaining):
-                    raise unavailable
+                    raise expired
                 chunk = os.read(process.stdout.fileno(), 65536)
                 if not chunk:
                     break
@@ -65,6 +66,8 @@ def _git(root, *args, deadline):
                 if len(output) > MAX_LISTING:
                     raise unavailable
         process.wait(max(0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired as error:
+        raise expired from error
     except (OSError, subprocess.SubprocessError):
         raise unavailable from None
     finally:

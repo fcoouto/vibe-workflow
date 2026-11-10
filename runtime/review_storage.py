@@ -12,7 +12,7 @@ import subprocess
 import time
 import uuid
 
-from runtime import evidence, state
+from runtime import evidence, startup, state
 from runtime.screening import screening_status, reserve_screening, settle_screening
 from runtime.startup import (PROJECT_FILE, checkout, json_object, read_git, _canonical_freeze,
                              _canonical_plain, _acquire_canonical_membership, _check_observation_deadline)
@@ -43,9 +43,9 @@ class _HistoryConflict(state.StateError):
 
 
 def _budget(deadline=None):
-    now = time.monotonic()
     _require(deadline is None or type(deadline) in (int, float) and math.isfinite(deadline))
-    result = dict(paths=0, bytes=0, deadline=min(deadline, now + 4) if deadline is not None else now + 4)
+    cap = time.monotonic() + startup.OBSERVATION_SECONDS
+    result = dict(paths=0, bytes=0, deadline=min(deadline, cap) if deadline is not None else cap)
     _check_observation_deadline(result)
     return result
 
@@ -125,7 +125,7 @@ def _machine_guard(*, create=False, deadline=None):
     try:
         info = os.fstat(descriptor)
         _require(dict(device=info.st_dev, inode=info.st_ino) == parents[str(path.parent)])
-        deadline = min(deadline, time.monotonic() + 5) if deadline is not None else time.monotonic() + 5
+        deadline = min(math.inf if deadline is None else deadline, time.monotonic() + startup.OBSERVATION_SECONDS + 1)
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
