@@ -6,7 +6,9 @@ Usage:
   routing.py --serve [--settings PATH] [--ledger PATH] [--table PATH] [--project PATH] [--test-inputs]
 
 `<op>` reads one request on stdin; `--serve` reads one request per line. `--project` pins the checkout a
-`prepare` workflow locator may name (S3.5).
+`prepare` workflow locator may name (S3.5); a workflow-bound `prepare` without it is `project_required`. For a
+managed project the service builds `prepare`'s observations itself, and `set managed_projects` is one-shot only,
+behind the activation gate (C.3 design 3.3, 4.2: docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md).
 
 The request and response contract, reason codes, clock, busy-wait and test-switch rules are defined once in
 the implementation plan, Task S3.1 (docs/superpowers/plans/2026-11-08-smart-routing.md#task-s31-single-routing-command).
