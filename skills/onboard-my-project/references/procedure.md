@@ -162,8 +162,10 @@ affected choice as inapplicable or pending, respectively.
    --no-cluster`: no model call, no Git hook. The Graphify command and client
    skill are required workspace items already handled in step 0; this question
    covers only the project's graph, and a still-missing item blocks only that
-   setup. The graph excludes documents and goes stale until regenerated. Skip the
-   question when the project has no code.
+   setup. Record the project's Graphify choice in the setup record. Enabled
+   projects run [post-merge maintenance](../../../clients/graphify-maintenance.md)
+   automatically during merges and synchronization; the graph excludes documents
+   and uncommitted task-worktree edits. Skip the question when the project has no code.
    - Yes, set it up now. (default, recommended)
    - Not now.
 5. **Connect `<project_name>` to a long-term memory vault?**

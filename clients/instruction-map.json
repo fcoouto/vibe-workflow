@@ -166,6 +166,15 @@
         ]
       ]
     },
+    "clients/graphify-maintenance.md": {
+      "sha256": "df701737d3cae95272305a6c5009bbbc161ec6925535ae0da8caf6ff69b1b0aa",
+      "ranges": [
+        [
+          1,
+          61
+        ]
+      ]
+    },
     "clients/guidance-publication.md": {
       "sha256": "fca1a4ff678be7c77ecb596d704c245fee965a885e48ee4588663f36c2918478",
       "ranges": [
@@ -376,7 +385,7 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "06d55e5873540e67c7cf683a92ef9e566d39d9cc75b560894cce9b4730576db3",
+      "sha256": "91560e39a37dd44604aaea8342317c17791a2f1f11d100c87c78972a4b13a824",
       "ranges": [
         [
           1,
@@ -460,11 +469,11 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "392652b94da94c6d237b831d7392a8fc06612da4336691718aa3929a30797b4d",
+      "sha256": "fe74e9967b3ca00b0df4e90ac682f377272c9ad55450909ac23ce54fc1c4b08c",
       "ranges": [
         [
           1,
-          49
+          55
         ]
       ]
     },
@@ -650,7 +659,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "a83b888f11f090adedcf69e69127398b66b89b1b83b1090b76799f53ba4703bf",
+      "sha256": "71e1b97982afd91272a632818b0229a1ad76fc615fb3bfe00fb9c7ede6755e87",
       "ranges": [
         [
           1,
@@ -662,7 +671,7 @@
         ],
         [
           136,
-          206
+          208
         ]
       ]
     },

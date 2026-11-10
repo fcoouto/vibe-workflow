@@ -1,5 +1,13 @@
 # Policy source map
 
+## Graphify post-merge maintenance — 10 November 2026
+
+| Requirement | Owner and source |
+| --- | --- |
+| **Local addition:** agents refresh only Graphify-enabled projects during post-merge maintenance and synchronization of external merges, without another user request | User's explicit approval on 10 November 2026; [design](superpowers/specs/2026-11-10-graphify-post-merge-design.md). [Merge Readiness](../policies/08-merge-readiness.md#perform-and-confirm) owns the trigger; [Graphify maintenance](../clients/graphify-maintenance.md) owns enablement, safe primary-checkout synchronization, extraction, verification and failure reporting. Onboarding records the selection and links the procedure. |
+| Reuse local code-only extraction, exclusions and no-clustering mode; no project Git hooks, watcher or model calls | Existing Toolkit-derived onboarding setup retained from revision `7ef68dd7b00ddfc5cd464458855e4ab66dd2128f`; Graphify 0.9.104 CLI and installed source inspected 10 November 2026. `GRAPHIFY_NO_AUTO_REFRESH` in `graphify/__main__.py` suppresses installed skill/plugin updates, not graph rebuilding. `graphify/hooks.py` skips linked worktrees; no hook is added. |
+| Preserve dirty/concurrent work; fast-forward only; verify the synchronized commit and graph; distinguish merge success from incomplete maintenance | Approved design and existing Project Scope, Task Planning, Context/Handoff and Merge Readiness contracts. The addition is an instruction-driven agent procedure, not a qualified runtime executor or an unattended remote-merge listener. |
+
 ## Workspace preparation: requirements list and local deviations — 10 November 2026
 
 `prepare-my-workspace` no longer executes the Toolkit's [environment prompt](https://github.com/soumatheusgomes/vibe-coding-toolkit/blob/7ef68dd7b00ddfc5cd464458855e4ab66dd2128f/docs/03-environment-setup.md). It reads [workspace-requirements.json](../clients/workspace-requirements.json), written from Toolkit revision `7ef68dd7b00ddfc5cd464458855e4ab66dd2128f` (its `toolkit_revision`). The Toolkit stays the authoring authority; [workflow maintenance](../policies/09-workflow-maintenance.md) reviews the list when the Toolkit's mandatory list changes. No code, model call or live run is part of this change.
