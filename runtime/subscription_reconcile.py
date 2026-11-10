@@ -8,6 +8,7 @@ a `prepare` snapshot shows a fixed window that began after the abandon (`_qualif
 """
 import hashlib
 import json
+import secrets
 
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, WIN, BudgetError, Ledger, require
@@ -124,9 +125,10 @@ def held(data):
 def _qualifies(window, entry, now):
     """True only for an observation of a FIXED window that is fresh, known, current and began at least
     CLOCK_MARGIN after the abandon mark: the abandoned request's units cannot be in it. Rolling windows, an unknown
-    reset or length, and a window that has not begun or has already reset never qualify."""
+    reset or length, and a window that has not begun or has already reset never qualify. Clearing is a release, so
+    `rolling` must be exactly False: a missing key, None or 0 never qualifies (admission's own default is unchanged)."""
     numbers = all(type(window.get(field)) in (int, float) for field in ('reset_at', 'length', 'used'))
-    if not numbers or window.get('rolling', False) is not False or window.get('fresh') is not True:
+    if not numbers or window.get('rolling') is not False or window.get('fresh') is not True:
         return False
     start = window['reset_at'] - window['length']
     return window['length'] > 0 and window['reset_at'] > now and entry['at'] + CLOCK_MARGIN <= start <= now
@@ -145,6 +147,7 @@ def clear_debits(ledger, data, observations):
         windows = (observations['pools'].get(pool) or {}).get('windows') or []
         found = [window for window in windows if window.get('id') == window_id]
         entry = debits[key]
+        # The snapshot shape check allows duplicate window ids; an ambiguous window never clears (fail closed).
         if len(found) != 1 or not _qualifies(found[0], entry, now):
             continue
         del debits[key]
@@ -153,8 +156,16 @@ def clear_debits(ledger, data, observations):
         body = dict(attempt_id='debit:' + tag, kind=CLEARED, recorded_at=now, outcome=dict(
             state='cleared', key=key, units=entry['units'], at=entry['at'],
             window_start=found[0]['reset_at'] - found[0]['length']))
-        digest = hashlib.sha256(usage_budget._compact(body).encode()).hexdigest()
-        ledger._store_event(data, '%s:%s:%d' % (CLEARED, tag, entry['at']), digest, body, now, effect=False)
+        raw = usage_budget._compact(body)
+        # Reserved id: longer than any client `event_id` (MAX_EVENT_ID) and unique per clearing, inserted without
+        # replacement, so it can never overwrite a client event or an earlier audit row. Not pruned here: a clearing
+        # follows one abandon's event, and the next `_store_event` trims the table back to MAX_EVENTS.
+        event_id = '%s:%s:%d:%s' % (CLEARED, hashlib.sha256(key.encode()).hexdigest(), entry['at'],
+                                    secrets.token_hex(32))
+        require(len(event_id) > usage_budget.MAX_EVENT_ID and len(raw) <= usage_budget.MAX_EVENT_BYTES,
+                'record_too_large')
+        ledger.db.execute('INSERT INTO events VALUES (?, ?, ?, ?, ?, ?)', (
+            event_id, hashlib.sha256(raw.encode()).hexdigest(), now, body['attempt_id'], 0, raw))
     if not debits:
         del data[DEBITS]
     return data
