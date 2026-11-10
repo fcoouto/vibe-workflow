@@ -5,6 +5,9 @@ one; the seed is fresh for the usual 900 s, `status` shows it as `source: operat
 observation replaces it, never the other way round. No model, network or host call is made.
 """
 import io
+from pathlib import Path
+import subprocess
+import sys
 import json
 import sqlite3
 import threading
@@ -56,6 +59,34 @@ class SeedBase(Stores):
     def collect(self):
         return collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
                                  ledger_path=self.ledger_path)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+# The user's lightweight rule (2026-11-10): a routing command loads only what its op needs.
+HEAVY = ('runtime.routing_observations', 'runtime.opencode_launcher', 'http.client', 'subprocess')
+
+
+class LightweightTests(unittest.TestCase):
+    def test_importing_the_routing_command_loads_no_collector_launcher_or_process_module(self):
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); import scripts.routing; '
+                'print(",".join(name for name in sys.argv[2:] if name in sys.modules))')
+        done = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(ROOT), *HEAVY], capture_output=True,
+                              text=True, timeout=60)
+        self.assertEqual((done.returncode, done.stderr), (0, ''))
+        self.assertEqual(done.stdout.strip(), '')
+
+    def test_the_seed_never_loads_the_opencode_launcher(self):
+        code = ('import sys; sys.path.insert(0, sys.argv[1]); from runtime import routing_observations as o; '
+                'o.seed_event(dict(pool="p", window="5h", used=0, limit=1000, reset_at=1, length=18000, '
+                'event_id="e")); o._host_windows(); print("runtime.opencode_launcher" in sys.modules)')
+        done = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(ROOT)], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, 'False'), done.stderr)
+
+    def test_the_window_constants_equal_the_host_paths(self):
+        """routing_observations is the single source for routing; the launcher's copies must not drift."""
+        self.assertEqual(collector.WINDOW_UNITS, opencode_launcher.WINDOW_UNITS)
+        self.assertEqual(collector.RATE_WINDOWS, opencode_launcher.RATE_WINDOWS)
 
 
 class ContractTests(SeedBase):
