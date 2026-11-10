@@ -183,13 +183,15 @@ Read the owning spec section and amendment before each task. Do not invent provi
 **Status lines.** On 10 November 2026 each task got a status line from a check of this plan against the merged PRs, the tests on `main` and the recorded live runs. A box is ticked only when its work is merged and the proof the box names has been seen: tests on `main` for package work, a recorded live run where the box asks for host or provider observation. The states are:
 
 - **Done:** ticked.
-- **Package only:** merged and tested, but the live observation the box asks for has not happened. Left unticked.
+- **Package only:** merged and tested, but the live observation the box asks for has not happened. Left unticked. A box that does not ask for live observation is ticked on package evidence, even when its text says "package only".
 - **Partial:** the status line names what is missing.
 - **Not started.**
 - **Changed:** the decision moved; the status line cites where.
 - **Waiting on the user:** the canary, cutover, billing pages, plan tier and API Usage. On 9 November 2026 the user deferred these until after the router is released.
 
-Work that merged PRs left open, and that no task covered, is listed once under [Follow-ups from merged work](#follow-ups-from-merged-work).
+A "write failing tests" or "expected: the new tests fail" step is ticked with its task: on the recorded test-first commits where the PR shows them, otherwise on the passing tests on `main` alone.
+
+Open work that a status line names is tracked on that task's box. Open work from PR descriptions and reviews that no box asks for is listed once under [Follow-ups from merged work](#follow-ups-from-merged-work).
 
 ### Task 0.1: Reconcile the baseline
 
@@ -227,7 +229,7 @@ Work that merged PRs left open, and that no task covered, is listed once under [
 
 ### Task 0.4: Probe the remaining P0 gates per slice
 
-**Status (10 November 2026):** Partial: P0.1 done (plugins load in OpenCode's embedded Bun; `node --test` runs `tests/opencode_plugin/`; `--serve` `check` p95 0.27 ms in #130, live shim check p95 1.18 ms over 20 pilot admissions in #145); probe output sanitized (#125, #128). P0.2 is partly established, P0.3 and P0.4 wait on the user's API Usage decision, and P0.5–P0.8 are tracked under S3.3–S3.6 and the [gate table](../../smart-routing-capability-matrix.md#gate-status-p0).
+**Status (10 November 2026):** Partial: P0.1 done (plugins load in OpenCode's embedded Bun; `node --test` runs `tests/opencode_plugin/`; `--serve` `check` p95 0.27 ms in #130, live shim check p95 1.18 ms over 20 pilot admissions in #145); probe output sanitized (#125, #128). P0.2 is partly established: on the ChatGPT route OpenCode's `native.rateLimit` is absent and no standalone reader of Codex's `account/rateLimits/read` exists, so whether it shares Codex's pool is unknown (#161, #182). P0.3 and P0.4 wait on the user's API Usage decision, and P0.5–P0.8 are tracked under S3.3–S3.6 and the [gate table](../../smart-routing-capability-matrix.md#gate-status-p0).
 
 **Files:** extend the capability matrix and fixtures.
 
@@ -238,7 +240,7 @@ Work that merged PRs left open, and that no task covered, is listed once under [
 
 ### Task S1.1: Allowance policy replaces the 20% floor
 
-**Status (10 November 2026):** Done (#113): allowance tests in `tests/test_usage_budget.py`; the floor is gone. The PR does not record the failing-first run.
+**Status (10 November 2026):** Done (#113): allowance tests in `tests/test_usage_budget.py`; the floor is gone.
 
 **Files:** modify `runtime/usage_budget.py`, `tests/test_usage_budget.py`.
 
@@ -325,7 +327,7 @@ Work that merged PRs left open, and that no task covered, is listed once under [
 
 ### Task S2.3: Evidence compiler and strategy table (A2, A5)
 
-**Status (10 November 2026):** Partial (#121): compiler, lookup and `tests/test_routing_evidence.py` are done, and the [maintenance procedure](../../../clients/guidance-publication.md#strategy-table-refresh) is written. Nothing writes `strategy-table.json` yet, so `prepare` always falls back to worker choices (`table_unavailable`, #130); the pilot used no table.
+**Status (10 November 2026):** Partial (#121): compiler, lookup and `tests/test_routing_evidence.py` are done, and the [maintenance procedure](../../../clients/guidance-publication.md#strategy-table-refresh) is written. Nothing writes `strategy-table.json` yet, so `prepare` always falls back to worker choices (`table_unavailable`, #130); the pilot used no table. The maintenance refresh must write the table, or the launcher passes `--table`; the owning procedure is linked only from managed delegation controls (#183).
 
 **Files:** create `runtime/routing_evidence.py`, `tests/test_routing_evidence.py`, fixtures under `tests/fixtures/smart-routing/`.
 
@@ -375,13 +377,13 @@ Work that merged PRs left open, and that no task covered, is listed once under [
 
 ### Task S2.6: Allocate and reserve in one transaction
 
-**Status (10 November 2026):** Partial (#123, #124): admission, persisted records and the single claim model are done (`tests/test_routing_admission.py`, `tests/test_routing_funding*.py`). The model-ranker-timeout test has nothing to test until S4 builds a model ranker; today the empty-ranking and missing-table fallbacks carry RF8.
+**Status (10 November 2026):** Done (#123, #124): admission, persisted records and the single claim model (`tests/test_routing_admission.py`, `tests/test_routing_funding*.py`). The first box is ticked for the tests that exist; the model-ranker timeout test waits for S4, which builds the model ranker. Until then the empty-ranking and missing-table fallbacks carry RF8.
 
 **Files:** modify `runtime/routing.py`, `runtime/usage_budget.py`; create `tests/test_routing_admission.py`.
 
 **Interface:** `admit(assignment, ranking, settings, observations, *, ledger) -> dict | blocked` filters by eligibility (spec §6.4), billing class (A12) and feasibility (spec §7.1), computes the class and route, then reserves and records `{bucket, shares, class, route, settings_revision}` in the same ledger transaction. The result is the admission (single-use dispatch authority added in S3).
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - API Usage OFF excludes direct API routes and their expiry pressure.
   - No organization defined or enabled: `admit` still works for subscription and `worker_choices` routes, funded routes are excluded with `no_funded_organization`, and nothing raises. Routing never creates or enables an organization or key; the Personal workspace is enabled only by the user, and an enabled organization with no ready key is unavailable with a reason (spec §6.4).
   - A stored-but-unenabled key excludes them; a wrong-scope or revoked binding blocks the route.
@@ -477,7 +479,7 @@ Rules the command applies:
 
 ### Task S3.3: Pre-transmission shim
 
-**Status (10 November 2026):** Partial (#132, #140, #152, #154; live in #145 and #163): the shim, handshake, descendants RPC and S3.3d denies are on `main` and observed live. Changed in #132: tools other than subagent spawns (MCP, Code Mode, built-ins) are governed by policy deny rules, not `check`, as the S3.1 contract states. Missing: the global plugin install with enforced worker profiles, and the rest of the P0.6 re-qualification ([follow-ups](#follow-ups-from-merged-work)).
+**Status (10 November 2026):** Partial (#132, #140, #152, #154; live in #145 and #163): the shim, handshake, descendants RPC and S3.3d denies are on `main` and observed live. Changed in #132: tools other than subagent spawns (MCP, Code Mode, built-ins) are governed by policy deny rules, not `check`, as the S3.1 contract states. Missing: the global plugin install with enforced worker profiles, and the rest of the P0.6 re-qualification (last box): MCP and Code Mode calls, a real `webfetch` execution, a failed plugin load making `routing.health` fail, the S3.3d image-generation probe and a tool-call spawn on another model. The `routing.health` box rests on the qualification harness (`tests/qualification/opencode_live.py`) refusing to send when health fails; no production launcher exists until C.3.
 
 **Files:** create `runtime/adapters/opencode_plugin.ts`; extend `tests/test_opencode_adapter.py`.
 
@@ -497,13 +499,13 @@ Rules the command applies:
 
 ### Task S3.4: Single-use dispatch authority
 
-**Status (10 November 2026):** Done (#135; live in #145): derived ids, one request per message id, duplicate sends and the lost-acknowledgment drill were observed. Racing launchers on the host and a server restart were not run ([follow-ups](#follow-ups-from-merged-work)).
+**Status (10 November 2026):** Partial (#135; live in #145): the first two boxes are done. The third (P0.7 re-qualification) is unticked: live runs observed derived ids accepted, one request per message id, a duplicate message id deduplicated and the lost-acknowledgment drill, but not racing launchers against the host or a server restart.
 
 **Files:** modify `runtime/usage_budget.py`, `runtime/routing.py`; create `tests/test_routing_dispatch.py`.
 
 - [x] Write failing tests: 15 callers racing for one attempt produce at most one authority; distinct affordable attempts run concurrently; a lost acknowledgment leaves the claim `unknown` and is not retried without proven host deduplication or proof of non-launch.
 - [x] Derive the session and message IDs from the attempt ID. The server deduplicates them (observed), but the `prompt` hook can run more than once for one message, so key the ledger on the message ID and recover an unknown attempt by reading the message by ID.
-- [x] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request, and that OpenCode's own session ids never have the derived shape (`ses_` + 32 lowercase hex), which the S3.3b shim assumes when it decides which sessions to ask the ledger about. Observed live on 9 November 2026 ([live report](../../smart-routing-qualification.md)): derived ids accepted, one request per derived message id, no request on a duplicate send (an extra `idle` record appears), read-back by id, OpenCode ids are 26 mixed-case characters, insertion-ordered listing; the re-run observed the lost-acknowledgment drill (hold stays counted, `record uncertain` keeps exposure; an uncertain subscription hold has no operator path). Racing launchers on the host and server restart were not run.
+- [ ] Run, implement, re-run; expected PASS (done). Re-qualify P0.7 on the finished path (not yet observed on OpenCode), including that one prompt with a derived message id causes exactly one model request, and that OpenCode's own session ids never have the derived shape (`ses_` + 32 lowercase hex), which the S3.3b shim assumes when it decides which sessions to ask the ledger about. Observed live on 9 November 2026 ([live report](../../smart-routing-qualification.md)): derived ids accepted, one request per derived message id, no request on a duplicate send (an extra `idle` record appears), read-back by id, OpenCode ids are 26 mixed-case characters, insertion-ordered listing; the re-run observed the lost-acknowledgment drill (hold stays counted, `record uncertain` keeps exposure; an uncertain subscription hold has no operator path). Racing launchers on the host and server restart were not run.
 
 The contract (dispatch, derived ids, the shim handshake, `authority_required`, `unmanaged` and lost acknowledgments) is defined once in the [S3.1 contract](#task-s31-single-routing-command).
 
@@ -544,7 +546,7 @@ The contract (dispatch, derived ids, the shim handshake, `authority_required`, `
 
 ### Task S3.6: Lineage, settlement and retention
 
-**Status (10 November 2026):** Partial (#142, #143, #144, #146): the accounting core, OpenCode accounting and operator reconciliation are done, and subscription settlement through `opencode_accounting` was observed live (re-run and the 20-admission pilot). Missing: retiring reflected settled charges and the remaining P0.8 observations ([follow-ups](#follow-ups-from-merged-work)).
+**Status (10 November 2026):** Partial (#142, #143, #144, #146): the accounting core, OpenCode accounting and operator reconciliation are done, and subscription settlement through `opencode_accounting` was observed live (re-run and the 20-admission pilot). Missing (S3.6b box): retiring reflected settled charges, which needs balance observations carrying a provider-declared `reflects_through` watermark bound to the organization and pool epoch, plus a settlement time per charge; until then headroom errs low on API-funded routes (#144). Missing (last box, P0.8): `generate` requests, compaction, retries, message paging with deletion or revert, a real sequence gap, coordinator, review and repair stages, API-funded holds, and what `durable.version` counts, since every live aggregate flagged `version_changed` with zero resync deltas (#143, #145).
 
 **Files:** modify `runtime/routing.py`, `runtime/usage_budget.py`, `scripts/routing.py`, `runtime/routing_gates.py` and the read-only accessor `runtime/delegation.py` (`routing_acceptances`, over delegation's evidence-backed reconciliation records); create `tests/test_routing_accounting.py` and (S3.6b-2) `tests/test_routing_reconcile.py`.
 
@@ -620,7 +622,7 @@ An uncertain subscription (window) hold has no operator recovery path today: `re
 
 ### Task C.3: Replace callers and retire selectors
 
-**Status (10 November 2026):** Not started. Requirements gathered from merged work are under [follow-ups](#follow-ups-from-merged-work).
+**Status (10 November 2026):** Not started. Merged work adds launcher requirements defined elsewhere: the [S3.5 wiring list](#task-s35-fresh-gates-at-dispatch-rf3) (`--project` mandatory, `workflow` binding), the S3.1 handshake pre-canary checklist (`authority_required`, `unstamped_open_holds: 0`), the S3.6 pre-canary descendants cross-check for API-funded attempts, and the S3.3d rule that launchers never invoke project commands in a managed session.
 
 **Files:** modify `runtime/delegation.py`, `runtime/external_delegation.py`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py`, `policies/03-agent-delegation.md`, `docs/policy-sources.md`, `clients/instruction-map.json` and affected skill entry points.
 
@@ -653,29 +655,11 @@ An uncertain subscription (window) hold has no operator recovery path today: `re
 
 ### Follow-ups from merged work
 
-Open work recorded in PR descriptions and review records but not in a task above. Each item names its source PR. Tasks S3.6c and S3.3's global install already cover their own items.
-
-**For C.3 (wiring the production launcher):**
-
-- [ ] **Pin the project and bind the workflow** (#135, #141). Run the command with `--project <checkout root>`, which C.3 must make mandatory (`status` shows `project_pinned: true`). Prepare every planned job with `workflow` and delegation's `attempt_id`, so `unbound_open_holds` counts only explicit delegation. Turn `authority_required` on and require `unstamped_open_holds: 0`.
-- [ ] **Never run project commands inside a managed session** (#154, observed in #163). A command's `` !`cmd` `` shell bypasses `shell.create.before` and keeps the full environment.
-- [ ] **Cross-check descendants for API-funded attempts** (#146, #152). The launcher merges `routing.descendants` with its own session listing before `record complete`. API-funded managed attempts are not qualified until the [positive and negative runs](../../../clients/opencode.md#plugin-rpc) pass on an API hold.
-- [ ] **Persist the strategy table** (#130, #183). The maintenance refresh must write `strategy-table.json`, or the launcher passes `--table`. The guidance-publication procedure that owns the refresh is linked only from managed delegation controls (#183).
-
-**Live observations still owed:**
-
-- [ ] **P0.6** (#145, #163): MCP and Code Mode calls, a real `webfetch` execution, a failed plugin load making `routing.health` fail, the S3.3d image-generation probe, and a tool-call spawn on another model.
-- [ ] **P0.7** (#145): racing launchers against the host, and a server restart.
-- [ ] **P0.8** (#143, #145): `generate` requests (whether they create messages), compaction, retries, message paging with deletion or revert, a real sequence gap, coordinator, review and repair stages, and API-funded holds.
-- [ ] **P0.8 `version_changed`** (#145): the live stream flagged `version_changed` on every aggregate. Resync gave zero deltas, so this errs safe, but whether `durable.version` counts per aggregate or per event type is not established.
-- [ ] **ChatGPT route telemetry** (#161, #182): OpenCode's `native.rateLimit` is absent on this route, and no standalone reader of Codex's `account/rateLimits/read` exists. So whether the route shares Codex's pool is unknown.
-
-**Hardening:**
+Open work that merged PRs recorded in their descriptions or reviews and that no box above asks for. Each item names its source PR.
 
 - [ ] **Per-root incompleteness set** (#152). Replace the sticky per-root `lineage_lookup_failed` flag with a bounded per-root set of undetermined sessions. Entries decay, and a later lookup that proves a session belongs to another tree clears it.
 - [ ] **`websearch`** (#154). Tighten it for managed sessions, like `webfetch`: it sends query text to a third-party provider.
 - [ ] **Explicit owner field** (#140). Have the command name the owner, for example `owner_attempt` on a session-only answer or `session_owned: true` on a strict allow. That would replace the shim's two-answer inference at `attach`.
-- [ ] **Retire reflected settled charges** (#144; spec §8). Balance observations must carry a provider-declared `reflects_through` watermark, bound to the organization and pool epoch, and the ledger needs a settlement time per charge. Until then settled charges are counted twice against observed balances, so headroom errs low. This affects API-funded routes only.
 - [ ] **Listed is not entitled** (#182). After Sign in with ChatGPT, OpenCode lists a fixed set of 18 models without consulting the account: `gpt-5.5` was refused (400 `model_not_found`) and `gpt-6-luna` was accepted. Routing must not treat a catalog listing as eligibility on a subscription route. The router-side rule is not designed yet.
 - [ ] **Operator op access** (#144). One-shot operator ops have no caller authentication. They rely on worker profiles being unable to run the command, so they depend on the S3.3 deny rules.
 - [ ] **Smaller items** recorded as non-blocking in reviews and not re-checked on `main` by this audit:

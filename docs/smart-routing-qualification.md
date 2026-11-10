@@ -172,7 +172,7 @@ Purpose: the S3.3d required live probe ([clients/opencode.md](../clients/opencod
     - **Public prices** (models.dev, read 2026-11-10, input + output per million tokens): `gpt-6-luna` 0.6, `gpt-5.6-luna` 1.4, `gpt-6.1-terra` 6, `gpt-6-sol` and `gpt-6.1-sol` 12, `gpt-5.6-terra` 14, `gpt-5.6-sol` 24, `gpt-5.5` 35, `gpt-6-astra` 60. The `-fast` twins have no entry, which fits a priority tier of the same model but is not evidence.
     - **The user reports that GPT-6 Luna works on their account.**
     - **Recommended order:** `openai/gpt-6-luna`, `openai/gpt-5.6-luna`, `openai/gpt-6.1-terra`, each with its lowest listed variant. `none` is OpenCode's normal "no reasoning" effort, and the refusal was about the model, not the variant.
-  - **Attempt 7: pass** (10 November 2026, 00:40 CET, harness `942da99`, `--chatgpt-model openai/gpt-6-luna`; [results](../tests/fixtures/smart-routing/probes/chatgpt-attempt7-results.json); attempt 6's are in [`chatgpt-attempt6-results.json`](../tests/fixtures/smart-routing/probes/chatgpt-attempt6-results.json)).
+  - **Attempt 7: pass** (10 November 2026, 00:40 CET, harness `942da99`, `--chatgpt-model openai/gpt-6-luna`; [results](../tests/fixtures/smart-routing/probes/chatgpt-attempt7-results.json); attempt 6's are in [`chatgpt-attempt6-results.json`](../tests/fixtures/smart-routing/probes/chatgpt-attempt6-results.json)). <a id="chatgpt-attempt-7"></a>
     - **Observed: the ChatGPT-via-OpenCode subscription route works end to end through the managed handshake for `gpt-6-luna`.**
       - The sign-in went through `chatgpt-token-sharing`.
       - One primary request on `gpt-6-luna#none` finished with `stop` after 2.5 s.
