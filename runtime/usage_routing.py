@@ -1,7 +1,12 @@
 """Select routes and enforce local controls for Usage Routing."""
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
+import stat
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from runtime import startup, usage_admission, usage_credentials, external_delegation
@@ -14,6 +19,22 @@ FUNDING_WARNING = ('Grant-only funding is best effort. Account auto-reload may b
 HANDOFF_REASONS = frozenset(('insufficient_headroom', 'balance_stale_or_missing',
     'expiry_or_cycle_boundary', 'evidence_deadline_expired', 'observation_stale',
     'concurrency_cap'))
+
+
+def refuse_managed(path):
+    """Phase W (C.3 design 4.3): refuse a legacy API Usage spending entry for a managed project, as its first action.
+
+    Its only read is the routing settings' `managed_projects`; nothing here opens Usage Routing settings, a
+    credential, a configuration or the ledger. Fail closed: settings that exist but cannot be read count as managed
+    (`routing_settings.managed_project`), so a corrupt routing settings file also stops legacy API Usage spending
+    until it is repaired. A missing settings file manages nothing. A `None` path cannot be checked, so it is refused
+    too. Setup and report actions never call this: they open no spending."""
+    from runtime import routing_settings
+    try:
+        managed = path is None or routing_settings.managed_project(path) is not False
+    except Exception:  # noqa: BLE001 - an uninspectable path is treated as managed
+        managed = True
+    require(not managed, routing_settings.LEGACY_ROUTE_RETIRED)
 
 
 def status(cwd=None):
@@ -66,6 +87,7 @@ def _run_live(cwd, task, evidence):
     from runtime import usage_admission, usage_settings
 
     require(type(evidence) is usage_admission.Admission, 'trusted_live_evidence_required')
+    refuse_managed(cwd)
     with usage_settings.controller(cwd) as control:
         def check_scope():
             require(usage_settings.scope(cwd) == (control.scope, control.root), 'scope_changed')
@@ -119,6 +141,12 @@ class Controller:
         self.root = Path(root).resolve() if root is not None else None
         self._bind = bind
         self._check_authority = check_authority
+
+    def _backstop(self):
+        """Refuse a managed project again, for a caller that skipped its entry point's refusal. Production
+        controllers (`usage_settings.controller`) always carry a root; a rootless one has no project to check."""
+        if self.root is not None:
+            refuse_managed(self.root)
 
     def _config(self, data):
         config = data.get('routing', {}).get(self.scope)
@@ -406,6 +434,7 @@ class Controller:
             raise BudgetError(str(error)) from None
 
     def _evaluate(self, data, task, *, pin_qualification=False, live=False):
+        self._backstop()
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
         for field in ('local_preferred','api_only','reviewer_available'):
@@ -449,6 +478,7 @@ class Controller:
     def request_handoff(self, task, reason):
         """Queue remaining work for existing native dispatch; never clears API exposure."""
         import copy
+        self._backstop()
         require(reason in HANDOFF_REASONS, 'unsupported_handoff_reason')
         fields(task, 'task_id run_id class_name packet provider local_preferred api_only reviewer_available native snapshots'
                + (' external' if isinstance(task, dict) and 'external' in task else ''))
@@ -575,6 +605,7 @@ class Controller:
         import copy
         from runtime import openai_api
 
+        self._backstop()  # before any decision and before Ledger.begin
         require(evidence is not None or (callable(connection_factory) and callable(credential_resolver)),
                 'live_execution_unavailable')
         task = copy.deepcopy(task)
@@ -699,6 +730,7 @@ def disable(cwd, request):
 
 
 def evaluate(cwd, task):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     try:
         with controller(cwd) as control:
@@ -715,6 +747,7 @@ def reconcile(cwd, request):
 
 
 def handoff(cwd, request):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     fields(request, 'task reason')
     with controller(cwd) as control:
@@ -722,7 +755,141 @@ def handoff(cwd, request):
 
 
 def claim_handoff(cwd, request):
+    refuse_managed(cwd)
     from runtime.usage_settings import controller
     fields(request, 'task_id attempt_id')
     with controller(cwd) as control:
         return control.claim_handoff(request['task_id'], request['attempt_id'])
+
+
+# -- activation-gate self-check (C.3 design 4.2, capability "API Usage") -----------------------------------------
+SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
+SELF_CHECK_MARK = 'usage-routing-self-check:'
+SELF_CHECK_CHILD = ('import json, sys\nsys.path.insert(0, sys.argv[1])\nfrom runtime import usage_routing\n'
+                    'print(usage_routing.SELF_CHECK_MARK + json.dumps(usage_routing._self_check_body(sys.argv[2])))\n')
+
+
+class _Reached(BaseException):
+    """A tripwire no handler under test catches, so a refusal that comes too late cannot hide."""
+
+
+def _sandbox(workdir):
+    path = Path(workdir).absolute()
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or any(path.iterdir()):
+        return None
+    return path.resolve()
+
+
+def managed_self_check(workdir):
+    """`[]` when every legacy API Usage spending entry refuses a managed project before any settings, credential,
+    configuration or ledger access, and `Ledger.begin` is never reached; else fixed failure codes.
+
+    The body swaps module globals, so it runs in a child of this interpreter with the plugin package root first on
+    its import path, a fixed environment and its stores in `workdir`. No network, model, host or secret-store call."""
+    root = _sandbox(workdir)
+    if root is None:
+        return ['self_check_workdir_unsafe']
+    for item in ('home', 'tmp'):
+        (root / item).mkdir(mode=0o700)
+    env = dict(PATH='/usr/bin:/bin', HOME=str(root / 'home'), TMPDIR=str(root / 'tmp'), LANG='C.UTF-8')
+    child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, str(PACKAGE), str(root / 'check')],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+                             cwd=root, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=SELF_CHECK_BUDGET)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
+        return ['self_check_timeout']
+    lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
+    try:
+        codes = json.loads(lines[-1][len(SELF_CHECK_MARK):])
+    except (IndexError, ValueError):
+        return ['self_check_error']
+    if type(codes) is not list or not all(type(code) is str for code in codes):
+        return ['self_check_error']
+    return codes if child.returncode == 0 or codes else ['self_check_error']
+
+
+def _self_check_body(workdir):
+    """The check. It swaps module globals and restores them, so only `managed_self_check`'s child runs it."""
+    import dataclasses
+    from runtime import (routing_settings, usage_canary, usage_canary_host, usage_codex_host, usage_credentials,
+                         usage_settings)
+    from scripts import routing as command  # the gate puts the plugin package root first on sys.path
+    root = _sandbox(workdir)
+    if root is None:
+        return ['self_check_workdir_unsafe']
+    checkout, other, settings = root / 'checkout', root / 'other', root / 'routing' / 'settings.json'
+    checkout.mkdir(mode=0o700)
+    other.mkdir(mode=0o700)
+    routing_settings.update(settings, dict(managed_projects=[str(checkout)]), 0)
+
+    def trip(attribute):
+        def reached(*args, **kwargs):
+            raise _Reached(attribute)
+        return reached
+    swaps = [(command, 'default_settings', lambda: settings), (usage_settings, 'directory', lambda: root / 'usage')]
+    swaps += [(target, attribute, trip(attribute)) for target, attribute in (
+        (Ledger, 'begin'), (usage_settings, 'controller'), (usage_settings, 'scope'),
+        (Controller, 'configure'), (usage_credentials, 'validate_binding'), (usage_credentials, 'resolve_key'),
+        (usage_codex_host, 'package_digest'), (usage_canary_host, 'package_digest'),
+        (usage_canary_host, 'verify_approval'))]
+    saved = [(target, attribute, getattr(target, attribute)) for target, attribute, _ in swaps]
+
+    def blank(kind, **values):
+        return kind(**({item.name: None for item in dataclasses.fields(kind)} | values))
+    path = str(checkout)
+    evidence = blank(usage_admission.Admission)
+    native = dict(account='self-check', windows=[], task='self-check')
+    task = dict(task_id='self-check', run_id='self-check', class_name='self-check', packet={}, provider='auto',
+                local_preferred=False, api_only=False, reviewer_available=True, native=native, snapshots=[])
+    control = Controller(None, 'self-check', root=checkout, clock=lambda: 0)
+    entries = dict(
+        codex_freeze=lambda: usage_codex_host.freeze(path, [task], thread_snapshot={}, reviewer=None, expires_at=0),
+        codex_execute=lambda: usage_codex_host.execute(blank(usage_codex_host.Plan, checkout=path), task,
+                                                       thread_snapshot={}, reviewer=None, grant=None, price=None),
+        canary_host_execute=lambda: usage_canary_host.execute(
+            blank(usage_canary_host.Plan, checkout=path), thread_snapshot={}, key_receipt={}, grant=None,
+            reviewer=None, price_observed_at=0, price_valid_until=1),
+        canary_run=lambda: usage_canary.run(path, evidence, binding={}, profile={}, native=native),
+        run_live=lambda: _run_live(path, task, evidence),
+        evaluate=lambda: evaluate(path, task),
+        handoff=lambda: handoff(path, dict(task=task, reason='insufficient_headroom')),
+        claim_handoff=lambda: claim_handoff(path, dict(task_id='self-check', attempt_id='self-check')),
+        backstop_run=lambda: control._run(task, None, None),
+        backstop_evaluate=lambda: control._evaluate({}, task),
+        backstop_handoff=lambda: control.request_handoff(task, 'insufficient_headroom'))
+    codes = []
+    try:
+        for target, attribute, value in swaps:
+            setattr(target, attribute, value)
+        for entry, call in entries.items():
+            try:
+                call()
+                codes.append(entry + '_not_refused')
+            except _Reached:
+                codes.append(entry + '_not_refused_first')
+            except BudgetError as error:
+                if str(error) != routing_settings.LEGACY_ROUTE_RETIRED:
+                    codes.append(entry + '_not_refused')
+            except Exception:  # noqa: BLE001 - any other failure is a fixed code, never a traceback
+                codes.append(entry + '_not_refused')
+        try:
+            refuse_managed(str(other))
+        except BudgetError:
+            codes.append('unmanaged_project_refused')
+    except Exception:  # noqa: BLE001
+        codes.append('self_check_error')
+    finally:
+        for target, attribute, value in saved:
+            setattr(target, attribute, value)
+    return codes

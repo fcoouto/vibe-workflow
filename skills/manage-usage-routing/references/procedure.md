@@ -50,6 +50,34 @@ when permitted. Never initiate a purchase or silently switch to a paid API pool.
 5. Use `disable` on an explicit stop request. Recheck status and report Off.
    On a stale revision, show current status before applying a changed selection.
 
+## Managed projects
+
+A checkout listed in, or inside a checkout listed in, the Smart Routing
+settings' `managed_projects` (`python3 -I -B scripts/routing.py status --project
+/absolute/project/path`) is a managed project. There, every legacy API Usage
+spending entry refuses with `legacy_route_retired` before it reads any API Usage
+setting, credential or ledger: the Codex host's `freeze` and `execute`, the foreground
+canary, `evaluate`, `handoff` and `claim_handoff`. Routing settings that exist
+but cannot be read count as managed, so a corrupt settings file also stops
+these sends until it is repaired. `legacy_route_retired` proves nothing was
+sent, because it comes before `Ledger.begin` and any send, so it is not uncertain
+exposure even when the host reports `uncertain`; continue the work natively and
+do not retry or switch provider.
+
+`status`, `configure`, `enable`, `disable` and Keychain setup stay available
+and open no spending. In a managed project, saved activation, Smart Balance or
+Manual state, a saved restriction and qualification records never authorize
+API spending; the only authority is the routing settings' `api_usage_enabled`.
+On the user's enable request there, also set it through the one-shot routing
+command, with `settings_revision` from that `status` as `expected_revision`:
+
+```sh
+printf '%s' '{"v":1,"expected_revision":<revision>,"change":{"api_usage_enabled":true}}' \
+  | python3 -I -B scripts/routing.py set --project /absolute/project/path
+```
+
+On a disable request, set it to `false` the same way, then report both states.
+
 ## Read-only status, quoting and selection
 
 From the package root:

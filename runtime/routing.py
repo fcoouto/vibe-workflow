@@ -742,7 +742,7 @@ def _shape_error(assignment, ranking, settings, observations):
     return None
 
 
-def admit(assignment, ranking, settings, observations, *, ledger, workflow=None):
+def admit(assignment, ranking, settings, observations, *, ledger, workflow=None, clear_debits=False):
     """Choose a funding class and route, reserve the padded claim and record the decision atomically.
 
     ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
@@ -784,7 +784,7 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None)
 
     ``workflow`` is the job part of the S3.5 binding (``routing_gates.job_binding``) or None for an assignment
     with no workflow job; the record stores it with the credential marker as ``binding`` (``invalid_binding``
-    when malformed). ``dispatch`` re-validates it.
+    when malformed). ``dispatch`` re-validates it. ``clear_debits`` lets windows clear debits (C3-0a: never ``--serve``).
     """
     try:
         reason = _shape_error(assignment, ranking, settings, observations)
@@ -795,8 +795,8 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None)
     if reason is not None:
         return _pending(reason)
     try:
-        outcome = ledger.admit(assignment['attempt_id'], lambda data: _decide(  # S3.6c: qualifying windows clear debits
-            sub_reconcile.clear_debits(ledger, data, observations), assignment, ranking, settings, observations, workflow))
+        outcome = ledger.admit(assignment['attempt_id'], lambda data: _decide(sub_reconcile.clear_debits(
+            ledger, data, observations) if clear_debits else data, assignment, ranking, settings, observations, workflow))
     except BudgetError as error:
         return _pending(str(error))
     except Exception:  # noqa: BLE001 - the transaction rolled back; nothing was reserved or recorded

@@ -216,7 +216,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "d0acd2e4edde80517ba74b1bad93aea806328620def093cf924f49eb2008cbd1",
+      "sha256": "9007c3473ae817cd9fa3bae164a8de28f8eef3812cad867b500104e688c6e4c0",
       "ranges": [
         [
           1,
@@ -244,11 +244,11 @@
         ],
         [
           209,
-          254
+          251
         ],
         [
-          255,
-          274
+          252,
+          280
         ]
       ]
     },
@@ -570,7 +570,7 @@
       ]
     },
     "skills/manage-usage-routing/SKILL.md": {
-      "sha256": "0d9533f09aef07bb37900ffba8c27424236704391baa8e57fedef9dd092fbb10",
+      "sha256": "bb175c331e2f0074b3f05956b2bdf317ce483307f29ad04a5b085ad913039cad",
       "ranges": [
         [
           1,
@@ -579,29 +579,29 @@
       ]
     },
     "skills/manage-usage-routing/references/codex-host.md": {
-      "sha256": "ae3c4cd49e4c54b6f839b7f398628d9fbffe6e6e42f1db167caf6b8b9c582317",
+      "sha256": "07ae32f07c11510a2fe6fbf5c60388775ce5d3f1cec0f9739c9b8ef2ac123077",
       "ranges": [
         [
           1,
-          93
+          94
         ]
       ]
     },
     "skills/manage-usage-routing/references/delegation.md": {
-      "sha256": "1a29f3cba621d02aaa7d1339ccaaf0d9632f7d83b160a58695d9354b05678cbc",
+      "sha256": "7fdb746c32ea8a20ee56ce97343ce5961183664fae8f67a0e175340a4ac10565",
       "ranges": [
         [
           1,
-          101
+          104
         ]
       ]
     },
     "skills/manage-usage-routing/references/first-canary.md": {
-      "sha256": "4355ed344c539c82361c35f247ca83f00d6a8ba155b2fc07bcc3bcff59f74b53",
+      "sha256": "21f4c0f0c615237ca5306d895c1bdbeb9ff5415cf49aaaecd5e957abe499c9a5",
       "ranges": [
         [
           1,
-          44
+          46
         ]
       ]
     },
@@ -615,19 +615,19 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "06430c496528ef639b329d13f6b791c89d526da234c28d780b22314096e017bd",
+      "sha256": "0ad4a6ad2c88ec87cda1641d284a0b70c14c74a91b1d57b75400103fd8570468",
       "ranges": [
         [
           1,
-          123
+          128
         ],
         [
-          124,
-          250
+          129,
+          251
         ],
         [
-          251,
-          253
+          252,
+          281
         ]
       ]
     },

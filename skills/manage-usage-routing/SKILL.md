@@ -5,8 +5,8 @@ description: Manage OpenAI API credit usage, spending limits and autonomous API 
 
 # Manage API Usage
 
-Read [management](references/procedure.md) for setup, activation, status and
-optional previews. Load [Keychain setup](references/keychain-setup.md) for a new
+Read [management](references/procedure.md) for setup, activation, status,
+previews and [managed projects](references/procedure.md#managed-projects). Load [Keychain setup](references/keychain-setup.md) for a new
 connection, [delegation](references/delegation.md) for eligible proposals or
 native handoff, and [foreground canary](references/first-canary.md) only for
 an expressly selected test.

@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import time
 
-from runtime import usage_admission, usage_canary, usage_credentials, usage_settings
+from runtime import usage_admission, usage_canary, usage_credentials, usage_routing, usage_settings
 from runtime.usage_budget import BudgetError, integer, name, require
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -161,6 +161,8 @@ def _temporary_run(controller, plan, evidence, binding, profile, native):
 def execute(plan, *, thread_snapshot, key_receipt, grant, native_limits=None,
             native_observed_at=None, reviewer, price_observed_at, price_valid_until):
     """Trusted foreground execution after actual approval and Keychain receipt."""
+    # First: a managed project writes no S1 configuration or organization (C.3 design 4.3).
+    usage_routing.refuse_managed(getattr(plan, 'checkout', None))
     now = int(time.time())
     verify_approval(plan, thread_snapshot, now)
     scope, checkout = usage_settings.scope(plan.checkout)

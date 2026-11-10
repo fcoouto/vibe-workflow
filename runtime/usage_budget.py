@@ -10,6 +10,8 @@ import sqlite3
 import stat
 import uuid
 
+from runtime import ledger_versions  # state versions and migration (C3-0a); it reads this module lazily
+
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
 # Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
 # begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
@@ -25,7 +27,6 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 SOFT_RECORD = 6_000_000
 MAX_RECORD = 12_000_000
 FRESH_SECONDS = 900
-STATE_VERSION = 4  # 4: S3.6a settled charges; older code must refuse a ledger that carries them
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
@@ -149,8 +150,8 @@ def initialize(path):
         raise BudgetError('ledger_exists') from error
     os.close(fd)
     identity = uuid.uuid4().hex
-    state = dict(version=STATE_VERSION, identity=identity, organizations={}, runs={}, native={}, finished_native=[],
-                 holds={}, admissions=[], seen_attempts=[])
+    state = dict(version=ledger_versions.STATE_VERSION, identity=identity, organizations={}, runs={}, native={},
+                 finished_native=[], holds={}, admissions=[], seen_attempts=[])
     with closing(sqlite3.connect(path)) as db:
         db.execute('CREATE TABLE ledger (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
         db.execute('INSERT INTO ledger VALUES (1, ?)', (json.dumps(state),))
@@ -239,9 +240,7 @@ class Ledger:
             require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
             original = json.loads(row[0]) if write else None
-            require(data['version'] in (1, 2, 3, STATE_VERSION) and data['identity'] == self.identity,
-                    'ledger_identity_changed')
-            self._migrate(data)
+            ledger_versions.upgrade(data, self.identity)  # refuses an unknown version, then migrates in place
             yield data
             self._check()
             if write and data != original:
@@ -252,68 +251,6 @@ class Ledger:
         except BaseException:
             self.db.execute('ROLLBACK')
             raise
-
-    @staticmethod
-    def _migrate(data):
-        """Upgrade older state in place, version by version.
-
-        1 -> 2 drops the global slot and the 20% floor: open runs keep their exposure through their own
-        calls, and the old floor seeds the issued allowance (a floor was one fifth of the first balance).
-        2 -> 3 adds the multi-pool `holds` and the bounded `admissions` records; both start empty, so
-        every in-flight run claim is preserved untouched. Version 3 never shipped with its first hold shape, so
-        written v3 ledgers are repaired in place: missing tables are added and a `vector` hold becomes a
-        window-only hold (it named no organization, so it carries no dollar amount).
-        3 -> 4 (S3.6a) changes no claim, hold or admission: it marks the ledger as one whose R may include settled
-        charges (`organizations.*.settled`, `settled_tasks`), so code that would ignore them refuses it
-        (`ledger_identity_changed`) instead of resetting caps and credit. A stored `blocked: true` becomes
-        `legacy_block` (the block is derived from now on); every unresolved S1 call of such an organization is
-        marked `over_bound` at its maximum (v3 recorded no marker, so an over-bound call cannot be told from an
-        uncertain one: fail closed); every hold gets its accounting root. The event and root tables are created
-        idempotently on the first accounting write.
-        """
-        if data['version'] == 1:
-            data.pop('slot', None)
-            for org in data['organizations'].values():
-                floor = org.pop('floor', None)
-                if org.get('issued') is None:
-                    org['issued'] = floor * 5 if floor is not None else None
-            data['version'] = 2
-        if data['version'] == 2:
-            data['version'] = 3
-        upgraded = data['version'] == 3
-        if upgraded:
-            data['version'] = 4
-        data.setdefault('holds', {})
-        data.setdefault('admissions', [])
-        data.setdefault('seen_attempts', [])
-        for hold in data['holds'].values():
-            hold.setdefault('state', 'admitted')
-            if 'windows' not in hold:
-                vector = hold.pop('vector', {})
-                hold.update(organization=None, amount=0, cycle=None, windows={WIN + k: v for k, v in vector.items()})
-        if upgraded:  # 3 -> 4, once per migrated ledger (the upgrade is persisted by its first write)
-            for organization, org in data['organizations'].items():
-                if not org.get('blocked'):
-                    continue
-                # v3's run path left an over-bound call `unresolved` with no marker; it cannot be told apart from an
-                # uncertain one, so every unresolved call of a blocked organization is treated as over-bound at its
-                # maximum: a later lower report can never settle it (case C) and the books keep the maximum.
-                for run in data['runs'].values():
-                    if run['organization'] == organization:
-                        for call in run['calls'].values():
-                            if call['state'] == 'unresolved':
-                                call.setdefault('over_bound', call['maximum'])
-            # Every hold admitted before v4 gets its accounting root, while its admission record still exists.
-            for attempt, hold in data['holds'].items():
-                if 'root' not in hold and 'task' in hold:
-                    hold.update(zip(('root', 'stage'), Ledger._record_root(Ledger.admission(data, attempt) or {},
-                                                                           hold['task'])))
-        for org in data['organizations'].values():
-            # v4 derives the admission block (`block_reasons`) and stores no flag. A stored `blocked: true` (written
-            # by v3, or by S1's run path before v4) has no recorded source, so it becomes the sticky `legacy_block`.
-            if org.pop('blocked', False):
-                org['legacy_block'] = True
-            org.pop('overrun_block', None)
 
     def snapshot(self):
         with self.transaction(False) as data:
