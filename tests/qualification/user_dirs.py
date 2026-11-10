@@ -131,3 +131,49 @@ def isolated_store(base):
     proves the server used its pinned store; it does not prove that nothing reached the user's real stores."""
     data = Path(base) / "data" / "opencode"
     return dict(data_dir=data.is_dir(), session_store=(data / "opencode.db").is_file() or (data / "storage").is_dir())
+
+
+# ---------------------------------------------------------------- whole-run snapshots (opencode_live.py, live_modes.py)
+
+REPORT_ONLY_HOME = (".claude", ".opencode")  # written by the claude CLI / OpenCode under HOME: reported, not compared
+
+
+def snapshot(home):
+    """The user's OpenCode directories (names and mtimes) and the watched OpenAI/Codex login directories."""
+    from tests.qualification import safety
+    return dict({name: safety.snapshot_tree(Path(home) / name) for name in safety.USER_OPENCODE_DIRS},
+                watched=safety.watched_home(home))
+
+
+def report_only(home):
+    from tests.qualification import safety
+    found = {}
+    for name in REPORT_ONLY_HOME:
+        try:
+            found[name] = safety.snapshot_tree(Path(home) / name, max_depth=2)
+        except safety.Refused:
+            found[name] = None
+    claude_json = Path(home) / ".claude.json"
+    found[".claude.json"] = {"": claude_json.stat().st_mtime_ns} if claude_json.exists() else {}
+    return found
+
+
+def compare(home, before, home_before, blockers, own_ids=(), after=None, home_after=None):
+    """The results' `user_dirs` entry; unexpected changes append to `blockers` (concurrent sessions' churn is counted;
+    credentials and config fail)."""
+    from tests.qualification import safety
+    after = snapshot(home) if after is None else after
+    changes = {}
+    for name in safety.USER_OPENCODE_DIRS:
+        changes[name], unexpected = user_dir_entry(name, before[name], after[name], Path(home) / name, own_ids)
+        if unexpected:
+            blockers.append("the user's %s changed during the run" % name)
+    codex, unexpected = safety.watched_changes(before["watched"], after["watched"])
+    if unexpected:
+        blockers.append("the user's ~/.codex credentials or config changed during the run")
+    home_after = report_only(home) if home_after is None else home_after
+    report = {}
+    for name, value in home_before.items():
+        report[name] = "not snapshotted (too many entries)" if value is None or home_after.get(name) is None else \
+            {key: len(items) for key, items in compare_snapshots(value, home_after[name]).items()}
+    return dict(opencode=changes, codex=codex, home_report_only=report)

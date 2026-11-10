@@ -37,14 +37,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tests.qualification import (chatgpt, demand, drill, gateway, launcher_probes, live_common, outputs,  # noqa: E402
-                                 safety, user_dirs)
+                                 user_dirs)
 from tests.qualification.safety import (COUNTING, CallLedger, QUALIFIED_OPENCODE, Redactor, Refused,  # noqa: E402
-                                        USER_OPENCODE_DIRS, check_isolated_dir, check_opencode_version,
-                                        check_real_home, compare_snapshots, snapshot_tree)
+                                        check_isolated_dir, check_opencode_version, check_real_home)
 from tests.qualification.server import kill_leftovers  # noqa: E402
 
 MODES = {"launcher-probes": "isolation", "drill": "drill", "gateway": "gateway", "measure-demand": None}
-REPORT_ONLY_HOME = (".claude", ".opencode")
 
 
 class Interrupted(Exception):
@@ -215,7 +213,7 @@ class Session:
     def run(self):
         began = time.monotonic()
         self.results["plan"] = plan(self.mode, self.args)
-        user_before, home_before = snapshot_user_dirs(self.home), report_only_home(self.home)
+        user_before, home_before = user_dirs.snapshot(self.home), user_dirs.report_only(self.home)
         previous = {sig: signal.signal(sig, _interrupt) for sig in (signal.SIGTERM, signal.SIGINT)}
         saved_tmp = tempfile.tempdir
         tempfile.tempdir = str(self.base / "launcher-tmp")  # the launcher's private dirs live in the isolated dir
@@ -233,7 +231,7 @@ class Session:
                 tempfile.tempdir = saved_tmp
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
-        self.results["user_dirs"] = compare_user_dirs(self.home, user_before, home_before, self.results["blockers"])
+        self.results["user_dirs"] = user_dirs.compare(self.home, user_before, home_before, self.results["blockers"])
         counts = dict(getattr(self.env, "counts", {}) or {})
         servers = counts.get("servers", 0)
         self.results["measured"] = dict(counts, processes=1 + 2 * servers + counts.get("children", 0)
@@ -269,38 +267,6 @@ class Session:
                                         "assistant messages (or the reserved count when unreadable)",
                     sanitized=True, generated_by="tests/qualification/live_modes.py (no post-processing)")
         return self.redact(dict(_meta=meta, **self.results))
-
-
-def snapshot_user_dirs(home):
-    return dict({name: snapshot_tree(home / name) for name in USER_OPENCODE_DIRS}, watched=safety.watched_home(home))
-
-
-def report_only_home(home):
-    found = {}
-    for name in REPORT_ONLY_HOME:
-        try:
-            found[name] = snapshot_tree(home / name, max_depth=2)
-        except Refused:
-            found[name] = None
-    claude_json = home / ".claude.json"
-    found[".claude.json"] = {"": claude_json.stat().st_mtime_ns} if claude_json.exists() else {}
-    return found
-
-
-def compare_user_dirs(home, before, home_before, blockers):
-    changes = {}
-    for name in USER_OPENCODE_DIRS:
-        changes[name], unexpected = user_dirs.user_dir_entry(name, before[name], snapshot_tree(home / name), home / name)
-        if unexpected:
-            blockers.append("the user's %s changed during the run" % name)
-    codex, unexpected = safety.watched_changes(before["watched"], safety.watched_home(home))
-    if unexpected:
-        blockers.append("the user's ~/.codex credentials or config changed during the run")
-    after, report = report_only_home(home), {}
-    for name, snapshot in home_before.items():
-        report[name] = "not snapshotted" if snapshot is None or after.get(name) is None else \
-            {key: len(value) for key, value in compare_snapshots(snapshot, after[name]).items()}
-    return dict(opencode=changes, codex=codex, home_report_only=report)
 
 
 # ---------------------------------------------------------------- the command
