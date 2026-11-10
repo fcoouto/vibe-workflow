@@ -319,6 +319,22 @@ class ManagedProjectRefusalTests(unittest.TestCase):
                 self.assertEqual(cli.main(), 1)
                 self.assertEqual(json.loads(output.getvalue()), dict(ok=False, reason=reason))
 
+    def test_the_activation_self_check_passes_and_names_an_entry_that_refuses_late(self):
+        from runtime import usage_canary
+        from scripts import routing as command
+        self.assertEqual(routing.managed_self_check(str(self.root / 'check')), [])
+        self.assertEqual(command._self_check('module', 'runtime.usage_routing:managed_self_check'), [])
+        self.assertEqual(sorted(path.name for path in (self.root / 'check').iterdir()), ['check', 'home', 'tmp'])
+        self.assertEqual(list((self.root / 'check' / 'home').iterdir()), [])
+        original = usage_canary.run
+
+        def late(cwd, evidence, **options):  # the refusal moved after a credential-binding read
+            usage_canary.usage_credentials.validate_binding(options['binding'])
+            return original(cwd, evidence, **options)
+        with patch.object(usage_canary, 'run', late):
+            self.assertEqual(routing._self_check_body(str(self.root / 'late')), ['canary_run_not_refused_first'])
+        self.assertEqual(routing.managed_self_check(str(self.root)), ['self_check_workdir_unsafe'])
+
     def test_old_consent_is_never_api_spending_authority(self):
         """Spec 10.4 step 4: enabled legacy Usage Routing, current consent and a qualification record, with
         default routing settings, leave every API route pending with `api_usage_disabled` and read no secret."""
