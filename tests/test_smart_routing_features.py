@@ -102,8 +102,107 @@ def managed_project_fixture(test, checkout, routes=()):
     # C3-1's body must patch every default path (routing settings and ledger, OpenRouter, usage settings) to the
     # test's temporary directory, so the fixture never touches real user state.
     # --- managed_project_fixture: body owned by C3-1 ---
-    raise AssertionError('managed_project_fixture: needs C3-1 (collector source seam)')
-    yield {}  # unreachable until C3-1 replaces this body
+    # Route-id mapping (C.3 design 6.4, G2). Pure: it writes nothing, so it runs before the slice check.
+    import importlib
+    import time
+    efforts, hosts = ('none', 'low', 'medium', 'high', 'max'), (('openrouter_proposal', 'proposals'),
+                                                                 ('openrouter_worker', 'workers'))
+    mapped = []  # (route id, host, identity fields, billing class, pool, demand, extra manifest fields)
+    for entry in routes:
+        precondition(type(entry) is dict and set(entry) == {'route', 'billing_class'} and type(entry['route']) is str,
+                     'malformed managed_project_fixture route: %r' % (entry,))
+        route, billing = entry['route'], entry['billing_class']
+        if route.startswith('native:') and '#' in route and billing == 'included_subscription':
+            model, effort = route[len('native:'):].rsplit('#', 1)
+            precondition(model and effort, 'malformed native fixture route: %r' % (route,))
+            mapped.append((route, 'codex_native', dict(model=model, effort=effort), billing,
+                           'fixture-codex-subscription', {'5h': 10}, dict(binding_enforceable=True)))
+        elif route.startswith('openrouter:') and '@' in route and billing in ('dollar', 'gateway'):
+            model, provider = route[len('openrouter:'):].rsplit('@', 1)
+            precondition(model and provider, 'malformed OpenRouter fixture route: %r' % (route,))
+            for host, integration in hosts:  # the id names neither host nor effort: list every one
+                for effort in efforts:
+                    mapped.append(('%s|%s|%s' % (route, host, effort), host,
+                                   dict(model=model, provider=provider, effort=effort), 'gateway',
+                                   'fixture-openrouter', {'credit': 1_000_000},
+                                   dict(endpoint=provider, integration_route=integration)))
+        else:
+            raise FixtureError('unmapped managed_project_fixture route: %r (%s)' % (route, billing))
+    # Rule 1: every slice the fixture stands on, as an assertion (never an AttributeError or ImportError).
+    needed = (('C3-0b', 'runtime.routing_settings', 'managed_project'), ('C3-0b', 'scripts.routing', 'managed_service'),
+              ('C3-1', 'runtime.routing_observations', 'default_source'),
+              ('C3-1', 'runtime.routing_launch', 'route_identity'))
+    modules = {}
+    for slice_id, name, attribute in needed:
+        try:
+            modules[name] = importlib.import_module(name)
+        except ImportError:
+            raise AssertionError('managed_project_fixture: needs %s (%s)' % (slice_id, name)) from None
+        if not callable(getattr(modules[name], attribute, None)):
+            raise AssertionError('managed_project_fixture: needs %s (%s.%s)' % (slice_id, name, attribute))
+    launch, observations = modules['runtime.routing_launch'], modules['runtime.routing_observations']
+    from runtime import openrouter_settings, usage_settings
+    # Rule 3: every default path the fixture or the code under test can reach, inside a temporary directory.
+    temporary = tempfile.TemporaryDirectory()
+    test.addCleanup(temporary.cleanup)
+    base = Path(temporary.name).resolve()
+    settings, ledger = base / 'routing' / 'settings.json', base / 'usage' / 'organizations.sqlite3'
+    root = Path(checkout).resolve()
+
+    def patch(target, attribute, value):
+        patcher = mock.patch.object(target, attribute, value)
+        patcher.start()
+        test.addCleanup(patcher.stop)
+
+    patch(command, 'default_settings', lambda: settings)
+    patch(command, 'default_ledger', lambda: ledger)
+    patch(usage_settings, 'directory', lambda: base / 'usage')
+    patch(openrouter_settings, 'BASIC_STORAGE', base / 'openrouter-consent')
+    # Rule 4: fund each billing class on those stores (the routing command's `set`, the Ledger API for balances).
+    service = command.Service(settings, ledger)
+    try:
+        def call(request):
+            return service.handle(json.dumps(request).encode())
+        subscriptions = [CHOICE] + [dict(launch.route_identity(host, **fields), funding='subscription')
+                                    for _, host, fields, billing, *_ in mapped if billing == 'included_subscription']
+        precondition(call(dict(v=1, op='set', authority_required=True)).get('state') == 'updated',
+                     'managed_project_fixture: authority_required was not set')
+        choices = dict(implementer=subscriptions, reviewer=subscriptions)
+        precondition(call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=choices))).get('state')
+                     == 'updated', 'managed_project_fixture: worker_choices were not set')
+        revision = None
+        if any(billing == 'gateway' for _, _, _, billing, *_ in mapped):
+            enabled = call(dict(v=1, op='set', organization=dict(id='fixture-openrouter', enabled=True,
+                                                                  policy=command_tests.POLICY, expected_revision=0)))
+            precondition(enabled.get('state') == 'updated', 'managed_project_fixture: organization not enabled')
+            revision = enabled['organization']['revision']
+            service._ledger(False, write=True).observe('fixture-openrouter', 10_000_000, int(time.time()),
+                                                       issued=10_000_000)
+    finally:
+        service.close()
+    # Rule 2: the checkout is managed, and the collector reads the fixture source.
+    manifest = [dict(route='fixture-choice', status='qualified', **{key: CHOICE[key] for key in routing.ROUTE_IDENTITY},
+                     billing_class='included_subscription', pool='fixture-choice-subscription',
+                     account='fixture-choice-subscription', demand={'5h': 10}, binding_enforceable=True)]
+    for route, host, fields, billing, pool, demand, extra in mapped:
+        manifest.append(dict(route=route, status='qualified', **launch.route_identity(host, **fields),
+                             billing_class=billing, pool=pool, account=pool, demand=demand, **extra))
+
+    def windows(pool, now):
+        if pool == 'fixture-openrouter':
+            return [dict(id='credit', limit=10**12, used=0, length=None, reset_at=None, rolling=False, observed_at=now,
+                         organization='fixture-openrouter', organization_revision=revision)]
+        return [dict(id='5h', limit=1000, used=100, length=18000, reset_at=now + 3600, rolling=False,
+                     observed_at=now)]
+
+    def credential(route, scope):
+        return dict(state='ready', scope=scope, ref='fixture-openrouter') if route['billing_class'] == 'gateway' \
+            else None
+
+    source = observations.StaticSource(manifest, windows, credential)
+    patch(routing_settings, 'managed_project', lambda path, *args, **kwargs: Path(path).resolve() == root)
+    patch(observations, 'default_source', lambda *args, **kwargs: source)
+    yield dict(routes=manifest, settings=settings, ledger=ledger)
     # --- end managed_project_fixture ---
 
 
@@ -240,12 +339,14 @@ class NeedsC3MarkerTests(unittest.TestCase):
             with self.subTest(slice=bad), self.assertRaises(ValueError):
                 NEEDS_C3(bad)
 
-    def test_the_managed_project_fixture_is_an_assertion_until_c3_1(self):
+    def test_the_managed_project_fixture_refuses_unmapped_route_ids(self):
         reached = []
-        with self.assertRaisesRegex(AssertionError, r'managed_project_fixture: needs C3-1 \(collector source seam\)'):
-            with managed_project_fixture(self, ROOT, routes=(fixture_route('test-route', 'included_subscription'),)):
-                reached.append(True)
-        self.assertEqual(reached, [])  # the contract body never runs before C3-1
+        for route in (fixture_route('test-route', 'included_subscription'), fixture_route('native:m#high', 'gateway'),
+                      fixture_route('openrouter:m@p', 'included_subscription'), dict(route='native:m#high')):
+            with self.subTest(route=route), self.assertRaises(FixtureError):
+                with managed_project_fixture(self, ROOT, routes=(route,)):
+                    reached.append(True)
+        self.assertEqual(reached, [])  # a broken precondition never runs the contract body
         for bad in ('dollar', 'purchased_usage', 'api_grant'):
             with self.subTest(billing_class=bad), self.assertRaises(ValueError):
                 fixture_route('r', bad)
