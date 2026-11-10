@@ -492,7 +492,6 @@ class C2bProjectPin(gate_tests.GateBase):
 
     # C3-0b must make `--project` mandatory for a workflow-bound `prepare` (S3.5 wiring list): an unpinned service
     # refuses it with `project_required`, as `settle` already does.
-    @NEEDS_C3('C3-0b')
     def test_a_workflow_bound_prepare_requires_the_project_pin(self):
         response = self.call(prepare('p1', workflow=gate_tests.locator()))
         self.assertEqual((response['state'], response.get('reason')), ('blocked', 'project_required'),
