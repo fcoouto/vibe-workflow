@@ -23,6 +23,7 @@ ENTITLEMENTS_FILE = 'entitlements.json'
 FRESH_SECONDS = usage_budget.FRESH_SECONDS  # the same 900 s freshness the ledger applies to balances
 MAX_FILE = 1 << 20
 MAX_MARKS = 256
+CLOCK_MARGIN = routing.MAX_CLOCK_DRIFT  # seconds a stored observation may run ahead of this clock
 LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it never stalls prepare
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
@@ -174,8 +175,9 @@ def _valid_window(window):
 
 def store_window(settings_path, pool, window):
     """Record one window observation for `pool` (the launcher stores what it read after settlement). An older
-    observation never replaces a newer one."""
-    if not routing._part(pool) or not _valid_window(window):
+    observation never replaces a newer one, and one dated beyond now plus CLOCK_MARGIN is refused, so a future-dated
+    record can never shadow later ones."""
+    if not routing._part(pool) or not _valid_window(window) or window['observed_at'] > time.time() + CLOCK_MARGIN:
         raise ValueError('invalid_window_observation')
     with _locked(window_path(settings_path)) as path:
         value = _read(path) or dict(version=1, pools={})

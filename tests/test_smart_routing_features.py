@@ -158,6 +158,12 @@ def managed_project_fixture(test, checkout, routes=()):
     patch(command, 'default_ledger', lambda: ledger)
     patch(usage_settings, 'directory', lambda: base / 'usage')
     patch(openrouter_settings, 'BASIC_STORAGE', base / 'openrouter-consent')
+    for name, path in (('scripts.routing.default_settings', command.default_settings()),
+                       ('scripts.routing.default_ledger', command.default_ledger()),
+                       ('runtime.usage_settings.directory', usage_settings.directory()),
+                       ('runtime.openrouter_settings.BASIC_STORAGE', openrouter_settings.BASIC_STORAGE)):
+        precondition(base in Path(path).resolve().parents,
+                     'managed_project_fixture: %s resolves outside the fixture directory' % name)
     # Rule 4: fund each billing class on those stores (the routing command's `set`, the Ledger API for balances).
     service = command.Service(settings, ledger)
     try:

@@ -11,7 +11,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import stat
+import subprocess
+import sys
 
 from runtime import routing, routing_observations, routing_settings
 
@@ -221,14 +224,17 @@ def _blocked(reason, **extra):
 
 
 def launch(service, *, host, assignment, job, catalog, transport, workflow=None, constraints=None, planned=False,
-           profile=None, dollar=False, settings_path=None, source=None, kind='primary'):
+           profile=None, settings_path=None, source=None, kind='primary'):
     """Run one managed attempt through the routing service `service` (pinned; in-process `handle`).
 
     `transport(route, *, authority, session_id, message_id)` performs the host send. It is the only receiver of the
     token, and returns the host's re-read outcome `{kind: 'complete' | 'not_dispatched', usage?}`; raising means the
     launch could not be confirmed, which records `uncertain` and names the operator op. A refusal before `dispatch`
     sends nothing and closes any admitted hold with `not_dispatched`. Pending and blocked answers stop the launch:
-    there is no fallback to another selector or route."""
+    there is no fallback to another selector or route.
+
+    The subscription preflight runs before `prepare`; the dollar items run again on a fresh `status` whenever the
+    admitted billing class is a dollar class, so no caller flag can skip them."""
     if getattr(service, 'project', None) is None:
         return _blocked(PROJECT_REQUIRED)
     settings_path = service.settings_path if settings_path is None else settings_path
@@ -237,7 +243,7 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
                                   profile=profile)
     except Refused as error:
         return _blocked(error.reason)
-    reason = preflight(_call(service, dict(v=1, op='status')), dollar=dollar)
+    reason = preflight(_call(service, dict(v=1, op='status')))
     if reason is not None:
         return _blocked(reason)
     if not managed(service.project, settings_path):
@@ -248,6 +254,8 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     admission = prepared['admission']
     attempt = admission['attempt_id']
     facts, reason = admitted_check(admission, host=host, catalog=catalog, settings_path=settings_path, source=source)
+    if reason is None and admission.get('billing_class') in routing.FUNDED:
+        reason = preflight(_call(service, dict(v=1, op='status')), dollar=True)
     if reason is None:
         facts['kind'] = kind
         sent = _call(service, dict(v=1, op='dispatch', attempt_id=attempt, request=facts))
@@ -301,12 +309,57 @@ def _sandbox(workdir):
     return path.resolve()
 
 
+# Set only by the self-check child's entry code (SELF_CHECK_CHILD), never from the environment or a request.
+_SELF_CHECK_CHILD = False
+SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
+SELF_CHECK_MARK = 'routing-launch-self-check:'
+SELF_CHECK_CHILD = (
+    'import json, sys\n'
+    'sys.path.insert(0, sys.argv[1])\n'
+    'from runtime import routing_launch\n'
+    'routing_launch._SELF_CHECK_CHILD = True\n'
+    'print(routing_launch.SELF_CHECK_MARK + json.dumps(routing_launch._self_check_in_child(sys.argv[2])))\n')
+
+
 def managed_self_check(workdir):
     """C.3 design 4.2 capability "Collector and launcher core": `[]` when it holds, else fixed failure codes.
 
-    Against stores it creates in `workdir` only, with a test source built here in code: the preflight refusals,
-    one launch admitted through the collector, and caller observations refused. It opens no default path and makes
-    no network, model, host or secret-store call. Until C3-0b's managed-project predicate exists it fails closed."""
+    The check swaps module globals for its run, so it never runs in the calling process: it runs in a child of this
+    interpreter, with the plugin package root first on its import path and a fixed environment, and its stores
+    in `workdir`. A long-lived process calling this keeps its own globals untouched."""
+    root = _sandbox(workdir)
+    if root is None:
+        return ['self_check_workdir_unsafe']
+    for name in ('home', 'tmp'):
+        (root / name).mkdir(mode=0o700)
+    env = dict(PATH='/usr/bin:/bin', HOME=str(root / 'home'), TMPDIR=str(root / 'tmp'), LANG='C.UTF-8')
+    package = Path(__file__).resolve().parents[1]
+    child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, str(package), str(root / 'check')],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+                             cwd=root, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=SELF_CHECK_BUDGET)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
+        return ['self_check_timeout']
+    lines = [line for line in output.decode('utf-8', 'replace').splitlines() if line.startswith(SELF_CHECK_MARK)]
+    try:
+        codes = json.loads(lines[-1][len(SELF_CHECK_MARK):])
+    except (IndexError, ValueError):
+        return ['self_check_error']
+    if type(codes) is not list or not all(type(code) is str for code in codes):
+        return ['self_check_error']
+    return codes if child.returncode == 0 or codes else ['self_check_error']
+
+
+def _self_check_in_child(workdir):
+    """The check body. It refuses to run unless its child entry point set `_SELF_CHECK_CHILD`."""
+    if _SELF_CHECK_CHILD is not True:
+        return ['self_check_not_in_child']
     root = _sandbox(workdir)
     if root is None:
         return ['self_check_workdir_unsafe']
