@@ -9,7 +9,7 @@ import time
 from types import SimpleNamespace
 import uuid
 
-from runtime import changes, langfuse, local_ownership, onboarding, observability_credentials as credentials, startup, state
+from runtime import changes, langfuse, local_ownership, onboarding, observability_credentials as credentials, persisted_binding, startup, state
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -141,7 +141,7 @@ class _Store:
                 startup._canonical_hash(binding['accepted_scope_digest'])
                 startup._canonical_binding(binding['authority_database'])
                 binding = {key: value for key, value in binding.items() if key not in historical}
-            if json.dumps(binding, sort_keys=True) != json.dumps(self.binding, sort_keys=True):
+            if not persisted_binding.record_matches(binding, self.binding):
                 raise SettingsError("observability_configuration_scope_changed")
             return record
         except SettingsError:
