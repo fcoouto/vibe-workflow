@@ -61,7 +61,8 @@ class LiveEnv:
     def __init__(self, base, redact, signin_timeout=900, announce=print, ask=input):
         self.base, self.redact, self.signin_timeout, self.announce, self.ask = Path(base), redact, signin_timeout, announce, ask
         self.pgids, self.real_home = [], Path.home()
-        self.counts = dict(servers=0, children=0, routing_commands=0)
+        self.counts = dict(servers=0, children=0, routing_commands=0, codex_reads=0)
+        self.codex_environ = None  # the reader's default: this process's environment (the user's Codex login, read-only)
 
     def start(self, project, settings, ledger, environ, options=None):
         from runtime import opencode_launcher
@@ -94,9 +95,32 @@ class LiveEnv:
         return shutil.which(name, path=path)
 
     def codex_window(self):
-        """The Codex pool's windows through lane R7's read-only reader (branch smart-routing-codex-window-reader). It
-        is not on main yet, so the ChatGPT pool's demand stays unmeasured; no model call is ever made to measure."""
-        return None
+        """One read of the ChatGPT pool's windows through runtime/codex_rate_limits.read_windows (zero tokens, one
+        short-lived `codex app-server`, the reader's own timeout and stop sequence): `{windows: [window], declared}`,
+        or `{reason}` with the reader's fixed reason. A5 reads once before and once after its launch only. Nothing is
+        stored: no routing settings or window store (the user's or a temporary one) is read or written, so two reads
+        in the same second are both kept (a store keeps only the newer of two). The shipped manifest's declared
+        windows for the pool are used when it declares any; only when it declares none does the read accept every
+        window the reader understands (`WINDOW_IDS`), marked `declared: False`."""
+        from runtime import codex_rate_limits as reader, routing_observations
+        self.counts["codex_reads"] += 1
+        try:
+            manifest = routing_observations.load_manifest()
+        except (OSError, ValueError):
+            return dict(reason="route_manifest_invalid")
+        declared = bool(reader.declared_windows(manifest))
+        if not declared:
+            manifest = dict(pools={reader.POOL: dict(windows=[dict(id=key) for key in sorted(reader.WINDOW_IDS.values())])})
+        try:
+            return dict(windows=reader.read_windows(command=self.codex_command(), environ=self.codex_environ,
+                                                    manifest=manifest), declared=declared)
+        except reader.ReadError as error:
+            return dict(reason=str(error) if str(error) in reader.REASONS else "codex_reader_failed")
+        except (OSError, ValueError):  # never fails A5: recorded, and A5 goes on without a ChatGPT sample
+            return dict(reason="codex_reader_failed")
+
+    def codex_command(self):
+        return None  # the reader's own search: an absolute `codex` on PATH (tests replace it with the double)
 
     def signin(self, host, note):
         """"Sign in with ChatGPT" on this server (the qualified chatgpt.connect flow): the login lives in the probe's
@@ -241,7 +265,7 @@ class Session:
         counts = dict(getattr(self.env, "counts", {}) or {})
         servers = counts.get("servers", 0)
         self.results["measured"] = dict(counts, processes=1 + 2 * servers + counts.get("children", 0)
-                                        + counts.get("routing_commands", 0),
+                                        + counts.get("routing_commands", 0) + counts.get("codex_reads", 0),
                                         sent=(self.results.get("call_ledger") or {}).get(self.purpose, {}).get("spent"),
                                         wall_s=round(time.monotonic() - began, 1))
         return self.results

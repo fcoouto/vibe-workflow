@@ -1,14 +1,21 @@
 """`measure-demand` with doubles: readings come only from data the budgeted launches already produce (the launcher's
-stored `native.rateLimit` windows, the drill's re-read, lane R7's Codex reader around A5); no extra model call,
-process or server. The arithmetic, the owner-only log and the `measure-demand` mode itself."""
+stored `native.rateLimit` windows, the drill's re-read, the Codex rate-limit reader around A5,
+with its app-server double); no extra model call or server. The arithmetic, the owner-only log and the `measure-demand` mode itself."""
 import json
 import os
+from pathlib import Path
+import shutil
+import sys
+import time
+from unittest import mock
 
+from runtime import routing_observations
 from tests.qualification import demand, launcher_probes, live_modes, safety
 from tests.qualification.doubles import Temp
 from tests.qualification.launcher_doubles import FakeEnv
 
 APPROVAL = dict(by="the user", at="2026-11-10T12:00Z", scope="live session")
+DOUBLE = Path(__file__).resolve().parent / "codex_app_server_double.py"
 
 
 def reading(label, used, at, reset=5000, pool="sub", window="5h"):
@@ -79,13 +86,14 @@ class LaunchReadingTests(Temp):
         self.assertEqual([m["windows"]["5h"] for m in report["per_launch"]], [dict(reason="no_before"), dict(delta=12)])
         self.assertEqual(report["suggestion"]["sub"]["5h"]["demand"], 18)
 
-    def test_A5_reads_the_codex_window_before_and_after_only_when_the_reader_exists(self):
+    def test_A5_reads_the_codex_window_before_and_after_only_when_the_reader_answers(self):
         models = [dict(providerID="openai", id="gpt-6-luna", variants=["none"])]
         absent = FakeEnv(self.tmp / "w1", models=list(models))
         probes = launcher_probes.LauncherProbes(self.private(self.tmp / "q1"), self.ledger, "r", absent,
                                                 self.private(self.tmp / "real"), "u", safety.Redactor(),
                                                 a5_model="openai/gpt-6-luna#none", demand_log=self.log)
-        self.assertEqual(probes.run(["A1", "A2", "A3", "A5"])["A5"]["demand"], dict(measured=False, reason="codex_reader_unavailable"))
+        self.assertEqual(probes.run(["A1", "A2", "A3", "A5"])["A5"]["demand"], dict(measured=False, reason="codex_unavailable"))
+        self.assertEqual(absent.codex_reads, 1)  # a failed reading before A5 spawns no second read after it
         self.assertEqual(absent.hosts[1].prompts, 1)
         windows = [[dict(id="5h", used=100, reset_at=9000, observed_at=1)], [dict(id="5h", used=130, reset_at=9000, observed_at=2)]]
         present = FakeEnv(self.tmp / "w2", models=list(models), codex_windows=windows)
@@ -108,6 +116,126 @@ class LaunchReadingTests(Temp):
         self.assertTrue(result["facts"]["demand_reading"])
         self.assertEqual([r["label"] for r in self.log.readings()], ["drill1"])
         self.assertEqual(self.log.readings()[0]["windows"]["5h"]["used"], 300)
+
+
+class LiveCodexReadingTests(Temp):
+    """`LiveEnv.codex_window` through runtime/codex_rate_limits.py with the reader's own app-server double
+    (tests/codex_app_server_double.py): an empty PATH, so no real `codex` is reachable, and a fake auth file."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertNotEqual(self.tmp, Path.home().resolve())
+        self.base = self.private(self.tmp / "q")
+        fake_home = self.private(self.tmp / "codex-home")
+        self.private(fake_home / ".codex")
+        (fake_home / ".codex" / "auth.json").write_text('{"fake": true}')  # never a real credential
+        empty_bin = self.private(self.tmp / "bin")
+        self.environ = dict(PATH=str(empty_bin), HOME=str(fake_home), LANG="C")
+        self.assertIsNone(shutil.which("codex", path=self.environ["PATH"]))
+        self.double_log = self.tmp / "double.log"
+
+    def env(self, scenario="ok", percents=(10, 13)):
+        env = live_modes.LiveEnv(self.base, safety.Redactor())
+        env.codex_environ = self.environ
+        reset = int(time.time()) + 3600
+        values = [dict(rateLimits=dict(limitId="codex", primary=dict(usedPercent=p, windowDurationMins=300, resetsAt=reset)))
+                  for p in percents]
+        commands = [[sys.executable, "-I", "-B", str(DOUBLE), str(self.double_log), scenario, json.dumps(v)] for v in values]
+        env.codex_command = lambda: commands.pop(0)
+        return env
+
+    def spawns(self):
+        lines = self.double_log.read_text().splitlines() if self.double_log.exists() else []
+        return [json.loads(line) for line in lines]
+
+    def test_one_read_goes_through_the_reader_and_stores_nothing(self):
+        env = self.env()
+        found = env.codex_window()
+        self.assertEqual(sorted(found), ["declared", "windows"])
+        self.assertIs(found["declared"], False)  # the shipped manifest declares no chatgpt windows yet
+        self.assertEqual([(w["id"], w["used"]) for w in found["windows"]], [("5h", 100)])
+        self.assertEqual(env.counts["codex_reads"], 1)
+        received = [e["received"].get("method") for e in self.spawns() if "received" in e]
+        self.assertEqual(received, ["initialize", "initialized", "account/rateLimits/read"])  # the reader's only methods
+        self.assertEqual(list(self.base.iterdir()), [])  # no routing settings or window store written
+        self.assertFalse(Path(routing_observations.window_path(Path.home() / ".local/state/vibe-workflow/routing/s.json")).exists())
+
+    def test_A5_logs_both_codex_readings_as_chatgpt_demand(self):
+        live = self.env()
+        env = FakeEnv(self.tmp / "w", models=[dict(providerID="openai", id="gpt-6-luna", variants=["none"])])
+        env.codex_window = live.codex_window
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+        log = demand.DemandLog(demand.log_path(ledger.path))
+        probes = launcher_probes.LauncherProbes(self.private(self.tmp / "q2"), ledger, "r", env,
+                                                self.private(self.tmp / "real"), "u", safety.Redactor(),
+                                                a5_model="openai/gpt-6-luna#none", demand_log=log)
+        result = probes.run(["A1", "A2", "A3", "A5"])["A5"]
+        self.assertIs(result["passed"], True, json.dumps(result)[:1500])
+        self.assertEqual(result["demand"], dict(measured=True, declared=False))
+        self.assertEqual(live.counts["codex_reads"], 2)
+        self.assertEqual([r.get("declared") for r in log.readings()], [False, False])
+        report = demand.report(log)
+        self.assertEqual([m.get("declared") for m in report["per_launch"]], [False, False])
+        self.assertIs(report["suggestion"]["chatgpt"]["5h"]["declared"], False)  # one before and one after the launch, nothing else
+        self.assertEqual(sum(1 for e in self.spawns() if e.get("spawned")), 2)
+        self.assertEqual([r["label"] for r in log.readings()], ["A5:before", "A5:after"])
+        self.assertEqual(demand.suggest(demand.measure(log.readings()))["chatgpt"]["5h"]["max_delta"], 30)
+
+    def manifest(self, windows):
+        from runtime import codex_rate_limits as reader
+        return dict(version=1, routes=[], pools={reader.POOL: dict(windows=[dict(id=key) for key in windows])})
+
+    def test_the_manifest_s_declared_windows_are_used_when_it_declares_any(self):
+        for declared, expected in ((["5h"], "windows"), (["7d"], "codex_window_undeclared")):
+            with self.subTest(declared=declared):
+                env = self.env()
+                with mock.patch.object(routing_observations, "load_manifest", return_value=self.manifest(declared)):
+                    found = env.codex_window()
+                self.assertIn(expected, (found.get("reason"), "windows" if "windows" in found else None))
+                if "windows" in found:
+                    self.assertIs(found["declared"], True)
+        with mock.patch.object(routing_observations, "load_manifest", side_effect=ValueError("route_manifest_invalid")):
+            self.assertEqual(self.env().codex_window(), dict(reason="route_manifest_invalid"))
+
+    def test_declared_readings_carry_no_mark(self):
+        log = demand.DemandLog(self.tmp / demand.FILE)
+        log.append(reading("A5:before", 100, 1000, pool="chatgpt"))
+        log.append(reading("A5:after", 130, 1010, pool="chatgpt"))
+        report = demand.report(log)
+        self.assertNotIn("declared", report["per_launch"][1])
+        self.assertNotIn("declared", report["suggestion"]["chatgpt"]["5h"])
+
+    def test_a_failed_read_records_its_fixed_reason_and_never_fails_A5(self):
+        for scenario, reason in (("exit_at_once", "codex_exited"), (None, "codex_unavailable")):
+            with self.subTest(reason):
+                live = self.env(scenario or "ok")
+                if scenario is None:
+                    live.codex_command = lambda: None  # the default command search: nothing on the empty PATH
+                env = FakeEnv(self.tmp / ("w-" + reason), models=[dict(providerID="openai", id="gpt-6-luna", variants=["none"])])
+                env.codex_window = live.codex_window
+                ledger = safety.CallLedger.initialize(self.private(self.tmp / ("state-" + reason)) / "calls.jsonl")
+                ledger.set_cap("isolation", 8, "approved", approval=APPROVAL)
+                log = demand.DemandLog(demand.log_path(ledger.path))
+                probes = launcher_probes.LauncherProbes(self.private(self.tmp / ("q-" + reason)), ledger, "r", env,
+                                                        self.private(self.tmp / "real"), "u", safety.Redactor(),
+                                                        a5_model="openai/gpt-6-luna#none", demand_log=log)
+                result = probes.run(["A1", "A2", "A3", "A5"])["A5"]
+                self.assertIs(result["passed"], True, json.dumps(result)[:1500])
+                self.assertEqual(result["demand"], dict(measured=False, reason=reason))
+                self.assertEqual(live.counts["codex_reads"], 1)  # no read after a failed one
+                self.assertEqual(log.readings(), [])
+
+    def test_the_plan_counts_the_two_codex_reads_only_when_A5_runs(self):
+        without, with_a5 = launcher_probes.plan(["A1", "A2", "A3"]), launcher_probes.plan(["A1", "A2", "A3", "A5"])
+        self.assertEqual((without["codex_reads"], with_a5["codex_reads"]), (0, 2))
+        self.assertEqual(with_a5["processes"], 1 + 2 * with_a5["servers"] + 2)
+
+    def test_no_real_codex_is_reachable_by_default(self):
+        env = live_modes.LiveEnv(self.base, safety.Redactor())
+        env.codex_environ = self.environ  # the default command: the empty PATH has no codex
+        self.assertEqual(env.codex_window(), dict(reason="codex_unavailable"))
+        self.assertFalse(self.double_log.exists())
 
 
 class MeasureDemandModeTests(Temp):

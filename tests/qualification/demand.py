@@ -4,8 +4,11 @@ No model call, process or provider read is added to measure. Every reading comes
 already produce:
 - Claude route: the settled launch's own `native.rateLimit` windows, which `opencode_launcher.launch` stores in the
   run's temporary window store (`routing_observations.window_path`), and the drill's re-read of its idle session.
-- ChatGPT/Codex pool: one Codex rate-limit read before and one after the A5 prompt through the read-only reader of
-  lane R7 (`env.codex_window()`); until that reader is on `main` it answers None and the pool stays unmeasured.
+- ChatGPT/Codex pool: one Codex rate-limit read before and one after the A5 prompt through the read-only reader
+  runtime/codex_rate_limits.py (`env.codex_window()`, zero tokens). A failed read records the reader's fixed reason
+  and the pool has no sample from that run; A5 itself never fails for it. The manifest's declared windows for the
+  pool are used when it declares any; when it declares none, the reader's known windows are read and each reading,
+  per-launch entry and suggestion is marked `declared: false`.
 
 Readings are appended to an owner-only `demand-readings.jsonl` next to the call ledger (never in a repository), so
 consecutive launches across modes (A6 -> A7 -> drill 1) pair up. A launch's demand is the rise of each window's
@@ -118,7 +121,10 @@ def measure(readings):
                 windows[window_id] = dict(reason="below_resolution")  # under one stored unit: not a 0 sample
             else:
                 windows[window_id] = dict(delta=now["used"] - prior["used"])
-        measured.append(dict(label=reading.get("label"), pool=pool, windows=windows))
+        entry = dict(label=reading.get("label"), pool=pool, windows=windows)
+        if reading.get("declared") is False:
+            entry["declared"] = False
+        measured.append(entry)
         last[pool] = reading
     return measured
 
@@ -132,6 +138,8 @@ def suggest(measured, margin_pct=MARGIN_PCT):
                 continue
             slot = found.setdefault(entry["pool"], {}).setdefault(window_id, dict(samples=0, max_delta=0))
             slot["samples"] += 1
+            if entry.get("declared") is False:
+                slot["declared"] = False  # the manifest declares no window for this pool yet
             slot["max_delta"] = max(slot["max_delta"], value["delta"])
     for windows in found.values():
         for slot in windows.values():

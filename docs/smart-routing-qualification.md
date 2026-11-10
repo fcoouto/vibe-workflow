@@ -45,9 +45,9 @@ python3 -B tests/qualification/live_modes.py launcher-probes --isolated-dir "${Q
   --out "${OUT:?}/launcher-probes.json" --a5-model openai/<MODEL>#<VARIANT> --no-variant-model <PROVIDER>/<MODEL>
 ```
 
-- **Proves** pre-canary item 3: A1 the launcher's flags, password and inline config are honoured; A2 and A3 a hostile project or global config adds no plugin, MCP, formatter or LSP and relaxes no permission; A4 no second routing plugin from the real global config; A5 outside reads and server- vs session-permission precedence, with the permission answer's shape; A6 the fixed `PATH` reaches the Claude tool, and the reply's text-part key; A7 a model listed without variants is admitted, launched and settled. A6 and A7 also store the window readings `measure-demand` uses.
+- **Proves** pre-canary item 3: A1 the launcher's flags, password and inline config are honoured; A2 and A3 a hostile project or global config adds no plugin, MCP, formatter or LSP and relaxes no permission; A4 no second routing plugin from the real global config; A5 outside reads and server- vs session-permission precedence, with the permission answer's shape; A6 the fixed `PATH` reaches the Claude tool, and the reply's text-part key; A7 a model listed without variants is admitted, launched and settled. A6 and A7 also store the window readings `measure-demand` uses, and A5 takes its two Codex readings (step 6).
 - **Order it enforces:** A5 only after A1–A3 pass in the same run; A6 and A7 only after A4 passes.
-- **Expect:** 4 model calls (A5 2, A6 1, A7 1; A1–A4 send none), 7 processes (`opencode --version`, then three servers each with its routing child), about 1 minute plus the interactive ChatGPT sign-in for A5. `--accept-outside-reads` records allowed outside reads as the user's accepted risk; pass it only on the user's say-so.
+- **Expect:** 4 model calls (A5 2, A6 1, A7 1; A1–A4 send none), 9 processes (`opencode --version`, then three servers each with its routing child, and two short-lived `codex app-server` reads around A5), about 1 minute plus the interactive ChatGPT sign-in for A5. `--accept-outside-reads` records allowed outside reads as the user's accepted risk; pass it only on the user's say-so.
 - **Pass:** exit 0, every probe `passed: true`, no blockers, `cleanup.verified_by_harness: true`. **Fail:** any probe `passed: false` or a blocker; do not run the gateway (step 5).
 
 ### 3. Lost-acknowledgment drill (S3.6c, purpose `drill`)
@@ -97,7 +97,7 @@ python3 -B tests/qualification/live_modes.py gateway --isolated-dir "${Q:?}" --c
 python3 -B tests/qualification/live_modes.py measure-demand --call-ledger "${L:?}" --out "${OUT:?}/demand.json"
 ```
 
-- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. It suggests the largest delta plus 50% (at least 1) as the manifest `demand`. Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool has no readings until the harness's Codex hook is wired ([plan follow-up](superpowers/plans/2026-11-08-smart-routing.md#follow-ups-from-merged-work)).
+- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. It suggests the largest delta plus 50% (at least 1) as the manifest `demand`. Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool's readings come from A5: one Codex rate-limit read before its launch and one after, through `runtime/codex_rate_limits.py` (0 tokens, the user's Codex login used read-only, nothing stored). It reads the windows the manifest declares for the pool; while it declares none, it reads the reader's known windows (`5h`, `7d`) and marks each reading, per-launch entry and suggestion `declared: false`. A failed read is recorded as `A5.demand.reason` (the reader's fixed reason); A5 is not failed for it, and that run gives the pool no sample.
 - **Expect:** 0 calls, 0 processes, under 1 s.
 - **Pass:** a measured delta for every window a manifest route demands. **Fail:** a window reported with a reason instead of a value; that route's demand stays unmeasured and #227 does not merge with it.
 
@@ -109,11 +109,31 @@ python3 -B tests/qualification/opencode_live.py --export-canary-admissions --can
   [--replay-dir <export dir>]
 ```
 
-Pass `--canary-state` explicitly: without it the command is refused.
+For the production-ledger canary (step 8), replace `--canary-state "${CS:?}"` with the same `--production-ledger --approval` arguments as its run.
 
 - **Proves:** every canary admission record, with its snapshot detail, is in the owner-only export (`~/.local/state/vibe-workflow-replay/canary/`) before the ledger prunes the detail after 24 hours. The canary also exports at the end of each run and at the next admission once the last export is 12 hours old, and refuses a new run while any record is missing. Rules: [validation Edit 6](smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history).
 - **Expect:** 0 calls, no server, one read-only ledger connection, under a second.
-- **Limit:** it reads only a dedicated canary state; `--canary-state` refuses the production routing state. The production-ledger form for the canary ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)) comes with a harness change that is in progress and not built: an explicit `--production-ledger` flag plus an `--approval` record, never the default.
+- **Limit:** `--canary-state` refuses the production routing state; only the step-8 form reads it.
+
+### 8. Canary on the production routing ledger (user approval, canary only)
+
+The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
+
+1. **The user activates the project.** Only the user adds the checkout to the production `managed_projects`, with the one-shot `scripts/routing.py set` (it passes only once the activation gate passes). The harness never changes `managed_projects` and refuses a project that is not on it.
+2. **The production ledger must exist and be clean.** The harness never creates, initializes or resets it. An unclean state (open attempts or holds, Smart Routing off, API Usage on, an enabled organization, raised caps) is refused before any write, with the condition named; fix it through `scripts/routing.py`, for example settle open holds with the one-shot operator ops.
+3. **Run the canary:**
+
+   ```sh
+   Q=$(mktemp -d) && chmod 700 "${Q:?}"
+   python3 -B tests/qualification/opencode_live.py --isolated-dir "${Q:?}" --call-ledger "${L:?}" --canary \
+     --project <the allowlisted checkout> --production-ledger --approval "<who>" "<when, ISO 8601>" "<scope, naming the canary>" \
+     --out "${OUT:?}/canary.json"
+   ```
+
+   Every canary write goes through `scripts/routing.py` under its one-shot and operator rules. The approval is recorded verbatim in the results (`production_ledger.approval`).
+4. **Export read-only.** The canary exports its admissions at the end of the run and every 12 hours by key, and on demand with step 7 in its production form; each export is one read-only connection to the production ledger.
+5. **Reset never applies.** `--reset-canary-state` refuses the production state.
+6. **On an abort** the harness turns Smart Routing OFF in the production settings through `scripts/routing.py set` (the kill switch). When the canary ends, the user removes the project from `managed_projects` with the one-shot `set`.
 
 ### After the session
 
@@ -590,7 +610,7 @@ The per-criterion table is in the [validation results](smart-routing-validation.
 
 - **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.
 - **`version_changed` on every live aggregate (accepted, open P0.8 item).** The resync gives zero deltas. Whether `durable.version` is a version per aggregate or per event type is not established.
-- **Uncertain subscription holds (follow-up).** They have no operator recovery path. The plan's follow-up task "subscription hold reconcile" is required before cutover and before any production use of enforced routing. Until then the pilot runs on a dedicated canary ledger.
+- **Uncertain subscription holds (follow-up).** They have no operator recovery path. The plan's follow-up task "subscription hold reconcile" is required before cutover and before any production use of enforced routing. The bounded pilot keeps its dedicated canary ledger; only the approved canary runs on the production ledger ([step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)).
 - **Probe exposure.** The probes' reserved calls count against the cap of the purpose they run under (`pilot` in canary mode).
 
 ## Settling a dead run's reservation

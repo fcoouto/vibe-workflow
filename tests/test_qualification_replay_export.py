@@ -147,7 +147,7 @@ class CanaryWiringTests(Temp):
         self.seed_canary()
         argv = ["--isolated-dir", str(self.q), "--call-ledger", str(self.ledger_path), "--canary", "--project",
                 canary.ALLOWLIST, "--canary-state", str(self.canary_state), "--replay-dir", str(self.replay)]
-        with mock.patch.object(canary, "check_project", lambda project, *a: project), \
+        with mock.patch.object(canary, "check_project", lambda project, *a, **k: project), \
                 mock.patch.object(canary, "check_ancestor_configs", lambda project: None):
             self.assertEqual(live.main(argv), 2)
         self.assertEqual(list(self.q.iterdir()), [])

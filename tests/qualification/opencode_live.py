@@ -13,8 +13,9 @@ Qualification stages (`--through N`, temporary routing stores pinned in the isol
   4  lost acknowledgment (no model call)
 
 Canary mode (`--canary --project <allowlisted checkout>`): the bounded pilot of docs/smart-routing-validation.md,
-on a dedicated canary routing state (`--canary-state`, never the production settings or ledger) with `--project`
-pinned; see tests/qualification/canary.py. A dead run's reservation is settled with `--settle-dead SEQ`.
+on a dedicated canary routing state (`--canary-state`) by default, or, only with `--production-ledger` and a recorded
+`--approval BY AT SCOPE`, on the production settings and ledger (canary.resolve_state), with `--project` pinned; see
+tests/qualification/canary.py. A dead run's reservation is settled with `--settle-dead SEQ`.
 
 Safety rules it enforces itself (tests/test_qualification_harness.py covers the pure parts):
 - `--isolated-dir` must be an empty, owner-only directory outside OpenCode's user directories, ~/Library/Application
@@ -100,6 +101,7 @@ class Run:
         if canary_project and not canary_state:
             raise Refused("canary mode needs the dedicated canary state")
         self.canary_state = canary_state
+        production = bool(canary_state and canary_state.get("production"))
         self.replay_dir = replay_export.default_dir()  # canary admission exports; HOME is read now, never at import
         if canary_project:
             self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
@@ -115,6 +117,8 @@ class Run:
         self.reread_wait = canary.REREAD_WAIT_S
         self.account_progress = None
         self.results = dict(mode=self.purpose, stages={}, ledger=[], blockers=[], deviations=[])
+        if production:  # --production-ledger: the user's recorded approval travels with the results
+            self.results["production_ledger"] = dict(approval=canary_state["approval"])
         self.redact = Redactor(paths=[str(base), os.path.realpath(base), str(base).replace("/private/", "/", 1), str(ROOT),
                                       str(Path.home())], names=[os.environ.get("USER", "")])
         self.events = None
@@ -724,12 +728,12 @@ class Run:
         checked before anything is written to the project or a server starts; health and the probes follow the
         start, and no admission begins unless they pass."""
         s = "pilot"
-        self.note(s, "canary_state", canary.initialize_state(self.routing))
+        self.note(s, "canary_state", canary.initialize_state(self.routing, self.canary_state.get("production")))
         before = self.routing("status")[0]
         self.note(s, "status_at_start", status_view(before))
         refusals = canary.preflight(before)
         if refusals:
-            raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.RESET_ADVICE))
+            raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
         canary.check_ancestor_configs(self.canary_project)
         if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
@@ -869,12 +873,15 @@ def main(argv=None):
     parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
     parser.add_argument("--project", help="canary: the allowlisted checkout")
-    parser.add_argument("--canary-state", default=str(canary.DEFAULT_STATE),
-                        help="canary: the dedicated routing state directory (never the production one)")
+    parser.add_argument("--canary-state", help="canary: the dedicated routing state directory (default %s; never the "
+                                               "production one)" % canary.DEFAULT_STATE)
+    parser.add_argument("--production-ledger", action="store_true", help="canary and its export only, with --approval: "
+                        "the production routing settings and ledger (never the default)")
     parser.add_argument("--set-cap", nargs=2, metavar=("PURPOSE", "CAP"),
                         help="append a recorded cap change (up to the code's recorded maximum; needs --reason)")
     parser.add_argument("--reason", help="the recorded reason for --set-cap")
-    parser.add_argument("--approval", nargs=3, metavar=("BY", "AT", "SCOPE"), help="--set-cap: who approved, when, for what")
+    parser.add_argument("--approval", nargs=3, metavar=("BY", "AT", "SCOPE"),
+                        help="--set-cap and --production-ledger: who approved, when, for what")
     parser.add_argument("--reset-canary-state", action="store_true",
                         help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
@@ -888,6 +895,7 @@ def main(argv=None):
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
     try:
+        canary.check_production_options(args)
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))
@@ -901,11 +909,11 @@ def main(argv=None):
                              indent=2))
             return 0
         if args.export_canary_admissions:
-            state = canary.check_canary_state(args.canary_state)
+            state = canary.resolve_state(args.canary_state, args.production_ledger, args.approval)
             print(json.dumps(replay_export.export(state["ledger"], args.replay_dir and Path(args.replay_dir)), indent=2))
             return 0
         if args.reset_canary_state:
-            print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
+            print(json.dumps(canary.reset_state(Path(args.canary_state or canary.DEFAULT_STATE), processes()), indent=2))
             return 0
         if args.settle_dead is not None:
             totals = CallLedger(args.call_ledger or "").settle_dead(args.settle_dead, processes())
@@ -934,8 +942,10 @@ def main(argv=None):
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
         purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None
-        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
-        project = canary.check_project(args.project, args.canary_allow, state and state["settings"]) if args.canary else None
+        state = canary.resolve_state(args.canary_state, args.production_ledger, args.approval, isolated=base) \
+            if args.canary else None
+        project = canary.check_project(args.project, args.canary_allow, state and state["settings"],
+                                       managed=bool(state and state.get("production"))) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
             replay_export.require_fresh(state["ledger"], args.replay_dir and Path(args.replay_dir))  # every record exported

@@ -2,7 +2,8 @@
 
 Pure decisions over an injectable environment, so every refusal and abort path is unit-tested without a server:
 `check_project` (the one-project allowlist), `check_canary_state` and `initialize_state` (the dedicated canary
-routing state; never the production settings or ledger), `preflight` (refusals before any write), `preconditions`
+routing state, the default), `resolve_state` (the production settings and ledger only with `--production-ledger` and a
+recorded `--approval`; never created, initialized or reset by the harness), `preflight` (refusals before any write), `preconditions`
 (refusals once the server and probes ran), `plan_assignments` (up to 20 explicit subscription admissions across three
 roles and two complexity bands) and `PilotDriver` (sequential admissions with the durable `pilot` call cap, a 24-hour
 limit, working-tree checks, and a catch-all abort that recovers by phase and runs the Smart Routing OFF kill switch).
@@ -24,7 +25,7 @@ import shutil
 import stat
 import time
 
-from tests.qualification.safety import (BudgetExceeded, HARNESS_NAME, HARNESS_SCRIPTS, MODEL, PROTECTED, PROVIDER,
+from tests.qualification.safety import (APPROVAL_FIELDS, BudgetExceeded, HARNESS_NAME, HARNESS_SCRIPTS, MODEL, PROTECTED, PROVIDER,
                                         Refused, VARIANT,
                                         exception_origin, inside_git_worktree, summarize_ms)
 
@@ -40,6 +41,10 @@ DEFAULT_STATE = Path.home() / ".local/state/vibe-workflow-qualification/canary"
 PRODUCTION_STATE_ROOT = ".local/state/vibe-workflow"
 RESET_ADVICE = ("The canary routing state is not clean. It belongs to the pilot only: after confirming no harness run is "
                 "alive, the operator may reset it by deleting the canary directory; the production state is untouched.")
+PRODUCTION_ADVICE = ("The production routing state is not clean or not ready, and the harness never deletes, resets or "
+                     "initializes it. Fix the named condition through scripts/routing.py: activate the project with the "
+                     "one-shot `set managed_projects`, settle or reconcile open holds with the one-shot operator ops, "
+                     "then run again.")
 CHOICE = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME, funding="subscription")
 # Profile role -> explicit assignment role; `researcher` is explicit on a worker job (routing_settings.EXPLICIT_ROLES).
 ROLES = (("implementer", "worker", None), ("reviewer", "review", "reviewer"), ("researcher", "worker", "researcher"))
@@ -84,24 +89,26 @@ def request(pool=POOL):
     return dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness=HARNESS_NAME, kind="primary", funding_pool=pool)
 
 
-def check_project(project, allow=None, settings=None):
+def check_project(project, allow=None, settings=None, managed=False):
     """The pilot runs only in the allowlisted checkout: exactly that path, resolved, and a git checkout root.
 
-    `allow` replaces the default ALLOWLIST for one run (`--canary-allow`). An explicit project must also be on the
-    dedicated canary settings' `managed_projects` (`settings`), which the harness never changes itself."""
+    `allow` replaces the default ALLOWLIST for one run (`--canary-allow`). An explicit project, and every project of
+    a production-ledger canary (`managed`), must also be on the routing settings' `managed_projects` (`settings`),
+    which the harness never changes itself (the user activates it with the one-shot `set`)."""
     if not project:
         raise Refused("--project is required in canary mode")
     resolved = os.path.realpath(project)
     if resolved != os.path.realpath(allow or ALLOWLIST) or not (Path(resolved) / ".git").exists():
         raise Refused("canary mode runs only in the allowlisted project")
-    if allow is not None:
+    if allow is not None or managed:
         from runtime import routing_settings
         try:
-            managed = settings is not None and routing_settings.managed_project(Path(resolved), settings_path=Path(settings))
+            found = settings is not None and routing_settings.managed_project(Path(resolved), settings_path=Path(settings))
         except Exception:  # noqa: BLE001 - unreadable settings never admit a project
-            managed = False
-        if managed is not True:
-            raise Refused("an explicit canary project must be on the canary settings' managed_projects")
+            found = False
+        if found is not True:
+            raise Refused("an explicit or production-ledger canary project must be on the routing settings' "
+                          "managed_projects")
     return resolved
 
 
@@ -168,6 +175,49 @@ def check_canary_state(path, home=None, production=None, isolated=None):
     return dict(dir=resolved, settings=settings, ledger=ledger)
 
 
+def check_approval(values):
+    """`--approval BY AT SCOPE` in the call ledger's approval shape (`APPROVAL_FIELDS`), recorded verbatim, or
+    `Refused`. The scope must name the canary: the approval covers the canary only."""
+    if type(values) not in (list, tuple) or len(values) != len(APPROVAL_FIELDS) or \
+            not all(type(value) is str and value.strip() and len(value) <= 200 for value in values):
+        raise Refused("the production-ledger canary needs --approval BY AT SCOPE: who approved, when and the scope "
+                      "(each at most 200 characters)")
+    if "canary" not in values[2].lower():
+        raise Refused("the production-ledger approval's SCOPE must name the canary")
+    return dict(zip(APPROVAL_FIELDS, values))
+
+
+def refusal_advice(state):
+    """What the operator does about an unclean state: delete the dedicated canary state, never the production one."""
+    return PRODUCTION_ADVICE if (state or {}).get("production") else RESET_ADVICE
+
+
+def resolve_state(path, production=False, approval=None, home=None, isolated=None):
+    """The canary's routing state. By default (never otherwise) the dedicated canary state (`check_canary_state`,
+    `path` or DEFAULT_STATE). Only with `--production-ledger` and a recorded `--approval` (the user approved the
+    canary, and nothing else, on the production ledger on 2026-11-10): the production settings and ledger at the
+    routing command's defaults, `{settings, ledger, production: True, approval}`. Every write still goes through
+    `scripts/routing.py` (one-shot and operator rules unchanged); the harness never creates, initializes or resets
+    the production state, and never changes `managed_projects`."""
+    if not production:
+        if approval is not None:
+            raise Refused("--approval with the canary belongs to --production-ledger")
+        return check_canary_state(path or DEFAULT_STATE, home=home, isolated=isolated)
+    if path is not None:
+        raise Refused("--production-ledger uses the production routing state; --canary-state does not apply")
+    approval = check_approval(approval)
+    settings, ledger = (Path(item).parent.resolve() / Path(item).name for item in _production_paths())
+    return dict(dir=None, settings=settings, ledger=ledger, production=True, approval=approval)
+
+
+def check_production_options(args):
+    """`--production-ledger` belongs only to `--canary` and `--export-canary-admissions` (and never `--reset`)."""
+    if not getattr(args, "production_ledger", False):
+        return
+    if args.reset_canary_state or args.set_cap or not (args.canary or args.export_canary_admissions):
+        raise Refused("--production-ledger belongs only to --canary and --export-canary-admissions")
+
+
 STATE_FILES = {"settings.json", "ledger.sqlite3", ".settings.lock", "ledger.sqlite3-wal", "ledger.sqlite3-shm",
                "ledger.sqlite3-journal"}
 
@@ -199,13 +249,19 @@ def reset_state(path, processes, home=None):
     return dict(removed=True, files=names)
 
 
-def initialize_state(routing):
+def initialize_state(routing, production=False):
     """Create the canary routing state on first use; never touch an existing one.
 
     `set authority_required=true` is the only `set` form that creates a ledger; the flag is one-way and applies to
-    this canary ledger only. Smart Routing ON and API Usage off are written explicitly; no organization is created."""
+    this canary ledger only. Smart Routing ON and API Usage off are written explicitly; no organization is created.
+    The production state (`production`) is never created or initialized here: it must already exist, and the
+    preflight then refuses it unless it is clean as it stands."""
     pins = dict(zip(routing.argv[::2], routing.argv[1::2]))
     settings, ledger = Path(pins["--settings"]), Path(pins["--ledger"])
+    if production:
+        if not ledger.exists():
+            raise Refused("the production routing ledger does not exist; the canary never creates or initializes it")
+        return dict(created=False, production=True)
     if ledger.exists():
         return dict(created=False)
     settings.parent.mkdir(mode=0o700, exist_ok=True)
