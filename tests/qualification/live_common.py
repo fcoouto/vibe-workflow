@@ -123,3 +123,42 @@ class Reservation:
 
     def settle_unknown(self):
         return self.settle(None)
+
+
+def connect_claude(host, sleep, attempts=20):
+    """Connect claude-agent through its external `claude-login` method in the server's own (temporary) data dir: a
+    method reference only, as the qualification harness did live. Never run against the user's real data dir."""
+    for _ in range(attempts):  # the provider's integration registers shortly after start-up
+        if host.request("GET", "/api/integration/claude-agent")[0] == 200:
+            break
+        sleep(0.5)
+    status, _ = host.request("POST", "/api/integration/claude-agent/connect/external", {"methodID": "claude-login"})
+    if status not in (200, 204):
+        return status
+    host.request("POST", "/api/location/reload")
+    return status
+
+
+def listed_model(host, provider, model, sleep, attempts=30):
+    """The listed entry for `provider/model` (waiting briefly for the catalog), or None."""
+    for index in range(attempts):
+        status, body = host.request("GET", "/api/model")
+        for entry in (data(body) if status == 200 else None) or []:
+            if isinstance(entry, dict) and entry.get("providerID") == provider and entry.get("id") == model:
+                return entry
+        if index + 1 < attempts:
+            sleep(0.5)
+    return None
+
+
+def variants_of(entry):
+    return [v if isinstance(v, str) else (v or {}).get("id") for v in (entry or {}).get("variants") or []]
+
+
+def parse_model(ref, variant_required=True):
+    """`provider/model#variant` (or without `#variant` when not required) as a tuple, or `Refused`."""
+    match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]{0,63})/([A-Za-z0-9][A-Za-z0-9._:@/+-]{0,127}?)(?:#([A-Za-z0-9._-]{1,64}))?",
+                         ref or "")
+    if not match or (variant_required and match.group(3) is None):
+        raise Refused("a model is provider/model%s" % ("#variant" if variant_required else ""))
+    return match.groups()
