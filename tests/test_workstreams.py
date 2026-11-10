@@ -713,7 +713,8 @@ class WorkstreamsDefaultTests(unittest.TestCase):
             for attempt in range(20):
                 try: return self.start(session_id='parallel-'+str(n),task_id='parallel-'+str(n))
                 except state.StateError as error:
-                    if 'locked or incompatible' not in str(error) or attempt == 19: raise
+                    # Contention is reported as busy: the state lock or the D4 transaction lock.
+                    if not isinstance(error, state.StateBusy) and 'D4 transaction busy' not in str(error) or attempt == 19: raise
                     time.sleep(0.01)
         with ThreadPoolExecutor(max_workers=2) as pool:
             results=list(pool.map(start,range(2)))

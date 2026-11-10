@@ -117,7 +117,7 @@ class MembershipTests(unittest.TestCase):
                 self.assert_unavailable()
         with self.subTest("timeout"), self.fake_git("sleep 5"):
             started = time.monotonic()
-            self.assert_unavailable(deadline=time.monotonic() + 0.5)
+            self.assert_unavailable(message="Package membership deadline exceeded", deadline=time.monotonic() + 0.5)
             self.assertLess(time.monotonic() - started, 3)
 
     def test_deadline_bounds_the_git_call(self):
