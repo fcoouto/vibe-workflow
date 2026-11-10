@@ -909,7 +909,6 @@ class C2dCouncilAndProjectReview(command_tests.Base):
 
     # C3-6 must update the project-review instructions so delegated reviewers are routed through
     # `scripts/routing.py prepare` within the selected scope (plan C.3 "affected skill entry points"; F09).
-    @NEEDS_C3('C3-6')
     def test_project_review_routes_delegated_reviewers_through_the_routing_command(self):
         routed = routes_reviewers_through_routing(self.text())
         self.assertTrue(routed, 'review-my-project has no instruction routing delegated reviewers through '
