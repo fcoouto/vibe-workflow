@@ -169,12 +169,15 @@ def usage():
     return dict(source='host_message_totals', requests=[dict(kind='primary', model='m', tokens=tokens)])
 
 
-NEGATION = re.compile(r"\b(?:not|never|don't|no|without|instead of)\b", re.I)
+# Negations, exclusions and permissive or conditional wording: a sentence carrying any of them is never a positive,
+# mandatory instruction. Deliberately over-strict: rejecting a real instruction is safe, accepting a prohibition is not.
+NEGATION = re.compile(r"\b(?:not|never|don't|no|without|instead of|avoid\w*|skip\w*|unless|except\w*|only if|"
+                      r"outside|may|might|can|could|optional\w*)\b", re.I)
 
 
 def routes_reviewers_through_routing(text):
     """The sentences that positively route delegated reviewers through scripts/routing.py within the selected
-    scope. A sentence with a negation never counts, so a prohibition cannot satisfy the instruction."""
+    scope. A sentence with a negation, exclusion or permissive or conditional word never counts (NEGATION)."""
     return [sentence for sentence in re.split(r'(?<=[.!?])\s+|\n+', text)
             if 'scripts/routing.py' in sentence and re.search(r'\breviewers?\b', sentence, re.I)
             and re.search(r'\bselected\b', sentence, re.I) and not NEGATION.search(sentence)]
@@ -778,7 +781,14 @@ class C2dCouncilAndProjectReview(command_tests.Base):
                      'Reviewers must not use scripts/routing.py; selected areas are reviewed natively.',
                      'Never send reviewers through scripts/routing.py for selected repositories.',
                      'Route delegated reviewers through scripts/routing.py without the selected scope.',
-                     'Use scripts/routing.py for workers in the selected scope.'):
+                     'Use scripts/routing.py for workers in the selected scope.',
+                     'Reviewers in the selected scope should avoid `scripts/routing.py`.',
+                     'Reviewers in the selected scope may skip scripts/routing.py.',
+                     'Reviewers outside the selected scope go through scripts/routing.py.',
+                     'Only if the user asks, route reviewers through scripts/routing.py in the selected scope',
+                     'Unless the user objects, reviewers in the selected scope use scripts/routing.py.',
+                     'Except for the selected scope, reviewers go through scripts/routing.py.',
+                     'Reviewers in the selected scope can optionally use scripts/routing.py.'):
             with self.subTest(text=text):
                 self.assertEqual(routes_reviewers_through_routing(text), [])
         positive = 'Route each delegated reviewer through scripts/routing.py prepare within the selected scope.'
