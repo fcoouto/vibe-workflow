@@ -408,7 +408,7 @@ class _Gate:
     def __init__(self, service, host):
         self.service, self.host = service, host
         self.project, self.settings_path, self.ledger_path = service.project, service.settings_path, service.ledger_path
-        self.admission, self.attempt_id = None, None
+        self.admission, self.attempt_id, self.dispatch_sent = None, None, False
 
     def handle(self, raw, op=None):
         value = json.loads(raw)
@@ -419,6 +419,7 @@ class _Gate:
                 None if health(self.host) is not None else HOST_UNHEALTHY
             if reason is not None:
                 return dict(v=1, state='blocked', reason=reason)
+            self.dispatch_sent = True  # from here the hold may be dispatched, whatever interrupts the answer
         response = self.service.handle(raw, op)
         if value.get('op') == 'prepare' and response.get('state') == 'admitted':
             self.admission = response.get('admission')
@@ -481,6 +482,14 @@ class _Attempt:
                 detached = False
         self._token, self.attached = None, False
         return detached
+
+
+def _record_uncertain(service, attempt):
+    try:
+        service.handle(json.dumps(dict(v=1, op='record', event=dict(
+            event_id='uncertain:%s' % attempt, attempt_id=attempt, kind='uncertain'))).encode())
+    except Exception:  # noqa: BLE001 - the re-raised interrupt is the outcome; `status` shows the hold
+        pass
 
 
 def _account_of(settings_path, source, route):
@@ -561,6 +570,13 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                                            transport=attempt, workflow=workflow, constraints=constraints,
                                            planned=planned, profile=profile, settings_path=service.settings_path,
                                            source=source)
+        except BaseException:
+            # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`.
+            # After `dispatch` the hold must not stay plainly dispatched: record `uncertain` (the core's own event id,
+            # so it is a duplicate if the core already did, and refused if `complete` won), then re-raise.
+            if gate.dispatch_sent:
+                _record_uncertain(service, gate.attempt_id)
+            raise
         finally:
             detached = attempt.detach()  # after `record complete`: `descendants` answers only while attached
         return _finish(result, gate, attempt, detached, service.settings_path, source)

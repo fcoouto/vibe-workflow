@@ -10,10 +10,12 @@ server and prints one JSON result. An unmanaged project answers `project_not_man
 
 The result never carries the dispatch token, the server password or the prompt. A launch that cannot be confirmed
 names the one-shot operator op (`scripts/routing.py <op>`) for the operator to run; this command never runs one.
-Blocked is an outcome (exit 0); only a usage error exits 2.
+Blocked is an outcome (exit 0); only a usage error exits 2. SIGTERM, SIGHUP and Ctrl-C become `interrupted`
+(exit 1) after the server is stopped and a dispatched hold is recorded `uncertain`.
 """
 import json
 from pathlib import Path
+import signal
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -24,6 +26,20 @@ VERSION = 1
 MAX_INPUT = 1 << 20
 REQUIRED = {'checkout', 'assignment', 'job', 'prompt'}
 OPTIONAL = {'workflow', 'constraints', 'planned', 'profile'}
+
+
+SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+class Interrupted(BaseException):
+    """SIGTERM or SIGHUP, raised where the command is, so every `finally` runs (the server is stopped and the
+    launcher records `uncertain` for a dispatched hold) instead of the process ending with its server alive."""
+
+
+def _interrupt(signum, frame):
+    for number in SIGNALS:  # one conversion only: a repeated signal cannot interrupt the cleanup
+        signal.signal(number, signal.SIG_IGN)
+    raise Interrupted(signum)
 
 
 def _blocked(reason):
@@ -79,12 +95,19 @@ def main(argv=None, stdin=None, write=None):
         return 2
     raw = stdin if stdin is not None else sys.stdin.buffer.read(MAX_INPUT + 1)
     body, reason = _request(raw)
+    previous = {number: signal.signal(number, _interrupt) for number in SIGNALS}
+    code = 0
     try:
         result = _blocked(reason) if body is None else run(body)
+    except (Interrupted, KeyboardInterrupt):  # `run` stopped the server; the launcher recorded what it had to
+        result, code = _blocked('interrupted'), 1
     except Exception:  # noqa: BLE001 - a fixed reason, never a traceback, input text or secret
         result = _blocked('internal_error')
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
     write(json.dumps(dict(v=VERSION, **result), sort_keys=True))
-    return 0
+    return code
 
 
 if __name__ == '__main__':
