@@ -178,6 +178,14 @@ class FailureTests(Base):
                 kept = self.stored()
                 self.assertEqual((kept['version'], kept['compiled_at']), (good['version'], good['compiled_at']))
 
+    def test_a_fifo_input_is_refused_without_waiting(self):
+        self.refresh(now='2026-11-01T00:00:00Z')
+        fifo = self.evidence / 'terms.json'
+        fifo.unlink()
+        os.mkfifo(fifo)
+        code, report = self.refresh(now='2026-11-09T00:00:00Z')
+        self.assertEqual((code, report['state']), (1, 'kept'))
+
     def test_oversized_compiled_table_is_not_written(self):
         self.refresh(now='2026-11-01T00:00:00Z')
         good = self.stored()

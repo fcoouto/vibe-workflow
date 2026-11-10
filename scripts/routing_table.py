@@ -57,7 +57,8 @@ def _parse(raw):
 
 
 def _read_input(path):
-    with open(path, 'rb') as handle:
+    # Non-blocking open so a FIFO or device is refused instead of waiting for a writer.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), 'rb') as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
             raise ValueError('Evidence input is not a regular file')
         raw = handle.read(MAX_INPUT + 1)
