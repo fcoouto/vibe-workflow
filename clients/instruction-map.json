@@ -478,15 +478,15 @@
       ]
     },
     "policies/10-project-onboarding.md": {
-      "sha256": "4ecd701b405870fe14b4864058ed2dab8a4b10b47b7d9664b32a0671fec1c4f5",
+      "sha256": "b83a9f3edc6da8c951a2236d61a6ecc79b72bffedaa60599cb567d7ee967a59e",
       "ranges": [
         [
           1,
-          52
+          51
         ],
         [
-          53,
-          67
+          52,
+          69
         ]
       ]
     },
@@ -619,7 +619,7 @@
       ]
     },
     "skills/onboard-my-project/SKILL.md": {
-      "sha256": "1f003ca257145beafef3e722e80279665a1001d25fe0bcab5c1618bff0c0a771",
+      "sha256": "965efd07c297c4f3b3f214fbaf9ab2bae6bcb5af61d65c141dea90c6cec7e263",
       "ranges": [
         [
           1,
@@ -637,7 +637,7 @@
       ]
     },
     "skills/onboard-my-project/references/managed-plan.md": {
-      "sha256": "8506fbeddca264aad8300e857568e77adaa2b908ded194311d16f06999f9f472",
+      "sha256": "b165eb0f84e9578f9d720897852080b1afcb5f9795c85cab18d1d51bda20eb35",
       "ranges": [
         [
           1,
@@ -650,19 +650,19 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "7c7bcb7488dcbb434b86f79d8ddf161cde3db88374de3a8ac8509fb373679187",
+      "sha256": "47144128bc678a7d569a5552a679a43e7ee76a0f231b6224721241172e812862",
       "ranges": [
         [
           1,
-          60
+          39
         ],
         [
-          61,
-          183
+          40,
+          143
         ],
         [
-          184,
-          192
+          144,
+          206
         ]
       ]
     },

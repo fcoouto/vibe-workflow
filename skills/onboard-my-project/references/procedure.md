@@ -1,15 +1,27 @@
 # Existing-project onboarding
 
-Use for an explicitly selected existing project, authorized update, repair or recovery. Basic onboarding inspects relevant instructions/configuration, assesses the complete Toolkit component catalog for relevance, makes authorized changes recoverably, and leaves useful guidance, working project commands, relevant checks, limitations and an undo location. Do not turn it into a whole-file census or client qualification campaign.
+Use for an explicitly selected existing project, authorized update, repair or recovery. Basic onboarding checks workspace readiness, inspects relevant instructions/configuration, assesses the complete Toolkit component catalog for relevance, makes authorized changes recoverably, and leaves useful guidance, working project commands, relevant checks, limitations and an undo location. Do not turn it into a whole-file census or client qualification campaign.
 
 ## Basic onboarding
 
-Read the [policy index](../../../policies/00-index.md), [Project Scope](../../../policies/01-project-scope.md), [Project Onboarding](../../../policies/10-project-onboarding.md), applicable local instructions and linked policies. For setup authoring, resolve the canonical [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit) revision once. Assess every component in its complete catalog for relevance, current adoption or an equivalent, and any useful action. Read the component guidance and linked sources needed for the selected work; keep provenance in authoring records, not routine task loading.
+Read the [policy index](../../../policies/00-index.md), [Project Scope](../../../policies/01-project-scope.md), [Project Onboarding](../../../policies/10-project-onboarding.md), applicable local instructions and linked policies. Run the steps in order. A failed step blocks only the work that depends on it: continue independent steps and carry the gap to step 7. Inspect-only and plan-only requests never install, write or apply.
 
-1. Confirm the selected checkout and applicable instructions. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client. Keep workspace preparation and new-project creation separate; do not enroll the toolkit checkout just because it is the current working directory.
-2. Inspect relevant project configuration, commands and paths. [Adapt project documents](#adapt-project-documents) to those facts. Separate observed facts from assumptions, and preserve user changes, data, permissions, model/provider choices and existing protections. Resolve missing [project preferences](#project-preference-questions) before preparing changes.
-3. Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes; use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations. Load detailed procedures only for a selected capability.
-4. Run useful project commands and relevant local/client checks, including [policy discovery](#verify-policy-discovery). Report what they establish and what remains unknown. Leave the user useful guidance, working commands, limitations and an undo location.
+0. **Readiness.** Run `python3 -I -B "$PLUGIN_ROOT/scripts/workflow.py" workspace status`, with `PLUGIN_ROOT` as in [managed planning](managed-plan.md#dispatcher-contract). For each `missing` or `outdated` required item, say what it is and why it matters (the item's `why`), then run [prepare-my-workspace](../../prepare-my-workspace/SKILL.md) for those items as its own operation under the consent rule in [Tool Integrations](../../../policies/11-tool-integrations.md), and resume here. Carry items still `needs-user` or `unknown` to the report; wait only where work depends on them, such as that client's startup verification. For an inspect-only or plan-only request, report what is missing and propose preparation without running it.
+   *Done when* every required item is `ready`, `not-supported` with its reason, or carried to the report with the action that resolves it. *On failure* (status cannot run, or exit 2): report it, treat the affected items as unknown and continue.
+1. **Target and clients.** Confirm the selected checkout; never the toolkit checkout just because it is the working directory; keep new-project creation separate. Name the client running this session and the agent clients installed, and select the clients to enroll (installed clients the plugin can enroll, by default). A client the plugin cannot enroll yet, such as OpenCode until its plugin client ships, is an explicit gap: say what is unavailable (startup orientation, enrollment) and that its tools come from step 0; never skip it silently. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client.
+   *Done when* the checkout, the selected clients and every gap are stated. *On failure* (uncertain target): make no writes until it is confirmed.
+2. **Sources and inspection.** Resolve the canonical [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit) revision once for this setup or update; resume an interrupted setup at its recorded revision; a trusted versioned copy may serve offline setup with freshness marked unverified. Inspect relevant instructions, configuration, commands, paths and baseline checks. A runtime or tool the project itself declares is a project need, reported and checked with the project's own commands. Separate observed facts from assumptions; preserve user changes, data, permissions, model/provider choices and existing protections.
+   *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. *On failure* (source unavailable): block only the work that depends on it.
+3. **Preferences.** Resolve missing [project preferences](#project-preference-questions), one at a time, before preparing changes.
+   *Done when* each question is answered, reused, defaulted (4 and 5 only) or reported pending or inapplicable with its reason.
+4. **Plan.** Assess every component in the complete Toolkit catalog; [adapt the nine project documents](#adapt-project-documents) and [author the policy entry point](#author-the-policy-entry-point). Each component ends planned, reused with evidence, inapplicable with its reason, or blocked with its prerequisite and resume condition. An applicable component is omitted only through a recorded user decision linked from its row; a mandatory one never is.
+   *Done when* every catalog component has one of those four outcomes and all nine documents map to a path or a reason. A plan-only request ends here.
+5. **Apply.** Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes, then use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations and each selected client's startup membership. Undo restores only content that still matches. Load detailed procedures only for a selected capability.
+   *Done when* the changes are applied with their backup and undo location recorded. *On failure*: recover from the backup, keep later user edits and report.
+6. **Verify.** Run useful project commands and relevant local/client checks, including [policy discovery](#verify-policy-discovery) and startup in a new session per selected client. State what each check establishes and what remains unobserved.
+   *Done when* every check has a recorded result and its limit.
+7. **Report.** Per client: version, trust and startup observed. Also: changes made, pending user actions (including step 0's), limitations and the undo location. Report documentation setup and client integration separately.
+   *Done when* the report shows all of these.
 
 When using packaged file tools for standalone basic setup, select `project_scope.inspection_scope: "relevant"`. This inspects only the project inputs needed for the requested edits: applicable ancestor/directory instructions, selected inputs and targets, their preimages, and the physical target scope. The tools capture planned write/delete/evidence paths; unrelated checkout state and a full file census are outside this partial snapshot. It grants no command execution inside the file transaction, runtime activation or managed authority. Run ordinary project checks natively under existing permission. Keep the Toolkit component-catalog assessment complete even when only selected files are inspected. Explain this as “inspect relevant project files”; do not ask users to select an internal JSON mode.
 
@@ -147,10 +159,11 @@ affected choice as inapplicable or pending, respectively.
    without reading many files. Setup adds `.graphifyignore` (secrets, `.env*`,
    caches, tool state) and a Git ignore for `graphify-out/`, then builds a
    code-only graph with `GRAPHIFY_NO_AUTO_REFRESH=1 graphify extract . --code-only
-   --no-cluster`: no model call, no Git hook. It reuses the installed Graphify and
-   client skill; for a missing one, the reviewed plan shows the exact install
-   command and scope. The graph excludes documents and goes stale until
-   regenerated. Skip the question when the project has no code.
+   --no-cluster`: no model call, no Git hook. The Graphify command and client
+   skill are required workspace items already handled in step 0; this question
+   covers only the project's graph, and a still-missing item blocks only that
+   setup. The graph excludes documents and goes stale until regenerated. Skip the
+   question when the project has no code.
    - Yes, set it up now. (default, recommended)
    - Not now.
 5. **Connect `<project_name>` to a long-term memory vault?**
@@ -166,11 +179,12 @@ affected choice as inapplicable or pending, respectively.
 Apply questions 4 and 5 from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable
 pointer). If a question is unanswered, apply its default and report it as
-"default applied, not answered"; the reviewed plan names any install command or
-location outside the project. Not now is a deferral: record the user's decision
-as its prerequisite and the next onboarding update as the resume condition, never
-a silent omission. If the user declines in their own words, record that decision
-and do not ask again. Reuse a recorded Yes or decline; ask again about a recorded
+"default applied, not answered"; the reviewed plan names any location outside the
+project. Not now is a deferral: record it as a user decision, link it from the
+component's coverage row (an applicable row ends `omit` only through that link),
+and name the next onboarding update as the resume condition; never a silent
+omission. If the user declines in their own words, record that decision and do
+not ask again. Reuse a recorded Yes or decline; ask again about a recorded
 Not now only at the next onboarding update. Report a question that cannot apply
 (for example Graphify with no code) as inapplicable, with the reason.
 
