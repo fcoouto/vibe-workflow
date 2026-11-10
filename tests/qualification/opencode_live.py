@@ -52,7 +52,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, outputs, probe_stages, safety, user_dirs  # noqa: E402
+from tests.qualification import canary, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
                                         Redactor, Refused, USER_OPENCODE_DIRS, VARIANT, check_isolated_dir, check_real_home,
@@ -84,6 +84,8 @@ def _interrupt(signum, _frame):
 
 
 class Run:
+    replay_dir = replay_export.DEFAULT_DIR  # canary: where every run's admission records are exported (cleanup)
+
     def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
                  canary_state=None, purpose=None, stages=None, chatgpt_model=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
@@ -824,6 +826,8 @@ class Run:
         step("stop_server", self.server.stop)
         config_removed = step("remove_project_config", self.server.project_config.remove) if self.server.project_config else None
         step("stop_routing", self.routing.stop)
+        if self.canary_project:  # after the server stopped, before the next write could prune the snapshot detail
+            self.results["replay_export"] = step("replay_export", lambda: replay_export.export(self.canary_state["ledger"], self.replay_dir))
         left = step("kill_leftovers", lambda: kill_leftovers(pgid, [str(self.base), os.path.realpath(self.base)]))
         hooks, unreadable = self.read_hooks()
         self.results["hooks_unreadable"] = unreadable
@@ -905,6 +909,8 @@ def main(argv=None):
     parser.add_argument("--admissions", type=int, default=None, help="canary: admissions (1 to the pilot max)")
     parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
     parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
+    parser.add_argument("--export-canary-admissions", action="store_true", help="0 calls: export the canary admissions")
+    parser.add_argument("--replay-dir", default=str(replay_export.DEFAULT_DIR), help="canary: the admission export dir")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
@@ -920,6 +926,10 @@ def main(argv=None):
             approval = dict(zip(("by", "at", "scope"), args.approval)) if args.approval else None
             print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or "", approval=approval),
                              indent=2))
+            return 0
+        if args.export_canary_admissions:
+            state = canary.check_canary_state(args.canary_state)
+            print(json.dumps(replay_export.export(state["ledger"], Path(args.replay_dir)), indent=2))
             return 0
         if args.reset_canary_state:
             print(json.dumps(canary.reset_state(Path(args.canary_state), processes()), indent=2))
@@ -955,6 +965,7 @@ def main(argv=None):
         project = canary.check_project(args.project, args.canary_allow, state and state["settings"]) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
+            replay_export.require_fresh(state["ledger"], Path(args.replay_dir))  # before any write could prune
             limit = canary.pilot_max(args.pilot_max, ledger)
             args.admissions = limit if args.admissions is None else args.admissions
             canary.plan_assignments(args.admissions, "check", limit=limit)
@@ -965,7 +976,7 @@ def main(argv=None):
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
-    run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
+    run.chatgpt_timeout, run.chatgpt_methods, run.replay_dir = args.chatgpt_timeout, args.chatgpt_methods, Path(args.replay_dir)
     results = run.run()
     clean = run.redact(run.output(results))  # a second pass: secrets learned partway through the first are removed
     text = json.dumps(clean, indent=2, sort_keys=True)
