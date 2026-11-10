@@ -115,7 +115,7 @@ class GateBase(DispatchBase):
         self.service.close()
         self.workflow = FakeWorkflow(Path(self.temp.name) / 'workflow.json')
         self.workflow.write(dict(build=entry()))
-        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow)
+        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow, project='/work/repo')
 
     def ledger_body(self):
         with closing(sqlite3.connect(self.ledger)) as db:
@@ -505,7 +505,7 @@ class ConcurrencyTests(GateBase):
         for thread in threads:
             thread.join(60)
         self.assertEqual([r['state'] for r in results], ['dispatched'] * 2, results)
-        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow)
+        self.service = command.Service(self.settings, self.ledger, workflow=self.workflow, project='/work/repo')
         self.workflow.update('api', state='accepted')
         self.assertEqual(ready('backend')['state'], 'admitted')
         self.assertEqual(ready('integrate')['reason'], 'dependency_not_ready')
@@ -530,7 +530,8 @@ class CanonicalWorkflowTests(unittest.TestCase):
         self.ledger = Path(temp.name) / 'usage' / 'organizations.sqlite3'
         Base.store_table(self, table())
         self.reader = routing_gates.D6Workflow(resolve=lambda where: self.scope)
-        self.service = command.Service(self.settings, self.ledger, workflow=self.reader)
+        self.service = command.Service(self.settings, self.ledger, workflow=self.reader,
+                                       project=str(self.scope.repository_root))
         self.addCleanup(self.service.close)
         self.jobs = [dict(id='a', role='worker', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
                      dict(id='b', role='worker', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1)]
@@ -902,7 +903,7 @@ class ReviewFollowUpTests(GateBase):
         self.assertIsNone(command._arguments(['status', '--project']))
 
     def test_an_oversized_serialized_binding_is_refused_at_prepare(self):
-        wide = '/' + '\u00e9' * 500  # within the character bound, but escapes to six bytes per character
+        wide = '/work/repo/' + '\u00e9' * 500  # within the character bound, but escapes to six bytes per character
         response = self.call(prepare('big', workflow=locator(cwd=wide)))
         self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large'))
         self.assertFalse(self.ledger.exists() and budget.Ledger.open_holds(self.snapshot()))
