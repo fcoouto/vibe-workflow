@@ -157,6 +157,52 @@ run(request, {
         result = subprocess.run([_NODE, '-e', code, str(_HELPER)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_both_bridge_actions_refuse_a_managed_project_through_the_real_package(self):
+        import dataclasses
+        import json
+        import os
+        from runtime import routing_settings, usage_admission, usage_codex_host
+        code = r"""
+const assert = require('node:assert/strict');
+const {spawnSync} = require('node:child_process');
+const run = eval(require('node:fs').readFileSync(process.argv[1], 'utf8'));
+const [root, python, checkout, plan, grant, price] = process.argv.slice(2);
+const tools = {
+  mcp__codex_app__read_thread: async () => ({structuredContent:{thread:{kind:'codex',id:'parent',hostId:'local',
+    cwd:checkout}, turns:[{id:'current',status:'inProgress',startedAt:100,items:[]}]}}),
+  exec_command: async args => {
+    const child = spawnSync('/bin/sh', ['-c', args.cmd], {encoding:'utf8'});
+    assert.equal(child.stderr, '');
+    return {exit_code:child.status, output:child.stdout};
+  }
+};
+const request = {root, python, checkout, threadId:'parent', hostId:'local',
+  reviewer:{coordinator:'parent', identity:'reviewer'}, grant:JSON.parse(grant), price:JSON.parse(price)};
+(async () => {
+  assert.deepEqual(await run({...request, action:'freeze', proposals:[{task_id:'task'}], expiresAt:200}, tools),
+                   {ok:false, reason:'legacy_route_retired', uncertain:false});
+  assert.deepEqual(await run({...request, action:'execute', plan:JSON.parse(plan), proposal:{task_id:'task'}}, tools),
+                   {ok:false, reason:'legacy_route_retired', uncertain:true});
+})().catch(error => { process.stderr.write(String(error)); process.exitCode = 1; });
+"""
+        with tempfile.TemporaryDirectory() as folder:
+            home, checkout = Path(folder, 'home').resolve(), Path(folder, 'checkout').resolve()
+            checkout.mkdir()
+            settings = home / '.local/state/vibe-workflow/routing/settings.json'
+            routing_settings.update(settings, dict(managed_projects=[str(checkout)]), 0)
+            plan = {item.name: None for item in dataclasses.fields(usage_codex_host.Plan)}
+            plan.update(checkout=str(checkout), thread_id='parent', host_id='local')
+            blank = {kind: {item.name: None for item in dataclasses.fields(kind)}
+                     for kind in (usage_admission.Grant, usage_codex_host.Price)}
+            grant = dict(blank[usage_admission.Grant], pool='prepaid')
+            package = Path(__file__).resolve().parents[1]
+            result = subprocess.run([_NODE, '-e', code, str(_HELPER), str(package), sys.executable, str(checkout),
+                                     json.dumps(plan), json.dumps(grant),
+                                     json.dumps(blank[usage_codex_host.Price])], capture_output=True, text=True, timeout=30,
+                                    env=dict(os.environ, HOME=str(home)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((home / '.local/state/vibe-workflow/usage').exists())
+
     def test_bridge_reads_native_sources_and_refuses_conflicting_expiry(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime = Path(folder) / 'runtime'
