@@ -382,6 +382,120 @@ def managed_self_check(workdir):
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
 
+class ActivationHostTests(Base):
+    """#222 follow-up F3: policy 03's Claude Code rule in code. A project joins only when one of its enrolled clients
+    has a managed delegation path; the enrolment itself is stubbed (the real record is in test_delegation_routing)."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = Path(self.temp.name).resolve() / 'checkout'
+        self.project.mkdir()
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, one_shot=True)
+
+    def add(self, hosts, projects=None, revision=0):
+        from runtime import delegation_routing
+        enrolled = mock.patch.object(delegation_routing, 'enrolled_hosts', **(
+            dict(side_effect=hosts) if isinstance(hosts, Exception) or callable(hosts) else dict(return_value=hosts)))
+        change = dict(managed_projects=[str(self.project)] if projects is None else projects)
+        with enrolled, mock.patch.object(command, 'activation_gate', return_value={}) as gate, \
+                mock.patch.object(delegation_routing, 'open_unrouted_assignments', return_value=[]):
+            response = self.service.handle(json.dumps(dict(v=1, op='set', expected_revision=revision,
+                                                           change=change)).encode())
+        return response, gate.call_count
+
+    def test_the_managed_hosts_are_codex_and_opencode(self):
+        self.assertEqual(command.MANAGED_HOSTS, ('codex', 'opencode'))
+
+    def test_a_claude_code_only_project_is_refused_before_the_gate(self):
+        response, gate = self.add(['claude-code'])
+        self.assertEqual(response, dict(v=1, state='blocked', reason='advisory_host_unmanaged',
+                                        projects=[str(self.project)]))
+        self.assertEqual(gate, 0)
+        self.assertEqual(routing_settings.revision(self.settings), 0)
+
+    def test_a_project_without_any_enrolled_client_is_refused(self):
+        response, _ = self.add([])
+        self.assertEqual(response['reason'], 'advisory_host_unmanaged')
+
+    def test_codex_opencode_and_a_mix_pass_this_check(self):
+        for hosts in (['codex'], ['opencode'], ['claude-code', 'codex']):
+            with self.subTest(hosts):
+                response, gate = self.add(hosts, revision=routing_settings.revision(self.settings))
+                self.assertEqual((response['state'], gate), ('updated', 1), response)
+                self.assertEqual(routing_settings.read(self.settings)['managed_projects'], [str(self.project)])
+                removal, _ = self.add(hosts, projects=[], revision=response['revision'])
+                self.assertEqual(removal['state'], 'updated', removal)
+
+    def test_an_unreadable_enrolment_fails_closed(self):
+        from runtime.startup import RuntimeScopeError
+        for error in (RuntimeScopeError('qualification'), OSError('unreadable'), KeyError('repositories')):
+            with self.subTest(error):
+                response, gate = self.add(error)
+                self.assertEqual(response, dict(v=1, state='blocked', reason='enrolment_unavailable',
+                                                projects=[str(self.project)]))
+                self.assertEqual(gate, 0)
+        self.assertEqual(routing_settings.revision(self.settings), 0)
+
+    def test_every_added_project_is_checked_and_an_existing_one_is_not(self):
+        other = Path(self.temp.name).resolve() / 'other'
+        other.mkdir()
+        routing_settings.update(self.settings, dict(managed_projects=[str(other)]), 0)
+        seen = []
+
+        def hosts(checkout):
+            seen.append(str(checkout))
+            return ['claude-code']
+        response, _ = self.add(hosts, projects=[str(other), str(self.project)], revision=1)
+        self.assertEqual((response['reason'], response['projects']), ('advisory_host_unmanaged', [str(self.project)]))
+        self.assertEqual(seen, [str(self.project)])
+        response, _ = self.add(hosts, projects=[], revision=1)  # a Claude Code project can always be removed
+        self.assertEqual(response['state'], 'updated', response)
+
+
+class RollbackTests(Base):
+    """#222 follow-up F3: the post-write re-check's rollback (`_recheck_activation`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = str(Path(self.temp.name).resolve() / 'checkout')
+        self.service.close()
+        self.service = command.Service(self.settings, self.ledger, one_shot=True)
+        routing_settings.update(self.settings, dict(managed_projects=[self.project]), 0)
+
+    def recheck(self, write):
+        from runtime import delegation_routing
+        answer = dict(state='updated', revision=1, invalidated_attempts=['a1', 'a2'])
+        with mock.patch.object(delegation_routing, 'open_unrouted_assignments', return_value=['open']), \
+                mock.patch.object(self.service, '_write_settings', side_effect=write) as written:
+            try:
+                self.service._recheck_activation(answer, {self.project})
+            except command.Blocked as error:
+                return error, written.call_count
+        self.fail('the re-check did not refuse')
+
+    def test_a_failed_rollback_write_is_a_refusal_with_its_cause(self):
+        for cause in (command.Blocked('settings_unavailable'), OSError('disk full')):
+            with self.subTest(cause):
+                error, writes = self.recheck(cause)
+                self.assertEqual((error.reason, error.detail), ('open_unrouted_assignments', dict(
+                    rolled_back=False, invalidated_attempts=['a1', 'a2'])))
+                self.assertIs(error.__cause__, cause)
+                self.assertEqual(writes, 1)
+
+    def test_a_stale_revision_is_retried_then_reported(self):
+        error, writes = self.recheck(command.Blocked('stale_revision'))
+        self.assertEqual(error.detail, dict(rolled_back=False, invalidated_attempts=['a1', 'a2']))
+        self.assertIsNone(error.__cause__)
+        self.assertEqual(writes, command.MAX_ROLLBACK)
+
+    def test_a_rollback_reports_the_first_writes_invalidated_attempts(self):
+        error, writes = self.recheck(lambda body: dict(state='updated'))
+        self.assertEqual((error.reason, error.detail), ('open_unrouted_assignments', dict(
+            rolled_back=True, invalidated_attempts=['a1', 'a2'])))
+        self.assertEqual(writes, 1)
+
+
 class ManagedServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
