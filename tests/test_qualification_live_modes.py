@@ -119,3 +119,33 @@ class EntryTests(Temp):
         self.assertEqual(len(withheld), 1)
         self.assertEqual(oct(withheld[0].stat().st_mode & 0o777), "0o600")
         self.assertFalse(self.q.exists())
+
+
+class StructureTests(Temp):
+    def test_mode_env_calls_are_checked_against_the_live_env(self):
+        from tests.qualification import structure
+        (self.tmp / "live_modes.py").write_text("class LiveEnv:\n    def start(self, a):\n        pass\n\n\n"
+                                                "class GatewayEnv(LiveEnv):\n    def receipt(self, n):\n        pass\n")
+        (self.tmp / "drill.py").write_text("class Drill:\n    def run(self):\n        self.env.start(1)\n"
+                                           "        self.env.missing()\n        self.env.start(1, 2)\n")
+        (self.tmp / "gateway.py").write_text("class Gateway:\n    def run(self):\n        self.env.start(1)\n"
+                                             "        self.env.receipt(1)\n        self.env.balance()\n")
+        problems = structure.signature_problems(sorted(self.tmp.glob("*.py")))
+        self.assertEqual(sorted(problems), ["drill.py:4 LiveEnv.missing: no such method",
+                                            "drill.py:5 LiveEnv.start: too many positional arguments",
+                                            "gateway.py:5 GatewayEnv.balance: no such method"])
+
+    def test_no_instance_attribute_shadows_a_method(self):
+        from tests.qualification import drill, gateway, launcher_probes
+        ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        redact = safety.Redactor()
+        env = live_modes.LiveEnv(self.tmp, redact)
+        instances = [env, live_modes.GatewayEnv(self.tmp, redact),
+                     launcher_probes.LauncherProbes(self.tmp, ledger, "r", env, self.home, "u", redact),
+                     drill.Drill(self.tmp, ledger, "r", env), gateway.Gateway(self.tmp, ledger, "r", env, "openrouter/m"),
+                     live_modes.Session("drill", self.tmp, ledger, None, env, home=self.home)]
+        for instance in instances:
+            cls = type(instance)
+            shadowed = [name for name in vars(instance) if callable(getattr(cls, name, None))
+                        or isinstance(getattr(cls, name, None), property)]
+            self.assertEqual(shadowed, [], cls.__name__)

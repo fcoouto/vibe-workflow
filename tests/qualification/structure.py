@@ -17,6 +17,9 @@ from pathlib import Path
 # `server` or `ledger` are often something else); attributes resolve through `self.<name>.` and `run.<name>.`.
 RECEIVERS = {"env": "CanaryEnv", "run": "Run", "server": "Server", "routing": "Routing", "ledger": "CallLedger"}
 BARE = ("env", "run")
+# The live-session modes get their environment from live_modes.py: their `env.` calls are checked against it.
+MODULE_RECEIVERS = {"launcher_probes.py": dict(env="LiveEnv"), "drill.py": dict(env="LiveEnv"),
+                    "gateway.py": dict(env="GatewayEnv")}
 
 
 def _signature(function):
@@ -52,8 +55,24 @@ def _classes(trees):
                                 attributes.add(leaf.attr)
                 attributes |= {item.targets[0].id for item in node.body
                                if isinstance(item, ast.Assign) and isinstance(item.targets[0], ast.Name)}
-                found[node.name] = dict(methods=methods, attributes=attributes, bases=bool(node.bases))
+                found[node.name] = dict(methods=methods, attributes=attributes, bases=bool(node.bases),
+                                        base_names=[b.id for b in node.bases if isinstance(b, ast.Name)])
+    for info in found.values():  # inherited methods and attributes from bases parsed here (one level is enough)
+        for base in info["base_names"]:
+            if base in found:
+                info["methods"] = dict(found[base]["methods"], **info["methods"])
+                info["attributes"] |= found[base]["attributes"]
     return found
+
+
+def _own_nodes(node):
+    """The nodes of a class without those of classes nested in it (they are checked as their own class)."""
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        item = stack.pop()
+        yield item
+        if not isinstance(item, ast.ClassDef):
+            stack.extend(ast.iter_child_nodes(item))
 
 
 def _check(signature, call):
@@ -72,18 +91,18 @@ def _check(signature, call):
     return "missing argument %s" % missing[0] if missing else None
 
 
-def _target(call_func, enclosing):
+def _target(call_func, enclosing, receivers=RECEIVERS):
     """(class name, method) a call refers to, or None when the receiver is not one we resolve."""
     receiver = call_func.value
     if isinstance(receiver, ast.Name):
         if receiver.id == "self":
             return enclosing, call_func.attr, True
         if receiver.id in BARE:
-            return RECEIVERS[receiver.id], call_func.attr, False
-    if isinstance(receiver, ast.Attribute) and receiver.attr in RECEIVERS:
+            return receivers[receiver.id], call_func.attr, False
+    if isinstance(receiver, ast.Attribute) and receiver.attr in receivers:
         base = receiver.value
         if isinstance(base, ast.Name) and base.id in ("self", "run"):
-            return RECEIVERS[receiver.attr], call_func.attr, False
+            return receivers[receiver.attr], call_func.attr, False
     return None
 
 
@@ -95,10 +114,11 @@ def signature_problems(files):
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            for call in ast.walk(node):
+            receivers = dict(RECEIVERS, **MODULE_RECEIVERS.get(name, {}))
+            for call in _own_nodes(node):
                 if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
                     continue
-                resolved = _target(call.func, node.name)
+                resolved = _target(call.func, node.name, receivers)
                 if resolved is None or resolved[0] not in classes:
                     continue
                 target, method, on_self = resolved

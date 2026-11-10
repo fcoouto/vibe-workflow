@@ -232,9 +232,9 @@ class HttpFake:
             def log_message(self, *_):
                 pass
 
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.port, self._password, self.directory, self.fake = self.server.server_address[1], password, host.directory, host
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.http = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port, self._password, self.directory, self.fake = self.http.server_address[1], password, host.directory, host
+        threading.Thread(target=self.http.serve_forever, daemon=True).start()
 
     def request(self, method, path, body=None, query=None):
         return self.fake.request(method, path, body=body, query=query)
@@ -243,6 +243,6 @@ class HttpFake:
         return self.fake.rpc(method, payload)
 
     def stop(self):
-        self.server.shutdown()
-        self.server.server_close()
+        self.http.shutdown()
+        self.http.server_close()
         self.fake.stop()
