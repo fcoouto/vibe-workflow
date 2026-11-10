@@ -1,6 +1,6 @@
 # Smart Routing C.3 — caller wiring and selector retirement design
 
-- **Version:** 1.1 draft (review fixes; see [revision history](#8-revision-history))
+- **Version:** 1.2 draft (round-2 review fixes; see [revision history](#8-revision-history))
 - **Date:** 2026-11-10
 - **Status:** Design only. No code, model call, OpenCode server or live run was used to write it. Open user decisions are in [section 7](#7-open-decisions).
 - **Plan task:** [C.3 Replace callers and retire selectors](../plans/2026-11-08-smart-routing.md#task-c3-replace-callers-and-retire-selectors). The plan owns task status; this document owns how C.3 is built.
@@ -57,7 +57,7 @@ The table covers every path that chooses or funds a delegated worker on `main` a
 | X2 | `runtime/external_delegation.py:check`, `prepare`, `effective_permission`, `native_review` | Source scope, permission, destination and packet provenance, plus review independence. Not a selector. | Kept unchanged, as constraints and pre-send checks inside the launcher. | none |
 | A1 | `runtime/usage_routing.py:Controller.evaluate`/`_evaluate` (441, 408), `scripts/usage_routing.py` `evaluate` | Whether an API Usage proposal is `eligible`, `native` or `paused`. **Legacy selector.** | Retired. API Usage candidates come from the collector, and `prepare` decides. | C3-5; removal C3-7 |
 | A2 | `Controller._run` (574) → `Ledger.begin` (643), reached through every entry below | Opens S1 runs and sends through `openai_api`. **Legacy writer.** | `prepare` → `dispatch` → `Ledger.convert_hold` → `openai_api` send with a `check` before each request → `record complete` with the measured cost. | C3-5; removal C3-7 |
-| A2a | `scripts/usage_routing.py` `run` → `usage_routing.run` (60) → `Controller._run` | CLI entry to A2. | As A2. | C3-5 |
+| A2a | `scripts/usage_routing.py` `run` → `usage_routing.run` (60) | Already disabled: it only raises `live_execution_unavailable` (60–61) and never reaches `Controller._run`. | Deleted in C3-7. | removal C3-7 |
 | A2b | `runtime/usage_codex_host.py:execute` (207) → `usage_routing._run_live` (64, call at 252) → `Controller._run_live` (560) → `_run`; reached from `scripts/usage_codex_host.js` (the Codex host bridge) | Live API proposal on the Codex host. | As A2. | C3-5 |
 | A2c | `runtime/usage_canary_host.py:execute` (161) → `usage_canary.run` (70, call at 144) → `usage_routing._run_live` → `_run` | First-canary host, from `skills/manage-usage-routing/references/first-canary.md`. | As A2. | C3-5 |
 | A3 | `Controller.request_handoff`/`claim_handoff` (449, 495); `scripts/usage_routing.py` `handoff`, `claim_handoff` | Queues paused API work for native dispatch in the ledger's `handoffs` table. | Retired. A paused assignment stays `pending` in `prepare` with its reason, and the coordinator prepares it again. Existing records stay as history ([4.4](#44-settle-outstanding-legacy-work)). | C3-5; removal C3-7 |
@@ -122,6 +122,16 @@ preflight(status) ─► [delegation reserve → attempt_id]
 | Entitlement | The entitlement record ([3.4](#34-listed-is-not-entitled)). |
 
 **Service enforcement (C3-0).** When the service is pinned to a managed project, `prepare` refuses a request carrying `observations` (`observations_not_accepted`) and calls the collector itself. If the collector module is missing or raises, `prepare` is blocked with `observations_unavailable`, so C3-0 fails closed until C3-1 lands. Request observations stay accepted only for unmanaged projects in phase W (the pilot and qualification harness, on their own ledgers) and under `--test-inputs`. C3-7 removes the unmanaged case.
+
+**Source seam (C3-1; test-only use).** This seam is defined once, here. `collect(project, assignment, *, source=None)` reads its route manifest and window observations from a source object. With `source=None` it uses `routing_observations.default_source()`, which returns the local source (manifest file, stored rate-limit observations, entitlement record). A source has two methods:
+- `manifest()`, which returns the route list;
+- `windows(pool, now)`, which returns that pool's window observations, each with its observation time.
+
+Only code can replace `default_source`: a test patches the module attribute. No request field, setting, table, environment variable or command-line flag can select a source, the same rule as the S3.5 workflow reader. The C.2 test helper uses this seam ([6.4](#64-c2-marker-map-and-pr-197-amendments)).
+
+**Qualification harness.** Today the harness sends its own observations: `tests/qualification/canary.py` (278) and `pilot_env.py` (29). The pre-registered canary (S3.7) runs on a managed project, where caller observations are refused. Before the canary, C3-3 updates the harness:
+- In canary mode on a managed project, it sends no `observations`; the collector supplies them from the real manifest and stored telemetry. This is the production path the canary measures, without `--test-inputs`, as the validation document requires.
+- The bounded pilot mode keeps caller observations on its dedicated unmanaged canary ledger until C3-7. C3-7 moves that mode to `--test-inputs`, which works only with non-default settings and ledger paths and is reported by `status`, so production can never use it.
 
 **Residual risk.**
 - The collector trusts local files that the user's own processes can write: settings, the observation cache and the entitlement record.
@@ -197,26 +207,40 @@ During phase W, two code paths open exposure in one ledger: routing admissions, 
 
 ### 4.2 Activation gate
 
-A project may be added to `managed_projects` only through the one-shot `scripts/routing.py set` with `managed_projects`. `--serve` refuses it with `operator_op_not_served`, as it refuses operator ops. The service also checks the activation gate, defined once in C3-0 as a fixed list of required capabilities. Each capability is something the owning phase W slice adds in a file it owns:
+A project may be added to `managed_projects` only through the one-shot `scripts/routing.py set` with `managed_projects`. `--serve` refuses it with `operator_op_not_served`, as it refuses operator ops. The service also checks the activation gate, defined once in C3-0 as a fixed list of required capabilities. A capability counts only when its behavioural self-check passes; the code merely being present is not enough.
 
-| Capability | Proof checked | Owner |
+**Self-check contract.** Each owning phase W slice adds `managed_self_check(workdir) -> list[str]` to a file it owns. It returns an empty list when the check passes, or fixed failure codes otherwise. The check:
+- runs the slice's managed path end to end against stores created in `workdir`: a temporary routing settings file, a ledger, a workflow double and a test source through the [source seam](#33-observation-collector);
+- makes no network, model, host or secret-store call, and never touches the production defaults or the checkout.
+
+For each capability, the gate:
+- creates a fresh owner-only temporary directory;
+- runs the check with a 10 s budget, each in-process for runtime modules, or as `python3 -I -B <script> --managed-self-check <workdir>` with a minimal environment (no credential-like names) for scripts;
+- deletes the directory.
+
+| Capability | Self-check proves | Owner |
 |---|---|---|
-| Collector | `runtime.routing_observations.collect` importable | C3-1 |
-| Launcher core | `runtime.routing_launch.preflight` importable | C3-1 |
-| Route manifest accepted | `runtime/routing_routes.json` has at least one route with `status: qualified` | C3-1, content per user decision 5 |
-| Native delegation | `runtime.delegation_routing.MANAGED_PATH` | C3-2 |
-| OpenCode launcher | `runtime.opencode_launcher.MANAGED_PATH` | C3-3 |
-| External choice and proposals | `runtime.external_delegation.constraints`; `scripts/openrouter_proposals.py` defines `MANAGED_PATH` | C3-4a |
-| OpenRouter workers | `scripts/openrouter_workers.py` defines `MANAGED_PATH` | C3-4b |
-| API Usage | `runtime.usage_routing.MANAGED_PATH` | C3-5 |
-| Instructions | `policies/03-agent-delegation.md` contains the heading `Managed projects` | C3-6 |
+| Collector and launcher core | `routing_launch.managed_self_check`: preflight refusals; a launch admits through the collector with the test source; caller observations are refused | C3-1 |
+| Route manifest accepted | `runtime/routing_routes.json` has at least one route with `status: qualified` (a data check) | C3-1, content per user decision 5 |
+| Native delegation | `delegation_routing.managed_self_check`: one in-process routing admission bound to its workflow job; catalog mismatch sends nothing | C3-2 |
+| OpenCode launcher | `opencode_launcher.managed_self_check`: against a fake server, every refusal happens before a session is created, and no token appears in output | C3-3 |
+| External choice and proposals | `scripts/openrouter_proposals.py --managed-self-check`: `begin` obtains one admission on a test `gateway` route | C3-4a |
+| OpenRouter workers | `scripts/openrouter_workers.py --managed-self-check`: `prepare` obtains one admission, and the V1 launch is refused | C3-4b |
+| API Usage | `usage_routing.managed_self_check`: every entry refuses before reading settings, and `Ledger.begin` is never reached | C3-5 |
+| Instructions | `policies/03-agent-delegation.md` contains the heading `Managed projects` (a text check) | C3-6 |
 
-If any item is missing, the change is refused with `managed_path_incomplete` and the missing names, and nothing is written. Removing a project is always allowed, and it is also one-shot only. Script capabilities are checked by reading their source for the constant, not by importing, so the gate runs no script. C3-7 deletes the gate together with `managed_projects`.
+If any check is missing or fails, the change is refused with `managed_path_incomplete` and the failing names, and nothing is written. Removing a project is always allowed, and it is also one-shot only. C3-7 deletes the gate, the self-checks and `managed_projects` together.
 
 ### 4.3 Stop legacy admissions
 
 - **Phase W, per project.** The refusal sits at the narrowest point every path crosses, so no entry point can bypass it:
-  - API Usage: `Controller._run` refuses a managed project with `legacy_route_retired` before `Ledger.begin` and before reading API Usage, OpenRouter or credential settings. That covers A2a, A2b and A2c. `Controller._evaluate` (A1) and `request_handoff` (A3) refuse the same way.
+  - **API Usage entry points.** Each refuses a managed project with `legacy_route_retired` as its first action. That comes before it opens `usage_settings.controller`, reads API Usage, OpenRouter or credential settings, validates a credential binding, writes configuration or an organization, or touches the ledger. Its only read is the routing settings' `managed_projects`. The entry points are:
+    - `usage_codex_host.execute` (A2b), before `usage_settings.controller` (223) and before the credential-binding checks it reaches through `_plan_settings`;
+    - `usage_canary_host.execute` (A2c), before `usage_settings.scope` and before `controller(create=True)` and `controller.configure` (185–192), so no S1 configuration or organization is written;
+    - `usage_canary.run` and `usage_routing._run_live` (both on the A2c path);
+    - the module functions `usage_routing.evaluate`, `handoff` and `claim_handoff` (A1, A3), before `controller(...)`.
+  - **Backstop.** `Controller._run` refuses again before `Ledger.begin`, and `Controller._evaluate` and `request_handoff` refuse the same way, in case a future caller skips an entry point.
+  - A2a is already disabled ([inventory](#2-inventory-of-selection-paths)).
   - OpenRouter workers: the V1 launch in `openrouter_workers._execute` refuses a managed project.
   - X0 and C1 are instructions; C3-6 and C3-4a change them for managed projects.
 - **Phase R, global.** The entry points are deleted. `scripts/usage_routing.py` keeps only `status`, `configure`, `enable`, `disable` and `quote` (setup and observation, which the API Usage skill still needs). `evaluate`, `run`, `handoff`, `claim_handoff` and `reconcile` go, and become usage errors (exit 2). There is no alias under the old names.
@@ -232,11 +256,11 @@ Before C3-7 merges, `status.ledger.legacy_outstanding` (added by C3-0) must be e
 
 It also lists `ready` handoffs for information. They hold no exposure and do not block.
 
-Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention):
+Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835, the state check at `a824819`), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention):
 
 | Call state | Accepted evidence | Effect |
 |---|---|---|
-| `reserved` | `{kind: never_dispatched}` | Releases the call. Sound because S1 `dispatch` writes `dispatching` inside its transaction before any send (`usage_budget.py` 827, before `_transmit` sends), so `reserved` proves nothing was sent. |
+| `reserved` | `{kind: never_dispatched}` | The call becomes `rejected-before-send` at cost 0, as `Ledger.close_run` already does for a reserved call (`usage_budget.py` 864), and the release **closes its run**. For a `count` call nothing was charged; for a `generation` call the completed `count` keeps its charge. A run never sends again after a release. This is sound because S1 `dispatch` writes `dispatching` inside its transaction (827), and `openai_api` calls that `admit` before transmitting, so `reserved` proves nothing was sent. |
 | `dispatching`, `unresolved` | `{kind: receipts, receipts, cost_usd_micros}` with a cost of at least 1 micro-USD | Charged as reported through the same code as `Ledger.complete`. A cost above the maximum becomes over-bound and is resolved with `resolve_block`. |
 | `dispatching`, `unresolved` | `{kind: charge_reservation}` | Charges the maximum and releases nothing. |
 | `over_bound` | none | Refused (`block_not_pending`); use `resolve_block`. |
@@ -300,7 +324,7 @@ Each slice's reviewer checks the points its files touch.
    - `purchased_usage` is never subscription headroom.
    - Advisory hosts never get dollar routes.
    - Old consent is never spending authority.
-7. **Legacy refusal placement.** `legacy_route_retired` is checked in `Controller._run` before `Ledger.begin` and before any API Usage, OpenRouter or credential settings are read.
+7. **Legacy refusal placement.** Every API Usage entry point refuses a managed project as its first action, before any settings read, credential-binding check, configuration or organization write, or ledger access ([4.3](#43-stop-legacy-admissions)). `Controller._run` repeats the refusal before `Ledger.begin` as a backstop.
 8. **History preservation.** No migration or retirement deletes runs, charges, caps, events or open holds.
 9. **Review independence (F13).** Reviewer constraints come from the review policy, not from the coordinator's request.
 
@@ -315,7 +339,7 @@ The protocol is defined once here and applies to every slice.
 - **One owner per file.** Each file has exactly one owning slice at a time, as listed in [6.3](#63-slices). Where two slices must edit one file, they are sequenced, never concurrent. The later slice depends on the earlier one, and the file's entry names both owners in order. The sequenced files are:
   - `clients/opencode.md`: C3-0 (S3.6c section), then C3-3 (launcher section);
   - every file C3-7 edits: their phase W owner first, then C3-7.
-- **`tests/test_smart_routing_features.py`** (PR #197, Lane D). A slice deletes only the `@NEEDS_C3('<slice>')` decorator lines that name it, and changes nothing else in the file. A contract that fails after its marker is removed means the slice is not done. Structural changes to the file go through Lane D.
+- **`tests/test_smart_routing_features.py`** (PR #197, Lane D). A slice deletes only the `@NEEDS_C3('<slice>')` decorator lines that name it, and changes nothing else in the file. There is one exception: C3-1 owns the body of the `managed_project_fixture` helper, between the comment lines `# --- managed_project_fixture: body owned by C3-1 ---` and `# --- end managed_project_fixture ---`, and edits nothing else there ([6.4](#64-c2-marker-map-and-pr-197-amendments)). A contract that still fails after its marker is removed means the slice is not done. Structural changes to the file go through Lane D.
 - **`clients/instruction-map.json`** is generated. Never hand-merge it. On a conflict, `git merge origin/main`, then run `python3 -B scripts/read_instructions.py --prepare` and commit the result.
 - **`docs/policy-sources.md`** is append-only. Each slice appends its own section and never edits another's. On a conflict, take `origin/main`'s version, re-append your own section, and commit.
 - **Slices C3-1, C3-2, C3-4a, C3-4b, C3-5 and C3-6 never edit `scripts/routing.py` or `runtime/routing.py`.** Only C3-0 does (and later C3-7). When a later slice needs a service change, it is added to C3-0's scope or to a follow-up owned by C3-0's author, never edited in parallel.
@@ -349,14 +373,20 @@ C3-0 + C3-1   → C3-5  API Usage
   - New: `runtime/ledger_versions.py`, `tests/test_routing_legacy_settlement.py`, `tests/test_routing_managed_projects.py`.
   - Code: `runtime/usage_budget.py` (move-out only, net shrink); `runtime/routing.py` (line-neutral); `runtime/subscription_reconcile.py`; `runtime/routing_settings.py` (`managed_projects`, `managed_project(path)` predicate); `scripts/routing.py`.
   - Docs: the S3.6c section of `clients/opencode.md` (first owner).
-  - Existing tests: `tests/test_routing_subscription_reconcile.py`, `tests/test_routing_funding_capacity.py`, `tests/test_routing_command.py`, `tests/test_routing_gates.py`, `tests/test_routing_settings.py`.
+  - Existing tests: `tests/test_routing_subscription_reconcile.py`, `tests/test_routing_funding_capacity.py`, `tests/test_routing_command.py`, `tests/test_routing_gates.py`, `tests/test_routing_settings.py`. It also owns these, which its changes break:
+    - `tests/test_routing_reconcile.py` (771) and `tests/test_routing_accounting_blocks.py` (332), which assert `STATE_VERSION == 4`;
+    - `tests/test_usage_budget.py` (458, 498, 506), which assert the migrated `version` through `budget.STATE_VERSION`, now in `ledger_versions.py`;
+    - `tests/test_routing_accounting_roots.py` (274), which builds an unpinned workflow `Service`.
+
+    C3-7 later owns `tests/test_usage_budget.py` in sequence, when it removes `Ledger.begin`.
 - **Does:**
   - state v5 and its downgrade guard ([4.6](#46-ledger-version));
   - window-debit clearing only in one-shot `prepare`, never under `--serve` (the #192 review): the line-neutral `runtime/routing.py` change passes a `clear_debits` flag from the service into `admit` instead of always calling `clear_debits`;
   - the one-shot `drop_debit{key, marker, event_id}`, with a `status` marker like `resolve_block legacy`;
   - the one-shot `settle_legacy_call` ([4.4](#44-settle-outstanding-legacy-work));
   - `status.ledger.legacy_outstanding`;
-  - `project_required` for an unpinned workflow-bound `prepare` (tests that relied on an unpinned workflow `prepare` are updated to pin);
+  - `project_required` for an unpinned workflow-bound `prepare` (tests that relied on an unpinned workflow `prepare` are updated to pin, with `project` equal to the locator's `cwd`);
+  - each line numbered above is the one at `a824819`.
   - the observation seam ([3.3](#33-observation-collector));
   - `managed_projects` as a one-shot setting with the activation gate ([4.2](#42-activation-gate));
   - the `legacy_route_retired` code constant.
@@ -367,7 +397,7 @@ C3-0 + C3-1   → C3-5  API Usage
   - `settle_legacy_call` for each state and evidence kind, zero cost `evidence_invalid`, `over_bound` refused, 15 racing processes apply one effect, `--serve` refuses it;
   - an unpinned workflow `prepare` is `project_required`;
   - a managed-project `prepare` with `observations` is `observations_not_accepted`, and without a collector `observations_unavailable`;
-  - `set managed_projects` is refused under `--serve` and refused with `managed_path_incomplete` while any capability is missing; removal is always allowed;
+  - `set managed_projects` is refused under `--serve` and refused with `managed_path_incomplete` while any capability's self-check is missing or failing (the self-checks run as in [4.2](#42-activation-gate)); removal is always allowed;
   - the capacity worst case is recomputed.
 - **Markers:** `test_a_workflow_bound_prepare_requires_the_project_pin`.
 - **Shared core:** no. **Size:** L (about 600 lines with tests).
@@ -377,6 +407,8 @@ C3-0 + C3-1   → C3-5  API Usage
   - New code: `runtime/routing_launch.py` (preflight, request builders, its refusal codes, entitlement record, recovery hints, `readiness()`); `runtime/routing_observations.py` (`collect`).
   - New data: `runtime/routing_routes.json`, created from the capability matrix. Its first content waits on user decision 5; until then it lists no qualified route, so the activation gate fails closed.
   - New tests: `tests/test_routing_launch.py`, `tests/test_routing_observations.py`.
+  - The [source seam](#33-observation-collector) and `routing_launch.managed_self_check`.
+  - The body of `managed_project_fixture` in `tests/test_smart_routing_features.py`, between its owner comments only ([6.4](#64-c2-marker-map-and-pr-197-amendments)).
 - **Never edits** `scripts/routing.py` or `runtime/routing.py`.
 - **Does:** [3.1](#31-what-a-launcher-must-do) steps 1–6, the collector and the entitlement rule, as host-neutral functions. Hosts plug in catalog, dispatch-transport and accounting callbacks. Steps 1–6 cover: pin check with `project_required`, preflight, `workflow_required`, profile from canonical data, catalog check.
 - **Tests:**
@@ -385,12 +417,12 @@ C3-0 + C3-1   → C3-5  API Usage
   - the collector reads no secret (credential resolver patched to fail) and makes no network call;
   - an unknown manifest route is excluded, and a `not_entitled` route stays excluded until cleared;
   - `readiness()` reports enabled and ready separately, with no inference.
-- **Markers:** none. The behaviour checked by `test_enablement_is_reported_separately_from_readiness` and the other C.2a and C.2e contracts already passes on `main`, and C3-1 must keep it passing.
+- **Markers:** none, but replacing the helper's sentinel body is what lets C3-2, C3-4a and C3-4b turn their markers into passes. The behaviour checked by `test_enablement_is_reported_separately_from_readiness` and the other C.2a and C.2e contracts already passes on `main`, and C3-1 must keep it passing.
 - **Shared core:** no. **Size:** L (about 600 lines with tests).
 
 **C3-2 — Native delegation and review wiring.** Depends on C3-1. Phase W.
 - **Owns:**
-  - New: `runtime/delegation_routing.py` (with `MANAGED_PATH`), `tests/test_delegation_routing.py`.
+  - New: `runtime/delegation_routing.py` (with `managed_self_check`), `tests/test_delegation_routing.py`.
   - Line-neutral hooks: `runtime/delegation.py` (`_prepare_native`, `_discovery`, `prepare_continuation`, `reconcile_assignment`) and `runtime/evidence.py` (`prepare_review`).
   - `runtime/workstreams.py` (`consume_dispatch` calls `dispatch`).
   - **Not** `scripts/workflow.py`: the route travels inside delegation's reply dict, which `workflow.py` already prints unchanged.
@@ -414,7 +446,8 @@ C3-0 + C3-1   → C3-5  API Usage
 
 **C3-3 — OpenCode production launcher.** Depends on C3-0 and C3-1. Phase W.
 - **Owns:**
-  - New: `runtime/opencode_launcher.py` (with `MANAGED_PATH`), `scripts/opencode_launch.py` (JSON CLI), `tests/test_opencode_launcher.py` (a fake server, and the real `routing.py` on temporary stores).
+  - New: `runtime/opencode_launcher.py` (with `managed_self_check`), `scripts/opencode_launch.py` (JSON CLI), `tests/test_opencode_launcher.py` (a fake server, and the real `routing.py` on temporary stores).
+  - The qualification harness: `tests/qualification/canary.py`, `tests/qualification/pilot_env.py` and their tests. In canary mode on a managed project it sends no observations ([3.3](#33-observation-collector)). This merges before the S3.7 canary.
   - The launcher section of `clients/opencode.md` (second owner, after C3-0).
 - **Does:**
   - the full [handshake](../../../clients/opencode.md#handshake) and [wiring](../../../clients/opencode.md#usage-accounting-and-resync);
@@ -435,7 +468,7 @@ C3-0 + C3-1   → C3-5  API Usage
 
 **C3-4a — External choice and OpenRouter proposals.** Depends on C3-1. Phase W.
 - **Owns:**
-  - Code: `runtime/external_delegation.py` (adds `constraints(...)`; `select` stays until C3-7); `scripts/openrouter_proposals.py` (with `MANAGED_PATH`).
+  - Code: `runtime/external_delegation.py` (adds `constraints(...)`; `select` stays until C3-7); `scripts/openrouter_proposals.py` (with `--managed-self-check`).
   - Docs: `clients/external-delegation.md` (the X0 text, with a managed-project rule); `skills/openrouter-proposals/references/procedure.md`.
   - Tests: `tests/test_external_delegation.py`, `tests/test_openrouter_proposals.py`.
 - **Does:** for a managed project, `begin`/`dispatch` run a managed launch on the `gateway` route, with an in-process `check` before the send. `external_delegation.check` and `native_review` stay. `triage` stays advisory and chooses nothing.
@@ -448,7 +481,7 @@ C3-0 + C3-1   → C3-5  API Usage
 - **Shared core:** no. **Size:** M.
 
 **C3-4b — OpenRouter workers on the managed launcher.** Depends on C3-3. Phase W.
-- **Owns:** `scripts/openrouter_workers.py` (with `MANAGED_PATH`), `skills/openrouter-workers/references/procedure.md`, `tests/test_openrouter_workers.py`.
+- **Owns:** `scripts/openrouter_workers.py` (with `--managed-self-check`), `skills/openrouter-workers/references/procedure.md`, `tests/test_openrouter_workers.py`.
 - **Does:** for a managed project, `prepare` obtains one routing admission and workers launch through `opencode_launcher` with the read-only profile from `configuration`. The V1 `opencode run --pure` launch refuses with `legacy_route_retired`.
 - **Tests:**
   - the V1 path is refused for a managed project;
@@ -459,15 +492,16 @@ C3-0 + C3-1   → C3-5  API Usage
 
 **C3-5 — API Usage on the managed path.** Depends on C3-0 and C3-1. Phase W.
 - **Owns:**
-  - Code: `runtime/usage_routing.py` (with `MANAGED_PATH`), `scripts/usage_routing.py`, `runtime/usage_codex_host.py`, `runtime/usage_canary.py`, `runtime/usage_canary_host.py`, `scripts/usage_codex_host.js`.
+  - Code: `runtime/usage_routing.py` (with `managed_self_check`), `scripts/usage_routing.py`, `runtime/usage_codex_host.py`, `runtime/usage_canary.py`, `runtime/usage_canary_host.py`, `scripts/usage_codex_host.js`.
   - Docs: all of `skills/manage-usage-routing/`, including `references/delegation.md`, `first-canary.md` and `codex-host.md`.
   - Tests: `tests/test_usage_routing.py`, `tests/test_usage_live.py`, `tests/test_usage_codex_host.py`, `tests/test_usage_codex_bridge.py`.
 - **Does:** for a managed project:
   - API Usage proposals run `prepare` → `dispatch` → `convert_hold` → `openai_api`, with a `check` before the count request and before the generation request, then `record complete`;
-  - the `legacy_route_retired` refusal sits in `Controller._run` before `Ledger.begin` and before reading API Usage, OpenRouter or credential settings, and also in `_evaluate` and `request_handoff`;
+  - the `legacy_route_retired` refusal is the first action of every entry point listed in [4.3](#43-stop-legacy-admissions), with `Controller._run`, `_evaluate` and `request_handoff` as backstops;
   - `enable` writes `api_usage_enabled` through the routing command.
 - **Tests:**
-  - a managed project never reaches `Ledger.begin` through any entry: the CLI `run`, `usage_routing._run_live`, `usage_codex_host.execute`, `usage_canary.run` and `usage_canary_host.execute` (`Ledger.begin` patched to fail the test);
+  - a managed project never reaches `Ledger.begin` through any entry: `usage_routing._run_live`, `usage_codex_host.execute`, `usage_canary.run`, `usage_canary_host.execute`, and `usage_routing.evaluate`/`handoff`/`claim_handoff`. In each test `Ledger.begin` is patched to fail. `usage_settings.controller`, `Controller.configure` and the credential-binding reader are patched the same way, which proves the refusal comes before any settings read or write;
+  - the CLI `run` still answers `live_execution_unavailable` (A2a);
   - the spec §10.4 step 4 test ([4.3](#43-stop-legacy-admissions));
   - the existing `live_admission_required`, `credential_unavailable` and OFF-never-resolves-a-credential tests still pass on the new path.
 - **Markers:** none. It keeps `test_api_usage_stays_off_until_explicitly_enabled` passing.
@@ -506,12 +540,78 @@ C3-0 + C3-1   → C3-5  API Usage
 - **Markers:** `test_external_delegation_keeps_no_caller_owned_selector`, `test_usage_routing_cli_no_longer_selects_routes`.
 - **Shared core:** **yes**, so the full suite runs. **Size:** M (mostly deletion).
 
-### 6.4 C.2 marker map
+### 6.4 C.2 marker map and PR #197 amendments
 
-PR #197 (head `b0365cc`) has exactly eight `@needs_c3` markers. Lane D's PR will be amended in two ways:
+PR #197 (head `b0365cc`) has exactly eight `@needs_c3` markers. Lane D amends #197 **before it merges**, in four ways. This list is the contract Lane D writes to.
 
-- **Marker naming.** The convention becomes `NEEDS_C3('<slice>')`: a small helper in the test module that records the slice and returns `unittest.expectedFailure`. Each marker then names its slice from the table below.
-- **Managed-project helper.** The four behaviour contracts that run on an unmanaged fixture checkout (the two native ones, `proposal_begin` and `worker_prepare`) need it. It patches `runtime.routing_settings.managed_project` (C3-0) to answer true for the fixture's checkout. Before C3-0 the patch target does not exist, so the test errors and stays an expected failure.
+**A1. Marker helper.** Replace `needs_c3` with `NEEDS_C3(slice_id)`. It counts only an `AssertionError` as an expected failure, so a contract that crashes (an import error, a missing attribute) can never pass as "still waiting on C.3":
+
+```python
+SLICES = {'C3-0', 'C3-1', 'C3-2', 'C3-3', 'C3-4a', 'C3-4b', 'C3-5', 'C3-6', 'C3-7'}
+_NON_ASSERTION = []
+
+def NEEDS_C3(slice_id):
+    assert slice_id in SLICES
+    def mark(test):
+        @functools.wraps(test)
+        def run(self):
+            try:
+                test(self)
+            except (AssertionError, unittest.SkipTest):
+                raise
+            except Exception as error:
+                _NON_ASSERTION.append('%s: %s' % (test.__qualname__, type(error).__name__))
+                raise
+        run.needs_c3 = slice_id
+        return unittest.expectedFailure(run)
+    return mark
+
+def tearDownModule():
+    if _NON_ASSERTION:
+        raise AssertionError('NEEDS_C3 contracts failed without an assertion: ' + ', '.join(_NON_ASSERTION))
+```
+
+`unittest` still records the crash as an expected failure, but `tearDownModule` then raises, so the module run fails.
+
+**A2. Slice names.** Each of the eight markers names its slice from the table below.
+
+**A3. Project pin (N1).**
+- `C2bWorkstreamsDelegationResources` builds its `Service` pinned, in its own `setUp`, with `project='/work/repo'` (the `cwd` of `gate_tests.locator()`). Its four tests keep passing after C3-0 adds `project_required`:
+  - `test_one_task_graph_ready_jobs_admit_dependent_and_conflicting_jobs_wait`;
+  - `test_an_unchanged_continuation_reuses_its_profile_but_gets_fresh_admission`;
+  - `test_changed_scope_or_brief_invalidates_the_prepared_selection`;
+  - `test_resource_and_funding_gates_bind_the_same_job_revision`.
+- `test_a_workflow_bound_prepare_requires_the_project_pin` moves to its own class, `C2bProjectPin(gate_tests.GateBase)`, which keeps the base's **unpinned** service.
+
+**A4. Managed-project fixture (N2).** Lane D adds this skeleton now. C3-1 later replaces only the body between the owner comments ([6.1](#61-shared-file-protocol)):
+
+```python
+@contextmanager
+def managed_project_fixture(test, checkout, routes=()):
+    """Make `checkout` a managed project with a qualified test route and fresh window telemetry."""
+    # --- managed_project_fixture: body owned by C3-1 ---
+    raise AssertionError('managed_project_fixture: needs C3-1 (collector source seam)')
+    yield {}  # unreachable until C3-1 replaces this body
+    # --- end managed_project_fixture ---
+```
+
+The four behaviour contracts wrap their bodies in it:
+- `with managed_project_fixture(self, <fixture checkout>, routes=(<the fixture's own explicit choice>,)):`
+- the two native ones pass the delegation fixture's repository root and its `selection`;
+- `proposal_begin` and `worker_prepare` pass `self.repo` and their request's model and provider.
+
+Until C3-1 merges, the sentinel raises `AssertionError`, so the markers stay expected failures under A1.
+
+The body C3-1 writes must:
+1. Raise `AssertionError` naming the missing slice if `runtime.routing_settings.managed_project` (C3-0) or `runtime.routing_observations.default_source` (C3-1) is absent. Never let an `AttributeError` escape.
+2. Patch, with cleanups registered on `test`:
+   - `routing_settings.managed_project` to answer true only for `checkout` (by realpath);
+   - `routing_observations.default_source` to return a fixture source whose `manifest()` lists the module's `CHOICE` route plus every entry of `routes`, each as `status: qualified` and `billing_class: included_subscription`, and whose `windows(pool, now)` returns one fresh, explicitly fixed window (`id` `5h`, `limit` 1000, `used` 100, `length` 18000, `reset_at` = now + 3600, `rolling: False`, observed at `now`).
+3. Using the routing command's own `set` ops, on the default settings and ledger paths under the unit's private `HOME`, write `worker_choices` (`implementer` and `reviewer`: those routes) and `authority_required=true`, so the C3-1 preflight passes.
+4. Make no network, model, host or secret-store call, and write nothing outside the unit's private `HOME` and the test's temporary directory.
+5. Yield `{route, settings, ledger}` for assertions.
+
+After C3-1 merges, those four contracts fail by assertion only (no routing admission yet), until C3-2, C3-4a and C3-4b each make theirs true and remove only their own markers.
 
 | Test | Slice | What makes it true |
 |---|---|---|
@@ -535,6 +635,7 @@ Each slice removes only the marker lines naming it ([6.1](#61-shared-file-protoc
 3. **OpenRouter workers gap.** Accept that OpenRouter workers in managed projects are unavailable until C3-4b merges and the `gateway` route on OpenCode is qualified live.
 4. **API-funded OpenCode qualification.** Run the S3.6 positive and negative descendants runs with real API costs; this lifts `api_funding_unqualified`.
 5. **Route manifest.** Accept the route manifest's classifications, taken from the capability matrix, as the collector's source while observed billing for several routes still waits on you. Until then the manifest lists no qualified route, and no project can be activated.
+6. **First window telemetry.** The collector learns a subscription window only from an attempt that has already settled, so the first managed launch on a route has no fresh window, and `prepare` stays `pending`. The routing decision needs one way to seed it. Recommendation: a one-shot operator op `seed_window{pool, window, used, limit, reset_at, length, event_id}`. It is refused under `--serve`, recorded with `source: operator`, fresh for the usual 900 s and replaced by the first host observation. The alternative is a single admission per route at concurrency 1 that ignores utilization; I do not recommend it, because it bypasses the allocator's window check.
 
 ### 7.2 Decided here (agent-decidable; change by PR)
 
@@ -547,11 +648,22 @@ Each slice removes only the marker lines naming it ([6.1](#61-shared-file-protoc
 - `scripts/usage_routing.py` keeps its setup and status actions.
 - Only the user clears entitlement marks.
 - C3-2 does not edit `scripts/workflow.py`.
-- The shared-file protocol ([6.1](#61-shared-file-protocol)) and the marker map ([6.4](#64-c2-marker-map)).
+- The shared-file protocol ([6.1](#61-shared-file-protocol)) and the marker map and #197 amendments ([6.4](#64-c2-marker-map-and-pr-197-amendments)).
 
 ## 8. Revision history
 
 - **1.0** (`bd01a22`): first draft.
+- **1.2:** fixes from the round-2 review of `b760638`:
+  - N1: PR #197's pin test moves to its own unpinned class, and its four siblings use a service pinned to `/work/repo`;
+  - N2: a collector source seam, defined once, and the `managed_project_fixture` contract (body owned by C3-1, an `AssertionError` sentinel until then), with `NEEDS_C3` counting only assertions;
+  - A2a corrected: the CLI `run` is already disabled;
+  - API Usage refusals moved to the first action of every host entry point, with `Controller._run` as a backstop;
+  - C3-0 owns the four existing tests its changes break;
+  - C3-3 updates the qualification harness before the canary;
+  - releasing a `reserved` call closes its run;
+  - the activation gate runs behavioural self-checks;
+  - line numbers re-verified at `a824819`;
+  - new open decision 6 (first window telemetry), found while writing the fixture contract.
 - **1.1:** fixes from the independent review of `bd01a22` (3 blocking findings, should-fixes and nits):
   - the eight real PR #197 markers mapped one to one to slices, with the `NEEDS_C3('<slice>')` convention and a managed-project test helper;
   - the canary and Codex host paths added to the inventory, with the legacy refusal moved into `Controller._run`;
