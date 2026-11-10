@@ -167,11 +167,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "cde4279b6c61b0fa4d975b5c492bee2644c5be34dc5c6d56fcf742256d488334",
+      "sha256": "fca1a4ff678be7c77ecb596d704c245fee965a885e48ee4588663f36c2918478",
       "ranges": [
         [
           1,
-          63
+          79
         ]
       ]
     },
@@ -403,14 +403,14 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "e3f339002fa79bdddb25f5fdb19abb3b0fb768e506b98ded85bfd49c1d2e0920",
+      "sha256": "3b11c3cde6b57a775f0b574ee3b5e5443e65438247645d32970838ab13008f0e",
       "ranges": [
         [
           1,
-          52
+          50
         ],
         [
-          53,
+          51,
           120
         ],
         [
