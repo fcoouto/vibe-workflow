@@ -6,6 +6,8 @@ answers according to SCENARIO. RESULT_JSON is the `account/rateLimits/read` resu
 """
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 
@@ -23,7 +25,12 @@ def send(value):
     sys.stdout.flush()
 
 
-log(spawned=True, env=sorted(os.environ), cwd=os.getcwd())
+log(spawned=True, env=sorted(os.environ), cwd=os.getcwd(), pid=os.getpid(), pgid=os.getpgid(0))
+if scenario in ('graceful_timeout', 'hang_with_child'):
+    signal.signal(signal.SIGTERM, lambda *_: log(signal='SIGTERM', at=time.monotonic()))  # ignored: logged only
+if scenario == 'hang_with_child':
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    log(grandchild=child.pid)
 sys.stderr.write('debug: access_token=token-xyz accountId=acct-secret-123\n')
 sys.stderr.flush()
 if scenario == 'exit_at_once':
@@ -44,8 +51,13 @@ for line in sys.stdin:
             time.sleep(0.6)
         if scenario == 'hang_read':
             time.sleep(60)
+        if scenario in ('graceful_timeout', 'hang_with_child'):
+            continue  # never answers; waits for stdin to close
         if scenario == 'touch_auth':
             os.utime(os.path.join(os.environ['HOME'], '.codex', 'auth.json'), (1, 1))
+        if scenario == 'create_auth':
+            with open(os.path.join(os.environ['HOME'], '.codex', 'auth.json'), 'w') as out:
+                out.write('{"fake": true}')
         if scenario == 'notifications':
             for _ in range(3):
                 send(dict(method='account/rateLimits/updated', params={}))
@@ -63,3 +75,8 @@ for line in sys.stdin:
             send(dict(id=ident, result=result))
     elif ident is not None:
         send(dict(id=ident, error=dict(code=-32601, message='unexpected')))
+log(stdin='eof', at=time.monotonic())
+if scenario in ('graceful_timeout', 'hang_with_child'):
+    end = time.monotonic() + 60
+    while time.monotonic() < end:  # survives SIGTERM: only SIGKILL stops it
+        time.sleep(0.05)

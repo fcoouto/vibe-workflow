@@ -5,6 +5,8 @@ import json
 import math
 import os
 from pathlib import Path
+import shutil
+import signal
 import sys
 import tempfile
 import threading
@@ -55,9 +57,12 @@ class Sandbox(unittest.TestCase):
         (self.home / '.codex' / 'auth.json').write_text('{"fake": true}')  # never a real credential
         self.settings = base / 'state' / 'routing' / 'settings.json'
         self.log = base / 'double.log'
-        self.environ = dict(PATH='/usr/bin:/bin', HOME=str(self.home), LANG='C', OPENAI_API_KEY='sk-secret',
+        fake_bin = base / 'bin'  # an empty PATH: no real `codex` (e.g. /opt/homebrew/bin/codex) is reachable
+        fake_bin.mkdir()
+        self.environ = dict(PATH=str(fake_bin), HOME=str(self.home), LANG='C', OPENAI_API_KEY='sk-secret',
                             CODEX_API_KEY='secret', GITHUB_TOKEN='gh-secret', AWS_SECRET_ACCESS_KEY='aws')
         self.manifest = manifest()
+        self.assertIsNone(shutil.which('codex', path=self.environ['PATH']))
 
     def command(self, scenario='ok', value=None):
         value = result(primary=window(42)) if value is None else value
@@ -134,29 +139,40 @@ class ParseTests(unittest.TestCase):
     def test_unexpected_shapes_fail_closed(self):
         now = int(time.time())
         bad = {
-            'not_a_dict': [],
-            'no_rate_limits': dict(ordinaryUsageAllowed=None),
-            'other_bucket_only': result(primary=window(1, now=now), limit_id='codex_other'),
-            'no_windows': result(),
-            'bool_percent': result(primary=window(True, now=now)),
-            'string_percent': result(primary=window('5', now=now)),
-            'nan_percent': result(primary=window(math.nan, now=now)),
-            'negative_percent': result(primary=window(-1, now=now)),
-            'over_100': result(primary=window(100.5, now=now)),
-            'unknown_length': result(primary=window(1, 60, 600, now)),
-            'null_length': result(primary=dict(usedPercent=1, windowDurationMins=None, resetsAt=now + 60)),
-            'float_length': result(primary=dict(usedPercent=1, windowDurationMins=10080.0, resetsAt=now + 60)),
-            'null_reset': result(primary=dict(usedPercent=1, windowDurationMins=WEEK, resetsAt=None)),
-            'past_reset': result(primary=window(1, resets_in=0, now=now)),
-            'reset_beyond_length': result(primary=window(1, FIVE_HOURS, 18000 + 120, now)),
-            'duplicate_window': result(primary=window(1, now=now), secondary=window(2, now=now)),
-            'extra_window_field': result(primary=dict(window(1, now=now), surprise=1)),
-            'allowed_not_bool': result(primary=window(1, now=now), allowed='yes'),
+            'not_a_dict': ([], 'codex_limits_invalid'),
+            'no_rate_limits': (dict(ordinaryUsageAllowed=None), 'codex_limits_invalid'),
+            'other_bucket_only': (result(primary=window(1, now=now), limit_id='codex_other'), 'codex_limits_invalid'),
+            'no_windows': (result(), 'codex_windows_absent'),
+            'bool_percent': (result(primary=window(True, now=now)), 'codex_window_invalid'),
+            'string_percent': (result(primary=window('5', now=now)), 'codex_window_invalid'),
+            'nan_percent': (result(primary=window(math.nan, now=now)), 'codex_window_invalid'),
+            'negative_percent': (result(primary=window(-1, now=now)), 'codex_window_invalid'),
+            'over_100': (result(primary=window(100.5, now=now)), 'codex_window_invalid'),
+            'unknown_length': (result(primary=window(1, 60, 600, now)), 'codex_window_unknown'),
+            'daily_length': (result(primary=window(1, 1440, 600, now)), 'codex_window_unknown'),
+            'null_length': (result(primary=dict(usedPercent=1, windowDurationMins=None, resetsAt=now + 60)),
+                            'codex_window_invalid'),
+            'float_length': (result(primary=dict(usedPercent=1, windowDurationMins=10080.0, resetsAt=now + 60)),
+                             'codex_window_invalid'),
+            'null_reset': (result(primary=dict(usedPercent=1, windowDurationMins=WEEK, resetsAt=None)),
+                           'codex_window_invalid'),
+            'missing_reset': (result(primary=dict(usedPercent=1, windowDurationMins=WEEK)), 'codex_window_invalid'),
+            'not_a_window': (result(primary=[1, WEEK, now + 60]), 'codex_window_invalid'),
+            'past_reset': (result(primary=window(1, resets_in=0, now=now)), 'codex_window_invalid'),
+            'reset_beyond_length': (result(primary=window(1, FIVE_HOURS, 18000 + 120, now)), 'codex_window_invalid'),
+            'duplicate_window': (result(primary=window(1, now=now), secondary=window(2, now=now)),
+                                 'codex_window_invalid'),
+            'allowed_not_bool': (result(primary=window(1, now=now), allowed='yes'), 'codex_limits_invalid'),
         }
-        for label, value in bad.items():
+        for label, (value, reason) in bad.items():
             with self.subTest(label), self.assertRaises(reader.ReadError) as caught:
                 self.parse(value, now)
-            self.assertIn(str(caught.exception), reader.REASONS)
+            self.assertEqual(str(caught.exception), reason)
+
+    def test_unknown_extra_window_fields_are_ignored(self):
+        now = int(time.time())
+        windows = self.parse(result(primary=dict(window(12, now=now), windowLabel='weekly', future=1)), now)
+        self.assertEqual([(item['id'], item['used']) for item in windows], [('7d', 120)])
 
     def test_a_window_the_manifest_does_not_declare_fails_closed(self):
         now = int(time.time())
@@ -193,8 +209,9 @@ class ExchangeTests(Sandbox):
     def test_the_client_refuses_to_send_any_other_method(self):
         self.assertEqual(reader.METHODS, ('initialize', 'initialized', 'account/rateLimits/read'))
         for method in ('thread/start', 'turn/start', 'account/logout', 'account/login/start', 'config/write'):
-            with self.subTest(method), self.assertRaises(AssertionError):
+            with self.subTest(method), self.assertRaises(reader.ReadError) as caught:
                 reader._message(method, 3)
+            self.assertEqual(str(caught.exception), 'codex_method_refused')
 
     def test_the_child_gets_only_allowlisted_variables(self):
         self.environ.update(PATH='relative/bin:/usr/bin:.:/bin', TMPDIR='relative', CODEX_HOME=str(self.home / '.codex'))
@@ -207,6 +224,32 @@ class ExchangeTests(Sandbox):
         self.assertEqual(child['PATH'], '/usr/bin:/bin')  # relative entries never reach the child
         self.assertEqual(self.entries()[0]['cwd'], '/')
 
+    def test_codex_home_must_be_absolute(self):
+        for value in ('relative/.codex', '.', '~/.codex'):
+            with self.subTest(value), self.assertRaises(reader.ReadError) as caught:
+                reader.child_env(dict(self.environ, CODEX_HOME=value))
+            self.assertEqual(str(caught.exception), 'codex_home_invalid')
+        with self.assertRaises(reader.ReadError):
+            self.read(environ=dict(self.environ, CODEX_HOME='relative'))
+        self.assertEqual(self.spawns(), 0)
+
+    def test_a_changed_symlinked_auth_file_fails_closed(self):
+        auth = self.home / '.codex' / 'auth.json'
+        target = Path(self.temp.name) / 'elsewhere-auth.json'
+        auth.rename(target)
+        auth.symlink_to(target)
+        with self.assertRaises(reader.ReadError) as caught:
+            self.read('touch_auth')
+        self.assertEqual(str(caught.exception), 'codex_auth_changed')
+
+    def test_keyring_storage_without_a_file_reads_and_a_file_appearing_fails(self):
+        (self.home / '.codex' / 'auth.json').unlink()
+        self.assertEqual(reader._auth_mark(reader.child_env(self.environ)), 'absent')
+        self.assertEqual(len(self.read()), 1)
+        with self.assertRaises(reader.ReadError) as caught:
+            self.read('create_auth')
+        self.assertEqual(str(caught.exception), 'codex_auth_changed')
+
     def test_tmpdir_is_passed_only_when_it_is_a_private_absolute_directory(self):
         private = Path(self.temp.name) / 'tmp'
         private.mkdir(mode=0o700)
@@ -217,7 +260,7 @@ class ExchangeTests(Sandbox):
         self.assertNotIn('TMPDIR', reader.child_env(dict(self.environ, TMPDIR=str(private))))
 
     def test_the_default_command_is_an_absolute_codex_on_absolute_path_entries(self):
-        bin_dir = Path(self.temp.name) / 'bin'
+        bin_dir = Path(self.temp.name) / 'codex-bin'
         bin_dir.mkdir()
         codex = bin_dir / 'codex'
         codex.write_text('#!/bin/sh\n')
@@ -258,6 +301,45 @@ class ExchangeTests(Sandbox):
                     self.read(scenario, timeout=0.5)
                 self.assertEqual(str(caught.exception), 'codex_timeout')
                 self.assertLess(time.monotonic() - started, 3.0)
+
+    def gone(self, pid):
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_the_whole_process_group_is_gone_after_the_timeout(self):
+        with self.assertRaises(reader.ReadError) as caught:
+            self.read('hang_with_child', timeout=0.5)
+        self.assertEqual(str(caught.exception), 'codex_timeout')
+        entries = self.entries()
+        pid = entries[0]['pid']
+        grandchild = next(entry['grandchild'] for entry in entries if 'grandchild' in entry)
+        self.assertEqual(entries[0]['pgid'], pid)  # its own group, so the group signal reaches every member
+        self.assertTrue(self.gone(pid))
+        self.assertTrue(self.gone(grandchild))
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(pid, 0)
+
+    def test_the_timeout_closes_stdin_then_terms_then_kills(self):
+        started = time.monotonic()
+        with self.assertRaises(reader.ReadError):
+            self.read('graceful_timeout', timeout=0.5)
+        order = [('stdin' if 'stdin' in entry else 'signal', entry['at']) for entry in self.entries()
+                 if 'stdin' in entry or 'signal' in entry]
+        self.assertEqual([name for name, _ in order], ['stdin', 'signal'])  # SIGTERM only after stdin closed
+        self.assertGreaterEqual(order[1][1] - order[0][1], reader.STOP_GRACE * 0.8)
+        self.assertTrue(self.gone(self.entries()[0]['pid']))  # it ignored SIGTERM: SIGKILL ended it
+        self.assertLess(time.monotonic() - started, 0.5 + 2 * reader.STOP_GRACE + 1.5)
+
+    def test_a_normal_read_lets_codex_exit_on_its_own(self):
+        self.read()
+        self.assertFalse(any('signal' in entry for entry in self.entries()))
+        self.assertTrue(any(entry.get('stdin') == 'eof' for entry in self.entries()))
 
     def test_a_changed_auth_file_fails_closed(self):
         with self.assertRaises(reader.ReadError) as caught:
@@ -358,7 +440,7 @@ class RefreshTests(Sandbox):
         self.refresh('exit_at_once')
         self.assertEqual(self.refresh(force=True)['state'], 'stored')
 
-    def test_concurrent_prepares_spawn_one_reader(self):
+    def test_concurrent_prepares_spawn_one_reader_and_the_others_wait_for_its_reading(self):
         outcomes = []
 
         def run():
@@ -369,14 +451,50 @@ class RefreshTests(Sandbox):
         for thread in threads:
             thread.join()
         self.assertEqual(self.spawns(), 1)
-        self.assertEqual(outcomes.count('stored'), 1)  # the others found the lock held, or the fresh reading
-        self.assertTrue(set(outcomes) <= {'stored', 'busy', 'fresh'}, outcomes)
+        self.assertEqual(sorted(outcomes), ['fresh'] * 5 + ['stored'])  # nobody gave up with reader_busy
 
-    def test_a_busy_lock_never_spawns(self):
+    def test_a_waiter_reuses_the_reading_stored_while_it_waited(self):
+        def holder():
+            with reader._pool_lock(self.settings, POOL) as held:
+                self.assertTrue(held)
+                started.set()
+                time.sleep(0.4)
+                collector.store_window(self.settings, POOL, dict(
+                    id='7d', limit=1000, used=5, length=604800, reset_at=int(time.time()) + 60,
+                    unit=collector.WINDOW_UNIT, observed_at=int(time.time())))
+        started = threading.Event()
+        thread = threading.Thread(target=holder)
+        thread.start()
+        started.wait()
+        self.assertEqual(self.refresh(), dict(state='fresh'))
+        thread.join()
+        self.assertEqual(self.spawns(), 0)
+
+    def test_a_lock_held_past_the_wait_is_busy_without_spawning(self):
         with reader._pool_lock(self.settings, POOL) as held:
             self.assertTrue(held)
-            self.assertEqual(self.refresh(), dict(state='busy', reason='reader_busy'))
+            started = time.monotonic()
+            self.assertEqual(self.refresh(timeout=0.2), dict(state='busy', reason='reader_busy'))
+            waited = time.monotonic() - started
+        self.assertGreaterEqual(waited, 0.2 + 1 - 0.1)  # TIMEOUT + 1 s
+        self.assertLess(waited, 0.2 + 1 + 1)
         self.assertEqual(self.spawns(), 0)
+
+    def test_a_store_failure_partway_records_the_backoff(self):
+        now = int(time.time())
+        value = result(primary=window(10, FIVE_HOURS, 600, now), secondary=window(20, now=now))
+        original, calls = collector.store_window, []
+
+        def store(settings, pool, item):
+            calls.append(item['id'])
+            if len(calls) == 2:
+                raise ValueError('observation_store_full')
+            return original(settings, pool, item)
+        with mock.patch.object(collector, 'store_window', side_effect=store):
+            self.assertEqual(self.refresh(value=value, need=('5h', '7d')),
+                             dict(state='failed', reason='observation_store_invalid'))
+        self.assertEqual(self.refresh(value=value), dict(state='backoff', reason='observation_store_invalid'))
+        self.assertEqual(self.spawns(), 1)
 
     def test_an_unsafe_store_fails_closed_without_spawning(self):
         folder = self.settings.parent
@@ -401,12 +519,13 @@ class CollectorTests(Sandbox):
                       account='claude-plan')
         second = dict(copy.deepcopy(self.manifest['routes'][0]), route='opencode-openai-2', model='m2')
         self.manifest['routes'] += [claude, second]
-        self.calls = []
+        self.calls, self.extra = [], {}
         original = reader.refresh
 
         def refresh(settings, **options):
             self.calls.append(options)
-            return original(settings, command=self.command(), environ=self.environ, manifest=self.manifest, **options)
+            return original(settings, command=self.command(), environ=self.environ, manifest=self.manifest,
+                            **options, **self.extra)
         for patch in (mock.patch.object(reader, 'refresh', side_effect=refresh),
                       mock.patch.object(collector, 'load_manifest', return_value=copy.deepcopy(self.manifest))):
             patch.start()
@@ -441,11 +560,32 @@ class CollectorTests(Sandbox):
         self.collect(refresh_windows=True, source=source)
         self.assertEqual((self.calls, self.spawns()), ([], 0))
 
-    def test_a_failed_read_leaves_the_route_out_and_prepare_fails_closed(self):
+    def test_a_failed_read_leaves_the_route_out_with_the_readers_reason(self):
         with mock.patch.object(self, 'command', return_value=self.command('exit_at_once')):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route='opencode-openai', reason='window_unobserved'), observations['excluded'])
+        for route in ('opencode-openai', 'opencode-openai-2'):
+            self.assertIn(dict(route=route, reason='codex_exited'), observations['excluded'])
+        self.assertIn(dict(route='claude', reason='window_unobserved'), observations['excluded'])
         self.assertEqual(observations['routes'], [])
+        again = self.collect(refresh_windows=True)['observations']  # the backoff: no process, same reason
+        self.assertIn(dict(route='opencode-openai', reason='codex_exited'), again['excluded'])
+        self.assertEqual(self.spawns(), 1)
+
+    def test_a_stale_reading_with_a_failed_read_is_left_out_with_the_reason(self):
+        old = int(time.time()) - collector.FRESH_SECONDS - 5
+        collector.store_window(self.settings, POOL, dict(id='7d', limit=1000, used=5, length=604800,
+                                                         reset_at=old + 60, unit=collector.WINDOW_UNIT,
+                                                         observed_at=old))
+        with mock.patch.object(self, 'command', return_value=self.command('read_error')):
+            observations = self.collect(refresh_windows=True)['observations']
+        self.assertIn(dict(route='opencode-openai', reason='codex_protocol_error'), observations['excluded'])
+        self.assertEqual(observations['routes'], [])
+
+    def test_a_busy_reader_is_the_excluded_reason(self):
+        self.extra['timeout'] = 0.1  # the lock wait is the timeout plus 1 s
+        with reader._pool_lock(self.settings, POOL):
+            observations = self.collect(refresh_windows=True)['observations']
+        self.assertIn(dict(route='opencode-openai', reason='reader_busy'), observations['excluded'])
 
     def test_the_service_reads_only_outside_serve(self):
         from scripts import routing as command
