@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from runtime import routing, subscription_reconcile as sub, usage_budget as budget
 from scripts import routing as command
@@ -525,6 +526,169 @@ class StatusTests(Subscription):
         ledger = self.status()
         self.assertIsNone(ledger['reconcile_hint'])  # a debit clears from telemetry; it needs no operator action
         self.assertEqual(ledger['reconcile']['window_debits']['count'], 1)
+
+
+def drop(key, marker, event_id='d1', **extra):
+    return dict(v=1, op='drop_debit', key=key, marker=marker, event_id=event_id, **extra)
+
+
+class ServeClearingTests(Subscription):
+    """C3-0a (#192 review): a qualifying window clears a debit only outside `--serve`; the shim's persistent child,
+    which a plugin or worker can reach, never releases one."""
+    def abandoned(self):
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        return self.debits()[KEY]
+
+    def test_a_serve_prepare_with_a_qualifying_window_leaves_the_debit(self):
+        debit = self.abandoned()
+        later = debit['at'] + 2 * HOUR
+        serving = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True, serving=True)
+        self.addCleanup(serving.close)
+        obs = observations(at=later, account='acct-b1')
+        obs['pools']['sub']['windows'] = [self.window(later, debit['at'] + HOUR)]
+        request = prepare('b1', observations=obs, constraints=dict(allowed_strategy_ids=['s-sub']))
+        self.assertEqual(serving.handle(json.dumps(request).encode())['state'], 'admitted')
+        self.assertEqual((self.debits(), self.cleared_rows()), ({KEY: debit}, []))
+        # The same snapshot through the persistent child of the real command: still kept.
+        serving.close()
+        self.service.close()
+        request = prepare('b2', observations=dict(obs, routes=[dict(r, account='acct-b2') for r in obs['routes']]),
+                          constraints=dict(allowed_strategy_ids=['s-sub']))
+        done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--test-inputs', '--settings',
+                               str(self.settings), '--ledger', str(self.ledger)],
+                              input=json.dumps(request).encode() + b'\n', capture_output=True, timeout=60)
+        self.assertEqual((done.returncode, done.stderr), (0, b''))
+        self.assertEqual(json.loads(done.stdout)['state'], 'admitted', done.stdout)
+        self.assertEqual((self.debits(), self.cleared_rows()), ({KEY: debit}, []))
+        # A one-shot `prepare` with the same evidence clears it.
+        request = prepare('b3', observations=dict(obs, routes=[dict(r, account='acct-b3') for r in obs['routes']]),
+                          constraints=dict(allowed_strategy_ids=['s-sub']))
+        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'prepare', '--test-inputs', '--settings',
+                               str(self.settings), '--ledger', str(self.ledger)],
+                              input=json.dumps(request).encode(), capture_output=True, timeout=60)
+        self.assertEqual(json.loads(done.stdout)['state'], 'admitted', done.stdout)
+        self.assertEqual((self.debits(), len(self.cleared_rows())), ({}, 1))
+
+    def test_admit_clears_only_when_the_service_asks(self):
+        self.assertIs(routing.admit.__kwdefaults__['clear_debits'], False)  # fail closed for any other caller
+        seen = []
+        real = routing.admit
+
+        def spy(*args, **kwargs):
+            seen.append(kwargs['clear_debits'])
+            return real(*args, **kwargs)
+        serving = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True, serving=True)
+        self.addCleanup(serving.close)
+        with mock.patch.object(command.routing, 'admit', spy):
+            self.admit_sub('in-process')
+            request = prepare('serving', observations=observations(account='acct-serving'),
+                              constraints=dict(allowed_strategy_ids=['s-sub']))
+            self.assertEqual(serving.handle(json.dumps(request).encode())['state'], 'admitted')
+        self.assertEqual(seen, [True, False])
+
+
+class DropDebitTests(Subscription):
+    def setUp(self):
+        super().setUp()
+        self.operator = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
+        self.addCleanup(self.operator.close)
+
+    def op(self, request):
+        return self.operator.handle(json.dumps(request).encode())
+
+    def listed(self):
+        return self.status()['reconcile']['drop_debit']
+
+    def marker(self, key=KEY):
+        return {entry['key']: entry['marker'] for entry in self.listed()['debits']}[key]
+
+    def test_status_lists_each_debit_with_its_marker(self):
+        self.assertEqual(self.listed(), dict(debits=[], more=0))
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        debit = self.debits()[KEY]
+        entry = self.listed()['debits'][0]
+        self.assertEqual({k: v for k, v in entry.items() if k != 'marker'}, dict(key=KEY, units=debit['units'],
+                                                                                at=debit['at']))
+        self.assertRegex(entry['marker'], r'^dd_[0-9a-f]{32}$')
+        self.assertIsNone(self.status()['reconcile_hint'])  # a debit still needs no operator action by itself
+
+    def test_drop_debit_removes_one_debit_with_an_audit_row(self):
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        units = self.debits()[KEY]['units']
+        settled, credit, marker = self.settled(), self.credit(), self.marker()
+        result = self.op(drop(KEY, marker))
+        self.assertEqual(result, dict(v=1, state='recorded', duplicate=False, outcome='debit_dropped', key=KEY,
+                                      units=units, event_id='d1'))
+        self.assertEqual((self.debits(), self.held()), ({}, 0))
+        self.assertNotIn(sub.DEBITS, self.snapshot())
+        self.assertEqual((self.settled(), self.credit()), (settled, credit))  # never dollars
+        body = dict(self.events())['d1']
+        self.assertEqual((body['kind'], body['outcome']['outcome']), ('drop_debit', 'debit_dropped'))
+        self.assertEqual(set(body) - set(budget.EVENT_BODY_FIELDS), set())
+        before, stored = self.snapshot(), self.ledger_bytes()
+        self.assertEqual(self.op(drop(KEY, 'dd_' + '0' * 32)), blocked('event_conflict'))
+        self.assertEqual(self.op(drop(KEY, marker)), dict(result, duplicate=True))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+
+    def test_a_stale_marker_is_refused(self):
+        self.sub_uncertain('a1')
+        self.sub_uncertain('a2')
+        self.call(reconcile('a1', ABANDON, 's-a1'))
+        seen = self.marker()
+        self.call(reconcile('a2', ABANDON, 's-a2'))  # the debit grew after the operator reviewed it
+        before, stored = self.snapshot(), self.ledger_bytes()
+        self.assertEqual(self.op(drop(KEY, seen)), blocked('marker_stale'))
+        self.assertEqual(self.op(drop('win:sub/7d', seen, 'd2')), blocked('debit_not_pending'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        self.assertEqual(self.op(drop(KEY, self.marker(), 'd3'))['state'], 'recorded')
+        self.assertEqual(self.op(drop(KEY, seen, 'd4')), blocked('debit_not_pending'))
+
+    def test_malformed_requests_are_refused_with_fixed_reasons(self):
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        good = self.marker()
+        before, stored = self.snapshot(), self.ledger_bytes()
+        for request in (drop(KEY, 'lb_' + good[3:]), drop(KEY, good.upper()), drop(KEY, good + '0'), drop(KEY, None),
+                        drop('org:personal', good), drop('sub/5h', good), drop('win:' + 'x' * 600, good),
+                        drop(7, good), drop(KEY, good, 'x' * 129), drop(KEY, good, ''), drop(KEY, good, units=1),
+                        drop(KEY, good, prompt=SECRET), dict(v=1, op='drop_debit', key=KEY, event_id='d1')):
+            with self.subTest(request=json.dumps(request)[:80]):
+                self.assertEqual(self.op(request), blocked('invalid_request'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+
+    def test_only_a_one_shot_command_drops_a_debit(self):
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        marker = self.marker()
+        before, stored = self.snapshot(), self.ledger_bytes()
+        serving = command.Service(self.settings, self.ledger, serving=True, one_shot=True)
+        self.addCleanup(serving.close)
+        for service in (self.service, serving):
+            with self.subTest(serving=service.serving):
+                self.assertEqual(service.handle(json.dumps(drop(KEY, marker)).encode()),
+                                 blocked('operator_op_not_served'))
+        self.service.close()
+        done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
+                               '--ledger', str(self.ledger)], input=json.dumps(drop(KEY, marker)).encode() + b'\n',
+                              capture_output=True, timeout=60)
+        self.assertEqual(json.loads(done.stdout), blocked('operator_op_not_served'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        done = self.run_cli(['drop_debit'], drop(KEY, marker))
+        self.assertEqual(json.loads(done.stdout)['outcome'], 'debit_dropped', done.stdout)
+        self.assertEqual(self.debits(), {})
+
+    def test_fifteen_racing_processes_drop_once(self):
+        self.sub_uncertain('a1')
+        self.call(reconcile('a1', ABANDON))
+        marker = self.marker()
+        self.service.close()
+        results = self.collect([self.spawn('drop_debit', drop(KEY, marker, 'same')) for _ in range(15)])
+        self.assertEqual(sorted(r['duplicate'] for r in results), [False] + [True] * 14, results)
+        results = self.collect([self.spawn('drop_debit', drop(KEY, marker, 'v%d' % i)) for i in range(15)])
+        self.assertEqual(results, [blocked('debit_not_pending')] * 15)
 
 
 class ProcessTests(Subscription):

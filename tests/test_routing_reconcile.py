@@ -12,7 +12,7 @@ import subprocess
 import sys
 import unittest
 
-from runtime import routing, usage_budget as budget
+from runtime import ledger_versions, routing, usage_budget as budget
 from tests.fixture_routing_accounting import Accounting, complete, usage
 from tests.test_routing_command import API, M, SCRIPT, SECRET, facts, now
 from tests.test_routing_dispatch import record
@@ -738,7 +738,8 @@ class StatusTests(Reconcile):
         self.assertEqual(ledger['reconcile'], dict(
             reconcile_uncertain=dict(count=0, ids=[], more=0),
             resolve_block=dict(over_bound=dict(organizations=[], more=0), legacy=dict(organizations=[], more=0)),
-            reconcile_subscription=dict(count=0, ids=[], more=0), window_debits=dict(count=0, keys=[], more=0)))
+            reconcile_subscription=dict(count=0, ids=[], more=0), window_debits=dict(count=0, keys=[], more=0),
+            drop_debit=dict(debits=[], more=0)))
         self.assertIsNone(ledger['reconcile_hint'])
 
 
@@ -768,8 +769,8 @@ class CompatibilityTests(Reconcile):
                          'recorded')
         self.assertEqual(self.reasons(), [])
         with closing(sqlite3.connect(self.ledger)) as db:
-            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 4)
-        self.assertEqual(budget.STATE_VERSION, 4)
+            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 5)
+        self.assertEqual(ledger_versions.STATE_VERSION, 5)
 
     def test_a_bare_newer_observation_retires_no_settled_charge(self):
         """Reflected-debit retirement is deferred: no observation shape carries a watermark, so a newer
