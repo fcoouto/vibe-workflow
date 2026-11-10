@@ -2,30 +2,9 @@
 
 ## Start here
 
-**Your first tool call in every session is to read `~/ai-memory-vault/MEMORY.md`.** Do it before any other read, search or command, for a question as much as for a task. It is a short index of facts the user wants every session to start with, and nothing in this repository repeats them ([Memory](#memory-and-project-preferences)).
+**Your first tool call in every session is to read the memory index described in [Memory](#memory-and-project-preferences).** Do it before any other read, search or command, for a question as much as for a task.
 
-**Before every subagent or worker call, read [Agent Delegation](policies/03-agent-delegation.md) in full.** This holds for a read-only check, and when the user asks for the subagent by name. For implementation or review, follow its [worker selection](policies/03-agent-delegation.md#select-capability-and-dispatch), including cached official platform guidance and its refresh rules. Preserve the user's chosen coordinator model and reasoning.
-
-Then pass each gate below before the action it guards. No task is too small for a gate, and a request that names the action does not waive it.
-
-| Before you… | Read in full first |
-| --- | --- |
-| Change anything: a file, setting, branch, commit or PR. Documentation, one-line fixes and settings commands count. | [Policy index](policies/00-index.md) and [development guide](docs/development.md), then every policy whose **Load when** row applies |
-| Review a change, select checks, judge whether work is complete or a PR is ready, or resume earlier work. These count even when you change nothing. | [Policy index](policies/00-index.md), then every policy whose **Load when** row applies |
-| Open or update a PR, mark it `[READY]` or merge | [Merge Readiness](policies/08-merge-readiness.md) and the [development guide](docs/development.md) |
-| Select checks, push or create a release archive | [Development guide](docs/development.md) |
-| Do client-specific work | [Clients](clients/index.md); load only the entry whose trigger applies |
-| Run an explicit workflow operation | Its `skills/<name>/SKILL.md` entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation. |
-| Decide on setup, maintenance or undo | [Setup record](docs/setup.md) |
-| Add a client adapter | [Client interface layout](docs/onboard-my-project-plan.md#client-scope-and-adapter-organization) |
-| Create or change a skill or workflow instruction | [Instruction authoring](#instruction-authoring) |
-
-A factual question about the repository needs only the memory read: answer it from the actual files, then stop. A request to review, to select checks, to judge completion or readiness, to resume work or to dispatch a worker is not such a question; it passes its gate.
-
-- A file whose complete, current text is already in context need not be read again.
-- The owning file is the rule. A link, a routing summary or a line in this file is not the procedure: follow triggered dependencies to their complete local procedures, and read applicable directory instructions.
-- Reassess the gates when scope changes and before implementation, delegation, completion or merge. After resume or context loss, restore missing instructions and check actual project state.
-- Resolve missing, conflicting or truncated instructions before the dependent action; continue independent authorized work. Preserve normal instruction precedence and task-specific policy pins.
+A factual question about the repository needs only the memory read: answer it from the actual files, then stop. Before other repository work—including file, setting, Git or PR changes, reviews, check selection, completion or readiness decisions, resuming work and delegation—read the [policy index](policies/00-index.md) in full. Follow its single routing table and read every applicable contract and guide in full before the action it guards.
 
 Hooks supplement these instructions. Their presence or silence does not establish policy compliance, enforcement or readiness. Ordinary development remains independent of optional managed controls.
 
