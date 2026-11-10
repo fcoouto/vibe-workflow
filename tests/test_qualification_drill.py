@@ -140,3 +140,62 @@ class ChildProcessTests(Temp):
         self.assertIs(result["passed"], True, json.dumps(result, indent=1)[:3000])
         self.assertEqual(env.hosts[0].prompts, 1)
         self.assertTrue(all(child.process.poll() is not None for child in env.children))
+
+
+class ReviewTests(Temp):
+    def setUp(self):
+        super().setUp()
+        self.ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
+        self.ledger.set_cap("drill", 4, "approved", approval=APPROVAL)
+
+    def test_only_operator_ops_start_a_process(self):
+        ops = []
+
+        class Counting(Env):
+            def routing(self, state):
+                class Counted(Routing):
+                    def __call__(self, op, **body):
+                        ops.append(op)
+                        return Routing.__call__(self, op, **body)
+                return Counted(state.settings, state.ledger, project=state.project)
+        result = drill.run_drill(drill.Drill(self.private(self.tmp / "q"), self.ledger, "d", Counting(self.tmp), pause_timeout=30))
+        self.assertTrue(result["passed"], json.dumps(result)[:2000])
+        self.assertEqual(ops, ["reconcile_subscription", "reconcile_subscription", "reconcile_subscription", "drop_debit"])
+        self.assertEqual(len(ops), drill.ROUTING_COMMANDS)
+
+    def test_drill_one_counts_child_sessions(self):
+        class Child(Env):
+            def start(self, project, settings, ledger, environ):
+                host = Env.start(self, project, settings, ledger, environ)
+                original = host.request
+
+                def request(method, path, body=None, query=None):
+                    answer = original(method, path, body=body, query=query)
+                    if method == "POST" and path.endswith("/prompt") and not path.startswith("/api/session/ses_fakechild"):
+                        root = path.split("/")[3]
+                        original("POST", "/api/session", dict(id="ses_fakechild0001", parentID=root, title="child",
+                                                              model=host.sessions[root]["model"]))
+                        original("POST", "/api/session/ses_fakechild0001/prompt", dict(text="x"))
+                    return answer
+                host.request = request
+                return host
+        env = Child(self.tmp)
+        self.ledger.set_cap("drill", 4, "approved", approval=APPROVAL)
+        result = drill.run_drill(drill.Drill(self.private(self.tmp / "q"), self.ledger, "d", env, pause_timeout=30))
+        self.assertEqual(result["facts"]["drill1_sessions_counted"], 2)
+        self.assertEqual(result["facts"]["drill1_sent"]["sent"], 2)  # recorded above the reservation, never hidden
+        self.assertIs(result["passed"], False)
+        self.assertIn("BudgetExceeded", result["blocker"])
+
+    def test_the_live_env_registers_each_child_process_group(self):
+        from unittest import mock
+        from tests.qualification import live_modes
+        env = live_modes.LiveEnv(self.tmp, safety.Redactor())
+
+        class Stub:
+            def __init__(self, spec, host):
+                self.process = type("P", (), dict(pid=4242))()
+        with mock.patch.object(drill, "ChildLaunch", Stub):
+            env.child({}, None)
+        self.assertEqual(env.pgids, [4242])
+        self.assertEqual(env.counts["children"], 1)

@@ -40,13 +40,13 @@ PAUSE_LIMIT_S = 600
 PAUSED = "drill-paused"
 RESULT = "drill-result:"
 CALLS = 1  # drill 1's prompt; drill 2 sends nothing
-ROUTING_COMMANDS = 13  # one-shot scripts/routing.py runs: 8 status reads, record, reconcile_subscription x3, drop_debit
+ROUTING_COMMANDS = 4  # one-shot scripts/routing.py runs: reconcile_subscription x3 and drop_debit (operator ops only)
 
 
 def plan():
     return dict(expected_calls=CALLS, servers=1, processes=1 + 2 + 2 + ROUTING_COMMANDS,
                 processes_note="opencode --version, `opencode serve` and the shim's routing child, two launcher children, "
-                               "and short one-shot routing commands",
+                               "and the four one-shot operator ops; status and record run in process",
                 wall_time="about 1-2 min (one haiku request)")
 
 
@@ -225,8 +225,16 @@ class Drill:
         if not passed:
             raise Blocker("drill step %s: expected %s" % (name, expected))
 
-    def status(self, routing):
-        return ledger_view(routing("status")[0])
+    def local(self, op, **body):
+        """`status` and `record` in process on the drill state (no process); operator ops go through the CLI."""
+        service = self.state.service()
+        try:
+            return service.handle(json.dumps(dict(v=1, op=op, **body)).encode())
+        finally:
+            service.close()
+
+    def status(self, _routing=None):
+        return ledger_view(self.local("status"))
 
     def launch_paused(self, state, attempt, pause):
         child = self.env.child(dict(root=str(state.root), route=list(ROUTE), attempt=attempt, prompt=PROMPT_TEXT,
@@ -237,10 +245,10 @@ class Drill:
         return child
 
     def run(self):
-        state = ManagedState(self.base / "drill-state", ROUTE, ACCOUNT)
+        state = self.state = ManagedState(self.base / "drill-state", ROUTE, ACCOUNT)
         state.create()
         routing = self.env.routing(state)
-        view = self.status(routing)
+        view = self.status()
         self.step("state_clean_at_start", "clean", view, clean(view))
         self.host = self.env.start(state.project, state.settings, state.ledger, self.env.environ())
         try:
@@ -261,21 +269,24 @@ class Drill:
                                   self.run_id)
         try:
             child = self.launch_paused(state, attempt, "descendants")
-            view = self.status(routing)
+            view = self.status()
             self.step("1_dispatched", "one dispatched hold", view, view["open_attempts"] == 1 and view["dispatched"] == 1)
             child.terminate()
             result = child.result()
             self.step("1_sigterm", "the launcher answers interrupted", result, result.get("state") == "interrupted")
             session = routing.admission_ids(attempt)["session_id"]
-            self.facts["drill1_sent"] = reservation.settle(message_counts(self.host, [session]))
+            tree = live_common.session_tree(self.host, session)  # child sessions count too
+            self.facts["drill1_sessions_counted"] = len(tree)
+            self.facts["drill1_sent"] = reservation.settle(message_counts(self.host, tree))
         finally:
             if reservation.settled is None:
                 reservation.settle_unknown()
-        view = self.status(routing)
+            self.facts["drill1_sent"] = reservation.settled  # kept when the ledger raised on an overrun
+        view = self.status()
         self.step("1_uncertain", "uncertain, place held, reconcile_subscription 1, hint set", view,
                   view["uncertain"] == 1 and view["open_attempts"] == 1 and view["reconcile_subscription"] == 1
                   and view["reconcile_hint"])
-        answer = routing("record", event=dict(event_id=attempt + "-client-complete", attempt_id=attempt, kind="complete"))[0]
+        answer = self.local("record", event=dict(event_id=attempt + "-client-complete", attempt_id=attempt, kind="complete"))
         self.step("1_complete_refused", "reconciliation_required", answer.get("reason"),
                   answer.get("reason") == "reconciliation_required")
         from runtime import opencode_launcher
@@ -294,7 +305,7 @@ class Drill:
         self.step("1_host_usage", "recorded complete, basis host_usage", dict(state=answer.get("state"), basis=basis,
                                                                              reason=answer.get("reason")),
                   answer.get("state") == "recorded" and basis == "host_usage")
-        view = self.status(routing)
+        view = self.status()
         self.step("1_released", "place and window released", view, view["open_attempts"] == 0
                   and not view["reconcile_subscription"])
         again = routing("reconcile_subscription", **body)[0]
@@ -303,7 +314,7 @@ class Drill:
     def drill_two(self, state, routing):
         attempt = attempt_id("drill2")
         child = self.launch_paused(state, attempt, "prompt")
-        view = self.status(routing)
+        view = self.status()
         self.step("2_dispatched", "one dispatched hold", view, view["open_attempts"] == 1 and view["dispatched"] == 1)
         child.terminate()
         result = child.result()
@@ -312,12 +323,12 @@ class Drill:
         proof = message_counts(self.host, [session])
         self.step("2_zero_calls", "no user or assistant message", proof, proof["readable"] and not proof["user"]
                   and not proof["assistant"])
-        view = self.status(routing)
+        view = self.status()
         self.step("2_uncertain", "uncertain, place held", view, view["uncertain"] == 1 and view["open_attempts"] == 1)
         answer = routing("reconcile_subscription", attempt_id=attempt, evidence=dict(kind="abandon"),
                          event_id=attempt + "-abandon")[0]
         self.step("2_abandon", "abandoned", answer.get("outcome"), answer.get("outcome") == "abandoned")
-        status = routing("status")[0]
+        status = self.local("status")
         view = ledger_view(status)
         self.step("2_debit", "one window_debits key, place released", view, view["window_debits"] == 1
                   and view["open_attempts"] == 0)
@@ -325,7 +336,7 @@ class Drill:
         answer = routing("drop_debit", key=debits[0]["key"], marker=debits[0]["marker"], event_id=attempt + "-drop")[0] \
             if debits else {}
         self.step("2_drop_debit", "debit_dropped", answer.get("outcome"), answer.get("outcome") == "debit_dropped")
-        view = self.status(routing)
+        view = self.status()
         self.step("2_clean", "status clean", view, clean(view))
 
 

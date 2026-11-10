@@ -226,6 +226,7 @@ class Gateway:
         finally:
             if reservation.settled is None:
                 reservation.settle_unknown()
+            facts["sent"] = reservation.settled  # kept when the ledger raised on an overrun
         read = opencode_launcher.account(self.host, root, funding="api", attempt=attempt, authority=token["authority"],
                                          route=dict(provider=self.route[0], model=self.route[1], variant=self.route[2]))
         result, usage = read["result"], read["result"].get("usage") or {}

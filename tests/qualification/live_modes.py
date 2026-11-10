@@ -106,7 +106,9 @@ class LiveEnv:
     # drill
     def child(self, spec, host):
         self.counts["children"] += 1
-        return drill.ChildLaunch(spec, host)
+        child = drill.ChildLaunch(spec, host)
+        self.pgids.append(child.process.pid)  # its own session: cleanup kills the group if it outlives the drill
+        return child
 
     def routing(self, state):
         from tests.qualification.server import Routing

@@ -327,6 +327,7 @@ class LauncherProbes:
         finally:
             if reservation.settled is None:
                 reservation.settle_unknown()
+            facts["sent"] = reservation.settled  # kept when the ledger raised on an overrun
         facts["demand"] = self.record_demand("chatgpt", "A5", [before, self.env.codex_window()])
         reply = assistant_text(host, prompted)
         effects = [facts["evaluated"][key]["effect"] for key in ("read_decoy", "read_auth")]
@@ -423,6 +424,7 @@ class LauncherProbes:
         finally:
             if reservation.settled is None:
                 reservation.settle_unknown()
+            facts["sent"] = reservation.settled  # kept when the ledger raised on an overrun
         admission = result.get("admission") or {}
         facts["launch"] = dict(state=result.get("state"), reason=result.get("reason"), event=result.get("event"),
                                billing_class=admission.get("billing_class"), detached=result.get("detached"),
