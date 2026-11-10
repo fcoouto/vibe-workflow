@@ -752,6 +752,10 @@ class ProductionLedgerTests(Temp):
         state = canary.resolve_state(None, production=True, approval=APPROVED)
         with self.assertRaises(safety.Refused):
             canary.check_project(str(project), str(project), state["settings"], managed=True)
+        with mock.patch.object(canary, "ALLOWLIST", str(project)):  # the default allowlist needs the list too
+            with self.assertRaises(safety.Refused):
+                canary.check_project(str(project), None, state["settings"], managed=True)
+            self.assertEqual(canary.check_project(str(project), None, state["settings"]), str(project.resolve()))
         revision = routing_settings._load(state["settings"])[0]
         routing_settings.update(state["settings"], dict(managed_projects=[str(project.resolve())]), revision)
         self.assertEqual(canary.check_project(str(project), str(project), state["settings"], managed=True),
@@ -819,7 +823,8 @@ class ProductionLedgerTests(Temp):
                  base + ["--canary", "--project", canary.ALLOWLIST, "--production-ledger", "--approval", *APPROVED,
                          "--canary-state", str(self.tmp / "canary")],
                  base + ["--production-ledger", "--approval", *APPROVED],  # not a canary
-                 ["--reset-canary-state", "--production-ledger", "--approval", *APPROVED],
+                 ["--canary", "--reset-canary-state", "--canary-state", str(self.resettable()), "--production-ledger",
+                  "--approval", *APPROVED],
                  ["--set-cap", "pilot", "4", "--reason", "r", "--production-ledger", "--approval", *APPROVED,
                   "--call-ledger", str(ledger)]]
         for argv in cases:
@@ -827,8 +832,16 @@ class ProductionLedgerTests(Temp):
                 self.assertEqual(live.main(argv), 2)
                 self.assertIn("refused", "".join(str(c) for c in err.write.call_args_list))
         self.assertEqual(list(target.iterdir()), [])
+        self.assertTrue(self.resettable().exists())  # a reset that would succeed alone is refused with the flag
         self.assertFalse(self.ledger.exists())
         self.assertFalse(self.settings.exists())
+
+    def resettable(self):
+        directory = self.private(self.tmp / "r") / "canary"
+        if not directory.exists():
+            self.private(directory)
+            (directory / "settings.json").write_text("{}")
+        return directory
 
     def test_an_approved_production_canary_is_not_managed_until_the_user_activates_it(self):
         ledger = self.private(self.tmp / "state") / "calls.jsonl"
