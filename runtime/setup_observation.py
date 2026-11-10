@@ -17,7 +17,7 @@ import tomllib
 from types import SimpleNamespace
 
 from runtime import package_manifest
-from runtime import onboarding as d3, startup
+from runtime import onboarding as d3, persisted_binding, startup
 from runtime.codex_layout import installation_versions, system_layer_path as _system_layer_path
 
 
@@ -394,8 +394,8 @@ def _collect_content(observed, accepted_identity, transaction_id, verified_asses
                 'A verified behavior lacks its actual frontend observations')
     d3._require(identity['configuration']['policy_digest'] == startup.policy_digest(package, budget=budget),
         'Setup candidate policy/runtime identity differs')
-    d3._require(d3._filesystem_binding(Path(identity['project_root'])) == identity['project_binding']
-        and all(d3._filesystem_binding(Path(identity['repository_root' if key == 'root' else key])) == binding
+    d3._require(persisted_binding.matches(identity['project_binding'], d3._filesystem_binding(Path(identity['project_root'])))
+        and all(persisted_binding.matches(binding, d3._filesystem_binding(Path(identity['repository_root' if key == 'root' else key])))
             for key, binding in identity['bindings'].items()), 'Setup physical project/checkout identity differs')
     for dependency in identity['shared_policy']:
         d3._require(hashlib.sha256(_read(Path(dependency['path']), budget)).hexdigest() == dependency['sha256'], 'Setup shared instruction source differs')
@@ -735,7 +735,7 @@ def collect_retained_setup(reference, identity, new_transaction, assessment, *, 
         d3._require(row['status']!='verified' or actual and all(proof in row['evidence'] for proof in actual),
             'A successor cannot qualify behavior absent from its retained genuine observations')
     current=current_configuration(original['configuration'],Path(identity['repository_root']),budget)
-    d3._require(current['digest']==original['configuration']['digest'] and current['hook_owner']==original['configuration']['hook_owner'],
+    d3._require(current['digest']==original['configuration']['digest'] and persisted_binding.record_matches(original['configuration']['hook_owner'],current['hook_owner']),
         'Original observable setup configuration changed')
     content.update(version=2,transaction_id=new_transaction,assessment=assessment,predecessor=original.get('predecessor') if native_origin else reference)
     content['source']['native_origin' if native_origin else 'capture_reference']=reference

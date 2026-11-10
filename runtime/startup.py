@@ -15,6 +15,7 @@ import time
 from types import MappingProxyType
 
 from runtime.package_manifest import PACKAGE_SCAN_MAX_BYTES, PACKAGE_SCAN_MAX_PATHS
+from runtime.persisted_binding import all_match as _same_all, matches as _same, record_matches as _same_owner
 
 
 MAX_INPUT = 128 * 1024
@@ -882,22 +883,24 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
             directories.update({selected[k]: b for k, b in selected["binding"].items()})
     observed_directories = {observation["project_root"]: observation["project_binding"]}
     observed_directories.update({observation[k]: b for k, b in observation["binding"].items()})
+    fresh = set()  # Paths observed in this acquisition compare the device too; record values do not.
+    differs = lambda path, b: path in directories and (directories[path] != b if path in fresh else not _same(directories[path], b))
     for path, binding in observed_directories.items():
-        if path in directories and directories[path] != binding:
+        if differs(path, binding):
             return result("conflict", "identity_changed")
-        directories[path] = binding
+        directories[path] = binding; fresh.add(path)
     for path, binding in authority["target"]["parents"].items():
-        if path in directories and directories[path] != binding:
+        if differs(path, binding):
             return result("conflict", "authority_conflict")
-        directories[path] = binding
+        directories[path] = binding; fresh.add(path)
 
     expected_authority = str(Path(data["project_root"]) / PROJECT_FILE)
     if (observation["conflicting_authorities"] or authority["path"] != expected_authority
             or authority["target"]["path"] != expected_authority
             or authority["target"]["fingerprint"]["status"] not in (("read", "absent") if preview else ("read",))
-            or authority["target"]["parents"].get(data["project_root"]) != data["project_binding"]):
+            or not _same(data["project_binding"], authority["target"]["parents"].get(data["project_root"]))):
         return result("conflict", "authority_conflict")
-    if any(observation[k] != data[k] for k in ("project_root", "project_binding")):
+    if observation["project_root"] != data["project_root"] or not _same(data["project_binding"], observation["project_binding"]):
         return result("conflict", "identity_changed")
     location_state = None
     if location is not None:
@@ -936,9 +939,9 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
     if not repos:
         for known in data["repositories"]:
             if (observation["git_common_dir"] == known["git_common_dir"]
-                    or observation["binding"]["primary_root"] == known["binding"]["primary_root"]
-                    or observation["binding"]["git_common_dir"] == known["binding"]["git_common_dir"]
-                    or any(observation["binding"]["root"] == c["binding"]["root"] for c in known["checkouts"])):
+                    or _same(known["binding"]["primary_root"], observation["binding"]["primary_root"])
+                    or _same(known["binding"]["git_common_dir"], observation["binding"]["git_common_dir"])
+                    or any(_same(c["binding"]["root"], observation["binding"]["root"]) for c in known["checkouts"])):
                 return result("conflict", "identity_changed")
         primary = Path(observation["primary_root"])
         project = Path(data["project_root"])
@@ -952,13 +955,13 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
         return result("pending", "member_pending")
     repo = repos[0]
     if (repo["git_common_dir"] != observation["git_common_dir"]
-            or any(repo["binding"][k] != observation["binding"][k] for k in repo["binding"])):
+            or not all(_same(repo["binding"][k], observation["binding"][k]) for k in repo["binding"])):
         return result("conflict", "identity_changed")
     selected = next((c for c in repo["checkouts"] if c["root"] == observation["root"]), None)
     if selected is None:
-        if any(c["binding"]["root"] == observation["binding"]["root"]
+        if any(_same(c["binding"]["root"], observation["binding"]["root"])
                 or c["git_dir"] == observation["git_dir"]
-                or c["binding"]["git_dir"] == observation["binding"]["git_dir"]
+                or _same(c["binding"]["git_dir"], observation["binding"]["git_dir"])
                 for c in repo["checkouts"]):
             return result("conflict", "identity_changed")
         primary = Path(repo["primary_root"])
@@ -976,7 +979,7 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
         return result("pending", "member_pending")
     bindings = repo["binding"] | selected["binding"]
     if (repo["git_common_dir"] != observation["git_common_dir"] or selected["git_dir"] != observation["git_dir"]
-            or bindings != observation["binding"]):
+            or not _same_all(bindings, observation["binding"])):
         return result("conflict", "identity_changed")
 
     config_entry = next((c for c in selected["clients"] if c["client"] == client), None)
@@ -1011,9 +1014,9 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
         return result("suspended", "dependency_unobserved")
     for dependency in dependencies:
         for path, binding in dependency["target"]["parents"].items():
-            if path in directories and directories[path] != binding:
+            if differs(path, binding):
                 return result("suspended", "dependency_changed")
-            directories[path] = binding
+            directories[path] = binding; fresh.add(path)
     if any(d["target"]["path"] != d["path"] or d["target"]["fingerprint"].get("sha256") != s["sha256"]
            for d, s in zip(dependencies, shared)):
         return result("suspended", "dependency_changed")
@@ -1030,7 +1033,8 @@ def _compare_canonical_scope(record, *, authority, observation, client, installe
     if qualification is not None and qualification["binding"] is not None:
         binding = qualification["binding"]
         if (binding != activation["qualification_binding"] or qualification["receipt"] != binding["receipt"]
-            or any(qualification["current"][k] != binding[k] for k in ("client", "configuration_digest", "hook_owner"))
+            or any(qualification["current"][k] != binding[k] for k in ("client", "configuration_digest"))
+            or not _same_owner(binding["hook_owner"], qualification["current"]["hook_owner"])
             or (client != "codex" and qualification["current"]["surface"] != binding["surface"])
             or binding["accepted_scope_digest"] != digest or binding["client"] != client):
             return result("suspended", "qualification_changed")

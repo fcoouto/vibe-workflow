@@ -9,7 +9,7 @@ import stat
 from types import SimpleNamespace
 import uuid
 
-from runtime import changes, local_ownership, onboarding, startup, state, external_delegation
+from runtime import changes, local_ownership, onboarding, persisted_binding, startup, state, external_delegation
 
 PACKAGE = Path(__file__).resolve().parents[1]
 BASIC_STORAGE = Path.home() / ".vcw-openrouter-consent"
@@ -179,7 +179,7 @@ class Store:
             binding = dict(binding, enrollment=self.binding['enrollment'])
         require(FIELDS <= set(record) <= FIELDS | {'external_permission'} and type(record['version']) is int and record['version'] in (1, 2)
                 and integer(record['revision']) and record['revision'] > 0
-                and type(record['enabled']) is bool and binding == self.binding,
+                and type(record['enabled']) is bool and persisted_binding.record_matches(binding, self.binding),
                 'invalid_or_changed_openrouter_configuration')
         validate_routes(record['routes'])
         if record.get('external_permission') is not None:
