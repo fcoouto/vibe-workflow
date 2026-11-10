@@ -24,7 +24,8 @@ class FakeLauncherHost:
         self.effects = {}  # action -> effect; default deny
         self.models = [dict(providerID="claude-agent", id="haiku", variants=[dict(id="low"), dict(id="high")])]
         self.reply, self.text_key, self.honour_hostile, self.healthy, self.attach_ok = "OK", "content", False, True, True
-        self.extra_assistants = 0
+        self.extra_assistants, self.cost, self.trust_attach = 0, 0, False
+        self.attached, self.unobserved = set(), set()
         self.connections = {}
         self.workdir.mkdir(parents=True, exist_ok=True)
         (self.workdir / "server.log").write_text("server password %s\nserver listening\n" % self._password)
@@ -56,6 +57,11 @@ class FakeLauncherHost:
         if method == "health":
             return (200, dict(state="ok", managed_denies=list(adapter.MANAGED_DENIES))) if self.healthy else (500, None)
         self.tokens.append(payload.get("authority"))
+        if method == "attach" and self.trust_attach:  # no ledger to check against (a routing double)
+            self.attached.add(payload["session_id"])
+            if payload["session_id"] in self.sessions:
+                self.unobserved.add(payload["session_id"])  # created before attach: the shim never saw it
+            return 200, dict(state="attached")
         if method == "attach":
             route, _, variant = payload["model"].partition("#")
             provider, _, model = route.partition("/")
@@ -70,13 +76,25 @@ class FakeLauncherHost:
             finally:
                 shim.close()
             ok = self.attach_ok and answer.get("authority") == "verified"
+            if ok:
+                self.attached.add(payload["session_id"])
             return (200, dict(state="attached")) if ok else (500, None)
         if method == "descendants":
-            if not payload.get("authority"):
+            root = payload["session_id"]
+            if not payload.get("authority") or (self.trust_attach and root not in self.attached):
                 return 500, None
-            return 200, dict(state="ok", root=payload["session_id"], descendants=[], truncated=False, complete=True,
-                             reason=None)
+            if root in self.unobserved:
+                return 200, dict(state="ok", root=root, descendants=[], truncated=False, complete=False,
+                                 reason="root_creation_unobserved")
+            children = [dict(session_id=sid, parent_session_id=root) for sid, item in self.sessions.items()
+                        if item["parent"] == root]
+            return 200, dict(state="ok", root=root, descendants=children, truncated=False, complete=True, reason=None)
+        self.attached.discard(payload.get("session_id"))
         return 200, dict(state="detached")
+
+    def session_tokens(self, sid):
+        count = sum(1 for m in self.sessions[sid]["messages"] if m.get("type") == "assistant")
+        return dict(input=3 * count, output=count, reasoning=0, cache=dict(read=0, write=0))
 
     # ------------------------------------------------------------ HTTP
     def request(self, method, path, body=None, query=None):
@@ -110,14 +128,16 @@ class FakeLauncherHost:
             return 200, dict(data=[dict(id=sid, parentID=item["parent"]) for sid, item in self.sessions.items()])
         sid = parts[2]
         if len(parts) == 3:
-            return 200, dict(data=dict(id=sid, parentID=self.sessions[sid]["parent"], tokens=tokens, cost=0))
+            spent = self.cost * sum(1 for m in self.sessions[sid]["messages"] if m.get("type") == "assistant")
+            return 200, dict(data=dict(id=sid, parentID=self.sessions[sid]["parent"], tokens=self.session_tokens(sid),
+                                       cost=spent))
         if parts[3] == "permission":
             return 200, dict(data=dict(effect=self.effects.get(body["action"], "deny")))
         if parts[3] in ("prompt", "command", "shell"):
             self.prompts += 1
             model = self.sessions[sid]["model"] or {}
             reply = self.reply(body.get("text", "")) if callable(self.reply) else self.reply
-            assistant = dict(id="msg_fakeassistant%04d" % self.prompts, type="assistant", finish="stop", cost=0,
+            assistant = dict(id="msg_fakeassistant%04d" % self.prompts, type="assistant", finish="stop", cost=self.cost,
                              tokens=tokens, model=dict(id=model.get("id"), providerID=model.get("providerID"),
                                                        variant=model.get("variant")),
                              time=dict(created=now, completed=now + 1))
