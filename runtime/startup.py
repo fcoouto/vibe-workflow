@@ -18,6 +18,8 @@ from runtime.package_manifest import PACKAGE_SCAN_MAX_BYTES, PACKAGE_SCAN_MAX_PA
 
 
 MAX_INPUT = 128 * 1024
+# Observation cap: one second of the native hook's five-second budget stays reserved for adaptation.
+OBSERVATION_SECONDS = 4
 PROJECT_FILE = Path(".vibe-workflow/project.json")
 
 
@@ -27,6 +29,10 @@ class StartupError(ValueError):
 
 class RuntimeScopeError(StartupError):
     """Accepted runtime scope whose installed policy/client source is incompatible."""
+
+
+class ObservationDeadline(StartupError):
+    """The shared observation deadline expired; nothing was observed to have changed."""
 
 
 @dataclass(frozen=True)
@@ -94,7 +100,7 @@ def repository_root(cwd, *, budget=None):
 
 def _check_observation_deadline(budget):
     if budget.get("deadline") is not None and time.monotonic() >= budget["deadline"]:
-        raise StartupError("Canonical acquisition deadline exceeded")
+        raise ObservationDeadline("Canonical acquisition deadline exceeded")
 
 
 def _entry_budget_check(budget, *, allow_full_bytes=False):
@@ -1233,8 +1239,8 @@ def _acquire_canonical_membership(cwd: Path, *, authority_path: Path | None, bud
             conflicting_authorities=[], dependencies=[], qualification=None, runtime_location=None)
         _check_observation_deadline(budget)
         return result("observed", "authority_observed")
-    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
-        return result("conflict", "observation_unavailable")
+    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError) as error:
+        return result("conflict", "observation_deadline" if isinstance(error, ObservationDeadline) else "observation_unavailable")
 
 
 def acquire_canonical_project(event, package, *, authority_path=None, qualifier=None, deadline=None, budget=None, managed=True):
@@ -1255,8 +1261,7 @@ def acquire_canonical_project(event, package, *, authority_path=None, qualifier=
         now = time.monotonic()
         if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
             raise StartupError("Invalid acquisition deadline")
-        # Reserve one second of the native hook's five-second budget for adaptation.
-        cap = min(deadline, now + 4) if deadline is not None else now + 4
+        cap = min(deadline, now + OBSERVATION_SECONDS) if deadline is not None else now + OBSERVATION_SECONDS
         if budget is None:
             budget = {"paths": 0, "bytes": 0, "deadline": cap}
         else:
@@ -1358,13 +1363,13 @@ def acquire_canonical_project(event, package, *, authority_path=None, qualifier=
                 client=event.client, installed=basic_installed, managed=False)
         _check_observation_deadline(budget)
         return CanonicalAcquisition(resolution, pointer)
-    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
-        return result("conflict", "observation_unavailable")
+    except (StartupError, OSError, TypeError, KeyError, RecursionError, subprocess.SubprocessError) as error:
+        return result("conflict", "observation_deadline" if isinstance(error, ObservationDeadline) else "observation_unavailable")
 
 
 def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budget=None, managed=True):
     """Internal actual-IO selector; no public wiring or native qualification."""
-    cap = time.monotonic() + 4
+    cap = time.monotonic() + OBSERVATION_SECONDS
     if deadline is not None:
         if type(deadline) not in (int, float) or not math.isfinite(deadline):
             raise StartupError('Invalid entry deadline')
@@ -1406,15 +1411,6 @@ def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budg
 
     pointer = None
     try:
-        cap = time.monotonic() + 4
-        if deadline is not None:
-            if type(deadline) not in (int, float) or not math.isfinite(deadline):
-                raise StartupError("Invalid entry deadline")
-            cap = min(cap, deadline)
-        if budget is None:
-            budget = dict(paths=0, bytes=0, deadline=cap)
-        else:
-            budget["deadline"] = min(budget.get("deadline", cap), cap)
         _entry_budget_check(budget)
         root = repository_root(event.cwd, budget=budget)
         _entry_budget_check(budget)
@@ -1494,10 +1490,10 @@ def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budg
                 raise StartupError("Canonical physical authority changed")
         _entry_budget_check(budget)
         return result
-    except (StartupError, OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
-        if budget is not None:
-            budget["bytes"] = max(budget.get("bytes", 0), PACKAGE_SCAN_MAX_BYTES)
-        return CanonicalAcquisition(ScopeResolution("conflict", None, "observation_unavailable"), pointer)
+    except (StartupError, OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError) as error:
+        budget["bytes"] = max(budget.get("bytes", 0), PACKAGE_SCAN_MAX_BYTES)
+        reason = "observation_deadline" if isinstance(error, ObservationDeadline) else "observation_unavailable"
+        return CanonicalAcquisition(ScopeResolution("conflict", None, reason), pointer)
 
 
 def _entry_scope(acquisition, *, managed=True):
