@@ -182,13 +182,19 @@ class SurfacedMessageTests(unittest.TestCase):
         names, found = {'ObservationDeadline', 'StateDeadline', 'StateBusy'}, 0
         root = Path(__file__).resolve().parents[1]
         for path in sorted(root.glob('runtime/**/*.py')):
-            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+            # Module-level names bound once to a string literal count as literals.
+            constants = {target.id for node in tree.body if isinstance(node, ast.Assign)
+                         and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+                         for target in node.targets if isinstance(target, ast.Name)}
+            for node in ast.walk(tree):
                 callee = getattr(node, 'func', None)
                 name = getattr(callee, 'id', None) or getattr(callee, 'attr', None)
                 if not isinstance(node, ast.Call) or name not in names:
                     continue
                 found += 1
-                literal = len(node.args) == 1 and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                literal = len(node.args) == 1 and (isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+                    or isinstance(node.args[0], ast.Name) and node.args[0].id in constants)
                 # The one pass-through re-raises an ObservationDeadline, whose text this rule already bounds.
                 passthrough = path.name == 'state_errors.py' and ast.unparse(node) == 'StateDeadline(str(error))'
                 self.assertTrue(literal or passthrough, f'{path.relative_to(root)}:{node.lineno}: {ast.unparse(node)}')
