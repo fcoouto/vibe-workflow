@@ -557,7 +557,7 @@ class StartupWarningTests(unittest.TestCase):
     def test_corrupt_record_leaves_the_startup_result_unchanged(self):
         self.enroll()
         baseline = self.hook()
-        self.path.parent.mkdir(parents=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         for raw in (b"{", b"\xff", b"x" * (pv.MAX_RECORD + 10)):
             self.path.write_bytes(raw)
             with self.subTest(raw=raw[:4]):
@@ -567,14 +567,16 @@ class StartupWarningTests(unittest.TestCase):
         pv.write_record(self.path, "9.9.9", {})
         self.assertIsNone(self.hook())
 
-    def test_startup_never_writes_or_spawns_a_client(self):
+    def test_startup_writes_only_the_delivery_note_and_never_spawns_a_client(self):
         self.enroll()
         pv.write_record(self.path, "9.9.9", {})
         before = [(str(p), p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(self.state.rglob("*")) if p.is_file()]
         output = self.hook()
         self.assertIn("9.9.9", output["systemMessage"])
         self.assertFalse(self.clients.marker.exists())
-        self.assertEqual(before, [(str(p), p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(self.state.rglob("*")) if p.is_file()])
+        after = [(str(p), p.read_bytes(), p.stat().st_mtime_ns) for p in sorted(self.state.rglob("*")) if p.is_file()]
+        self.assertEqual(before, [entry for entry in after if "/delivered/" not in entry[0]])
+        self.assertEqual([Path(entry[0]).name for entry in after if "/delivered/" in entry[0]], [f"{self.client}.json"])
         self.assertFalse((self.base / "home").exists())
 
     def test_failure_while_checking_leaves_the_output_unchanged(self):

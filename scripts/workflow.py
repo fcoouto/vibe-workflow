@@ -391,15 +391,16 @@ def main():
                 except Exception:
                     # Optional title repair must preserve the startup result.
                     pass
-            if output is not None and time.monotonic() < deadline:
+            try:
+                from runtime import startup_notes
                 try:
-                    from runtime import package_versions
-                    warning = package_versions.drift_warning(PACKAGE, start.client)
-                    if warning:
-                        output = package_versions.append_warning(output, warning)
+                    restricted = qualification_only(_entry_scope(acquisition, managed=False))
                 except Exception:
-                    # The optional drift warning must preserve the startup result.
-                    pass
+                    restricted = True
+                output = startup_notes.apply(PACKAGE, start.client, output, deadline, restricted)
+            except Exception:
+                # The optional delivery note and warnings must preserve the startup result.
+                pass
         else:
             event = codex.normalize_runtime(payload)
             acquisition = acquire_project_entry(event, PACKAGE, deadline=deadline)
