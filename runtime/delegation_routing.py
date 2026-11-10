@@ -10,7 +10,8 @@ after delegation's own reservation commits, bound to the planned job (`workflow`
   replay of the same request re-runs `prepare` (idempotent by attempt id) and grants the one launch permit only on
   the call that obtains the admission. A catalog or host mismatch releases it through `reconcile_assignment`. On a
   replay, a refusal at the launch check or `dispatch` records `not_dispatched` and adds `reconcile_required: true`
-  to `routing`: the coordinator reconciles rather than retries. A blocked admission carries no such field.
+  to `routing`: the coordinator reconciles rather than retries. `legacy_route_retired` carries it too; any other
+  blocked admission does not.
 - `release()` records routing `not_dispatched` before it calls `reconcile_assignment`. If that reconcile fails, the
   assignment stays `prepared` with no launch permit until the coordinator reconciles it (fail closed).
 - Codex native subagents are an advisory host: `dispatch` runs at the last pre-spawn step, and its token is dropped
@@ -219,7 +220,8 @@ def prepare(scope, request, role, inner):
     if record['data']['observation'] is not None or 'workstream_dispatch' in record['data']:
         return reply  # already launched or consumed: a replay never grants a second permit
     if reply['replayed'] and record['data']['binding']['requested_model'] is not None:
-        return dict(reply, routing=dict(state='blocked', reason=PRE_MANAGED))  # committed unmanaged: reconcile first
+        return dict(reply, routing=dict(state='blocked', reason=PRE_MANAGED,  # committed unmanaged: reconcile first
+                                        reconcile_required=True))
     selection = record['body']['request']['selection']
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         constraints = None
@@ -345,32 +347,52 @@ def settled(scope, record, reply):
     return dict(reply, routing=dict(closed=closed)) if closed else reply
 
 
-def _enrolled_clients(cwd):
-    """The clients whose enrolment of this checkout keeps runtime state, from the canonical record. A checkout with
-    no canonical record keeps the legacy entry path's client; an unreadable or conflicting record raises."""
+def _enrolment(cwd):
+    """The canonical record's client entries for this checkout, or None when no canonical record covers it (the
+    legacy entry path). An unreadable or conflicting record, or one without the observed checkout, raises."""
     from runtime import startup
     budget = dict(paths=0, bytes=0, deadline=time.monotonic() + startup.OBSERVATION_SECONDS)
     acquired = startup._acquire_canonical_membership(cwd, authority_path=None, budget=budget)
     if acquired.status == 'outside':
-        return ['codex']
+        return None
     if acquired.status != 'observed':
         raise startup.RuntimeScopeError('Project authority is unavailable: ' + acquired.reason)
     data, observed = startup._canonical_plain(acquired.record.data), startup._canonical_plain(acquired.observation)
     selected = next((c for r in data['repositories'] if r['primary_root'] == observed['primary_root']
-                     for c in r['checkouts'] if c['root'] == observed['root']), dict(clients=[]))
-    return sorted(e['client'] for e in selected['clients'] if (e['configuration'] or {}).get('runtime'))
+                     for c in r['checkouts'] if c['root'] == observed['root']), None)
+    if selected is None:
+        raise startup.RuntimeScopeError('Project authority does not list the observed checkout')
+    return selected['clients']
+
+
+def _enrolled_clients(cwd, entries=False):
+    """The clients whose enrolment of this checkout keeps runtime state (from `entries` when the caller already
+    read them). A checkout with no canonical record keeps the legacy entry path's client, codex."""
+    entries = _enrolment(cwd) if entries is False else entries
+    return ['codex'] if entries is None else sorted(
+        e['client'] for e in entries if (e['configuration'] or {}).get('runtime'))
+
+
+def enrolled_hosts(checkout):
+    """Read-only, for the activation gate (`scripts/routing.py` MANAGED_HOSTS): every client enrolled for this
+    checkout, with or without runtime state; ['codex'] with no canonical record. Raises when it cannot be read."""
+    entries = _enrolment(Path(checkout).resolve())
+    return ['codex'] if entries is None else sorted({e['client'] for e in entries})
 
 
 def _scopes_for(checkout):
     """The checkout's delegation scopes, one per enrolled client with runtime state, through the workflow entry
-    path; [] when no client keeps runtime state. A client that cannot be resolved raises (fails closed)."""
+    path; [] when no client keeps runtime state. A client the record says keeps runtime state but that cannot be
+    resolved raises (fails closed); only the legacy client of an unrecorded checkout may be absent."""
     from runtime import routing_gates
     cwd, scopes = Path(checkout).resolve(), []
-    for client in _enrolled_clients(cwd):
+    entries = _enrolment(cwd)
+    for client in _enrolled_clients(cwd, entries):
         try:
             scopes.append(routing_gates._resolve_scope(dict(client=client, cwd=str(cwd))))
-        except LookupError:  # not enrolled for this client, or no runtime state: no native assignment can exist
-            continue
+        except LookupError:  # an unrecorded checkout with no runtime state: no native assignment can exist
+            if entries is not None:
+                raise
     return scopes
 
 

@@ -412,7 +412,7 @@ class ActivationHostTests(Base):
         self.assertEqual(response, dict(v=1, state='blocked', reason='advisory_host_unmanaged',
                                         projects=[str(self.project)]))
         self.assertEqual(gate, 0)
-        self.assertEqual(routing_settings.revision(self.settings), 0)
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
     def test_a_project_without_any_enrolled_client_is_refused(self):
         response, _ = self.add([])
@@ -421,9 +421,9 @@ class ActivationHostTests(Base):
     def test_codex_opencode_and_a_mix_pass_this_check(self):
         for hosts in (['codex'], ['opencode'], ['claude-code', 'codex']):
             with self.subTest(hosts):
-                response, gate = self.add(hosts, revision=routing_settings.revision(self.settings))
+                response, gate = self.add(hosts, revision=routing_settings.revision(self.service.settings_path))
                 self.assertEqual((response['state'], gate), ('updated', 1), response)
-                self.assertEqual(routing_settings.read(self.settings)['managed_projects'], [str(self.project)])
+                self.assertEqual(routing_settings.read(self.service.settings_path)['managed_projects'], [str(self.project)])
                 removal, _ = self.add(hosts, projects=[], revision=response['revision'])
                 self.assertEqual(removal['state'], 'updated', removal)
 
@@ -435,7 +435,7 @@ class ActivationHostTests(Base):
                 self.assertEqual(response, dict(v=1, state='blocked', reason='enrolment_unavailable',
                                                 projects=[str(self.project)]))
                 self.assertEqual(gate, 0)
-        self.assertEqual(routing_settings.revision(self.settings), 0)
+        self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
 
     def test_every_added_project_is_checked_and_an_existing_one_is_not(self):
         other = Path(self.temp.name).resolve() / 'other'

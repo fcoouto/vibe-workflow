@@ -94,6 +94,12 @@ CAPABILITIES = (
     ('api_usage', 'module', 'runtime.usage_routing:managed_self_check'),  # C3-5
     ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
 )
+# Enrolled clients whose coordinator has a managed delegation path (policy 03 `Managed projects`): codex through
+# native delegation preparation (C3-2), opencode through the managed launcher (C3-3). Claude Code native subagents
+# have none, so a project enrolled only for clients outside this list is refused (`advisory_host_unmanaged`); a mix
+# may join, and policy 03's hold covers a Claude Code coordinator there. The user's decision 2 (whether advisory
+# hosts get automatic selection) may change this list.
+MANAGED_HOSTS = ('codex', 'opencode')
 SELF_CHECK_TIMEOUT = 10
 SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
 SELF_CHECK_MARK = 'managed-self-check:'
@@ -641,22 +647,26 @@ class Service:
         """The activation gate runs before the write, so an assignment committed in between would keep an unmanaged
         launch permit in a now-managed project (PR #217 follow-up). Re-check after the write; on a hit, write the
         added projects out again (a new revision through the same ordered write, keeping any concurrent change)
-        and refuse. Exhausted retries leave the project managed, where a pre-managed replay is refused anyway."""
+        and refuse. Exhausted retries or a failed rollback write leave the project managed, where a pre-managed replay
+        is refused anyway; either is still this refusal, with `rolled_back: false` and the failure chained. Every
+        refusal carries the first write's `invalidated_attempts`, which that write already invalidated."""
         from runtime import delegation_routing
         if not any(map(delegation_routing.open_unrouted_assignments, sorted(added))):
             return answer
+        invalidated = answer.get('invalidated_attempts')
         for _ in range(MAX_ROLLBACK):
             current = self._settings()
             try:
                 self._write_settings(dict(expected_revision=current['revision'], change=dict(managed_projects=[
                     item for item in current['managed_projects'] if item not in added])))
                 break
-            except Blocked as error:
-                if error.reason != 'stale_revision':
-                    raise
+            except Exception as error:  # noqa: BLE001 - only a stale revision is retried; anything else is reported
+                if not (isinstance(error, Blocked) and error.reason == 'stale_revision'):
+                    raise Blocked('open_unrouted_assignments', rolled_back=False,
+                                  invalidated_attempts=invalidated) from error
         else:
-            raise Blocked('open_unrouted_assignments', rolled_back=False)
-        raise Blocked('open_unrouted_assignments', rolled_back=True)
+            raise Blocked('open_unrouted_assignments', rolled_back=False, invalidated_attempts=invalidated)
+        raise Blocked('open_unrouted_assignments', rolled_back=True, invalidated_attempts=invalidated)
 
     def _write_settings(self, body):
         # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
@@ -695,6 +705,7 @@ class Service:
             raise Blocked('invalid_managed_projects') from None
         if set(value) - set(self._settings()['managed_projects']):
             from runtime import delegation_routing  # C3-2: no project joins with an unrouted native launch open
+            _require_managed_hosts(delegation_routing, sorted(set(value) - set(self._settings()['managed_projects'])))
             require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
                 'managed_projects']))), 'open_unrouted_assignments')
             codes = activation_gate()
@@ -813,6 +824,24 @@ def _self_check(kind, target):
         return codes if child.returncode == 0 or codes else ['self_check_error']
     finally:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def _require_managed_hosts(delegation_routing, projects):
+    """Refuse adding a project none of whose enrolled clients is in MANAGED_HOSTS; an unreadable enrolment fails
+    closed (`enrolment_unavailable`). Read-only, before the self-checks and any ledger lock."""
+    unreadable, advisory = [], []
+    for project in projects:
+        try:
+            hosts = delegation_routing.enrolled_hosts(project)
+        except Exception:  # noqa: BLE001 - e.g. RuntimeScopeError or OSError: unknown enrolment never joins
+            unreadable.append(project)
+            continue
+        if not set(hosts) & set(MANAGED_HOSTS):
+            advisory.append(project)
+    if unreadable:
+        raise Blocked('enrolment_unavailable', projects=unreadable)
+    if advisory:
+        raise Blocked('advisory_host_unmanaged', projects=advisory)
 
 
 def activation_gate():
