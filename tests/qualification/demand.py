@@ -4,8 +4,9 @@ No model call, process or provider read is added to measure. Every reading comes
 already produce:
 - Claude route: the settled launch's own `native.rateLimit` windows, which `opencode_launcher.launch` stores in the
   run's temporary window store (`routing_observations.window_path`), and the drill's re-read of its idle session.
-- ChatGPT/Codex pool: one Codex rate-limit read before and one after the A5 prompt through the read-only reader of
-  lane R7 (`env.codex_window()`); until that reader is on `main` it answers None and the pool stays unmeasured.
+- ChatGPT/Codex pool: one Codex rate-limit read before and one after the A5 prompt through the read-only reader
+  runtime/codex_rate_limits.py (`env.codex_window()`, zero tokens). A failed read records the reader's fixed reason
+  and the pool has no sample from that run; A5 itself never fails for it.
 
 Readings are appended to an owner-only `demand-readings.jsonl` next to the call ledger (never in a repository), so
 consecutive launches across modes (A6 -> A7 -> drill 1) pair up. A launch's demand is the rise of each window's
