@@ -26,7 +26,8 @@ class CanaryEnv:
 
     def prepare(self, body):
         body = json.loads(json.dumps(body))
-        body["observations"]["now"] = int(time.time())
+        if "observations" in body:  # the unmanaged pilot's own snapshot; a managed canary sends none (server.Routing)
+            body["observations"]["now"] = int(time.time())
         return self.run.routing.served("prepare", **body)
 
     def dispatch(self, attempt):

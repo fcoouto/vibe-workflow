@@ -3,7 +3,10 @@
 Qualification mode: the server's project, config and routing stores all live in the isolated directory.
 Canary mode: the server's location is a dedicated, git-excluded subdirectory of the allowlisted project (see
 `ProjectConfig`), and routing (the shim's child and the launcher) uses the dedicated canary settings and ledger
-(canary.check_canary_state; never the production defaults) with `--project` pinned.
+(canary.check_canary_state; never the production defaults) with `--project` pinned. When that project is on the
+canary settings' `managed_projects`, every `prepare` goes out without `observations`, so the routing service's
+collector supplies them as in production (C3-3, docs/superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md
+section 3.3); otherwise the bounded pilot keeps its own snapshot on its unmanaged canary ledger.
 """
 import base64
 import http.client
@@ -282,7 +285,29 @@ class Routing:
         self.child = None
         self.seq = 0
 
+    def observation_mode(self):
+        """`collector` when the pinned project is on the pinned settings' `managed_projects`: the harness then sends no
+        `observations` and the routing service's collector supplies them, as in production. `caller` otherwise:
+        qualification (no project) and the bounded pilot on its unmanaged canary ledger keep their own snapshot until
+        C3-7 moves that to `--test-inputs`. Read on every call, because the canary state may be created after this
+        object; an unreadable answer counts as managed (fail closed), so nothing is sent that a managed service refuses."""
+        pins = dict(zip(self.argv[::2], self.argv[1::2]))
+        if "--project" not in pins:
+            return "caller"
+        from runtime import routing_settings
+        try:
+            managed = routing_settings.managed_project(Path(pins["--project"]), settings_path=Path(pins["--settings"]))
+        except Exception:  # noqa: BLE001 - fail closed
+            return "collector"
+        return "caller" if managed is False else "collector"
+
+    def _body(self, op, body):
+        if op == "prepare" and self.observation_mode() == "collector":
+            return {key: value for key, value in body.items() if key != "observations"}
+        return body
+
     def __call__(self, op, **body):
+        body = self._body(op, body)
         began = time.perf_counter()
         done = subprocess.run([sys.executable, "-I", "-B", str(ROOT / "scripts" / "routing.py"), op, *self.argv],
                               input=json.dumps(dict(v=1, op=op, **body)), capture_output=True, text=True, timeout=60)
@@ -327,6 +352,7 @@ class Routing:
         Every reply must carry this request's id. A timeout, an unreadable or mismatched reply, or an interrupt
         kills the child (so nothing it still owes is read later). Reads (`status`, `check`) are then sent once more
         to a fresh child; a write is never re-sent and answers `unconfirmed` with the reason."""
+        body = self._body(op, body)
         tries = 2 if op in self.READS else 1
         for attempt in range(tries):
             if self.child is None or self.child.poll() is not None:
@@ -364,13 +390,15 @@ class Routing:
         self._kill()
 
     def admission_ids(self, attempt):
-        """Derived ids of an admitted, not yet dispatched attempt (read-only, in process), for the pending probe."""
+        """Derived ids of an admitted, not yet dispatched attempt (read-only, in process), for the pending probe. Only
+        the run's pinned stores are read: without both pins this refuses, and it never opens the production defaults."""
+        paths = dict(zip(self.argv[::2], self.argv[1::2]))
+        if "--settings" not in paths or "--ledger" not in paths:
+            raise Refused("the pending probe reads only the run's pinned routing stores")
         sys.path.insert(0, str(ROOT))
         from runtime import routing as core
         from scripts import routing as command
-        paths = dict(zip(self.argv[::2], self.argv[1::2]))
-        service = command.Service(paths.get("--settings") or command.default_settings(),
-                                  paths.get("--ledger") or command.default_ledger(), project=paths.get("--project"))
+        service = command.Service(paths["--settings"], paths["--ledger"], project=paths.get("--project"))
         try:
             ledger = service._ledger(False)
             return None if ledger is None else core.admission_ids(ledger.snapshot(), attempt)
