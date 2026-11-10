@@ -45,6 +45,13 @@ class DeadlineTypeTests(unittest.TestCase):
                                               budget=budget)
             self.assertEqual(budget['deadline'], now + 50)
 
+    def test_delegation_caps_child_lineage_with_the_shared_constant(self):
+        import re
+        from runtime import delegation
+        source = Path(delegation.__file__).read_text()
+        self.assertIsNone(re.search(r'monotonic\(\) \+ 4\b', source))  # PR #219 follow-up: no inline cap
+        self.assertIn('time.monotonic() + startup.OBSERVATION_SECONDS', source)
+
 
 class AcquisitionReasonTests(unittest.TestCase):
     def test_membership_deadline_is_reported_as_a_deadline(self):
@@ -127,6 +134,17 @@ class StateFailureTests(unittest.TestCase):
         self.assertIsInstance(failure, state.StateBusy)
         self.assertEqual(str(failure), str(error))
         self.assertIs(failure.__cause__, error)
+
+    def test_d4_busy_matches_only_the_exact_constant(self):
+        # PR #219 follow-up: text around the D4 constant may carry input, so it never surfaces as busy.
+        from runtime.state_errors import D4_BUSY, UNAVAILABLE
+        for error in (startup.StartupError(D4_BUSY + ': /Users/someone/private-input'),
+                      startup.StartupError('private-input ' + D4_BUSY), startup.StartupError(D4_BUSY + ' '),
+                      startup.RuntimeScopeError(D4_BUSY)):
+            with self.subTest(str(error)):
+                failure = self.failure(error)
+                self.assertNotIsInstance(failure, (state.StateBusy, state.StateDeadline))
+                self.assertEqual(str(failure), UNAVAILABLE)
 
     def test_other_startup_errors_never_surface_their_text(self):
         # Many StartupError messages embed input (setting keys, client names, joined blockers).
@@ -236,6 +254,21 @@ class SiblingFingerprintTests(unittest.TestCase):
     def test_worktree_churn_beside_a_development_checkout_does_not_change_the_fingerprint(self):
         with tempfile.TemporaryDirectory() as base:
             self.assert_sibling(self.package(Path(base).resolve().joinpath('vibe-workflow.worktrees/lane'), git=True), changes=False)
+
+    def test_the_suites_package_root_never_lists_its_parent(self):
+        # Fixtures use this checkout as the package root while other agents add and remove worktrees beside it;
+        # #198's test-side listing freeze is gone because a development checkout never lists that parent.
+        root, listed = state.PACKAGE.resolve(), []
+        real = setup_observation._children
+
+        def children(path, budget):
+            listed.append(Path(path).resolve())
+            return real(path, budget)
+        config = dict(files=[], roots=[str(root)], package_root=str(root), plugin_id='vibe-workflow@local', keys=[])
+        with patch.object(setup_observation, '_children', children):
+            versions = setup_observation.current_configuration(config, root)['material']['installation_versions']
+        self.assertIsNone(versions)
+        self.assertNotIn(root.parent, listed)
 
 
 if __name__ == '__main__':

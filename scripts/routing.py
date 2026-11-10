@@ -47,6 +47,8 @@ TEST_FLAG = '--test-inputs'
 READ_WAIT = 0.2
 WRITE_WAIT_SERVING = 0.3
 WRITE_WAIT = 5
+# Attempts to write a refused activation back out when concurrent settings writes keep moving the revision.
+MAX_ROLLBACK = 3
 # `observations` is refused for a managed project, where the collector builds them (C.3 design 3.3).
 FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constraints', 'workflow'}),
               check=({'request'}, {'attempt_id', 'session_id', 'authority', 'now'}),
@@ -630,6 +632,33 @@ class Service:
         require(set(body) == {'expected_revision', 'change'}, 'invalid_request')
         if type(body['change']) is dict and 'managed_projects' in body['change']:
             body = dict(body, change=self._managed_change(body['change']))
+            added = set(body['change']['managed_projects']) - set(self._settings()['managed_projects'])
+            if added:
+                return self._recheck_activation(self._write_settings(body), added)
+        return self._write_settings(body)
+
+    def _recheck_activation(self, answer, added):
+        """The activation gate runs before the write, so an assignment committed in between would keep an unmanaged
+        launch permit in a now-managed project (PR #217 follow-up). Re-check after the write; on a hit, write the
+        added projects out again (a new revision through the same ordered write, keeping any concurrent change)
+        and refuse. Exhausted retries leave the project managed, where a pre-managed replay is refused anyway."""
+        from runtime import delegation_routing
+        if not any(map(delegation_routing.open_unrouted_assignments, sorted(added))):
+            return answer
+        for _ in range(MAX_ROLLBACK):
+            current = self._settings()
+            try:
+                self._write_settings(dict(expected_revision=current['revision'], change=dict(managed_projects=[
+                    item for item in current['managed_projects'] if item not in added])))
+                break
+            except Blocked as error:
+                if error.reason != 'stale_revision':
+                    raise
+        else:
+            raise Blocked('open_unrouted_assignments', rolled_back=False)
+        raise Blocked('open_unrouted_assignments', rolled_back=True)
+
+    def _write_settings(self, body):
         # Healthy ledger: write the settings while holding its write lock, the lock `dispatch` reads settings under,
         # so a change and a dispatch are totally ordered and `invalidated_attempts` is exact. A ledger that is absent,
         # busy, corrupt or unsafe must not stop a change (turning API Usage or Smart Routing off is a money stop):
