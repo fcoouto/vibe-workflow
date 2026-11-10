@@ -5,6 +5,7 @@ The contract is the C.3 design (docs/superpowers/specs/2026-11-10-smart-routing-
 `collect(project, assignment) -> {observations, seen}`; no model, network or host call is made.
 """
 from contextlib import contextmanager
+import io
 import json
 import os
 from pathlib import Path
@@ -29,8 +30,9 @@ def collector(result=None, error=None):
     """Install a stub collector module; it records each call and returns `result` (or raises `error`)."""
     calls = []
 
-    def collect(project, assignment, *, source=None):
-        calls.append(dict(project=project, assignment=assignment, source=source))
+    def collect(project, assignment, *, settings_path, ledger_path, source=None):
+        calls.append(dict(project=project, assignment=assignment, source=source, settings_path=settings_path,
+                          ledger_path=ledger_path))
         if error is not None:
             raise error
         return result
@@ -113,6 +115,26 @@ class ObservationTests(ManagedBase):
         self.assertEqual([call['project'] for call in calls], [str(self.project)])
         self.assertEqual(calls[0]['assignment']['attempt_id'], 'm4')
         self.assertIsNone(calls[0]['source'])
+
+    def test_the_collector_reads_the_services_own_stores(self):
+        with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:
+            self.call(without(prepare('s1'), 'observations'))
+        self.assertEqual((calls[0]['settings_path'], calls[0]['ledger_path']),
+                         (self.service.settings_path, self.service.ledger_path))
+
+    def test_the_cli_passes_non_default_store_paths_to_the_collector(self):
+        """`--settings`/`--ledger` reach the collector unchanged; it never falls back to the default stores."""
+        self.assertNotEqual(self.service.settings_path, command._resolved(command.default_settings()))
+        stdout = io.BytesIO()
+        with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:
+            code = command.main(['prepare', '--settings', str(self.settings), '--ledger', str(self.ledger),
+                                 '--project', str(self.project)],
+                                stdin=io.BytesIO(json.dumps(without(prepare('s2'), 'observations')).encode()),
+                                stdout=stdout)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())['seen'], SEEN)
+        self.assertEqual((calls[0]['settings_path'], calls[0]['ledger_path']),
+                         (command._resolved(self.settings), command._resolved(self.ledger)))
 
     def test_seen_is_echoed_unchanged_when_pending(self):
         spent = observations()
