@@ -6,7 +6,7 @@ The requirements are in [workspace-requirements.md](../../../clients/workspace-r
 
 - **Verify** runs step 1 and reports the table. It changes nothing and does not run `workspace record`, so no private record is written. A not-ready result is a report, not a failure.
 - **Prepare** runs all seven steps. An inspect-only or plan-only request is verify mode, plus a proposal of what preparation would do.
-- A repair, upgrade or onboarding handoff runs steps 2–7 for the named items only.
+- A repair, upgrade or onboarding handoff runs steps 1–7, limited to the named items.
 
 ## Before step 1
 
@@ -14,13 +14,13 @@ Identify the destination (this host, container, VM, WSL or remote server), the o
 
 The **package root** is the folder two levels above this skill (it holds `scripts/workflow.py` and `clients/workspace-requirements.json`): the release or checkout the user is preparing from, which may be the first copy on the machine. Never use a client's cached copy. A relative `install_ref` in the list is read from it.
 
-Keep every backup and source record of a run in one private directory outside projects, such as `$XDG_STATE_HOME/vibe-workflow/preparation/<run>` (default `~/.local/state`). To resume an interrupted run, rerun step 1, read those records, keep the existing backups and continue the pending items. Never duplicate installs, configuration or hooks. Do not resolve the Toolkit again.
+Keep every backup and source record of a run in one private directory outside projects, such as `$XDG_STATE_HOME/vibe-workflow/preparation/<run>` (default `~/.local/state`). To resume an interrupted run, pick the latest unfinished run directory, rerun step 1, read its records, keep the existing backups and continue the pending items. Never duplicate installs, configuration or hooks. Do not resolve the Toolkit again.
 
 ## Steps
 
 1. **Check.** From the package root, run `python3 -B scripts/workflow.py workspace status` (`--json` for structured output; exit 0 ready, 1 not ready, 2 undetermined). It finds Codex, Claude Code and OpenCode, plus the client running this session, and gives each requirement and client one state. Ask the user about a client you cannot see.
    - Done when: the table is produced.
-   - On failure: report each `unknown` with its reason and never treat it as ready. If `python3` is missing or older than 3.11, install it as the `python` item's `install_ref` describes, announced as in step 2, then rerun. If the command still cannot run, report that gap and stop.
+   - On failure: report each `unknown` with its reason and never treat it as ready. If `python3` is missing or older than 3.11: in prepare mode, install it as the `python` item's `install_ref` describes, announced as in step 2, then rerun; in verify mode, report it as the gap and stop. If the command still cannot run, report that gap and stop.
 2. **Tell.** List what is missing or outdated and the value each brings (the list's `why`), say you are proceeding, and list the user actions to expect.
    - Done when: the message is shown.
    - On failure: if the user narrows scope, continue within it.
