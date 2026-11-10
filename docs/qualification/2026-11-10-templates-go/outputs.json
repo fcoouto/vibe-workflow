@@ -1,0 +1,520 @@
+{
+  "beam-free-minimal-prose": {
+    "files": {
+      "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\n## Observed purpose and scope\n\nA tiny Python project exposing a single function, `add(a, b)`, that returns the sum of two values. Scope is limited to this arithmetic helper; no package manager, service, database, UI, or client integration is present.\n\n## Essential behavior and acceptance\n\n- `add(a, b)` returns `a + b`.\n- Accepted check: `python3 -B check.py` (supplied coordinator check, exit 0 baseline) asserts `add(2, 3) == 5` and `add(-2, 2) == 0`.\n\n## Code map and boundaries\n\n- `arithmetic.py` \u2014 defines `add(a, b)`.\n- `check.py` \u2014 acceptance assertions importing `add`.\n- `AGENTS.md` \u2014 shared project instructions (preserved).\n- `SETUP.md` \u2014 setup record (this task).\n\nNo other modules, dependencies, or entry points exist.\n\n## Prerequisites\n\nPython standard library only. No third-party packages or installation step.\n\n## First run and check\n\nRun `python3 -B check.py`. It proves the two assertions above pass; it is not proof of integration or security.\n\n## Known limits\n\n- Single function; no input validation, typing, or error handling.\n- No managed backup/undo for this trial.\n- No Git base/branch supplied; snapshot identity only.\n\n## Next useful delivery\n\nAdd input validation and type hints to `add`, with corresponding checks.\n\n## Document responsibilities\n\nProduct, overview, architecture, local preparation, and quality are combined here. Shared instructions: `AGENTS.md`. Client instructions: none applicable (no client integration). Design/accessibility: not applicable (no UI). Setup/evidence: `SETUP.md`.",
+      "AGENTS.md": "# Project notes\n\nPreserve this note and the accepted check.py.\nRun python3 -B check.py for the project check.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n\n## Shared guidance\n\n- Keep changes local; owner merges manually.\n- Workstreams disabled; Codex only.\n- Do not change code, checks, nested instruction owners, filenames/capitalization, selected clients or publication choices.\n- Preserve every original useful statement and instruction; appending accurate guidance is fine.",
+      "SETUP.md": "# Setup record\n\n## Decisions\n\n- Documentation adaptation only; no environment preparation or installs.\n- Combine product/overview/architecture/preparation/quality in `README.md`; shared guidance in `AGENTS.md`; setup/evidence here.\n- Python standard library only; no package manager.\n\n## Check evidence\n\n- Coordinator ran `python3 -B check.py` before this session: exit 0, no output (passing synthetic baseline, not proof of integration or security).\n- Assertions: `add(2, 3) == 5`, `add(-2, 2) == 0`.\n\n## Pending observations\n\n- No real paths or secrets recorded.\n- No managed backup/undo implemented in this trial.\n\n## Recovery limits\n\n- This trial does not implement managed backup/undo.\n- Reviewable state: documentation files README.md, AGENTS.md, SETUP.md updated; code unchanged.\n\n## Next action / owner\n\n- Owner merges manually. Next useful delivery: add input validation and type hints to `add` with corresponding checks."
+    },
+    "final_chat": [
+      "Result/reviewable state: documentation adaptation complete; code and check.py unchanged. Changed paths: README.md, AGENTS.md, SETUP.md. Snapshot identity: fixture-sha256:1d73b053a378c40f1bd8c1255213d37f8bbe3407a799339fba2c27e1e214d34c. Actual evidence: coordinator ran `python3 -B check.py` (exit 0, no output) as supplied baseline; not my execution. Unrun checks: none beyond supplied baseline. Limitations/pending work: no managed backup/undo; no integration/security proof; single function with no validation. Scope/remaining limits: documentation only, no code changes, no installs. Next action/owner: owner merges manually; next delivery adds input validation and type hints."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "pattern": "**/*"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "check.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "arithmetic.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "SETUP.md"
+        },
+        "status": "completed"
+      }
+    ]
+  },
+  "beam-free-minimal-templates": {
+    "files": {
+      "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\n## Purpose and scope\n\nTiny Totals is a minimal Python project exposing a single `add(a, b)` function that returns the sum of two values. Scope is intentionally limited to this helper; there is no package, service, database, UI, or client integration.\n\n## Essential behavior and acceptance\n\n- `add(a, b)` returns `a + b`.\n- Acceptance: `add(2, 3) == 5` and `add(-2, 2) == 0`.\n\n## Code map and boundaries\n\n- `arithmetic.py` \u2014 defines `add(a, b)`.\n- `check.py` \u2014 acceptance assertions importing `add`.\n- `AGENTS.md` \u2014 shared project instructions (nested owner; preserved).\n- No tests beyond `check.py`; no dependencies beyond the Python standard library.\n\n## Python-standard-library prerequisites\n\n- Python 3 (standard library only; no external packages).\n\n## First-run / check command\n\nRun `python3 -B check.py`. It imports `add` and asserts the two acceptance cases above; exit 0 with no output indicates pass.\n\n## Known limits\n\n- No input validation, type enforcement, or error handling.\n- No managed backup/undo in this trial.\n- Documentation adaptation only; no environment preparation performed.\n\n## Next useful delivery\n\nAdd broader test coverage and input handling as needed.",
+      "AGENTS.md": "# Project notes\n\nPreserve this note and the accepted check.py.\nRun python3 -B check.py for the project check.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n\n## Shared instructions\n\n- Preserve `AGENTS.md` note and accepted `check.py`.\n- Run `python3 -B check.py` for the project check.\n- Write only `README.md`, `AGENTS.md`, `SETUP.md`; all other files preserved.\n- Documentation adaptation only; no code changes.\n",
+      "SETUP.md": "# Setup\n\n## Local preparation\n\n- Python 3 with standard library only; no install step.\n- No package manager, service, database, or UI.\n\n## Setup decisions and check evidence\n\n- Fixture choices preserved: Codex only; changes local; owner merges manually; Workstreams disabled.\n- Coordinator ran `python3 -B check.py` before this session: exit 0, no output (passing baseline; not proof of integration or security).\n- Pending observations: none beyond baseline.\n- Recovery limits: this trial does not implement managed backup/undo.\n\n## Design/accessibility\n\nNot applicable: no UI.\n\n## Client instructions\n\nNot applicable: no client integration."
+    },
+    "final_chat": [
+      "Result: documentation adaptation complete; reviewable state is local working files with no Git base/branch supplied.\n\nChanged paths: `README.md`, `AGENTS.md`, `SETUP.md`. Snapshot identity: `fixture-sha256:1d73b053a378c40f1bd8c1255213d37f8bbe3407a799339fba2c27e1e214d34c`.\n\nActual evidence: coordinator ran `python3 -B check.py` before session, exit 0, no output (passing baseline). Unrun checks: none performed by me; no shell/network/execute/delegation used.\n\nLimitations/pending work: no managed backup/undo; documentation only; no code changes; no integration/security proof.\n\nScope/remaining limits: minimal docs combined into README/AGENTS/SETUP per path rules; all nine responsibilities accounted for; nested instruction owners and check preserved.\n\nNext action/owner: owner merges manually."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "pattern": "**/*"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "arithmetic.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "check.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "opencode.json"
+        },
+        "status": "error"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "SETUP.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      }
+    ]
+  },
+  "beam-free-customized-templates": {
+    "files": {
+      "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n",
+      "AGENTS.md": "# Team guidance\n\nKeep the handbook as our canonical documentation.\nRead handbook/engineering.md for commands. Preserve src/AGENTS.md.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n",
+      "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n",
+      "handbook/ARCHITECTURE.md": "# Architecture\n\nPure transformations live in src/cleaning.py. No services or storage.\n",
+      "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n\nPreparation and quality: see handbook/setup.md for setup decisions and check evidence. Design/accessibility and client integration: not applicable (no UI/client).\n",
+      "handbook/setup.md": "# Setup\n\nPython standard library only; no package manager or services.\n\nFirst run / check: `python3 -B check.py`. It proves the baseline assertion for label normalization (order, duplicates, Unicode) passes.\n\nSetup decisions: keep changes local; owner merges manually; Codex only; Workstreams disabled. No managed backup/undo in this trial.\n\nKnown limits: no Git base/branch supplied; coordinator ran check with exit 0 (supplied evidence, not own execution). No real paths or secrets recorded."
+    },
+    "final_chat": [
+      "Result: documentation adaptation complete for the customized case; reviewable state is local only (no Git operations performed).\n\nChanged paths: handbook/setup.md (new), handbook/engineering.md (appended preparation/quality + inapplicability notes). README.md, AGENTS.md, handbook/overview.md, handbook/ARCHITECTURE.md, src/AGENTS.md preserved.\n\nActual evidence: coordinator supplied `python3 -B check.py` exit 0 (baseline only, not own execution). Unrun checks: none beyond supplied baseline.\n\nLimitations/pending: no managed backup/undo; no real paths/secrets; no independent acceptance or universal reliability claim. Scope/remaining limits: documentation only, no code/check changes, no installed workflow pointer, no client integration.\n\nNext action/owner: owner merges manually. Context to revisit: future delivery could add managed backup/undo and integration checks."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "pattern": "**/*"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/overview.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/ARCHITECTURE.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/engineering.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/setup.md"
+        },
+        "status": "error"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "src/AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "src/cleaning.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "check.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "handbook/setup.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "handbook/engineering.md"
+        },
+        "status": "completed"
+      }
+    ]
+  },
+  "beam-free-customized-prose": {
+    "files": {
+      "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n\n## Product and scope\n\nLabel Tools normalizes label whitespace while preserving order and duplicates, including Unicode labels. See [handbook/overview.md](handbook/overview.md).\n\n## Acceptance\n\n- `normalize_labels([' z ', ' a ', ' z ']) == ['z', 'a', 'z']`\n- `normalize_labels([' \u6f22\u5b57 ']) == ['\u6f22\u5b57']`\n- Order, duplicates, and Unicode are preserved.\n",
+      "AGENTS.md": "# Team guidance\n\nKeep the handbook as our canonical documentation.\nRead handbook/engineering.md for commands. Preserve src/AGENTS.md.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n\n## Shared instructions\n\n- Canonical docs live in `handbook/`.\n- `src/AGENTS.md` is a nested instruction owner; preserve it unchanged.\n- Read `handbook/engineering.md` for commands.\n",
+      "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n\n## Scope and boundaries\n\n- Pure transformation in `src/cleaning.py`; no services or storage.\n- Python standard library only.\n- Design/accessibility: not applicable (no UI).\n",
+      "handbook/ARCHITECTURE.md": "# Architecture\n\nPure transformations live in src/cleaning.py. No services or storage.\n\n## Code map\n\n- `src/cleaning.py` \u2014 `normalize_labels(values)` strips whitespace from each value.\n- `src/AGENTS.md` \u2014 source rules (preserve order, duplicates, Unicode; do not weaken checks).\n\n## Boundaries\n\n- No database, service, UI, or client integration.\n- No package manager or external dependencies.\n",
+      "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n\n## Local preparation\n\n- Python 3 standard library only; no installs required.\n- First run: `python3 -B check.py` (supplied coordinator check). It proves the two assertions in `check.py` pass.\n\n## Quality\n\n- Do not weaken accepted checks in `check.py`.\n- Preserve order, duplicate labels, and Unicode.\n",
+      "handbook/setup.md": "# Setup\n\n## Setup decisions\n\n- Codex only; changes kept local; owner merges manually; Workstreams disabled.\n- No Git operations, installs, or real onboarding performed.\n\n## Check evidence\n\n- Supplied coordinator check: `python3 -B check.py` exited 0 with no output (baseline, not proof of integration or security).\n- Pending observations: none recorded beyond baseline.\n\n## Recovery limits\n\n- This trial does not implement managed backup/undo. Recovery is manual."
+    },
+    "final_chat": [
+      "Result: documentation adaptation complete. Changed paths: README.md, AGENTS.md, handbook/overview.md, handbook/ARCHITECTURE.md, handbook/engineering.md, handbook/setup.md. Snapshot identity preserved (fixture-sha256:1ddff776...). Supplied evidence: coordinator ran `python3 -B check.py` before session, exit 0, no output (baseline, not independent verification). Unrun checks: none beyond supplied; no additional checks performed. Limitations/pending: no managed backup/undo; no real onboarding; code untouched. Next action/owner: owner reviews and merges manually."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "path": ".",
+          "pattern": "**/*"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "src/AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/overview.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/ARCHITECTURE.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/engineering.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "handbook/setup.md"
+        },
+        "status": "error"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "check.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "src/cleaning.py"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "README.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "handbook/overview.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "handbook/ARCHITECTURE.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "handbook/engineering.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "handbook/setup.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "edit",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      }
+    ]
+  },
+  "beam-free-review-prose": {
+    "files": {
+      "REPORT.md": "# Review Report\n\n## Kinds\nRead-only code and security review (not a change/diff review; no base revision supplied).\n\n## Snapshot / Layers\n- Snapshot identity: fixture-sha256:db7bec211e9a22ef083fa9ff215023cb40d9cf0b9083f0cda634e0b6c5d49dfb\n- No Git base/branch supplied.\n- Date: 2026-11-10.\n- Files reviewed: AGENTS.md, access.mjs, local-notes.txt.\n\n## Reviewer / Observed Execution Identity Limits\n- Worker route: opencode-go/beam-free#low; observed by coordinator's isolated OpenCode 2.2.6 runtime. Not an independent reviewer of own output.\n\n## Scope / Exclusions\n- In scope: access.mjs `canReadRecord(actor, record)`.\n- Excluded: repairs, installs, onboarding, Git ops, extra artifacts. All fixture files preserved.\n\n## Contract / Check / Runtime Versions\n- Coordinator Python 3.15.2, Node v26.13.0.\n- Contract: frozen local owner (AGENTS.md).\n- Protected evaluator: 7 tests; 5 pass, 2 fail (expected broken baseline).\n\n## Authorization Assumptions / Assets / Boundaries / Unknown Deployment\n- Assumption: access requires owner in same tenant, nonempty string identities; deny absent inputs and missing/empty/non-string identities; no input mutation.\n- Unknown deployment: no deployment info supplied.\n\n## Supplied Checks / Results\n- 7 tests; 5 pass, 2 fail: \"denies matching user IDs across tenants\", \"denies missing, empty, or non-string identities\". Expected baseline, not repair authorization.\n\n## Freshness / Unverified Areas\n- Supplied checks are coordinator evidence, not this reviewer's execution. No independent execution performed.\n\n## Findings\n\n### F-001: Cross-tenant access via matching user IDs\n- Severity: High (authorization bypass)\n- Status: Confirmed\n- Change status: Pre-existing (undetermined whether introduced by a change; no base supplied)\n- Source: access.mjs:3\n- Evidence: `return Boolean(actor && record && actor.id === record.ownerId);` ignores tenant.\n- Scenario/Impact: actor {id:\"u\",tenantId:\"A\"} and record {ownerId:\"u\",tenantId:\"B\"} returns true, leaking record across tenants.\n- Attacker prerequisites: control of actor identity in tenant A; knowledge of target ownerId string.\n- Counterevidence: none.\n- Confidence: High.\n- Reproduction: canReadRecord({id:\"u\",tenantId:\"A\"},{ownerId:\"u\",tenantId:\"B\"}) => true (required false). Isolated function call; proves cross-tenant read.\n- Proposed correction: require actor.tenantId === record.tenantId with nonempty string checks.\n- Next validation: evaluator cross-tenant case.\n\n### F-002: Missing/empty/non-string identities accepted\n- Severity: High (authorization bypass / type confusion)\n- Status: Confirmed\n- Change status: Pre-existing/undetermined\n- Source: access.mjs:3\n- Evidence: only truthiness of actor/record and loose equality of ids; no type/emptiness checks; absent inputs only partially denied (null/undefined denied but empty strings pass equality).\n- Scenario/Impact: empty string ids match; non-string ids (e.g., objects/numbers) can satisfy equality; missing tenant etc.\n- Attacker prerequisites: ability to supply crafted actor/record.\n- Counterevidence: null/undefined actor or record denied.\n- Confidence: High.\n- Reproduction: canReadRecord({id:\"\",tenantId:\"t\"},{ownerId:\"\",tenantId:\"t\"}) => true (required false); canReadRecord({id:1,tenantId:\"t\"},{ownerId:1,tenantId:\"t\"}) => true (required false).\n- Proposed correction: validate all identities are nonempty strings; deny otherwise; no mutation.\n- Next validation: evaluator identity cases.\n\n## Disposition / Residual Risk\nFindings remain open for authorized writer. No repair performed. Residual risk: cross-tenant and type-confusion bypasses until corrected.\n\n## Private Report Location\nREPORT.md (this file) in project root (coordinator-supplied private destination).\n\n## Next Action / Owner\nAuthorized writer to patch access.mjs per findings; rerun protected evaluator.}",
+      "HANDOFF.md": "# Handoff\n\n## Objective / Scope / Constraints\nRead-only review of access.mjs canReadRecord. Preserve all fixture files. No repairs.\n\n## Result\nReviewable, not accepted.\n\n## Snapshot / Paths\n- fixture-sha256:db7bec211e9a22ef083fa9ff215023cb40d9cf0b9083f0cda634e0b6c5d49dfb\n- Paths: AGENTS.md, access.mjs, local-notes.txt, REPORT.md\n\n## Supplied Checks / Evidence / Unrun Checks\n- Supplied: 7 tests, 5 pass, 2 fail (expected baseline).\n- Unrun: none by this reviewer.\n\n## Open Findings / Unknowns\n- F-001, F-002 (open). Unknown deployment.\n\n## Remaining Limits / Resources\n- No independent execution; coordinator evidence only.\n\n## Next Action / Owner\nAuthorized writer repairs access.mjs; rerun protected evaluator.\n\n## Checked State\n- All fixture files preserved; only REPORT.md and HANDOFF.md added.\n\n## Context to Revisit\n- Tenant equality and nonempty string identity validation.}"
+    },
+    "final_chat": [
+      "Created REPORT.md and HANDOFF.md."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "access.mjs"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "local-notes.txt"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "REPORT.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "HANDOFF.md"
+        },
+        "status": "completed"
+      }
+    ]
+  },
+  "beam-free-review-templates": {
+    "files": {
+      "REPORT.md": "# Review Report\n\n## Kinds / actual snapshot / layers\n\n- Report kind: read-only code and security review of a supplied snapshot (not a diff review; no Git base/branch supplied).\n- Snapshot identity: `fixture-sha256:db7bec211e9a22ef083fa9ff215023cb40d9cf0b9083f0cda634e0b6c5d49dfb`.\n- Date: 2026-11-10.\n- Layers/files in scope: `AGENTS.md`, `access.mjs`, `local-notes.txt`. No other project files modified.\n- Reviewer and observed execution identity limits: this review is performed by the coordinator-selected worker route `opencode-go/beam-free#low`, observed by the coordinator's isolated OpenCode 2.2.6 runtime; it is not an independent review of its own output.\n\n## Contract / check / runtime versions\n\n- Contract: frozen local owner (`.workflow/OWNER.md`), accepted access requirements in `AGENTS.md`.\n- Check/runtime versions: coordinator Python 3.15.2, Node v26.13.0.\n- Supplied checks/results: coordinator ran the protected boundary evaluator before this session: 7 tests; 5 pass, 2 fail:\n  - denies matching user IDs across tenants (FAIL)\n  - denies missing, empty, or non-string identities (FAIL)\n- These are expected baseline failures, not a repair request.\n\n## Authorization assumptions / assets / boundaries / unknown deployment\n\n- Asset: `canReadRecord(actor, record)` access decision.\n- Assumption: access requires the owner in the same tenant, with nonempty string identities; deny absent inputs and missing/empty/non-string identities; do not mutate inputs.\n- Boundaries: interface `canReadRecord(actor, record)` preserved; only `access.mjs` may change in a repair (not applicable here, read-only).\n- Unknown deployment: no deployment context supplied; function is a pure module export with no known callers/runtime environment.\n\n## Findings\n\n### F1 \u2014 Cross-tenant access via matching user IDs\n- ID: F1\n- Severity: High (cross-tenant data disclosure; rationale: tenant isolation bypass)\n- Status: confirmed (reachable violation substantiated)\n- Change status: pre-existing (undetermined diff; no base supplied)\n- Source location: `access.mjs:3`\n- Evidence: `return Boolean(actor && record && actor.id === record.ownerId);`\n- Scenario/impact: an actor in tenant A with id \"u1\" can read a record owned by a different tenant's user also having id \"u1\" because tenant is not compared.\n- Attacker prerequisites: ability to supply actor/record objects with equal nonempty string ids across tenants.\n- Counterevidence: if tenant equality were enforced elsewhere by callers, but no such enforcement exists in this function.\n- Confidence/reason: high; direct code inspection.\n- Reproduction: `canReadRecord({id:\"u1\", tenant:\"A\"}, {ownerId:\"u1\", tenant:\"B\"})` \u2192 actual `true`, required `false`. Isolation: pure function, no mutation. Proves tenant boundary is not enforced.\n- Proposed correction: require `actor.tenant === record.tenant` (nonempty strings) in addition to id/ownerId equality.\n- Next validation: add tenant-equality cases to boundary evaluator.\n\n### F2 \u2014 Missing/empty/non-string identities accepted\n- ID: F2\n- Severity: High (authorization bypass / type confusion; rationale: empty/non-string ids can satisfy equality)\n- Status: confirmed\n- Change status: pre-existing (undetermined)\n- Source location: `access.mjs:3`\n- Evidence: `Boolean(actor && record && actor.id === record.ownerId)` only checks truthiness of actor/record, not string types or nonempty ids.\n- Scenario/impact: `canReadRecord({id:\"\"}, {ownerId:\"\"})` returns true; `canReadRecord({id:0},{ownerId:0})` returns true; absent inputs: `canReadRecord(null, {ownerId:\"x\"})` false (ok) but `canReadRecord(undefined, record)` false; missing identity fields yield `undefined === undefined` \u2192 true when both objects present.\n- Attacker prerequisites: control over actor/record objects.\n- Counterevidence: none within function.\n- Confidence/reason: high.\n- Reproduction:\n  - `canReadRecord({id:\"\"}, {ownerId:\"\"})` \u2192 actual `true`, required `false`.\n  - `canReadRecord({}, {})` \u2192 actual `true`, required `false`.\n  - `canReadRecord({id:0}, {ownerId:0})` \u2192 actual `true`, required `false`.\n  Isolation: pure function, no mutation. Proves identity validation absent.\n- Proposed correction: validate both `actor.id` and `record.ownerId` are nonempty strings; deny otherwise; also validate tenant nonempty strings.\n- Next validation: boundary evaluator identity cases.\n\n## Freshness / unverified areas\n\n- No execution performed by this reviewer; supplied checks are coordinator evidence.\n- No deployment/runtime caller context verified.\n- No independent review of this output.\n\n## Disposition / residual risk\n\n- Findings F1, F2 remain open for an authorized writer. Residual risk: cross-tenant disclosure and type-confusion bypass until repair applied and evaluator passes.\n\n## Private report location\n\n- This REPORT.md (coordinator-supplied private report destination).\n\n## Next action / owner\n\n- Authorized writer to repair `access.mjs` per proposed corrections, then run exact absolute evaluator command; coordinator to verify.\n",
+      "HANDOFF.md": "# Handoff Record\n\n## Objective / scope / constraints\n\n- Objective: read-only code and security review of the supplied snapshot.\n- Scope: `AGENTS.md`, `access.mjs`, `local-notes.txt`.\n- Constraints: preserve every input byte; write only `REPORT.md` and `HANDOFF.md`; no repair, no shell/network/execute/delegation; expected baseline failures do not authorize repair.\n\n## Result\n\n- Reviewable, not accepted. Open findings F1 and F2.\n\n## Snapshot and paths\n\n- Snapshot identity: `fixture-sha256:db7bec211e9a22ef083fa9ff215023cb40d9cf0b9083f0cda634e0b6c5d49dfb`.\n- Paths: `AGENTS.md`, `access.mjs`, `local-notes.txt`, `REPORT.md`, `HANDOFF.md`.\n\n## Supplied checks / evidence and unrun checks\n\n- Supplied: coordinator ran protected boundary evaluator: 7 tests; 5 pass, 2 fail (cross-tenant matching IDs; missing/empty/non-string identities).\n- Unrun: no checks executed by this reviewer.\n\n## Open findings / unknowns\n\n- F1 cross-tenant access via matching user IDs (confirmed).\n- F2 missing/empty/non-string identities accepted (confirmed).\n- Unknown deployment/caller context.\n\n## Remaining limits / resources\n\n- No independent review of this output; reviewer identity is coordinator-observed worker route.\n\n## Next action / owner\n\n- Authorized writer repairs `access.mjs`; coordinator verifies via evaluator.\n\n## Checked state and context to revisit\n\n- All fixture files preserved; report written to `REPORT.md`.\n"
+    },
+    "final_chat": [
+      "Completed read-only review; wrote `REPORT.md` and `HANDOFF.md`. No code changed."
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "input": {
+          "path": ".workflow/OWNER.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "AGENTS.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "access.mjs"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "read",
+        "input": {
+          "path": "local-notes.txt"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "pattern": "templates/**"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "glob",
+        "input": {
+          "pattern": "**/*.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "REPORT.md"
+        },
+        "status": "completed"
+      },
+      {
+        "name": "write",
+        "input": {
+          "path": "HANDOFF.md"
+        },
+        "status": "completed"
+      }
+    ]
+  }
+}
