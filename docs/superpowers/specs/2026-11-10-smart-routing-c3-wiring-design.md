@@ -1,6 +1,6 @@
 # Smart Routing C.3 — caller wiring and selector retirement design
 
-- **Version:** 1.4 draft (round-4 review; validated by running; see [revision history](#8-revision-history))
+- **Version:** 1.5 draft (round-5 should-fixes; see [revision history](#8-revision-history))
 - **Date:** 2026-11-10
 - **Status:** Design only. No model call, OpenCode server or live run was used. Since v1.4, the risky steps are validated by running throwaway prototypes in a scratch worktree ([Appendix B.0](#b0-prototype-runs-validated-by-running)); no prototype code is part of this PR.
 - **Line numbers:** all at `origin/main` `bd5cde6` ([Appendix A](#appendix-a--inventory-at-the-pinned-base)). Open user decisions are in [section 7](#7-open-decisions).
@@ -120,7 +120,7 @@ preflight(status) ─► [delegation reserve → attempt_id]
 | Subscription windows | Rate-limit observations the launcher stores after settlement (`opencode_accounting.rate_limit_observation`), in a private file next to the routing settings, with their observation time. Missing telemetry gives `fresh: false`, and the route is reported enabled-but-blocked (P0.2 is still open for ChatGPT). |
 | Dollar organizations | The ledger's organizations and balances (existing `observe` paths). |
 | Credentials | Binding readiness metadata from `usage_credentials` and `openrouter_settings` (state, scope, reference). The secret is never resolved. |
-| OpenRouter | `openrouter_settings.admission` activation, scope and funding verification, mapped to the `gateway` class with `integration_enabled`. |
+| OpenRouter | `openrouter_settings.status(cwd)` (304) only, **never** `admission`. `integration_enabled` is true when the report is `enabled` and its `routes` include the host's route (`proposals` or `workers`); `local_configuration` must be present. The report's `revision` is returned as `seen.openrouter_revision` ([below](#openrouter-lock-and-revision)). |
 | Entitlement | The entitlement record ([3.4](#34-listed-is-not-entitled)). |
 
 **Service factory and workflow resolver (C3-0b; defined once, here).** In-process managed launches build their service only with `scripts.routing.managed_service(checkout, scope=None)`, which is `Service(default_settings(), default_ledger(), project=<realpath of checkout>, workflow=routing_gates.D6Workflow(resolve=…, project=…))`:
@@ -138,7 +138,16 @@ P2 showed this is needed: the default resolver refuses a checkout without record
 
 Each manifest route carries its own `demand`, which `routing._incomplete` (377) requires: per window id, a conservative per-request estimate in that window's unit. That is window units for subscription pools, and micro-USD in the `credit` window for `gateway` and direct API pools. A host with a tighter bound, such as a proposal's `output_tokens` times the endpoint price, may lower it but never raise it.
 
-Ledger organizations and balances are not part of the source; the collector always reads them from the ledger it is given. `funding_verified` is true only when the route's organization is enabled in that ledger and has a balance observation no older than 900 s.
+Ledger organizations and balances are not part of the source; the collector always reads them from the ledger it is given. `funding_verified` is a ledger check only: it is true only when the route's organization is enabled in that ledger and has a balance observation no older than 900 s.
+
+<a id="openrouter-lock-and-revision"></a>**OpenRouter lock and revision.** A round-5 throwaway test established how the lock behaves:
+- `openrouter_settings.admission` (366) takes a non-waiting lock.
+- While it is held, `status` fails with `openrouter_operation_busy`, and a second `admission` fails with `openrouter_storage_or_scope_unavailable`.
+- Before the lock, `status` works, and `admission(..., revision=<status.revision>)` succeeds. A changed revision fails with `openrouter_preparation_stale`.
+
+So:
+- **The collector** reads `status` and never takes the lock. It returns `seen = {openrouter_revision: <status.revision>}` beside the observations, and C3-0b's service echoes `seen` in its `prepare` response. `seen` holds revisions only, never settings content.
+- **The OpenRouter hosts** (C3-4a, C3-4b) run routing `prepare` **before** `settings.admission` (`scripts/openrouter_proposals.py:324`, `scripts/openrouter_workers.py:126`). They then call `settings.admission(..., revision=seen.openrouter_revision)`, so a settings change in between fails closed with `openrouter_preparation_stale`. That leaves an admitted hold, which the host closes with `record not_dispatched`.
 
 C3-1 also defines two helpers that every wiring slice and the test helper use, so a test route always matches what a slice requests:
 - `routing_launch.route_identity(host, **fields)` maps host-specific fields to `{provider, model, effort, harness}`, the `ROUTE_IDENTITY` fields of `runtime/routing.py` (333). The hosts are:
@@ -423,9 +432,9 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
       - `GateBase.setUp` (118) pins `project='/work/repo'`;
       - the re-created service in `ConcurrencyTests` (508) pins the same;
       - `CanonicalWorkflowTests.setUp` (533) pins `str(self.scope.repository_root)`;
-      - `test_an_oversized_serialized_binding_is_refused_at_prepare` (904–906) moves its wide `cwd` under the pinned root (`'/work/repo/' + 'é' * 500`), so it still proves `binding_too_large` instead of hitting `project_mismatch`.
+      - `test_an_oversized_serialized_binding_is_refused_at_prepare`: one changed line (905) moves its wide `cwd` under the pinned root (`'/work/repo/' + 'é' * 500`), so it still proves `binding_too_large` instead of hitting `project_mismatch`. The value is reused unchanged at 909.
       - Unchanged: 462 and 497 (`dispatch` only), 893 (`status` only) and the already pinned services.
-    - `tests/fixture_routing_accounting.py`: `admit(..., root=…)` (86–87) and `admit_sub(..., root=…)` (95–98) send their workflow-bound `prepare` through a new `call_bound`. It uses a short-lived `command.Service(..., project='/checkout', test_inputs=self.service.test_inputs)` (`/checkout` is the `cwd` of `where()`). `self.service` (75) stays unpinned, because `settle` without `workflow` is `project_required` on a pinned service (`scripts/routing.py` 442). This one change covers `test_routing_accounting.py` (199–243), `test_routing_accounting_roots.py`, `test_routing_accounting_blocks.py` (288) and `test_routing_subscription_reconcile.py` (117, 177); those four files are unchanged.
+    - `tests/fixture_routing_accounting.py`: `admit(..., root=…)` (86–87) and `admit_sub(..., root=…)` (95–98) send their workflow-bound `prepare` through a new `call_bound`. It uses a short-lived `command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout', test_inputs=self.service.test_inputs)` (`/checkout` is the `cwd` of `where()`). `self.service` (75) stays unpinned, because `settle` without `workflow` is `project_required` on a pinned service (`scripts/routing.py` 448). This one change covers `test_routing_accounting.py` (199–243), `test_routing_accounting_roots.py`, `test_routing_accounting_blocks.py` (288) and `test_routing_subscription_reconcile.py` (117, 177); those four files are unchanged.
     - `tests/test_smart_routing_features.py`: delete `@NEEDS_C3('C3-0b')` (495).
   - **The observation refusal and collector call** ([3.3](#33-observation-collector)).
   - **`managed_projects`** as a one-shot setting with the activation gate ([4.2](#42-activation-gate)).
@@ -481,6 +490,8 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - the collector reads no secret (credential resolver patched to fail) and makes no network call;
   - an unknown manifest route is excluded, and a `not_entitled` route stays excluded until cleared;
   - `readiness()` reports enabled and ready separately, with no inference;
+  - **(round 5)** the collector derives `integration_enabled` from the real `openrouter_settings.status` and `funding_verified` from the ledger (organization enabled, balance at most 900 s old), never from the source. With a real enabled OpenRouter settings store and a real ledger, both are true. With the setting disabled, the route missing, the organization disabled or the balance stale, the gateway route is excluded with its reason;
+  - **(round 5)** the collector never takes the OpenRouter lock. With `openrouter_settings.admission` held for the checkout in another handle, `collect` still answers. A spy also shows the collector never calls `admission`;
   - the four managed-fixture contracts, run with plain `python3 -I -B -m unittest` in a subprocess with `HOME` set to a fresh empty directory and no `test_sharded` wrapper, leave `HOME` empty ([6.4](#64-c2-marker-map-and-pr-197-amendments) A4 rule 3).
 - **Markers:** none. Replacing the sentinel body is what lets C3-2, C3-4a and C3-4b turn their markers into passes. C3-1 must keep `test_enablement_is_reported_separately_from_readiness` and the other C.2a and C.2e contracts passing.
 - **Shared core:** no. **Size:** L (about 650 lines with tests).
@@ -514,7 +525,8 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - an advisory host never gets a dollar route;
   - an unmanaged project keeps today's `selection` behaviour;
   - pending, then admitted on a replay, grants exactly one permit;
-  - `explicit` and `inherit` never get a substituted route.
+  - `explicit` and `inherit` never get a substituted route;
+  - **(round 5)** a `routed` catalog mismatch after the reservation commit releases the never-launched assignment through `reconcile_assignment`. The reply is `launch_admitted: false` with `catalog_mismatch`, the routing hold is closed (`not_dispatched`), and the assignment's claims and resource units are free for the next `prepare`. If `reconcile_assignment` refuses a never-launched assignment today, C3-2 adds that path, with this test.
 - **Markers:** `test_native_worker_admission_calls_routing_prepare_once`, `test_native_worker_admission_is_bound_to_its_workflow_job`.
 - **Shared core:** **yes** (`runtime/delegation.py`, `runtime/evidence.py`), so the full suite runs. **Size:** L.
 
@@ -554,7 +566,9 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - OpenRouter is a candidate only with its own activation and funding;
   - a direct API grant never funds it;
   - proposals gain no file or tool permission;
-  - an explicit choice narrows the candidates and never widens them.
+  - an explicit choice narrows the candidates and never widens them;
+  - **(round 5)** routing `prepare` runs before `settings.admission` (a call-order spy), and a settings change between them fails closed with `openrouter_preparation_stale` and closes the hold with `not_dispatched`.
+- **Order (round 5).** Routing `prepare` comes **before** `settings.admission` (`scripts/openrouter_proposals.py:324`), and admission gets `revision=seen.openrouter_revision` ([3.3](#openrouter-lock-and-revision)).
 - **Markers:** `test_proposal_begin_obtains_one_routing_admission`.
 - **Shared core:** no. **Size:** M.
 
@@ -567,7 +581,9 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 - **Tests:**
   - the V1 path is refused for a managed project;
   - the read-only profile is kept;
-  - a V1 qualification record does not authorize a V2 editing profile.
+  - a V1 qualification record does not authorize a V2 editing profile;
+  - **(round 5)** `prepare` runs before `settings.admission`, and a stale revision fails closed with `openrouter_preparation_stale`.
+- **Order (round 5).** As in C3-4a: routing `prepare` before `settings.admission` (`scripts/openrouter_workers.py:126`), with `revision=seen.openrouter_revision`.
 - **Markers:** `test_worker_prepare_obtains_one_routing_admission`.
 - **Shared core:** no. **Size:** M.
 
@@ -727,6 +743,12 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 ## 8. Revision history
 
 - **1.0** (`bd01a22`): first draft.
+- **1.5:** round-5 should-fixes on `624d169` (nothing blocking; P1 reproduced from the spec text alone, and I11/I12 matched):
+  - **OpenRouter lock.** A throwaway test showed `admission` holds a non-waiting lock in which even `status` fails. So the collector reads only `status` and returns `seen.openrouter_revision`; C3-4a and C3-4b run `prepare` before `settings.admission` and pass that revision, so a change in between fails closed with `openrouter_preparation_stale`. `funding_verified` stays a ledger check. B4 and B5 are re-ordered.
+  - **Lines:** the unpinned `settle` refusal is at `scripts/routing.py` 448; the oversized-binding test is one changed line (905), reused at 909.
+  - **`call_bound`** names all `Service` arguments.
+  - **Appendix A** says slice workers must use its exact commands (`git grep` gives fewer hits).
+  - **Unproven items are now tests in their slices' lists** (round-5 verdict): the collector's real derivation and the lock rule (C3-1); the never-launched reconcile after a catalog mismatch (C3-2); prepare before the lock and the stale revision (C3-4a, C3-4b). `worker_prepare` and C3-7's deletions are already enforced by their markers.
 - **1.4:** the round-4 review of `71d0108`. Root-cause change: **validate by running**. Throwaway prototypes ran in a scratch worktree of `origin/main`, and Appendix B.0 records the commands and results.
   - **P1** (C3-0b `project_required` plus pins): 664 tests pass. The exact changed tests are now listed: `test_routing_gates.py` (118, 508, 533, 904–906) and `fixture_routing_accounting.py` (`call_bound`), plus the C3-0b marker. The earlier claims about 893, `test_routing_accounting_roots.py:274` and the other accounting files were wrong; those files are unchanged.
   - **P2** (fixture path): both native contracts and `proposal_begin` pass with the prototype fixture and wiring, and `HOME` stays empty under plain `unittest`. This found and fixed three gaps:
@@ -799,7 +821,7 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 
 ### A.1 Commands and owners
 
-Run from the pinned base, with these helpers:
+Run from the pinned base, with these helpers. Slice workers must use these exact commands: `git grep` (which skips untracked files and treats patterns differently) gives fewer hits, and the counts below would not match.
 
 ```bash
 g() { grep -rnE --include='*.py' --include='*.js' --include='*.ts' --exclude-dir=fixtures --exclude-dir=node_modules "$@"; }
@@ -904,16 +926,20 @@ Throwaway patches in a scratch worktree of `origin/main` (`../vibe-workflow.work
    - a `credit` window naming it, with pool `billing_class: gateway`;
    - a ready credential for `assignment_scope(repo)`;
    - route `demand: {'credit': 1_000_000}`.
-3. `openrouter_proposals.run('begin')` (`scripts/openrouter_proposals.py:321`): `settings.admission` and `external_delegation.check` pass as today.
-4. C3-4a: `managed_service(checkout)._prepare` with role `researcher`, `choice = route_identity('openrouter_proposal', model, provider, effort=None → 'none') + funding: 'api'` and `job = unplanned_job(...)`.
-5. `routing.admit`, **once**. `_candidate` (`runtime/routing.py:438`): `gateway` ∈ `FUNDED` (332); `_credential_reasons` (411) passes; `_funding` (354) finds the organization; result `admitted`.
-6. `_run('begin')` returns `attempt_token`. Proven by P2 run 2.
+3. `openrouter_proposals.run('begin')` (`scripts/openrouter_proposals.py:321`). C3-4a first calls `managed_service(checkout)._prepare` **before** `settings.admission` (324), with role `researcher`, `choice = route_identity('openrouter_proposal', model, provider, effort=None → 'none') + funding: 'api'` and `job = unplanned_job(...)`.
+4. The collector reads `openrouter_settings.status(checkout)` (no lock) → `integration_enabled`, `seen.openrouter_revision`.
+5. `routing.admit`, **once**. In `_candidate` (`runtime/routing.py:438`): `gateway` ∈ `FUNDED` (332); `_credential_reasons` (411) passes; `_funding` (354) finds the organization; result `admitted`, with `seen` echoed.
+6. `settings.admission(cwd, 'proposals', store=store, revision=seen.openrouter_revision)` and `external_delegation.check` pass as today.
+7. `_run('begin')` returns `attempt_token`.
+
+P2 run 2 proved steps 3, 5 and 7, with the hook placed inside the lock and the fixture supplying `integration_enabled` directly. The before-the-lock order and the `status` read come from the round-5 lock test; C3-4a's obligation test runs them together.
 
 **B5. `test_worker_prepare_obtains_one_routing_admission` (C3-4b; 740).**
 1. Precondition: `enroll` and `configure(routes=('workers',), …)`; brief model `vendor/model`, provider `provider`, effort `low`; route `fixture_route('openrouter:vendor/model@provider', 'dollar')`.
 2. The fixture is set up as in B4 step 2. The `openrouter_worker` route with effort `low` exists, because the fixture lists every effort.
-3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`) → C3-4b: `managed_service(source_root)._prepare` with `choice = route_identity('openrouter_worker', …, effort='low') + funding: 'api'` → `admit`, **once** → `admitted` (as in B4 step 5).
-4. `prepare` writes `brief.json`.
+3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`) validates the brief. Then C3-4b calls `managed_service(source_root)._prepare` **before** `settings.admission` (126), with `choice = route_identity('openrouter_worker', …, effort='low') + funding: 'api'` → collector (`status`, no lock) → `admit`, **once** → `admitted` (as in B4 step 5).
+4. `settings.admission(source, 'workers', root=root, revision=seen.openrouter_revision)`.
+5. `prepare` writes `brief.json`.
 
 Not prototyped (see B.0). The steps are those B4 proved, with another host name.
 
@@ -926,5 +952,7 @@ Not prototyped (see B.0). The steps are those B4 proved, with another host name.
 **Steps no slice provides:** none.
 
 **Not proven by running:**
-- B5 (worker), B7 and B8. B7 and B8 are deletions.
-- The collector's production derivation of `integration_enabled` and `funding_verified`. P2's fixture source supplied both directly; the design ([3.3](#33-observation-collector)) derives them from `openrouter_settings` and the ledger.
+- B5 (`worker_prepare`), B7 and B8 (deletions) are enforced by their own markers: each slice must make its contract pass and remove the marker ([6.1](#61-shared-file-protocol)).
+- The collector's real derivation of `integration_enabled` and `funding_verified`, and never taking the OpenRouter lock: C3-1's test list.
+- `reconcile_assignment` for a never-launched assignment: C3-2's test list.
+- The prepare-before-lock order and the stale-revision refusal: C3-4a's and C3-4b's test lists.
