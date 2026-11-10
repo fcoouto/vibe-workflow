@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 from queue import Empty, Full, Queue
 import selectors
 import signal
@@ -74,6 +75,14 @@ def visibility_declaration(brief):
         **({'custom_role_name': brief['custom_role_name']} if 'custom_role_name' in brief else {})))
 
 
+def worker_permission(brief, report):
+    """(external assignment, effective permission) of this brief under an OpenRouter settings report."""
+    assignment = dict(service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
+        effort=brief['effort'], class_name=brief['external']['class_name'])
+    return assignment, external_delegation.effective_permission(report['external_permission'], report['activation'],
+                                                                **assignment)
+
+
 def scoped_packet(brief, report, now=None, workspace=None):
     external_delegation.require('external' in brief, 'binding_required')
     binding = brief['external']
@@ -81,9 +90,7 @@ def scoped_packet(brief, report, now=None, workspace=None):
     external_delegation.require(Path(brief['source_root']) == checkout, 'checkout_changed')
     external_delegation.native_review(binding)
     external_delegation.require(binding['coordinator'] == brief['coordinator_chat_id'], 'coordinator_changed')
-    assignment = dict(service='openrouter', mode='worker', model=brief['model'], provider=brief['provider'],
-        effort=brief['effort'], class_name=binding['class_name'])
-    permission = external_delegation.effective_permission(report['external_permission'], report['activation'], **assignment)
+    assignment, permission = worker_permission(brief, report)
     packet = external_delegation.check(checkout, permission, binding,
         **assignment, now=time.time() if now is None else now)
     selected = {str(Path(item['path']).relative_to(brief['source_root'])): item['sha256']
@@ -123,11 +130,23 @@ def prepare(root, brief, now=None):
     if not source.is_absolute() or source.resolve() != source or not source.is_dir(): raise ValueError('invalid_source')
     files = brief['files']
     if not isinstance(files, list) or not files: raise ValueError('invalid_files')
+    if _managed(source):
+        return _prepare_managed(root, brief, now, deadline, source)
     with settings.admission(source, 'workers', root=root) as report:
         selected = scoped_packet(brief, report, now)
-        if 'sizing' in brief: brief = dict(brief, validated_output_tokens=sizing(brief, report['proposal_store'], now))
-        brief = dict(brief, approval_ref=brief.get('approval_ref', report['activation']['ref']),
-            management=dict(scope_id=report['scope_id'], revision=report['revision']))
+        brief = admitted_brief(brief, report, now)
+    return _write_run(root, brief, selected, deadline)
+
+
+def admitted_brief(brief, report, now=None):
+    """The brief as retained under an OpenRouter admission report: validated sizing, approval and management stamp."""
+    if 'sizing' in brief: brief = dict(brief, validated_output_tokens=sizing(brief, report['proposal_store'], now))
+    return dict(brief, approval_ref=brief.get('approval_ref', report['activation']['ref']),
+        management=dict(scope_id=report['scope_id'], revision=report['revision']))
+
+
+def _write_run(root, brief, selected, deadline, before_save=None):
+    source, files = Path(brief['source_root']), brief['files']
     maximum = brief['sizing']['max_files'] if 'sizing' in brief else 16
     if len(files) > maximum: raise ValueError('invalid_files')
     inputs = {}
@@ -151,10 +170,7 @@ def prepare(root, brief, now=None):
         external_delegation.require(hashlib.sha256(raw).hexdigest() == selected[name], 'source_changed')
         inputs[name] = raw.decode('utf-8')
     if time.monotonic() >= deadline: raise TimeoutError('preparation_deadline')
-    root = Path(root)
-    if not root.is_absolute() or root.resolve() != root: raise ValueError('unsafe_state_root')
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if root.stat().st_mode & 0o077: raise ValueError('state_root_must_be_private')
+    root = private_root(root)
     run = root / brief['task_id']
     run.mkdir(mode=0o700)  # Exclusive identity: even an interrupted attempt cannot be replayed.
     workspace = run / 'workspace'
@@ -171,9 +187,18 @@ def prepare(root, brief, now=None):
         dest.chmod(0o400)
     if time.monotonic() >= deadline: raise TimeoutError('preparation_deadline')
     if 'sizing' in brief: brief['sizing_digest'] = sizing_digest(brief)
+    if before_save is not None: before_save(run)
     save(run / 'brief.json', brief)
     save(run / 'result.json', {'state': 'prepared', 'task_id': brief['task_id']})
     return run
+
+
+def private_root(root):
+    root = Path(root)
+    if not root.is_absolute() or root.resolve() != root: raise ValueError('unsafe_state_root')
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if root.stat().st_mode & 0o077: raise ValueError('state_root_must_be_private')
+    return root
 
 
 def configuration(brief):
@@ -322,12 +347,52 @@ def execute(run, executable, auth_data, publish=None):
         original = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
         try:
             with visibility_updates(publish) as update:
+                if 'routing' in brief:  # prepared through routing: only the managed launcher may run it
+                    return _execute_managed(run, brief, Path(executable), Path(auth_data), update)
                 return _execute(run, brief, Path(executable), Path(auth_data), update)
         finally:
             signal.signal(signal.SIGTERM, original)
 
 
+def management_stamp(brief):
+    stamp = brief.get('management')
+    settings.require(isinstance(stamp, dict) and set(stamp) == {'scope_id', 'revision'}
+                     and isinstance(stamp['scope_id'], str) and settings.integer(stamp['revision']),
+                     'openrouter_preparation_unmanaged')
+    return stamp
+
+
+def launch_checks(brief, report, workspace):
+    """Under the launch's OpenRouter admission: the exact packet, the copied bytes and an unchanged sizing."""
+    scoped_packet(brief, report, workspace=workspace)
+    if any(key in brief for key in ('sizing', 'sizing_digest', 'validated_output_tokens')):
+        try:
+            if brief.get('sizing_digest') != sizing_digest(brief) or sizing(brief, report['proposal_store']) != brief['validated_output_tokens']:
+                raise ValueError('sizing_changed')
+        except (ValueError, KeyError, TypeError):
+            raise settings.SettingsError('openrouter_sizing_unavailable_or_changed') from None
+
+
+def _failed_result(brief, reason):
+    return {'state': 'failed', 'task_id': brief['task_id'], 'requested_model': brief['model'], 'session_id': None,
+            'tools': [], 'reported_cost_usd': None, 'reported_tokens': {}, 'known_cost_subtotal_usd': 0,
+            'accounting_complete': False, 'accounting_source': 'opencode', 'response': '',
+            'upstream_cancellation_confirmed': False, 'failure': {'category': 'integration', 'reason': reason},
+            'local_execution_stopped': True, 'native_fallback_ready': True}
+
+
+def _failed(run, brief, reason):
+    """A launch refused before anything started: nothing ran, so native takeover is ready."""
+    result = _failed_result(brief, reason)
+    save(run / 'result.json', result)
+    progress(run, 'failed')
+    return result
+
+
 def _execute(run, brief, executable, auth_data, publish):
+    if _managed(brief['source_root']):  # C.3 design 4.3: the V1 launch refuses a managed project, before anything
+        from runtime import routing_settings
+        return _failed(run, brief, routing_settings.LEGACY_ROUTE_RETIRED)
     workspace = run / 'workspace'
     config = configuration(brief)
     env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'LANG', 'OPENROUTER_API_KEY')}
@@ -357,20 +422,11 @@ def _execute(run, brief, executable, auth_data, publish):
     total = 0
     buffer = b''
     try:
-        stamp = brief.get('management')
-        settings.require(isinstance(stamp, dict) and set(stamp) == {'scope_id', 'revision'}
-                         and isinstance(stamp['scope_id'], str) and settings.integer(stamp['revision']),
-                         'openrouter_preparation_unmanaged')
+        stamp = management_stamp(brief)
         deadline = time.monotonic() + brief['timeout_seconds']
         with settings.admission(brief['source_root'], 'workers', root=run.parent, opencode=executable,
                                 auth_data=auth_data, revision=stamp['revision'], scope_id=stamp['scope_id']) as report:
-            scoped_packet(brief, report, workspace=workspace)
-            if any(key in brief for key in ('sizing', 'sizing_digest', 'validated_output_tokens')):
-                try:
-                    if brief.get('sizing_digest') != sizing_digest(brief) or sizing(brief, report['proposal_store']) != brief['validated_output_tokens']:
-                        raise ValueError('sizing_changed')
-                except (ValueError, KeyError, TypeError):
-                    raise settings.SettingsError('openrouter_sizing_unavailable_or_changed') from None
+            launch_checks(brief, report, workspace)
             if time.monotonic() >= deadline: raise TimeoutError()
             proc = subprocess.Popen([str(executable), 'run', '--pure', '--format', 'json', '--agent', 'pilot',
                                      '--model', 'openrouter/' + brief['model'], '--title', brief['task_id']],
@@ -551,7 +607,355 @@ def status(run: Path, *, compact=False) -> dict:
         result_ref=dict(path=str(path.resolve()), sha256=hashlib.sha256(raw).hexdigest()))
 
 
+# -- Smart Routing managed launch (C.3 design 3.1, 3.3 "OpenRouter lock and revision", 4.3, 6.3 C3-4b) ------------
+# In a managed project `prepare` obtains one routing admission on the `gateway` route before the OpenRouter admission
+# lock, takes that admission at the revision routing saw and writes the run with its attempt id. `execute` launches it
+# through the OpenCode managed launcher (runtime/opencode_launcher.py) in the run's private workspace copy, with the
+# read-only profile from `configuration`. The V1 `opencode run --pure` launch refuses a managed project. Write-ahead
+# entries, dispatch state and recovery: runtime/openrouter_worker_routing.py.
+HOST = 'openrouter_worker'
+ROLE = 'researcher'
+_PROPOSALS = []
+
+
+class RoutingRefused(ValueError):
+    """Routing refused this worker with a fixed reason; nothing was sent."""
+
+
+def _shared():
+    """The C3-4a helpers this host shares: phase W `_managed`, `_routing`, settlement, the estimate charge and the
+    endpoint check."""
+    if not _PROPOSALS:
+        _PROPOSALS.append(discovery())
+    return _PROPOSALS[0]
+
+
+def _managed(path):
+    return _shared()._managed(path)
+
+
+def session_rules(brief):
+    from runtime import openrouter_worker_routing as state
+    return state.session_rules(configuration(brief)['permission'])
+
+
+def _settle(service, attempt):
+    """Close one attempt's own hold: None once nothing of it is open, else routing's fixed reason."""
+    return _shared()._settle_own(service, attempt, dispatched=False)
+
+
+def _settle_at(checkout, attempt):
+    command, _ = _shared()._routing()
+    service = command.managed_service(checkout)
+    try:
+        return _settle(service, attempt)
+    finally:
+        service.close()
+
+
+def _settle_run(run, service, attempt):
+    """After a launch: settle the run's hold unless an event already closed it (idempotent)."""
+    from runtime import openrouter_worker_routing as state
+    if state.state(run) in state.OPEN_STATES:
+        state.settled(run, _settle(service, attempt))
+
+
+def _release(service, attempt, entry):
+    """A `prepare` that will not write its run: close the hold, then drop the write-ahead entry."""
+    if _settle(service, attempt) is None:
+        entry.unlink()
+
+
+def _routed_request(brief, checkout, attempt):
+    """(assignment, job) of a worker's admission: an explicit `gateway` choice routing admits or refuses, never
+    substitutes, and the minimal unplanned job with the read-only tools."""
+    from runtime import openrouter_worker_routing as state
+    _, launch = _shared()._routing()
+    scope = launch.assignment_scope(checkout)
+    choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'])
+    assignment = dict(attempt_id=attempt, role=ROLE, scope=scope, choice=choice,
+                      task='worker:' + hashlib.sha256(brief['task_id'].encode()).hexdigest()[:32])
+    return assignment, launch.unplanned_job(ROLE, scope, brief['task_id'], tools=state.READ_ONLY)
+
+
+def _admit(service, checkout, brief, limits, attempt):
+    """(bound facts with the reservation, seen revision) for an admitted worker, else (None, reason)."""
+    _, launch = _shared()._routing()
+    reason = launch.preflight(launch._call(service, dict(v=1, op='status')), dollar=True)
+    if reason is not None:
+        return None, reason
+    assignment, job = _routed_request(brief, checkout, attempt)
+    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
+    if prepared.get('state') != 'admitted':
+        reason = prepared.get('reason')
+        return None, reason if isinstance(reason, str) and reason else 'routing_unavailable'
+    admission = prepared['admission']
+    identity = launch.route_identity(HOST, model=brief['model'], provider=brief['provider'], effort=brief['effort'])
+    _, reason = launch.admitted_check(admission, host=HOST, catalog=[identity], settings_path=service.settings_path)
+    if reason is None and not _shared()._endpoint(service.settings_path, admission['route'], brief['provider']):
+        reason = launch.CATALOG_MISMATCH  # the admitted manifest route must pin this brief's endpoint
+    if reason is not None:
+        return None, reason
+    reserved = [value for key, value in (admission.get('reserved') or {}).items() if key.startswith('org:')]
+    return dict(reserved=max(reserved) if reserved else None), (prepared.get('seen') or {}).get('openrouter_revision')
+
+
+def _prepare_managed(root, brief, now, deadline, source):
+    """Every local refusal first, then a write-ahead attempt id, one routing admission, the OpenRouter admission at the
+    revision routing saw (a change in between fails closed) and the run. Any exit before the run closes the hold."""
+    from runtime import openrouter_worker_routing as state
+    command, _ = _shared()._routing()
+    root = private_root(root)
+    if (root / brief['task_id']).exists(): raise FileExistsError('task_already_prepared')
+    current = settings.status(source)  # a brief shared lock, never the admission lock
+    settings.require(current['enabled'], 'openrouter_disabled')
+    settings.require('workers' in current['routes'], 'openrouter_route_disabled')
+    settings.require(current['local_configuration'] == 'ready', 'openrouter_configuration_unavailable')
+    settings.require(current['worker_root'] is not None and Path(current['worker_root']) == root,
+                     'openrouter_configuration_mismatch')
+    scoped_packet(brief, current, now)  # nothing outside the user's scope reaches routing
+    limits = external_delegation.constraints(worker_permission(brief, current)[1], brief['external'],
+                                             service='openrouter', mode='worker')
+    checkout, attempt = Path(current['checkout']), 'worker-' + secrets.token_hex(12)
+    with state.root_lock(root):
+        state.recover(root, _settle_at)
+        pending, entry = state.write_ahead(root, attempt, checkout)
+    service, run = None, None
+    try:
+        service = command.managed_service(checkout)
+        bound, seen = _admit(service, checkout, brief, limits, attempt)
+        if bound is None:
+            raise RoutingRefused(seen)
+        settings.require(type(seen) is int, 'openrouter_preparation_stale')
+        with settings.admission(source, 'workers', root=root, revision=seen) as report:
+            selected = scoped_packet(brief, report, now)
+            brief = dict(admitted_brief(brief, report, now), routing=dict(attempt_id=attempt, checkout=str(checkout),
+                                                                          **bound))
+        run = _write_run(root, brief, selected, deadline,
+                         before_save=lambda folder: state.admitted(folder, attempt, checkout))
+        entry.unlink()
+        return run
+    finally:
+        try:
+            if run is None and service is not None:
+                _release(service, attempt, entry)
+        finally:
+            pending.close()
+            if service is not None:
+                service.close()
+
+
+@contextmanager
+def _server(run, executable, auth_data, service):
+    """The run's own OpenCode server (opencode_launcher.start_server): `opencode serve` in the private workspace copy,
+    the routing shim pinned to the managed service's stores, and OpenCode's data (its sign-ins) under `auth_data`."""
+    from runtime import opencode_launcher as launcher
+    server = launcher.start_server(Path(run) / 'workspace', settings_path=service.settings_path,
+                                   ledger_path=service.ledger_path, opencode=str(executable),
+                                   environ=dict(os.environ, XDG_DATA_HOME=str(auth_data)))
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+def _charge(reserved):
+    """A `complete`'s OpenCode usage as charged: an estimate of at least the whole reservation (no provider receipt);
+    None (no usage: `cost_unknown`) for any unknown cost or an unusable report."""
+    def charge(usage):
+        try:
+            return _shared()._charged_usage(usage, reserved)
+        except ValueError:
+            return None
+    return charge
+
+
+def _outcome(result, outcome):
+    result['routing'] = {key: outcome[key] for key in ('attempt_id', 'state', 'reason', 'event', 'recovery')
+                         if key in outcome}
+    if outcome.get('state') == 'uncertain':
+        result.update(state='unresolved', failure=dict(category='integration', reason=outcome.get('reason')))
+    elif outcome.get('state') != 'recorded':
+        result.update(state='failed', failure=dict(category='integration', reason=outcome.get('reason')))
+    elif result['response'].strip():
+        result['state'] = 'awaiting_verification'
+    else:
+        result.update(state='unresolved', failure=dict(category='incomplete_output'))
+
+
+def _execute_managed(run, brief, executable, auth_data, publish):
+    from runtime import opencode_launcher as launcher, openrouter_worker_routing as state
+    command, _ = _shared()._routing()
+    bound = brief['routing']
+    result = dict(_failed_result(brief, None), state='running', failure=None, accounting_source='routing',
+                  local_execution_stopped=False, native_fallback_ready=False, routing=dict(attempt_id=bound['attempt_id']))
+    save(run / 'result.json', result)
+    service = None
+    try:
+        with state.root_lock(run.parent):
+            state.recover(run.parent, _settle_at)  # this run's own execution lock is held: it is never touched here
+        stamp = management_stamp(brief)
+        with settings.admission(brief['source_root'], 'workers', root=run.parent, opencode=executable,
+                                auth_data=auth_data, revision=stamp['revision'], scope_id=stamp['scope_id']) as report:
+            launch_checks(brief, report, run / 'workspace')
+        service = state.Routed(command.managed_service(bound['checkout']), run, bound['attempt_id'],
+                               _charge(bound.get('reserved')), _shared().RECOVERED)
+        assignment, job = _routed_request(brief, bound['checkout'], bound['attempt_id'])
+        progress(run, 'Starting')
+        with _server(run, executable, auth_data, service) as host:
+            prompt = configuration(brief)['agent']['pilot']['prompt'] + '\n\n' + brief['objective']
+            outcome = launcher.launch(bound['checkout'], host=state.ReadOnlyHost(host, session_rules(brief)),
+                                      service=service, assignment=assignment, job=job, prompt=prompt,
+                                      idle_timeout=brief['timeout_seconds'])
+            if outcome.get('state') == 'recorded' and outcome.get('event') == 'complete' and service.session:
+                result.update(session_id=service.session, response=state.response(host, service.session, LIMIT))
+        _outcome(result, outcome)
+    except settings.SettingsError as exc:
+        result.update(state='failed', failure=dict(category='integration', reason=str(exc)))
+    except launcher.ServerUnavailable:
+        result.update(state='failed', failure=dict(category='integration', reason='server_unavailable'))
+    except KeyboardInterrupt:
+        result.update(state='unresolved', failure=dict(category='interrupted'))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
+        result.update(state='unresolved', failure=result['failure'] or dict(category='runtime_or_output'))
+    finally:
+        try:
+            if service is None:
+                service = command.managed_service(bound['checkout'])
+            _settle_run(run, service, bound['attempt_id'])  # every exit closes the hold or leaves it recoverable
+        finally:
+            service.close()
+            if result['state'] in ('failed', 'unresolved'):
+                result['response'] = ''  # nothing provider-written survives a refusal or an unconfirmed launch
+            result.update(local_execution_stopped=True, native_fallback_ready=result['state'] in ('failed', 'unresolved'))
+            save(run / 'result.json', result)
+            progress(run, 'Awaiting verification' if result['state'] == 'awaiting_verification' else result['state'])
+            if publish:
+                publish(result['state'])
+    return result
+
+
+# -- activation-gate self-check (C.3 design 4.2: "OpenRouter workers") -------------------------------------------
+def managed_self_check(workdir):
+    """`[]` when a managed `prepare` obtains one routing admission on a test `gateway` route and the V1 launch is
+    refused, else fixed codes. It replaces module globals for its run, so it runs this script with
+    `--managed-self-check` in a child of this interpreter with a fixed environment; every store is in `workdir`."""
+    root = _shared()._self_check_root(workdir)  # the child's own safety checks, before this process creates anything
+    if root is None:
+        return [SELF_CHECK_UNSAFE]
+    for name in ('home', 'tmp'):
+        (root / name).mkdir(mode=0o700)
+    env = dict(PATH='/usr/bin:/bin', HOME=str(root / 'home'), TMPDIR=str(root / 'tmp'), LANG='C.UTF-8')
+    child = subprocess.Popen([sys.executable, '-I', '-B', str(Path(__file__).resolve()), '--managed-self-check',
+                              str(root / 'check')], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, env=env, cwd=root, start_new_session=True)
+    try:
+        output, _ = child.communicate(timeout=SELF_CHECK_BUDGET)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
+        return ['self_check_timeout']
+    try:
+        codes = json.loads(output.splitlines()[-1])['codes']  # after the refused run's progress line
+    except (ValueError, KeyError, TypeError, IndexError):
+        return ['self_check_error']
+    if type(codes) is not list or not all(type(code) is str for code in codes):
+        return ['self_check_error']
+    return codes if child.returncode == 0 or codes else ['self_check_error']
+
+
+SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
+SELF_CHECK_UNSAFE = 'self_check_workdir_unsafe'
+
+
+def _self_check(workdir):
+    """The flag's body: it never opens a default path; every store lives in `workdir`."""
+    root = _shared()._self_check_root(workdir)
+    if root is None:
+        return [SELF_CHECK_UNSAFE]
+    command, launch = _shared()._routing()
+    from runtime import routing, routing_observations, routing_settings, usage_settings
+    routing_path, ledger_path = root / 'routing' / 'settings.json', root / 'ledger' / 'organizations.sqlite3'
+    command.default_settings, command.default_ledger = (lambda: routing_path), (lambda: ledger_path)
+    usage_settings.directory = lambda: root / 'usage'
+    settings.BASIC_STORAGE = root / 'openrouter-consent'
+    checkout, workers = root / 'checkout', root / 'workers'
+    checkout.mkdir(mode=0o700)
+    (checkout / 'input.txt').write_text('self-check\n')
+    marker, executable = root / 'v1-launched', root / 'opencode'
+    executable.write_text('#!/bin/sh\ntouch %s\n' % marker)
+    executable.chmod(0o700)
+    report = dict(enabled=True, routes=['workers'], revision=1, local_configuration='ready', checkout=str(checkout),
+                  scope_id='self-check', external_permission=None, proposal_store=str(root / 'discovery.json'),
+                  worker_root=str(workers), activation=dict(ref='activation:openrouter:self-check:r1',
+                                                            funding_ref='self-check', classes=None, destinations=None))
+
+    @contextmanager
+    def admission(cwd, route, *, revision=None, **_):
+        settings.require(revision is None or revision == report['revision'], 'openrouter_preparation_stale')
+        yield dict(report)
+    settings.status, settings.admission = (lambda cwd: dict(report)), admission
+    routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
+    service = command.Service(routing_path, ledger_path)
+    codes = []
+    try:
+        policy = dict(cycle='c', start=0, end=2 * 10**10, expiry=2 * 10**10, stop_at=10**10, ceiling='none',
+                      amount=None, grant_amount=0, pilot_limit=None, task_limit=None)
+        launch._call(service, dict(v=1, op='set', authority_required=True))
+        enabled = launch._call(service, dict(v=1, op='set', organization=dict(id='self-check', enabled=True,
+                                                                              policy=policy, expected_revision=0)))
+        service._ledger(False, write=True).observe('self-check', 10_000_000, int(time.time()), issued=10_000_000)
+        model = dict(model='self-check/model', provider='self-check', effort='low')
+        source = routing_observations.StaticSource(
+            [dict(route='self-check-gateway', status='qualified', **launch.route_identity(HOST, **model),
+                  billing_class='gateway', pool='self-check', account='self-check', demand={'credit': 1000},
+                  integration_route='workers', endpoint='self-check')],
+            lambda pool, at: [dict(id='credit', limit=10**12, used=0, rolling=False, observed_at=at,
+                                   organization='self-check', organization_revision=enabled['organization']['revision'])],
+            lambda route, scope: dict(state='ready', scope=scope, ref='self-check'))
+        routing_observations.default_source = lambda *args, **kwargs: source
+        coordinator = str(uuid.uuid4())
+        permission = external_delegation.effective_permission(None, report['activation'], service='openrouter',
+                                                              mode='worker', class_name='self-check', **model)
+        packet = external_delegation.prepare(checkout, permission, [dict(kind='text', text='self-check',
+                                                                         sources=['input.txt'])])
+        brief = dict(task_id='self-check', coordinator_chat_id=coordinator, objective='self-check',
+                     source_root=str(checkout), files=['input.txt'], timeout_seconds=5, steps=1, **model,
+                     external=dict(packet['binding'], automatic=True, local_preferred=False, class_name='self-check',
+                                   coordinator=coordinator, reviewer='self-check-reviewer', integration_available=True))
+        admissions, real = [], routing.admit
+
+        def admit(*args, **kwargs):
+            result = real(*args, **kwargs)
+            admissions.append(result)
+            return result
+        routing.admit = admit
+        run = prepare(workers, brief)
+        if [(item.get('status'), item.get('billing_class')) for item in admissions] != [('admitted', 'gateway')] \
+                or 'routing' not in json.loads((run / 'brief.json').read_text()):
+            codes.append('worker_admission_failed')
+        legacy = {key: value for key, value in brief.items()}  # an unrouted (V1) brief in the managed project
+        refused = _execute(run, legacy, executable, root, None)
+        if (refused.get('failure') or {}).get('reason') != routing_settings.LEGACY_ROUTE_RETIRED or marker.exists():
+            codes.append('v1_launch_not_refused')
+    except Exception:  # noqa: BLE001 - any failure is a fixed code, never a traceback
+        codes.append('self_check_error')
+    finally:
+        service.close()
+    return codes
+
+
 def main():
+    if sys.argv[1:2] == ['--managed-self-check']:  # C.3 design 4.2; refused unless the workdir is a safe sandbox
+        if len(sys.argv) != 3:
+            print(json.dumps(dict(codes=[SELF_CHECK_UNSAFE])))
+            return 2
+        codes = _self_check(sys.argv[2])
+        print(json.dumps(dict(codes=codes)))
+        return 1 if codes else 0
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['run', 'status', 'verify'])
     parser.add_argument('--root', type=Path, required=True)
@@ -584,6 +988,7 @@ def main():
 
 
 if __name__ == '__main__':
-    try: main()
+    try: status = main()
     except (ValueError, OSError, KeyError, TypeError):
         print(json.dumps({'error': 'invalid_request_or_runtime_unavailable'})); sys.exit(1)
+    sys.exit(status)

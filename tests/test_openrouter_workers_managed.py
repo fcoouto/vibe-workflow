@@ -21,6 +21,11 @@ from tests.test_opencode_launcher import FakeHost
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/openrouter_workers.py'
 READ_ONLY = ('read', 'glob', 'grep')
+# BLOCKER (C3-3 follow-up): the OpenCode adapter's name pattern refuses `/`, so OpenCode accounting cannot normalize a
+# message on an OpenRouter model (`vendor/model`) and the launch stays `uncertain`
+# (test_an_openrouter_model_id_is_not_yet_accountable). Tests of what happens after accounting simulate the adapter
+# fix: the fake server reports the message's model id without the slash.
+ACCOUNTABLE = dict(message_model=dict(providerID='openrouter', id='vendor-model', variant='low'))
 
 
 class TextHost(FakeHost):
@@ -209,7 +214,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_the_read_only_profile_is_kept(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002)
+        self.serve(cost=0.000002, **ACCOUNTABLE)
         run = self.api.prepare(self.runs, self.brief())
         result = self.execute(run)
         self.assertEqual(result['state'], 'awaiting_verification', result)
@@ -245,7 +250,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
                                               'edit'), 'deny')
         self.assertEqual(launcher.rule_effect(launcher.WORKER_RULES, 'edit'), 'allow')  # never the worker's
         self.qualified()
-        self.serve(cost=0.000002)
+        self.serve(cost=0.000002, **ACCOUNTABLE)
         run = self.api.prepare(self.runs, self.brief('pilot-2'))
         self.assertEqual(self.execute(run)['state'], 'awaiting_verification')
         self.assertNotEqual(self.hosts[-1].created['permissions'], launcher.WORKER_RULES)
@@ -301,7 +306,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_a_reported_cost_is_charged_the_full_reservation(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002)
+        self.serve(cost=0.000002, **ACCOUNTABLE)
         calls, events = self.admissions(), self.recorded()
         self.execute(self.api.prepare(self.runs, self.brief()))
         [(_, answer)] = [item for item in events if item[0]['kind'] == 'complete']
@@ -315,7 +320,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_a_missing_cost_leaves_the_cost_unknown(self):
         self.manage()
         self.qualified()
-        self.serve()  # tokens with a zero cost: OpenCode's figure is no evidence
+        self.serve(**ACCOUNTABLE)  # tokens with a zero cost: OpenCode's figure is no evidence
         events = self.recorded()
         run = self.api.prepare(self.runs, self.brief())
         self.execute(run)
@@ -329,7 +334,7 @@ class ManagedExecuteTests(ManagedWorkerCase):
     def test_the_token_never_appears_in_output_or_files(self):
         self.manage()
         self.qualified()
-        self.serve(cost=0.000002)
+        self.serve(cost=0.000002, **ACCOUNTABLE)
         run = self.api.prepare(self.runs, self.brief())
         result = self.execute(run)
         self.assertEqual(result['state'], 'awaiting_verification')
@@ -338,6 +343,18 @@ class ManagedExecuteTests(ManagedWorkerCase):
         token = tokens.pop()
         self.assertNotIn(token, json.dumps(result))
         self.assertNotIn(token.encode(), self.files())
+
+    def test_an_openrouter_model_id_is_not_yet_accountable_so_the_launch_stays_uncertain(self):
+        """Today's fail-closed behaviour until the adapter accepts `vendor/model`: the launch is unconfirmed, the hold
+        stays `uncertain` with its whole exposure for the operator's `reconcile_uncertain`, and nothing is returned."""
+        self.manage()
+        self.qualified()
+        self.serve(cost=0.000002)
+        run = self.api.prepare(self.runs, self.brief())
+        result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('unresolved', 'launch_unconfirmed'))
+        self.assertEqual(result['routing']['recovery'], 'reconcile_uncertain')
+        self.assertEqual((result['response'], self.routing_state(run), self.holds()), ('', 'uncertain', {'uncertain': 1}))
 
     def test_a_kill_after_the_routing_dispatch_is_recovered_keeping_the_exposure(self):
         self.manage()
