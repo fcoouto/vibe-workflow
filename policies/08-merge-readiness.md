@@ -8,7 +8,7 @@ When a merge is requested, act only on the reviewed candidate after its applicab
 
 | Element | Contract |
 | --- | --- |
-| Trigger | When opening or updating a PR; before declaring a candidate merge-ready or merging, including a direct commit or push to a merge target; after candidate/base changes, changed check definitions or policy, new findings, or changed repository enforcement. |
+| Trigger | When opening or updating a PR; before declaring a candidate merge-ready or merging, including a direct commit or push to a merge target; when synchronizing merged changes; after candidate/base changes, changed check definitions or policy, new findings, or changed repository enforcement. |
 | Decision | Determine the exact candidate and target, required evidence, authorization and whether repository controls actually enforce the decision. |
 | Required action | Assemble current check/review evidence, resolve blockers, verify applicable existing checks and any selected managed gate, and recheck the candidate immediately before an authorized merge. |
 | Evidence | Record candidate/base and any queue candidate, applicable policy/check versions, authoritative check/review results, finding dispositions, gate configuration and the actual merge result. |
@@ -47,3 +47,9 @@ When managed merge enforcement is selected:
 A merge target is a branch the project designates for integrating completed work, normally its primary branch; a task branch that only serves as the base of a stacked PR is not one. A direct commit or push to a merge target bypasses PR review and counts as a merge: it needs the same readiness and explicit authorization. Authority to commit, push or open PRs for task branches never covers it. Readiness grants no new commit, push, merge or deployment authority. Reuse existing authorization without asking again unless its scope changes. Immediately before acting, verify the candidate and target still match the accepted evidence and use the supported conditional-update mechanism when available.
 
 After the merge, observe repository state and record the resulting commit and method. If the outcome is unknown, inspect it before retrying. Preserve unrelated work and do not bypass a failed gate or force an unrelated history change to complete the request.
+
+For Graphify-enabled projects, complete [Graphify post-merge maintenance](../clients/graphify-maintenance.md)
+after confirming the merge, and when synchronizing merges made elsewhere. Run it
+as part of the operation without another user request. A successful remote merge
+does not establish successful local synchronization or graph refresh; report
+pending maintenance separately and do not claim the overall operation complete.
