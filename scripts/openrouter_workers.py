@@ -666,13 +666,14 @@ def _prepare_managed(root, brief, now, deadline, source):
 
 
 @contextmanager
-def _server(run, executable, auth_data, service):
+def _server(run, executable, auth_data, service, options):
     """The run's own OpenCode server (opencode_launcher.start_server): `opencode serve` in the private workspace copy,
-    the routing shim pinned to the managed service's stores, and OpenCode's data (its sign-ins) under `auth_data`."""
+    the routing shim pinned to the managed service's stores, OpenCode's data (its sign-ins) under `auth_data`, and
+    the worker's launch `options` in its inline config."""
     from runtime import opencode_launcher as launcher
     server = launcher.start_server(Path(run) / 'workspace', settings_path=service.settings_path,
                                    ledger_path=service.ledger_path, opencode=str(executable),
-                                   environ=dict(os.environ, XDG_DATA_HOME=str(auth_data)))
+                                   environ=dict(os.environ, XDG_DATA_HOME=str(auth_data)), options=options)
     try:
         yield server
     finally:

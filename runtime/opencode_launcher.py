@@ -36,6 +36,8 @@ PROFILE_NOT_ENFORCED = 'profile_not_enforced'
 API_FUNDING_UNQUALIFIED = 'api_funding_unqualified'
 ATTACH_FAILED = 'attach_failed'
 LAUNCH_UNCONFIRMED = 'launch_unconfirmed'
+LAUNCH_OPTIONS_UNEXPRESSIBLE = 'launch_options_unexpressible'
+LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -81,6 +83,20 @@ WINDOW_UNITS = 1000
 WINDOW_UNIT = routing_observations.WINDOW_UNIT
 
 
+# Per-launch provider options (`launch_options`) go into the launch's own inline config, in OpenCode's V2 keys:
+# `providers.<p>.models.<m>.body` request fields and `agents.<PRIMARY_AGENT>.steps`. Only OpenRouter can pin an
+# endpoint (its request body's `provider.only` with `allow_fallbacks: false`). Whether 2.2.6 honours each key, and
+# that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6), are live items (clients/opencode.md).
+PRIMARY_AGENT = 'build'
+ENDPOINT_PIN_PROVIDERS = ('openrouter',)
+MAX_OUTPUT_TOKENS = 1_000_000
+MAX_STEPS = 64
+
+
+class Unexpressible(ValueError):
+    """Required launch options this launcher cannot express in OpenCode's config: nothing is started or sent."""
+
+
 class Unconfirmed(Exception):
     """The host launch cannot be confirmed: the attempt is recorded `uncertain` and never retried."""
 
@@ -123,20 +139,44 @@ def protected_paths(settings_path, ledger_path):
     return found
 
 
-def server_config(settings_path, ledger_path, plugin):
+def launch_options(provider, model, *, endpoint, max_output_tokens, steps):
+    """One launch's provider options, validated: the endpoint `model` must stay on, its output cap and the step
+    count. Raises Unexpressible for anything the inline config cannot carry exactly."""
+    if not (isinstance(provider, str) and provider in ENDPOINT_PIN_PROVIDERS and adapter.NAME.fullmatch(provider)
+            and isinstance(model, str) and adapter.MODEL_ID.fullmatch(model)
+            and isinstance(endpoint, str) and adapter.MODEL_ID.fullmatch(endpoint)
+            and type(max_output_tokens) is int and 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS
+            and type(steps) is int and 1 <= steps <= MAX_STEPS):
+        raise Unexpressible(LAUNCH_OPTIONS_UNEXPRESSIBLE)
+    return dict(provider=provider, model=model, endpoint=endpoint, max_output_tokens=max_output_tokens, steps=steps)
+
+
+def server_config(settings_path, ledger_path, plugin, options=None):
     """The inline server config (`OPENCODE_CONFIG_CONTENT`): the routing shim as the only plugin, pinned to the
     managed service's own stores with the routing state directories protected from model edits; no MCP server,
-    formatter or LSP server; and the worker profile's permission rules. Whether OpenCode lets a project or global
-    config add to or override it is unobserved (clients/opencode.md#managed-launcher, pre-canary probe)."""
-    options = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
-                   protected_paths=protected_paths(settings_path, ledger_path))
-    return {'$schema': 'https://opencode.ai/config.json', 'plugins': [dict(package=str(plugin), options=options)],
-            'mcp': {}, 'formatter': False, 'lsp': False, 'permissions': [dict(rule) for rule in WORKER_RULES]}
+    formatter or LSP server; and the worker profile's permission rules. With `options` (`launch_options`), the
+    model's request body pins the endpoint and caps the output, and the primary agent's steps are capped. Whether
+    OpenCode lets a project or global config add to or override it is unobserved (clients/opencode.md#managed-launcher,
+    pre-canary probe)."""
+    shim = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
+                protected_paths=protected_paths(settings_path, ledger_path))
+    config = {'$schema': 'https://opencode.ai/config.json', 'plugins': [dict(package=str(plugin), options=shim)],
+              'mcp': {}, 'formatter': False, 'lsp': False, 'permissions': [dict(rule) for rule in WORKER_RULES]}
+    if options is not None:
+        options = launch_options(**options)
+        body = dict(provider=dict(only=[options['endpoint']], allow_fallbacks=False),
+                    max_tokens=options['max_output_tokens'])
+        config.update(providers={options['provider']: dict(models={options['model']: dict(body=body)})},
+                      agents={PRIMARY_AGENT: dict(steps=options['steps'])})
+    return config
 
 
 # -- the host ----------------------------------------------------------------------------------------------------
 class ServerHost:
-    """A loopback OpenCode server. `request` and `rpc` answer `(status, body)`; the password stays in memory."""
+    """A loopback OpenCode server. `request` and `rpc` answer `(status, body)`; the password stays in memory.
+    `options` are the launch options its inline config carries (None: none)."""
+
+    options = None
 
     def __init__(self, port, password, directory, timeout=REQUEST_TIMEOUT):
         self.port, self._password, self.directory, self.timeout = port, password, directory, timeout
@@ -172,9 +212,9 @@ class Server(ServerHost):
     """An `opencode serve` the launcher started for one checkout; `stop` ends its process group and removes its
     private directory (plugin wrapper and log)."""
 
-    def __init__(self, port, password, directory, process, workdir):
+    def __init__(self, port, password, directory, process, workdir, options=None):
         super().__init__(port, password, directory)
-        self.process, self.workdir = process, workdir
+        self.process, self.workdir, self.options = process, workdir, options
 
     def stop(self):
         try:
@@ -197,9 +237,12 @@ def _free_port():
         return probe.getsockname()[1]
 
 
-def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', environ=None, timeout=SERVER_START):
+def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', environ=None, timeout=SERVER_START,
+                 options=None):
     """Start `opencode serve` on a free loopback port in the checkout's canonical directory, with the routing shim
-    pinned to the given stores and a stripped environment. Raises ServerUnavailable when it does not come up."""
+    pinned to the given stores, a stripped environment and this launch's `options`. Raises Unexpressible before
+    starting anything for options it cannot carry, and ServerUnavailable when the server does not come up."""
+    options = None if options is None else launch_options(**options)
     directory = os.path.realpath(checkout)
     workdir = Path(tempfile.mkdtemp(prefix='vibe-opencode-launch-')).resolve()
     process = None
@@ -209,7 +252,8 @@ def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', e
         (plugin / 'index.ts').write_text('export { default } from %s\n' % json.dumps(str(SHIM)))
         password = secrets.token_urlsafe(32)
         env = host_environment(os.environ if environ is None else environ)
-        env.update(SERVER_FLAGS, OPENCODE_CONFIG_CONTENT=json.dumps(server_config(settings_path, ledger_path, plugin)),
+        env.update(SERVER_FLAGS, OPENCODE_CONFIG_CONTENT=json.dumps(server_config(settings_path, ledger_path, plugin,
+                                                                                  options)),
                    OPENCODE_SERVER_PASSWORD=password)
         port, log = _free_port(), workdir / 'server.log'
         executable = shutil.which(opencode) or opencode  # resolved with the caller's PATH; the server gets SERVER_PATH
@@ -222,7 +266,7 @@ def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', e
             text = log.read_text(errors='replace')
             if 'server listening' in text:
                 found = re.search(r'^server password (\S+)$', text, re.M)
-                return Server(port, found.group(1) if found else password, directory, process, workdir)
+                return Server(port, found.group(1) if found else password, directory, process, workdir, options)
             if process.poll() is not None or time.monotonic() > deadline:
                 raise ServerUnavailable('server_not_started')
             time.sleep(0.1)
@@ -401,10 +445,18 @@ class _Gate:
     with `not_dispatched`. It remembers the admission, the attempt id and how far `dispatch` got (`dispatch`: None,
     `sending`, `dispatched` or `refused`), never the token."""
 
-    def __init__(self, service, host):
-        self.service, self.host = service, host
+    def __init__(self, service, host, options=None):
+        self.service, self.host, self.options = service, host, options
         self.project, self.settings_path, self.ledger_path = service.project, service.settings_path, service.ledger_path
         self.admission, self.attempt_id, self.dispatch = None, None, None
+
+    def _options_reason(self, request):
+        """`launch_options_mismatch` when the launch's options pin another model than the one being dispatched."""
+        if self.options is None:
+            return None
+        request = request if isinstance(request, dict) else {}
+        same = (request.get('provider'), request.get('model')) == (self.options['provider'], self.options['model'])
+        return None if same else LAUNCH_OPTIONS_MISMATCH
 
     def handle(self, raw, op=None):
         value = json.loads(raw)
@@ -412,7 +464,7 @@ class _Gate:
             self.attempt_id = value.get('attempt_id')
             funded = (self.admission or {}).get('billing_class') in routing.FUNDED
             reason = API_FUNDING_UNQUALIFIED if funded and not API_FUNDING_QUALIFIED else \
-                None if health(self.host) is not None else HOST_UNHEALTHY
+                self._options_reason(value.get('request')) or (None if health(self.host) is not None else HOST_UNHEALTHY)
             if reason is not None:
                 return dict(v=1, state='blocked', reason=reason)
             self.dispatch = 'sending'  # unknown until the service answers: an interrupt here asks the ledger
@@ -556,13 +608,15 @@ def _finish(result, gate, attempt, detached, settings_path, source):
 
 
 def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraints=None, planned=False, profile=None,
-           service=None, source=None, idle_timeout=IDLE_TIMEOUT):
+           service=None, source=None, idle_timeout=IDLE_TIMEOUT, options=None):
     """Run one managed attempt on `host` (a ServerHost for the checkout's canonical directory). `service` defaults
     to `scripts.routing.managed_service(checkout)`. Returns the core's result plus `not_entitled`; never the token.
 
     An unmanaged project returns `project_not_managed` without touching the host. Refusals before `dispatch` send
     nothing and close any admitted hold with `not_dispatched`; a refused attach creates nothing and closes the hold
-    with `record complete`; a launch that cannot be confirmed is recorded `uncertain` and names the operator op."""
+    with `record complete`; a launch that cannot be confirmed is recorded `uncertain` and names the operator op.
+    With `options` (`launch_options`), `host.options` must be exactly those options (`launch_options_unexpressible`,
+    before anything is prepared) and the admitted model theirs (`launch_options_mismatch`, before `dispatch`)."""
     owned = service is None
     if owned:
         from scripts import routing as command
@@ -572,6 +626,13 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
             return dict(state='blocked', reason=routing_launch.PROJECT_REQUIRED)
         if not routing_launch.managed(service.project, service.settings_path):
             return dict(state='unmanaged', reason=routing_launch.PROJECT_NOT_MANAGED)
+        if options is not None:
+            try:
+                options = launch_options(**options)
+            except (TypeError, ValueError):
+                options = None
+            if options is None or getattr(host, 'options', None) != options:
+                return dict(state='blocked', reason=LAUNCH_OPTIONS_UNEXPRESSIBLE)
         reason = routing_launch.preflight(service.handle(json.dumps(dict(v=1, op='status')).encode()))
         if reason is not None:
             return dict(state='blocked', reason=reason)
@@ -580,7 +641,7 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
             return dict(state='blocked', reason=HOST_UNHEALTHY)
         if enforcement(host, answer) != 'enforced':
             return dict(state='blocked', reason=PROFILE_NOT_ENFORCED)
-        gate = _Gate(service, host)
+        gate = _Gate(service, host, options)
         attempt = _Attempt(host, gate, prompt, idle_timeout)
         detached = None
         try:

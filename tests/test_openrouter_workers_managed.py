@@ -79,14 +79,16 @@ class ManagedWorkerCase(ManagedRouting, unittest.TestCase):
                                          class_name='investigation', coordinator=brief['coordinator_chat_id'],
                                          reviewer='native-reviewer', integration_available=True))
 
-    def serve(self, **knobs):
-        """Every managed launch gets a fake OpenCode server in the run's private workspace copy."""
+    def serve(self, carry=lambda options: options, **knobs):
+        """Every managed launch gets a fake OpenCode server in the run's private workspace copy, carrying the launch
+        options it was started with (`carry` changes what it carries)."""
         shim = command.Service(self.stores['settings'], self.stores['ledger'], serving=True)
         self.addCleanup(shim.close)
 
         @contextmanager
-        def server(run, executable, auth_data, service):
+        def server(run, executable, auth_data, service, options):
             host = TextHost(shim, str(Path(run) / 'workspace'), [], **knobs)
+            host.options = carry(options)
             self.hosts.append(host)
             yield host
         self.enterContext(patch.object(self.api, '_server', server))
@@ -380,6 +382,59 @@ class ManagedExecuteTests(ManagedWorkerCase):
         self.assertNotIn(token, json.dumps(result))
         self.assertTrue(any(path.is_file() for path in run.rglob('*')))  # the run folder itself is scanned
         self.assertNotIn(token.encode(), self.files())
+
+    def test_the_endpoint_pin_output_cap_and_steps_reach_the_server(self):
+        """F4 item 2: the V1 configuration's pin, cap and steps are the launch options the server is started with."""
+        self.manage()
+        self.qualified()
+        self.serve(cost=0.000002)
+        run = self.api.prepare(self.runs, self.brief())
+        self.assertEqual(self.execute(run)['state'], 'awaiting_verification')
+        self.assertEqual(self.hosts[0].options, dict(provider='openrouter', model='vendor/model', endpoint='provider',
+                                                     max_output_tokens=2048, steps=3))
+        config = launcher.server_config('/s/settings.json', '/l/l.sqlite3', '/p', options=self.hosts[0].options)
+        self.assertEqual(config['providers']['openrouter']['models']['vendor/model']['body'],
+                         dict(provider=dict(only=['provider'], allow_fallbacks=False), max_tokens=2048))
+        self.assertEqual(config['agents'], dict(build=dict(steps=3)))
+
+    def test_a_server_without_the_options_is_refused_and_closes_the_hold(self):
+        self.manage()
+        self.qualified()
+        for number, carry in enumerate((lambda options: None, lambda options: dict(options, steps=8))):
+            with self.subTest(number=number):
+                self.serve(carry=carry)
+                run = self.api.prepare(self.runs, self.brief('pilot-%d' % number))
+                result = self.execute(run)
+                self.assertEqual((result['state'], result['failure']['reason']),
+                                 ('failed', 'launch_options_unexpressible'))
+                self.assertFalse(hasattr(self.hosts[-1], 'created'))
+                self.assertEqual((self.routing_state(run), self.holds()), ('settled', {}))
+
+    def test_options_that_cannot_be_expressed_start_no_server(self):
+        self.manage()
+        self.qualified()
+        self.serve()
+        run = self.api.prepare(self.runs, self.brief())  # three steps
+        with patch.object(launcher, 'MAX_STEPS', 2):
+            result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', 'launch_options_unexpressible'))
+        self.assertEqual((self.hosts, self.routing_state(run), self.holds()), ([], 'settled', {}))
+
+    def test_the_real_server_seam_starts_opencode_with_the_options(self):
+        self.manage()
+        self.qualified()
+        seen = []
+
+        def start(*args, **kwargs):
+            seen.append(kwargs.get('options'))
+            raise launcher.ServerUnavailable('server_not_started')
+        run = self.api.prepare(self.runs, self.brief())
+        with patch.object(launcher, 'start_server', start):
+            result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', 'server_unavailable'))
+        self.assertEqual(seen, [dict(provider='openrouter', model='vendor/model', endpoint='provider',
+                                     max_output_tokens=2048, steps=3)])
+        self.assertEqual(self.holds(), {})
 
     def test_an_openrouter_model_id_is_accounted_and_settles(self):
         """F4 item 1: the adapter accepts `vendor/model`, so the message on the admitted OpenRouter id is accounted and

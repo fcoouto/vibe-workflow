@@ -52,6 +52,7 @@ class ReadOnlyHost:
 
     def __init__(self, host, rules):
         self.host, self.rules, self.directory = host, rules, host.directory
+        self.options = getattr(host, 'options', None)  # the launch options its server carries
 
     def rpc(self, method, payload):
         return self.host.rpc(method, payload)

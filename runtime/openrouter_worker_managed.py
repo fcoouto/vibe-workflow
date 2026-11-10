@@ -135,6 +135,20 @@ def _expire(api):
     return expired
 
 
+def launch_options(api, brief):
+    """The worker's endpoint pin, output cap and step count, from the same `configuration` the V1 launch used, as
+    the OpenCode launcher's per-launch options. Raises opencode_launcher.Unexpressible when they cannot be carried."""
+    from runtime import opencode_launcher as launcher
+    config = api.configuration(brief)
+    [(provider, entry)] = config['provider'].items()
+    options = entry['models'][brief['model']]['options']
+    only = options['provider']['only']
+    if len(only) != 1 or options['provider'].get('allow_fallbacks') is not False:
+        raise launcher.Unexpressible(launcher.LAUNCH_OPTIONS_UNEXPRESSIBLE)
+    return launcher.launch_options(provider, brief['model'], endpoint=only[0],
+                                   max_output_tokens=options['maxOutputTokens'], steps=config['agent']['pilot']['steps'])
+
+
 def _charge(api, reserved):
     """A `complete`'s OpenCode usage as charged: an estimate of at least the whole reservation (no provider receipt);
     None (no usage: `cost_unknown`) for any unknown cost or an unusable report."""
@@ -178,17 +192,20 @@ def execute(api, run, brief, executable, auth_data, publish):
         service = state.Routed(command.managed_service(bound['checkout']), run, bound['attempt_id'],
                                _charge(api, bound.get('reserved')), api._shared().RECOVERED)
         assignment, job = _routed_request(api, brief, bound['checkout'], bound['attempt_id'])
+        options = launch_options(api, brief)  # before any server: options it cannot carry start nothing
         api.progress(run, 'Starting')
-        with api._server(run, executable, auth_data, service) as host:
+        with api._server(run, executable, auth_data, service, options) as host:
             prompt = api.configuration(brief)['agent']['pilot']['prompt'] + '\n\n' + brief['objective']
             outcome = launcher.launch(bound['checkout'], host=state.ReadOnlyHost(host, api.session_rules(brief)),
                                       service=service, assignment=assignment, job=job, prompt=prompt,
-                                      idle_timeout=brief['timeout_seconds'])
+                                      idle_timeout=brief['timeout_seconds'], options=options)
             if outcome.get('state') == 'recorded' and outcome.get('event') == 'complete' and service.session:
                 result.update(session_id=service.session, response=state.response(host, service.session, api.LIMIT))
         _outcome(result, outcome)
     except settings.SettingsError as exc:
         result.update(state='failed', failure=dict(category='integration', reason=str(exc)))
+    except launcher.Unexpressible:
+        result.update(state='failed', failure=dict(category='integration', reason=launcher.LAUNCH_OPTIONS_UNEXPRESSIBLE))
     except launcher.ServerUnavailable:
         result.update(state='failed', failure=dict(category='integration', reason='server_unavailable'))
     except KeyboardInterrupt:
