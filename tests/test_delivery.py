@@ -460,7 +460,7 @@ class CompletionTests(unittest.TestCase):
         self.assertIn('new-pr', result['pending'])
         self.assertEqual(title_sync.progress_cells(result['task']), 2)
         self.assertEqual(self.fixture.api._read(self.scope, initial['task']['delivery']['plan']), initial['plan'])
-        title = title_sync.format_title('W1', 'P', 'Feature', result['task']['state'], 5)
+        title = title_sync.format_title('Feature', result['task']['state'], 5)
         self.assertNotIn('▰▰▰▰▰', title)
 
     def test_scope_revision_preserves_explicit_pause_and_required_deliveries(self):
@@ -483,8 +483,8 @@ class CompletionTests(unittest.TestCase):
         self.assertEqual(result['task']['state'], 'REVIEW')
         conditions = result['task']['conditions']
         self.assertEqual([c['id'] for c in conditions if c['status'] == 'pending'], [])
-        title = title_sync.format_title('W1', 'P', 'Feature', result['task']['state'], 4)
-        self.assertEqual(title, '\uFFFB▰▰▰▰▱ [W1] P · Feature')
+        title = title_sync.format_title('Feature', result['task']['state'], 4)
+        self.assertEqual(title, '\uFFFB▰▰▰▰▱ Feature')
         self.assertNotIn('▰▰▰▰▰', title)
         status = self.fixture.api.evidence_status(self.scope, 'codex', 'parent')
         self.assertFalse(status['evidence']['delivery_complete'])

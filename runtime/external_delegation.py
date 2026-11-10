@@ -108,6 +108,29 @@ def select(explicit, local_preferred, candidates, preference=None, *, api_only=F
     return dict(route='paused' if api_only else 'native', reason='route_unavailable_or_unresolved')
 
 
+def _selection(permission, binding):
+    require(type(binding.get('automatic')) is bool and type(binding.get('local_preferred')) is bool,
+            'selection_required')
+    require(not binding['local_preferred'], 'local_preference')
+    require(not binding['automatic'] or permission['automatic'], 'automatic_selection_denied')
+
+
+def constraints(permission, binding, *, service, mode):
+    """X0 in a managed project (C.3 design 2): routing `prepare` decides; this chooses nothing.
+
+    The coordinator's explicit route becomes the assignment's `choice`; the user's scope becomes routing
+    `constraints` that can only remove candidates: the permitted models and efforts (`none` for null) of this
+    service and mode. Local preference and a saved automatic opt-out stay refusals, never inputs to a choice.
+    Endpoint, source and packet checks remain `check`'s, at admission and dispatch."""
+    validate_permission(permission)
+    require(isinstance(binding, dict), 'selection_required')
+    _selection(permission, binding)
+    routes = [route for route in permission['destinations'] if (route['service'], route['mode']) == (service, mode)]
+    require(routes, 'destination_denied')
+    return dict(allowed_models=sorted({route['model'] for route in routes}),
+                allowed_efforts=sorted({'none' if route['effort'] is None else route['effort'] for route in routes}))
+
+
 def _read(root, permission, path):
     path = _path(path)
     target = root / path
@@ -169,10 +192,7 @@ def check(root, permission, binding, *, service, mode, model, provider, effort, 
     validate_permission(permission)
     require(isinstance(binding, dict) and binding.get('permission_digest') == digest(permission),
             'permission_changed')
-    require(type(binding.get('automatic')) is bool and type(binding.get('local_preferred')) is bool,
-            'selection_required')
-    require(not binding['local_preferred'], 'local_preference')
-    require(not binding['automatic'] or permission['automatic'], 'automatic_selection_denied')
+    _selection(permission, binding)
     require(permission['valid_until'] is None or now < permission['valid_until'], 'permission_expired')
     require(class_name in permission['classes'], 'task_class_denied')
     route = dict(service=service, mode=mode, model=model, provider=provider, effort=effort)

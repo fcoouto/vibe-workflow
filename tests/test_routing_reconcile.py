@@ -6,13 +6,16 @@ from contextlib import closing
 import hashlib
 import itertools
 import json
+from pathlib import Path
 import random
 import sqlite3
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
-from runtime import routing, usage_budget as budget
+from runtime import ledger_versions, routing, usage_budget as budget
+from scripts import routing as command
 from tests.fixture_routing_accounting import Accounting, complete, usage
 from tests.test_routing_command import API, M, SCRIPT, SECRET, facts, now
 from tests.test_routing_dispatch import record
@@ -737,7 +740,9 @@ class StatusTests(Reconcile):
         ledger = self.status()
         self.assertEqual(ledger['reconcile'], dict(
             reconcile_uncertain=dict(count=0, ids=[], more=0),
-            resolve_block=dict(over_bound=dict(organizations=[], more=0), legacy=dict(organizations=[], more=0))))
+            resolve_block=dict(over_bound=dict(organizations=[], more=0), legacy=dict(organizations=[], more=0)),
+            reconcile_subscription=dict(count=0, ids=[], more=0), window_debits=dict(count=0, keys=[], more=0),
+            drop_debit=dict(debits=[], more=0)))
         self.assertIsNone(ledger['reconcile_hint'])
 
 
@@ -767,8 +772,8 @@ class CompatibilityTests(Reconcile):
                          'recorded')
         self.assertEqual(self.reasons(), [])
         with closing(sqlite3.connect(self.ledger)) as db:
-            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 4)
-        self.assertEqual(budget.STATE_VERSION, 4)
+            self.assertEqual(json.loads(db.execute('SELECT body FROM ledger').fetchone()[0])['version'], 5)
+        self.assertEqual(ledger_versions.STATE_VERSION, 5)
 
     def test_a_bare_newer_observation_retires_no_settled_charge(self):
         """Reflected-debit retirement is deferred: no observation shape carries a watermark, so a newer
@@ -794,8 +799,8 @@ class ProtocolTests(Reconcile):
                          dict(v=1, state='blocked', reason='invalid_json'))  # a duplicate key
         self.assertEqual(self.hold('a1')['state'], 'uncertain')
 
-    def test_serve_refuses_every_operator_op_and_one_shot_still_applies_it(self):
-        """Review round 1: the shim's persistent child (`--serve`) never exposes operator ops; they stay one-shot."""
+    def operator_state(self):
+        """One pending item for each older operator op, and their requests (C3-0a review S1 reuses it)."""
         self.uncertain('a1')
         self.funded('a2')
         self.call(complete('a2', 'c2'))  # cost_unknown
@@ -804,11 +809,47 @@ class ProtocolTests(Reconcile):
         self.call(complete('a3', 'c3', usage=usage(9 * M)))  # overrun
         self.over_bound('s1')
         self.service.close()
+        return [reconcile('a1', receipts(M)), dict(reconcile('a1', CHARGE, 'u2'), id=7),
+                resolve_block('personal', 'over_bound', ids=['s1']),
+                dict(v=1, op='resolve_overrun', attempt_id='a3', decision='dismiss', event_id='r1'),
+                dict(v=1, op='resolve_cost_unknown', attempt_id='a2', cost_usd_micros=0, event_id='r2')]
+
+    def test_in_process_services_refuse_every_operator_op(self):
+        """C3-0a review S1 (as #212 B1 for `set managed_projects`): only `main()`'s one-shot command runs an operator
+        op. Every in-process service refuses each one before reading anything, `managed_service` included."""
+        operator = self.operator_state()
+        others = [dict(v=1, op='reconcile_subscription', attempt_id='a1', evidence=dict(kind='abandon'),
+                       event_id='o1'),
+                  dict(v=1, op='drop_debit', key='win:sub/5h', marker='dd_' + '0' * 32, event_id='o2'),
+                  dict(v=1, op='settle_legacy_call', run_id='s1', phase='count', evidence=CHARGE, event_id='o3')]
+        requests = {request['op']: request for request in operator + others}
+        self.assertEqual(set(requests), set(command.OPERATOR_OPS))
         before, stored = self.snapshot(), self.ledger_bytes()
-        operator = [reconcile('a1', receipts(M)), dict(reconcile('a1', CHARGE, 'u2'), id=7),
-                    resolve_block('personal', 'over_bound', ids=['s1']),
-                    dict(v=1, op='resolve_overrun', attempt_id='a3', decision='dismiss', event_id='r1'),
-                    dict(v=1, op='resolve_cost_unknown', attempt_id='a2', cost_usd_micros=0, event_id='r2')]
+        project = Path(self.temp.name).resolve() / 'checkout'
+        project.mkdir()
+        with mock.patch.object(command, 'default_settings', return_value=self.settings), \
+                mock.patch.object(command, 'default_ledger', return_value=self.ledger):
+            managed = command.managed_service(project)
+        services = dict(in_process=command.Service(self.settings, self.ledger, workflow=self.reader),
+                        pinned=command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout'),
+                        managed_service=managed,
+                        serving=command.Service(self.settings, self.ledger, serving=True, one_shot=True))
+        for name, service in services.items():
+            self.addCleanup(service.close)
+            for op, request in requests.items():
+                with self.subTest(service=name, op=op):
+                    response = service.handle(json.dumps(request).encode())
+                    self.assertEqual({k: v for k, v in response.items() if k != 'id'},
+                                     dict(v=1, state='blocked', reason='operator_op_not_served'))
+        self.assertEqual((self.snapshot(), self.ledger_bytes()), (before, stored))
+        one_shot = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
+        self.addCleanup(one_shot.close)
+        self.assertEqual(one_shot.handle(json.dumps(operator[0]).encode())['state'], 'recorded')
+
+    def test_serve_refuses_every_operator_op_and_one_shot_still_applies_it(self):
+        """Review round 1: the shim's persistent child (`--serve`) never exposes operator ops; they stay one-shot."""
+        operator = self.operator_state()
+        before, stored = self.snapshot(), self.ledger_bytes()
         lines = operator + [b'not json', reconcile('a\u0000', CHARGE), dict(v=1, op='status')]
         raw = b''.join((line if isinstance(line, bytes) else json.dumps(line).encode()) + b'\n' for line in lines)
         done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),

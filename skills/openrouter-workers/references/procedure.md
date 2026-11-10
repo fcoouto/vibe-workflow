@@ -7,6 +7,7 @@ owns original files, integration and acceptance. The original proposal route rem
 separate. Its successful tests do not qualify tool use or autonomous editing.
 
 Apply the [shared selection contract](../../../clients/external-delegation.md) for automatic consideration or a saved restriction.
+In a [managed project](#managed-projects), Smart Routing admits or refuses the selected worker; the steps below still apply.
 
 ## Prepare
 
@@ -196,3 +197,13 @@ unknown rather than becoming an automatic worker replay or a zero-cost claim.
 Package tests, fixture processes, actual OpenCode tool execution, Habblaud rendering
 and genuine native dispatch are separate evidence classes. Do not publish or enable
 this integration globally on the strength of package validation alone.
+
+## Managed projects
+
+In a project on Smart Routing's `managed_projects` list, the runner is the launcher and follows the [shared managed-project rule](../../../clients/external-delegation.md#managed-projects). The `run`, `status` and `verify` calls stay the same.
+
+- Before it writes the run, `run` asks routing `prepare` for the `gateway` route, with your brief's model, provider and effort as an explicit choice and your saved scope as constraints. It then takes the OpenRouter admission at the settings revision routing saw. If routing refuses, the runner writes nothing and prints `{"error": "routing_refused", "reason": ...}`, for example `explicit_choice_unavailable`, `ledger_reconcile_pending` or `openrouter_preparation_stale`. Continue natively; do not try another model to get an admission.
+- The worker runs through the OpenCode managed launcher, not `opencode run --pure`: an `opencode serve` in the run's private workspace copy, with the routing shim and a session that may only read the selected files, glob and grep. A run prepared before the project was managed fails with `legacy_route_retired` and never starts.
+- Until API-funded OpenCode routes are qualified (C.3 user decision 4), every managed worker fails with `api_funding_unqualified` before a session exists, and its hold is released. Continue natively. The managed launch does not yet apply the brief's step count, output cap or endpoint pin to the send, and OpenCode accounting cannot yet read OpenRouter model names; both must be fixed before that qualification.
+- OpenCode's reported cost is an estimate, not a receipt: the hold is charged its full reservation. A missing cost stays unknown until the operator's `resolve_cost_unknown`. A launch that cannot be confirmed is `unresolved` with `launch_unconfirmed`, and its hold waits for the operator's `reconcile_uncertain`.
+- If a `run` is interrupted, the next managed `run` with the same worker root settles the hold it left behind. A hold that was never dispatched is released; a dispatched one keeps its reservation as an unknown cost. Never rerun under another ID instead.

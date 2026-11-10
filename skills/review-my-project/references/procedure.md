@@ -27,6 +27,8 @@ Identify canonical checks by their resolved definition, arguments, environment, 
 
 Use an installed review capability only when it fits the selected scope and is authorized. Reuse existing review facilities; do not build another audit engine or install a tool merely to fill a checklist.
 
+In a managed project, prepare each delegated reviewer for the selected scope through `scripts/routing.py`, as [policy 03](../../../policies/03-agent-delegation.md#managed-projects) requires.
+
 ## Installations and fixes
 
 Review approval permits inspection only. If a missing tool would materially help, name the package/tool, purpose, installation scope, and affected files including manifests and lockfiles. Install only after explicit approval for that exact package and scope; reuse a matching approval already recorded for this task without asking again. A declined or unavailable installation remains a coverage gap.

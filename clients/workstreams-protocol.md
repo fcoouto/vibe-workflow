@@ -58,14 +58,7 @@ scope, tools or objective does, so update the profile then.
 
 ## Immutable native names
 
-For family `W42`, use the top-level `workstream_context_id:"WS42.01"` for a worker
-or `workstream_context_id:"WS42.03"` for review. New assignments use this
-top-level field; the existing `workstream_limits.context_id` fallback remains
-supported. The adapter derives
-`worker_ws42_01_build_<attempt>` or `review_ws42_03_review_<attempt>` from those
-immutable requests, retaining the complete attempt suffix and native lineage.
-These naming markers identify work only; they do not grant feature permission.
-Ordinary delegation keeps its original markers. Review grouping remains available
-when either feature is off. Context IDs are `WS` plus alphanumerics, a dot and a positive
-decimal ordinal; use short labels to fit the validated 64-character creation marker.
-Never truncate identity or use a display title as native lineage.
+The runtime names each native child from its immutable attempt:
+`worker_<attempt>` or `review_<attempt>`. Preparation rejects
+`workstream_context_id`. These markers identify work only; they grant no feature
+permission. Never truncate identity or use a display title as native lineage.

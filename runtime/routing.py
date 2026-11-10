@@ -17,8 +17,8 @@ import math
 import re
 import secrets
 
-
 from runtime import routing_allocator as allocator, routing_gates, routing_settings
+from runtime import subscription_reconcile as sub_reconcile
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
@@ -548,7 +548,7 @@ def _choice_matches(entry, item):
 
 def _decide(data, assignment, ranking, settings, observations, workflow=None):
     now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
-    accounts, held = Ledger.open_accounts(data), Ledger.held(data)
+    accounts, held = Ledger.open_accounts(data), sub_reconcile.held(data)  # S3.6c: plus window debits
     if len(accounts) >= _caps(data, settings)[0]:
         return _pending('concurrency_cap')
     candidates, excluded = [], []
@@ -742,7 +742,7 @@ def _shape_error(assignment, ranking, settings, observations):
     return None
 
 
-def admit(assignment, ranking, settings, observations, *, ledger, workflow=None):
+def admit(assignment, ranking, settings, observations, *, ledger, workflow=None, clear_debits=False):
     """Choose a funding class and route, reserve the padded claim and record the decision atomically.
 
     ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
@@ -784,7 +784,7 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None)
 
     ``workflow`` is the job part of the S3.5 binding (``routing_gates.job_binding``) or None for an assignment
     with no workflow job; the record stores it with the credential marker as ``binding`` (``invalid_binding``
-    when malformed). ``dispatch`` re-validates it.
+    when malformed). ``dispatch`` re-validates it. ``clear_debits`` lets windows clear debits (C3-0a: never ``--serve``).
     """
     try:
         reason = _shape_error(assignment, ranking, settings, observations)
@@ -795,8 +795,8 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None)
     if reason is not None:
         return _pending(reason)
     try:
-        outcome = ledger.admit(assignment['attempt_id'],
-                               lambda data: _decide(data, assignment, ranking, settings, observations, workflow))
+        outcome = ledger.admit(assignment['attempt_id'], lambda data: _decide(sub_reconcile.clear_debits(
+            ledger, data, observations) if clear_debits else data, assignment, ranking, settings, observations, workflow))
     except BudgetError as error:
         return _pending(str(error))
     except Exception:  # noqa: BLE001 - the transaction rolled back; nothing was reserved or recorded
@@ -1468,7 +1468,7 @@ def reconcile_summary(data):
                                unresolved=_counted(items)))
     summary = dict(reconcile_uncertain=_counted(uncertain),
                    resolve_block=dict(over_bound=_by_organization(over_bound), legacy=_by_organization(legacy)))
-    return summary, RECONCILE_HINT if uncertain or over_bound or legacy else None
+    return sub_reconcile.summary(data, summary, RECONCILE_HINT if uncertain or over_bound or legacy else None)
 
 
 def ledger_summary(data):

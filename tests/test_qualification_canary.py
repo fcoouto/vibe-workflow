@@ -6,9 +6,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
 from runtime import routing, routing_settings
 from tests.qualification import canary, safety
+from tests.qualification import server as qual_server
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Fake, FakeOpenCode, Temp, types_namespace
 
@@ -631,6 +633,69 @@ class AbortDetailTests(Temp):
         self.assertEqual(self.run_with(AdapterError("invalid message id")), "refusal: invalid message id")
         for error in (TypeError("x"), AttributeError("x"), NameError("x"), KeyError("x")):
             self.assertEqual(self.run_with(error), "harness_error: %s" % type(error).__name__)
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class ManagedCanaryTests(PilotHarness):
+    """C3-3 (C.3 design 3.3, plan S3.7): in canary mode on a managed project the harness sends no observations, so
+    the routing service's collector supplies them as in production; the pilot on its unmanaged canary ledger keeps
+    its own. Tested with the real scripts/routing.py on temporary canary stores; never live."""
+
+    def manage(self, run, projects):
+        """Put the canary project on the canary settings' `managed_projects` directly (the one-shot `set` needs the
+        activation gate, which fails closed until user decision 5; the harness never changes this list itself)."""
+        settings = Path(dict(zip(run.routing.argv[::2], run.routing.argv[1::2]))["--settings"])
+        revision = routing_settings._load(settings)[0]
+        routing_settings.update(settings, dict(managed_projects=[str(Path(p).resolve()) for p in projects]), revision)
+
+    def body(self, run, tag):
+        return canary.plan_assignments(1, tag, pool=run.pool, account=run.route_account)[0]["body"]
+
+    def test_an_unmanaged_pilot_still_sends_its_own_observations(self):
+        run, _ = self.pilot()
+        self.assertEqual(run.routing.observation_mode(), "caller")
+        answer, _ = run.routing("prepare", **self.body(run, "own"))
+        self.assertEqual(answer.get("state"), "admitted", answer)
+
+    def test_a_managed_canary_sends_no_observations(self):
+        run, _ = self.pilot()
+        self.manage(run, [run.canary_project])
+        self.assertEqual(run.routing.observation_mode(), "collector")
+        sent = []
+        real = subprocess.run
+
+        def spy(argv, **kwargs):
+            sent.append(json.loads(kwargs["input"]))
+            return real(argv, **kwargs)
+        with mock.patch.object(qual_server.subprocess, "run", spy):
+            answer, _ = run.routing("prepare", **self.body(run, "managed"))
+        self.assertNotIn("observations", sent[-1])
+        # The real command collected from the shipped manifest: no `observations_not_accepted` (caller data refused)
+        # and no `invalid_request` (an unmanaged prepare without observations); nothing is qualified yet, so pending.
+        self.assertEqual(answer.get("state"), "pending", answer)
+        served, _ = run.routing.served("prepare", **self.body(run, "served"))
+        self.assertEqual(served.get("state"), "pending", served)
+
+    def test_an_unreadable_managed_answer_fails_closed_to_collector_mode(self):
+        run, _ = self.pilot()
+        with mock.patch.object(routing_settings, "managed_project", side_effect=OSError("unreadable")):
+            self.assertEqual(run.routing.observation_mode(), "collector")
+        self.assertEqual(live.Routing().observation_mode(), "caller")  # qualification mode: never a project
+
+    def test_canary_env_prepare_passes_a_body_without_observations(self):
+        sent = []
+        run = types_namespace(routing=types_namespace(served=lambda op, **body: (sent.append(body), ({}, 1.0))[1]))
+        live.CanaryEnv(run).prepare(dict(assignment={}, job={}))
+        self.assertEqual(sent, [dict(assignment={}, job={})])
+
+    def test_admission_ids_never_opens_the_production_stores(self):
+        from scripts import routing as command
+        run, _ = self.pilot()  # the canary state check compares with the defaults; it never opens them
+        with mock.patch.object(command, "default_settings", side_effect=AssertionError("default settings")), \
+                mock.patch.object(command, "default_ledger", side_effect=AssertionError("default ledger")):
+            with self.assertRaises(safety.Refused):
+                live.Routing().admission_ids("a")
+            self.assertIsNone(run.routing.admission_ids("never-admitted"))
 
 
 if __name__ == "__main__":

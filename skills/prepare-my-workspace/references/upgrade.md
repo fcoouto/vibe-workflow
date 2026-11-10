@@ -1,8 +1,8 @@
 # Upgrade the plugin in every client
 
-Each supported client keeps its own copy of this plugin and has its own update command. Nothing upgrades them together, so run this procedure when the user asks to upgrade or update the plugin, or after a startup drift warning. It covers Codex and Claude Code, one after the other.
+Each supported client keeps its own copy of this plugin and has its own update command. Nothing upgrades them together, so run this procedure when the user asks to upgrade or update the plugin, when preparation finds it outdated (step 4 of the [procedure](procedure.md)), or when the user acts on a startup drift warning. It covers Codex and Claude Code, one after the other.
 
-Run the user's approved commands only. Keep the client configuration, permissions, model choices and other plugins as they are. Never start an upgrade the user has not asked for.
+Run only the update commands below, under the [consent rule](../../../policies/11-tool-integrations.md#choose-and-configure): a request to upgrade or to prepare the workspace covers an outdated plugin, announced first, and nothing else starts an upgrade. Keep the client configuration, permissions, model choices and other plugins as they are.
 
 ## Before you start
 
@@ -20,7 +20,7 @@ Run the user's approved commands only. Keep the client configuration, permission
 
 - `claude plugin marketplace update <marketplace>`, then `claude plugin update vibe-workflow@<marketplace>`. Add `-y` when the command does not run in an interactive terminal, and `--scope <scope>` for an install outside user scope.
 
-A client that is not installed, whose command is missing or whose command fails is not upgraded. Report it that way. Do not skip it and do not retry in a different way without asking.
+A client that is not installed, whose command is missing or whose command fails is not upgraded. Report it that way and continue with the other clients and the rest of the preparation. Do not retry in a different way, such as another source or command, without asking.
 
 ## Restart and trust
 

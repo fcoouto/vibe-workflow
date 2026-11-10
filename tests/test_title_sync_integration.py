@@ -83,12 +83,12 @@ class TitleIntegrationTests(unittest.TestCase):
 
     def test_explicit_adoption_then_same_revision_does_not_rewrite(self):
         self.call('configure', topic='Thread naming')
-        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ [W1] P · Thread naming')
+        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ Thread naming')
         self.call()
         self.assertEqual(self.native.writes, 1)
         self.task.update(state='REVIEW', user_attention=True, revision=self.task['revision']+1)
         self.call()
-        self.assertIn(' REVIEW · [', self.native.title)
+        self.assertIn(' REVIEW · ', self.native.title)
 
     def test_unchanged_sync_reads_saved_status_without_revalidating_or_native_transport(self):
         self.call('configure', topic='Thread naming')
@@ -97,36 +97,24 @@ class TitleIntegrationTests(unittest.TestCase):
             self.call()
         self.assertFalse(task_read.call_args.kwargs['revalidate'])
 
-    def test_oversized_member_cannot_create_unreadable_presentation(self):
-        before = self.native.title
-        with self.assertRaises(ValueError):
-            self.call('configure', topic='Title', parent_session_id='parent', member='C' + '1' * 5000)
-        self.assertEqual(self.native.title, before)
-        self.assertEqual(self.native.writes, 0)
-        self.assertFalse(title_sync._path(self.scope, 'codex', 'session').exists())
-
-    def test_child_role_survives_status_transitions_and_resume(self):
-        self.task['state'] = 'TRIAGE'
-        self.call('configure', topic='Title', parent_session_id='parent', member='C')
-        for status in ('WORKING', 'REVIEW', 'WAITING', 'PAUSED', 'DONE', 'CANCELLED'):
-            attention = status in ('REVIEW', 'WAITING')
-            self.task.update(state=status, user_attention=attention, revision=self.task['revision'] + 1)
-            self.call()
-            label = f'{status} · ' if attention else ''
-            self.assertEqual(self.native.title.split(' ', 1)[1], f'{label}[W1] C · Title')
-            self.assertEqual(self.call('status')['presentation']['member'], 'C')
-        self.assertFalse(self.call('resume')['paused'])
-
-    def test_child_role_rejects_self_root_and_numbered_members(self):
-        for root, member in (('session', 'C'), ('parent', 'P'), ('parent', 'C1'),
-                             ('parent', 'C2'), ('parent', 'C0')):
-            with self.subTest(root=root, member=member), self.assertRaises(ValueError):
-                self.call('configure', topic='Title', parent_session_id=root, member=member)
-            self.assertEqual(self.native.title, 'Original title')
+    def test_configure_rejects_member_and_parent(self):
+        for extra in (dict(member='C'), dict(parent_session_id='parent')):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                self.call('configure', topic='Title', **extra)
             self.assertEqual(self.native.writes, 0)
             self.assertFalse(title_sync._path(self.scope, 'codex', 'session').exists())
-        self.call('configure', topic='Title', parent_session_id='parent', member='C')
-        self.assertEqual(self.call('status')['presentation']['member'], 'C')
+
+    def test_record_in_another_shape_is_unmanaged(self):
+        import json
+        self.call('configure', topic='Thread naming')
+        path = title_sync._path(self.scope, 'codex', 'session')
+        path.write_text(json.dumps(json.loads(path.read_text()) | dict(family='W1', member='C')))
+        before = self.native.title
+        self.task.update(state='REVIEW', user_attention=True, revision=self.task['revision'] + 1)
+        self.assertEqual(self.call(), dict(ok=True, managed=False))
+        self.assertFalse(title_sync.repair(self.scope, 'codex', 'session')['managed'])
+        self.assertEqual(self.native.title, before)
+        self.assertEqual(self.native.writes, 1)
 
     def test_oversized_manual_title_is_preserved_and_pauses_once(self):
         self.call('configure', topic='Title')
@@ -149,31 +137,27 @@ class TitleIntegrationTests(unittest.TestCase):
         self.assertEqual(self.native.writes, 0)
         self.assertFalse(title_sync._path(self.scope, 'codex', 'session').exists())
 
-    def test_corrupt_family_register_preserves_bytes_and_uses_control_error_boundary(self):
+    def test_configure_never_touches_the_register(self):
         store = self.home / '.vibe-workflow' / 'workstreams-families.sqlite3'
         store.parent.mkdir(mode=0o700)
         store.write_bytes(b'corrupt family register')
-        before = self.native.title
-        with self.assertRaises(OSError):
-            self.call('configure', topic='Title')
+        self.call('configure', topic='Thread naming')
+        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ Thread naming')
         self.assertEqual(store.read_bytes(), b'corrupt family register')
-        self.assertEqual(self.native.title, before)
-        self.assertEqual(self.native.writes, 0)
-        self.assertFalse(title_sync._path(self.scope, 'codex', 'session').exists())
 
     def test_topic_survives_next_status_update_and_persistence(self):
         self.call('configure', topic='Thread naming')
         self.native.title = self.native.title.replace('Thread naming','Better naming')
         self.task.update(state='REVIEW', user_attention=True, revision=self.task['revision']+1)
         self.call()
-        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ REVIEW · [W1] P · Better naming')
+        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ REVIEW · Better naming')
         self.task.update(state='WORKING', user_attention=False, revision=self.task['revision']+1)
         self.call()
-        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ [W1] P · Better naming')
+        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ Better naming')
 
     def test_manual_done_does_not_complete_task_and_notice_only_once(self):
         self.call('configure', topic='Thread naming')
-        manual = self.native.title.replace(' [', ' DONE · [')
+        manual = self.native.title.replace(' Thread naming', ' DONE · Thread naming')
         self.native.title = manual
         self.task.update(revision=self.task['revision']+1)
         self.assertIsNotNone(self.call()['notification'])
@@ -182,10 +166,10 @@ class TitleIntegrationTests(unittest.TestCase):
         self.assertEqual(self.native.title, manual)
         self.assertEqual(self.task['state'], 'WORKING')
         self.call('resume')
-        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ [W1] P · Thread naming')
+        self.assertEqual(self.native.title, '\uFFFB▰▱▱▱▱ Thread naming')
 
     def test_failed_acknowledgment_repairs_without_duplicate_write(self):
-        self.call('configure', topic='Thread naming', parent_session_id='parent', member='C')
+        self.call('configure', topic='Thread naming')
         self.task.update(state='REVIEW', revision=self.task['revision']+1)
         self.native.lose_ack = True
         with self.assertRaises(OSError): self.call()
@@ -193,8 +177,7 @@ class TitleIntegrationTests(unittest.TestCase):
         self.assertEqual(self.native.writes, 2)
         presentation = self.call('status')['presentation']
         self.assertFalse(presentation['paused'])
-        self.assertEqual(presentation['member'], 'C')
-        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ [W1] C · Thread naming')
+        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ Thread naming')
 
     def test_stale_revision_cannot_adopt_or_rename(self):
         with self.assertRaises(ValueError):
@@ -229,7 +212,7 @@ class TitleIntegrationTests(unittest.TestCase):
         self.call('configure', topic='Thread naming')
         self.task.update(state='REVIEW', user_attention=True, revision=self.task['revision']+1)
         output = self.hook('PostToolUse', HookResult('PostToolUse', 'context', 'Existing context'))
-        self.assertIn(' REVIEW · [', self.native.title)
+        self.assertIn(' REVIEW · ', self.native.title)
         self.assertEqual(output['hookSpecificOutput']['additionalContext'], 'Existing context')
 
     def test_stop_hook_preserves_continuation_and_reports_manual_override_once(self):
@@ -287,7 +270,7 @@ class TitleIntegrationTests(unittest.TestCase):
         self.task.update(state='WAITING', user_attention=True)
         self.call('configure', topic='Thread naming')
         applied = self.native.title
-        manual = applied.replace(' WAITING · [', ' [').replace('Thread naming', 'Owner topic')
+        manual = applied.replace(' WAITING · ', ' ').replace('Thread naming', 'Owner topic')
         self.task.update(user_attention=False, revision=self.task['revision'] + 1)
         with patch.object(self.native, 'read', side_effect=[applied, manual]):
             self.assertTrue(self.call()['pending'])
@@ -349,32 +332,9 @@ class BoundTaskTitleTests(unittest.TestCase):
 
     def test_workflow_topic_rebind_respects_ownership(self):
         self.configure(workflow_topic='Old objective')
-        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ [W1] P · New objective')
+        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ New objective')
 
-    def test_child_role_preserves_binding_through_resume_and_task_replacement(self):
-        self.configure(workflow_topic='Owner task', parent_session_id='root', member='C')
-        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ [W1] C · Owner task')
-        task = self.fixture.status()['task']
-        request = {key: task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')} | dict(
-            expected_revision=task['revision'], reference='user:resume')
-        for change in (dict(member='P'), dict(parent_session_id='another-root')):
-            self.command(['task', 'title', 'resume'], request | change, expected_code=1)
-        self.command(['task', 'title', 'resume'], request)
-        report = self.command(['task', 'title', 'status'], dict(client='codex', session_id='session'))
-        self.assertEqual((report['presentation']['family'], report['presentation']['member']), ('W1', 'C'))
-
-        self.start_new_objective()
-        task = self.fixture.status()['task']
-        replacement = {key: task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')} | dict(
-            expected_revision=task['revision'], reference='user:replace', workflow_topic='New owner task')
-        for change in (dict(member='P'), dict(parent_session_id='another-root')):
-            self.command(['task', 'title', 'configure'], replacement | change, expected_code=1)
-        self.configure(workflow_topic='New owner task')
-        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ [W1] C · New owner task')
-        report = self.command(['task', 'title', 'status'], dict(client='codex', session_id='session'))
-        self.assertEqual((report['presentation']['family'], report['presentation']['member']), ('W1', 'C'))
-
-    def test_distinct_child_sessions_share_role_without_sharing_records_or_writes(self):
+    def test_distinct_sessions_keep_separate_records_and_writes(self):
         contexts = {session: NativeFixture() for session in ('session', 'owner', 'worker')}
 
         class SessionTitles(NativeFixture):
@@ -383,19 +343,17 @@ class BoundTaskTitleTests(unittest.TestCase):
 
         self.native = SessionTitles()
         self.configure(topic='Root')
-        self.assertEqual(contexts['session'].title, '\uFFFB▱▱▱▱▱ [W1] P · Root')
+        self.assertEqual(contexts['session'].title, '\uFFFB▱▱▱▱▱ Root')
         tasks = {}
         for session, topic in (('owner', 'Owner'), ('worker', 'Nested worker')):
             task = self.fixture.start(session_id=session, task_id='task-' + session)['task']
             tasks[session] = task
             self.command(['task', 'title', 'configure'],
                 {key: task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')} |
-                dict(expected_revision=task['revision'], reference='user:adopt', topic=topic,
-                     parent_session_id='session', member='C'))
-            self.assertEqual(contexts[session].title, f'\uFFFB▱▱▱▱▱ [W1] C · {topic}')
+                dict(expected_revision=task['revision'], reference='user:adopt', topic=topic))
+            self.assertEqual(contexts[session].title, f'\uFFFB▱▱▱▱▱ {topic}')
             report = self.command(['task', 'title', 'status'], dict(client='codex', session_id=session))
             self.assertEqual(report['presentation']['identity']['session_id'], session)
-            self.assertEqual(report['presentation']['member'], 'C')
         owner_path = title_sync._path(self.fixture.scope, 'codex', 'owner')
         worker_path = title_sync._path(self.fixture.scope, 'codex', 'worker')
         self.assertNotEqual(owner_path, worker_path)
@@ -404,14 +362,14 @@ class BoundTaskTitleTests(unittest.TestCase):
         self.command(['task', 'update'],
             {key: task[key] for key in ('client', 'session_id', 'task_id', 'scope_ref')} |
             dict(expected_revision=task['revision'], state='WORKING', reason='Owner work', reference='user:work'))
-        self.assertEqual(contexts['owner'].title, '\uFFFB▰▱▱▱▱ [W1] C · Owner')
+        self.assertEqual(contexts['owner'].title, '\uFFFB▰▱▱▱▱ Owner')
         self.assertEqual(contexts['owner'].written_sessions, ['owner', 'owner'])
         self.assertEqual(contexts['worker'].written_sessions, ['worker'])
-        self.assertEqual(contexts['worker'].title, '\uFFFB▱▱▱▱▱ [W1] C · Nested worker')
+        self.assertEqual(contexts['worker'].title, '\uFFFB▱▱▱▱▱ Nested worker')
         self.assertEqual(worker_path.read_bytes(), worker_before)
     def test_workflow_topic_rebind_preserves_explicit_topic(self):
         self.configure(topic='User wording')
-        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ [W1] P · User wording')
+        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ User wording')
 
     def test_workflow_topic_rebind_preserves_legacy_topic(self):
         import json
@@ -420,18 +378,18 @@ class BoundTaskTitleTests(unittest.TestCase):
         saved = json.loads(path.read_text())
         del saved['topic_workflow_owned']
         path.write_text(json.dumps(saved))
-        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ [W1] P · Old objective')
+        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ Old objective')
 
     def test_workflow_topic_rebind_preserves_previously_reconciled_edit(self):
         self.configure(workflow_topic='Old objective')
         self.native.title = self.native.title.replace('Old objective', 'My research')
         self.command(['task', 'title', 'sync'], dict(client='codex', session_id='session'))
-        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ [W1] P · My research')
+        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ My research')
 
     def test_workflow_topic_rebind_reconciles_edit_before_choosing_topic(self):
         self.configure(workflow_topic='Old objective')
         self.native.title = self.native.title.replace('Old objective', 'My research')
-        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ [W1] P · My research')
+        self.assert_topic_rebind('\uFFFB▱▱▱▱▱ My research')
 
     def test_workflow_topic_rebind_preserves_paused_title(self):
         self.configure(workflow_topic='Old objective')
@@ -453,9 +411,9 @@ class BoundTaskTitleTests(unittest.TestCase):
         result = self.command(['task', 'title', 'configure'], request, expected_code=1)
         self.assertFalse(result['ok'])
         status = self.command(['task', 'title', 'status'], identity)
-        self.assertEqual(status['presentation']['pending'], '\uFFFB▱▱▱▱▱ [W1] P · New objective')
+        self.assertEqual(status['presentation']['pending'], '\uFFFB▱▱▱▱▱ New objective')
         self.command(['task', 'title', 'sync'], identity)
-        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ [W1] P · New objective')
+        self.assertEqual(self.native.title, '\uFFFB▱▱▱▱▱ New objective')
         self.assertEqual(self.native.writes, before + 1)
         self.assertIsNone(self.command(['task', 'title', 'status'], identity)['presentation']['pending'])
 
@@ -547,7 +505,7 @@ class BoundTaskTitleTests(unittest.TestCase):
         old = self.fixture.status()['task']
         self.fixture.start(task_id='next-task', replaces=dict(task_id=old['task_id'], expected_revision=old['revision']))
         self.configure()
-        self.assertTrue(self.native.title.startswith('\uFFFB▱▱▱▱▱ [W1] P · '))
+        self.assertTrue(self.native.title.startswith('\uFFFB▱▱▱▱▱ '))
         histories = list(self.fixture.scope.runtime.state_dir.glob('title-history-*.json'))
         self.assertEqual(len(histories), 1)
 
@@ -588,7 +546,7 @@ class CompletedTaskTitleTests(unittest.TestCase):
         native_config = fixture.request(reference='user:adopt', workflow_topic='Completed task')
         with patch.object(Path, 'home', return_value=fixture.root):
             title_sync.operate(fixture.scope, 'configure', native_config, transport=lambda: native)
-        self.assertEqual(native.title, '\uFFFB▰▰▰▰▰ [W1] P · Completed task')
+        self.assertEqual(native.title, '\uFFFB▰▰▰▰▰ Completed task')
         milestones = accepted + [dict(id='next-data', weight=1, accepted=False, reference='user:continue')]
         request = fixture.request(state='WORKING', reason='Check another dataset',
                                   reference='user:continue', milestones=milestones)
@@ -603,7 +561,7 @@ class CompletedTaskTitleTests(unittest.TestCase):
         reopened = json.loads(output.getvalue())['task']
         self.assertEqual(reopened['task_id'], done['task_id'])
         self.assertEqual(reopened['milestones'], milestones)
-        self.assertEqual(native.title, '\uFFFB▰▰▰▰▱ [W1] P · Completed task')
+        self.assertEqual(native.title, '\uFFFB▰▰▰▰▱ Completed task')
 
     def test_explicit_refresh_revalidates_done_before_title_fast_path(self):
         from tests import test_evidence
@@ -622,10 +580,10 @@ class CompletedTaskTitleTests(unittest.TestCase):
             expected_revision=task['revision'], reference='user:adopt', topic='Completed task')
         with patch.object(Path, 'home', return_value=fixture.root):
             title_sync.operate(fixture.scope, 'configure', request, transport=lambda: native)
-        self.assertEqual(native.title, '\uFFFB▰▰▰▰▰ [W1] P · Completed task')
+        self.assertEqual(native.title, '\uFFFB▰▰▰▰▰ Completed task')
         (fixture.repo / 'app.py').write_text('print("Changed after completion")\n')
         title_sync.operate(fixture.scope, 'sync', dict(client='codex',session_id='parent'), transport=lambda: native, force=True)
-        self.assertEqual(native.title, '\uFFFB▱▱▱▱▱ [W1] P · Completed task')
+        self.assertEqual(native.title, '\uFFFB▱▱▱▱▱ Completed task')
 
     def test_completion_verification_cannot_resolve_wait_states(self):
         from tests import test_evidence

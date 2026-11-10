@@ -1,4 +1,5 @@
 """Behavioral boundaries: replay, cache lifecycle, attribution and private storage."""
+import copy
 import importlib.util
 import json
 import os
@@ -16,7 +17,7 @@ PROFILE = dict(family='coding', language='Python', framework=None, difficulty='s
 METADATA = dict(models=[dict(id='model/v1', context_length=10000, max_output_tokens=1000)], endpoints=[dict(model='model/v1', provider='p', context_length=9000, max_output_tokens=1000, modalities=['text'], supported_parameters=['reasoning'], pricing={'output': '0.01'}, health=None)], benchmarks=[dict(model='model/v1', coding=None, native_reference='native')], task_usage=[], coverage={'complete': True, 'source': 'fixture'})
 
 
-class ProposalTests(unittest.TestCase):
+class ProposalCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if SCRIPT.exists():
@@ -59,6 +60,32 @@ class ProposalTests(unittest.TestCase):
             class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
             integration_available=True))
 
+    def publish(self):
+        token = self.call('claim')['refresh_token']
+        return self.call('publish', dict(refresh_token=token, metadata=METADATA))
+
+    def bind_request(self, request):
+        from runtime import external_delegation as external
+        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
+            service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
+            effort=request['effort'], class_name='investigation')
+        packet = external.prepare(self.repo, consent, [dict(kind='text', text='Source-free fixture objective', sources=[])])
+        return dict(request, external=dict(packet['binding'], automatic=True, local_preferred=False,
+            class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
+            integration_available=True))
+
+    def begin_request(self, task='task-1'):
+        return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
+                    snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
+                    output_tokens=500, timeout_seconds=60,
+                    visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
+                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
+
+    def cli(self, action, request):
+        return subprocess.run(fixture_command(self, SCRIPT, action, '--store', self.store, '--cwd', self.repo), input=json.dumps(request), text=True, capture_output=True)
+
+
+class ProposalTests(ProposalCase):
     def test_enabled_proposal_without_approval_ref_dispatches_once(self):
         request = self.scoped_request()
         del request['approval_ref']
@@ -253,27 +280,6 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         finally:
             if child.poll() is None: child.kill(); child.wait()
             for stream in (child.stdin, child.stdout, child.stderr): stream.close()
-
-    def publish(self):
-        token = self.call('claim')['refresh_token']
-        return self.call('publish', dict(refresh_token=token, metadata=METADATA))
-
-    def bind_request(self, request):
-        from runtime import external_delegation as external
-        consent = external.effective_permission(self.settings['external_permission'], self.settings['activation'],
-            service='openrouter', mode='proposal', model=request['model'], provider=request['provider'],
-            effort=request['effort'], class_name='investigation')
-        packet = external.prepare(self.repo, consent, [dict(kind='text', text='Source-free fixture objective', sources=[])])
-        return dict(request, external=dict(packet['binding'], automatic=True, local_preferred=False,
-            class_name='investigation', coordinator='native-coordinator', reviewer='native-reviewer',
-            integration_available=True))
-
-    def begin_request(self, task='task-1'):
-        return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
-                    snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
-                    output_tokens=500, timeout_seconds=60,
-                    visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
-                    requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
 
     def test_begin_keeps_valid_roles_and_ignores_missing_or_invalid_metadata(self):
         self.publish()
@@ -625,9 +631,6 @@ with settings.admission(Path(sys.argv[2]), 'proposals', store=Path(sys.argv[3]))
         for value in ('x' * (1024 * 1024 + 1), float('nan'), object()):
             with self.assertRaises(ValueError):
                 self.call('status', {'invalid': value})
-
-    def cli(self, action, request):
-        return subprocess.run(fixture_command(self, SCRIPT, action, '--store', self.store, '--cwd', self.repo), input=json.dumps(request), text=True, capture_output=True)
 
     def test_cli_json_errors_and_real_process_contention(self):
         bad = self.cli('unknown', {})

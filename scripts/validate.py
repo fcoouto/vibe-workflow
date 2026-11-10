@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +29,7 @@ OVERSIZED_PYTHON = {
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
-    "runtime/usage_budget.py": 1616,
+    "runtime/usage_budget.py": 1553,
 }
 
 
@@ -236,12 +237,69 @@ def validate(root=ROOT):
             "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
 
 
-if __name__ == "__main__":
+def release_pathspecs():
+    """The paths a release ships: everything tracked except what scripts/package.py leaves out."""
+    from runtime.package_manifest import EXCLUDED
+    return [".", *[f":(exclude){item.rstrip('/')}" for item in EXCLUDED]]
+
+
+def _tracked_changes(root, *revisions):
+    """Shipped paths that differ between the revisions (the working tree against HEAD for none or one)."""
+    from runtime.package_manifest import PackageManifestError, _git
+    try:
+        output = _git(root, "diff", "--name-only", "-z", *revisions, "--", *release_pathspecs(), deadline=time.monotonic() + 60)
+    except PackageManifestError:
+        raise ValueError("Release check: cannot compare shipped content with Git; run it inside the repository") from None
+    return [name for name in output.decode("utf-8", "replace").split("\0") if name]
+
+
+def _listed(names):
+    return ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+
+
+def release_check(root=ROOT):
+    """Fail when shipped paths have uncommitted changes, or the package version is already a release tag and
+    HEAD's shipped content differs from that tag.
+
+    A version without a tag is unreleased and passes. The comparison is HEAD against the tag, which is what
+    `scripts/package.py --release` ships, limited to the paths it exports, so development-only changes need no
+    version bump."""
+    from runtime.package_manifest import PackageManifestError, _git
+    root = Path(root).resolve(strict=True)
+    version = read_json(root / ".codex-plugin/plugin.json")["version"]
+    uncommitted = _tracked_changes(root, "HEAD")
+    if uncommitted:
+        raise ValueError(f"Shipped paths have uncommitted changes ({_listed(uncommitted)}); commit them first, "
+                         "because a release ships the committed tree")
+    try:
+        tags = _git(root, "tag", "--list", version, deadline=time.monotonic() + 60).decode("utf-8").split()
+    except (PackageManifestError, UnicodeDecodeError):
+        raise ValueError("Release check: cannot read this checkout's Git tags; run it inside the repository") from None
+    if version not in tags:
+        return {"release_tag": "absent", "version": version}
+    changed = _tracked_changes(root, f"refs/tags/{version}", "HEAD")
+    if changed:
+        raise ValueError(f"Version {version} is already released as a tag, but shipped content changed since "
+                         f"({_listed(changed)}); raise the version in both plugin manifests before releasing")
+    return {"release_tag": "unchanged", "version": version}
+
+
+def main(arguments):
+    if arguments not in ([], ["--release"]):
+        print("Usage: validate.py [--release]", file=sys.stderr)
+        return 2
     try:
         report = validate()
+        if arguments:
+            report["release_check"] = release_check()
         for warning in report["warnings"]:
             print(f"Validation warning: {warning}", file=sys.stderr)
         print(json.dumps(report, indent=2))
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(f"Validation failed: {error}", file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

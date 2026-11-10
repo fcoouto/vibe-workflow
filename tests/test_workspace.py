@@ -17,6 +17,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from runtime import hook_delivery as hd
 from runtime import package_versions as pv
 from runtime import workspace as ws
 from runtime import workspace_observe as ob
@@ -366,7 +367,64 @@ class StatusTests(WorldTestCase):
         self.assertEqual([entry["client"] for entry in report["clients"]], ["codex", "claude-code", "opencode"])
         self.assertEqual(report["clients"][0], dict(client="codex", installed=True, cli_version="0.167.0", config_dir=True, session=True))
 
-    def test_hook_trust_is_never_ready(self):
+    def hooks(self, client="codex", **extra):
+        return self.cell(self.world.status(**extra), "vibe-workflow-hooks", client)
+
+    def deliver(self, client):
+        self.assertTrue(hd.record_delivery(PACKAGE, client, self.world.environ()))
+
+    def test_hooks_are_ready_only_with_a_matching_delivery_note(self):
+        for client in ("codex", "claude-code"):
+            with self.subTest(client=client):
+                self.assertEqual(self.hooks(client), dict(state="unknown", reason="start a new session"))
+                self.deliver(client)
+                value = self.hooks(client)
+                self.assertEqual(value["state"], "ready")
+                self.assertRegex(value["reason"], r"^hooks ran \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        report = self.world.status()
+        self.assertEqual(self.world.states(report)["vibe-workflow-hooks"], dict(codex="ready", **{"claude-code": "ready"}, opencode="not-supported"))
+
+    def test_a_note_for_other_hooks_or_another_version_leaves_hooks_unknown(self):
+        self.deliver("codex")
+        path = hd.note_path("codex", self.world.environ())
+        note = json.loads(path.read_text())
+        for field, value in (("version", "0.0.1"), ("hook_sha256", "0" * 64), ("client", "claude-code")):
+            path.write_text(json.dumps(dict(note, **{field: value})))
+            with self.subTest(field=field):
+                self.assertEqual(self.hooks()["state"], "unknown")
+        path.write_text("{")
+        self.assertEqual(self.hooks()["state"], "unknown")
+
+    def test_missing_approvals_stay_needs_user_even_with_a_note_and_disabled_plugin_is_missing(self):
+        self.deliver("codex")
+        self.world.trust(skip=("stop",))
+        self.assertEqual(self.hooks()["state"], "needs-user")
+        self.world.trust()
+        self.assertEqual(self.hooks()["state"], "ready")
+        self.deliver("claude-code")
+        self.world.cli("claude", "plugin list --json", claude_plugins(vibe=[claude_entry("vibe-workflow", "vibe-workflow-local", VERSION, enabled=False)]))
+        self.assertEqual(self.hooks("claude-code")["state"], "missing")
+
+    def test_an_old_or_future_note_leaves_hooks_unknown(self):
+        self.deliver("codex")
+        path = hd.note_path("codex", self.world.environ())
+        note = json.loads(path.read_text())
+        for days, expected in ((6, "ready"), (8, "unknown"), (-1, "unknown")):
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days * 86400))
+            path.write_text(json.dumps(dict(note, delivered_at=stamp)))
+            with self.subTest(days=days):
+                value = self.hooks()
+                self.assertEqual(value["state"], expected)
+                if expected == "unknown":
+                    self.assertEqual(value["reason"], "start a new session")
+
+    def test_checking_hooks_writes_nothing(self):
+        self.deliver("codex")
+        before = self.world.tree()
+        self.hooks()
+        self.assertEqual(before, self.world.tree())
+
+    def test_hook_state_without_a_note_is_never_ready(self):
         report = self.world.status()
         for key, value in next(item for item in report["items"] if item["id"] == "vibe-workflow-hooks")["cells"].items():
             self.assertNotEqual(value["state"], "ready", key)

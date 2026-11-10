@@ -4,6 +4,8 @@ For an explicitly selected bounded test, use the reviewed, digest-pinned candida
 uses a new temporary canary-only configuration and requires an unused routing
 scope and organization budget; its exact approval below is that temporary
 configuration's activation. Keep ordinary routing OFF during preparation.
+A Smart Routing managed project refuses this canary; see
+[managed projects](procedure.md#managed-projects).
 
 1. Freeze a `usage_canary_host.Plan` using the actual Codex thread, host,
    checkout, candidate digest, native account, independent reviewer, selected

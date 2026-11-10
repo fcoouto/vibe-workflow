@@ -72,7 +72,8 @@ class Accounting(DispatchBase):
         super().setUp()
         self.reader = Reader(Path(self.temp.name) / 'workflow.json')
         self.service.close()
-        self.service = command.Service(self.settings, self.ledger, workflow=self.reader)
+        # Operator ops run only in a one-shot command (C3-0a review S1); only `main()` sets the flag in production.
+        self.service = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
         self.call(dict(v=1, op='set', expected_revision=0,
                        change=dict(api_usage_enabled=True, caps=dict(total=16, per_account=16))))
         budget.initialize(self.ledger)
@@ -81,6 +82,16 @@ class Accounting(DispatchBase):
             ledger.enable_organization('personal', self.POLICY, 0)
             ledger.observe('personal', self.BALANCE, now(), issued=self.BALANCE)
 
+    def call_bound(self, request):
+        """A workflow-bound `prepare` needs the project pin (`project_required`); `/checkout` is `where()`'s cwd.
+        `self.service` stays unpinned, because a pinned service refuses `settle` without `workflow`."""
+        service = command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout',
+                                  test_inputs=self.service.test_inputs)
+        try:
+            return service.handle(json.dumps(request).encode())
+        finally:
+            service.close()
+
     def admit(self, attempt, demand=5 * M, root=None, session='session-1'):
         obs = api_observations()
         obs['routes'][-1].update(demand={'credit': demand}, account='acct-' + attempt)
@@ -88,6 +99,7 @@ class Accounting(DispatchBase):
         request = prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
         if root is not None:
             request.update(workflow=bound(root, session))
+            return self.call_bound(request)
         return self.call(request)
 
     def admit_sub(self, attempt, root=None, at=None):
@@ -95,7 +107,7 @@ class Accounting(DispatchBase):
                           constraints=dict(allowed_strategy_ids=['s-sub']))
         if root is not None:
             request.update(workflow=bound(root))
-        response = self.call(request)
+        response = self.call_bound(request) if root is not None else self.call(request)
         self.assertEqual(response['state'], 'admitted', response)
         return response
 
