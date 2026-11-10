@@ -1,6 +1,6 @@
 # Smart Routing C.3 — caller wiring and selector retirement design
 
-- **Version:** 1.5 draft (round-5 should-fixes; see [revision history](#8-revision-history))
+- **Version:** 1.5.1 draft (pre-merge text fixes; see [revision history](#8-revision-history))
 - **Date:** 2026-11-10
 - **Status:** Design only. No model call, OpenCode server or live run was used. Since v1.4, the risky steps are validated by running throwaway prototypes in a scratch worktree ([Appendix B.0](#b0-prototype-runs-validated-by-running)); no prototype code is part of this PR.
 - **Line numbers:** all at `origin/main` `bd5cde6` ([Appendix A](#appendix-a--inventory-at-the-pinned-base)). Open user decisions are in [section 7](#7-open-decisions).
@@ -120,8 +120,14 @@ preflight(status) ─► [delegation reserve → attempt_id]
 | Subscription windows | Rate-limit observations the launcher stores after settlement (`opencode_accounting.rate_limit_observation`), in a private file next to the routing settings, with their observation time. Missing telemetry gives `fresh: false`, and the route is reported enabled-but-blocked (P0.2 is still open for ChatGPT). |
 | Dollar organizations | The ledger's organizations and balances (existing `observe` paths). |
 | Credentials | Binding readiness metadata from `usage_credentials` and `openrouter_settings` (state, scope, reference). The secret is never resolved. |
-| OpenRouter | `openrouter_settings.status(cwd)` (304) only, **never** `admission`. `integration_enabled` is true when the report is `enabled` and its `routes` include the host's route (`proposals` or `workers`); `local_configuration` must be present. The report's `revision` is returned as `seen.openrouter_revision` ([below](#openrouter-lock-and-revision)). |
+| OpenRouter | `openrouter_settings.status(cwd)` (304) only, **never** `admission`. `integration_enabled` is true when the report is `enabled` and its `routes` include the host's route (`proposals` or `workers`); `local_configuration` must be `'ready'` (what `admission` requires). The report's `revision` is returned as `seen.openrouter_revision` ([return shape](#collector-return-shape)). If `status` fails with `openrouter_operation_busy`, the gateway route is left out with that reason ([lock](#openrouter-lock-and-revision)). |
 | Entitlement | The entitlement record ([3.4](#34-listed-is-not-entitled)). |
+
+<a id="collector-return-shape"></a>**Collector return shape (C3-1 owns it; defined once, here).** `collect` returns `{observations, seen}`:
+- `observations` is the snapshot `routing.admit` takes (`now`, `routes`, `pools`), plus a fixed reason for every route left out;
+- `seen = {openrouter_revision: <int or null>}` holds the revisions the collector read: revisions only, never settings content or secrets. `null` means it could not read one.
+
+C3-1 defines this shape. C3-0b, which runs in parallel, only passes `seen` through: its service echoes it unchanged, as an opaque mapping, in every `prepare` response (`admitted` and `pending`) for a managed project. C3-4a and C3-4b read `seen.openrouter_revision` from that response.
 
 **Service factory and workflow resolver (C3-0b; defined once, here).** In-process managed launches build their service only with `scripts.routing.managed_service(checkout, scope=None)`, which is `Service(default_settings(), default_ledger(), project=<realpath of checkout>, workflow=routing_gates.D6Workflow(resolve=…, project=…))`:
 - A caller that already holds the canonical delegation scope (C3-2) passes `scope=`, and the reader resolves every locator to that scope. This is the same injection the gate tests use (`D6Workflow(resolve=…)`). The pin is still compared with `scope.repository_root`.
@@ -141,12 +147,12 @@ Each manifest route carries its own `demand`, which `routing._incomplete` (377) 
 Ledger organizations and balances are not part of the source; the collector always reads them from the ledger it is given. `funding_verified` is a ledger check only: it is true only when the route's organization is enabled in that ledger and has a balance observation no older than 900 s.
 
 <a id="openrouter-lock-and-revision"></a>**OpenRouter lock and revision.** A round-5 throwaway test established how the lock behaves:
-- `openrouter_settings.admission` (366) takes a non-waiting lock.
-- While it is held, `status` fails with `openrouter_operation_busy`, and a second `admission` fails with `openrouter_storage_or_scope_unavailable`.
+- `openrouter_settings.admission` (366) takes a non-waiting exclusive lock.
+- `status` is **not** lock-free. It takes a brief non-waiting shared lock (286), so while another handle holds `admission`, `status` fails with `openrouter_operation_busy`, and a second `admission` fails with `openrouter_storage_or_scope_unavailable`.
 - Before the lock, `status` works, and `admission(..., revision=<status.revision>)` succeeds. A changed revision fails with `openrouter_preparation_stale`.
 
 So:
-- **The collector** reads `status` and never takes the lock. It returns `seen = {openrouter_revision: <status.revision>}` beside the observations, and C3-0b's service echoes `seen` in its `prepare` response. `seen` holds revisions only, never settings content.
+- **The collector** never takes the `admission` lock; it calls `status`. If `status` fails with `openrouter_operation_busy`, the collector leaves the gateway route out with that fixed reason, sets `seen.openrouter_revision` to `null` and never retries in a loop; the assignment is then `pending`. Otherwise it returns the report's revision in `seen` ([return shape](#collector-return-shape)).
 - **The OpenRouter hosts** (C3-4a, C3-4b) run routing `prepare` **before** `settings.admission` (`scripts/openrouter_proposals.py:324`, `scripts/openrouter_workers.py:126`). They then call `settings.admission(..., revision=seen.openrouter_revision)`, so a settings change in between fails closed with `openrouter_preparation_stale`. That leaves an admitted hold, which the host closes with `record not_dispatched`.
 
 C3-1 also defines two helpers that every wiring slice and the test helper use, so a test route always matches what a slice requests:
@@ -436,12 +442,13 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
       - Unchanged: 462 and 497 (`dispatch` only), 893 (`status` only) and the already pinned services.
     - `tests/fixture_routing_accounting.py`: `admit(..., root=…)` (86–87) and `admit_sub(..., root=…)` (95–98) send their workflow-bound `prepare` through a new `call_bound`. It uses a short-lived `command.Service(self.settings, self.ledger, workflow=self.reader, project='/checkout', test_inputs=self.service.test_inputs)` (`/checkout` is the `cwd` of `where()`). `self.service` (75) stays unpinned, because `settle` without `workflow` is `project_required` on a pinned service (`scripts/routing.py` 448). This one change covers `test_routing_accounting.py` (199–243), `test_routing_accounting_roots.py`, `test_routing_accounting_blocks.py` (288) and `test_routing_subscription_reconcile.py` (117, 177); those four files are unchanged.
     - `tests/test_smart_routing_features.py`: delete `@NEEDS_C3('C3-0b')` (495).
-  - **The observation refusal and collector call** ([3.3](#33-observation-collector)).
+  - **The observation refusal and collector call** ([3.3](#33-observation-collector)), echoing the collector's `seen` unchanged as an opaque mapping in every managed-project `prepare` response ([return shape](#collector-return-shape); C3-1 owns the shape).
   - **`managed_projects`** as a one-shot setting with the activation gate ([4.2](#42-activation-gate)).
   - **The shared factory** `scripts.routing.managed_service(checkout, scope=None)` (G3; [3.3](#33-observation-collector)). It is the only way production code builds an in-process service for a managed launch. `delegation_routing` (C3-2), `openrouter_proposals` (C3-4a), `openrouter_workers` (C3-4b), `opencode_launcher` (C3-3), `usage_routing` (C3-5) and the C.2 fixture all use it. It reads `default_settings()`/`default_ledger()` at call time, so the fixture's patches take effect.
 - **Tests:**
   - an unpinned workflow `prepare` is `project_required`, and `settle` without `workflow` on an unpinned service still works;
   - a managed-project `prepare` with `observations` is `observations_not_accepted`, and without a collector `observations_unavailable`;
+  - with a stub collector returning `seen = {'openrouter_revision': 7}`, the managed-project `prepare` response (admitted and pending) carries `seen` unchanged;
   - `set managed_projects` is refused under `--serve`, and refused with `managed_path_incomplete` while any self-check is missing or failing; removal is always allowed;
   - `managed_service` pins the repository root and uses the default paths.
 - **Markers:** `test_a_workflow_bound_prepare_requires_the_project_pin`.
@@ -491,7 +498,8 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - an unknown manifest route is excluded, and a `not_entitled` route stays excluded until cleared;
   - `readiness()` reports enabled and ready separately, with no inference;
   - **(round 5)** the collector derives `integration_enabled` from the real `openrouter_settings.status` and `funding_verified` from the ledger (organization enabled, balance at most 900 s old), never from the source. With a real enabled OpenRouter settings store and a real ledger, both are true. With the setting disabled, the route missing, the organization disabled or the balance stale, the gateway route is excluded with its reason;
-  - **(round 5)** the collector never takes the OpenRouter lock. With `openrouter_settings.admission` held for the checkout in another handle, `collect` still answers. A spy also shows the collector never calls `admission`;
+  - **(round 5)** the collector never takes the `admission` lock. With `openrouter_settings.admission` held for the checkout in another handle, `collect` returns without the gateway route, with reason `openrouter_operation_busy` and `seen.openrouter_revision: null`, and without retrying. A spy shows it never calls `admission`;
+  - `collect` returns the [return shape](#collector-return-shape): with a readable OpenRouter store, `seen.openrouter_revision` equals `status()['revision']`, and `seen` contains no other content;
   - the four managed-fixture contracts, run with plain `python3 -I -B -m unittest` in a subprocess with `HOME` set to a fresh empty directory and no `test_sharded` wrapper, leave `HOME` empty ([6.4](#64-c2-marker-map-and-pr-197-amendments) A4 rule 3).
 - **Markers:** none. Replacing the sentinel body is what lets C3-2, C3-4a and C3-4b turn their markers into passes. C3-1 must keep `test_enablement_is_reported_separately_from_readiness` and the other C.2a and C.2e contracts passing.
 - **Shared core:** no. **Size:** L (about 650 lines with tests).
@@ -743,6 +751,7 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 ## 8. Revision history
 
 - **1.0** (`bd01a22`): first draft.
+- **1.5.1:** pre-merge text fixes on `af6b0a7`: `status` takes a brief shared lock and can fail with `openrouter_operation_busy`, so the collector leaves the gateway route out with that reason, without retrying (C3-1 test rewritten); one collector return shape `{observations, seen}`, owned by C3-1 and echoed opaquely by C3-0b, with a test in each; `local_configuration == 'ready'`.
 - **1.5:** round-5 should-fixes on `624d169` (nothing blocking; P1 reproduced from the spec text alone, and I11/I12 matched):
   - **OpenRouter lock.** A throwaway test showed `admission` holds a non-waiting lock in which even `status` fails. So the collector reads only `status` and returns `seen.openrouter_revision`; C3-4a and C3-4b run `prepare` before `settings.admission` and pass that revision, so a change in between fails closed with `openrouter_preparation_stale`. `funding_verified` stays a ledger check. B4 and B5 are re-ordered.
   - **Lines:** the unpinned `settle` refusal is at `scripts/routing.py` 448; the oversized-binding test is one changed line (905), reused at 909.
@@ -927,7 +936,7 @@ Throwaway patches in a scratch worktree of `origin/main` (`../vibe-workflow.work
    - a ready credential for `assignment_scope(repo)`;
    - route `demand: {'credit': 1_000_000}`.
 3. `openrouter_proposals.run('begin')` (`scripts/openrouter_proposals.py:321`). C3-4a first calls `managed_service(checkout)._prepare` **before** `settings.admission` (324), with role `researcher`, `choice = route_identity('openrouter_proposal', model, provider, effort=None → 'none') + funding: 'api'` and `job = unplanned_job(...)`.
-4. The collector reads `openrouter_settings.status(checkout)` (no lock) → `integration_enabled`, `seen.openrouter_revision`.
+4. The collector calls `openrouter_settings.status(checkout)`, which takes only a brief shared lock and never the `admission` lock → `integration_enabled`, `seen.openrouter_revision`.
 5. `routing.admit`, **once**. In `_candidate` (`runtime/routing.py:438`): `gateway` ∈ `FUNDED` (332); `_credential_reasons` (411) passes; `_funding` (354) finds the organization; result `admitted`, with `seen` echoed.
 6. `settings.admission(cwd, 'proposals', store=store, revision=seen.openrouter_revision)` and `external_delegation.check` pass as today.
 7. `_run('begin')` returns `attempt_token`.
@@ -937,7 +946,7 @@ P2 run 2 proved steps 3, 5 and 7, with the hook placed inside the lock and the f
 **B5. `test_worker_prepare_obtains_one_routing_admission` (C3-4b; 740).**
 1. Precondition: `enroll` and `configure(routes=('workers',), …)`; brief model `vendor/model`, provider `provider`, effort `low`; route `fixture_route('openrouter:vendor/model@provider', 'dollar')`.
 2. The fixture is set up as in B4 step 2. The `openrouter_worker` route with effort `low` exists, because the fixture lists every effort.
-3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`) validates the brief. Then C3-4b calls `managed_service(source_root)._prepare` **before** `settings.admission` (126), with `choice = route_identity('openrouter_worker', …, effort='low') + funding: 'api'` → collector (`status`, no lock) → `admit`, **once** → `admitted` (as in B4 step 5).
+3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`) validates the brief. Then C3-4b calls `managed_service(source_root)._prepare` **before** `settings.admission` (126), with `choice = route_identity('openrouter_worker', …, effort='low') + funding: 'api'` → collector (`status`, never the `admission` lock) → `admit`, **once** → `admitted` (as in B4 step 5).
 4. `settings.admission(source, 'workers', root=root, revision=seen.openrouter_revision)`.
 5. `prepare` writes `brief.json`.
 
