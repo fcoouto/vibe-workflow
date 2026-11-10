@@ -224,11 +224,45 @@ class ManagedRelease(ManagedDelegation):
             self.assertEqual(waiting['routing']['state'], 'pending', waiting)
             spent['value'] = False
             replay = self.api.prepare_assignment(self.scope, request)
-            self.assertEqual(replay['routing'], dict(state='blocked', reason='catalog_mismatch'))
+            self.assertEqual(replay['routing'], dict(state='blocked', reason='catalog_mismatch',
+                                                     reconcile_required=True))
             self.assertFalse(replay['launch_admitted'])
             self.assertNotIn('release', replay)  # a replay never asserts that nothing was launched
             self.assertEqual(self.hold(replay['attempt_id']), 'released')
             self.assertEqual(self.raw_assignment(replay['attempt_id'])['status'], 'prepared')
+
+    def replay_after_pending(self, **patches):
+        spent = dict(value=True)
+
+        def windows(pool, now):
+            if spent['value']:
+                return [dict(id='5h', limit=1000, used=1000, length=18000, reset_at=now + 3600, rolling=False,
+                             observed_at=now)]
+            return None
+        request = self.routed_request()
+        with self.managed(NATIVE, windows=windows):
+            self.worker_choices(self.native())
+            waiting = self.api.prepare_assignment(self.scope, request)
+            self.assertEqual(waiting['routing']['state'], 'pending', waiting)
+            spent['value'] = False
+            with mock.patch.multiple(*patches['target'], **patches['values']):
+                replay = self.api.prepare_assignment(self.scope, request)
+            return replay, self.hold(replay['attempt_id'])
+
+    def test_a_replay_refused_at_dispatch_asks_for_reconciliation(self):
+        # PR #221 review: the refusal recorded `not_dispatched`, so the coordinator reconciles rather than retries.
+        refused = mock.Mock(return_value=dict(state='blocked', reason='ledger_busy'))
+        replay, hold = self.replay_after_pending(target=(command.Service,), values=dict(_dispatch=refused))
+        self.assertEqual(replay['routing'], dict(state='blocked', reason='ledger_busy', reconcile_required=True))
+        self.assertFalse(replay['launch_admitted'])
+        self.assertEqual(hold, 'released')
+
+    def test_a_replay_whose_admission_is_blocked_is_left_to_retry(self):
+        blocked = mock.Mock(return_value=dict(state='blocked', reason='ledger_busy'))
+        replay, hold = self.replay_after_pending(target=(delegation_routing,), values=dict(admit=blocked))
+        self.assertEqual(replay['routing'], dict(state='blocked', reason='ledger_busy'))
+        self.assertFalse(replay['launch_admitted'])
+        self.assertIsNone(hold)
 
     def test_an_advisory_host_never_gets_a_dollar_route(self):
         gateway = dict(state='admitted', duplicate=False, admission=dict(

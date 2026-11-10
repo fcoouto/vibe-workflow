@@ -8,7 +8,9 @@ after delegation's own reservation commits, bound to the planned job (`workflow`
   `explicit_choice_unavailable`, never a substitute. `routed` names no model and lets routing choose.
 - A committed assignment whose routing answer is pending or blocked is not launched (`launch_admitted: false`). A
   replay of the same request re-runs `prepare` (idempotent by attempt id) and grants the one launch permit only on
-  the call that obtains the admission. A catalog or host mismatch releases it through `reconcile_assignment`.
+  the call that obtains the admission. A catalog or host mismatch releases it through `reconcile_assignment`. On a
+  replay, a refusal at the launch check or `dispatch` records `not_dispatched` and adds `reconcile_required: true`
+  to `routing`: the coordinator reconciles rather than retries. A blocked admission carries no such field.
 - `release()` records routing `not_dispatched` before it calls `reconcile_assignment`. If that reconcile fails, the
   assignment stays `prepared` with no launch permit until the coordinator reconciles it (fail closed).
 - Codex native subagents are an advisory host: `dispatch` runs at the last pre-spawn step, and its token is dropped
@@ -244,6 +246,7 @@ def prepare(scope, request, role, inner):
             reply['routing'] = dict(state='blocked', reason=reason)
             if reply['replayed']:  # an earlier call may have handed out a launch (e.g. before the project was
                 _record(service, attempt, 'not_dispatched', '%s:%s' % (reason, attempt))  # managed): no proof
+                reply['routing']['reconcile_required'] = True  # #221 review: closed here, so reconcile, not retry
             else:  # this call committed the assignment and handed out no permit: release it now
                 reply['release'] = release(scope, request, attempt, reason, service=service)
             return reply
