@@ -544,6 +544,8 @@ class ServerStartTests(unittest.TestCase):
                        'OPENCODE_SERVER_PASSWORD', *launcher.SERVER_FLAGS}
             # macOS adds __CF_USER_TEXT_ENCODING to every process; nothing else may appear
             self.assertEqual(set(seen['env']) - allowed - {'__CF_USER_TEXT_ENCODING'}, set())
+            self.assertEqual({key: seen['env'].get(key) for key in launcher.SERVER_FLAGS}, launcher.SERVER_FLAGS)
+            self.assertEqual(launcher.SERVER_FLAGS['OPENCODE_DISABLE_PROJECT_CONFIG'], '1')
             for name in ('NODE_OPTIONS', 'BUN_INSTALL', 'PYTHONPATH', 'GITHUB_TOKEN', 'OPENCODE_CONFIG'):
                 self.assertNotIn(name, seen['env'])
             self.assertEqual(seen['cwd'], str(checkout))
