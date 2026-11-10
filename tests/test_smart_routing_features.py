@@ -87,9 +87,20 @@ def tearDownModule():  # noqa: N802 - unittest's module hook
         raise AssertionError(problem)
 
 
+def fixture_route(route, billing_class):
+    """One `managed_project_fixture` route entry: a route id and its billing class (C.3 design round 3)."""
+    if billing_class not in ('included_subscription', 'dollar'):
+        raise ValueError('unknown billing class: %r' % (billing_class,))
+    return dict(route=route, billing_class=billing_class)
+
+
 @contextmanager
 def managed_project_fixture(test, checkout, routes=()):
-    """Make `checkout` a managed project with a qualified test route and fresh window telemetry."""
+    """Make `checkout` a managed project with a qualified test route and fresh window telemetry.
+
+    `routes` are `fixture_route` entries. Until C3-1 replaces the body it only raises, so it writes nothing."""
+    # C3-1's body must patch every default path (routing settings and ledger, OpenRouter, usage settings) to the
+    # test's temporary directory, so the fixture never touches real user state.
     # --- managed_project_fixture: body owned by C3-1 ---
     raise AssertionError('managed_project_fixture: needs C3-1 (collector source seam)')
     yield {}  # unreachable until C3-1 replaces this body
@@ -218,9 +229,11 @@ class NeedsC3MarkerTests(unittest.TestCase):
     def test_the_managed_project_fixture_is_an_assertion_until_c3_1(self):
         reached = []
         with self.assertRaisesRegex(AssertionError, r'managed_project_fixture: needs C3-1 \(collector source seam\)'):
-            with managed_project_fixture(self, ROOT, routes=(CHOICE,)):
+            with managed_project_fixture(self, ROOT, routes=(fixture_route('test-route', 'included_subscription'),)):
                 reached.append(True)
         self.assertEqual(reached, [])  # the contract body never runs before C3-1
+        with self.assertRaises(ValueError):
+            fixture_route('r', 'purchased_usage')
         source = Path(__file__).read_text()
         start = source.index('# --- managed_project_fixture: body owned by C3-1 ---')
         self.assertLess(start, source.index('# --- end managed_project_fixture ---'))
@@ -481,7 +494,9 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
         return admit
 
     def managed(self):
-        return managed_project_fixture(self, self.fixture.repo, routes=(self.request['selection'],))
+        selection = self.request['selection']  # the fixture's own explicit native choice: a subscription route
+        route = fixture_route('native:%s#%s' % (selection['model'], selection['effort']), 'included_subscription')
+        return managed_project_fixture(self, self.fixture.repo, routes=(route,))
 
     # C3-2 must replace the caller-supplied native `selection` with `scripts/routing.py prepare` on a managed project:
     # the native worker admission calls the routing service in-process exactly once (plan C.3 box 1; F11).
@@ -655,7 +670,7 @@ class C2cProposalThroughRouting(EnrolledOpenRouter):
                                                              modalities=['text'], parameters=[]),
                        external=bound_external(packet))
         self.begin = lambda: call('begin', request)
-        self.route = dict(model=request['model'], provider=request['provider'])
+        self.route = fixture_route('openrouter:%s@%s' % (request['model'], request['provider']), 'dollar')
 
     # C3-4a must route an approved OpenRouter proposal through `scripts/routing.py prepare` (plan C.3 box 1; F06):
     # `begin` obtains one routing admission, keeping endpoint pinning and scope as constraints.
@@ -697,7 +712,7 @@ class C2cWorkerThroughRouting(EnrolledOpenRouter):
     # obtains one routing admission and records the requested route.
     @NEEDS_C3('C3-4b')
     def test_worker_prepare_obtains_one_routing_admission(self):
-        route = dict(model=self.brief['model'], provider=self.brief['provider'])
+        route = fixture_route('openrouter:%s@%s' % (self.brief['model'], self.brief['provider']), 'dollar')
         with managed_project_fixture(self, self.repo, routes=(route,)):
             with counted_admissions() as admit:
                 run = self.workers.prepare(self.runs, self.brief)
