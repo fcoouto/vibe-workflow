@@ -737,7 +737,8 @@ class StatusTests(Reconcile):
         ledger = self.status()
         self.assertEqual(ledger['reconcile'], dict(
             reconcile_uncertain=dict(count=0, ids=[], more=0),
-            resolve_block=dict(over_bound=dict(organizations=[], more=0), legacy=dict(organizations=[], more=0))))
+            resolve_block=dict(over_bound=dict(organizations=[], more=0), legacy=dict(organizations=[], more=0)),
+            reconcile_subscription=dict(count=0, ids=[], more=0), window_debits=dict(count=0, keys=[], more=0)))
         self.assertIsNone(ledger['reconcile_hint'])
 
 

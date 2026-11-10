@@ -4,7 +4,7 @@ import copy
 import json
 import sqlite3
 import unittest
-from runtime import routing, usage_budget as budget
+from runtime import routing, subscription_reconcile, usage_budget as budget
 from tests.fixture_routing_funding import Funded, M, NOW, assignment, authorize, funded_pool, native, observations, policy, route, settings, window
 
 
@@ -116,6 +116,10 @@ class CapacityTests(Funded, unittest.TestCase):
         data['runs'], data['native'] = runs, native
         data['finished_native'] = list(native)  # bounded by native entries, which are bounded by runs
         data['caps'] = dict(total=budget.MAX_INTEGER, per_account=budget.MAX_INTEGER)
+        # S3.6c: the window debits abandoned subscription holds leave behind, every key at its bound.
+        data[subscription_reconcile.DEBITS] = {
+            ('win:' + unique(i, long('p')) + '/' + long('w')): dict(units=budget.MAX_INTEGER, at=budget.MAX_INTEGER)
+            for i in range(subscription_reconcile.MAX_WINDOW_DEBITS)}
         raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
         sizes = {key: len(json.dumps(value, separators=(',', ':'))) for key, value in data.items()}
         self.assertLessEqual(len(raw), budget.MAX_RECORD * 0.9, sizes)  # at least 10% margin

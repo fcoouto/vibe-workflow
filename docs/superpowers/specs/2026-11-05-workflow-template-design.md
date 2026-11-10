@@ -78,12 +78,12 @@ Toolkit sources inform authoring, setup and updates. Routine tasks consume compl
 
 | Kind | Purpose and storage | Authority |
 |---|---|---|
-| Artifact template | Shape a recurring document/report; keep beside its owning skill/reference, using `assets/` only when it is output payload | Current policy decides when the artifact is needed; the template introduces no new obligation. |
+| Artifact template | Shape a recurring document/report; since 9 November 2026 kept in the root `templates/` folder and linked from its owning policy or skill ([templates across the workflow](2026-11-09-templates-across-the-workflow-design.md)), using `assets/` only when it is output payload | Current policy decides when the artifact is needed; the template introduces no new obligation. |
 | Worked request | Minimal valid example and relevant variant in the current operation guide, using named JSON fences as existing delegation docs do | Existing operation validator decides accepted fields and state. Tests resolve placeholders from fixtures. |
 | Behavioral fixture | Disposable input and independently controlled evaluator for selected maintenance cases | Existing maintenance policy defines qualification and decision criteria. |
 | Optional future schema | Editor/API/form contract for a named consumer, only if a demonstrated need remains | One structural source of truth, with validator parity and migration compatibility; never a parallel authorization authority. |
 
-Keep short examples in their owner document. Extract only when size or a distinct loading trigger warrants it. Do not create a root `templates/` catalog that every agent must read. Extend `docs/policy-sources.md` for authoring coverage; it remains outside routine loading. Update the existing prepared instruction map only when its actual input sources change.
+Keep short examples in their owner document. Extract only when size or a distinct loading trigger warrants it. No agent reads `templates/` as a catalog; each template is reached through its owner's link. Extend `docs/policy-sources.md` for authoring coverage; it remains outside routine loading. Update the existing prepared instruction map only when its actual input sources change.
 
 ### Mandatory versus optional
 

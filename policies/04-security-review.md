@@ -11,7 +11,7 @@ Apply with the [shared contract rules](00-index.md).
 | Trigger | After implementing a deliverable, before completion or merge; reassess after changes affecting review coverage or evidence. A deliverable may be a task or wave. |
 | Decision | Assess actual security impact, then choose scope, depth, checks and necessary independent specialist coverage. Investigate uncertainty before selecting additional review. |
 | Required action | Establish the target, review relevant security boundaries and substantiate findings using the procedure below. Reviewers remain read-only; authorized fixes return to the responsible writer. |
-| Evidence | Record candidate/base, contract and check versions, scope, reviewer provenance, actual checks, findings and disposition. Keep sensitive evidence private and redacted. |
+| Evidence | Record every [review report](../templates/review-report.md) line marked for security review. Keep sensitive evidence private and redacted. |
 | Blocking condition | Required review is missing or stale, a blocking finding remains unresolved, or material security uncertainty remains. Unavailable review capacity cannot make review inapplicable. |
 
 ## Establish the target and limits
@@ -46,7 +46,7 @@ For each candidate finding, establish attacker input, prerequisites, reachable f
 
 Bind evidence to actual candidate content, including dirty layers, base, contract/check versions and observed reviewer execution. A report's claimed identity alone does not prove independence. Changed inputs invalidate affected evidence; compare current content before accepting completion.
 
-Record scope, revisions/comparison, dirty layers, authorization assumptions, assets/boundaries, reviewed/excluded paths, tool/source versions, checks/results, unavailable capabilities and deployment unknowns. For each finding include ID, severity/rationale, confidence, confirmation status, file/line and revision/layer, minimal redacted evidence, attacker prerequisites, impact, counterevidence, test result, proposed correction and next validation. Deduplicate shared root causes; base severity on realistic impact and exploit conditions.
+Write the report with every [review report](../templates/review-report.md) line marked for security review. Deduplicate shared root causes; base severity on realistic impact and exploit conditions.
 
 Keep detailed reports outside every reviewed repository in a user-private location, using restrictive permissions where supported, unique filenames and no overwrite. Honor a safe requested destination. If writing is unavailable, return a redacted conversational report and state no file was saved. Omit credentials, personal data, internal domains and unnecessary exploit payloads. Privately recommend containment/rotation for suspected secrets without testing them.
 

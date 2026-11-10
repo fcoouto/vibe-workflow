@@ -25,8 +25,8 @@ When a merge is requested, act only on the reviewed candidate after its applicab
 
 When agents publish through pull requests, the agent that opened or took over a PR keeps its title prefix and draft state in step with its readiness:
 
-1. Open every PR as a draft, where the host supports drafts, titled `[BLOCKED] <title>`. `[BLOCKED]` is the normal state while work, checks or review continue.
-2. When [readiness](#establish-readiness) holds for the current candidate, change the prefix to `[READY]` and mark the PR ready for review.
+1. Open every PR as a draft, where the host supports drafts, titled `[BLOCKED] <title>`. `[BLOCKED]` is the normal state while work, checks or review continue. Write the body from the [PR template](../templates/pull-request.md) unless the project has its own layout.
+2. When [readiness](#establish-readiness) holds for the current candidate, change the prefix to `[READY]` and mark the PR ready for review. The template's readiness section can carry that evidence.
 3. Before pushing to a `[READY]` PR, and as soon as a base change, failed check or new finding invalidates its evidence, return it to `[BLOCKED]` and draft.
 4. If the project's recorded merge permission covers the target, or the user explicitly asks for this merge, merge a `[READY]` PR as described in [Perform and confirm](#perform-and-confirm). Otherwise stop at `[READY]` and report that it awaits the user's merge.
 5. When other work replaces a PR, by the user's decision or within its own task's scope, change its prefix to `[SUPERSEDED]`, name what replaces it in a closing comment, and close it unmerged; keep its branch. A publication that selected managed delivery requires still needs the user's scope decision.
