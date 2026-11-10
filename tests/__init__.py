@@ -190,4 +190,3 @@ if not operator:
 if not operator and not getattr(sys, '_vcw_home_guard', False):
     sys.addaudithook(audit)
     sys._vcw_home_guard = True
-
