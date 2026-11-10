@@ -23,4 +23,4 @@ How to work on this repository: where to make changes, which checks to run and h
 - Publish completed task changes by committing, pushing the task branch and opening a draft PR against `main`. The [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) sets its title prefix: `[BLOCKED]`, `[READY]` or `[SUPERSEDED]`.
 - Agents may merge here (see the [setup record](setup.md#decisions)). Merge only completed, independently reviewed slices against current `main`, in PRs marked `[READY]`, after local checks pass.
 - The repository has no CI or branch protection, so these rules are not enforced mechanically.
-- Create release archives only when requested.
+- Create release archives only when requested, and run `python3 -B scripts/validate.py --release` first: it fails when the package version already has a release tag but shipped content changed since, so raise the version first.

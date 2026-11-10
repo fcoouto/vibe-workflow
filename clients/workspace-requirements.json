@@ -50,7 +50,7 @@
       "scope": "client",
       "check": {
         "codex": {"kind": "hooks-trust"},
-        "claude-code": {"kind": "unobservable", "reason": "Claude Code does not list plugin hook trust; start a new session to see the hooks run"},
+        "claude-code": {"kind": "hooks-trust"},
         "opencode": {"kind": "not-supported", "reason": "OpenCode plugin client pending (plan slice R4)"}
       },
       "install_ref": "skills/prepare-my-workspace/references/upgrade.md#restart-and-trust",

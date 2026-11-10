@@ -27,7 +27,7 @@ CLI_VERSION = re.compile(r"[0-9][0-9A-Za-z.+_-]*")
 NEXT_ACTION = "run the prepare-my-workspace upgrade"
 
 
-def _read_json(path, limit):
+def _read_bytes(path, limit):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         if not os.fstat(descriptor).st_mode & 0o170000 == 0o100000:
@@ -37,7 +37,11 @@ def _read_json(path, limit):
         os.close(descriptor)
     if len(data) > limit:
         raise ValueError("File is too large")
-    value = json.loads(data.decode("utf-8"))
+    return data
+
+
+def _read_json(path, limit):
+    value = json.loads(_read_bytes(path, limit).decode("utf-8"))
     if not isinstance(value, dict):
         raise ValueError("Expected a JSON object")
     return value
@@ -95,15 +99,11 @@ def _private_directory(directory):
         os.chmod(directory, 0o700)
 
 
-def write_record(path, version, clients):
+def write_private(path, data, prefix):
+    """Atomically replace `path` with `data` as a 0600 file in a private directory."""
     path = Path(path)
-    record = dict(schema_version=SCHEMA_VERSION, package=PLUGIN, version=version,
-                  recorded_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), clients=clients)
-    data = (json.dumps(record, indent=2) + "\n").encode()
-    if len(data) > MAX_RECORD:
-        raise ValueError("Record is too large")
     _private_directory(path.parent)
-    descriptor, temporary = tempfile.mkstemp(prefix=".package-release-", dir=path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=prefix, dir=path.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             os.fchmod(stream.fileno(), 0o600)
@@ -117,6 +117,15 @@ def write_record(path, version, clients):
         except OSError:
             pass
         raise
+
+
+def write_record(path, version, clients):
+    record = dict(schema_version=SCHEMA_VERSION, package=PLUGIN, version=version,
+                  recorded_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), clients=clients)
+    data = (json.dumps(record, indent=2) + "\n").encode()
+    if len(data) > MAX_RECORD:
+        raise ValueError("Record is too large")
+    write_private(path, data, ".package-release-")
 
 
 def _unknown():
