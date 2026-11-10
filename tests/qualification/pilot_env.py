@@ -18,6 +18,11 @@ class CanaryEnv:
     def __init__(self, run):
         self.run = run
 
+    def export_if_due(self):
+        """The canary admissions' 12-hour replay export, read-only on the canary ledger (replay_export)."""
+        from tests.qualification import replay_export
+        return replay_export.export_if_due(self.run.canary_state["ledger"], self.run.replay_dir)
+
     def status(self):
         return self.run.routing.served("status")[0]
 
