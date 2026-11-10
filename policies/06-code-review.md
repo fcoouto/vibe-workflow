@@ -11,7 +11,7 @@ Apply with the [shared contract rules](00-index.md).
 | Trigger | Before every merge; before completing nontrivial work or work requiring review under the task/project rules; when explicitly requested; after changes affecting prior review evidence. |
 | Decision | Select complementary review scopes from the actual diff, acceptance criteria and consequences. Determine necessary independent and specialist coverage without a fixed panel. |
 | Required action | Establish the exact target, inspect changes and connected behavior, substantiate findings, verify their disposition and rerun affected checks after authorized fixes. |
-| Evidence | Record target/base and working-tree layers, review scope, reviewer provenance, findings and disposition, checks, unreviewed areas and residual risks. |
+| Evidence | Record every [review report](../templates/review-report.md) line marked for code review. |
 | Blocking condition | Required review is missing or stale, a relevant blocking finding remains unresolved, or material uncertainty prevents judging the change. Unavailable capacity does not make required coverage inapplicable. |
 
 ## Choose coverage
@@ -27,7 +27,7 @@ Fix the base/candidate or working-tree snapshot before review, including relevan
 
 Reviewers remain read-only. Use [Agent Delegation](03-agent-delegation.md) for worker capability, permissions, resource ownership, verified identity and review-round bounds. Use [Tests and Builds](05-tests-and-builds.md) for safe execution and current evidence. A report's claimed author or success cannot establish an independent execution.
 
-Each finding needs severity, precise location, a concrete failure scenario and supporting evidence. Seek counterevidence before calling a concern a defect. Separate confirmed defects, hypotheses and optional improvements; do not invent performance claims without measurements. The coordinator verifies findings, deduplicates shared root causes and reassesses dependencies when overlap reveals coupled work.
+Report each finding with the review report lines marked for code review. Seek counterevidence before calling a concern a defect; do not invent performance claims without measurements. The coordinator verifies findings, deduplicates shared root causes and reassesses dependencies when overlap reveals coupled work.
 
 Return fixes to the responsible writer within existing authorization, subject to [stuck-pattern escalation](03-agent-delegation.md#stuck-pattern-escalation). Recheck affected findings and rerun relevant checks after changes; preserve unaffected evidence only with a reason. Do not repeat a full review merely because an internal fix occurred, reset requested round counts, or expand scope to obtain a clean report.
 
