@@ -54,6 +54,45 @@ class OptionShape(unittest.TestCase):
             launcher.server_config('/s/settings.json', '/l/ledger.sqlite3', '/p', options=dict(GOOD, steps=0))
 
 
+class UncappedAgents(unittest.TestCase):
+    """The one rule (`uncapped_agents`) the launcher and the gateway harness share."""
+
+    CONFIG = {name: dict(steps=3) for name in launcher.BUILTIN_AGENTS}
+    UNREADABLE = [launcher.LISTING_UNREADABLE]
+
+    def check(self, listing, steps=3, config=None):
+        return launcher.uncapped_agents(listing, self.CONFIG if config is None else config, steps)
+
+    def test_reported_steps_must_equal_the_required_count(self):
+        self.assertEqual(self.check([dict(id='build', steps=3), dict(id='reviewer', steps=3)]), [])
+        self.assertEqual(self.check([dict(id='build', steps=2), dict(id='plan', steps=4)]), ['build', 'plan'])
+
+    def test_a_bool_is_never_a_step_count(self):
+        # required count 1, so `True == 1` cannot pass by accident
+        config = {name: dict(steps=1) for name in launcher.BUILTIN_AGENTS}
+        self.assertEqual(self.check([dict(id='build', steps=True)], steps=1, config=config), ['build'])
+        self.assertEqual(self.check([dict(id='build', steps=1)], steps=1, config=config), [])
+
+    def test_unreported_steps_come_from_the_inline_config_for_that_name(self):
+        self.assertEqual(self.check([dict(id=name) for name in launcher.BUILTIN_AGENTS]), [])
+        self.assertEqual(self.check([dict(id='build'), dict(id='reviewer')]), ['reviewer'])
+        self.assertEqual(self.check([dict(id='build')], config=dict(build=dict(steps=4))), ['build'])
+        self.assertEqual(self.check([dict(id='build')], config=dict(build=dict(steps=True))), ['build'])
+        self.assertEqual(self.check([dict(id='build')], steps=1, config=dict(build=dict(steps=True))), ['build'])
+        self.assertEqual(self.check([dict(id='build')], config={}), ['build'])
+
+    def test_the_name_is_the_id_else_the_name(self):
+        self.assertEqual(self.check([dict(name='plan')]), [])
+        self.assertEqual(self.check([dict(id='reviewer', name='build')]), ['reviewer'])
+        self.assertEqual(self.check([dict(id=7, name='build')]), [])  # a non-string id falls back to the name
+
+    def test_an_empty_malformed_or_unreadable_listing_refuses(self):
+        for listing in (None, [], 'build', dict(build=dict(steps=3)), [dict(steps=3)], ['build'],
+                        [dict(id='build', steps=3), None], [dict(id=None, name=None)]):
+            with self.subTest(listing=listing):
+                self.assertEqual(self.check(listing), self.UNREADABLE)
+
+
 class StartedServer(unittest.TestCase):
     def start(self, root, options):
         record = root / 'seen.json'
@@ -152,7 +191,7 @@ class EveryAgentCapped(base.LauncherBase):
         listings = [self.capped() + [extra],  # a new or custom agent the inline config does not name
                     self.capped()[:-1] + self.capped(steps=4)[-1:],  # one agent's cap overridden
                     self.capped()[:-1] + [dict(self.capped()[-1], steps=True)],
-                    [], 'not a list', [dict(id='build')], [dict(steps=3)]]
+                    [], 'not a list', [dict(id='reviewer')], [dict(steps=3)]]
         for listing in listings:
             with self.subTest(listing=listing):
                 del self.order[:]
@@ -160,15 +199,18 @@ class EveryAgentCapped(base.LauncherBase):
                 self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
                 self.assertNotIn('prepare', self.order)
 
+    def test_built_ins_listed_without_steps_pass_on_the_inline_config(self):
+        self.host.options, self.host.agents = GOOD, [dict(id=name) for name in launcher.BUILTIN_AGENTS]
+        self.assertEqual(self.launch(options=GOOD)['reason'], launcher.LAUNCH_OPTIONS_MISMATCH)
+
     def test_an_unreadable_listing_refuses(self):
         self.host.options, self.host.agents = GOOD, self.capped()
-        for status in (500, 404):
-            with self.subTest(status=status):
-                self.host.agent_status = status
+        for status, raises in ((500, None), (404, None), (200, ConnectionResetError('lost'))):
+            with self.subTest(status=status, raises=raises):
+                del self.order[:]
+                self.host.agent_status, self.host.agent_raises = status, raises
                 self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
-        self.host.agent_status, self.host.agent_raises = 200, ConnectionResetError('lost')
-        self.assert_refused(launcher.AGENT_STEPS_UNCAPPED, self.launch(options=GOOD))
-        self.assertNotIn('prepare', self.order)
+                self.assertNotIn('prepare', self.order)
 
 
 if __name__ == '__main__':
