@@ -5,6 +5,8 @@ import time
 from runtime.startup import ObservationDeadline, StartupError
 
 UNAVAILABLE = 'Runtime state is unavailable, corrupt, locked or incompatible'
+# The D4 lock's fixed text (runtime/changes.py _lock); it is contention, so it is reported as busy.
+D4_BUSY = 'D4 transaction busy; retry the same bound request'
 
 
 class StateError(StartupError):
@@ -20,7 +22,11 @@ class StateDeadline(StateError, ObservationDeadline):
 
 
 def database_failure(error, deadline):
-    """Name a deadline, lock contention or a startup diagnostic; return None for the generic sanitized error."""
+    """Name a deadline or lock contention; return None for the generic sanitized error.
+
+    Only fixed texts surface: deadline messages (literals, enforced by tests), D4_BUSY and SQLite's own lock texts.
+    Other StartupError messages may embed inputs (setting keys, client names, joined blockers), so they stay generic.
+    """
     if isinstance(error, ObservationDeadline):
         return StateDeadline(str(error))
     timed_out = deadline is not None and time.monotonic() >= deadline
@@ -29,5 +35,6 @@ def database_failure(error, deadline):
         return StateDeadline('Runtime state deadline exceeded')
     if isinstance(error, sqlite3.OperationalError) and str(error) == 'database is locked':
         return StateBusy('Runtime state is busy')
-    # Startup diagnostics carry no input contents by contract; keep their reason instead of a generic one.
-    return StateError(str(error)) if isinstance(error, StartupError) else None
+    if type(error) is StartupError and str(error) == D4_BUSY:
+        return StateBusy(D4_BUSY)
+    return None
