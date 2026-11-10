@@ -163,7 +163,7 @@ class RoutingSettingsTests(unittest.TestCase):
         root = Path(self.tmp.name).resolve()
         (root / 'checkout').mkdir()
         routing_settings.update(self.path, dict(managed_projects=[str(root / 'checkout')]), 0)
-        with unittest.mock.patch.object(routing_settings.os, 'stat', side_effect=PermissionError('denied')):
+        with unittest.mock.patch.object(routing_settings, '_identity', side_effect=PermissionError('denied')):
             self.assertIs(routing_settings.managed_project(root / 'elsewhere', settings_path=self.path), True)
 
     def test_managed_project_fails_closed_on_unreadable_settings(self):
