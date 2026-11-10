@@ -25,13 +25,17 @@ def status(**ledger):
                 ledger=dict(state='ready', **value))
 
 
+# C3-0b's routing service collects for a managed project itself; before it lands, ManagedStub stands in for it.
+C3_0B = callable(getattr(command, 'managed_service', None))
+
+
 class ManagedStub(command.Service):
     """Test-only stand-in for C3-0b's managed-project `prepare` (C.3 design 3.3): the service, never the caller,
-    collects observations, refuses caller ones and echoes `seen` unchanged."""
+    collects observations, refuses caller ones and echoes `seen` unchanged. With C3-0b present it is the real one."""
 
     def handle(self, raw, op=None):
         value = json.loads(raw)
-        if value.get('op') != 'prepare':
+        if C3_0B or value.get('op') != 'prepare':
             return super().handle(raw, op)
         if 'observations' in value:
             return dict(v=1, state='blocked', reason='observations_not_accepted')
