@@ -846,7 +846,6 @@ class C2cWorkerThroughRouting(EnrolledOpenRouter):
 
     # C3-4b must route each OpenRouter worker through `scripts/routing.py prepare` (plan C.3 box 1; F07): `prepare`
     # obtains one routing admission and records the requested route.
-    @NEEDS_C3('C3-4b')
     def test_worker_prepare_obtains_one_routing_admission(self):
         route = fixture_route('openrouter:%s@%s' % (self.brief['model'], self.brief['provider']), 'gateway')
         with managed_project_fixture(self, self.repo, routes=(route,)):

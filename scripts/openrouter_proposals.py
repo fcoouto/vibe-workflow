@@ -427,20 +427,28 @@ def _close(service, attempt):
 
 
 def _settle_own(service, attempt, usage=None, *, dispatched):
-    """Settle one row's own hold; True once nothing of it is left open. Not dispatched by this row's record: release
-    it, or, if routing had dispatched it after all, complete it with no usage (its whole reservation stays held as
-    `cost_unknown`). Dispatched: complete, with `usage` when given. A closed or forgotten hold, or a conflicting
-    replay of this same attempt's `complete`, means an earlier call for this row already settled it."""
+    """Settle one row's own hold: None once nothing of it is left open, else routing's fixed refusal reason. Not
+    dispatched by this row's record: release it, or, if routing had dispatched it after all, complete it with no
+    usage (its whole reservation stays held as `cost_unknown`). Dispatched: complete, with `usage` when given. A
+    closed or forgotten hold, or a conflicting replay of this same attempt's `complete`, means an earlier call for
+    this row already settled it."""
     _, launch = _routing()
     if not dispatched:
         answer = launch._record(service, attempt, 'not_dispatched')
         if answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED:
-            return True
+            return None
         if answer.get('reason') != 'hold_state_forbidden':
-            return False
+            return _reason(answer)
         usage = None
     answer = launch._record(service, attempt, 'complete', **({} if usage is None else dict(usage=usage)))
-    return answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED + ('event_conflict',)
+    if answer.get('state') == 'recorded' or answer.get('reason') in RECOVERED + ('event_conflict',):
+        return None
+    return _reason(answer)
+
+
+def _reason(answer):
+    reason = answer.get('reason') if isinstance(answer, dict) else None
+    return reason if isinstance(reason, str) and reason else 'routing_unavailable'
 
 
 def _mark_unsent(row, moment):
@@ -454,7 +462,7 @@ def _settle_dead(row, moment):
     command, _ = _routing()
     service = command.managed_service(row['routing']['checkout'])
     try:
-        settled = _settle_own(service, row['routing']['attempt_id'], dispatched=False)
+        settled = _settle_own(service, row['routing']['attempt_id'], dispatched=False) is None
     finally:
         service.close()
     if settled:
@@ -501,7 +509,7 @@ def _unsent(granted, store, now):
     for checkout, attempt in granted:
         service = command.managed_service(checkout)
         try:
-            if _settle_own(service, attempt, dispatched=True):
+            if _settle_own(service, attempt, dispatched=True) is None:
                 settled.add(attempt)
         finally:
             service.close()
@@ -676,11 +684,11 @@ def _settle(row, request):
         if dispatched and 'usage' in request else None
     service = command.managed_service(row['routing']['checkout'])
     try:
-        settled = _settle_own(service, row['routing']['attempt_id'], usage, dispatched=dispatched)
+        refused = _settle_own(service, row['routing']['attempt_id'], usage, dispatched=dispatched)
     finally:
         service.close()
-    if not settled:
-        return 'record_refused'
+    if refused is not None:
+        return refused  # routing's own fixed reason (PR #216 follow-up), e.g. `reconciliation_required`
     row.pop('routing_state', None)
     return None
 
