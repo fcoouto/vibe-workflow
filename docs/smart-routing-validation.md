@@ -163,7 +163,9 @@ Results go to `tests/fixtures/smart-routing/probes/pilot-results.json` and to Re
 
 Registered on 10 November 2026, before any historical or cutover replay has run, on the user's instruction of that day: "No problem, reduce the value to the amount of past assignments we have." It replaces the text marked superseded in [Allocator replay](#allocator-replay), [Disagreement and quality re-execution](#disagreement-and-quality-re-execution) and [Canary](#canary); that text stays as written. No latency budget, canary bound or pilot number changed.
 
-**Why.** The 200-assignment minimum assumed that recorded assignments carry what the strict checks need. Past worker sessions record the model, the variant or effort, timestamps and token counts, but not the task family, the complexity or risk band, the funding state at arrival, or acceptance. Only admission records carry those. Today the only ones are the pilot's 20, made with a fixed synthetic window observation. So the replay is split in two.
+**Why.** The 200-assignment minimum assumed that recorded assignments carry what the strict checks need. Past worker sessions record the model, the variant or effort, timestamps and token counts, but not the task family, the complexity or risk band, the funding state at arrival, or acceptance. Only admission records carry those. Today the only ones are the pilot's 20, made with a fixed synthetic window observation. The 15 runs in the usage ledger are legacy S1 calls, not routing admissions, and are excluded. So the replay is split in two.
+
+**Design rule (the user's, 10 November 2026).** The replay is lightweight: one read-only pass per store, metadata columns only, no model calls, and results computed locally.
 
 | | Historical replay | Strict replay |
 |---|---|---|
@@ -202,12 +204,16 @@ These rules are fixed now, before any session is read, and apply to the historic
 2. **Task family**, from the role: `implementer` and `repair` give `implementation`, `reviewer` gives `review`, `researcher` gives `research`, and `unknown` stays `unknown`.
 3. **Complexity band**, the higher of two bands. Generated tokens (output plus reasoning; input and cache tokens are left out because hosts count them differently): under 5,000 `low`, 5,000 to 19,999 `medium`, 20,000 to 59,999 `high`, 60,000 or more `critical`. Duration (last update minus start): under 5 minutes `low`, 5 to under 20 minutes `medium`, 20 to under 60 minutes `high`, 60 minutes or more `critical`. With only one of the two, that one; with neither, `unknown`.
 4. **Risk band:** always `unknown`, because no session metadata carries risk.
-5. **Funding class**, from the provider or harness: OpenCode's `claude-agent` provider, a Codex thread or a Claude Code subagent session gives `included_subscription`; the OpenAI API provider (`openai` in OpenCode) or `openrouter` gives `dollar`; anything else gives `unknown`.
+5. **Funding class**, from the provider or harness: OpenCode's `claude-agent` provider, a Codex thread or a Claude Code subagent session gives `included_subscription`; `openrouter`, or a provider that the metadata explicitly shows as signed in with an API key, gives `dollar`; anything else gives `unknown`. OpenCode's `openai` provider gives `unknown`, because it can also be signed in with ChatGPT (a subscription) and its metadata cannot tell the two apart.
 6. **Historical route:** the model id and the variant or reasoning effort as recorded; a missing effort is `unknown`.
 
 An `unknown` task family or band is passed to the router as a missing field, so the router applies its own conservative floors, as in production (`FLOORS` in `runtime/routing.py`: family `general`, complexity `high`, risk `high`).
 
-**Assumptions for the historical replay.** The window use and headroom at each arrival are unknown. The pre-registered assumption is that every arrival sees one fixed synthetic observation in which every subscription window is fresh at 0% use. Settings are the defaults: Smart Routing ON, API Usage off and no organization, so the router never chooses a dollar route. The concurrency caps are the defaults, with occupancy rebuilt from the sessions' own timestamps; an arrival that would wait is counted as `pending` and not compared. Arrivals run in start-time order, ties broken by session id. The strategy table and route manifest are those at the replay's commit, recorded by digest in the report. While the manifest qualifies no route (until user decision 5 in the plan), the router cannot choose and the historical replay cannot run. Under these assumptions the historical replay measures route choice only; it says nothing about funding or capacity.
+**Store fields.** The replay tool maps each store's own fields to the agent types, providers and markers named above. If a named value or field does not exist in a store, a dated edit here is required before any run.
+
+**Assumptions for the historical replay.** The window use and headroom at each arrival are unknown. The pre-registered assumption is that every arrival sees one fixed synthetic observation in which every subscription window is fresh at 0% use. Settings are the defaults: Smart Routing ON, API Usage off and no organization, so the router never chooses a dollar route. The concurrency caps are the defaults, with occupancy rebuilt from the sessions' own timestamps; an arrival that would wait is counted as `pending` and not compared. Arrivals run in start-time order, ties broken by session id. The strategy table and route manifest are those at the replay's commit, recorded by digest in the report. While the manifest qualifies no route, the router cannot choose; the historical replay therefore runs only after a live session has qualified at least one route with its measured demand (user decision 5 in the plan). Under these assumptions the historical replay measures route choice only; it says nothing about funding or capacity.
+
+The sample, exclusions, labelling rules, keyword lists, thresholds and these assumptions are pre-registered as written. Any later change needs a dated edit here before the replay runs.
 
 ### Metrics
 
@@ -216,11 +222,11 @@ An `unknown` task family or band is passed to the router as a missing field, so 
 
 ### Order
 
-1. **Before the canary:** the historical replay runs once and its advisory report is recorded under Results. It must have run; its result blocks nothing. This is what the Canary's "only after replay passes" now means.
+1. **Before the canary, after a route is qualified live** (user decision 5): the historical replay runs once and its advisory report is recorded under Results. It must have run; its result blocks nothing. This is what the Canary's "only after replay passes" now means.
 2. **Canary** (plan S3.7), within its unchanged bounds.
 3. **C.1:** the strict replay runs over the pilot's 20 and the canary's admission records. The canary's own pass condition that "replay still reproduces the canary's admission records exactly" is this strict replay.
 
-**Keeping the admission records.** Retention removes a closed attempt's admission record after 14 days and its quota snapshot detail (`pressure`, `snapshot_id`) after 24 hours (plan S3.6a). The pilot ran on 9 November 2026, so its snapshot detail is already gone and its records are removed from about 23 November 2026. Before then, the pilot's admission records are exported read-only from the canary ledger to the local replay directory, and each canary admission's record is exported within 14 days. The pilot's window observation was the harness's fixed synthetic one, so its values remain known without the expired snapshot detail. A record that lacks a field exact reproduction needs counts as not reproduced, which is a strict failure.
+**Keeping the admission records.** Retention removes a closed attempt's admission record after 14 days and its quota snapshot detail (`pressure`, `snapshot_id`) after 24 hours (plan S3.6a). The pilot ran on 9 November 2026, so its snapshot detail is already gone and its records are removed from about 23 November 2026. On 10 November 2026 the coordinator exported the pilot's canary ledger read-only (SQLite backup API from a `mode=ro` connection) to `~/.local/state/vibe-workflow-replay/pilot-ledger-2026-11-09.sqlite3`, owner-only (0600): 1 ledger row, 21 events and 21 roots; `integrity_check` ok; 110,592 bytes. The snapshot detail, older than 24 hours, was already gone when it was taken. The pilot's window observation was the harness's fixed synthetic one, so its values remain known without that detail; exact reproduction from this export is untested until C.1. Each canary admission's record is exported the same way within 14 days. A record that lacks a field exact reproduction needs counts as not reproduced, which is a strict failure.
 
 ### Privacy
 
@@ -231,7 +237,7 @@ An `unknown` task family or band is passed to the router as a missing field, so 
 
 ### Quality re-execution
 
-Deferred to C.1 with the canary. Re-execution needs each assignment's brief and acceptance checks; past sessions record no acceptance and their prompts are not read, so no past session is re-executed. Before C.1 runs, a dated edit here must register the trigger, sample and comparison for re-executing canary admissions. Until then no re-execution is in force; the earlier budget (at most 30 assignments within 5% of one pool's canary spend cap) remains the ceiling.
+Deferred to C.1 with the canary. Re-execution needs each assignment's brief and acceptance checks; past sessions record no acceptance and their prompts are not read, so no past session is re-executed. Before C.1 runs, a dated edit here must register the trigger, sample, comparison and baseline for re-executing canary admissions; the baseline is chosen in that registration. Until then no re-execution is in force; the earlier budget (at most 30 assignments within 5% of one pool's canary spend cap) remains the ceiling.
 
 ## Results
 
