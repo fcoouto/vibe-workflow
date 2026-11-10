@@ -103,6 +103,13 @@ class BoundsTests(SeedBase):
         self.assertEqual(self.call(missing)['reason'], 'invalid_request')
         self.assertIsNone(self.stored())
 
+    def test_the_event_shape_alone_refuses_a_zero_length_or_limit(self):
+        body = {key: value for key, value in seed().items() if key not in ('v', 'op')}
+        self.assertEqual(collector.seed_event(body), dict(body, kind='seed_window'))
+        for change in (dict(length=0), dict(limit=0, used=0), dict(used=1001)):
+            with self.subTest(change):
+                self.assertIsNone(collector.seed_event(dict(body, **change)))
+
     def test_the_boundary_values_are_accepted(self):
         at = int(time.time())
         response = self.call(seed(used=1000, limit=1000, length=7200, reset_at=at + 7200 - 5))
@@ -184,6 +191,21 @@ class StoreTests(SeedBase):
         self.assertEqual((window['used'], window.get('source')), (420, None))
         self.assertEqual(self.call(seed('seed-2'))['reason'], 'fresh_observation_exists')
         self.assertEqual(self.stored()['sub']['5h']['used'], 420)
+
+    def write_store(self, window):
+        path = collector.window_path(self.settings)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(json.dumps(dict(version=1, pools=dict(sub={'5h': window}))))
+        path.chmod(0o600)
+
+    def test_a_stored_host_observation_dated_far_ahead_still_refuses_the_seed(self):
+        self.write_store({key: value for key, value in sub_window(self.now + 5000).items() if key != 'id'})
+        self.assertEqual(self.call(seed())['reason'], 'fresh_observation_exists')
+
+    def test_a_stored_window_with_another_source_is_never_a_window(self):
+        self.write_store(dict({key: value for key, value in sub_window(self.now).items() if key != 'id'},
+                              source='other'))
+        self.assertIn(dict(route='sub', reason='window_unobserved'), self.collect()['observations']['excluded'])
 
     def test_the_host_path_can_never_store_an_operator_source(self):
         for source in ('operator', 'host'):
