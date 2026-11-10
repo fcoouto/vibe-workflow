@@ -46,7 +46,7 @@ def precondition(condition, message):
         raise FixtureError(message)
 
 
-SLICES = {'C3-0', 'C3-1', 'C3-2', 'C3-3', 'C3-4a', 'C3-4b', 'C3-5', 'C3-6', 'C3-7'}
+SLICES = {'C3-0a', 'C3-0b', 'C3-1', 'C3-2', 'C3-3', 'C3-4a', 'C3-4b', 'C3-5', 'C3-6', 'C3-7'}
 _NON_ASSERTION = []  # marked contracts that failed without an assertion (a crash is never "waiting on C.3")
 _PASSED = []  # marked contracts that now hold: their slice must remove the marker
 
@@ -89,7 +89,7 @@ def tearDownModule():  # noqa: N802 - unittest's module hook
 
 def fixture_route(route, billing_class):
     """One `managed_project_fixture` route entry: a route id and its billing class (C.3 design round 3)."""
-    if billing_class not in ('included_subscription', 'dollar'):
+    if billing_class not in ('included_subscription', 'gateway'):  # runtime.routing's class names
         raise ValueError('unknown billing class: %r' % (billing_class,))
     return dict(route=route, billing_class=billing_class)
 
@@ -169,6 +169,17 @@ def usage():
     return dict(source='host_message_totals', requests=[dict(kind='primary', model='m', tokens=tokens)])
 
 
+NEGATION = re.compile(r"\b(?:not|never|don't|no|without|instead of)\b", re.I)
+
+
+def routes_reviewers_through_routing(text):
+    """The sentences that positively route delegated reviewers through scripts/routing.py within the selected
+    scope. A sentence with a negation never counts, so a prohibition cannot satisfy the instruction."""
+    return [sentence for sentence in re.split(r'(?<=[.!?])\s+|\n+', text)
+            if 'scripts/routing.py' in sentence and re.search(r'\breviewers?\b', sentence, re.I)
+            and re.search(r'\bselected\b', sentence, re.I) and not NEGATION.search(sentence)]
+
+
 def bound_external(packet, coordinator='native-coordinator'):
     return dict(packet['binding'], automatic=True, local_preferred=False, class_name='investigation',
                 coordinator=coordinator, reviewer='native-reviewer', integration_available=True)
@@ -178,7 +189,7 @@ class NeedsC3MarkerTests(unittest.TestCase):
     """The marker and fixture semantics (C.3 design 6.4): only an assertion or skip is the expected failure; a crash
     or a pass is recorded so the module run fails; the C3-1 fixture sentinel is an assertion."""
 
-    def run_marked(self, body, slice_id='C3-0'):
+    def run_marked(self, body, slice_id='C3-0a'):
         case = type('Case', (unittest.TestCase,), dict(test=NEEDS_C3(slice_id)(body)))('test')
         result, non_assertion, passed = unittest.TestResult(), [], []
         with mock.patch.object(sys.modules[__name__], '_NON_ASSERTION', non_assertion), \
@@ -222,7 +233,7 @@ class NeedsC3MarkerTests(unittest.TestCase):
             tearDownModule()
 
     def test_an_unknown_slice_is_refused(self):
-        for bad in ('C3', 'C3-8', 'c3-0', None):
+        for bad in ('C3', 'C3-0', 'C3-8', 'c3-0a', None):
             with self.subTest(slice=bad), self.assertRaises(ValueError):
                 NEEDS_C3(bad)
 
@@ -232,8 +243,9 @@ class NeedsC3MarkerTests(unittest.TestCase):
             with managed_project_fixture(self, ROOT, routes=(fixture_route('test-route', 'included_subscription'),)):
                 reached.append(True)
         self.assertEqual(reached, [])  # the contract body never runs before C3-1
-        with self.assertRaises(ValueError):
-            fixture_route('r', 'purchased_usage')
+        for bad in ('dollar', 'purchased_usage', 'api_grant'):
+            with self.subTest(billing_class=bad), self.assertRaises(ValueError):
+                fixture_route('r', bad)
         source = Path(__file__).read_text()
         start = source.index('# --- managed_project_fixture: body owned by C3-1 ---')
         self.assertLess(start, source.index('# --- end managed_project_fixture ---'))
@@ -309,50 +321,53 @@ class C2aStartupStatusNamingDiagnostics(command_tests.Base):
 
 
 class C2aOnboardingKeepsExplicitOff(unittest.TestCase):
-    """F02/F17: onboarding and startup leave an explicit Smart Routing OFF untouched (isolated test HOME)."""
+    """F02/F17: onboarding and startup leave an explicit Smart Routing OFF untouched, in the very HOME they use."""
 
     def setUp(self):
-        self.settings = command.default_settings()  # under the suite's private HOME (tests/__init__.py)
-        precondition(not self.settings.exists(), 'routing settings already exist in the test HOME')
-        home = Path.home()
-        self.created = [folder for folder in (self.settings.parent, *self.settings.parent.parents)
-                        if home in folder.parents and not folder.exists()]
+        from runtime import startup
+        from tests.fixture_canonical_birth import CanonicalBirthFixture
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.addCleanup(self.forget_settings)
         self.ledger = Path(self.temp.name) / 'usage' / 'organizations.sqlite3'
+        self.owner = CanonicalBirthFixture('runTest')
+        self.addCleanup(self.owner.doCleanups)
+        self.prepared = self.owner.prepare()  # patches HOME to the birth's isolated home until cleanup
+        self.home = self.prepared[0].base / 'isolated-home'
+        precondition(Path.home() == self.home, 'the birth fixture did not isolate HOME')
+        self.settings = command.default_settings()
+        precondition(self.home in self.settings.parents, 'routing settings are outside the onboarding HOME')
+        self.project_file = Path(self.prepared[1]['manifest']['enrollment']['record']['project_root']) \
+            / startup.PROJECT_FILE
 
-    def forget_settings(self):
-        for name in (self.settings.name, '.settings.lock'):
-            (self.settings.parent / name).unlink(missing_ok=True)
-        for folder in self.created:  # deepest first: only the directories this test created
-            folder.rmdir()
-
-    def status(self):
+    def call(self, request):
         service = command.Service(self.settings, self.ledger)
         try:
-            return service.handle(json.dumps(dict(v=1, op='status')).encode())
+            return service.handle(json.dumps(request).encode())
         finally:
             service.close()
+
+    def snapshot(self):
+        """The settings file's bytes and identity, or None when it is gone (a deletion is a contract failure)."""
+        try:
+            info = self.settings.stat()
+            return self.settings.read_bytes(), info.st_ino, info.st_mtime_ns
+        except FileNotFoundError:
+            return None
 
     def test_explicit_off_survives_onboarding_and_startup(self):
-        from tests.fixture_canonical_birth import fresh_canonical
-        service = command.Service(self.settings, self.ledger)
-        try:
-            off = service.handle(json.dumps(dict(v=1, op='set', expected_revision=0,
-                                                 change=dict(smart_routing=False))).encode())
-        finally:
-            service.close()
-        self.assertEqual(off['state'], 'updated', off)
-        before = (self.settings.read_bytes(), self.settings.stat().st_ino, self.settings.stat().st_mtime_ns)
-        for _ in range(2):  # two real onboarding births, each followed by startup acquisition
-            fixture, acquired, _observation = fresh_canonical(self)
-            self.assertIsNotNone(acquired.resolution.scope)
-        after = (self.settings.read_bytes(), self.settings.stat().st_ino, self.settings.stat().st_mtime_ns)
-        self.assertEqual(after, before)
-        status = self.status()
-        self.assertIs(status['settings']['smart_routing'], False)
-        self.assertEqual(status['settings_revision'], 1)
+        current = self.call(dict(v=1, op='status'))['settings_revision']  # written fresh, whatever was there
+        off = self.call(dict(v=1, op='set', expected_revision=current, change=dict(smart_routing=False)))
+        precondition(off.get('state') == 'updated', 'explicit OFF could not be written')
+        before = self.snapshot()
+        self.owner.assert_applied_configured(self.prepared, self.owner.invoke(self.prepared))  # real onboarding
+        _, acquired, _ = self.owner.qualify_members(self.prepared[0], self.project_file)  # startup acquisition
+        precondition(acquired.resolution.scope is not None and Path.home() == self.home,
+                     'startup did not acquire the project in the onboarding HOME')
+        self.assertEqual(self.snapshot(), before, 'onboarding or startup changed the explicit OFF settings')
+        status = self.call(dict(v=1, op='status'))
+        self.assertEqual((status['settings_state'], status['settings'] and status['settings']['smart_routing']),
+                         ('ok', False), 'Smart Routing is no longer explicitly OFF')
+        self.assertEqual(status['settings_revision'], current + 1)
 
 
 class PinnedGates(gate_tests.GateBase):
@@ -466,9 +481,9 @@ class C2bQuotaResetIsNotAuthority(command_tests.Base):
 class C2bProjectPin(gate_tests.GateBase):
     """F03 (S3.5 wiring): production prepare of a workflow job needs the project pin. Unpinned service."""
 
-    # C3-0 must make `--project` mandatory for a workflow-bound `prepare` (S3.5 wiring list): an unpinned service
+    # C3-0b must make `--project` mandatory for a workflow-bound `prepare` (S3.5 wiring list): an unpinned service
     # refuses it with `project_required`, as `settle` already does.
-    @NEEDS_C3('C3-0')
+    @NEEDS_C3('C3-0b')
     def test_a_workflow_bound_prepare_requires_the_project_pin(self):
         response = self.call(prepare('p1', workflow=gate_tests.locator()))
         self.assertEqual((response['state'], response.get('reason')), ('blocked', 'project_required'),
@@ -491,7 +506,7 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
         with counted_admissions() as admit:
             prepared = self.fixture.api.prepare_assignment(self.fixture.scope, self.request)
         precondition(prepared.get('launch_admitted') is True, 'the native fixture admitted no launch')
-        return admit
+        return admit, prepared
 
     def managed(self):
         selection = self.request['selection']  # the fixture's own explicit native choice: a subscription route
@@ -503,7 +518,7 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
     @NEEDS_C3('C3-2')
     def test_native_worker_admission_calls_routing_prepare_once(self):
         with self.managed():
-            admit = self.prepare_counted()
+            admit, _ = self.prepare_counted()
             self.assertEqual(admit.count, 1, 'native worker admission did not go through routing prepare')
 
     # C3-2 must bind that call to the planned job with `workflow` (job_id `edit`) and the delegation attempt id,
@@ -511,10 +526,13 @@ class C2bNativeDelegationThroughRouting(unittest.TestCase):
     @NEEDS_C3('C3-2')
     def test_native_worker_admission_is_bound_to_its_workflow_job(self):
         with self.managed():
-            admit = self.prepare_counted()
-            bound = [kwargs.get('workflow') for _, kwargs in admit.calls if kwargs.get('workflow') is not None]
+            admit, prepared = self.prepare_counted()
+            bound = [(args, kwargs['workflow']) for args, kwargs in admit.calls if kwargs.get('workflow') is not None]
             self.assertTrue(bound, 'routing admission for a planned job carried no workflow binding')
-            self.assertEqual(bound[0]['locator']['job_id'], 'edit')
+            (assignment, *_), workflow = bound[0]
+            self.assertEqual(workflow['locator']['job_id'], 'edit')
+            self.assertEqual(assignment['attempt_id'], prepared['attempt_id'],
+                             'the routing admission is not the delegation attempt')
 
 
 class Funded(command_tests.Base):
@@ -670,7 +688,7 @@ class C2cProposalThroughRouting(EnrolledOpenRouter):
                                                              modalities=['text'], parameters=[]),
                        external=bound_external(packet))
         self.begin = lambda: call('begin', request)
-        self.route = fixture_route('openrouter:%s@%s' % (request['model'], request['provider']), 'dollar')
+        self.route = fixture_route('openrouter:%s@%s' % (request['model'], request['provider']), 'gateway')
 
     # C3-4a must route an approved OpenRouter proposal through `scripts/routing.py prepare` (plan C.3 box 1; F06):
     # `begin` obtains one routing admission, keeping endpoint pinning and scope as constraints.
@@ -712,7 +730,7 @@ class C2cWorkerThroughRouting(EnrolledOpenRouter):
     # obtains one routing admission and records the requested route.
     @NEEDS_C3('C3-4b')
     def test_worker_prepare_obtains_one_routing_admission(self):
-        route = fixture_route('openrouter:%s@%s' % (self.brief['model'], self.brief['provider']), 'dollar')
+        route = fixture_route('openrouter:%s@%s' % (self.brief['model'], self.brief['provider']), 'gateway')
         with managed_project_fixture(self, self.repo, routes=(route,)):
             with counted_admissions() as admit:
                 run = self.workers.prepare(self.runs, self.brief)
@@ -754,13 +772,23 @@ class C2dCouncilAndProjectReview(command_tests.Base):
             assignment=dict(attempt_id='rv1', task='task-rv1', role='implementer', scope=SCOPE)))
         self.assertEqual(response, dict(v=1, state='blocked', reason='role_mismatch'))
 
+    def test_the_review_instruction_check_accepts_only_a_positive_instruction(self):
+        """The C3-6 marker cannot be satisfied by a prohibition or a sentence that routes something else."""
+        for text in ('Do not use scripts/routing.py for delegated reviewers outside the selected scope.',
+                     'Reviewers must not use scripts/routing.py; selected areas are reviewed natively.',
+                     'Never send reviewers through scripts/routing.py for selected repositories.',
+                     'Route delegated reviewers through scripts/routing.py without the selected scope.',
+                     'Use scripts/routing.py for workers in the selected scope.'):
+            with self.subTest(text=text):
+                self.assertEqual(routes_reviewers_through_routing(text), [])
+        positive = 'Route each delegated reviewer through scripts/routing.py prepare within the selected scope.'
+        self.assertEqual(routes_reviewers_through_routing(positive), [positive])
+
     # C3-6 must update the project-review instructions so delegated reviewers are routed through
     # `scripts/routing.py prepare` within the selected scope (plan C.3 "affected skill entry points"; F09).
     @NEEDS_C3('C3-6')
     def test_project_review_routes_delegated_reviewers_through_the_routing_command(self):
-        sentences = re.split(r'(?<=[.!?])\s+|\n+', self.text())
-        routed = [sentence for sentence in sentences if 'scripts/routing.py' in sentence
-                  and re.search(r'\breviewers?\b', sentence, re.I) and re.search(r'\bselected\b', sentence, re.I)]
+        routed = routes_reviewers_through_routing(self.text())
         self.assertTrue(routed, 'review-my-project has no instruction routing delegated reviewers through '
                                 'scripts/routing.py within the selected scope')
 
