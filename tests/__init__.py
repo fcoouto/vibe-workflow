@@ -206,6 +206,8 @@ def freeze_package_siblings(module, parent=os.path.dirname(REPO)):
     directories (setup_observation.current_configuration). Here that parent holds the worktrees that other
     agents create and remove, which made tests report 'qualification_changed'. Answer listings of that one
     directory with the names seen first in this process; the real listing still runs, so budgets are charged."""
+    if getattr(module, '_vcw_siblings_frozen', False):
+        return
     listing, frozen = module._children, []
 
     def children(path, budget):
@@ -216,6 +218,7 @@ def freeze_package_siblings(module, parent=os.path.dirname(REPO)):
             frozen.append(sorted(entry.name for entry in entries if entry.is_dir()))
         return [_Sibling(name) for name in frozen[0]]
     module._children = children
+    module._vcw_siblings_frozen = True
 
 
 class _SiblingFreezer:
@@ -239,3 +242,6 @@ class _SiblingFreezer:
 if not operator and not getattr(sys, '_vcw_sibling_freezer', False):
     sys.meta_path.insert(0, _SiblingFreezer())
     sys._vcw_sibling_freezer = True
+# A test module may import runtime before tests (tests/test_qualification_before.py does), so the finder never sees it.
+if not operator and 'runtime.setup_observation' in sys.modules:
+    freeze_package_siblings(sys.modules['runtime.setup_observation'])

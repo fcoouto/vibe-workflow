@@ -374,6 +374,14 @@ class PackageSiblingTests(unittest.TestCase):
         self.assertEqual(status, 0, err)
         self.assertEqual(out.split(), ['False', 'freeze_package_siblings.<locals>.children'])
 
+    def test_setup_observation_imported_before_tests_is_frozen_once(self):
+        code = ("from runtime import setup_observation\nimport tests\n"
+                "frozen = setup_observation._children\ntests.freeze_package_siblings(setup_observation)\n"
+                "print(frozen.__qualname__, setup_observation._children is frozen)")
+        status, out, err = run(code)
+        self.assertEqual(status, 0, err)
+        self.assertEqual(out.split(), ['freeze_package_siblings.<locals>.children', 'True'])
+
 
 if __name__ == '__main__':
     unittest.main()
