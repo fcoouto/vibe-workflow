@@ -57,8 +57,8 @@ DENY_ACTIONS = ('external_directory', 'shell', 'bash', 'webfetch', 'websearch')
 # The server's environment is an allowlist (as in the live-qualified harness, tests/qualification/server.py):
 # HOME, because OpenCode and the Claude Agent provider find their own sign-ins and data under it; USER, which the
 # macOS keychain lookup of a provider sign-in uses (the harness ran live with it); LANG for text decoding; TMPDIR for
-# OpenCode's temporary files; XDG_DATA_HOME only when the user moved OpenCode's data (its `auth.json` sign-ins)
-# there. PATH is fixed, never the caller's, so no project-local tool directory reaches the server.
+# OpenCode's temporary files; XDG_DATA_HOME whenever it is set, because OpenCode then keeps its data (its `auth.json`
+# sign-ins) there. PATH is fixed, never the caller's, so no project-local tool directory reaches the server.
 ENV_ALLOWED = ('HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME')
 SERVER_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
 # Fixed switches (names present in the 2.2.6 binary; their effect on project config is unobserved).
