@@ -4,7 +4,9 @@
 
 **Your first tool call in every session is to read the memory index described in [Memory](#memory-and-project-preferences).** Do it before any other read, search or command, for a question as much as for a task.
 
-A factual question about the repository needs only the memory read: answer it from the actual files, then stop. Before other repository work—including file, setting, Git or PR changes, reviews, check selection, completion or readiness decisions, resuming work and delegation—read the [policy index](policies/00-index.md) in full. Follow its single routing table and read every applicable contract and guide in full before the action it guards.
+Delegation is not a factual-only question, even for a read-only check or a worker requested by name. Before considering or calling a worker, read the [policy index](policies/00-index.md) in full and follow its loading rules.
+
+A factual question about the repository needs only the memory read: answer it from the actual files, then stop. Before other repository work—including file, setting, Git or PR changes, reviews, check selection, completion or readiness decisions and resuming work—read the [policy index](policies/00-index.md) in full. Follow its single routing table and read every applicable contract and guide in full before the action it guards.
 
 Hooks supplement these instructions. Their presence or silence does not establish policy compliance, enforcement or readiness. Ordinary development remains independent of optional managed controls.
 

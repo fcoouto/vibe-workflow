@@ -924,11 +924,11 @@
       ]
     },
     "templates/project/shared-instructions.md": {
-      "sha256": "1498680bd02d8671e655a3677d0828295a3fd99be62cbfb93fd6f84d2122cf7e",
+      "sha256": "60e3ef388031b3410f5373f092092f39f065d30eb53b706be474e08f272a7fdb",
       "ranges": [
         [
           1,
-          38
+          40
         ]
       ]
     },
