@@ -1,9 +1,11 @@
 """Local-only management and request-bound validation."""
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -151,6 +153,209 @@ class SlotFreeRoutingTests(unittest.TestCase):
         self.assertFalse(status['enabled'])
         self.assertEqual(status['reason'], 'live_adapter_unavailable')
         self.assertNotIn('live_blocker', status)
+
+
+class Reached(BaseException):
+    """A tripwire: no handler in the code under test catches it, so a late refusal cannot hide it."""
+
+
+RETIRED = 'legacy_route_retired'
+QUALIFICATION = dict(class_name='investigation', profile_digest=routing.profile_digest(PROFILE), samples=4,
+                     quality_passed=True, net_native_saved=5, uncertainty=1, unit='allowance_pp',
+                     native_calibrated=True, observed_at=100, valid_until=900, native_allowance_pp=7)
+
+
+class ManagedProjectRefusalTests(unittest.TestCase):
+    """C.3 design 4.3 and A.2: every legacy API Usage spending entry refuses a managed project first."""
+
+    def setUp(self):
+        from runtime import routing_settings, usage_settings
+        from scripts import routing as command
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.checkout = self.root / 'checkout'
+        self.checkout.mkdir()
+        self.settings = self.root / 'routing' / 'settings.json'
+        for target, attribute, value in ((command, 'default_settings', lambda: self.settings),
+                                         (usage_settings, 'directory', lambda: self.root / 'usage')):
+            patcher = patch.object(target, attribute, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        routing_settings.update(self.settings, dict(managed_projects=[str(self.checkout)]), 0)
+
+    def tripwires(self):
+        """Fail on any settings, credential, configuration or ledger access a refused entry must not reach."""
+        from runtime import usage_canary_host, usage_codex_host, usage_credentials, usage_settings
+        for target, attribute in ((budget.Ledger, 'begin'), (usage_settings, 'controller'), (usage_settings, 'scope'),
+                                  (routing.Controller, 'configure'), (usage_credentials, 'validate_binding'),
+                                  (usage_credentials, 'resolve_key'), (usage_codex_host, 'package_digest'),
+                                  (usage_canary_host, 'package_digest'), (usage_canary_host, 'verify_approval')):
+            patcher = patch.object(target, attribute, side_effect=Reached(attribute))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def entries(self):
+        import dataclasses
+        from runtime import usage_admission, usage_canary, usage_canary_host, usage_codex_host
+
+        def blank(kind, **values):
+            return kind(**({item.name: None for item in dataclasses.fields(kind)} | values))
+        checkout, task = str(self.checkout), candidate('managed')
+        evidence = blank(usage_admission.Admission)
+        return dict(
+            codex_freeze=lambda: usage_codex_host.freeze(checkout, [task], thread_snapshot={}, reviewer=None,
+                                                         expires_at=200),
+            codex_execute=lambda: usage_codex_host.execute(blank(usage_codex_host.Plan, checkout=checkout), task,
+                                                           thread_snapshot={}, reviewer=None, grant=None, price=None),
+            canary_host_execute=lambda: usage_canary_host.execute(
+                blank(usage_canary_host.Plan, checkout=checkout), thread_snapshot={}, key_receipt={}, grant=None,
+                reviewer=None, price_observed_at=100, price_valid_until=1000),
+            canary_run=lambda: usage_canary.run(checkout, evidence, binding=BINDING, profile=PROFILE,
+                                                native=native('managed')),
+            run_live=lambda: routing._run_live(checkout, task, evidence),
+            evaluate=lambda: routing.evaluate(checkout, task),
+            handoff=lambda: routing.handoff(checkout, dict(task=task, reason='insufficient_headroom')),
+            claim_handoff=lambda: routing.claim_handoff(checkout, dict(task_id='managed', attempt_id='attempt')))
+
+    def assert_every_entry_refuses(self):
+        for entry, call in self.entries().items():
+            with self.subTest(entry=entry), self.assertRaisesRegex(BudgetError, '^' + RETIRED + '$'):
+                call()
+
+    def test_every_spending_entry_refuses_before_settings_credentials_configuration_or_ledger(self):
+        self.tripwires()
+        self.assert_every_entry_refuses()
+
+    def test_a_path_inside_the_managed_checkout_is_refused_too(self):
+        from runtime import usage_canary
+        self.tripwires()
+        with self.assertRaisesRegex(BudgetError, RETIRED):
+            usage_canary.run(str(self.checkout / 'nested' / 'new'), None, binding=BINDING, profile=PROFILE,
+                             native=native('managed'))
+
+    def test_an_unreadable_routing_settings_file_counts_as_managed(self):
+        self.settings.write_text('{not json')
+        self.tripwires()
+        self.assert_every_entry_refuses()
+
+    def test_unmanaged_projects_pass_the_refusal_unchanged(self):
+        from runtime import routing_settings
+        other = self.root / 'other'
+        other.mkdir()
+        routing_settings.update(self.settings, dict(managed_projects=[str(other)]), 1)
+        self.tripwires()
+        for entry, call in self.entries().items():
+            with self.subTest(entry=entry):
+                try:
+                    call()
+                except BudgetError as error:
+                    self.assertNotEqual(str(error), RETIRED)
+                except Reached:
+                    pass
+        self.settings.unlink()  # no routing settings at all: nothing is managed
+        with self.assertRaises(Reached):
+            routing.evaluate(str(self.checkout), candidate('managed'))
+
+    def enabled_controller(self):
+        """Configure and enable legacy API Usage in the managed checkout through the setup actions."""
+        from contextlib import contextmanager
+        from runtime import usage_settings
+        path = self.root / 'usage' / 'organizations.sqlite3'
+        path.parent.mkdir(mode=0o700)
+        ledger = budget.Ledger(path, budget.initialize(path))
+        self.addCleanup(ledger.close)
+        control = routing.Controller(ledger, 'scope', root=self.checkout, clock=lambda: 101)
+
+        @contextmanager
+        def local(*args, **kwargs):
+            yield control
+        with patch.object(usage_settings, 'controller', side_effect=local):
+            configured = routing.configure(str(self.checkout), dict(
+                version=1, expected_revision=0, expected_org_revision=0, binding=BINDING, policy=POLICY,
+                profile=PROFILE, class_name='investigation', mode='smart'))
+            with ledger.transaction() as data:
+                data['routing']['scope'].update(qualification=dict(QUALIFICATION), qualification_revision=1)
+            enabled = routing.enable(str(self.checkout), dict(expected_revision=configured['revision']))
+            self.assertIsInstance(routing.status(str(self.checkout)), dict)
+        self.assertTrue(enabled['enabled'])
+        ledger.observe('org', 800, 100)
+        return control
+
+    def test_setup_actions_stay_available_and_enabling_reaches_no_ledger_begin(self):
+        control = self.enabled_controller()
+        self.tripwires()
+        self.assert_every_entry_refuses()
+        self.assertEqual(control.ledger.snapshot()['runs'], {})
+
+    def test_controller_backstops_refuse_before_any_decision_or_ledger_begin(self):
+        control = self.enabled_controller()
+        self.tripwires()
+        task = candidate('managed')
+        backstops = dict(
+            run=lambda: control._run(task, lambda *_: None, lambda _: b'synthetic-key'),
+            evaluate=lambda: control._evaluate(control.ledger.snapshot(), task),
+            request_handoff=lambda: control.request_handoff(task, 'insufficient_headroom'))
+        for entry, call in backstops.items():
+            with self.subTest(entry=entry), self.assertRaisesRegex(BudgetError, '^' + RETIRED + '$'):
+                call()
+        self.assertEqual(control.evaluate(task)['reason'], RETIRED)
+        self.assertEqual(control.ledger.snapshot()['runs'], {})
+        self.assertEqual(control.ledger.snapshot().get('handoffs', {}), {})
+
+    def test_cli_spending_actions_report_the_refusal_and_run_stays_unavailable(self):
+        from scripts import usage_routing as cli
+        self.tripwires()
+        task = candidate('managed')
+        for action, request, reason in (('evaluate', task, RETIRED),
+                                        ('handoff', dict(task=task, reason='insufficient_headroom'), RETIRED),
+                                        ('claim_handoff', dict(task_id='managed', attempt_id='a'), RETIRED),
+                                        ('run', task, 'live_execution_unavailable')):
+            output = io.StringIO()
+            stdin = SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode()))
+            with self.subTest(action=action), patch.object(sys, 'argv', ['usage_routing.py', action, '--cwd',
+                                                                         str(self.checkout)]), \
+                    patch.object(sys, 'stdin', stdin), patch.object(sys, 'stdout', output):
+                self.assertEqual(cli.main(), 1)
+                self.assertEqual(json.loads(output.getvalue()), dict(ok=False, reason=reason))
+
+    def test_old_consent_is_never_api_spending_authority(self):
+        """Spec 10.4 step 4: enabled legacy Usage Routing, current consent and a qualification record, with
+        default routing settings, leave every API route pending with `api_usage_disabled` and read no secret."""
+        import time
+        from runtime import routing_launch, routing_observations, usage_credentials
+        from scripts import routing as command
+        control = self.enabled_controller()
+        now = int(time.time())
+        with control.ledger.transaction() as data:
+            data['organizations']['org']['observed_at'] = now
+            consent = control._consent(control._config(data), True)
+        self.assertEqual(consent['qualification_revision'], 1)
+        identity = routing_launch.route_identity('api_usage', model=PROFILE['model'], effort=PROFILE['reasoning'])
+        scope = routing_launch.assignment_scope(self.checkout)
+        source = routing_observations.StaticSource(
+            [dict(route='api-grant', status='qualified', billing_class='api_grant', pool='api', account='org',
+                  demand={'credit': 1}, **identity)],
+            {'api': [dict(id='credit', limit=10 ** 12, used=0, organization='org', rolling=False, observed_at=now)]},
+            credential=lambda route, scope: dict(state='ready', scope=scope, ref='org'))
+        for target, attribute in ((usage_credentials, 'resolve_key'), (usage_credentials, '_read_key')):
+            patcher = patch.object(target, attribute, side_effect=Reached(attribute))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        service = command.Service(self.settings, control.ledger.path, project=self.checkout)
+        self.addCleanup(service.close)
+        with patch.object(routing_observations, 'default_source', return_value=source):
+            for attempt, choice in (('routed', None), ('chosen', dict(identity, funding='api'))):
+                assignment = dict(attempt_id=attempt, task='task-' + attempt, role='implementer', scope=scope)
+                if choice is not None:
+                    assignment['choice'] = choice
+                request = routing_launch.prepare_request(
+                    assignment, routing_launch.unplanned_job('implementer', scope, 'managed proposal'))
+                with self.subTest(attempt=attempt):
+                    result = service.handle(json.dumps(request).encode())
+                    self.assertEqual(result['state'], 'pending', result)
+                    self.assertIn('api_usage_disabled', json.dumps(result))
+        self.assertFalse(service._settings()['api_usage_enabled'])
 
 
 if __name__ == '__main__': unittest.main()
