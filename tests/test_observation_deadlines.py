@@ -255,6 +255,21 @@ class SiblingFingerprintTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as base:
             self.assert_sibling(self.package(Path(base).resolve().joinpath('vibe-workflow.worktrees/lane'), git=True), changes=False)
 
+    def test_the_suites_package_root_never_lists_its_parent(self):
+        # Fixtures use this checkout as the package root while other agents add and remove worktrees beside it;
+        # #198's test-side listing freeze is gone because a development checkout never lists that parent.
+        root, listed = state.PACKAGE.resolve(), []
+        real = setup_observation._children
+
+        def children(path, budget):
+            listed.append(Path(path).resolve())
+            return real(path, budget)
+        config = dict(files=[], roots=[str(root)], package_root=str(root), plugin_id='vibe-workflow@local', keys=[])
+        with patch.object(setup_observation, '_children', children):
+            versions = setup_observation.current_configuration(config, root)['material']['installation_versions']
+        self.assertIsNone(versions)
+        self.assertNotIn(root.parent, listed)
+
 
 if __name__ == '__main__':
     unittest.main()
