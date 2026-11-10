@@ -224,7 +224,7 @@ These are new fixed codes, each defined once by the slice named. Reasons from th
 | `open_unrouted_assignments`, `managed_during_prepare` | C3-2 | The [activation precondition](#42-activation-gate); a project that became managed during an unmanaged `prepare`, whose new assignment is released with no permit. |
 | `host_unhealthy`, `profile_not_enforced`, `api_funding_unqualified`, `attach_failed`, `launch_unconfirmed`, `interrupted` | C3-3 | OpenCode launch. `host_unhealthy` covers any `routing.health` answer other than `ok`, including an RPC error. `launch_unconfirmed` follows `record uncertain`. `interrupted` is the command's answer after a signal ([C3-3](#63-slices)). |
 | `routing_reservation_lost` | C3-4a | A proposal `begin` whose [write-ahead entry](#63-slices) recovery already closed, for example after a pause past the 120 s lease. |
-| `advisory_host_unmanaged`, `not_enrolled`, `enrolment_unavailable` | Host rule (#224) | Adding a project whose configured or active clients include none in `MANAGED_HOSTS`; a checkout with no enrolment; an enrolment that cannot be read ([4.2](#42-activation-gate) step 3). |
+| `advisory_host_unmanaged`, `not_enrolled`, `enrolment_unavailable` | Host rule (#224) | Adding a project whose configured or active clients include none in `MANAGED_HOSTS`; a checkout with neither a canonical enrolment record nor a resolving legacy codex scope; an enrolment that cannot be read ([4.2](#42-activation-gate) step 3). |
 
 A refusal before `dispatch` sends nothing. If `prepare` admitted a hold, the launcher closes it with `record not_dispatched`.
 
@@ -656,7 +656,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - **(round 5)** `prepare` runs before `settings.admission`, and a stale revision fails closed with `openrouter_preparation_stale`.
 - **Order (round 5).** As in C3-4a: routing `prepare` before `settings.admission` (`scripts/openrouter_workers.py:126`), with `revision=seen.openrouter_revision`.
 - **As merged (#225).** Every local refusal runs before `prepare`, and a write-ahead attempt entry is written before it. Without a verified receipt the hold is charged its full reservation (C3-4a's money rule), and a missing cost stays `cost_unknown`. The dollar preflight runs at `prepare` and again at dispatch. Every exit before dispatch closes the hold and returns no packet. The next managed `prepare` or `execute` recovers unlocked write-ahead entries and started runs whose hold is still open. The V1 path's first statement refuses a managed project.
-- **Known gaps (#225).** All fail closed today, because the launcher refuses API-funded OpenCode routes (`api_funding_unqualified`) until [user decision 4](#71-for-the-user); they are listed on the plan's [follow-ups](../plans/2026-11-08-smart-routing.md#follow-ups-from-merged-work):
+- **Known gaps (#225).** All fail closed today, because the launcher refuses API-funded OpenCode routes (`api_funding_unqualified`) until [user decision 4](#71-for-the-user); the reply text format is on the plan's [pre-canary list](../plans/2026-11-08-smart-routing.md#pre-canary-requirements), and the other three are on its [follow-ups](../plans/2026-11-08-smart-routing.md#follow-ups-from-merged-work):
   - the OpenCode adapter's accounting rejects OpenRouter `vendor/model` ids, so such a send ends uncertain;
   - the launcher's server config has no per-launch endpoint pin, output cap or step count;
   - the reply's text format (`content[].type == 'text'`) is unobserved live;
