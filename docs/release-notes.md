@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.1.36
+
+- **Workstreams uses native children only.** Delegated workers and reviewers run as native child sessions that one coordinator starts; a chat you ask for is an independent conversation. Only the coordinator's thread gets a managed title, `￻<meter> [STATUS · ]<topic>`: the `[W…]` family code, `P`/`C` roles and the shared family register are retired, and children get no managed title. `workstream_context_id` is rejected; children are named `worker_<attempt>` or `review_<attempt>`. Earlier titles and saved title records are left as they are and no longer synced.
+- **Smart Routing managed projects.** Adds `scripts/routing.py prepare` wiring for native workers, reviewers, OpenRouter proposals and OpenRouter workers, plus an OpenCode launcher. Activation stays blocked because no production route is qualified yet. API-funded OpenCode and OpenRouter-worker launches stay disabled. Codex selection is advisory; OpenCode-coordinated projects also need Codex enrollment. Claude Code native delegation is held in managed projects. API Usage refuses managed projects before spending. Unmanaged selection is unchanged, but unreadable routing settings block legacy spending. Routing is still not cut over.
+- **Usage ledger and recovery.** The ledger upgrades to version 5 on its next write, keeping runs, holds, handoffs and debits. Earlier releases cannot read the upgraded ledger. `scripts/routing.py` adds `drop_debit` for stuck subscription debits and `settle_legacy_call` for unfinished legacy calls; routing operator actions are one-shot commands.
+- **Strategy-table rollback.** `scripts/routing_table.py` keeps the previous verified table on refresh, and `rollback` swaps the two.
+- **Workspace readiness.** Codex and Claude Code startup record private hook-delivery evidence for `workflow.py workspace status`. Enrolled startup warns when the last readiness record shows missing required items. `validate.py --release` rejects uncommitted shipped changes and changes to shipped content under an existing release tag.
+- **Graphify refresh after merges** for projects that enabled Graphify: code-only extraction with no model calls, reported separately from the merge.
+- **Startup diagnostics.** Observation deadlines report `observation_deadline`, and runtime lock contention reports a distinct busy error. Unrelated sibling worktrees no longer change a development checkout's qualification fingerprint; installed-version checks remain.
+- Package validation does not establish client execution or live API qualification.
+
 ## 0.1.35
 
 - **Escalation ladder.** A stuck repair escalates to a more capable worker, through a stronger model or higher reasoning effort, up to five levels within existing limits. The agent asks the user when escalation cannot continue or does not converge, with the attempts, remaining options, a recommendation and the decision needed.
