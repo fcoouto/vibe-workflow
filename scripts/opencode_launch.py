@@ -29,6 +29,7 @@ OPTIONAL = {'workflow', 'constraints', 'planned', 'profile'}
 
 
 SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+WATCHED = SIGNALS + (signal.SIGINT,)
 
 
 class Interrupted(BaseException):
@@ -37,8 +38,10 @@ class Interrupted(BaseException):
 
 
 def _interrupt(signum, frame):
-    for number in SIGNALS:  # one conversion only: a repeated signal cannot interrupt the cleanup
+    for number in WATCHED:  # one conversion only: no second signal or Ctrl-C can interrupt the cleanup
         signal.signal(number, signal.SIG_IGN)
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
     raise Interrupted(signum)
 
 
@@ -95,7 +98,7 @@ def main(argv=None, stdin=None, write=None):
         return 2
     raw = stdin if stdin is not None else sys.stdin.buffer.read(MAX_INPUT + 1)
     body, reason = _request(raw)
-    previous = {number: signal.signal(number, _interrupt) for number in SIGNALS}
+    previous = {number: signal.signal(number, _interrupt) for number in WATCHED}
     code = 0
     try:
         result = _blocked(reason) if body is None else run(body)

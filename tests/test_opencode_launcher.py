@@ -806,17 +806,22 @@ class WindowUnitTests(LauncherBase):
 class SignalTests(LauncherBase):
     """S2: SIGTERM and SIGHUP to the command become an exception, so its server is always stopped."""
 
-    def test_sigterm_and_sighup_stop_the_server_and_leave_the_hold_uncertain(self):
-        for number, sig in enumerate((signal.SIGTERM, signal.SIGHUP, signal.SIGINT)):
-            with self.subTest(signal=sig):
-                attempt = 's%d' % number
-                self.order.clear()
-                code, answer, server = self.run_signal(sig, attempt)
-                self.assertEqual((code, answer['state'], answer['reason']), (1, 'blocked', 'interrupted'))
-                server.stop.assert_called_once_with()
-                self.assertEqual(self.holds()[attempt]['state'], 'uncertain')
-                # a second Ctrl-C, SIGTERM or SIGHUP cannot interrupt the cleanup
-                self.assertEqual(self.during_stop, {item: signal.SIG_IGN for item in self.during_stop})
+    def check_signal(self, sig):
+        code, answer, server = self.run_signal(sig, 'a1')
+        self.assertEqual((code, answer['state'], answer['reason']), (1, 'blocked', 'interrupted'))
+        server.stop.assert_called_once_with()
+        self.assertEqual(self.holds()['a1']['state'], 'uncertain')
+        # a second Ctrl-C, SIGTERM or SIGHUP cannot interrupt the cleanup
+        self.assertEqual(self.during_stop, {item: signal.SIG_IGN for item in self.during_stop})
+
+    def test_sigterm_stops_the_server_and_leaves_the_hold_uncertain(self):
+        self.check_signal(signal.SIGTERM)
+
+    def test_sighup_stops_the_server_and_leaves_the_hold_uncertain(self):
+        self.check_signal(signal.SIGHUP)
+
+    def test_a_first_ctrl_c_is_converted_and_a_second_is_ignored(self):
+        self.check_signal(signal.SIGINT)
 
     def run_signal(self, sig, attempt):
         from scripts import opencode_launch

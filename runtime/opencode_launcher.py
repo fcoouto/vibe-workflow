@@ -403,12 +403,13 @@ def windows(observation):
 class _Gate:
     """The managed service as the core sees it. Immediately before `dispatch` it refuses an API-funded admission
     (`api_funding_unqualified`) and asks `routing.health` again (`host_unhealthy`); the core then closes the hold
-    with `not_dispatched`. It remembers the admission and the attempt id, never the token."""
+    with `not_dispatched`. It remembers the admission, the attempt id and how far `dispatch` got (`dispatch`: None,
+    `sending`, `dispatched` or `refused`), never the token."""
 
     def __init__(self, service, host):
         self.service, self.host = service, host
         self.project, self.settings_path, self.ledger_path = service.project, service.settings_path, service.ledger_path
-        self.admission, self.attempt_id, self.dispatch_sent = None, None, False
+        self.admission, self.attempt_id, self.dispatch = None, None, None
 
     def handle(self, raw, op=None):
         value = json.loads(raw)
@@ -419,10 +420,14 @@ class _Gate:
                 None if health(self.host) is not None else HOST_UNHEALTHY
             if reason is not None:
                 return dict(v=1, state='blocked', reason=reason)
-            self.dispatch_sent = True  # from here the hold may be dispatched, whatever interrupts the answer
+            self.dispatch = 'sending'  # unknown until the service answers: an interrupt here asks the ledger
+            response = self.service.handle(raw, op)
+            self.dispatch = 'dispatched' if response.get('state') in ('dispatched', 'already_dispatched') else 'refused'
+            return response
         response = self.service.handle(raw, op)
         if value.get('op') == 'prepare' and response.get('state') == 'admitted':
             self.admission = response.get('admission')
+            self.attempt_id = (self.admission or {}).get('attempt_id')
         return response
 
 
@@ -484,12 +489,33 @@ class _Attempt:
         return detached
 
 
-def _record_uncertain(service, attempt):
+def _record(service, attempt, kind):
+    """One lifecycle event under the core's own event id (`<kind>:<attempt>`), so it is a duplicate when the core
+    already recorded it; the answer's state and reason, or None when the call failed."""
     try:
-        service.handle(json.dumps(dict(v=1, op='record', event=dict(
-            event_id='uncertain:%s' % attempt, attempt_id=attempt, kind='uncertain'))).encode())
+        answer = service.handle(json.dumps(dict(v=1, op='record', event=dict(
+            event_id='%s:%s' % (kind, attempt), attempt_id=attempt, kind=kind))).encode())
     except Exception:  # noqa: BLE001 - the re-raised interrupt is the outcome; `status` shows the hold
-        pass
+        return None
+    return answer.get('state'), answer.get('reason')
+
+
+def _interrupted(service, gate):
+    """After an interrupt: a confirmed dispatch is recorded `uncertain`. Otherwise the hold is closed with
+    `not_dispatched`, which the ledger accepts only while the hold is still `admitted` (a dispatch commits atomically,
+    so a refused or interrupted `dispatch` left it so). `hold_state_forbidden` there proves the dispatch committed,
+    so it is recorded `uncertain`; any other doubt after a dispatch was sent is `uncertain` too (conservative). A
+    `complete` that already won makes both `attempt_closed`, which changes nothing."""
+    attempt = gate.attempt_id
+    if attempt is None:
+        return  # nothing was admitted
+    if gate.dispatch != 'dispatched':
+        answer = _record(service, attempt, 'not_dispatched')
+        if answer is not None and (answer[0] == 'recorded' or answer[1] == 'attempt_closed'):
+            return
+        if gate.dispatch is None and (answer is None or answer[1] != 'hold_state_forbidden'):
+            return  # never sent: the hold is only admitted and expires unsent; `uncertain` would keep it
+    _record(service, attempt, 'uncertain')
 
 
 def _account_of(settings_path, source, route):
@@ -571,11 +597,9 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                                            planned=planned, profile=profile, settings_path=service.settings_path,
                                            source=source)
         except BaseException:
-            # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`.
-            # After `dispatch` the hold must not stay plainly dispatched: record `uncertain` (the core's own event id,
-            # so it is a duplicate if the core already did, and refused if `complete` won), then re-raise.
-            if gate.dispatch_sent:
-                _record_uncertain(service, gate.attempt_id)
+            # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`;
+            # close or mark the hold it leaves before re-raising.
+            _interrupted(service, gate)
             raise
         finally:
             detached = attempt.detach()  # after `record complete`: `descendants` answers only while attached
