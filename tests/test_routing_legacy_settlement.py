@@ -317,7 +317,9 @@ class OneShotTests(Legacy):
                 mock.patch.object(command, 'default_ledger', return_value=self.ledger):
             managed = command.managed_service(self.temp.name)
         self.addCleanup(managed.close)
-        for name, service in (('in_process', self.service), ('serving', serving), ('managed_service', managed)):
+        in_process = command.Service(self.settings, self.ledger, workflow=self.reader)
+        self.addCleanup(in_process.close)
+        for name, service in (('in_process', in_process), ('serving', serving), ('managed_service', managed)):
             with self.subTest(service=name):
                 self.assertEqual(service.handle(json.dumps(settle_call('s1', RESERVATION)).encode()),
                                  blocked('operator_op_not_served'))

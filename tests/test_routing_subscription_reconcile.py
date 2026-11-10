@@ -10,6 +10,7 @@ import subprocess
 import sys
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from runtime import routing, subscription_reconcile as sub, usage_budget as budget
 from scripts import routing as command
@@ -17,6 +18,7 @@ from tests.fixture_opencode_accounting import account
 from tests.fixture_routing_accounting import Accounting, complete, usage
 from tests.test_routing_command import API, M, SCRIPT, SECRET, facts, now, observations, prepare
 from tests.test_routing_dispatch import record
+from tests.test_routing_managed_projects import collector
 
 KEY = 'win:sub/5h'
 HOUR = 3600
@@ -50,7 +52,9 @@ class Subscription(Accounting):
         super().setUp()
         self.service.close()
         # Tests supply an off-clock observation `now` to `prepare` (the window-epoch rule needs later windows).
-        self.service = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True)
+        # A one-shot command, as an operator runs `reconcile_subscription` (C3-0a review S1).
+        self.service = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True,
+                                       one_shot=True)
 
     def sub_dispatched(self, attempt):
         self.admit_sub(attempt)
@@ -579,13 +583,50 @@ class ServeClearingTests(Subscription):
             seen.append(kwargs['clear_debits'])
             return real(*args, **kwargs)
         serving = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True, serving=True)
-        self.addCleanup(serving.close)
+        in_process = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True)
+        for service in (serving, in_process):
+            self.addCleanup(service.close)
         with mock.patch.object(command.routing, 'admit', spy):
-            self.admit_sub('in-process')
-            request = prepare('serving', observations=observations(account='acct-serving'),
-                              constraints=dict(allowed_strategy_ids=['s-sub']))
-            self.assertEqual(serving.handle(json.dumps(request).encode())['state'], 'admitted')
-        self.assertEqual(seen, [True, False])
+            self.admit_sub('one-shot')
+            for name, service in (('serving', serving), ('in-process', in_process)):
+                request = prepare(name, observations=observations(account='acct-' + name),
+                                  constraints=dict(allowed_strategy_ids=['s-sub']))
+                self.assertEqual(service.handle(json.dumps(request).encode())['state'], 'admitted')
+        self.assertEqual(seen, [True, False, False])
+
+    def qualifying(self, debit, account):
+        later = debit['at'] + 2 * HOUR
+        obs = observations(at=later, account=account)
+        obs['pools']['sub']['windows'] = [self.window(later, debit['at'] + HOUR)]
+        return obs
+
+    def test_caller_observations_in_process_never_clear_a_debit(self):
+        """C3-0a review S1: outside the one-shot command, only a managed project's collector-built snapshot clears;
+        an in-process service never trusts a caller's snapshot to release a debit."""
+        debit = self.abandoned()
+        in_process = command.Service(self.settings, self.ledger, workflow=self.reader, test_inputs=True)
+        self.addCleanup(in_process.close)
+        request = prepare('b1', observations=self.qualifying(debit, 'acct-b1'),
+                          constraints=dict(allowed_strategy_ids=['s-sub']))
+        self.assertEqual(in_process.handle(json.dumps(request).encode())['state'], 'admitted')
+        self.assertEqual((self.debits(), self.cleared_rows()), ({KEY: debit}, []))
+
+    def test_collector_observations_of_a_managed_project_clear_in_process(self):
+        debit = self.abandoned()
+        project = Path(self.temp.name).resolve() / 'checkout'
+        project.mkdir()
+        revision = self.call(dict(v=1, op='status'))['settings_revision']
+        command.routing_settings.update(command._resolved(self.settings), dict(managed_projects=[str(project)]),
+                                        revision)  # written directly: the activation gate is C3-0b's to test
+        # Pinned and managed; `--test-inputs` only so the stub's off-clock `now` is accepted (no caller observations).
+        managed = command.Service(self.settings, self.ledger, workflow=self.reader, project=project, test_inputs=True)
+        self.addCleanup(managed.close)
+        request = prepare('b1', constraints=dict(allowed_strategy_ids=['s-sub']))
+        request.pop('observations', None)
+        with collector(dict(observations=self.qualifying(debit, 'acct-b1'), seen={})) as calls:
+            self.assertEqual(managed.handle(json.dumps(request).encode())['state'], 'admitted')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((self.debits(), len(self.cleared_rows())), ({}, 1))
 
 
 class DropDebitTests(Subscription):
@@ -665,11 +706,13 @@ class DropDebitTests(Subscription):
         marker = self.marker()
         before, stored = self.snapshot(), self.ledger_bytes()
         serving = command.Service(self.settings, self.ledger, serving=True, one_shot=True)
-        self.addCleanup(serving.close)
-        for service in (self.service, serving):
+        in_process = command.Service(self.settings, self.ledger, workflow=self.reader)
+        for service in (in_process, serving):
+            self.addCleanup(service.close)
             with self.subTest(serving=service.serving):
                 self.assertEqual(service.handle(json.dumps(drop(KEY, marker)).encode()),
                                  blocked('operator_op_not_served'))
+        in_process.close()
         self.service.close()
         done = subprocess.run([sys.executable, '-B', str(SCRIPT), '--serve', '--settings', str(self.settings),
                                '--ledger', str(self.ledger)], input=json.dumps(drop(KEY, marker)).encode() + b'\n',
