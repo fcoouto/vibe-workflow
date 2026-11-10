@@ -293,6 +293,195 @@ class FailureTests(Base):
         self.assertNotIn('SECRET', out.getvalue())
 
 
+class PreviousTableTests(Base):
+    """C.4 rollback: a successful refresh keeps one previous version; `rollback` swaps it into place."""
+    def setUp(self):
+        super().setUp()
+        self.previous = self.table.parent / 'strategy-table.previous.json'
+
+    def change_inputs(self):
+        values = inputs()
+        values[2].append(dict(values[2][0], id='bench-extra', sha256='e' * 64))
+        self.write_inputs(values)
+
+    def two_versions(self):
+        self.refresh(now='2026-11-01T00:00:00Z')
+        old = self.table.read_bytes()
+        self.change_inputs()
+        code, report = self.refresh(now='2026-11-09T00:00:00Z')
+        self.assertEqual((code, report['state']), (0, 'refreshed'), report)
+        return old, self.table.read_bytes()
+
+    def rollback(self, *extra):
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out):
+            code = routing_table.main(['rollback', '--settings', str(self.settings), *extra])
+        return code, json.loads(out.getvalue())
+
+    def test_first_refresh_keeps_no_previous_version(self):
+        self.refresh()
+        self.assertFalse(os.path.lexists(self.previous))
+
+    def test_successful_refresh_keeps_the_replaced_table_unchanged_and_private(self):
+        old, new = self.two_versions()
+        self.assertNotEqual(old, new)
+        self.assertEqual(self.previous.read_bytes(), old)  # original version and compiled_at
+        self.assertEqual(json.loads(old)['compiled_at'], '2026-11-01T00:00:00Z')
+        info = self.previous.lstat()
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
+        self.assertEqual(sorted(p.name for p in self.table.parent.iterdir()),
+                         ['strategy-table.json', 'strategy-table.previous.json'])
+
+    def test_only_one_previous_version_is_kept(self):
+        _, middle = self.two_versions()
+        self.write_inputs(inputs())
+        self.refresh(now='2026-11-10T00:00:00Z')
+        self.assertEqual(self.previous.read_bytes(), middle)
+        self.assertEqual(len(list(self.table.parent.iterdir())), 2)
+
+    def test_same_version_or_failed_refresh_leaves_the_previous_version(self):
+        old, new = self.two_versions()
+        code, report = self.refresh(now='2026-11-10T00:00:00Z')  # same evidence, same version
+        self.assertEqual((code, report['state']), (0, 'refreshed'))
+        self.assertEqual(self.previous.read_bytes(), old)
+        (self.evidence / 'catalog.json').unlink()
+        self.assertEqual(self.refresh()[1]['state'], 'kept')
+        self.assertEqual(self.previous.read_bytes(), old)
+
+    def test_unverified_table_is_not_kept_as_previous(self):
+        self.table.parent.mkdir(mode=0o700, parents=True)
+        self.table.write_text('{"rows": NaN}')
+        self.table.chmod(0o600)
+        self.assertEqual(self.refresh()[1]['state'], 'refreshed')
+        self.assertFalse(os.path.lexists(self.previous))
+
+    def test_unsafe_previous_path_blocks_the_refresh_and_keeps_the_table(self):
+        old = self.two_versions()[1]
+        real = self.root / 'elsewhere.json'
+        real.write_text('{}')
+        real.chmod(0o600)
+        self.previous.unlink()
+        self.previous.symlink_to(real)
+        self.write_inputs(inputs())
+        code, report = self.refresh(now='2026-11-10T00:00:00Z')
+        self.assertEqual((code, report['state'], report['reason']), (1, 'blocked', 'unsafe_table_path'))
+        self.assertEqual(self.table.read_bytes(), old)
+        self.assertEqual(real.read_text(), '{}')
+
+    def test_failed_previous_write_leaves_the_table(self):
+        _, new = self.two_versions()
+        self.write_inputs(inputs())
+        with mock.patch.object(routing_table.os, 'replace', side_effect=OSError('disk')):
+            code, report = self.refresh(now='2026-11-10T00:00:00Z')
+        self.assertEqual((code, report['reason']), (1, 'write_failed'))
+        self.assertEqual(self.table.read_bytes(), new)
+        self.assertEqual(len(list(self.table.parent.iterdir())), 2)  # no temp file
+
+    def test_rollback_swaps_and_a_second_rollback_returns_to_the_newer_table(self):
+        old, new = self.two_versions()
+        code, report = self.rollback()
+        self.assertEqual((code, report['state']), (0, 'rolled_back'), report)
+        self.assertEqual(self.table.read_bytes(), old)
+        self.assertEqual(self.previous.read_bytes(), new)
+        self.assertEqual((report['version'], report['compiled_at'], report['replaced_version']),
+                         (json.loads(old)['version'], '2026-11-01T00:00:00Z', json.loads(new)['version']))
+        self.assertEqual(stat.S_IMODE(self.table.lstat().st_mode), 0o600)
+        self.assertEqual(self.rollback()[0], 0)
+        self.assertEqual((self.table.read_bytes(), self.previous.read_bytes()), (new, old))
+        self.assertEqual(len(list(self.table.parent.iterdir())), 2)
+
+    def test_rollback_honors_an_explicit_table_path(self):
+        other = self.root / 'other' / 'table.json'
+        self.refresh('--table', str(other), now='2026-11-01T00:00:00Z')
+        old = other.read_bytes()
+        self.change_inputs()
+        self.refresh('--table', str(other), now='2026-11-09T00:00:00Z')
+        self.assertTrue((other.parent / 'table.previous.json').exists())
+        self.assertEqual(self.rollback('--table', str(other))[0], 0)
+        self.assertEqual(other.read_bytes(), old)
+
+    def test_rollback_without_a_previous_version_is_refused(self):
+        self.assertEqual(self.rollback(), (1, dict(v=1, state='blocked', reason='no_previous_table')))
+        self.refresh()
+        before = self.table.read_bytes()
+        self.assertEqual(self.rollback()[1]['reason'], 'no_previous_table')
+        self.assertEqual(self.table.read_bytes(), before)
+
+    def test_rollback_refuses_an_unsafe_or_invalid_previous_version(self):
+        old, new = self.two_versions()
+        real = self.root / 'elsewhere.json'
+        real.write_bytes(old)
+        real.chmod(0o600)
+        self.previous.unlink()
+        self.previous.symlink_to(real)
+        self.assertEqual(self.rollback()[1]['reason'], 'unsafe_previous_table')
+        self.previous.unlink()
+        os.link(real, self.previous)  # a hard link is shared, not private
+        self.assertEqual(self.rollback()[1]['reason'], 'unsafe_previous_table')
+        self.previous.unlink()
+        os.mkfifo(self.previous, 0o600)
+        self.assertEqual(self.rollback()[1]['reason'], 'unsafe_previous_table')
+        self.previous.unlink()
+        for label, data in (('nan', b'{"rows": NaN}'), ('shape', b'{"rows": []}'), ('utf', b'\xff')):
+            with self.subTest(label):
+                self.previous.write_bytes(data)
+                self.previous.chmod(0o600)
+                self.assertEqual(self.rollback()[1]['reason'], 'invalid_previous_table')
+                self.previous.unlink()
+        self.previous.write_bytes(old)
+        self.previous.chmod(0o600)
+        with mock.patch.object(command, 'MAX_TABLE', len(old) - 1):  # the reader limit applies to both files
+            self.assertEqual(self.rollback()[1]['reason'], 'invalid_previous_table')
+        self.assertEqual(self.table.read_bytes(), new)
+
+    def test_rollback_refuses_an_unsafe_table_path(self):
+        old, new = self.two_versions()
+        self.table.chmod(0o644)
+        self.assertEqual(self.rollback()[1]['reason'], 'unsafe_table_path')
+        self.table.chmod(0o600)
+        self.table.parent.chmod(0o755)
+        self.assertEqual(self.rollback()[1]['reason'], 'unsafe_table_path')
+        self.table.parent.chmod(0o700)
+        self.assertEqual((self.table.read_bytes(), self.previous.read_bytes()), (new, old))
+
+    def test_rollback_over_an_unverified_or_missing_table_installs_the_previous_version(self):
+        old, _ = self.two_versions()
+        self.table.write_text('{"rows": NaN}')
+        self.assertEqual(self.rollback()[1]['state'], 'rolled_back')
+        self.assertEqual(self.table.read_bytes(), old)
+        self.assertEqual(self.previous.read_bytes(), old)  # an unverified table is never kept
+        self.table.unlink()
+        self.assertEqual(self.rollback()[1]['state'], 'rolled_back')
+        self.assertEqual(self.table.read_bytes(), old)
+
+    def test_interrupted_rollback_never_leaves_no_table(self):
+        old, new = self.two_versions()
+        with mock.patch.object(routing_table.os, 'replace', side_effect=OSError('disk')):
+            code, report = self.rollback()
+        self.assertEqual((code, report['reason']), (1, 'write_failed'))
+        self.assertEqual((self.table.read_bytes(), self.previous.read_bytes()), (new, old))
+        real_replace, calls = os.replace, []
+
+        def second_fails(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise OSError('disk')
+            return real_replace(src, dst)
+        with mock.patch.object(routing_table.os, 'replace', second_fails):
+            code, report = self.rollback()
+        self.assertEqual((code, report['reason']), (1, 'write_failed'))
+        self.assertEqual(self.table.read_bytes(), old)  # the table is installed first
+        self.assertEqual(len(list(self.table.parent.iterdir())), 2)
+
+    def test_rollback_usage_errors(self):
+        for argv in (['rollback', '--guidance', 'x'], ['rollback', '--table'], ['rollback', 'extra']):
+            out = io.StringIO()
+            with mock.patch('sys.stdout', out):
+                self.assertEqual(routing_table.main(argv), 2, argv)
+            self.assertEqual(json.loads(out.getvalue())['reason'], 'usage_error')
+
+
 class LocalOnlyTests(Base):
     """RF5: the refresh reads and writes local files only."""
     def test_refresh_makes_no_network_subprocess_model_or_secret_store_call(self):
@@ -310,6 +499,8 @@ class LocalOnlyTests(Base):
             code, report = self.refresh()
             (self.evidence / 'catalog.json').unlink()
             self.refresh()
+            with mock.patch('sys.stdout', io.StringIO()):
+                routing_table.main(['rollback', '--settings', str(self.settings)])
         finally:
             for patch in patches:
                 patch.stop()
@@ -329,8 +520,8 @@ class LocalOnlyTests(Base):
 
 class RoundTripTests(Base):
     """Refresh, then a one-shot `routing.py prepare` ranks from the written table."""
-    def write_evidence(self):
-        guidance = [dict(id='g1', sha256='a' * 64, checked_at='2026-11-01T00:00:00Z', rows=[dict(
+    def write_evidence(self, digest='a'):
+        guidance = [dict(id='g1', sha256=digest * 64, checked_at='2026-11-01T00:00:00Z', rows=[dict(
             role='worker', task_family='code', complexity_band='medium', risk_band='medium',
             strategies=[dict(model='m', effort='high', harness='h', evidence_refs=['g1'])])])]
         self.write_inputs([guidance, [dict(model='m', supported_efforts=['high'])], [], []])
@@ -368,6 +559,23 @@ class RoundTripTests(Base):
         self.assertNotIn('table_unavailable', ranking['reason_codes'])
         self.assertEqual(ranking['table_version'], self.stored()['version'])
         self.assertEqual(ranking['strategy_ids'], [strategy])
+
+    def test_prepare_ranks_from_the_previous_table_after_rollback(self):
+        self.write_evidence()
+        self.assertEqual(self.refresh(now='2026-11-01T00:00:00Z')[0], 0)
+        old = self.stored()['version']
+        self.write_evidence('b')
+        self.assertEqual(self.refresh()[0], 0)
+        self.assertNotEqual(self.stored()['version'], old)
+        done = subprocess.run([sys.executable, '-B', str(SCRIPT), 'rollback', '--settings', str(self.settings)],
+                              capture_output=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)['state'], 'rolled_back')
+        strategy = self.stored()['rows']['worker|code|medium|medium'][0]['strategy_id']
+        response = self.prepare(self.root / 'usage' / 'ledger.sqlite3', strategy)
+        self.assertEqual(response['state'], 'admitted', response)
+        self.assertNotIn('table_unavailable', response['ranking']['reason_codes'])
+        self.assertEqual(response['ranking']['table_version'], old)
 
     def test_cli_runs_one_shot_and_exits_by_state(self):
         self.write_evidence()
