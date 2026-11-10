@@ -59,13 +59,21 @@ def _call(service, request):
     return service.handle(json.dumps(request).encode())
 
 
+def _holds(service):
+    """The routing ledger snapshot (read-only), or {} before the ledger exists. An unreadable or busy ledger is a
+    delegation error, never "no hold" (fail closed)."""
+    try:
+        ledger = service._ledger(False)
+        return {} if ledger is None else ledger.snapshot()
+    except Exception:  # noqa: BLE001 - Blocked, BudgetError or sqlite3.Error from the routing command's stores
+        service.close()
+        raise state.StateError('Routing ledger is unavailable or busy') from None
+
+
 def _hold(service, attempt_id):
     """(hold state or None, admission record or None) for a routing attempt, read-only."""
-    ledger = service._ledger(False)
-    if ledger is None:
-        return None, None
-    data = ledger.snapshot()
-    hold = data['holds'].get(attempt_id)
+    data = _holds(service)
+    hold = data.get('holds', {}).get(attempt_id)
     return (None if hold is None else hold['state']), _admission(data, attempt_id)
 
 
@@ -283,8 +291,10 @@ def settled(scope, record, reply):
         return reply
     closed = []
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
-        ledger = service._ledger(False)
-        holds = {} if ledger is None else ledger.snapshot()['holds']
+        try:
+            holds = _holds(service).get('holds', {})
+        except state.StateError:  # the assignment is settled; its holds close at the next reconcile or by the operator
+            return dict(reply, routing=dict(state='unavailable', reason='ledger_unavailable'))
         for attempt, hold in sorted(holds.items()):
             if hold['closed'] or not (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
                 continue
@@ -304,8 +314,7 @@ def _continuation_attempt(record, value):
 def _close_turns(service, record):
     """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
     ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`."""
-    ledger = service._ledger(False)
-    for attempt, hold in sorted(({} if ledger is None else ledger.snapshot()['holds']).items()):
+    for attempt, hold in sorted(_holds(service).get('holds', {}).items()):
         if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
             kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
             if kind is not None:
