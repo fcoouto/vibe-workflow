@@ -40,7 +40,7 @@ Hooks supplement these instructions. Their presence or silence does not establis
 Run them in the task worktree. Install, lint, types and build are unavailable: nothing exists to run.
 
 - Validate the package: `python3 -B scripts/validate.py`
-- Tests, selected by what the change can break: `python3 -B scripts/test_sharded.py <module-or-glob>...` (without names it runs the full suite, about 10 minutes)
+- Commit first, then run tests selected by what the change can break: `python3 -B scripts/test_sharded.py <module-or-glob>...` (without names it runs the full suite, about 10 minutes)
 - After changing a policy or instruction file, before committing, validating or testing: `python3 -B scripts/read_instructions.py --prepare`
 - Dev package for both clients: `python3 -B scripts/package.py`
 
