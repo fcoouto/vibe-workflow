@@ -314,6 +314,36 @@ class ExchangeTests(Sandbox):
             time.sleep(0.05)
         return False
 
+    def group_signals(self):
+        """Record each group signal and whether the leader was still unreaped (its pgid then cannot be reused)."""
+        calls, real = [], os.killpg
+
+        def killpg(pgid, sig):
+            try:
+                os.waitid(os.P_PID, pgid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                unreaped = True
+            except ChildProcessError:
+                unreaped = False
+            calls.append((sig, unreaped))
+            return real(pgid, sig)
+        return calls, mock.patch.object(reader.os, 'killpg', side_effect=killpg)
+
+    def test_a_normal_read_sends_no_group_signal_at_all(self):
+        calls, patch = self.group_signals()
+        with patch:
+            self.assertEqual(len(self.read()), 1)
+        self.assertEqual(calls, [])
+
+    def test_the_timeout_signals_the_group_only_while_the_leader_is_unreaped(self):
+        calls, patch = self.group_signals()
+        with patch, self.assertRaises(reader.ReadError):
+            self.read('hang_with_child', timeout=0.5)
+        self.assertEqual([sig for sig, _ in calls], [signal.SIGTERM, signal.SIGKILL])
+        self.assertTrue(all(unreaped for _, unreaped in calls), calls)
+        grandchild = next(entry['grandchild'] for entry in self.entries() if 'grandchild' in entry)
+        self.assertTrue(self.gone(self.entries()[0]['pid']))
+        self.assertTrue(self.gone(grandchild))
+
     def test_the_whole_process_group_is_gone_after_the_timeout(self):
         with self.assertRaises(reader.ReadError) as caught:
             self.read('hang_with_child', timeout=0.5)
