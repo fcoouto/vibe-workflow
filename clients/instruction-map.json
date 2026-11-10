@@ -38,28 +38,28 @@
       ]
     },
     "clients/delegation-requests.md": {
-      "sha256": "4961cc917a607996104f0b2457e8ff070d84fd9e8e6d64543892f4d5ec98c09a",
+      "sha256": "40f1accf5440b113d0c5dabba334de4f81dea8561632a5d6d1fbd25d93443cfe",
       "ranges": [
         [
           1,
-          208
+          206
         ],
         [
-          209,
-          298
+          207,
+          302
         ]
       ]
     },
     "clients/delegation.md": {
-      "sha256": "03d8c561fe555459ecaccd5c032d2675e34d45b68b0e9dc3dddf0ab671544251",
+      "sha256": "da8d58ec3b8a9a001b2fabefcbce14309a31490c73f26cb0065f3f40cc5e888b",
       "ranges": [
         [
           1,
-          56
+          55
         ],
         [
-          57,
-          77
+          56,
+          78
         ]
       ]
     },
@@ -122,7 +122,7 @@
       ]
     },
     "clients/evidence-review-prepare.md": {
-      "sha256": "9c62050aedfc790bcb84bbad91fc58abe46d9fc0049add1f72812619b901e5e1",
+      "sha256": "6cf7c1287d922584ca169a02f69e82a2270c572784f64d57edd7af632e8e3956",
       "ranges": [
         [
           1,
@@ -424,19 +424,19 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "3b11c3cde6b57a775f0b574ee3b5e5443e65438247645d32970838ab13008f0e",
+      "sha256": "3c90f6ae467c95d3eabef2f3d7abd8228b11bf566e9d0bcb90e1b6144d84fe07",
       "ranges": [
         [
           1,
-          50
+          40
         ],
         [
-          51,
-          120
+          41,
+          115
         ],
         [
-          121,
-          123
+          116,
+          147
         ]
       ]
     },
@@ -794,11 +794,11 @@
       ]
     },
     "skills/review-my-project/references/procedure.md": {
-      "sha256": "876ef45aadab70d1acb714869f4a491350f579ec9de3bf4691496f463869a8fb",
+      "sha256": "ea545464624886f768c6d9622f3dd1cf861984e314c62b2c1a3fa5244878eea9",
       "ranges": [
         [
           1,
-          44
+          46
         ]
       ]
     },
