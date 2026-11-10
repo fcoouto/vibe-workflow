@@ -1,8 +1,9 @@
 # Smart Routing C.3 — caller wiring and selector retirement design
 
-- **Version:** 1.3 draft (round-3 review and root-cause diagnosis; see [revision history](#8-revision-history))
+- **Version:** 1.4 draft (round-4 review; validated by running; see [revision history](#8-revision-history))
 - **Date:** 2026-11-10
-- **Status:** Design only. No code, model call, OpenCode server or live run was used to write it. Open user decisions are in [section 7](#7-open-decisions).
+- **Status:** Design only. No model call, OpenCode server or live run was used. Since v1.4, the risky steps are validated by running throwaway prototypes in a scratch worktree ([Appendix B.0](#b0-prototype-runs-validated-by-running)); no prototype code is part of this PR.
+- **Line numbers:** all at `origin/main` `bd5cde6` ([Appendix A](#appendix-a--inventory-at-the-pinned-base)). Open user decisions are in [section 7](#7-open-decisions).
 - **Plan task:** [C.3 Replace callers and retire selectors](../plans/2026-11-08-smart-routing.md#task-c3-replace-callers-and-retire-selectors). The plan owns task status; this document owns how C.3 is built.
 - **Parent design:** [Smart Routing spec v1.5](2026-11-08-usage-routing-opencode-subscriptions-design.md) §3, §4, §8, §10.4 and Appendix A.
 
@@ -42,11 +43,11 @@ Each term is defined here once and used with this meaning below.
 
 ## 2. Inventory of selection paths
 
-The table covers every path that chooses or funds a delegated worker on `main` at `4f16c36`. "Target" is the call sequence after C.3; [section 3.2](#32-call-sequence) defines the steps. Line numbers are for that commit.
+The table covers every path that chooses or funds a delegated worker. "Target" is the call sequence after C.3; [section 3.2](#32-call-sequence) defines the steps. Line numbers follow the one base stated in [Appendix A](#appendix-a--inventory-at-the-pinned-base).
 
 | ID | Path (file:function) | What it decides today | Target sequence | Slice |
 |---|---|---|---|---|
-| N1 | `runtime/delegation.py:_prepare_native` (2055) via `_discovery` (1461), reached from `scripts/workflow.py` `delegation prepare` (279) | Validates a coordinator-supplied `selection{model, effort, mode: explicit/inherit, profile_ids}` against the observed Codex catalog and cached guidance. The coordinator chooses the model from guidance ([clients/delegation.md](../../../clients/delegation.md) "Select suitable worker settings"). It also reserves claims and resources and returns spawn settings. | Delegation reserve (unchanged) → in-process `prepare` with `workflow` and the delegation `attempt_id` → catalog check of the admitted strategy → `dispatch` at the last pre-spawn step → spawn with explicit model and effort → `observe` → `record complete` from `reconcile`. Advisory host. | C3-2 |
+| N1 | `runtime/delegation.py:_prepare_native` (2055) via `_discovery` (1461), reached from `scripts/workflow.py` `delegation prepare` (300) | Validates a coordinator-supplied `selection{model, effort, mode: explicit/inherit, profile_ids}` against the observed Codex catalog and cached guidance. The coordinator chooses the model from guidance ([clients/delegation.md](../../../clients/delegation.md) "Select suitable worker settings"). It also reserves claims and resources and returns spawn settings. | Delegation reserve (unchanged) → in-process `prepare` with `workflow` and the delegation `attempt_id` → catalog check of the admitted strategy → `dispatch` at the last pre-spawn step → spawn with explicit model and effort → `observe` → `record complete` from `reconcile`. Advisory host. | C3-2 |
 | N2 | `runtime/evidence.py:prepare_review` (5691) → `_prepare_native(role='review')` | Same as N1 for an independent reviewer. Independence is checked by evidence, not by route. | As N1, with role `review` (routing role `reviewer`) and an independence constraint from the review policy. | C3-2 |
 | N3 | `runtime/delegation.py:prepare_continuation` / `consume_continuation` (3079, 3036) | Reuses a child for unchanged work. The continuation inherits the child's settings. | Reuses the child and its profile, but gets a **fresh** `prepare` and `dispatch` (spec F11). A change of scope or role gets a new profile. | C3-2 |
 | N4 | `runtime/workstreams.py:consume_dispatch` (201), `validate_admission` (183) | Workstreams launch gates for a planned job. No model choice. | Gates unchanged. Becomes the last pre-spawn step, where `dispatch` runs for Workstreams jobs. | C3-2 |
@@ -122,17 +123,31 @@ preflight(status) ─► [delegation reserve → attempt_id]
 | OpenRouter | `openrouter_settings.admission` activation, scope and funding verification, mapped to the `gateway` class with `integration_enabled`. |
 | Entitlement | The entitlement record ([3.4](#34-listed-is-not-entitled)). |
 
-**Service enforcement (C3-0b).** When the service is pinned to a managed project, `prepare` refuses a request carrying `observations` (`observations_not_accepted`) and calls the collector itself. If the collector module is missing or raises, `prepare` is blocked with `observations_unavailable`, so C3-0b fails closed until C3-1 lands. Request observations stay accepted only for unmanaged projects in phase W (the pilot and qualification harness, on their own ledgers) and under `--test-inputs`. C3-7 removes the unmanaged case.
+**Service factory and workflow resolver (C3-0b; defined once, here).** In-process managed launches build their service only with `scripts.routing.managed_service(checkout, scope=None)`, which is `Service(default_settings(), default_ledger(), project=<realpath of checkout>, workflow=routing_gates.D6Workflow(resolve=…, project=…))`:
+- A caller that already holds the canonical delegation scope (C3-2) passes `scope=`, and the reader resolves every locator to that scope. This is the same injection the gate tests use (`D6Workflow(resolve=…)`). The pin is still compared with `scope.repository_root`.
+- Without `scope`, the reader uses the default entry-path resolver (`routing_gates._resolve_scope`).
+
+P2 showed this is needed: the default resolver refuses a checkout without recorded qualification (`qualification_unobserved`).
+
+**Service enforcement (C3-0b).** `FIELDS['prepare']` makes `observations` optional. When the service is pinned to a managed project, `prepare` refuses a request carrying `observations` (`observations_not_accepted`) and calls the collector itself. If the collector module is missing or raises, `prepare` is blocked with `observations_unavailable`, so C3-0b fails closed until C3-1 lands. Request observations stay accepted only for unmanaged projects in phase W (the pilot and qualification harness, on their own ledgers) and under `--test-inputs`. C3-7 removes the unmanaged case.
 
 **Source seam (C3-1; test-only use).** This seam is defined once, here. `collect(project, assignment, *, source=None)` reads its route manifest and window observations from a source object. With `source=None` it uses `routing_observations.default_source()`, which returns the local source (manifest file, stored rate-limit observations, entitlement record). A source has three methods:
 - `manifest()`, which returns the route list, each route with its `billing_class`, `pool` and `account`;
 - `windows(pool, now)`, which returns that pool's window observations, each with its observation time. A dollar pool's windows name their ledger organization and its revision, as `routing._funding` requires;
 - `credential(route, scope)`, which returns binding readiness metadata (`state`, `scope`, `ref`) for a dollar route, never a secret.
 
+Each manifest route carries its own `demand`, which `routing._incomplete` (377) requires: per window id, a conservative per-request estimate in that window's unit. That is window units for subscription pools, and micro-USD in the `credit` window for `gateway` and direct API pools. A host with a tighter bound, such as a proposal's `output_tokens` times the endpoint price, may lower it but never raise it.
+
 Ledger organizations and balances are not part of the source; the collector always reads them from the ledger it is given. `funding_verified` is true only when the route's organization is enabled in that ledger and has a balance observation no older than 900 s.
 
 C3-1 also defines two helpers that every wiring slice and the test helper use, so a test route always matches what a slice requests:
-- `routing_launch.route_identity(host, **fields)` maps host-specific fields to `{provider, model, effort, harness}`. The hosts are `codex_native` (provider `openai`, harness `codex-native`), `openrouter_proposal` and `openrouter_worker` (provider `openrouter`, harness `openrouter-proposal` or `opencode`, the request's `provider` kept as the pinned endpoint), `opencode` and `api_usage`. Unknown fields are ignored.
+- `routing_launch.route_identity(host, **fields)` maps host-specific fields to `{provider, model, effort, harness}`, the `ROUTE_IDENTITY` fields of `runtime/routing.py` (333). The hosts are:
+  - `codex_native`: provider `openai`, harness `codex-native`;
+  - `openrouter_proposal` and `openrouter_worker`: provider `openrouter`, harness `openrouter-proposal` or `opencode`. The request's `provider` is kept as the pinned endpoint;
+  - `opencode` and `api_usage`.
+
+  A missing effort becomes `none`. Unknown fields are ignored.
+- `routing_launch.choice(host, funding, **fields)` returns `route_identity(...)` plus `funding` (`subscription` or `api`). This is the only shape of `assignment.choice` that `routing._valid_assignment` (661) accepts; `api` covers both direct API and `gateway` routes (`FUNDING_OF`, 330).
 - `routing_launch.assignment_scope(checkout)` returns the assignment `scope` that credential readiness is compared with.
 
 Only code can replace `default_source`: a test patches the module attribute. No request field, setting, table, environment variable or production command-line flag can select a source, the same rule as the S3.5 workflow reader. The C.2 test helper uses this seam ([6.4](#64-c2-marker-map-and-pr-197-amendments)).
@@ -225,7 +240,8 @@ A project may be added to `managed_projects` only through the one-shot `scripts/
 
 For each capability, the gate:
 - creates a fresh owner-only temporary directory;
-- runs the check in a child process: `python3 -I -B -c 'from runtime import <module> as m; ...'` for runtime modules, or `python3 -I -B <script> --managed-self-check <workdir>` for scripts;
+- runs the check in a child process started with **`sys.executable`** (the interpreter running the gate), never a `python3` looked up on `PATH`. On this Mac, `PATH=/usr/bin:/bin` gives Apple's Python 3.9.6, which cannot import `runtime.routing` (P3);
+- puts the **plugin package root** (`runtime.state.PACKAGE`) first on the child's import path, never the project checkout: `[sys.executable, '-I', '-B', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); …', PACKAGE]`. A script check loads `PACKAGE/scripts/<script>.py` by path and calls its `managed_self_check(workdir)`;
 - gives the child exactly this environment, inheriting nothing: `PATH=/usr/bin:/bin`, `HOME=<workdir>/home`, `TMPDIR=<workdir>/tmp`, `LANG=C.UTF-8`;
 - enforces the 10 s budget with `subprocess.run(..., timeout=10, start_new_session=True)`, killing the child's process group on timeout and failing the check with `self_check_timeout`;
 - deletes the directory.
@@ -273,7 +289,7 @@ Before C3-7 merges, `status.ledger.legacy_outstanding` (added by C3-0a) must be 
 
 It also lists `ready` handoffs for information. They hold no exposure and do not block.
 
-Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835, the state check at the [pinned base](#appendix-a--inventory-at-the-pinned-base)), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0a) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention):
+Today `Ledger.complete` accepts a `dispatching` or `unresolved` call (`usage_budget.py` 835, the state check), but only the legacy send path calls it. No operator entry reaches it, and `Ledger.reconcile` only reports. So the one-shot op `settle_legacy_call{run_id, phase, evidence, event_id}` (C3-0a) covers every open state, under the [operator-op rules](../plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention):
 
 | Call state | Accepted evidence | Effect |
 |---|---|---|
@@ -349,7 +365,7 @@ Each slice's reviewer checks the points its files touch.
 
 Each slice is one PR. A slice may edit only the files it owns; every other file is read-only for it, except as the [shared-file protocol](#61-shared-file-protocol) allows. [Appendix A](#appendix-a--inventory-at-the-pinned-base) gives every grep hit an owner.
 
-`scripts/validate.py` sets line ceilings, and four touched files are at theirs at the pinned base: `runtime/delegation.py` (3,369), `runtime/evidence.py` (8,505), `runtime/routing.py` (1,506) and `runtime/usage_budget.py` (1,616). New code therefore goes into new modules, and edits to those four files are line-neutral or shrink them.
+`scripts/validate.py` sets line ceilings, and four touched files are at theirs: `runtime/delegation.py` (3,369), `runtime/evidence.py` (8,505), `runtime/routing.py` (1,506) and `runtime/usage_budget.py` (1,616). New code therefore goes into new modules, and edits to those four files are line-neutral or shrink them.
 
 ### 6.1 Shared-file protocol
 
@@ -374,7 +390,7 @@ The protocol is defined once here and applies to every slice.
 ```text
 C3-0b  routing service: pin, managed projects, gate, observations, factory   (no #192 dependency)
 C3-1   launcher core + collector + manifest                                   (parallel with C3-0b)
-#192 + C3-0b        → C3-0a  ledger v5, legacy settlement, debits (2nd owner of scripts/routing.py)
+C3-0b               → C3-0a  ledger v5, legacy settlement, debits (2nd owner of scripts/routing.py; #192 is on main)
 C3-0b + C3-1        → C3-2   native delegation (shared core) → C3-6 phase-W instructions
 C3-0b + C3-1        → C3-4a  external choice + OpenRouter proposals
 C3-0b + C3-1        → C3-5   API Usage
@@ -386,7 +402,7 @@ C3-3 + C3-4a        → C3-4b  OpenRouter workers
 
 Parallel sets (no two slices in a set own the same file):
 1. C3-0b and C3-1.
-2. After both: C3-2, C3-4a, C3-5, and C3-0a once #192 has merged.
+2. After both: C3-0a, C3-2, C3-4a and C3-5.
 3. C3-3 after C3-0a and C3-1; C3-6 after C3-2.
 4. C3-4b after C3-3 and C3-4a.
 
@@ -398,17 +414,22 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 - **Owns:**
   - Code: `scripts/routing.py` (first owner); `runtime/routing_settings.py` (`managed_projects`, the `managed_project(path)` predicate, the `LEGACY_ROUTE_RETIRED` code constant).
   - New tests: `tests/test_routing_managed_projects.py`.
-  - Existing tests: `tests/test_routing_command.py`, `tests/test_routing_gates.py`, `tests/test_routing_settings.py`, `tests/test_routing_accounting_roots.py`, `tests/fixture_routing_accounting.py`, `tests/test_routing_accounting.py`.
+  - Existing tests it changes (P1, [Appendix B.0](#b0-prototype-runs-validated-by-running)): `tests/test_routing_gates.py` and `tests/fixture_routing_accounting.py`; also `tests/test_routing_settings.py` for `managed_projects`.
   - In `tests/test_smart_routing_features.py`: its own marker line only.
 - **Does:**
   - **`project_required`:** `Service._workflow_binding` refuses a workflow-bound `prepare` without `project`, before any workflow read.
-  - **Pin the tests that relied on an unpinned workflow-bound `prepare`,** with `project` equal to their locator's `cwd`:
-    - `tests/test_routing_gates.py` 118, 462, 497, 508, 533. The deliberately unpinned service at 893 now expects `project_required`.
-    - `tests/test_routing_accounting_roots.py` 274.
-    - `tests/fixture_routing_accounting.py`: the fixture keeps its unpinned `self.service` (75) for everything without a workflow, because `settle` without `workflow` is `project_required` on a pinned service (`scripts/routing.py` 442) and must keep working. It adds `self.pinned = command.Service(..., project='/checkout')` (the `cwd` of `where()`), and `admit(..., root=…)` (86–87) sends its workflow-bound `prepare` through it. The eight calls in `tests/test_routing_accounting.py` (199–243) keep their shape.
+  - **Pin exactly the tests that send an unpinned workflow-bound `prepare`.** This list is P1-verified: 664 tests pass with it.
+    - `tests/test_routing_gates.py`:
+      - `GateBase.setUp` (118) pins `project='/work/repo'`;
+      - the re-created service in `ConcurrencyTests` (508) pins the same;
+      - `CanonicalWorkflowTests.setUp` (533) pins `str(self.scope.repository_root)`;
+      - `test_an_oversized_serialized_binding_is_refused_at_prepare` (904–906) moves its wide `cwd` under the pinned root (`'/work/repo/' + 'é' * 500`), so it still proves `binding_too_large` instead of hitting `project_mismatch`.
+      - Unchanged: 462 and 497 (`dispatch` only), 893 (`status` only) and the already pinned services.
+    - `tests/fixture_routing_accounting.py`: `admit(..., root=…)` (86–87) and `admit_sub(..., root=…)` (95–98) send their workflow-bound `prepare` through a new `call_bound`. It uses a short-lived `command.Service(..., project='/checkout', test_inputs=self.service.test_inputs)` (`/checkout` is the `cwd` of `where()`). `self.service` (75) stays unpinned, because `settle` without `workflow` is `project_required` on a pinned service (`scripts/routing.py` 442). This one change covers `test_routing_accounting.py` (199–243), `test_routing_accounting_roots.py`, `test_routing_accounting_blocks.py` (288) and `test_routing_subscription_reconcile.py` (117, 177); those four files are unchanged.
+    - `tests/test_smart_routing_features.py`: delete `@NEEDS_C3('C3-0b')` (495).
   - **The observation refusal and collector call** ([3.3](#33-observation-collector)).
   - **`managed_projects`** as a one-shot setting with the activation gate ([4.2](#42-activation-gate)).
-  - **The shared factory** `scripts.routing.managed_service(checkout)` (G3). It is the only way production code builds an in-process service for a managed launch: `Service(default_settings(), default_ledger(), project=<repository root of checkout, realpath>)` with the default `D6Workflow`. `delegation_routing` (C3-2), `openrouter_proposals` (C3-4a), `openrouter_workers` (C3-4b), `opencode_launcher` (C3-3), `usage_routing` (C3-5) and the C.2 fixture all use it. It reads `default_settings()`/`default_ledger()` at call time, so the fixture's patches take effect.
+  - **The shared factory** `scripts.routing.managed_service(checkout, scope=None)` (G3; [3.3](#33-observation-collector)). It is the only way production code builds an in-process service for a managed launch. `delegation_routing` (C3-2), `openrouter_proposals` (C3-4a), `openrouter_workers` (C3-4b), `opencode_launcher` (C3-3), `usage_routing` (C3-5) and the C.2 fixture all use it. It reads `default_settings()`/`default_ledger()` at call time, so the fixture's patches take effect.
 - **Tests:**
   - an unpinned workflow `prepare` is `project_required`, and `settle` without `workflow` on an unpinned service still works;
   - a managed-project `prepare` with `observations` is `observations_not_accepted`, and without a collector `observations_unavailable`;
@@ -417,7 +438,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 - **Markers:** `test_a_workflow_bound_prepare_requires_the_project_pin`.
 - **Shared core:** no. **Size:** M (about 350 lines with tests).
 
-**C3-0a — Ledger pre-C.** Depends on #192 merged and on C3-0b (`scripts/routing.py` sequencing). Phase W.
+**C3-0a — Ledger pre-C.** Depends on C3-0b (`scripts/routing.py` sequencing); #192 is already on `main`. Phase W.
 - **Owns:**
   - New: `runtime/ledger_versions.py`, `tests/test_routing_legacy_settlement.py`.
   - Code: `runtime/usage_budget.py` (move-out only, net shrink); `runtime/routing.py` (line-neutral); `runtime/subscription_reconcile.py`; `scripts/routing.py` (second owner: new ops, `status` fields, the `--serve` debit flag).
@@ -472,10 +493,15 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
   - `tests/fixture_delegation.py`, only if it changes.
   - **Not** `scripts/workflow.py`: the route travels inside delegation's reply dict, which `workflow.py` already prints unchanged.
 - **Does:** for a managed project:
-  - **Every selection mode goes through `prepare` (G1).** `explicit` (as in `tests/fixture_delegation.py` 96–97 and the native C.2 contracts) and `inherit` both become `assignment.choice` = `route_identity('codex_native', model, effort)`, taken from `selection` or `selection.inheritance`. The user's explicit choice stays a hard constraint: `prepare` admits that route or answers `worker_choice_unavailable`, and never substitutes. The new mode `routed` has no model, and lets routing choose.
-  - **Order (G4).** `prepare` runs **after** delegation's reservation transaction (`_reservation_write`, 1799) commits, through `scripts.routing.managed_service(repo)._prepare` in-process, with `workflow{client, cwd, session_id, task_id, job_id, attempt_id}` and `job = delegation.routing_job(scope, locator)` (3270).
+  - **Every selection mode goes through `prepare` (G1).** `explicit` (as in `tests/fixture_delegation.py` 96–97 and the native C.2 contracts) and `inherit` both become `assignment.choice = routing_launch.choice('codex_native', 'subscription', model=…, effort=…)`, taken from `selection` or `selection.inheritance`. That is the four `ROUTE_IDENTITY` fields plus `funding`, as `_valid_assignment` requires. The user's choice stays a hard constraint: `prepare` admits that route or answers **`explicit_choice_unavailable`** (`runtime/routing.py` 596), and never substitutes. The new mode `routed` has no model, and lets routing choose.
+  - **Order (G4).** `prepare` runs **after** delegation's reservation transaction (`_reservation_write`, 1799) commits, through `scripts.routing.managed_service(repo, scope=scope)` in-process, with `workflow{client, cwd, session_id, task_id, job_id, attempt_id}` and `job = delegation.routing_job(scope, locator)` (3270).
   - **Outcomes (G4).**
-    - **admitted:** the existing catalog and guidance validators (`_discovery`, 1461) check the admitted route. The reply is `_reply(record, admitted=True)` (1378), so `launch_admitted` (1386) is true and the reply carries `route{model, effort, attempt_id}`.
+    - **admitted:** for `explicit` and `inherit`, `_discovery` (1461, called at 2106) has already validated the model and effort against the catalog, **before** the reservation, so the admitted route cannot mismatch. For `routed`, the admitted model is known only now, so C3-2 runs the same catalog check after admission. On a mismatch, `delegation_routing.release(attempt_id, 'catalog_mismatch')`, in this order:
+      1. records routing `not_dispatched` (`event_id` `catalog_mismatch:<attempt_id>`), which closes the admitted hold;
+      2. settles the committed assignment as `blocked` through delegation's existing reconcile path, which releases its claims and resource units;
+      3. replies `launch_admitted: false` with `routing{state: 'blocked', reason: 'catalog_mismatch'}`.
+
+      Whether `reconcile_assignment` accepts a never-launched assignment is not yet verified. C3-2 adds that path if missing, with a test. The reply is `_reply(record, admitted=True)` (1378), so `launch_admitted` (1386) is true and the reply carries `route{model, effort, attempt_id}`.
     - **pending or blocked:** the committed assignment stays `prepared` and is not launched. The reply has `launch_admitted: false` and `routing{state, reason}`. A retry is the same `delegation prepare` request (same `dispatch_id`). Its replay re-runs routing `prepare`, which is idempotent by `attempt_id`, and grants the one launch permit only on the call that sees `admitted`. Release is explicit, through delegation's existing reconcile path, which records `not_dispatched` for any admitted hold.
     - **`workflow_changed`:** `D6Workflow.view` (`runtime/routing_gates.py` 225) raises `WorkflowChanged`, which the service answers as `blocked/workflow_changed` (`scripts/routing.py` 360–361). C3-2 retries once at once; if it repeats, the outcome is the pending/blocked case above with reason `workflow_changed`.
   - **Single record.** The routing admission is the only record of the requested model. `binding.requested_model` stays null for routed and choice modes, and `observe` compares observed settings with the admission through a read-only accessor.
@@ -517,7 +543,7 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 **C3-4a — External choice and OpenRouter proposals.** Depends on C3-0b and C3-1. Phase W.
 - **Owns:**
   - Code: `runtime/external_delegation.py` (adds `constraints(...)`; `select` stays until C3-7); `scripts/openrouter_proposals.py` (with `--managed-self-check`).
-  - Docs: `clients/external-delegation.md` (the X0 text, with a managed-project rule); `skills/openrouter-proposals/references/procedure.md`.
+  - Docs: `clients/external-delegation.md` (the X0 text, with a managed-project rule); `skills/openrouter-proposals/references/procedure.md` (130) and `skills/openrouter-proposals/SKILL.md` (15).
   - Tests: `tests/test_external_delegation.py`, `tests/test_openrouter_proposals.py`, `tests/openrouter_fixtures.py` (first owner).
 - **Does:** for a managed project:
   - `begin` obtains one routing admission on the `gateway` route through `managed_service`, with `job = unplanned_job(...)`, role `researcher` and no `workflow`;
@@ -566,14 +592,18 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 **C3-6 — Phase W instructions.** Depends on C3-2. It merges in phase W and is part of the activation gate, so a canary coordinator never gets instructions that contradict the code.
 - **Owns:**
   - `policies/03-agent-delegation.md`: a `Managed projects` section. In a managed project, ask a launcher and never choose a model; guidance refresh feeds the strategy table; explicit choices are hard constraints.
-  - `clients/delegation.md` (worker settings, lines 17 and 57) and `clients/evidence-review-prepare.md` (line 6).
+  - `clients/delegation.md` (lines 3, 17, 55, 57), `clients/evidence-review-prepare.md` (lines 6, 8) and `clients/delegation-requests.md` (119–122: "select model and supported effort from the actual native catalog", the explicit and inherit modes; 159: the request example's `selection`). These are the B5 and I11/I12 hits ([Appendix A](#appendix-a--inventory-at-the-pinned-base)); C3-2's code needs none of them earlier.
   - All of `skills/review-my-project/`.
   - The `skills/workstreams/` references, where they describe worker selection.
 
   Entry points keep the 150-word limit.
 - **Does:**
   - adds the managed-project rule once, in policy 03; the other files link to it;
-  - in `skills/review-my-project/`, keeps **one operative sentence** (G5): a step, not a second definition of the rule. It says that in a managed project the delegated reviewer(s) for the selected scope are prepared through `scripts/routing.py`, and links to policy 03;
+  - in `skills/review-my-project/references/procedure.md`, adds **one operative sentence** (G5), a step and not a second definition of the rule. Exact text, P2-checked against the merged `NEGATION` regex (`tests/test_smart_routing_features.py:174`), which rejects not, no, never, without, instead of, avoid…, skip…, unless, except…, only if, outside, may, might, can, could and optional…:
+
+    > In a managed project, prepare each delegated reviewer for the selected scope through `scripts/routing.py`, as [policy 03](../../../policies/03-agent-delegation.md#managed-projects) requires.
+
+    C3-6 creates the `Managed projects` section that the link targets;
   - leaves the unmanaged-project text unchanged until C3-7;
   - covers C1 (Claude Code native subagents) through policy 03.
 - **Tests:** `tests.test_prepared_instructions` and the affected instruction tests; walkthroughs for Workstreams, API Usage, OpenRouter, Council and project review, reported separately.
@@ -604,27 +634,24 @@ Lane B's table is a soft dependency: without it, `prepare` falls back to `worker
 
 ### 6.4 C.2 marker map and PR #197 amendments
 
-This section is based on PR #197 at **`60c191f`**. Contracts must cite that head; a later #197 head needs this section re-checked.
+PR #197 is **merged** (`main` `bd5cde6`). Every amendment this design asked for is applied there:
+- **`NEEDS_C3(slice_id)` and `SLICES`,** including `C3-0a` and `C3-0b`. Only an `AssertionError` (or a skip) counts as an expected failure. A crash goes to `_NON_ASSERTION` and a pass to `_PASSED`, and `tearDownModule` then fails the module ([6.1](#61-shared-file-protocol) unexpected-pass rule). A broken precondition raises `FixtureError`, which is deliberately not an assertion.
+- **Pinned siblings.** `PinnedGates` (`project='/work/repo'`) holds the four sibling contracts. `C2bProjectPin` (484–491) builds its **own** unpinned `Service`, so C3-0b's `GateBase.setUp` pin does not affect it.
+- **The fixture skeleton.** `managed_project_fixture(test, checkout, routes=())` (98), with the C3-1 owner comments and an `AssertionError` sentinel.
+- **Route entries.** `fixture_route(route, billing_class)` with ids `native:<model>#<effort>` and `openrouter:<model>@<provider>`.
+- **The merged review check.** `routes_reviewers_through_routing` with the `NEGATION` regex (174–183).
 
-**What #197 already has at `60c191f`:**
-- **`NEEDS_C3(slice_id)`.** Only an `AssertionError` (or a skip) counts as an expected failure. Any other exception is recorded in `_NON_ASSERTION`, and a contract that passes is recorded in `_PASSED`; `tearDownModule` then fails the module ([6.1](#61-shared-file-protocol) unexpected-pass rule). A broken precondition raises `FixtureError`, which is deliberately not an assertion.
-- **Pinned siblings.** `PinnedGates` (`project='/work/repo'`) for the four sibling contracts, and `C2bProjectPin(gate_tests.GateBase)` (unpinned) for the pin contract.
-- **The fixture skeleton.** `managed_project_fixture(test, checkout, routes=())` with the C3-1 owner comments and an `AssertionError` sentinel.
-- **Route entries.** `fixture_route(route, billing_class)` returns `{'route': <id>, 'billing_class': 'included_subscription' | 'dollar'}`. The ids are `native:<model>#<effort>` (the two native contracts, from the fixture's `selection`) and `openrouter:<model>@<provider>` (`proposal_begin` and `worker_prepare`).
-
-**The one change #197 still needs (C3-0 split).** The slice names change, so two lines change:
-- `SLICES = {'C3-0a', 'C3-0b', 'C3-1', 'C3-2', 'C3-3', 'C3-4a', 'C3-4b', 'C3-5', 'C3-6', 'C3-7'}`;
-- `@NEEDS_C3('C3-0')` on `test_a_workflow_bound_prepare_requires_the_project_pin` becomes `@NEEDS_C3('C3-0b')`, with its comment naming C3-0b.
+No further #197 change is needed. All marker lines below are on `main`.
 
 **Route-id mapping (G2; defined once, here).** C3-1 maps ids inside the fixture body; test bodies and `fixture_route` do not change.
 
 | Id prefix and billing class | Host(s) for `route_identity` | Provider | Harness | Account kind and account | Funding set up by the fixture |
 |---|---|---|---|---|---|
 | `native:<model>#<effort>` (split on the last `#`), `included_subscription` | `codex_native` | `openai` | `codex-native` | subscription, `fixture-codex-subscription` | one fresh, fixed `5h` window |
-| `openrouter:<model>@<provider>` (split on the last `@`), `dollar` | `openrouter_proposal` **and** `openrouter_worker` (the id does not say which, so the test manifest lists both) | `openrouter`; the id's `<provider>` is kept as the pinned endpoint | `openrouter-proposal`, `opencode` | gateway, `fixture-openrouter` | ledger organization, balance, credential (rule 4) |
-| any other combination (`native:` with `dollar`, `openrouter:` with `included_subscription`, an unknown prefix) | — | — | — | — | raises `FixtureError` |
+| `openrouter:<model>@<provider>` (split on the last `@`), `dollar` or `gateway` | `openrouter_proposal` **and** `openrouter_worker`, each for every effort the hosts accept (`none`, `low`, `medium`, `high`, `max`): the id carries neither host nor effort, so the test manifest lists all of them | `openrouter`; the id's `<provider>` is kept as the pinned endpoint | `openrouter-proposal`, `opencode` | gateway, `fixture-openrouter` | ledger organization, balance, credential (rule 4) |
+| any other combination (`native:` with `dollar` or `gateway`, `openrouter:` with `included_subscription`, an unknown prefix) | — | — | — | — | raises `FixtureError` |
 
-`dollar` with an `openrouter:` id is the `gateway` billing class. The entries carry everything the manifest, C3-2's catalog check ([3.1](#31-what-a-launcher-must-do) step 6) and the `gateway` candidate checks need.
+`dollar` (as #197 writes it) or `gateway` with an `openrouter:` id is the `gateway` billing class. The entries carry everything the manifest, C3-2's catalog check ([3.1](#31-what-a-launcher-must-do) step 6) and the `gateway` candidate checks need.
 
 **A4. The body C3-1 writes must:**
 1. **Check slices.** Raise `AssertionError` naming the missing slice if `runtime.routing_settings.managed_project` or `scripts.routing.managed_service` (C3-0b), or `runtime.routing_observations.default_source` or `runtime.routing_launch.route_identity` (C3-1), is absent. Never let an `AttributeError` escape. A malformed entry or an unmapped id raises `FixtureError`.
@@ -652,16 +679,16 @@ This section is based on PR #197 at **`60c191f`**. Contracts must cite that head
 
 Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the four managed contracts fail by assertion only (no routing admission yet) until C3-2, C3-4a and C3-4b each make theirs true and remove only their own marker.
 
-| Test (#197 `60c191f` line) | Slice | What makes it true |
+| Test (marker line on `main`) | Slice | What makes it true |
 |---|---|---|
-| `test_a_workflow_bound_prepare_requires_the_project_pin` (472) | C3-0b | The routing service refuses an unpinned workflow-bound `prepare` with `project_required`. |
-| `test_native_worker_admission_calls_routing_prepare_once` (504) | C3-2 | Managed-project native `prepare` calls `managed_service(...)._prepare` in-process once, so `runtime.routing.admit` runs once. |
-| `test_native_worker_admission_is_bound_to_its_workflow_job` (512) | C3-2 | That call carries `workflow` for the planned job (`job_id` `edit`) and the delegation `attempt_id`. |
-| `test_proposal_begin_obtains_one_routing_admission` (678) | C3-4a | Managed-project proposal `begin` obtains one admission on the `gateway` route. |
-| `test_worker_prepare_obtains_one_routing_admission` (714) | C3-4b | Managed-project `openrouter_workers.prepare` obtains one admission before writing the run. |
-| `test_project_review_routes_delegated_reviewers_through_the_routing_command` (760) | C3-6 | The review-my-project skill keeps one operative sentence naming `scripts/routing.py`, the delegated reviewer(s) and the selected scope, linking to policy 03. |
-| `test_external_delegation_keeps_no_caller_owned_selector` (596) | C3-7 | `runtime.external_delegation.select` is deleted. |
-| `test_usage_routing_cli_no_longer_selects_routes` (614) | C3-7 | `scripts/usage_routing.py evaluate` is a usage error (exit 2). |
+| `test_a_workflow_bound_prepare_requires_the_project_pin` (495) | C3-0b | The routing service refuses an unpinned workflow-bound `prepare` with `project_required`. |
+| `test_native_worker_admission_calls_routing_prepare_once` (527) | C3-2 | Managed-project native `prepare` calls `managed_service(...)._prepare` in-process once, so `runtime.routing.admit` runs once. |
+| `test_native_worker_admission_is_bound_to_its_workflow_job` (535) | C3-2 | That call carries `workflow` for the planned job (`job_id` `edit`) and the delegation `attempt_id`. |
+| `test_proposal_begin_obtains_one_routing_admission` (704) | C3-4a | Managed-project proposal `begin` obtains one admission on the `gateway` route. |
+| `test_worker_prepare_obtains_one_routing_admission` (740) | C3-4b | Managed-project `openrouter_workers.prepare` obtains one admission before writing the run. |
+| `test_project_review_routes_delegated_reviewers_through_the_routing_command` (805) | C3-6 | The review-my-project skill keeps one operative sentence naming `scripts/routing.py`, the delegated reviewer(s) and the selected scope, linking to policy 03. |
+| `test_external_delegation_keeps_no_caller_owned_selector` (622) | C3-7 | `runtime.external_delegation.select` is deleted. |
+| `test_usage_routing_cli_no_longer_selects_routes` (640) | C3-7 | `scripts/usage_routing.py evaluate` is a usage error (exit 2). |
 
 [Appendix B](#appendix-b--contract-walk) walks each one step by step.
 
@@ -676,7 +703,8 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 5. **Route manifest.** Accept the route manifest's classifications, taken from the capability matrix, as the collector's source while observed billing for several routes still waits on you. Until then the manifest lists no qualified route, and no project can be activated.
 6. **First window telemetry.** The collector learns a subscription window only from an attempt that has already settled, so the first managed launch on a route has no fresh window, and `prepare` stays `pending`. Something has to seed it; this is your decision. Recommendation: a one-shot operator op `seed_window{pool, window, used, limit, reset_at, length, event_id}`, with these limits:
    - subscription-window pools only; a dollar pool or an organization window is `invalid_request`;
-   - refused (`fresher_observation_exists`) while a host observation of that window is fresher than the seed would be;
+   - refused (`fresh_observation_exists`) while a fresh host observation of that window exists;
+   - bounds: `used`, `limit` and `length` are non-negative integers, `used <= limit`, `limit > 0` and `length > 0`; `reset_at` is an integer in the future and no later than `now + length`. Anything else is `invalid_request`;
    - one-shot only (`--serve` answers `operator_op_not_served`), idempotent by `event_id`;
    - recorded with `source: operator`, which `status` shows for that window while the seed is in use;
    - fresh for the usual 900 s, and replaced by the first real host observation, never the other way round.
@@ -699,6 +727,24 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 ## 8. Revision history
 
 - **1.0** (`bd01a22`): first draft.
+- **1.4:** the round-4 review of `71d0108`. Root-cause change: **validate by running**. Throwaway prototypes ran in a scratch worktree of `origin/main`, and Appendix B.0 records the commands and results.
+  - **P1** (C3-0b `project_required` plus pins): 664 tests pass. The exact changed tests are now listed: `test_routing_gates.py` (118, 508, 533, 904–906) and `fixture_routing_accounting.py` (`call_bound`), plus the C3-0b marker. The earlier claims about 893, `test_routing_accounting_roots.py:274` and the other accounting files were wrong; those files are unchanged.
+  - **P2** (fixture path): both native contracts and `proposal_begin` pass with the prototype fixture and wiring, and `HOME` stays empty under plain `unittest`. This found and fixed three gaps:
+    - the workflow resolver for the fixture checkout: `managed_service(checkout, scope=…)`;
+    - the `choice` shape: `funding` added;
+    - the gateway `demand` source.
+  - **P3** (self-check runner): `sys.executable` plus the package root works. `PATH` `python3` is Apple's 3.9.6 and fails.
+  - **B1:** #197 is merged with C2bProjectPin's own unpinned service; §6.4 marks every amendment applied.
+  - **B3:** `explicit_choice_unavailable` replaces the wrong `worker_choice_unavailable`.
+  - **B5:** `clients/delegation-requests.md` goes to C3-6. New greps I11 and I12 cover selection instructions in `clients/`, `skills/` and `policies/`, and found no other unowned one.
+  - **Should-fix:**
+    - Appendix A is re-pinned to `bd5cde6` (137 hits), and the #192 rebase rule is dropped. `FIELDS` and `Service` were confirmed on `main`; `FIELDS['prepare']` gets optional `observations` (C3-0b);
+    - the mapping table accepts `gateway`;
+    - the C3-2 catalog-mismatch release.
+  - **Nits:**
+    - one line-number base;
+    - `seed_window`: refused while a fresh host observation exists, with bounds on `used`, `limit`, `length` and `reset_at`.
+  - The G5 sentence was checked against the merged `NEGATION` regex.
 - **1.3:** the round-3 review of `7463fb5` and the root-cause diagnosis:
   - **Restructured.**
     - Appendix A: an inventory, with exact grep commands and their 109 hits at one pinned base (`94da5fb` plus #192 at `8d64c9f`), each changed hit with one owner, plus the API Usage entry-point table.
@@ -749,30 +795,37 @@ Before C3-1 merges, the sentinel raises `AssertionError`. After it merges, the f
 
 ## Appendix A — Inventory at the pinned base
 
-**Pinned base.** `origin/main` at `94da5fb` plus PR #192's diff at `8d64c9f` (`git diff 4f16c36 8d64c9f`, applied cleanly; `4f16c36` is the merge base). Every line number in this appendix and in [section 6](#6-slice-plan) is at that base unless a section says otherwise. C3-0a builds on #192 merged into `main`; if `main` moves before it starts, re-run the commands below and update the line numbers in the same PR.
+**Pinned base:** `origin/main` at `bd5cde6`, which contains #192 (S3.6c), #195, #196 and #197. This is the only line-number base in this document. The earlier base (`94da5fb` plus #192's diff) is retired: #192 has merged, so C3-0a builds on `main` with no rebase rule. If `main` moves before a slice starts, that slice re-runs the commands below and updates the cited lines in its own PR.
 
 ### A.1 Commands and owners
 
-Run from the pinned base, with this helper:
+Run from the pinned base, with these helpers:
 
 ```bash
 g() { grep -rnE --include='*.py' --include='*.js' --include='*.ts' --exclude-dir=fixtures --exclude-dir=node_modules "$@"; }
+m() { grep -rnEi --include='*.md' "$@"; }
 ```
 
 | # | Command | Hits | Hit (file:line) → owner |
 |---|---|---|---|
-| I1 | `g 'Service\(' runtime scripts tests \| grep -v 'class Service'` | 24 | `scripts/routing.py:635` (CLI `main`) → C3-0b. `tests/test_routing_dispatch.py:222, 806, 880` → C3-0a. `tests/test_routing_subscription_reconcile.py:52` → C3-0a (its workflow use is `settle`, allowed unpinned). `tests/test_routing_command.py:98, 525, 633, 700, 744` → C3-0b (no workflow-bound `prepare`; unchanged unless new cases are added). `tests/test_routing_accounting_blocks.py:234` (already pinned) → C3-0a. `tests/fixture_routing_accounting.py:75` → C3-0b. `tests/qualification/server.py:372` → C3-3. `tests/test_routing_gates.py:118, 462, 497, 508, 533` (unpinned, workflow-bound: pin), `668, 682, 863, 882` (pinned: unchanged) and `893` (unpinned on purpose: now expects `project_required`) → C3-0b. `tests/test_routing_accounting_roots.py:274` → C3-0b. |
+| I1 | `g 'Service\(' runtime scripts tests \| grep -v 'class Service'` | 29 | `scripts/routing.py:635` (CLI `main`) → C3-0b. `tests/test_routing_gates.py:118, 508` (pinned to `/work/repo`) and `533` (pinned to the scope's root) → C3-0b, changed. `462, 497` (`dispatch` only), `668, 682, 863, 882` (already pinned) and `893` (`status` only) → C3-0b, unchanged. `tests/fixture_routing_accounting.py:75` → C3-0b, changed (adds `call_bound`). `tests/test_routing_accounting_roots.py:274` (`record` and `settle` only), `tests/test_routing_command.py:98, 525, 633, 700, 744` (no workflow-bound `prepare`) and `tests/test_routing_table.py:79` (#196; no workflow) → unchanged, no owner. `tests/test_routing_dispatch.py:222, 806, 880` and `tests/test_routing_subscription_reconcile.py:52` (workflow use is `settle`, allowed unpinned) → C3-0a. `tests/test_routing_accounting_blocks.py:234` (already pinned) → C3-0a. `tests/qualification/server.py:372` → C3-3. `tests/test_smart_routing_features.py:346, 382 (PinnedGates), 491 (C2bProjectPin's own unpinned service), 666` → no change (Lane D's file; slices only delete their marker lines, [6.1](#61-shared-file-protocol)). |
 | I2 | `g 'STATE_VERSION' runtime scripts tests` | 11 | `runtime/usage_budget.py:28, 152, 242` (move to `ledger_versions.py`) → C3-0a. `tests/test_routing_reconcile.py:772`, `tests/test_routing_accounting_blocks.py:332, 336`, `tests/test_usage_budget.py:458, 498, 506, 648, 653` → C3-0a. |
-| I3 | `g 'usage_settings\.(controller\|scope)\(\|[^_.]controller\((cwd\|plan\|checkout\|key\|root)' runtime scripts` | 17 | `runtime/usage_settings.py:112` (definition, unchanged) → C3-5. `runtime/usage_canary_host.py:166, 185` → C3-5 (refuse first). `runtime/usage_routing.py:39` (`status`), `55` (`enable`), `690` (`configure`), `697` (`disable`) and `713` (`reconcile` report) → C3-5 (allowed: setup or report). `69, 71` (`_run_live`), `704` (`evaluate`), `720` (`handoff`) and `727` (`claim_handoff`) → C3-5 (refuse first). `runtime/usage_codex_host.py:121` (`freeze`) and `223` (`execute`) → C3-5 (refuse first); `186` (`_publish_generation`, reached only after `execute`) → C3-5 (covered by `execute`'s refusal). `scripts/usage_key_setup_host.py:96` → C3-5 (setup only, K1). |
-| I4 | `g 'default_settings\|default_ledger' runtime scripts tests` | 11 | `scripts/routing.py:582, 586, 610, 611, 635` → C3-0b (`managed_service` uses 582 and 586). `tests/test_routing_command.py:554` → C3-0b (unchanged). `tests/test_qualification_canary.py:239, 546`, `tests/qualification/server.py:372, 373` and `tests/qualification/canary.py:107` → C3-3. |
+| I3 | `g 'usage_settings\.(controller\|scope)\(\|[^_.]controller\((cwd\|plan\|checkout\|key\|root)' runtime scripts` | 17 | `runtime/usage_settings.py:112` (definition, unchanged) → C3-5. `runtime/usage_canary_host.py:166, 185` → C3-5 (refuse first). `runtime/usage_routing.py:39` (`status`), `55` (`enable`), `690` (`configure`), `697` (`disable`) and `713` (`reconcile` report) → C3-5 (allowed). `69, 71` (`_run_live`), `704` (`evaluate`), `720` (`handoff`) and `727` (`claim_handoff`) → C3-5 (refuse first). `runtime/usage_codex_host.py:121` (`freeze`) and `223` (`execute`) → C3-5 (refuse first); `186` (`_publish_generation`, reached only after `execute`) → C3-5 (covered). `scripts/usage_key_setup_host.py:96` → C3-5 (setup only, K1). |
+| I4 | `g 'default_settings\|default_ledger' runtime scripts tests` | 13 | `scripts/routing.py:582, 586, 610, 611, 635` → C3-0b (`managed_service` reads 582 and 586 at call time). `scripts/routing_table.py:234` (#196) → unchanged, no owner; it follows `scripts/routing.py`'s defaults, which the C.2 fixture patches. `tests/test_routing_command.py:554` and `tests/test_smart_routing_features.py:340` → unchanged. `tests/test_qualification_canary.py:239, 546`, `tests/qualification/server.py:372, 373` and `tests/qualification/canary.py:107` → C3-3. |
 | I5 | `grep -nE "\['freeze', 'execute'\]\|action == 'freeze'\|host\.(freeze\|execute)" scripts/usage_codex_host.js` | 5 | `scripts/usage_codex_host.js:5, 61, 62, 72, 74` → C3-5. No change: the refusals sit in the Python functions they call. |
-| I6 | `grep -nE '^def ' runtime/usage_routing.py; grep -nE 'choices=' scripts/usage_routing.py` | 13 | `runtime/usage_routing.py:19 status, 47 enable, 76 quote, 106 profile_digest, 688 configure, 694 disable, 710 reconcile` → C3-5 (allowed). `60 run` → C3-7 (already disabled). `64 _run_live, 701 evaluate, 717 handoff, 724 claim_handoff` → C3-5 (refuse first). `scripts/usage_routing.py:24` (`choices`) → C3-7 (removes the spending actions and `reconcile`). |
-| I7 | `g 'usage_routing\.(status\|enable\|configure\|disable\|run\|_run_live\|quote\|evaluate\|reconcile\|handoff\|claim_handoff)\b\|getattr\(usage_routing' runtime scripts` | 7 | `runtime/usage_canary.py:60` (`quote`, no exposure) and `75` (`_run_live`) → C3-5. `runtime/usage_codex_host.py:107` (`quote`) and `252` (`_run_live`) → C3-5. `scripts/usage_routing.py:29, 40, 42` (dispatch to the module functions) → C3-5. |
-| I8 | `g '\.begin\(' runtime scripts \| grep -v 'def begin'` | 1 | `runtime/usage_routing.py:643` (`Controller._run` → `Ledger.begin`) → C3-5 (backstop refusal), then C3-7 (removal). |
-| I9 | `ls tests/fixture_*.py tests/openrouter_fixtures.py tests/qualification/server.py tests/qualification/doubles.py` | 15 | `fixture_delegation.py` → C3-2 (only if it changes). `fixture_routing_accounting.py` → C3-0b. `openrouter_fixtures.py` → C3-4a, then C3-4b. `qualification/server.py` and `qualification/doubles.py` → C3-3. `fixture_routing_funding.py` is read by the C3-1 fixture body as a policy example and is not changed. Not touched by C.3, so no owner: `fixture_canonical_birth.py`, `fixture_changes.py`, `fixture_evidence.py`, `fixture_native_behavior.py`, `fixture_native_reviews.py`, `fixture_opencode_accounting.py`, `fixture_package.py`, `fixture_staged_successor.py`, `fixture_worker_visibility.py`. |
-| I10 | `g "'explicit'\|'inherit'" runtime/delegation.py tests/fixture_delegation.py` | 5 | `runtime/delegation.py:1486, 1487, 2113, 2114` → C3-2 (G1 mode mapping). `tests/fixture_delegation.py:97` → C3-2 (unchanged: `explicit` becomes `assignment.choice`). |
+| I6 | `grep -nE '^def ' runtime/usage_routing.py; grep -nE 'choices=' scripts/usage_routing.py` | 13 | `runtime/usage_routing.py:19 status, 47 enable, 76 quote, 106 profile_digest, 688 configure, 694 disable, 710 reconcile` → C3-5 (allowed). `60 run` → C3-7 (already disabled). `64 _run_live, 701 evaluate, 717 handoff, 724 claim_handoff` → C3-5 (refuse first). `scripts/usage_routing.py:24` (`choices`) → C3-7. |
+| I7 | `g 'usage_routing\.(status\|enable\|configure\|disable\|run\|_run_live\|quote\|evaluate\|reconcile\|handoff\|claim_handoff)\b\|getattr\(usage_routing' runtime scripts` | 7 | `runtime/usage_canary.py:60, 75`, `runtime/usage_codex_host.py:107, 252` and `scripts/usage_routing.py:29, 40, 42` → C3-5. |
+| I8 | `g '\.begin\(' runtime scripts \| grep -v 'def begin'` | 1 | `runtime/usage_routing.py:643` → C3-5 (backstop refusal), then C3-7 (removal). |
+| I9 | `ls tests/fixture_*.py tests/openrouter_fixtures.py tests/qualification/server.py tests/qualification/doubles.py` | 15 | `fixture_delegation.py` → C3-2 (only if it changes; the P2 prototype needed no change). `fixture_routing_accounting.py` → C3-0b. `openrouter_fixtures.py` → C3-4a, then C3-4b. `qualification/server.py` and `qualification/doubles.py` → C3-3. `fixture_routing_funding.py` is read as a policy example and not changed. Not touched by C.3, so no owner: `fixture_canonical_birth.py`, `fixture_changes.py`, `fixture_evidence.py`, `fixture_native_behavior.py`, `fixture_native_reviews.py`, `fixture_opencode_accounting.py`, `fixture_package.py`, `fixture_staged_successor.py`, `fixture_worker_visibility.py`. |
+| I10 | `g "'explicit'\|'inherit'" runtime/delegation.py tests/fixture_delegation.py` | 5 | `runtime/delegation.py:1486, 1487, 2113, 2114` → C3-2 (G1 mapping). `tests/fixture_delegation.py:97` → C3-2 (unchanged). |
+| I11 | `m "(select\|choose\|pick)[a-z]* [a-z ]{0,30}(model\|effort\|worker settings\|reasoning)\|native catalog\|\binherit(ance)?\b.*(model\|effort)\|explicit model\|requested_model" clients skills policies` | 9 | Selection instructions. `policies/03-agent-delegation.md:13, 21` → C3-6. `clients/delegation.md:17, 57` → C3-6. `clients/evidence-review-prepare.md:8` → C3-6. `clients/delegation-requests.md:119, 120, 122` → C3-6 (B5: "Select model and supported effort from the actual native catalog", explicit and inherit modes). `skills/openrouter-workers/references/procedure.md:45` → C3-4b. |
+| I12 | `m "worker selection\|native selection\|makes the selection\|selection source\|benchmarks guide selection\|\"selection\": \{\|selection/control" clients skills policies` | 12 | `clients/delegation.md:3, 55` → C3-6. `clients/delegation-requests.md:159` (the request example's `selection`) → C3-6. `skills/openrouter-workers/references/procedure.md:20, 32, 44` → C3-4b. `skills/manage-usage-routing/references/delegation.md:3, 53, 88` → C3-5. `skills/openrouter-proposals/references/procedure.md:130` and `skills/openrouter-proposals/SKILL.md:15` → C3-4a. `policies/03-agent-delegation.md:119` (escalation to a more capable worker: in a managed project, a new `prepare` with a higher profile floor) → C3-6. |
 
-**Totals.** 109 hits. Every hit that C.3 changes has exactly one owner, or a named sequence of owners. Nine shared fixtures are untouched and need no owner. No changed hit is unowned.
+**Totals.** 137 hits.
+- Every hit that C.3 changes has exactly one owner, or a named sequence of owners.
+- Unchanged hits are marked "no owner". They are nine untouched fixtures, `scripts/routing_table.py:234` and the read-only test services.
+- No changed hit is unowned.
+- I11 and I12 are the selection-instruction greps that would have found B5 (`clients/delegation-requests.md`). Run across `clients/`, `skills/` and `policies/`, they found no other selection instruction. `clients/external-delegation.md`'s selection text (lines 11, 24) is matched by neither pattern but is already owned by C3-4a.
 
 ### A.2 API Usage entry points
 
@@ -792,78 +845,86 @@ Every path that can reach `Ledger.begin` (`runtime/usage_budget.py:689`, called 
 
 ## Appendix B — Contract walk
 
-Each of the 8 markers in PR #197 at `60c191f`, from precondition to pass. "base" means the [pinned base](#appendix-a--inventory-at-the-pinned-base); a slice name means the step is new code there.
+The 8 markers in `tests/test_smart_routing_features.py` on `main` at `bd5cde6` (#197 merged), from precondition to pass. "base" means that commit; a slice name means the step is new code in that slice.
 
-**B1. `test_a_workflow_bound_prepare_requires_the_project_pin` (C3-0b).**
-1. Precondition: `C2bProjectPin(gate_tests.GateBase)` builds an unpinned `Service` (`tests/test_routing_gates.py:118`, base).
+### B.0 Prototype runs (validated by running)
+
+Throwaway patches in a scratch worktree of `origin/main` (`../vibe-workflow.worktrees/scratch-e`, deleted afterwards). They prove the risky steps execute; they are not the slice implementations. Run on this Mac with Python 3.15.2 (`/opt/homebrew/opt/python@3.15/bin/python3.15`).
+
+**P1 — C3-0b `project_required` and the test pins.**
+- Run 1 (at `2ce00f1`). Patch: `require(self.project is not None, 'project_required')` in `Service._workflow_binding`, right after `valid_locator` (`scripts/routing.py:354`). Command: `python3 -B scripts/test_sharded.py 'test_routing_*' test_usage_budget`. Result: 73 failures in `test_routing_gates`, `test_routing_accounting`, `test_routing_accounting_roots`, `test_routing_accounting_blocks` and `test_routing_subscription_reconcile`.
+- Run 2 (at `2ce00f1`), adding the pins listed in [6.3 C3-0b](#63-slices). Same command. Result: 626 tests OK.
+- Run 3 (at `bd5cde6`), with the same patch plus `test_smart_routing_features`. Result: 663 pass, and the module fails only through `tearDownModule`: "remove the NEEDS_C3(C3-0b) marker". That is the unexpected-pass rule working.
+- Run 4: run 3 with that marker line deleted. Command: `python3 -B scripts/test_sharded.py 'test_routing_*' test_usage_budget test_smart_routing_features`. Result: **664 tests, OK** (exit 0).
+- The patch touches 3 files: `scripts/routing.py` +1; `tests/fixture_routing_accounting.py` +11/−1; `tests/test_routing_gates.py` +5/−4.
+
+**P2 — the fixture path for the native contracts and `proposal_begin`** (at `2ce00f1` plus #197's merged test file; the runtime code is identical to `bd5cde6`).
+- The prototype implements:
+  - `routing_settings.managed_project`;
+  - `routing_observations` (`default_source`, `collect`);
+  - `routing_launch` (`route_identity`, `choice`, `assignment_scope`, `unplanned_job`);
+  - `scripts.routing.managed_service(checkout, scope=None)`;
+  - `prepare` with optional `observations`;
+  - the native hook after the reservation commit, and the proposal `begin` hook;
+  - the fixture body, per [6.4](#64-c2-marker-map-and-pr-197-amendments).
+- Run 1: the native contract hit `FixtureError` (`launch_admitted` false). Routing answered `blocked/workflow_unavailable`, because the default `routing_gates._resolve_scope` refuses the AdmissionFixture checkout (`RuntimeScopeError … qualification_unobserved`). `proposal_begin` already passed.
+- Fix: `managed_service(checkout, scope=...)`. The caller that already holds the canonical scope (delegation) passes it, as the gate tests inject `resolve=`; the project pin is still checked against `scope.repository_root` ([3.3](#33-observation-collector)).
+- Run 2. Command: `python3 -B -m unittest tests.test_smart_routing_features.C2bNativeDelegationThroughRouting tests.test_smart_routing_features.C2cProposalThroughRouting`. Result: **3 unexpected successes** (both native contracts and `proposal_begin`), with `tearDownModule` asking to remove their markers. They pass.
+- The same command with `HOME` set to an empty directory, plain `unittest` (no `test_sharded`): 3 unexpected successes, and **0 files** under `HOME` afterwards.
+- The G5 sentence ([6.3 C3-6](#63-slices)) was appended to `skills/review-my-project/references/procedure.md`. `routes_reviewers_through_routing` returns it under the merged `NEGATION` regex, and `test_project_review_routes_delegated_reviewers_through_the_routing_command` is an unexpected success.
+- Not prototyped: `worker_prepare` (C3-4b). Its fixture route id carries no effort, so the fixture lists the OpenRouter routes for every effort the hosts accept ([6.4](#64-c2-marker-map-and-pr-197-amendments)). The proposal case, which uses the same mapping with effort `none`, passed.
+
+**P3 — the activation self-check runner on this Mac.**
+- A runner started with `sys.executable` executes three checks, each as `subprocess.run([sys.executable, '-I', '-B', '-c', code, PACKAGE], env={PATH:/usr/bin:/bin, HOME, TMPDIR, LANG}, cwd=<workdir>, timeout=10, start_new_session=True)`. `code` first does `sys.path.insert(0, sys.argv[1])`, where `PACKAGE` is `runtime.state.PACKAGE`, the plugin package root, never the project checkout.
+- The three checks: `from runtime import routing_settings, routing_gates, usage_routing`, then loading `scripts/openrouter_proposals.py` and `scripts/openrouter_workers.py` by path. All three returned **exit 0, `ok`**; the workdir's `HOME` stayed empty.
+- Control: `python3` resolved from `PATH=/usr/bin:/bin` is Apple's Python 3.9.6, and `from runtime import routing, usage_routing` fails there with `TypeError: unsupported operand type(s) for |`. So the gate must use `sys.executable`, as [4.2](#42-activation-gate) now says.
+
+### B.1 The walk
+
+**B1. `test_a_workflow_bound_prepare_requires_the_project_pin` (C3-0b; marker at line 495).**
+1. Precondition: `C2bProjectPin.setUp` (484–491) builds its **own** unpinned `Service`, independent of `GateBase.setUp`, which C3-0b pins.
 2. The test sends `prepare` with `workflow=gate_tests.locator()`.
-3. `Service._prepare` (`scripts/routing.py:309`, base) → `_workflow_binding` (346, base). C3-0b adds `project_required` there, before the early `cwd` check (357) and before any workflow read.
-4. The answer is `blocked/project_required`, and C3-0b removes the marker.
+3. `Service._prepare` (`scripts/routing.py:309`) → `_workflow_binding` (346). C3-0b adds `project_required` after `valid_locator` (354), before the early `cwd` check and before any workflow read.
+4. The answer is `blocked/project_required`. Proven by P1 run 3.
 
-The four `PinnedGates` siblings (`project='/work/repo'`) are unaffected.
+**B2. `test_native_worker_admission_calls_routing_prepare_once` (C3-2; 527).**
+1. Precondition: `AdmissionFixture.plan()` and `prepare_request()` (`tests/fixture_delegation.py:86, 89`). The request's `selection` is `explicit` (96–97).
+2. `managed_project_fixture` (C3-1) with `fixture_route('native:new-native-model#high', 'included_subscription')`: default paths redirected; `managed_project(repo)` true; the manifest has `route_identity('codex_native', …)` with a fresh `5h` window; `authority_required` set.
+3. `delegation.prepare_assignment` → `_prepare_native` (`runtime/delegation.py:2050, 2055`): `_discovery` (call at 2106) validates `selection` against the catalog, then the reservation commits in `_reservation_write` (1799).
+4. C3-2 hook: managed project → `assignment.choice = route_identity('codex_native', model, effort) + funding: 'subscription'` (G1); `workflow{…, job_id: 'edit', attempt_id}`; `job = delegation.routing_job(...)` (3270).
+5. `scripts.routing.managed_service(repo, scope=scope)._prepare` → `_workflow_binding` → `D6Workflow.view` (`runtime/routing_gates.py:225`) with the injected scope → the collector with the fixture source → `runtime.routing.admit` (745), **once** → `_decide`'s explicit-choice branch → `admitted`.
+6. `_reply(record, admitted=True)` (1378): `launch_admitted` (1386) is true, so the precondition holds. `admit.count == 1`. Proven by P2 run 2.
 
-**B2. `test_native_worker_admission_calls_routing_prepare_once` (C3-2).**
-1. Precondition: `AdmissionFixture.plan()` and `prepare_request()` (`tests/fixture_delegation.py:86, 89`, base). The request carries `selection` mode `explicit` (96–97).
-2. `managed_project_fixture` (C3-1) runs with `fixture_route('native:new-native-model#high', 'included_subscription')`:
-   - default paths redirected (A4 rule 3);
-   - `managed_project(repo)` true;
-   - the manifest has `route_identity('codex_native', model, effort)`, with a fresh `5h` window;
-   - `authority_required` and `worker_choices` set.
-3. `delegation.prepare_assignment` → `_prepare_native` (`runtime/delegation.py:2050, 2055`, base) reserves and commits the assignment in `_reservation_write` (1799).
-4. The C3-2 hook (`delegation_routing.route`) sees the managed project and maps `explicit` to `assignment.choice` (G1). It builds `workflow{…, job_id: 'edit', attempt_id}` and `job = delegation.routing_job(...)` (3270, base).
-5. It calls `scripts.routing.managed_service(repo)._prepare` (C3-0b factory):
-   - `_workflow_binding` → `D6Workflow.view` (`runtime/routing_gates.py:225`) → `delegation.routing_view` (3309);
-   - the service refuses request observations and calls `routing_observations.collect` with the fixture source (C3-0b seam, C3-1 collector);
-   - `runtime.routing.admit` (745, base) runs **once**: class `subscription`, `admitted`.
-6. The catalog validator (`_discovery`, 1461, base) accepts the admitted model and effort, because they are the fixture's own `selection`.
-7. `_reply(record, admitted=True)` (1378): `launch_admitted` (1386) is true, so the precondition holds. `admit.count == 1`.
+**B3. `test_native_worker_admission_is_bound_to_its_workflow_job` (C3-2; 535).** B2 steps 1–5. `admit` receives `workflow=` the binding from `routing_gates.job_binding` (125), and `locator.job_id == 'edit'`. Proven by P2 run 2.
 
-**B3. `test_native_worker_admission_is_bound_to_its_workflow_job` (C3-2).** Steps 1–5 of B2. In step 5, `admit` receives `workflow=` the binding from `routing_gates.job_binding` (125, base), whose `locator.job_id` is `edit`.
+**B4. `test_proposal_begin_obtains_one_routing_admission` (C3-4a; 704).**
+1. Precondition: `enroll` and `configure(routes=('proposals',))`; the request has model `model/v1`, provider `p`, effort `None`; route `fixture_route('openrouter:model/v1@p', 'dollar')`.
+2. The fixture maps the route to both OpenRouter hosts and every effort, class `gateway`. It also sets up:
+   - organization `fixture-openrouter`, enabled with $10 observed;
+   - a `credit` window naming it, with pool `billing_class: gateway`;
+   - a ready credential for `assignment_scope(repo)`;
+   - route `demand: {'credit': 1_000_000}`.
+3. `openrouter_proposals.run('begin')` (`scripts/openrouter_proposals.py:321`): `settings.admission` and `external_delegation.check` pass as today.
+4. C3-4a: `managed_service(checkout)._prepare` with role `researcher`, `choice = route_identity('openrouter_proposal', model, provider, effort=None → 'none') + funding: 'api'` and `job = unplanned_job(...)`.
+5. `routing.admit`, **once**. `_candidate` (`runtime/routing.py:438`): `gateway` ∈ `FUNDED` (332); `_credential_reasons` (411) passes; `_funding` (354) finds the organization; result `admitted`.
+6. `_run('begin')` returns `attempt_token`. Proven by P2 run 2.
 
-**B4. `test_proposal_begin_obtains_one_routing_admission` (C3-4a).**
-1. Precondition: `enroll(self)` (`tests/openrouter_fixtures.py:27`) and `configure(routes=('proposals',))` (65) enable OpenRouter proposals.
-2. The test publishes metadata and builds the request (model `model/v1`, provider `p`); `self.route = fixture_route('openrouter:model/v1@p', 'dollar')`.
-3. `managed_project_fixture` (C3-1):
-   - paths redirected; `managed_project(repo)` true;
-   - manifest routes `route_identity('openrouter_proposal', …)` and `('openrouter_worker', …)`, class `gateway`;
-   - organization `fixture-openrouter` enabled, with $10 observed;
-   - a `credit` window naming it;
-   - credential ready for `assignment_scope(repo)`.
-4. `openrouter_proposals.run('begin')` (`scripts/openrouter_proposals.py:321`, base): `settings.admission(cwd, 'proposals')` (`runtime/openrouter_settings.py:366`) and `external_delegation.check` pass as today.
-5. C3-4a: the managed project calls `managed_service(repo)._prepare`, with:
-   - `assignment.choice = route_identity('openrouter_proposal', model, provider)`;
-   - `job = routing_launch.unplanned_job(...)`;
-   - role `researcher`;
-   - no `workflow`.
-6. Collector → `routing.admit` (**once**). In `_candidate` (`runtime/routing.py:438`, base):
-   - `gateway` is in `FUNDED` (332);
-   - `_credential_reasons` (411) passes: `integration_enabled` from the real OpenRouter activation, credential ready and in scope, `funding_verified`;
-   - the pool's `billing_class` matches;
-   - `_funding` (354) finds the enabled organization, and `org_headroom` covers the reservation;
-   - result: class `api`, `admitted`.
-7. `_run('begin')` → `act('begin')` returns `attempt_token` (base), so the precondition holds. `admit.count == 1`. `dispatch` happens later, at the `dispatch` action, outside this test.
+**B5. `test_worker_prepare_obtains_one_routing_admission` (C3-4b; 740).**
+1. Precondition: `enroll` and `configure(routes=('workers',), …)`; brief model `vendor/model`, provider `provider`, effort `low`; route `fixture_route('openrouter:vendor/model@provider', 'dollar')`.
+2. The fixture is set up as in B4 step 2. The `openrouter_worker` route with effort `low` exists, because the fixture lists every effort.
+3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`) → C3-4b: `managed_service(source_root)._prepare` with `choice = route_identity('openrouter_worker', …, effort='low') + funding: 'api'` → `admit`, **once** → `admitted` (as in B4 step 5).
+4. `prepare` writes `brief.json`.
 
-**B5. `test_worker_prepare_obtains_one_routing_admission` (C3-4b).**
-1. Precondition: `enroll` and `configure(routes=('workers',), executable, auth)`; the brief has model `vendor/model`, provider `provider`, effort `low`; route `fixture_route('openrouter:vendor/model@provider', 'dollar')`.
-2. The fixture is set up as in B4 step 3.
-3. `openrouter_workers.prepare` (`scripts/openrouter_workers.py:101`, base) validates the brief and runs `settings.admission(source, 'workers')`.
-4. C3-4b: `managed_service(repo)._prepare` with `choice = route_identity('openrouter_worker', …)` → `routing.admit` (**once**) → `gateway` admitted as in B4 step 6.
-5. The rest of `prepare` writes `brief.json` (base), so the precondition holds. Dispatch and the OpenCode launch happen in `execute` through `opencode_launcher` (C3-3), outside this test.
+Not prototyped (see B.0). The steps are those B4 proved, with another host name.
 
-**B6. `test_project_review_routes_delegated_reviewers_through_the_routing_command` (C3-6).**
-1. The test reads every `.md` under `skills/review-my-project/`.
-2. C3-6 adds one operative sentence there (G5): in a managed project, the delegated reviewer(s) for the selected scope are prepared through `scripts/routing.py`, with a link to policy 03's `Managed projects` section.
-3. `assertIn('scripts/routing.py', text)` holds.
+**B6. `test_project_review_routes_delegated_reviewers_through_the_routing_command` (C3-6; 805).** C3-6 adds the G5 sentence to `skills/review-my-project/references/procedure.md`, and `routes_reviewers_through_routing` (`tests/test_smart_routing_features.py:178`) returns it. Proven by P2.
 
-**B7. `test_external_delegation_keeps_no_caller_owned_selector` (C3-7).**
-1. C3-4a has moved X0 to `constraints`.
-2. C3-7 deletes `select` (`runtime/external_delegation.py:95`, base) and `automatic_allowed` (90) with their tests.
-3. `hasattr(external_delegation, 'select')` is false.
+**B7. `test_external_delegation_keeps_no_caller_owned_selector` (C3-7; 622).** C3-4a has moved X0 to `constraints`. C3-7 deletes `select` (`runtime/external_delegation.py:95`) and `automatic_allowed` (90) with their tests, so `hasattr(external_delegation, 'select')` is false.
 
-**B8. `test_usage_routing_cli_no_longer_selects_routes` (C3-7).**
-1. C3-7 removes `evaluate`, `run`, `handoff`, `claim_handoff` and `reconcile` from `choices` (`scripts/usage_routing.py:24`, base).
-2. `argparse` exits 2 with `invalid choice`, as the test asserts.
+**B8. `test_usage_routing_cli_no_longer_selects_routes` (C3-7; 640).** C3-7 removes `evaluate`, `run`, `handoff`, `claim_handoff` and `reconcile` from `choices` (`scripts/usage_routing.py:24`). `argparse` exits 2 with `invalid choice`.
 
-**Steps no slice provides:** none. Two things are recorded as obligations, not gaps:
-- B2 step 6 needs the manifest route to equal the fixture's `selection`. The G2 mapping guarantees it.
-- B4 and B5 need the test's own OpenRouter `configure` to leave `integration_enabled` true. On the base this comes from `openrouter_settings.enable`; C3-1's fixture checks it and raises `FixtureError` if not.
+**Steps no slice provides:** none.
+
+**Not proven by running:**
+- B5 (worker), B7 and B8. B7 and B8 are deletions.
+- The collector's production derivation of `integration_enabled` and `funding_verified`. P2's fixture source supplied both directly; the design ([3.3](#33-observation-collector)) derives them from `openrouter_settings` and the ledger.
