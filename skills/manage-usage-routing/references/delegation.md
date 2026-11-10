@@ -7,6 +7,8 @@ For foreground work, load [Codex host admission](codex-host.md). For optional
 local tests, drive the private runner with a connection factory and credential resolver fixture.
 
 For external consideration and saved restrictions, apply the [shared contract](../../../clients/external-delegation.md).
+In a Smart Routing managed project, proposals and handoffs refuse; follow
+[managed projects](procedure.md#managed-projects).
 
 ## Admission and execution
 
@@ -64,7 +66,8 @@ replay returns the stored state. A host transport result proving no send can rej
 attempt with zero cost and close its claim. Sent or uncertain failures retain
 maximum reservations and unresolved exposure; do not infer zero cost from
 elapsed time, process death or a refreshed balance. No automatic retry, provider
-switch, new purchases or paid funding is permitted.
+switch, new purchases or paid funding is permitted. A `legacy_route_retired`
+refusal is not uncertain exposure; see [managed projects](procedure.md#managed-projects).
 
 Count completion does not authorize generation. If later activation, reviewer readiness,
 source, price or affordability checks fail before sending generation, retain the

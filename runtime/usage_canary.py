@@ -69,6 +69,7 @@ def validate(evidence, *, binding, profile, task, now) -> None:
 
 def run(cwd, evidence, *, binding, profile, native):
     """Delegate one approved attempt. The shared ledger rejects reuse of its run ID."""
+    usage_routing.refuse_managed(cwd)
     require(type(evidence) is usage_admission.Admission, 'trusted_live_evidence_required')
     task = task_for(evidence.approval_id, binding, native)
     validate(evidence, binding=binding, profile=profile, task=task, now=int(time.time()))
