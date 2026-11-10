@@ -37,9 +37,12 @@ class ArithmeticTests(Temp):
                 self.assertEqual(measured[1]["windows"]["5h"]["reason"], reason)
                 self.assertEqual(demand.suggest(measured), {})
 
-    def test_a_zero_delta_still_suggests_one(self):
-        measured = demand.measure([reading("a", 200, 1000), reading("b", 200, 1010)])
-        self.assertEqual(demand.suggest(measured)["sub"]["5h"]["demand"], 1)
+    def test_a_delta_under_one_unit_is_below_resolution_not_a_zero_sample(self):
+        measured = demand.measure([reading("a", 200, 1000), reading("b", 200, 1010), reading("c", 201, 1020)])
+        self.assertEqual(measured[1]["windows"]["5h"], dict(reason="below_resolution"))
+        self.assertEqual(demand.suggest(measured)["sub"]["5h"], dict(samples=1, max_delta=1, demand=2, margin_pct=50,
+                                                                     unit=demand.UNIT))
+        self.assertEqual(demand.suggest(demand.measure([reading("a", 200, 1000), reading("b", 200, 1010)])), {})
 
     def test_the_log_is_owner_only_and_skips_damaged_lines(self):
         log = demand.DemandLog(self.tmp / demand.FILE)

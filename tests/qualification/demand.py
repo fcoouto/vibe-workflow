@@ -114,6 +114,8 @@ def measure(readings):
                 windows[window_id] = dict(reason="stale_before", gap_s=reading["at"] - before["at"])
             elif now["used"] < prior["used"]:
                 windows[window_id] = dict(reason="decreased")
+            elif now["used"] == prior["used"]:
+                windows[window_id] = dict(reason="below_resolution")  # under one stored unit: not a 0 sample
             else:
                 windows[window_id] = dict(delta=now["used"] - prior["used"])
         measured.append(dict(label=reading.get("label"), pool=pool, windows=windows))
@@ -144,4 +146,4 @@ def report(log):
     measured = measure(readings)
     return dict(readings=len(readings), per_launch=measured, suggestion=suggest(measured), stale_s=STALE_S,
                 note="upper bounds: other use of the same login between two readings raises a delta; stored windows "
-                     "are whole thousandths, so a launch below one thousandth reads 0")
+                     "are whole thousandths, so a launch below one thousandth is below_resolution, not a sample")

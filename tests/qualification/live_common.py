@@ -11,6 +11,7 @@ from tests.qualification.safety import BudgetExceeded, Refused
 LIVE_PURPOSES = ("isolation", "drill", "gateway")
 # Endpoints through which a model request can start: a prompt, a command, a shell command (whose output a model may
 # read) and a summarize/compaction. A zero-call step refuses them all before anything is sent.
+ZERO_CALL_RPC = ("health", "descendants")
 SENDING = re.compile(r"^/api/session/[^/]+/(?:prompt|command|shell|summarize|compact|init|revert|unrevert)(?:/|$)")
 
 
@@ -51,6 +52,10 @@ class ZeroCallHost:
         return self.host.request(method, path, body=body, query=query)
 
     def rpc(self, method, payload):
+        """Only the reads the zero-call steps need (`health`, `descendants`); anything else is refused."""
+        if method not in ZERO_CALL_RPC:
+            self.refused.append("rpc:%s" % method)
+            raise ZeroCall("a zero-call step may not call routing.%s" % method)
         return self.host.rpc(method, payload)
 
 

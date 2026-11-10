@@ -301,8 +301,10 @@ def measure_demand(args):
     print(json.dumps(found["demand"]["suggestion"], indent=2))
     return 0
 
+
 def needed_calls(args):
-    return plan(args.mode, args).get("reserved", plan(args.mode, args)["expected_calls"])
+    found = plan(args.mode, args)
+    return found.get("reserved", found["expected_calls"])
 
 
 def parser():

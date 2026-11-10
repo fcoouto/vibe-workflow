@@ -92,6 +92,10 @@ class ProbeTests(Temp):
             with self.subTest(path), self.assertRaises(live_common.ZeroCall):
                 wrapped.request("POST", path, {})
         self.assertEqual(host.prompts, 0)
+        for method in ("attach", "detach", "check"):
+            with self.subTest(method), self.assertRaises(live_common.ZeroCall):
+                wrapped.rpc(method, {})
+        self.assertEqual(wrapped.rpc("health", {})[0], 200)
         proof = live_common.zero_call_proof(wrapped, live_common.message_counts(wrapped))
         self.assertFalse(proof["proven"])
         self.assertIn("sending_endpoint_attempted", proof["reasons"])
