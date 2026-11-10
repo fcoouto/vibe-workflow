@@ -5,12 +5,13 @@ the ledger it is given and `openrouter_settings.status`. It never reads a secret
 model or takes the OpenRouter admission lock. Window and entitlement files live next to the routing settings path
 the caller gives, never under a path derived from HOME.
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import copy
 import fcntl
 import json
 import os
 from pathlib import Path
+import sqlite3
 import time
 import uuid
 
@@ -22,6 +23,7 @@ ENTITLEMENTS_FILE = 'entitlements.json'
 FRESH_SECONDS = usage_budget.FRESH_SECONDS  # the same 900 s freshness the ledger applies to balances
 MAX_FILE = 1 << 20
 MAX_MARKS = 256
+LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it never stalls prepare
 # The OpenRouter route each gateway harness needs enabled in `openrouter_settings` (`routes`).
 INTEGRATION_ROUTES = ('proposals', 'workers')
 ROUTE_FIELDS = ('route', 'strategy_id', *routing.ROUTE_IDENTITY, 'account', 'billing_class', 'pool', 'demand',
@@ -246,26 +248,38 @@ def _funding_verified(data, organization, now):
             and 0 <= now - org['observed_at'] <= FRESH_SECONDS)
 
 
-def _snapshot(ledger):
-    if ledger is None:
+def _ledger_data(ledger_path):
+    """The ledger body at `ledger_path`, read-only and briefly (never a write, never a wait), {} when absent, or
+    None when it cannot be read: every dollar route is then `funding_unverified`."""
+    path = _resolved(ledger_path)
+    if not os.path.lexists(path):
+        return {}
+    try:
+        usage_budget.private(path.parent, True)
+        usage_budget.private(path)
+        with closing(sqlite3.connect('%s?mode=ro' % path.as_uri(), uri=True, timeout=LEDGER_WAIT)) as db:
+            row = db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
+        if row is None or len(row[0]) > usage_budget.MAX_RECORD:
+            return None
+        data = json.loads(row[0])
+    except (OSError, ValueError, sqlite3.Error, usage_budget.BudgetError):
         return None
-    return ledger.snapshot() if callable(getattr(ledger, 'snapshot', None)) else ledger
+    return data if type(data) is dict and type(data.get('organizations')) is dict else None
 
 
-def collect(project, assignment, *, ledger=None, settings_path=None, source=None, now=None):
+def collect(project, assignment, *, settings_path, ledger_path, source=None):
     """Build `{observations, seen}` for `prepare` from local records (C.3 design 3.3, collector return shape).
 
-    `ledger` is the routing ledger (or its snapshot) the service admits against; `settings_path` locates the
-    private window and entitlement files. Without them nothing is fresh or funded, which fails closed.
+    It reads only the stores the calling service uses: `settings_path` locates the private window and entitlement
+    files and `ledger_path` the ledger whose organizations fund dollar routes. It never opens a default path.
     `observations` is the snapshot `routing.admit` takes plus `excluded`, one fixed reason per route left out;
     `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed)."""
-    now = int(time.time()) if now is None else now
+    now = int(time.time())
     source = source if source is not None else default_source(settings_path)
-    data = _snapshot(ledger)
+    data = _ledger_data(ledger_path)
     scope = assignment.get('scope') if type(assignment) is dict else None
     try:
-        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)} \
-            if settings_path is not None else set()
+        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
         marks_reason = None
     except (OSError, ValueError, KeyError, TypeError):
         marks, marks_reason = set(), 'entitlement_unavailable'

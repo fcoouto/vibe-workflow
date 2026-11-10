@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import stat
-import time
 
 from runtime import routing, routing_observations, routing_settings
 
@@ -112,14 +111,15 @@ def _count(value):
     return len(value) if isinstance(value, (list, tuple)) else int(bool(value))
 
 
-def managed(checkout):
-    """Phase W: whether `checkout` is on the routing settings' `managed_projects` (C3-0b's predicate). Its absence
-    means "not managed", which fails closed."""
+def managed(checkout, settings_path):
+    """Phase W: whether `checkout` is on `managed_projects` in the routing settings at `settings_path` (C3-0b's
+    predicate; always given the service's own path, never the default). Its absence means "not managed", which
+    fails closed."""
     predicate = getattr(routing_settings, 'managed_project', None)
     if not callable(predicate):
         return False
     try:
-        return predicate(Path(checkout).resolve()) is True
+        return predicate(Path(checkout).resolve(), settings_path=settings_path) is True
     except Exception:  # noqa: BLE001 - an unreadable setting never makes a project managed
         return False
 
@@ -231,6 +231,7 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     there is no fallback to another selector or route."""
     if getattr(service, 'project', None) is None:
         return _blocked(PROJECT_REQUIRED)
+    settings_path = service.settings_path if settings_path is None else settings_path
     try:
         request = prepare_request(assignment, job, workflow=workflow, constraints=constraints, planned=planned,
                                   profile=profile)
@@ -239,7 +240,7 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     reason = preflight(_call(service, dict(v=1, op='status')), dollar=dollar)
     if reason is not None:
         return _blocked(reason)
-    if not managed(service.project):
+    if not managed(service.project, settings_path):
         return dict(state='unmanaged', reason=PROJECT_NOT_MANAGED)
     prepared = _call(service, request)
     if prepared.get('state') != 'admitted':
@@ -351,8 +352,8 @@ def managed_self_check(workdir):
             codes.append('collector_admission_failed')
         elif tokens[0] in json.dumps(result):
             codes.append('token_exposed')
-        collected = routing_observations.collect(checkout, dict(scope=assignment_scope(checkout)),
-                                                 settings_path=settings, now=int(time.time()))
+        collected = routing_observations.collect(str(checkout), dict(scope=assignment_scope(checkout)),
+                                                 settings_path=service.settings_path, ledger_path=service.ledger_path)
         offered = dict(prepare_request(dict(attempt_id='offered', task='self-check-offered',
                                             scope=assignment_scope(checkout)),
                                        unplanned_job('implementer', assignment_scope(checkout), 'offered')),

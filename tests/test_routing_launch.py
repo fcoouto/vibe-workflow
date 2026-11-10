@@ -35,8 +35,8 @@ class ManagedStub(command.Service):
             return super().handle(raw, op)
         if 'observations' in value:
             return dict(v=1, state='blocked', reason='observations_not_accepted')
-        collected = collector.collect(self.project, value['assignment'], ledger=self._ledger(True, write=True),
-                                      settings_path=self.settings_path)
+        collected = collector.collect(str(self.project), value['assignment'], settings_path=self.settings_path,
+                                      ledger_path=self.ledger_path)
         response = super().handle(json.dumps(dict(value, observations=collected['observations'])).encode(), op)
         return dict(response, seen=collected['seen'])
 
@@ -167,7 +167,8 @@ class RequestTests(unittest.TestCase):
         canonical = job()
         request = launcher.prepare_request(dict(attempt_id='a', task='t', scope=SCOPE), canonical, profile=dict(
             complexity_band='critical'))
-        self.assertEqual(request['job'], dict(canonical, profile=dict(canonical['profile'], complexity_band='critical')))
+        self.assertEqual(request['job'], dict(canonical, profile=dict(complexity_band='critical')))
+        self.assertNotIn('profile', canonical)  # the caller's canonical job is never changed in place
         self.assertNotIn('observations', request)
 
 
@@ -178,14 +179,19 @@ class LaunchTests(Stores):
         self.checkout.mkdir()
         self.service.close()
         self.service = ManagedStub(self.settings, self.ledger_path, project=self.checkout)
+        self.addCleanup(self.service.close)
         self.source = collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready)
         self.patches = [mock.patch.object(collector, 'default_source', lambda settings_path=None: self.source),
                         mock.patch.object(routing_settings, 'managed_project', create=True,
-                                          new=lambda path: Path(path).resolve() == self.checkout.resolve())]
+                                          new=self.managed_project)]
         for patch in self.patches:
             patch.start()
             self.addCleanup(patch.stop)
         self.assertEqual(self.call(dict(v=1, op='set', authority_required=True))['state'], 'updated')
+
+    def managed_project(self, path, settings_path=None):
+        self.assertEqual(settings_path, self.service.settings_path)  # the service's own settings, never a default
+        return Path(path).resolve() == self.checkout.resolve()
 
     def launch(self, service=None, catalog=(IDENTITY,), transport=None, **options):
         self.transport = transport or Transport()
@@ -230,7 +236,7 @@ class LaunchTests(Stores):
         result = self.launch(catalog=[dict(IDENTITY, model='other')])
         self.assertEqual((result['state'], result['reason']), ('blocked', 'catalog_mismatch'))
         self.assertEqual(self.transport.calls, [])
-        self.assertEqual(self.holds()['a1']['state'], 'not_dispatched')
+        self.assertEqual(self.holds()['a1']['state'], 'released')  # `not_dispatched` closed the admitted hold
 
     def test_an_advisory_host_never_gets_a_dollar_route(self):
         admission = dict(route='gw', billing_class='gateway', route_identity=routing.route_identity(*IDENTITY.values()))
@@ -303,7 +309,8 @@ class SelfCheckTests(unittest.TestCase):
         """The same check in-process, with the test stand-in for C3-0b's managed `prepare`."""
         with tempfile.TemporaryDirectory() as temp, \
                 mock.patch.object(command, 'Service', ManagedStub), \
-                mock.patch.object(routing_settings, 'managed_project', create=True, new=lambda path: False):
+                mock.patch.object(routing_settings, 'managed_project', create=True,
+                                  new=lambda path, settings_path=None: False):
             self.assertEqual(launcher.managed_self_check(Path(temp) / 'check'), [])
 
     def test_the_self_check_refuses_a_workdir_it_did_not_create(self):

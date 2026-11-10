@@ -95,10 +95,10 @@ class Stores(unittest.TestCase):
         ledger = self.service._ledger(True, write=True)
         return ledger.snapshot()
 
-    def collect(self, routes, windows, project=None, **options):
+    def collect(self, routes, windows, project=None):
         source = collector.StaticSource(routes, windows, ready)
-        return collector.collect(project or self.root, dict(scope=SCOPE), ledger=self.data(),
-                                 settings_path=self.settings, source=source, now=self.now, **options)
+        return collector.collect(str(project or self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                 ledger_path=self.ledger_path, source=source)
 
 
 def excluded(result):
@@ -115,7 +115,8 @@ class CollectorTests(Stores):
         self.assertEqual(set(result), {'observations', 'seen'})
         self.assertEqual(result['seen'], dict(openrouter_revision=None))  # no gateway route needed OpenRouter
         observations = result['observations']
-        self.assertEqual(observations['now'], self.now)
+        self.assertLessEqual(abs(observations['now'] - self.now), 5)
+        self.data()  # the ledger admit writes to
         route = kept(result)['sub']
         self.assertEqual((route['capable'], route['permitted'], route['binding_enforceable']), (True, True, True))
         self.assertNotIn('status', route)
@@ -200,8 +201,8 @@ class CollectorTests(Stores):
         manifest = json.loads(collector.MANIFEST.read_text())
         self.assertEqual(manifest['decision'], 'pending: C.3 design 7.1 user decision 5')
         self.assertEqual(collector.manifest_check(), ['route_manifest_unqualified'])
-        result = collector.collect(self.root, dict(scope=SCOPE), ledger=self.data(), settings_path=self.settings,
-                                   now=self.now)
+        result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                   ledger_path=self.ledger_path)
         self.assertEqual(result['observations']['routes'], [])
         self.assertTrue(result['observations']['excluded'])
         qualified = collector.StaticSource([sub_route()], {}, ready)
@@ -213,10 +214,34 @@ class CollectorTests(Stores):
         with mock.patch.object(collector, 'default_source',
                                lambda settings_path=None: seen.append(settings_path) or
                                collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready)):
-            result = collector.collect(self.root, dict(scope=SCOPE, source='local'), ledger=self.data(),
-                                       settings_path=self.settings, now=self.now)
+            result = collector.collect(str(self.root), dict(scope=SCOPE, source='local'),
+                                       settings_path=self.settings, ledger_path=self.ledger_path)
         self.assertEqual(seen, [self.settings])
         self.assertEqual(set(kept(result)), {'sub'})
+
+
+    def test_only_the_given_stores_are_read_and_never_the_defaults(self):
+        """Coordinator decision (C3-0b review): the collector reads the service's own settings and ledger paths, so
+        the two can never disagree; a default path is never opened."""
+        self.fund()
+        collector.store_window(self.settings, 'gw', gateway_window(self.now))
+        report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=2)
+        local = collector.default_source(self.settings)
+        source = collector.StaticSource([gateway_route()], local.windows, ready)
+        from runtime import usage_settings
+        with mock.patch.object(command, 'default_settings', refuse('default_settings')), \
+                mock.patch.object(command, 'default_ledger', refuse('default_ledger')), \
+                mock.patch.object(usage_settings, 'directory', refuse('usage_settings.directory')), \
+                mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
+            result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                       ledger_path=self.ledger_path, source=source)
+            elsewhere = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.root / 'other' / 's.json',
+                                          ledger_path=self.root / 'other' / 'l.sqlite3', source=source)
+        self.assertEqual(kept(result)['gw']['funding_verified'], True)  # this ledger's organization, this window
+        self.assertEqual(excluded(elsewhere), dict(gw='funding_unverified'))  # another ledger funds nothing
+        self.assertEqual(collector.default_source(self.root / 'other' / 's.json').windows('gw', self.now), [])
+        with self.assertRaises(TypeError):
+            collector.collect(str(self.root), dict(scope=SCOPE), source=source)  # both paths are required
 
 
 class GatewayDerivationTests(Stores):
