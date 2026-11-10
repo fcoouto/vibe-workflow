@@ -1,6 +1,6 @@
 # Smart Routing redesign: value ranking, learning and one specialist roster
 
-Status: draft for user approval, 2026-11-10. Base: `main` at `5ed0784`.
+Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
 This design changes parts of two earlier documents and leaves the rest of them in force:
 
@@ -104,7 +104,7 @@ Each entry has:
 - `writes`, whether the specialist may change files;
 - `reviews`, whether the independent-review rules apply to it.
 
-**Proposal (coordinator), for the user to accept or change.** The last three are attributes of the specialist, not a second role name. Code needs them because it applies different floors to work that writes files and separate rules to reviews, and because public evidence describes kinds of work, not job titles. `work_kind` replaces the free-text `task_family` field, so a profile no longer carries both a role and a family.
+**Proposal (coordinator), accepted by the user.** The last three are attributes of the specialist, not a second role name. Code needs them because it applies different floors to work that writes files and separate rules to reviews, and because public evidence describes kinds of work, not job titles. `work_kind` replaces the free-text `task_family` field, so a profile no longer carries both a role and a family.
 
 **Proposal (coordinator): the shipped roster** is the toolkit's representative roster of 23 specialists with a display label for each: `orchestrator`, `code-reviewer`, `security-reviewer`, `typescript-reviewer`, `react-reviewer`, `react-build-resolver`, `test-engineer`, `qa-automation-engineer`, `database-architect`, `devops-engineer`, `backend-specialist`, `frontend-specialist`, `seo-specialist`, `performance-optimizer`, `product-manager`, `product-owner`, `project-planner`, `code-archaeologist`, `debugger`, `explorer-agent`, `documentation-writer`, `penetration-tester`, `security-auditor`. One entry is added: `software-engineer` ("Software Engineer"), for implementation that no narrower specialist covers, because the toolkit list has no general implementer.
 
@@ -319,7 +319,7 @@ Each slice is one PR with non-overlapping files, built and reviewed as the earli
 
 **The user decided:** the goal; the funding order; approach C with the gated ranking model; removing Jev; per-project learning with model names stored; no model names in the covered areas; family as data with the successor rule; no trials; path rules with generated routes; one roster with labels and no mapping; the template under `templates/`; the daily and weekly refresh by due job; build order 2.
 
-**The coordinator proposes, for the user to accept or change:**
+**The coordinator proposed, and the user accepted with the design on 2026-11-10:**
 
 1. The `work_kind`, `writes` and `reviews` attributes, the six work kinds, each specialist's values, and dropping `task_family` (5.2).
 2. The roster of 23 plus `software-engineer`, with no per-project customization (5.2).
