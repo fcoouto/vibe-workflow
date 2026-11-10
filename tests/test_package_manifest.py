@@ -120,6 +120,13 @@ class MembershipTests(unittest.TestCase):
             self.assert_unavailable(message="Package membership deadline exceeded", deadline=time.monotonic() + 0.5)
             self.assertLess(time.monotonic() - started, 3)
 
+    def test_git_that_closes_its_output_but_keeps_running_reports_the_deadline(self):
+        # Output ends at once, so the deadline expires in process.wait rather than in the read loop.
+        with self.fake_git("exec >&-\nsleep 5"):
+            started = time.monotonic()
+            self.assert_unavailable(message="Package membership deadline exceeded", deadline=time.monotonic() + 0.5)
+            self.assertLess(time.monotonic() - started, 3)
+
     def test_deadline_bounds_the_git_call(self):
         with patch.object(package_manifest.subprocess, "Popen") as popen:
             self.assert_unavailable(message="Package membership deadline exceeded", deadline=time.monotonic() - 1)
