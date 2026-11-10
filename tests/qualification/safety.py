@@ -29,12 +29,17 @@ PROMPT_TEXT = "Reply with exactly: OK"
 QUALIFIED_OPENCODE = "2.2.6"
 # Durable caps per purpose (the user's authorizations): qualification 14, the bounded pilot canary 24.
 # New purposes start at 0 in code: nothing may be spent until a recorded approval cap line opens them.
-CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0}
+CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0, "isolation": 0, "drill": 0, "gateway": 0}
 # The most a recorded cap line may raise each purpose to (pre-registration edit 4: pilot 24 -> 28 before attempt 2).
 # chatgpt 4 -> 6: approved by the user (Fernando Couto) on 2026-11-10 at about 00:05 CET for ChatGPT-via-OpenCode
 # qualification requests on one tiny OpenAI model, after attempts 3 and 4 each spent one real request without a usable
 # diagnosis while the run needs 3 remaining. The cap itself rises only through a recorded `--set-cap` line.
-MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 6}
+# isolation 8, drill 4, gateway 8: the live-session runbook's proposed caps (parts A, B, C). Each stays closed until the
+# user approves it through a recorded `--set-cap <purpose> <cap> --approval BY AT SCOPE` line.
+MAX_CAPS = {"qualification": 14, "pilot": 28, "qualification-2": 10, "chatgpt": 6, "isolation": 8, "drill": 4,
+            "gateway": 8}
+# The entry scripts whose runs may still send: a dead reservation or the canary state waits while one is alive.
+HARNESS_SCRIPTS = ("opencode_live.py", "live_modes.py")
 # The one route each live-probe mode may send to. `chatgpt` is an `openai` model chosen by the operator from the
 # ChatGPT login's own model list (see `check_route`); a run never allows two providers.
 MODE_ROUTES = {"qualification-2": ("claude-agent", "haiku", "low"), "chatgpt": None}
@@ -306,8 +311,8 @@ class CallLedger:
         own = os.getpid()
         for line in (processes or "").splitlines():
             parts = line.split(None, 1)
-            if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) != own and "opencode_live.py" in parts[1] \
-                    and "--settle-dead" not in parts[1]:
+            if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) != own \
+                    and any(script in parts[1] for script in HARNESS_SCRIPTS) and "--settle-dead" not in parts[1]:
                 raise Refused("a harness run is still alive; stop it before settling a dead reservation")
         with self._locked(True) as handle:
             records = self._read(handle)

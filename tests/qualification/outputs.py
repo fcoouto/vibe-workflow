@@ -7,7 +7,7 @@ from pathlib import Path
 import stat
 
 from tests.qualification import sanitize
-from tests.qualification.safety import Refused
+from tests.qualification.safety import CAPS, Refused
 
 
 def inside_repository(path):
@@ -30,7 +30,7 @@ def minimal(results):
     cleanup = results.get("cleanup") if isinstance(results.get("cleanup"), dict) else {}
     ledger = results.get("call_ledger") if isinstance(results.get("call_ledger"), dict) else {}
     totals = {}
-    for purpose in ("qualification", "pilot", "qualification-2", "chatgpt"):
+    for purpose in CAPS:
         if isinstance(ledger.get(purpose), dict):
             totals[purpose] = {k: v for k, v in ledger[purpose].items() if type(v) is int}
     return dict(blockers_count=len(results.get("blockers") or []), results_withheld=True, call_ledger=totals,

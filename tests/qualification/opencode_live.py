@@ -902,7 +902,9 @@ def main(argv=None):
                         help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
                         help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
-    parser.add_argument("--admissions", type=int, default=canary.PILOT_MAX, help="canary: admissions (1-20)")
+    parser.add_argument("--admissions", type=int, default=None, help="canary: admissions (1 to the pilot max)")
+    parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
+    parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
@@ -949,18 +951,19 @@ def main(argv=None):
             if not 60 <= args.chatgpt_timeout <= 1800:
                 raise Refused("--chatgpt-timeout is 60 to 1800 seconds")
         purpose = "qualification-2" if stages else "chatgpt" if args.chatgpt or args.chatgpt_methods else None
-        project = canary.check_project(args.project) if args.canary else None
+        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
+        project = canary.check_project(args.project, args.canary_allow, state and state["settings"]) if args.canary else None
         if args.canary:
             canary.check_ancestor_configs(project)
-        state = canary.check_canary_state(args.canary_state, isolated=base) if args.canary else None
-        if args.canary:
-            canary.plan_assignments(args.admissions, "check")
+            limit = canary.pilot_max(args.pilot_max, ledger)
+            args.admissions = limit if args.admissions is None else args.admissions
+            canary.plan_assignments(args.admissions, "check", limit=limit)
         check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
-    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions, keep=args.keep,
+    run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     results = run.run()
