@@ -7,6 +7,7 @@ from contextlib import closing, contextmanager
 import json
 import shutil
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -381,7 +382,14 @@ class ManagedGates(ManagedDelegation):
         enabled = workstreams.control(self.scope, 'enable', dict(client='codex', expected_revision=current['revision']))
         limits = dict(context_id='WS42.01', rationale='One bounded outcome', output_tokens=12000, context_tokens=64000,
                       max_steps=40, max_seconds=1200, max_continuations=3, backoff_seconds=0)
-        with self.managed(NATIVE):
+        clock, real = dict(now=int(time.time())), routing_observations.mark_consumed
+
+        def mark(*args):  # F4 N-1: the next reading is observed after the earlier turn's mark, never the same one
+            written = real(*args)
+            clock['now'] += 1
+            return written
+        with self.managed(NATIVE), mock.patch('time.time', lambda: float(clock['now'])), \
+                mock.patch.object(routing_observations, 'mark_consumed', mark):
             prepared = self.prepare(workstream_revision=enabled['revision'], workstream_limits=limits)
             workstreams.consume_dispatch(self.scope, self.request(attempt_id=prepared['attempt_id'],
                                                                   workstream_revision=enabled['revision']))
@@ -391,6 +399,8 @@ class ManagedGates(ManagedDelegation):
                 attempt_id=prepared['attempt_id'], workstream_revision=enabled['revision'], reason='follow-up',
                 prompt='Finish the original accepted scope', human_continue=False, host_proof=proof['host_proof']))
             self.assertEqual(intent['routing']['state'], 'admitted', intent)
+            self.assertEqual(routing_observations.consumed_at(self.stores['settings'], 'fixture-codex-subscription'),
+                             clock['now'] - 1)  # the earlier turn's pool was marked before its hold released
             fresh = intent['routing']['attempt_id']
             self.assertEqual(self.hold(prepared['attempt_id']), 'released')  # the previous turn completed
             first, second = self.admission(prepared['attempt_id']), self.admission(fresh)
