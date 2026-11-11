@@ -1041,21 +1041,21 @@ def _observe_native_assignment(scope, attempt, parent_turn_id, spawn_item_id, *,
         raise StartupError(f"Native {label} observation unavailable; assignment ownership remains unresolved") from None
 
 
-def native_task_name(attempt_id, role, context_id=None):
-    """Derive a native creation name from immutable assignment identity."""
+def native_task_name(attempt_id, prefix, context_id=None):
+    """Derive a native creation name from immutable assignment identity and its `worker` or `review` name prefix."""
     attempt_id = _review_id(attempt_id)
-    if not isinstance(role, str) or role not in {"worker", "review"}:
+    if not isinstance(prefix, str) or prefix not in {"worker", "review"}:
         raise StartupError("Invalid native assignment role")
     if context_id is None:
-        marker = role + "_" + attempt_id
+        marker = prefix + "_" + attempt_id
     else:
         if (not isinstance(context_id, str)
                 or re.fullmatch(r"WS[A-Za-z0-9]{1,16}\.[0-9]{1,16}", context_id) is None
                 or int(context_id.split(".")[1]) == 0
                 or re.fullmatch(r"[a-z0-9_]+", attempt_id) is None):
             raise StartupError("Invalid Workstreams native assignment identity")
-        label = "build" if role == "worker" else "review"
-        marker = role + "_" + context_id.lower().replace(".", "_") + "_" + label + "_" + attempt_id
+        label = "build" if prefix == "worker" else "review"
+        marker = prefix + "_" + context_id.lower().replace(".", "_") + "_" + label + "_" + attempt_id
         if len(marker) > 64:
             raise StartupError("Workstreams native assignment name exceeds its bound")
     if "/" in marker:
@@ -1502,7 +1502,7 @@ def observe_setup_metadata(process, attempt):
 
 def observe_managed_case(scope, task_ref, attempt_ref, case_id):
     """Observe a parent task hook or the admitted child canary completion."""
-    from runtime import delegation, onboarding as d3, setup_observation, startup
+    from runtime import delegation, onboarding as d3, setup_observation, startup, task_profile
     projection = startup._canonical_plain(setup_observation.managed_observation_projection(
         scope, task_ref, attempt_ref, case_id=case_id))
     try:
@@ -1510,10 +1510,10 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
             raise ObservationError('managed_case_pending')
         binding, selectors, probe = projection['binding'], projection['selectors'], projection['probe']
         if (probe['patch'] is None or probe['before']['probe'] is None
-                or binding['role'] not in {'worker', 'review'}):
+                or not task_profile.native(binding['role'])):
             raise ObservationError('managed_source_unqualified')
         assignment = projection['attempt']['assignment_id']
-        prefix = 'review_' if binding['role'] == 'review' else 'worker_'
+        prefix = 'review_' if task_profile.reviews(binding['role']) else 'worker_'
         now = time.monotonic()
         remaining = projection['attempt']['limits']['deadline']-time.time()
         deadline = now+min(REVIEW_TIMEOUT, max(0, remaining))

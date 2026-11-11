@@ -82,7 +82,7 @@ TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write')
 STAGES = ('coordinator', 'profiling', 'routing', 'worker', 'review', 'rescue', 'repair', 'check', 'escalation',
           'auxiliary')
 ROLE_STAGES = dict(implementer='worker', worker='worker', reviewer='review', review='review', repair='repair',
-                   check='check', researcher='auxiliary')
+                   check='check', researcher='auxiliary')  # keyed by bucket[0]: a work kind, or a stored old role
 # Lifecycle events live in their own table of the ledger file, written in the ledger transaction. A body holds
 # ids, labels, integer totals and the outcome; never a prompt, body, transcript or credential. Worst case in
 # characters: two 256-character ids, eight 517-character unit keys in the usage and in the outcome, nine claim

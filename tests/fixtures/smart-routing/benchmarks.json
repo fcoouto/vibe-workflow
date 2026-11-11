@@ -3,7 +3,7 @@
   "id": "bench-beta",
   "model": "beta-new",
   "harness": "native",
-  "task_family": "implementation",
+  "work_kind": "implementation",
   "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
   "checked_at": "2026-11-02T00:00:00Z"
  }

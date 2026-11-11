@@ -12,6 +12,17 @@ from tests import fixture_routing_accounting as fixture
 from tests.fixture_routing_accounting import TOKENS, complete, settle, usage, where
 
 
+class StageTests(unittest.TestCase):
+    def test_stage_follows_the_buckets_work_kind(self):
+        def stage(bucket):
+            return budget.Ledger._record_root(dict(bucket=bucket), 't')[1]
+        self.assertEqual(stage(['review', 'low']), 'review')
+        self.assertEqual((stage(['implementation', 'low']), stage(['investigation', 'low'])), ('worker', 'worker'))
+        self.assertEqual(stage(['reviewer', 'low']), 'review')  # a stored bucket keeps its old role name
+        self.assertEqual(budget.STAGES, ('coordinator', 'profiling', 'routing', 'worker', 'review', 'rescue', 'repair',
+                                         'check', 'escalation', 'auxiliary'))
+
+
 class EventTests(fixture.Accounting):
     def test_a_duplicate_event_returns_its_original_outcome_and_changes_nothing(self):
         self.funded('a1')

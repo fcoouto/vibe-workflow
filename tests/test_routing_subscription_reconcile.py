@@ -114,7 +114,7 @@ class HostUsageTests(Subscription):
         self.assertNotIn('acct-a1', budget.Ledger.open_accounts(self.snapshot()))  # the concurrency place is free
         self.assertEqual((self.settled(), self.credit()), (settled, credit))  # never dollars
         self.assertEqual(self.call(dict(v=1, op='check', attempt_id='a1', request=facts(),
-                                        authority=self.tokens['a1'])), blocked('attempt_closed'))
+                                        authority=self.tokens['a1'])), dict(blocked('attempt_closed'), settings_warnings=[]))
         self.assertEqual(self.call(complete('a1', 'late', usage=usage(None, source='host_message_totals'))),
                          blocked('attempt_closed'))
 
@@ -170,7 +170,7 @@ class AbandonTests(Subscription):
         self.assertEqual((self.settled(), self.credit()), (settled, credit))  # never dollars
         self.assertEqual(self.admit_sub('a2')['state'], 'admitted')  # the concurrency place is free
         self.assertEqual(self.call(dict(v=1, op='check', attempt_id='a1', request=facts(),
-                                        authority=self.tokens['a1'])), blocked('attempt_closed'))
+                                        authority=self.tokens['a1'])), dict(blocked('attempt_closed'), settings_warnings=[]))
 
     def admit_pending(self, attempt):
         response = self.call(prepare(attempt, observations=observations(account='acct-' + attempt),
@@ -827,7 +827,7 @@ class ProcessTests(Subscription):
         self.assertEqual(cli('prepare', prepare('p2', observations=observations(account='acct-p2'),
                                                 constraints=dict(allowed_strategy_ids=['s-sub'])))['state'], 'admitted')
         self.assertEqual(cli('check', dict(v=1, op='check', attempt_id='p1', request=facts(),
-                                           authority=sent['authority'])), blocked('attempt_closed'))
+                                           authority=sent['authority'])), dict(blocked('attempt_closed'), settings_warnings=[]))
 
 
 if __name__ == '__main__':

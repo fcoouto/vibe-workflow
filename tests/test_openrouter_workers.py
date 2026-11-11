@@ -72,7 +72,7 @@ class WorkerTests(unittest.TestCase):
         self.settings = configure(self.source, executable=executable, auth=self.root / 'auth', routes=('workers',))
         self.runs = Path(self.settings['worker_root'])
         (self.source / 'input.txt').write_text('three lines\nof evidence\nfor review\n')
-        self.brief = dict(task_id='pilot-1', role='Scout', specialty='File analysis',
+        self.brief = dict(task_id='pilot-1', role='explorer-agent', specialty='File analysis',
                           coordinator_chat_id=str(uuid.uuid4()), model='vendor/model',
                           model_display_name='Model', provider='provider', objective='Read input.txt and count lines.',
                           source_root=str(self.source), files=['input.txt'], timeout_seconds=5,
@@ -304,7 +304,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         except ValueError as error:
             self.fail(f'Explicit custom role name must be supported: {error}')
         saved = json.loads((run / 'brief.json').read_text())
-        self.assertEqual(saved['role'], 'Scout')
+        self.assertEqual(saved['role'], 'explorer-agent')
         self.assertEqual(saved['specialty'], 'File analysis')
         self.assertEqual(saved['custom_role_name'], 'Security investigator · 東京')
         self.assertEqual(saved['model'], 'vendor/model')
@@ -347,7 +347,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         self.assertNotEqual(external, self.brief['coordinator_chat_id'])
         self.assertEqual({event['agent_id'] for event in client.events}, {external})
         self.assertEqual({event['session_id'] for event in client.events}, {self.brief['coordinator_chat_id']})
-        self.assertEqual({event['agent_type'] for event in client.events}, {'Scout · Model'})
+        self.assertEqual({event['agent_type'] for event in client.events}, {'Explorer Agent · Model'})
         self.assertEqual([event['hook_event_name'] for event in client.events].count('SubagentStart'), 1)
         self.assertEqual([event['hook_event_name'] for event in client.events].count('SubagentStop'), 1)
 
@@ -367,6 +367,23 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             publish = self.api.habblaud_publisher(self.root, run, endpoint, account)
             self.assertTrue(publish('accepted')['delivered'])
         self.assertEqual({event['agent_type'] for event in client.events}, {'Evidence scout · Model'})
+
+    def test_pre_roster_receipt_keeps_its_stored_badge_and_its_binding(self):  # an old brief label, a version 1 receipt
+        from runtime import habblaud; from tests.fixture_worker_visibility import fixture_transport
+        reviewer, scout = dict(version=1, role='Reviewer', specialty='File analysis'), dict(version=1, role='Scout', specialty='File analysis', custom_role_name='Evidence scout')
+        for stored, label, parent in ((reviewer, 'Reviewer · Model', None), (scout, 'Evidence scout · Model', None), (reviewer, 'Reviewer · Model', str(uuid.uuid4()))):
+            (client, transport), run = fixture_transport(), self.api.prepare(self.runs, dict(self.brief, task_id=('legacy-%s-%s' % (stored['role'], bool(parent))).lower()))
+            brief = json.loads((run / 'brief.json').read_text()) | {k: v for k, v in stored.items() if k in ('role', 'custom_role_name')}
+            binding = dict(parent=brief['coordinator_chat_id'], agent_id=str(uuid.uuid5(uuid.NAMESPACE_URL, str(run))), label=label, cwd=brief['source_root'])
+            self.assertTrue(habblaud.publisher(transport, 'http://127.0.0.1:1', 'account', binding, stored, run / 'visibility.json')('Working')['delivered'])
+            (run / 'brief.json').write_text(json.dumps(brief | ({'coordinator_chat_id': parent} if parent else {}))); self.assertIsNone(self.api.visibility_declaration(brief))
+            saved, sent = [(run / name).read_bytes() for name in ('brief.json', 'visibility.json')], len(client.events)
+            with self.subTest(label=label, changed=bool(parent)), patch.object(habblaud, 'transport', return_value=transport):
+                result = self.api.habblaud_publisher(self.root, run, 'http://127.0.0.1:1', 'account')('accepted')
+                self.assertEqual(result['delivered'], not parent, result)  # a changed binding is refused
+                self.assertEqual(({event['agent_type'] for event in client.events}, (run / 'brief.json').read_bytes()), ({label}, saved[0]))
+                self.assertEqual((json.loads((run / 'visibility.json').read_text())['visibility'], json.loads((run / 'visibility.json').read_text())['binding']['label']), (stored, label))
+                self.assertTrue(not parent or ((run / 'visibility.json').read_bytes(), len(client.events)) == (saved[1], sent))
 
     def test_approved_native_fallback_preserves_frozen_name_with_a_real_child_id(self):
         from runtime import habblaud, worker_visibility
@@ -398,12 +415,12 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             with patch.object(codex, 'observe_worker_visibility', return_value=observed):
                 native = native_helper.publish_native(context, child, 'Working', plugin, endpoint, account)
         self.assertTrue(native['delivered'])
-        self.assertEqual(native['visibility'], dict(version=1, role='Scout', specialty='File analysis',
+        self.assertEqual(native['visibility'], dict(version=2, role='explorer-agent', specialty='File analysis',
                                                    custom_role_name='Evidence scout'))
         external = str(uuid.uuid5(uuid.NAMESPACE_URL, str(run)))
         self.assertNotEqual(child, external)
         starts = {event['agent_id']: event['agent_type'] for event in client.events if event['hook_event_name'] == 'SubagentStart'}
-        self.assertEqual(starts, {external: 'Scout · Model', child: 'Evidence scout · Native model'})
+        self.assertEqual(starts, {external: 'Explorer Agent · Model', child: 'Evidence scout · Native model'})
 
     def test_slow_visibility_does_not_consume_worker_deadline(self):
         run = self.api.prepare(self.runs, dict(self.brief, timeout_seconds=1))

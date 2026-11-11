@@ -6,12 +6,13 @@ catalog, unsupported efforts or harnesses, or lacking cited evidence are dropped
 never guessed. Model, effort and harness names appear only as data.
 
 Input shapes (all plain JSON):
-  guidance:   [{id, sha256, checked_at, rows:[{role, task_family, complexity_band, risk_band,
+  guidance:   [{id, sha256, checked_at, rows:[{work_kind, complexity_band, risk_band,
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
   catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # native catalog shape (runtime/delegation.py)
-  benchmarks: [{id, model, harness, task_family, sha256, checked_at}]      # harness and task_family are required to match
+  benchmarks: [{id, model, harness, work_kind, sha256, checked_at}]        # harness and work_kind are required to match
 
-Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
+A row's work kind is one of the task profile template's; a row naming a `role` or `task_family` (the schema-1
+shape) is invalid, so republished guidance must drop them. Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
 A catalog entry without ``harnesses`` accepts any harness. A strategy's ``endpoint`` defaults to its harness.
 OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
 An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
@@ -21,9 +22,10 @@ import json
 import re
 import time
 
-from runtime import routing
+from runtime import routing, task_profile
 
-SCHEMA = 1
+SCHEMA = routing.TABLE_SCHEMA
+ROW_KEYS = {'work_kind', 'complexity_band', 'risk_band', 'strategies'}
 NO_RECOMMENDATION = dict(no_recommendation=True, reason='no_recommendation')
 MAX_ROWS = 4096
 _TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z')
@@ -90,9 +92,9 @@ def _sources(guidance, benchmarks):
     return sources, refs
 
 
-def _qualified(strategy, family, refs, entry):
+def _qualified(strategy, kind, refs, entry):
     """A strategy qualifies only through cited evidence: its own guidance entry, or a benchmark for the same
-    model, harness and task family (records lacking harness or task family match nothing)."""
+    model, harness and work kind (records lacking harness or work kind match nothing)."""
     cited = strategy['evidence_refs']
     if not cited:
         return False
@@ -103,7 +105,7 @@ def _qualified(strategy, family, refs, entry):
         if benchmark is None:
             if ref != entry:
                 return False
-        elif (benchmark.get('model') != strategy['model'] or benchmark.get('task_family') != family or
+        elif (benchmark.get('model') != strategy['model'] or benchmark.get('work_kind') != kind or
               benchmark.get('harness') != strategy['harness']):
             return False
     return True
@@ -113,20 +115,16 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
     """Return the versioned strategy table; see the module docstring for input shapes."""
     live = _catalog(catalog)
     sources, refs = _sources(guidance, benchmarks)
+    kinds = task_profile.load()['work_kinds']  # TemplateUnavailable is a ValueError: the compile fails
     rows, dropped = {}, []
     for entry in guidance:
         for row in _list(entry.get('rows'), 'guidance rows'):
-            _require(isinstance(row, dict), 'Invalid guidance row')
-            role = _text(row.get('role'), 'row role', 64)
-            _require(role in routing.ROLES, 'Unknown row role')
+            _require(isinstance(row, dict) and set(row) <= ROW_KEYS, 'Invalid guidance row')
+            kind = row.get('work_kind')
+            _require(isinstance(kind, str) and kind in kinds, 'Unknown row work kind')
             _require(row.get('complexity_band') in routing.COMPLEXITY_BANDS and
                      row.get('risk_band') in routing.RISK_BANDS, 'Invalid row band')
-            family = _text(row.get('task_family'), 'row task family', 64)
-            try:
-                name = routing.row_key(role, family, row['complexity_band'], row['risk_band'])
-            except ValueError:
-                dropped.append(dict(reason='invalid_row', model=None, effort=None, row=None))
-                continue
+            name = routing.row_key(kind, row['complexity_band'], row['risk_band'])
             target = rows.setdefault(name, [])
             for item in _list(row.get('strategies'), 'row strategies'):
                 _require(isinstance(item, dict), 'Invalid strategy')
@@ -145,11 +143,10 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
                     reason = 'effort_unsupported'
                 elif model['harnesses'] is not None and strategy['harness'] not in model['harnesses']:
                     reason = 'harness_unsupported'
-                elif not _qualified(strategy, family, refs, entry.get('id')):
+                elif not _qualified(strategy, kind, refs, entry.get('id')):
                     reason = 'evidence_missing'
                 if reason:
-                    dropped.append(dict(reason=reason, model=strategy['model'], effort=strategy['effort'],
-                                        row=routing.row_key(role, family, row['complexity_band'], row['risk_band'])))
+                    dropped.append(dict(reason=reason, model=strategy['model'], effort=strategy['effort'], row=name))
                     continue
                 strategy['strategy_id'] = _digest([strategy['model'], strategy['effort'], strategy['harness']] + (
                     [strategy['endpoint']] if strategy['endpoint'] != strategy['harness'] else []))[:16]
@@ -186,7 +183,7 @@ def refresh_table(previous, load, *, now=None):
 
 
 def lookup(table, profile):
-    """Strategies for a profile (exact row, then stricter or conservative fallback), or ``NO_RECOMMENDATION``.
+    """Strategies for a profile (exact row, then a stricter band of its work kind), or ``NO_RECOMMENDATION``.
 
     ``NO_RECOMMENDATION`` is not a refusal: the caller falls through to the deterministic path or the
     user's explicit worker choices."""

@@ -119,6 +119,70 @@ class TemplateTests(unittest.TestCase):
             with self.subTest(label), self.assertRaises(task_profile.TemplateUnavailable):
                 task_profile.load(path)
 
+    def test_non_floor_enum_values_are_validated(self):
+        good = task_profile.load()
+        for label, values in {'non-string': ['low', 3], 'table separator': ['low', 'a|b'], 'empty': [],
+                              'duplicate': ['low', 'low'], 'not a list': 'low'}.items():
+            fields = dict(good['fields'], uncertainty={'values': values})
+            with self.subTest(label), self.assertRaises(task_profile.TemplateUnavailable):
+                task_profile.load(self.write(dict(good, fields=fields), name='%s.json' % label.replace(' ', '-')))
+
+    def test_attributes_answer_for_roster_ids(self):
+        self.assertEqual((task_profile.ORCHESTRATOR, task_profile.CHECK), ('orchestrator', 'check'))
+        self.assertTrue(task_profile.routed('code-reviewer') and task_profile.reviews('code-reviewer'))
+        self.assertFalse(task_profile.writes('code-reviewer'))
+        self.assertTrue(task_profile.routed('software-engineer') and task_profile.writes('software-engineer'))
+        self.assertFalse(task_profile.reviews('software-engineer'))
+        self.assertEqual(task_profile.work_kind('debugger'), 'investigation')
+        self.assertFalse(task_profile.routed('orchestrator'))
+        self.assertTrue(task_profile.orchestrates('orchestrator'))
+        self.assertFalse(task_profile.orchestrates('software-engineer'))
+        self.assertEqual(task_profile.stored('code-reviewer'), task_profile.specialist('code-reviewer'))
+        self.assertNotIn('legacy', task_profile.stored('code-reviewer'))
+
+    def test_old_names_read_as_history(self):
+        self.assertEqual(task_profile.LEGACY, ('worker', 'review', 'coordinator', 'implementer', 'reviewer',
+                                               'researcher', 'repair'))
+        self.assertIs(task_profile.stored('review')['legacy'], True)
+        self.assertTrue(task_profile.reviews('review') and task_profile.reviews('reviewer'))
+        self.assertTrue(task_profile.orchestrates('coordinator'))
+        self.assertIsNone(task_profile.specialist('review'))
+        for name in ('worker', 'implementer', 'repair'):
+            with self.subTest(name):
+                self.assertEqual((task_profile.work_kind(name), task_profile.writes(name),
+                                  task_profile.reviews(name)), ('implementation', True, False))
+                self.assertFalse(task_profile.routed(name))
+        self.assertEqual((task_profile.work_kind('researcher'), task_profile.writes('researcher')),
+                         ('investigation', False))
+        self.assertEqual(task_profile.work_kind('coordinator'), 'planning')
+        self.assertIs(task_profile.stored('coordinator')['legacy'], True)
+        entry = task_profile.stored('worker')
+        entry['writes'] = False  # a copy: callers cannot change the fixed entries
+        self.assertTrue(task_profile.writes('worker'))
+
+    def test_native_roles_include_stored_names(self):
+        # Delegation's native worker and reviewer jobs: roster ids, and the stored old names, never the orchestrator.
+        for name in ('software-engineer', 'debugger', 'worker'):
+            self.assertTrue(task_profile.native(name) and task_profile.native_worker(name), name)
+        for name in ('code-reviewer', 'review'):
+            self.assertTrue(task_profile.native(name) and not task_profile.native_worker(name), name)
+        for name in ('orchestrator', 'coordinator', 'check', 'wizard', None):
+            self.assertFalse(task_profile.native(name) or task_profile.native_worker(name), name)
+
+    def test_check_is_reserved_and_not_a_specialist(self):
+        self.assertIsNone(task_profile.specialist('check'))
+        self.assertFalse(task_profile.routed('check'))
+        self.assertIsNone(task_profile.stored('check'))
+        self.assertFalse(task_profile.orchestrates('check'))
+
+    def test_unknown_names_have_no_attributes(self):
+        for name in ('wizard', None, 3, ''):
+            with self.subTest(name):
+                self.assertIsNone(task_profile.stored(name))
+                self.assertFalse(task_profile.routed(name) or task_profile.reviews(name)
+                                 or task_profile.writes(name) or task_profile.orchestrates(name))
+                self.assertIsNone(task_profile.work_kind(name))
+
     def test_template_ships_in_the_package(self):
         self.assertIn('templates/task-profile.json', package_manifest.export_members(ROOT))
 
@@ -140,12 +204,32 @@ class BriefTests(unittest.TestCase):
         block = task_profile.render_brief(task_profile.load())
         lines = block.splitlines()
         self.assertEqual((lines[0], lines[-1]), (task_profile.BRIEF_START, task_profile.BRIEF_END))
-        self.assertTrue(lines[1].startswith('- Task profile: '))
+        self.assertTrue(lines[2].startswith('- Task profile: '))
         self.assertIn('| complexity_band | low | One file or one mechanical change with an obvious solution. '
                       '| Fix a typo, rename a local variable, update a constant. |', lines)
         self.assertEqual(sum(line.startswith(('| complexity_band |', '| risk_band |')) for line in lines), 8)
         self.assertIn('high', block[block.index('Floors'):])
-        self.assertNotIn('code-reviewer', block)  # the specialist line and roster table arrive with F2
+
+    def test_rendered_section_holds_the_specialist_line_and_roster_table(self):
+        template = task_profile.load()
+        lines = task_profile.render_brief(template).splitlines()
+        self.assertTrue(lines[1].startswith('- Specialist: '))
+        self.assertIn('when_to_use', lines[1])
+        self.assertIn('orchestrator', lines[1])  # named only to say it is never routed
+        self.assertIn('| Specialist | Label | When to use | Work kind | Writes | Reviews |', lines)
+        rows = [line for line in lines if line.startswith('| `')]
+        self.assertEqual(len(rows), len(template['roster']) - 1)  # every routed specialist, not the orchestrator
+        self.assertIn('| `code-reviewer` | Code Reviewer | Reviews any code change for bugs, error handling and test '
+                      'coverage. | review | no | yes |', lines)
+        self.assertFalse(any(line.startswith('| `orchestrator`') for line in lines))
+
+    def test_validate_fails_on_brief_drift(self):
+        from unittest import mock
+        from scripts import validate
+        drift = ['templates/worker-brief.md: the task profile section differs from templates/task-profile.json']
+        with mock.patch.object(task_profile, 'brief_drift', return_value=drift):
+            with self.assertRaisesRegex(ValueError, 'the task profile section differs'):
+                validate.validate()
 
     def test_brief_drift_is_reported(self):
         brief = self.root / 'templates' / 'worker-brief.md'
@@ -167,6 +251,14 @@ class BriefTests(unittest.TestCase):
         brief.write_text(text)
         (self.root / 'templates' / 'task-profile.json').write_text('{}')
         self.assertIn('templates/task-profile.json', task_profile.brief_drift(self.root)[0])
+
+    def test_malformed_enum_values_report_a_template_problem(self):
+        template = task_profile.load()
+        template['fields']['uncertainty']['values'] = ['low', 1, 'a|b']
+        (self.root / 'templates' / 'task-profile.json').write_text(json.dumps(template))
+        drift = task_profile.brief_drift(self.root)
+        self.assertEqual(len(drift), 1)
+        self.assertTrue(drift[0].startswith('templates/task-profile.json: '))
 
 
 if __name__ == '__main__':

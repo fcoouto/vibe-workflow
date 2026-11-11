@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 
-from runtime import persisted_binding, state
+from runtime import persisted_binding, state, task_profile
 from runtime.startup import MAX_INPUT, StartupError, AcceptedScope, ProjectScope, RuntimeSettings, json_object, policy_digest, _canonical_freeze, _canonical_plain
 
 VERSION = 1
@@ -1094,9 +1094,9 @@ def _closure_assignment_projection(context,db,task,records):
             review['assessments']=assessments;reviews.append(review)
         outcomes.append(outcome)
     for record in records:
-        if record['data']['role'] not in {'worker','review'}:continue
+        if not task_profile.native(record['data']['role']):continue
         history=delegation._worker_history(None,record['data']['observation'],context=context,db=db)
-        if record['data']['role']=='worker':
+        if task_profile.native_worker(record['data']['role']):
             for _,value in history:
                 if value['report'] is not None:
                     _require(delegation._worker_report(None,record,value['result'])==value['report'],
@@ -1107,7 +1107,7 @@ def _closure_assignment_projection(context,db,task,records):
     verification_refs={_raw(entry['verification']):entry['verification'] for entry in
         task.get('evidence',{}).get('history',[])+[task.get('evidence',{})] if 'verification' in entry}
     for record in records:
-        if record['data']['role']=='coordinator':
+        if task_profile.orchestrates(record['data']['role']):
             reconciled=read(record['data']['reconciliation'])
             if reconciled.get('kind')=='synchronous-verification':
                 reference=reconciled['verification'];verification_refs[_raw(reference)]=reference
@@ -1464,7 +1464,7 @@ def _stop_verification(context,db,task,*,allow_absent=False):
     barriers=[]
     for record in delegation._ledger(None,db,context=context):
         if not all(record['owner'][k]==ref[k] for k in ('scope_id','client','session_id','task_id')):continue
-        if record['data']['role']!='coordinator' or record['data']['status']!='settled':continue
+        if not task_profile.orchestrates(record['data']['role']) or record['data']['status']!='settled':continue
         rec=_read(None,record['data']['reconciliation'],context=context,db=db)
         if rec.get('kind')=='synchronous-verification':
             changes._barrier_facts(context,db,task,record,rec);barriers.append(rec)
@@ -2990,7 +2990,7 @@ def _retention_routes(context,db,original):
             for field,child_kind in (('candidate','candidate'),('plan','native-plan'),('d5_plan','plan'),
                     ('d6_plan','native-plan'),('operation','definition'),('discovery','discovery')):
                 child(body.get(field),child_kind)
-            child(body.get('policy'),'policy' if body['role'] in {'worker','review'} else 'routing' if body['role']=='check' else 'operation-policy')
+            child(body.get('policy'),'policy' if task_profile.native(body['role']) else 'routing' if body['role']=='check' else 'operation-policy')
             child(body.get('review',{}).get('d5_plan'),'plan')
             child(body.get('guidance',{}).get('snapshot_ref'),'guidance')
             child(body.get('request',{}).get('guidance',{}).get('snapshot_ref'),'guidance')
@@ -3091,7 +3091,7 @@ def _retention_original_support_core(context,db,reference,*,budget):
             and _digest(assignment['request'])==certificate['request_digest'],
             'Closed detail original request/pins/binding correspondence differs')
         markers.append(dict(id=ref['id'],marker=marker))
-        if certificate['role'] in delegation.NATIVE_ROLES:
+        if task_profile.native(certificate['role']):
             discovery_ref=assignment['discovery'];discovery_meta,discovery_raw=_managed_artifact(None,discovery_ref,context=context,db=db)
             discovery=json.loads(discovery_raw)
             native_sources.append(dict(assignment=ref,discovery=dict(reference=discovery_ref,metadata=discovery_meta,
@@ -4141,7 +4141,7 @@ def _linked_producer(scope,request,snapshot,db):
     dispatch='verify:'+str(request['expected_revision'])+':'+request['purpose']
     _require(record is not None and record['owner']==dict(scope_id=reference['scope_id'],
         **{key:task[key] for key in ('client','session_id','task_id')},dispatch_id=dispatch) and
-        record['data']['role']=='coordinator' and record['data']['status']=='settled' and
+        task_profile.orchestrates(record['data']['role']) and record['data']['status']=='settled' and
         _read(scope,record['body']['operation'],db=db)==dict(id=dispatch,kind='completion-verification',
             decision_ref=task['decision_ref'],claims_digest=_digest(record['data']['claims'])),
         'Foreign publication lacks its actual original synchronous producer')
@@ -5691,7 +5691,7 @@ def _review_response(scope, db, request, record, admitted=False):
 def prepare_review(scope, request):
     """The sole native review admission path: one D5 round and one D6 launch permit."""
     from runtime import delegation
-    return delegation.delegation_routing.prepare(scope, request, 'review', delegation._prepare_native)  # C3-2
+    return delegation.delegation_routing.prepare(scope, request, True, delegation._prepare_native)  # C3-2
 
 
 def prepared_native_review(scope, attempt_id):
@@ -6278,7 +6278,7 @@ def _verify_member(scope, request, *, linked=False, _held=False):
         ownership_ref=task['decision_ref'], stop_conditions=['Return after this synchronous verification'],
         verification=dict(purpose=request['purpose'], **routing))
     try:
-        reserved = delegation._reserve_operation(scope, barrier_request, role='coordinator',
+        reserved = delegation._reserve_operation(scope, barrier_request, role=task_profile.ORCHESTRATOR,
             _verification=True, _cooperative=cooperative)
     except state.StateError:
         blockers = ownership_blockers()
@@ -6924,7 +6924,7 @@ def _linked_stop_basis(pointer,authorities):
         with _context_database(current['context']) as db:
             bindings=state._ready_stop_bindings(current['context'],db,task);barriers=[]
             for record in delegation._ledger(None,db,context=current['context']):
-                if record['data']['role']!='coordinator' or not all(record['owner'][k]==current['reference'][k] for k in ('scope_id','client','session_id','task_id')):continue
+                if not task_profile.orchestrates(record['data']['role']) or not all(record['owner'][k]==current['reference'][k] for k in ('scope_id','client','session_id','task_id')):continue
                 rec=_read(None,record['data']['reconciliation'],context=current['context'],db=db)
                 if rec.get('kind')=='synchronous-verification':
                     changes._barrier_facts(current['context'],db,task,record,rec);barriers.append(rec)

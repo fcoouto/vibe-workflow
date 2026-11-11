@@ -75,7 +75,7 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
     "jobs": [
       {
         "id": "edit",
-        "role": "worker",
+        "role": "software-engineer",
         "claims": [
           {
             "kind": "path",
@@ -94,15 +94,20 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
 Return: `ok`, current `revision`, immutable `plan` reference and `plan_digest`, plus
 limitations. Plan acceptance starts no native worker and spends no worker attempt.
 
-Each job may carry an optional `profile` the coordinator fills from
-[the task profile template](../templates/task-profile.json): its fields, their allowed
-values, one definition and example for each complexity and risk level, and the floors.
-`task_family` is still accepted until the specialist roster replaces it. Code validates
-the profile; unknown fields are rejected. Missing or invalid fields take conservative
-floors, and no supplied value can lower a floor from write scope or job requirements.
-Routing `prepare` lists the floor-filled fields as `missing_fields` and never blocks on
-them; fill them from the template and prepare again before dispatch. This task profile
-is separate from guidance `profile_ids`, which only reference cached recommendations.
+Each job's `role` is a specialist id from the roster in
+[the task profile template](../templates/task-profile.json), or `check` for a check run.
+A specialist that does not write files gets read-only claims. Each job may carry an
+optional `profile` the coordinator fills from the same template: its fields, their
+allowed values, one definition and example for each complexity and risk level, and the
+floors. Code validates the profile; unknown fields are rejected, except a retired
+`task_family`, which is accepted and ignored. Missing or invalid fields take
+conservative floors, and no supplied value can lower a floor from write scope or job
+requirements. Routing `prepare` lists the floor-filled fields as `missing_fields` and
+never blocks on them. Fill the profile before an attempt's first `prepare`: a decision
+is never replaced, so a repeated `prepare` of the same attempt returns its stored
+admission, while its `missing_fields` and `profile` describe only the repeated request.
+This task profile is separate from guidance `profile_ids`, which only reference cached
+recommendations.
 
 ## Prepare worker
 

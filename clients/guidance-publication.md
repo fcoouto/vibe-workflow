@@ -53,6 +53,16 @@ python3 -B scripts/routing_table.py refresh --guidance GUIDANCE.json \
   [--settings SETTINGS.json] [--table TABLE.json]
 ```
 
+Guidance rows are keyed by `work_kind`, complexity and risk, using the work kinds in
+[the task profile template](../templates/task-profile.json). When republishing sources
+compiled before the specialist roster, drop each row's `role` and `task_family`,
+including obsolete control-role rows, and give it its work kind: the compiler
+rejects a row that still carries either field, and a failed refresh keeps the last
+verified table. A table written in the older schema is left as it is; routing ranks
+nothing from it (`table_outdated`) until a successful refresh replaces it, and that
+refresh does not keep it as the previous version. Never edit a stored table or
+evidence record by hand.
+
 A terms file kept from an older refresh is no longer an input; the command
 ignores it, and `--terms` is a usage error. It writes `strategy-table.json` beside the routing settings file (or `--table`),
 where `scripts/routing.py` reads it, and makes no network, model or secret

@@ -71,7 +71,7 @@ class CodexUsageHostTests(unittest.TestCase):
     def proposal(self, **changes):
         return dict(task_id='task', class_name='investigation', packet=dict(PACKET), provider='openai-api',
                     local_preferred=False, api_only=False, snapshots=[],
-                    visibility=dict(version=1, role='Scout', specialty='Investigate')) | changes
+                    visibility=dict(version=2, role='explorer-agent', specialty='Investigate')) | changes
 
     def receipt(self, text='Prepare the bounded work.', *, turn='prepare', status='inProgress',
                 started=101, role='userMessage', host='desktop', item=None):
@@ -560,7 +560,7 @@ class CodexUsageHostTests(unittest.TestCase):
                          ['SubagentStart', 'PreToolUse', 'SubagentStop'])
         self.assertEqual({account for account, _ in events}, {'.codex'})
         self.assertEqual({item['session_id'] for _, item in events}, {plan.thread_id})
-        self.assertEqual({item['agent_type'] for _, item in events}, {'Scout · GPT-6.1 Sol'})
+        self.assertEqual({item['agent_type'] for _, item in events}, {'Explorer Agent · GPT-6.1 Sol'})
         self.assertNotEqual(events[0][1]['agent_id'], plan.thread_id)
         self.assertEqual(events[1][1]['phase'], 'completed')
         self.assertNotIn(result['text'], str(events))

@@ -35,7 +35,7 @@ def locator(job_id='build', **extra):
 
 def semantic(**extra):
     """The canonical job's semantic fields; `job()` from the command tests describes the same job."""
-    value = dict(role='worker', scope_ref=SCOPE, objective=SECRET, context=SECRET)
+    value = dict(role='software-engineer', scope_ref=SCOPE, objective=SECRET, context=SECRET)
     value.update(extra)
     return value
 
@@ -234,7 +234,7 @@ class FreshGateTests(GateBase):
                 self.assertRefused('a1', 'resource_authority_lost')
 
     def test_a_changed_brief_scope_role_or_tools_is_binding_stale(self):
-        for change in (dict(objective='new brief'), dict(scope_ref='scope2'), dict(role='review'),
+        for change in (dict(objective='new brief'), dict(scope_ref='scope2'), dict(role='code-reviewer'),
                        dict(tools=['shell'])):
             with self.subTest(change=change):
                 self.workflow.update('build', semantic=semantic(**change))
@@ -533,8 +533,8 @@ class CanonicalWorkflowTests(unittest.TestCase):
         self.service = command.Service(self.settings, self.ledger, workflow=self.reader,
                                        project=str(self.scope.repository_root))
         self.addCleanup(self.service.close)
-        self.jobs = [dict(id='a', role='worker', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
-                     dict(id='b', role='worker', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1)]
+        self.jobs = [dict(id='a', role='software-engineer', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
+                     dict(id='b', role='software-engineer', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1)]
         self.f.plan(self.f.plan_value(jobs=self.jobs))
 
     def call(self, request):
@@ -909,7 +909,7 @@ class ReviewFollowUpTests(GateBase):
         self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large', missing_fields=[]))
         self.assertFalse(self.ledger.exists() and budget.Ledger.open_holds(self.snapshot()))
         oversized = routing_gates.job_binding(locator(cwd=wide), self.workflow.view(locator()))
-        self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='implementer', complexity_band='medium',
+        self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='software-engineer', work_kind='implementation', complexity_band='medium',
                                             scope=SCOPE), dict(strategy_ids=[], reason_codes=[]),
                                        dict(routing_settings.resolve({}), revision=0), observations(),
                                        ledger=None, workflow=oversized)['reason_code'], 'invalid_binding')

@@ -13,20 +13,20 @@ def strategy(name, model, effort='low', harness='native', **extra):
 
 
 def table(rows, version='v1'):
-    return dict(schema=1, version=version,
+    return dict(schema=routing.TABLE_SCHEMA, version=version,
                 rows={routing.row_key(*key): value for key, value in rows.items()})
 
 
 TABLE = table({
-    ('worker', 'implementation', 'medium', 'medium'): [strategy('s1', 'm-a', 'high'), strategy('s2', 'm-b')],
-    ('worker', 'implementation', 'high', 'high'): [strategy('s3', 'm-a', 'max', context_limit=1000)],
-    ('worker', 'research', 'critical', 'critical'): [strategy('s4', 'm-c')],
-    ('worker', 'research', 'low', 'low'): [strategy('s5', 'm-d')],
+    ('implementation', 'medium', 'medium'): [strategy('s1', 'm-a', 'high'), strategy('s2', 'm-b')],
+    ('implementation', 'high', 'high'): [strategy('s3', 'm-a', 'max', context_limit=1000)],
+    ('investigation', 'critical', 'critical'): [strategy('s4', 'm-c')],
+    ('investigation', 'low', 'low'): [strategy('s5', 'm-d')],
 })
 
 
 def profile(**changes):
-    value = dict(role='worker', task_family='implementation', complexity_band='medium', risk_band='medium',
+    value = dict(role='software-engineer', work_kind='implementation', complexity_band='medium', risk_band='medium',
                  semantic_digest='d' * 64, context=dict(tokens=10, kind='estimated'), tools=[])
     value.update(changes)
     return value
@@ -46,19 +46,34 @@ class RankTests(unittest.TestCase):
         self.assertIn('ranking_stricter_band', result['reason_codes'])
 
     def test_stricter_search_never_goes_to_a_weaker_band(self):
-        result = routing.rank(profile(task_family='research', complexity_band='medium', risk_band='medium'), TABLE, {})
+        result = routing.rank(profile(role='debugger', work_kind='investigation', complexity_band='medium',
+                                      risk_band='medium'), TABLE, {})
         self.assertEqual(result['strategy_ids'], ['s4'])
 
-    def test_no_stricter_row_uses_strongest_qualified_strategy_conservatively(self):
+    def test_no_weaker_or_other_work_kind_row_is_used(self):
         result = routing.rank(profile(complexity_band='critical', risk_band='critical'), TABLE, {})
-        self.assertEqual(result['strategy_ids'], ['s4'])
-        self.assertIn('ranking_conservative', result['reason_codes'])
-        unknown_family = routing.rank(profile(task_family='novel'), TABLE, {})
-        self.assertIn('ranking_conservative', unknown_family['reason_codes'])
-        self.assertEqual(unknown_family['strategy_ids'], ['s4'])
+        self.assertEqual(result['strategy_ids'], [])
+        self.assertEqual(result['reason_codes'], ['no_recommendation'])
+        planning = routing.rank(profile(role='project-planner', work_kind='planning'), TABLE, {})
+        self.assertEqual(planning['strategy_ids'], [])
+        self.assertNotIn('ranking_conservative', str([result, planning]))
+
+    def test_table_from_the_old_schema_is_reported_outdated(self):
+        for old in (dict(TABLE, schema=1), {key: value for key, value in TABLE.items() if key != 'schema'}):
+            result = routing.rank(profile(), old, {})
+            self.assertEqual(result['strategy_ids'], [])
+            self.assertIn('table_outdated', result['reason_codes'])
+            self.assertNotIn('table_empty', result['reason_codes'])
+
+    def test_empty_table_is_still_reported_empty(self):
+        for empty in (dict(schema=1, version='v0', rows={}), {}, dict(schema=routing.TABLE_SCHEMA, rows={})):
+            result = routing.rank(profile(), empty, {})
+            self.assertIn('table_empty', result['reason_codes'])
+            self.assertNotIn('table_outdated', result['reason_codes'])
+        self.assertEqual(routing.TABLE_SCHEMA, 2)
 
     def test_conservative_fallback_never_uses_a_weaker_row(self):
-        weak = table({('worker', 'implementation', 'low', 'low'): [strategy('w1', 'm-a')]})
+        weak = table({('implementation', 'low', 'low'): [strategy('w1', 'm-a')]})
         result = routing.rank(profile(complexity_band='critical', risk_band='critical'), weak, {})
         self.assertEqual(result['strategy_ids'], [])
         self.assertIn('no_recommendation', result['reason_codes'])
@@ -66,12 +81,15 @@ class RankTests(unittest.TestCase):
         self.assertEqual(one_band['strategy_ids'], [])
 
     def test_malformed_table_keys_are_ignored(self):
-        broken = dict(TABLE, rows=dict(TABLE['rows'], **{'worker|x|bogus|low': [strategy('bad', 'm-q')], 'junk': []}))
+        broken = dict(TABLE, rows=dict(TABLE['rows'], **{'implementation|bogus|low': [strategy('bad', 'm-q')], 'junk': [],
+                                                         'worker|implementation|critical|critical': [strategy('old', 'm-q')]}))
         self.assertEqual(routing.rank(profile(), broken, {})['strategy_ids'], ['s1', 's2'])
-        self.assertEqual(routing.rank(profile(complexity_band='critical', risk_band='critical'), broken, {})['strategy_ids'], ['s4'])
+        self.assertEqual(routing.rank(profile(complexity_band='critical', risk_band='critical'), broken, {})['strategy_ids'], [])
+        investigation = profile(role='debugger', work_kind='investigation', complexity_band='high', risk_band='high')
+        self.assertEqual(routing.rank(investigation, broken, {})['strategy_ids'], ['s4'])
 
-    def test_role_without_rows_gives_no_recommendation(self):
-        result = routing.rank(profile(role='review'), TABLE, {})
+    def test_work_kind_without_rows_gives_no_recommendation(self):
+        result = routing.rank(profile(role='code-reviewer', work_kind='review'), TABLE, {})
         self.assertEqual(result['strategy_ids'], [])
         self.assertIn('no_recommendation', result['reason_codes'])
 
@@ -106,7 +124,7 @@ class RankTests(unittest.TestCase):
     def test_table_refresh_reranks_without_reprofiling(self):
         value = profile()
         before = copy.deepcopy(value)
-        refreshed = table({('worker', 'implementation', 'medium', 'medium'): [strategy('s9', 'm-z')]}, version='v2')
+        refreshed = table({('implementation', 'medium', 'medium'): [strategy('s9', 'm-z')]}, version='v2')
         first, second = routing.rank(value, TABLE, {}), routing.rank(value, refreshed, {})
         self.assertEqual(value, before)
         self.assertEqual(second['strategy_ids'], ['s9'])
@@ -124,7 +142,7 @@ class RankTests(unittest.TestCase):
         with patch.object(socket.socket, 'connect', forbidden), patch.object(socket, 'create_connection', forbidden), \
                 patch.object(subprocess, 'Popen', forbidden), patch.object(subprocess, 'run', forbidden):
             self.assertEqual(routing.rank(profile(), TABLE, {})['strategy_ids'], ['s1', 's2'])
-            routing.rank(profile(role='review'), TABLE, dict(allowed_models=['x']))
+            routing.rank(profile(role='code-reviewer', work_kind='review'), TABLE, dict(allowed_models=['x']))
 
     def test_result_exposes_the_cache_key_inputs(self):
         result = routing.rank(profile(review_policy='strict', scope_ref='scope-a'), TABLE, {})

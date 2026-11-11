@@ -78,6 +78,9 @@ printf '%s' '{"v":1,"expected_revision":<revision>,"change":{"api_usage_enabled"
 
 On a disable request, set it to `false` the same way, then report both states.
 
+Smart Routing worker choices follow [worker choices](worker-choices.md); they
+need none of the API Usage steps here.
+
 ## Read-only status, quoting and selection
 
 From the package root:

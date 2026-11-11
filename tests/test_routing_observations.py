@@ -140,7 +140,7 @@ class CollectorTests(Stores):
         self.assertNotIn('observed_at', window)
         ranking = dict(strategy_ids=[], reason_codes=[])
         settings = dict(routing.routing_settings.resolve({}), revision=0)
-        assignment = dict(attempt_id='a1', task='t1', role='implementer', complexity_band='medium', scope=SCOPE,
+        assignment = dict(attempt_id='a1', task='t1', role='software-engineer', work_kind='implementation', complexity_band='medium', scope=SCOPE,
                           choice=dict(provider='openai', model='m', effort='high', harness='codex-native',
                                       funding='subscription'))
         admitted = routing.admit(assignment, ranking, settings, observations, ledger=self.service._ledger(False, True))

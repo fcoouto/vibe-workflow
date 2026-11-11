@@ -16,7 +16,7 @@ import stat
 import subprocess
 import sys
 
-from runtime import routing, routing_observations, routing_settings
+from runtime import routing, routing_observations, routing_settings, task_profile
 from runtime.adapters import opencode as opencode_adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6); `project_required` is the routing service's own code.
@@ -38,8 +38,6 @@ HOSTS = dict(codex_native=('openai', 'codex-native'), openrouter_proposal=('open
 PINNED_ENDPOINT = ('openrouter_proposal', 'openrouter_worker')  # the request's `provider` is the pinned endpoint
 # Advisory hosts cannot block a send before it happens, so they never get a dollar route (C.3 design 3.7).
 ADVISORY_HOSTS = ('codex_native',)
-# Routing assignment role -> the canonical job role routing profiles (routing_settings.PROFILE_ROLES, reversed).
-PROFILE_ROLE = dict(implementer='worker', researcher='worker', repair='worker', reviewer='review')
 CONSERVATIVE_FLOORS = dict(complexity_band='high', risk_band='high', review_policy='independent')
 
 
@@ -94,12 +92,12 @@ assignment_scope = routing_observations.assignment_scope
 
 
 def unplanned_job(role, scope_ref, objective, *, tools=None):
-    """The minimal canonical job for explicit, unplanned delegation (a proposal or worker): role, scope reference,
-    an objective digest (never the text) and conservative requirement floors."""
-    if role not in PROFILE_ROLE:
+    """The minimal canonical job for explicit, unplanned delegation (a proposal or worker): a routed roster
+    specialist, scope reference, an objective digest (never the text) and conservative requirement floors."""
+    if not task_profile.routed(role):
         raise ValueError('invalid_role')
     digest = hashlib.sha256(str(objective).encode()).hexdigest()
-    return dict(id='unplanned:' + digest[:16], role=PROFILE_ROLE[role], scope_ref=scope_ref,
+    return dict(id='unplanned:' + digest[:16], role=role, scope_ref=scope_ref,
                 objective='sha256:' + digest, tools=sorted(set(tools or [])),
                 requirement_floors=dict(CONSERVATIVE_FLOORS))
 
@@ -402,7 +400,7 @@ def _self_check_in_child(workdir):
         return dict(kind='complete')
 
     def attempt(name, **options):
-        options.setdefault('job', unplanned_job('implementer', assignment_scope(checkout), 'managed self-check'))
+        options.setdefault('job', unplanned_job('software-engineer', assignment_scope(checkout), 'managed self-check'))
         return launch(options.pop('service', service), host='codex_native', catalog=[identity], transport=transport,
                       settings_path=settings, assignment=dict(attempt_id=name, task='self-check-' + name,
                                                               scope=assignment_scope(checkout),
@@ -425,7 +423,7 @@ def _self_check_in_child(workdir):
                                                  settings_path=service.settings_path, ledger_path=service.ledger_path)
         offered = dict(prepare_request(dict(attempt_id='offered', task='self-check-offered',
                                             scope=assignment_scope(checkout)),
-                                       unplanned_job('implementer', assignment_scope(checkout), 'offered')),
+                                       unplanned_job('software-engineer', assignment_scope(checkout), 'offered')),
                        observations=collected['observations'])
         if _call(service, offered).get('reason') != 'observations_not_accepted':
             codes.append('caller_observations_accepted')

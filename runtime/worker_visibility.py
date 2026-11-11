@@ -12,9 +12,9 @@ import tempfile
 import uuid
 
 
-ROLES = frozenset({'Coordinator', 'Scout', 'Builder', 'Tester', 'Reviewer', 'Scribe', 'Investigator'})
 LIMIT = 128 * 1024
 LABEL_LIMIT = 2 * 4096 + len(' · ')
+FIELDS = {'version', 'role', 'specialty', 'custom_role_name'}
 
 
 def text(value, limit=4096):
@@ -23,16 +23,47 @@ def text(value, limit=4096):
     return value
 
 
-def declaration(value):
-    if (not isinstance(value, dict) or not {'version', 'role', 'specialty'} <= set(value)
-            or set(value) - {'version', 'role', 'specialty', 'custom_role_name'}
-            or type(value['version']) is not int or value['version'] != 1
-            or not isinstance(value['role'], str) or value['role'] not in ROLES):
+def _shape(value, version):
+    if (not isinstance(value, dict) or not {'version', 'role', 'specialty'} <= set(value) or set(value) - FIELDS
+            or type(value['version']) is not int or value['version'] != version
+            or not isinstance(value['role'], str) or not value['role']):
         raise ValueError('invalid_visibility_declaration')
+    text(value['role'], 128)
     text(value['specialty'])
     if 'custom_role_name' in value:
         text(value['custom_role_name'])
     return dict(value)
+
+
+def declaration(value):
+    """A new declaration: version 2 naming a roster specialist. A new version 1 declaration is refused."""
+    from runtime import task_profile
+    value = _shape(value, 2)
+    try:
+        known = task_profile.specialist(value['role']) is not None
+    except task_profile.TemplateUnavailable:
+        known = False
+    if not known:
+        raise ValueError('invalid_visibility_declaration')
+    return value
+
+
+def stored_declaration(value):
+    """A declaration read from a persisted context or receipt: version 2, or version 1 shown as written."""
+    if isinstance(value, dict) and type(value.get('version')) is int and value['version'] == 1:
+        return _shape(value, 1)
+    return declaration(value)
+
+
+def display_role(value):
+    """The role a badge shows: the custom name, else the roster label (version 2) or the stored role (version 1)."""
+    value = stored_declaration(value)
+    if 'custom_role_name' in value:
+        return value['custom_role_name']
+    if value['version'] == 1:
+        return value['role']
+    from runtime import task_profile
+    return task_profile.specialist(value['role'])['label']
 
 
 def optional_declaration(value):
@@ -133,16 +164,18 @@ def prepare_native(path, request, *, reuse=False, observed=None):
     if not checkout.is_absolute() or checkout.resolve(strict=True) != checkout or not checkout.is_dir():
         raise ValueError('invalid_native_checkout')
     text(request['task_name'], 128)
-    context = dict(request, version=1, visibility=declaration(request['visibility']))
+    path = context_path(path, checkout)
+    existing = read_context(path) if reuse and path.exists() else None
+    # Reuse keeps the declaration its saved context holds, version 1 included; any other declaration is new input.
+    saved = existing is not None and request['visibility'] == existing.get('visibility')
+    context = dict(request, version=1, visibility=(stored_declaration if saved else declaration)(request['visibility']))
     if 'ledger_assignment_digest' in request:
         digest = request['ledger_assignment_digest']
         if not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
             raise ValueError('invalid_visibility_assignment_digest')
     else:
         context['prompt_marker'] = 'VCW worker visibility ' + uuid.uuid4().hex
-    path = context_path(path, checkout)
-    if reuse and path.exists():
-        existing = read_context(path)
+    if existing is not None:
         if ({key: value for key, value in context.items() if key != 'prompt_marker'} !=
                 {key: value for key, value in existing.items() if key not in {'prompt_marker', 'observed'}}):
             raise ValueError('native_visibility_context_changed')
@@ -183,8 +216,9 @@ def prepare_assignment(request, *, context=None, context_directory=None):
         if 'visibility' not in brief:
             path = context if context is not None else hook_context_path(
                 context_directory or default_context_directory(), brief['parent_session_id'], brief['task_name'])
-            brief['visibility'] = read_context(context_path(path, brief['checkout']))['visibility']
-        brief['visibility'] = declaration(brief['visibility'])
+            brief['visibility'] = stored_declaration(read_context(context_path(path, brief['checkout']))['visibility'])
+        else:
+            brief['visibility'] = declaration(brief['visibility'])
         path, prepared = prepare_context(brief, context=context,
                                          context_directory=context_directory, reuse=True)
         marker = prepared.get('prompt_marker')

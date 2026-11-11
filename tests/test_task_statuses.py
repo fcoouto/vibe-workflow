@@ -172,7 +172,7 @@ class CanonicalTaskStatusTests(unittest.TestCase):
                 operation=dict(id='blocked-dispatch',kind='coordinator-work'),reason='Observe only',
                 ownership_ref='user:scope',stop_conditions=['Return after observation'])
             with self.assertRaisesRegex(ValueError, 'Task cannot reserve'):
-                delegation._reserve_operation(fixture.scope, operation, role='coordinator')
+                delegation._reserve_operation(fixture.scope, operation, role='orchestrator')
             self.assertEqual({str(p):p.read_bytes() for p in fixture.scope.runtime.state_dir.rglob('*') if p.is_file()}, files)
             state.update_task(fixture.scope, fixture.request(state='WORKING',reason='Resume accepted task',
                 reference='user:resume',resolution_ref='user:resolved'))

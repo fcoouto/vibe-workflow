@@ -15,6 +15,40 @@ from runtime.startup import StartupError
 from tests.fixture_worker_visibility import NativeVisibilityFixture, fixture_transport
 
 
+class RosterDeclarationTests(unittest.TestCase):
+    """F2.4: new declarations name a roster specialist (version 2); stored version 1 declarations read as written."""
+    def test_declaration_takes_a_roster_id_and_shows_its_label(self):
+        from runtime import habblaud
+        value = dict(version=2, role='code-reviewer', specialty='Parser safety')
+        self.assertEqual(worker_visibility.declaration(value), value)
+        self.assertEqual(worker_visibility.display_role(value), 'Code Reviewer')
+        self.assertEqual(habblaud.display_label(value, 'Model X'), 'Code Reviewer · Model X')
+        custom = dict(value, custom_role_name='Safety reviewer')
+        self.assertEqual(habblaud.display_label(custom, 'Model X'), 'Safety reviewer · Model X')
+        self.assertFalse(hasattr(worker_visibility, 'ROLES'))
+
+    def test_new_version_1_declaration_is_refused(self):
+        for bad in (dict(version=1, role='Reviewer', specialty='s'),
+                    dict(version=2, role='Reviewer', specialty='s'), dict(version=2, role='review', specialty='s'),
+                    dict(version=2, role='check', specialty='s'), dict(version=2, role='code-reviewer', specialty=''),
+                    dict(version=2, role='code-reviewer', specialty='s', extra=1), dict(version=True, role='debugger',
+                                                                                         specialty='s')):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, 'invalid_visibility'):
+                worker_visibility.declaration(bad)
+            self.assertIsNone(worker_visibility.optional_declaration(bad))
+
+    def test_stored_version_1_declaration_is_shown_as_written(self):
+        from runtime import habblaud
+        stored = dict(version=1, role='Reviewer', specialty='Security assessment')
+        self.assertEqual(worker_visibility.stored_declaration(stored), stored)
+        self.assertEqual(habblaud.display_label(stored, 'Model X'), 'Reviewer · Model X')
+        custom = dict(stored, custom_role_name='Threat reviewer · 東京')
+        self.assertEqual(habblaud.display_label(custom, 'Model X'), 'Threat reviewer · 東京 · Model X')
+        for bad in (dict(stored, role=''), dict(stored, version=3), dict(stored, extra=1), 'Reviewer'):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, 'invalid_visibility'):
+                worker_visibility.stored_declaration(bad)
+
+
 class VisibilityTests(unittest.TestCase):
     def setUp(self):
         try:
@@ -26,7 +60,7 @@ class VisibilityTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.root.chmod(0o700)
-        self.metadata = dict(version=1, role='Reviewer', specialty='Security assessment',
+        self.metadata = dict(version=2, role='code-reviewer', specialty='Security assessment',
                              custom_role_name='Threat reviewer · 東京')
         self.parent, self.child = str(uuid.uuid4()), str(uuid.uuid4())
         self.binding = dict(parent=self.parent, agent_id=self.child,
@@ -41,7 +75,7 @@ class VisibilityTests(unittest.TestCase):
         return dict(module=self.transport, endpoint='http://127.0.0.1:1', account='account',
                     parent='018e5cb4-73ab-7bed-ae5a-c912132405db', checkout=str(self.root),
                     run_id='fixture-run', execution_route='openai-api',
-                    model_display_name='GPT-6.1 Sol', visibility=self.metadata | dict(role='Scout'),
+                    model_display_name='GPT-6.1 Sol', visibility=self.metadata | dict(role='explorer-agent'),
                     state_directory=self.root)
 
     def test_external_registration_replays_exact_legacy_identity_and_canonical_label(self):
@@ -52,7 +86,7 @@ class VisibilityTests(unittest.TestCase):
             self.assertEqual(self.api.register_external(**args), dict(delivered=True))
         self.assertEqual(self.client.events, [
             dict(hook_event_name=name, session_id=args['parent'], agent_id=external_id,
-                 agent_type='Scout · GPT-6.1 Sol', cwd=str(self.root), **activity)
+                 agent_type='Explorer Agent · GPT-6.1 Sol', cwd=str(self.root), **activity)
             for name, activity in (
                 ('SubagentStart', {}),
                 ('PreToolUse', dict(tool_name='completed', tool_use_id='fixture-activity', tool_input={})),
@@ -77,7 +111,7 @@ class VisibilityTests(unittest.TestCase):
                          dict(delivered=False, reason='visibility_unconfirmed'))
         self.assertEqual(self.client.events, [])
         self.client.agents.append(dict(id='account:' + external_id, parentId='account:' + args['parent'],
-                                       role='Scout · GPT-6.1 Sol'))
+                                       role='Explorer Agent · GPT-6.1 Sol'))
         self.assertEqual(self.api.register_external(**args), dict(delivered=True))
         self.assertEqual([event['hook_event_name'] for event in self.client.events],
                          ['PreToolUse', 'SubagentStop'])
@@ -118,7 +152,7 @@ class VisibilityTests(unittest.TestCase):
         external_id = 'e16ee46f-5dff-57a5-a771-6e5147660779'
         receipt = self.root / f'habblaud-{external_id}.json'
         binding = dict(parent=args['parent'], agent_id=external_id,
-                       label='Scout · GPT-6.1 Sol', cwd=str(self.root))
+                       label='Explorer Agent · GPT-6.1 Sol', cwd=str(self.root))
         frozen = dict(version=1, binding=binding, visibility=args['visibility'], account=args['account'],
                       delivered=True, started=True, stopped=True, phase='completed')
         for change in (dict(label='Historical alias · GPT-6.1 Sol'), dict(parent=self.parent)):
@@ -139,7 +173,7 @@ class VisibilityTests(unittest.TestCase):
         args = self.external_args()
         external_id = 'e16ee46f-5dff-57a5-a771-6e5147660779'
         observed = dict(id='account:' + external_id, parentId='account:' + args['parent'],
-                        role='Scout · GPT-6.1 Sol')
+                        role='Explorer Agent · GPT-6.1 Sol')
         for change in (dict(role='Historical alias · GPT-6.1 Sol'), dict(parentId='account:' + self.parent)):
             with self.subTest(change=change):
                 self.client.agents = [observed | change]
@@ -198,10 +232,10 @@ class VisibilityTests(unittest.TestCase):
         for metadata, model, expected in cases:
             with self.subTest(expected=expected):
                 self.assertEqual(self.api.display_label(metadata, model), expected)
-                self.assertEqual(self.api.declaration(metadata), metadata)
+                self.assertEqual(self.api.stored_declaration(metadata), metadata)
 
     def test_invalid_declarations_reject_without_silent_label_replacement(self):
-        for change in (dict(role='Worker'), dict(version=True), dict(version=2),
+        for change in (dict(role='Worker'), dict(version=True), dict(version=1),
                        dict(custom_role_name=''), dict(custom_role_name='x\ny'),
                        dict(custom_role_name='x' * 4097), dict(specialty='\t'), dict(extra='field')):
             with self.subTest(change=change), self.assertRaises(ValueError):
@@ -438,7 +472,7 @@ class NativeVisibilityObservationTests(NativeVisibilityFixture, unittest.TestCas
         parent_checkout.mkdir()
         self.parent_thread['cwd'] = str(parent_checkout)
         request = self.native_request() | dict(checkout=str(parent_checkout),
-            visibility=dict(version=1, role='Tester', specialty='Verify the change'))
+            visibility=dict(version=2, role='test-engineer', specialty='Verify the change'))
         path = helper.hook_context_path(self.task_context, self.parent, 'review_original')
         path.parent.mkdir(mode=0o700)
         helper.prepare_native(path, request)
@@ -451,8 +485,8 @@ class NativeVisibilityObservationTests(NativeVisibilityFixture, unittest.TestCas
                 with self.subTest(checkout=checkout):
                     replay = helper.enrich_start(event, self.task_context, checkout, Path(sys.executable).resolve())
                     self.assertEqual(replay, first)
-        self.assertEqual(first, original | dict(agent_type='Tester · Native model',
-            agent_role='Tester · Native model', vcw_display_label='Tester · Native model'))
+        self.assertEqual(first, original | dict(agent_type='Test Engineer · Native model',
+            agent_role='Test Engineer · Native model', vcw_display_label='Test Engineer · Native model'))
         self.assertEqual(event, original)
         saved = helper.read_context(path)
         self.assertEqual(saved['observed']['checkout'], str(parent_checkout))
@@ -633,11 +667,11 @@ class NativeVisibilityObservationTests(NativeVisibilityFixture, unittest.TestCas
         client, transport = fixture_transport()
         path = self.task_context / 'assignment.json'
         request = dict(parent_session_id=self.parent, checkout=str(self.root), task_name='review_original',
-                       visibility=dict(version=1, role='Reviewer', specialty='Read only', custom_role_name='Audit lead'))
+                       visibility=dict(version=2, role='code-reviewer', specialty='Read only', custom_role_name='Audit lead'))
         helper.prepare_native(path, request)
         self.assertEqual(client.events, [])
         with self.assertRaises(FileExistsError):
-            helper.prepare_native(path, request | dict(visibility=request['visibility'] | dict(role='Builder')))
+            helper.prepare_native(path, request | dict(visibility=request['visibility'] | dict(role='software-engineer')))
         with patch.object(codex, '_native_reader', self.reader), patch.object(habblaud, 'transport', return_value=transport):
             first = helper.publish_native(path, self.child, 'Reviewing', self.root, 'http://127.0.0.1:1', 'account')
             second = helper.publish_native(path, self.child, 'Continuing', self.root, 'http://127.0.0.1:1', 'account')

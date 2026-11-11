@@ -850,7 +850,7 @@ def _self_check_in_child(workdir):
             host = _SelfCheckHost(shim, str(checkout))
             host.__dict__.update(knobs)
             result = launch(checkout, host=host, service=service, prompt='self-check', job=routing_launch.unplanned_job(
-                'implementer', routing_launch.assignment_scope(checkout), 'self-check'),
+                'software-engineer', routing_launch.assignment_scope(checkout), 'self-check'),
                 assignment=dict(attempt_id=name, task='self-check-' + name, scope=routing_launch.assignment_scope(
                     checkout), choice=picked))
             outputs.append(json.dumps(result))

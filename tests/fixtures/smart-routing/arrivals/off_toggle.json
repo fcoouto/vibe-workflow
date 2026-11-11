@@ -10,7 +10,7 @@
    "complexity": "high",
    "id": "job-00",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 100000
   },
@@ -26,7 +26,7 @@
    "complexity": "medium",
    "id": "job-01",
    "kind": "arrive",
-   "role": "reviewer",
+   "work_kind": "review",
    "sub_cost": 0.03,
    "t": 100100
   },
@@ -42,7 +42,7 @@
    "complexity": "medium",
    "id": "job-02",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 100200
   },
@@ -58,7 +58,7 @@
    "complexity": "high",
    "id": "job-03",
    "kind": "arrive",
-   "role": "researcher",
+   "work_kind": "investigation",
    "sub_cost": 0.03,
    "t": 100300
   },
@@ -79,7 +79,7 @@
    "complexity": "medium",
    "id": "job-04",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 100401
   },
@@ -95,7 +95,7 @@
    "complexity": "medium",
    "id": "job-05",
    "kind": "arrive",
-   "role": "reviewer",
+   "work_kind": "review",
    "sub_cost": 0.03,
    "t": 100501
   },
@@ -111,7 +111,7 @@
    "complexity": "high",
    "id": "job-06",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 100601
   },
@@ -127,7 +127,7 @@
    "complexity": "medium",
    "id": "job-07",
    "kind": "arrive",
-   "role": "researcher",
+   "work_kind": "investigation",
    "sub_cost": 0.03,
    "t": 100701
   },
@@ -148,7 +148,7 @@
    "complexity": "medium",
    "id": "job-08",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 100802
   },
@@ -164,7 +164,7 @@
    "complexity": "high",
    "id": "job-09",
    "kind": "arrive",
-   "role": "reviewer",
+   "work_kind": "review",
    "sub_cost": 0.03,
    "t": 100902
   },
@@ -180,7 +180,7 @@
    "complexity": "medium",
    "id": "job-10",
    "kind": "arrive",
-   "role": "implementer",
+   "work_kind": "implementation",
    "sub_cost": 0.03,
    "t": 101002
   },
@@ -196,7 +196,7 @@
    "complexity": "medium",
    "id": "job-11",
    "kind": "arrive",
-   "role": "researcher",
+   "work_kind": "investigation",
    "sub_cost": 0.03,
    "t": 101102
   },

@@ -46,8 +46,9 @@ PRODUCTION_ADVICE = ("The production routing state is not clean or not ready, an
                      "one-shot `set managed_projects`, settle or reconcile open holds with the one-shot operator ops, "
                      "then run again.")
 CHOICE = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME, funding="subscription")
-# Profile role -> explicit assignment role; `researcher` is explicit on a worker job (routing_settings.EXPLICIT_ROLES).
-ROLES = (("implementer", "worker", None), ("reviewer", "review", "reviewer"), ("researcher", "worker", "researcher"))
+# (label, job specialist, explicit assignment role): an explicit role must equal the job's specialist.
+ROLES = (("software-engineer", "software-engineer", None), ("code-reviewer", "code-reviewer", "code-reviewer"),
+         ("explorer-agent", "explorer-agent", "explorer-agent"))
 BANDS = ("low", "medium")
 # How far an admission got, in order; recovery after an abort depends on it.
 PHASES = ("planned", "preparing", "admitted", "dispatching", "dispatched", "attached", "launching", "launched",
@@ -360,7 +361,7 @@ def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, l
         if explicit:
             assignment["role"] = explicit
         job = dict(id="job-" + attempt, role=profile_role, scope_ref="pilot-scope", objective="o", context="c",
-                   profile=dict(task_family="code", complexity_band=band, risk_band="medium", review_policy="independent",
+                   profile=dict(complexity_band=band, risk_band="medium", review_policy="independent",
                                 context_tokens=100, tools=["read"], uncertainty="low"))
         observations = dict(now=now, routes=[dict(route="sub", strategy_id="s-sub", **route, account=account,
                                                   billing_class="included_subscription", pool=pool, demand={"5h": 10},

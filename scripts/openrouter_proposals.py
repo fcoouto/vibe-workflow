@@ -548,10 +548,10 @@ def _prepare(service, checkout, request, limits, attempt):
         return None, reason
     fields = dict(model=request['model'], provider=request['provider'], effort=request.get('effort'))
     scope = launch.assignment_scope(checkout)
-    assignment = dict(attempt_id=attempt, role='researcher', scope=scope,
+    assignment = dict(attempt_id=attempt, role='explorer-agent', scope=scope,
                       task='proposal:' + hashlib.sha256(request['task_id'].encode()).hexdigest()[:32],
                       choice=launch.choice(HOST, 'api', **fields))
-    job = launch.unplanned_job('researcher', scope, request['task_id'])
+    job = launch.unplanned_job('explorer-agent', scope, request['task_id'])
     prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
     if prepared.get('state') != 'admitted':
         reason = prepared.get('reason')

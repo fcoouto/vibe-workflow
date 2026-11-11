@@ -80,7 +80,7 @@ class AdmissionFixture:
                 rationale='Native worker isolates bounded context', required_controls=['spawn']),
             limits=dict(max_attempts=8, max_resource_units=8, deadline=int(self.api._now()) + 600,
                 max_parallel_workers=4, host_capacity=4, capacity_ref='coordinator:observed-slots'),
-            fallback=dict(action='stop', reference='user:original-budget'), jobs=[dict(id='edit', role='worker',
+            fallback=dict(action='stop', reference='user:original-budget'), jobs=[dict(id='edit', role='software-engineer',
                 claims=[self.path_claim()], dependencies=[], max_attempts=3)]) | updates
 
     def plan(self, value=None):

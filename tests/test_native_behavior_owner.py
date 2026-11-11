@@ -592,7 +592,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             delegation.record_guidance(scope, native.cache_request|dict(token=claim['token'], generation=claim['generation'],
                 coordinator_ref='fixture:independently-verified-software-guidance', guidance=guidance))
             claims = [dict(kind='path', key=str(original['canary']), mode='write' if child_guard else 'read')]
-            plan = native.plan_value(jobs=[dict(id='edit', role='worker', claims=claims, dependencies=[], max_attempts=1)])
+            plan = native.plan_value(jobs=[dict(id='edit', role='software-engineer', claims=claims, dependencies=[], max_attempts=1)])
             plan['limits'].update(max_attempts=2, max_resource_units=1, max_parallel_workers=1, host_capacity=1,
                 deadline=int(allocation['limits']['deadline']))
             native.plan(plan)

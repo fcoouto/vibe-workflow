@@ -21,7 +21,7 @@ import time
 import unicodedata
 import uuid
 
-from runtime import onboarding as d3, persisted_binding
+from runtime import onboarding as d3, persisted_binding, task_profile
 from runtime import state as task_state
 from runtime import recovery_uses
 from runtime.startup import (PROJECT_FILE, ProjectScope, StartupError, checkout,
@@ -2389,10 +2389,10 @@ def _assignment_certificate_shape(value, task):
         ('scope_id','client','session_id','task_id')),'Stopped assignment original owner differs')
     task_state._integer(value['created_at'],'original stopped assignment age'); d3._hash(value['request_digest'])
     delegation._stored_claims(value['claims'],maximum=delegation.MAX_VERIFICATION_CLAIMS)
-    role=value['role']; d3._require(role in {'coordinator','check','worker','review'},'Unknown stopped assignment role')
+    role=value['role']; d3._require((task_profile.stored(role) is not None or role==task_profile.CHECK),'Unknown stopped assignment role')
     rec=value['reconciliation']
     if 'version' in value:
-        d3._require(type(value['version']) is int and value['version']==2 and task.get('writer_stop') and task.get('state') in {'DONE','REVIEW','CANCELLED'} and role=='coordinator',
+        d3._require(type(value['version']) is int and value['version']==2 and task.get('writer_stop') and task.get('state') in {'DONE','REVIEW','CANCELLED'} and task_profile.orchestrates(role),
             'Barrier certificate needs its independently stopped complete owner')
         task_state._fields(rec,('version','kind','reference','body','outcome','stop_digest','bindings'))
         task_state._artifact_reference(rec['reference']);body=rec['body']
@@ -2421,10 +2421,9 @@ def _assignment_certificate_shape(value, task):
         type(proof.get('expected_revision')) is int and proof['expected_revision']==rec['revision']-1,
         'Stopped assignment proof original identity differs')
     bindings=rec['bindings']
-    fields={'coordinator':('operation','operation_evidence','resource_observations','d5_plan','d6_plan','candidate','current_candidate'),
+    fields={'orchestrator':('operation','operation_evidence','resource_observations','d5_plan','d6_plan','candidate','current_candidate'),
         'check':('d5_plan','candidate','current_candidate','execution'),
-        'worker':('plan','candidate','current_candidate','observation','native_receipt'),
-        'review':('plan','candidate','current_candidate','observation','native_receipt')}[role]
+        'native':('plan','candidate','current_candidate','observation','native_receipt')}['orchestrator' if task_profile.orchestrates(role) else role if role==task_profile.CHECK else 'native']
     task_state._fields(bindings,fields)
     for key in fields:
         if key!='native_receipt' and bindings[key] is not None: task_state._artifact_reference(bindings[key])
@@ -2436,7 +2435,7 @@ def _assignment_certificate_shape(value, task):
         for key in ('changed_paths','evidence'): delegation._strings(assessment[key],key,maximum=64,limit=4096,nonempty=key=='evidence')
         for name in assessment['changed_paths']: evidence._relative(name)
         task_state._text(assessment['coordinator_ref'],'assessment coordinator',4096)
-    if role=='coordinator':
+    if task_profile.orchestrates(role):
         d3._require(proof.get('kind')=='coordinator-operation-reconciliation' and proof.get('operation_stopped') is True and
             proof.get('operation_descendants_stopped') is True and proof.get('operation_digest')==bindings['operation']['digest'] and
             all(proof.get(k)==bindings[k] for k in ('operation_evidence','resource_observations')),
@@ -2486,7 +2485,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
     d3._require(type(rec.get('version')) is int and rec['version']==2,'Recovery assignment requires version2 role proof')
     role=data['role']
     task_state._fields(rec,('version','proof','source_digest','request_digest','current_candidate',*(() if role=='check' else ('assessment','revision','reservation_snapshot_digest'))),
-        ('prior_cooperative',) if role in delegation.NATIVE_ROLES else ())
+        ('prior_cooperative',) if task_profile.native(role) else ())
     if 'prior_cooperative' in rec:
         prior=read(rec['prior_cooperative'])
         d3._require(prior.get('proof',{}).get('kind')==delegation.COOPERATIVE_PROOF and
@@ -2506,7 +2505,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
         # The check writer persists no revision/assessment; its exact transition increments once.
         revision=proof['expected_revision']+1; assessment=None
     else:
-        if role=='review':
+        if task_profile.reviews(role):
             d3._require(attempt is not None and attempt['status'] not in {'reserved','running','uncertain'} and
                 attempt.get('ownership_reconciliation')==data['reconciliation'],'Recovery review remains unresolved')
         assessment=rec['assessment']; task_state._fields(assessment,('outcome','changed_paths','result_assessment','partial_change_assessment','evidence','coordinator_ref'))
@@ -2518,7 +2517,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
         linked_review=lambda a:delegation._linked_review(None,owner['scope_id'],task,a,[record],context=context,db=db),
         current_candidate_digest=current['digest'] if current else None)
     if current is not None: evidence._candidate_projection(read(current),task)
-    if role=='coordinator':
+    if task_profile.orchestrates(role):
         bindings={k:body[k] for k in ('operation','d5_plan','d6_plan')}
         bindings.update({k:proof[k] for k in ('operation_evidence','resource_observations')})
     elif role=='check':

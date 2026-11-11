@@ -102,7 +102,7 @@ class ReconcileUncertainTests(Reconcile):
         self.assert_identity()
         # A closed attempt can never send again: the shim's every check is refused.
         checked = self.call(dict(v=1, op='check', attempt_id='a1', request=facts(**API), authority=self.tokens['a1']))
-        self.assertEqual(checked, dict(v=1, state='blocked', reason='attempt_closed'))
+        self.assertEqual(checked, dict(v=1, settings_warnings=[], state='blocked', reason='attempt_closed'))
 
     def test_receipt_arithmetic_is_exact_at_every_boundary(self):
         for i, cost in enumerate((1, 6 * M - 1, 6 * M, 6 * M + 1, budget.MAX_INTEGER)):
