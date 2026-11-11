@@ -73,30 +73,6 @@
       "evidence_refs": []
      }
     ]
-   },
-   {
-    "role": "profiler",
-    "task_family": "general",
-    "complexity_band": "low",
-    "risk_band": "low",
-    "strategies": [
-     {
-      "model": "free-open",
-      "effort": "low",
-      "harness": "gateway",
-      "evidence_refs": [
-       "guide-1"
-      ]
-     },
-     {
-      "model": "free-private",
-      "effort": "low",
-      "harness": "gateway",
-      "evidence_refs": [
-       "guide-1"
-      ]
-     }
-    ]
    }
   ]
  }

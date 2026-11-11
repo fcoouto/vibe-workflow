@@ -3,10 +3,9 @@
 An empty ranking (``no_recommendation``) is never a refusal: callers fall through to the
 deterministic admission path or the user's explicit worker choices. Only admission can block.
 
-Profiling and ranking are pure: no network, subprocess or model call happens here except through
-the caller-supplied, optional ``jev`` enrichment callable. ``admit`` and ``dispatch`` are the
-exceptions: each writes the local ledger in one short transaction of pure arithmetic. ``dispatch``
-issues the single-use dispatch authority (S3.4).
+Profiling and ranking are pure: no network, subprocess or model call happens here. ``admit`` and
+``dispatch`` are the exceptions: each writes the local ledger in one short transaction of pure
+arithmetic. ``dispatch`` issues the single-use dispatch authority (S3.4).
 """
 import copy
 import functools
@@ -28,7 +27,7 @@ COMPLEXITY_BANDS = ('low', 'medium', 'high', 'critical')
 RISK_BANDS = ('low', 'medium', 'high', 'critical')
 REVIEW_POLICIES = ('none', 'self', 'independent', 'strict')
 UNCERTAINTY = ('low', 'medium', 'high')
-PROVENANCE = ('coordinator', 'metadata', 'floor', 'jev')
+PROVENANCE = ('coordinator', 'metadata', 'floor')
 # Conservative values for fields nobody supplied: higher bands, stricter review.
 FLOORS = dict(task_family='general', complexity_band='high', risk_band='high', review_policy='independent')
 # Requirement floors implied by a write claim, independent of any supplied value.
@@ -175,17 +174,11 @@ def _usable_supplied(job, digest, reasons):
     return supplied
 
 
-def _jev_view(job, fields):
-    return dict(job_id=job.get('id'), role=job.get('role'), objective=job.get('objective'),
-                context=job.get('context'), scope=_claims(job), tools=_tools(job), unresolved=list(fields))
-
-
-def ensure_profile(job, *, jev=None):
+def ensure_profile(job):
     """Return a TaskProfile for ``job`` without mutating it.
 
-    Complete coordinator-supplied profiles never call ``jev``. Gaps take
-    deterministic floors; ``jev`` (optional) is asked once for unresolved
-    semantic fields. No supplied or enriched value can lower a requirement floor.
+    Complete coordinator-supplied profiles are used as supplied. Gaps take
+    deterministic floors. No supplied value can lower a requirement floor.
     """
     if not isinstance(job, dict) or not isinstance(job.get('role'), str) or job.get('role') not in ROLES:
         raise ProfileUnavailable('profile_unavailable: unknown role')
@@ -198,18 +191,6 @@ def ensure_profile(job, *, jev=None):
     for field in ('task_family', *_ORDERS):
         if _valid(field, supplied.get(field)):
             values[field], provenance[field] = supplied[field], 'coordinator'
-    unresolved = [field for field in SEMANTIC_FIELDS if field not in values]
-    enriched = False
-    if unresolved and callable(jev):
-        try:
-            answer = jev(_jev_view(job, unresolved), tuple(unresolved))
-        except Exception:
-            answer = None
-        if isinstance(answer, dict):
-            for field in unresolved:
-                if _valid(field, answer.get(field)):
-                    values[field], provenance[field] = answer[field], 'jev'
-                    enriched = True
     gaps = [field for field in ('task_family', *_ORDERS) if field not in values]
     for field in gaps:
         values[field], provenance[field] = FLOORS[field], 'floor'
@@ -227,7 +208,7 @@ def ensure_profile(job, *, jev=None):
         context, context_source = dict(tokens=supplied['context_tokens'], kind='estimated'), 'coordinator'
     else:
         context, context_source = dict(tokens=_estimate_tokens(job), kind='estimated'), 'floor'
-    uncertainty = 'high' if gaps else 'medium' if enriched else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
+    uncertainty = 'high' if gaps else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
     return dict(contract_version=CONTRACT_VERSION, job_id=job.get('id'), role=job['role'], scope_ref=job['scope_ref'],
                 task_family=values['task_family'], complexity_band=values['complexity_band'],
                 risk_band=values['risk_band'], review_policy=values['review_policy'], context=context,

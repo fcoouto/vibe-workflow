@@ -1,4 +1,4 @@
-"""Compile the Smart Routing strategy table from guidance, catalog, benchmark and terms evidence.
+"""Compile the Smart Routing strategy table from guidance, catalog and benchmark evidence.
 
 Maintenance-time only: the compiler is pure, makes no network or model call and is
 never run on spawn paths or hooks. Strategies naming models absent from the live
@@ -10,8 +10,6 @@ Input shapes (all plain JSON):
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
   catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # native catalog shape (runtime/delegation.py)
   benchmarks: [{id, model, harness, task_family, sha256, checked_at}]      # harness and task_family are required to match
-  terms:      [{model, endpoint, zero_retention, no_training, forbids_confidential, user_restricted?}]  # per endpoint (RF7);
-              # a legacy user_opt_in is ignored: activation covers retaining endpoints
 
 Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
 A catalog entry without ``harnesses`` accepts any harness. A strategy's ``endpoint`` defaults to its harness.
@@ -27,8 +25,6 @@ from runtime import routing
 
 SCHEMA = 1
 NO_RECOMMENDATION = dict(no_recommendation=True, reason='no_recommendation')
-# Rows for these roles select models that see task text outside the worker, so data terms apply.
-CONTROL_ROLES = ('profiler', 'ranker')
 MAX_ROWS = 4096
 _TIME = re.compile(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z')
 
@@ -94,23 +90,6 @@ def _sources(guidance, benchmarks):
     return sources, refs
 
 
-def _terms(items):
-    result = {}
-    for item in _list(items, 'terms'):
-        _require(isinstance(item, dict), 'Invalid terms entry')
-        result[(_text(item.get('model'), 'terms model', 128), _text(item.get('endpoint'), 'terms endpoint', 128))] = item
-    return result
-
-
-def _control_allowed(terms):
-    """Control rows see task text, so their endpoint's terms must be known. An active integration covers
-    endpoints that may retain or train on it (user decision, 9 November 2026). Eligibility needs
-    `forbids_confidential` to be exactly False; a missing or malformed value, or a `user_restricted`
-    entry other than False, excludes the endpoint."""
-    return (bool(terms) and terms.get('forbids_confidential') is False
-            and terms.get('user_restricted', False) is False)
-
-
 def _qualified(strategy, family, refs, entry):
     """A strategy qualifies only through cited evidence: its own guidance entry, or a benchmark for the same
     model, harness and task family (records lacking harness or task family match nothing)."""
@@ -130,17 +109,16 @@ def _qualified(strategy, family, refs, entry):
     return True
 
 
-def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
+def compile_table(guidance, catalog, benchmarks, *, now=None):
     """Return the versioned strategy table; see the module docstring for input shapes."""
     live = _catalog(catalog)
     sources, refs = _sources(guidance, benchmarks)
-    policy = _terms(terms)
     rows, dropped = {}, []
     for entry in guidance:
         for row in _list(entry.get('rows'), 'guidance rows'):
             _require(isinstance(row, dict), 'Invalid guidance row')
             role = _text(row.get('role'), 'row role', 64)
-            _require(role in routing.ROLES + CONTROL_ROLES, 'Unknown row role')
+            _require(role in routing.ROLES, 'Unknown row role')
             _require(row.get('complexity_band') in routing.COMPLEXITY_BANDS and
                      row.get('risk_band') in routing.RISK_BANDS, 'Invalid row band')
             family = _text(row.get('task_family'), 'row task family', 64)
@@ -169,8 +147,6 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
                     reason = 'harness_unsupported'
                 elif not _qualified(strategy, family, refs, entry.get('id')):
                     reason = 'evidence_missing'
-                elif role in CONTROL_ROLES and not _control_allowed(policy.get((strategy['model'], strategy['endpoint']))):
-                    reason = 'control_plane_terms'
                 if reason:
                     dropped.append(dict(reason=reason, model=strategy['model'], effort=strategy['effort'],
                                         row=routing.row_key(role, family, row['complexity_band'], row['risk_band'])))
@@ -189,18 +165,14 @@ def compile_table(guidance, catalog, benchmarks, terms, *, now=None):
 
 
 def refresh_table(previous, load, *, now=None):
-    """Maintenance refresh: ``load()`` returns the four compile inputs.
+    """Maintenance refresh: ``load()`` returns the three compile inputs.
 
     Any failure keeps the last verified table with its original ``compiled_at`` and marks
     ``refresh_failed``; with no previous table the failure is an error. A successful compile that
-    drops every row of a non-empty previous table (for example an empty catalog) keeps only the
-    previous non-control rows, with a version for that content: profiler and ranker rows see task
-    text, so they come only from a compile against the current terms.
+    drops every row of a non-empty previous table (for example an empty catalog) is a failure too.
     """
-    compiled = False
     try:
         fresh = compile_table(*load(), now=now)
-        compiled = True
         failure = None
         if previous and previous.get('rows') and not fresh['rows']:
             failure = ValueError('Refresh produced no qualified rows')
@@ -210,13 +182,7 @@ def refresh_table(previous, load, *, now=None):
         return fresh
     if previous is None:
         raise ValueError('No verified strategy table to retain') from failure
-    kept = dict(previous, refresh_failed=True)
-    if compiled:
-        rows = {name: value for name, value in previous['rows'].items()
-                if name.split('|', 1)[0] not in CONTROL_ROLES}
-        if rows != previous['rows']:
-            kept.update(rows=rows, version=_digest([SCHEMA, rows, previous['sources']]))
-    return kept
+    return dict(previous, refresh_failed=True)
 
 
 def lookup(table, profile):

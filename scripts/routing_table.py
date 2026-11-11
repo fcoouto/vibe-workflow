@@ -2,11 +2,12 @@
 """Write the Smart Routing strategy table from local evidence files (plan Task S2.3). Maintenance only.
 
 Usage:
-  routing_table.py refresh --guidance PATH --catalog PATH --benchmarks PATH --terms PATH
+  routing_table.py refresh --guidance PATH --catalog PATH --benchmarks PATH
                            [--settings PATH] [--table PATH]
   routing_table.py rollback [--settings PATH] [--table PATH]
 
-The four inputs are the JSON shapes `runtime.routing_evidence` documents. The table goes where
+The three inputs are the JSON shapes `runtime.routing_evidence` documents; a `terms.json` an older
+procedure left in the sources folder is not an input and is ignored. The table goes where
 `scripts/routing.py` reads it: `--table`, or `strategy-table.json` beside the settings file. The command
 reads and writes local files only: no network, model, subprocess or secret access. Spawn paths, hooks and
 startup never run it; the maintenance procedure is clients/guidance-publication.md#strategy-table-refresh.
@@ -43,7 +44,7 @@ from scripts import routing as reader  # noqa: E402
 VERSION = 1
 USAGE = 2
 MAX_INPUT = 4 << 20
-INPUTS = ('guidance', 'catalog', 'benchmarks', 'terms')
+INPUTS = ('guidance', 'catalog', 'benchmarks')
 
 
 class Blocked(Exception):

@@ -44,16 +44,17 @@ settings separate, and preserve the coordinator's model and authentication.
 After a successful guidance record, or a relevant catalog or benchmark change, a
 maintenance run recompiles the Smart Routing strategy table. Run it only during
 that maintenance session, never from a spawn path, hook or startup check. Extract
-prose guidance into structured rows first and save the four inputs as local JSON
+prose guidance into structured rows first and save the three inputs as local JSON
 files in the shapes `runtime/routing_evidence.py` documents, then run:
 
 ```sh
 python3 -B scripts/routing_table.py refresh --guidance GUIDANCE.json \
-  --catalog CATALOG.json --benchmarks BENCHMARKS.json --terms TERMS.json \
+  --catalog CATALOG.json --benchmarks BENCHMARKS.json \
   [--settings SETTINGS.json] [--table TABLE.json]
 ```
 
-It writes `strategy-table.json` beside the routing settings file (or `--table`),
+A terms file kept from an older refresh is no longer an input; the command
+ignores it, and `--terms` is a usage error. It writes `strategy-table.json` beside the routing settings file (or `--table`),
 where `scripts/routing.py` reads it, and makes no network, model or secret
 access. Inputs must be regular files, not symlinks or devices. It prints one
 JSON line: `refreshed` (exit 0) wrote a new table; `kept` (exit 1) kept the last
@@ -80,15 +81,10 @@ always survives; likewise a crash between rollback's two writes leaves both file
 holding the older version, so recreate the newer one with a refresh.
 Report a `kept`, `blocked` or warning result as a maintenance finding; it never
 blocks delegation. Code drops rows naming unavailable models,
-unsupported efforts or harnesses, and rows without cited evidence. Profiling or
-ranking models also need known endpoint terms that allow confidential data
-(`forbids_confidential: false`). An active integration covers endpoints that may
-retain or train on task text; a missing or malformed term, or a `user_restricted`
-entry, excludes the endpoint. A failed or invalid refresh keeps the last verified
-table with its original age. A refresh re-ranks later assignments without
-re-profiling them. A refresh that compiles but leaves no qualified rows keeps only
-the previous non-control rows: profiler and ranker rows come only from a compile
-against the current terms.
+unsupported efforts or harnesses, and rows without cited evidence. A failed or
+invalid refresh keeps the last verified table with its original age. A refresh
+re-ranks later assignments without re-profiling them. A refresh that compiles but
+leaves no qualified rows also keeps the last verified table.
 
 An empty ranking (`no_recommendation`) is a missing suggestion, not a refusal. The
 caller continues on the deterministic admission path or the user's explicit worker
