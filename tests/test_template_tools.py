@@ -135,6 +135,33 @@ class TemplateToolsTests(unittest.TestCase):
         self.write("README.md", '[valid][guide]\n\n[guide]: <Some%20File.md#hello> "Title"\n\n`[code](missing.md)`\n\n```md\n[example](missing.md)\n```\n')
         self.assertTrue(self.tools.check(self.root, ["README.md"])["ok"])
 
+    def test_heading_anchors_preserve_visible_inline_code(self):
+        path = self.write("README.md", "# Run `tool`\n\n[run](#run-tool)\n")
+        self.assertTrue(self.tools.check(self.root, ["README.md"])["ok"])
+        path.write_text("# Run `tool`\n\n[absent](#run-other)\n")
+        self.assertEqual(self.codes(self.tools.check(self.root, ["README.md"])), {"anchor_missing"})
+
+    def test_duplicate_reference_labels_use_first_definition(self):
+        self.write("present.md", "# Present\n")
+        for first, second, expected in (("missing.md", "present.md", {"link_missing"}),
+                                        ("present.md", "missing.md", set())):
+            with self.subTest(first=first):
+                self.write("README.md", f"[guide][r guide]\n\n[R  Guide]: {first}\n[r guide]: {second}\n")
+                self.assertEqual(self.codes(self.tools.check(self.root, ["README.md"])), expected)
+
+    def test_duplicate_heading_collisions_and_repeated_links_finish_within_budget(self):
+        self.write("collisions.md", "# a\n# a-1\n# a\n# a-1\n# a\n")
+        self.write("large.md", "# a\n" * 20000)
+        links = "".join(f"[collision](collisions.md#{anchor})\n"
+                        for anchor in ("a", "a-1", "a-2", "a-1-1", "a-3"))
+        self.write("README.md", links + "[last](large.md#a-19999)\n" * 100)
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(SCRIPT), "check", "--cwd", str(self.root),
+             "--document", "README.md", "--quiet"],
+            capture_output=True, text=True, timeout=5,
+            env={"PATH": os.defpath, "HOME": str(self.base)})
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
     def test_selected_paths_refuse_traversal_symlinks_and_special_files(self):
         self.write("outside.md", "private", self.base)
         (self.root / "alias.md").symlink_to(self.base / "outside.md")
