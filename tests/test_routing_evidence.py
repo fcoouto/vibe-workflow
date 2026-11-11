@@ -20,8 +20,8 @@ def inputs():
     return [load(name) for name in ('guidance', 'catalog', 'benchmarks')]
 
 
-def key(role, family, complexity, risk):
-    return routing.row_key(role, family, complexity, risk)
+def key(kind, complexity, risk):
+    return routing.row_key(kind, complexity, risk)
 
 
 class CompileTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class CompileTests(unittest.TestCase):
         return [(item['model'], item['effort']) for item in self.table['rows'][row]]
 
     def test_rows_are_versioned_ordered_and_cite_evidence(self):
-        row = key('worker', 'implementation', 'medium', 'medium')
+        row = key('implementation', 'medium', 'medium')
         self.assertEqual(self.models(row), [('alpha-large', 'high'), ('alpha-small', 'low')])
         first = self.table['rows'][row][0]
         self.assertEqual(set(first) - {'context_limit'}, {'strategy_id', 'model', 'effort', 'harness', 'evidence_refs'})
@@ -47,21 +47,21 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(again['version'], self.table['version'])
 
     def test_absent_models_and_unsupported_efforts_are_dropped_not_guessed(self):
-        row = key('worker', 'implementation', 'high', 'high')
+        row = key('implementation', 'high', 'high')
         self.assertEqual(self.models(row), [('alpha-large', 'max')])
         reasons = {item['reason'] for item in self.table['dropped']}
         self.assertTrue({'model_not_in_catalog', 'effort_unsupported'} <= reasons)
 
     def test_new_catalog_model_needs_cited_evidence(self):
-        self.assertNotIn(key('worker', 'implementation', 'low', 'low'), self.table['rows'])
+        self.assertNotIn(key('implementation', 'low', 'low'), self.table['rows'])
         guidance, catalog, benchmarks = inputs()
         guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
         table = evidence.compile_table(guidance, catalog, benchmarks)
-        self.assertEqual([item['model'] for item in table['rows'][key('worker', 'implementation', 'low', 'low')]],
+        self.assertEqual([item['model'] for item in table['rows'][key('implementation', 'low', 'low')]],
                          ['beta-new'])
         for refs in (['bench-unknown'], ['guide-1', 'bench-unknown']):
             guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = refs
-            self.assertNotIn(key('worker', 'implementation', 'low', 'low'),
+            self.assertNotIn(key('implementation', 'low', 'low'),
                              evidence.compile_table(guidance, catalog, benchmarks)['rows'])
 
     def test_benchmark_for_another_model_does_not_qualify(self):
@@ -69,14 +69,14 @@ class CompileTests(unittest.TestCase):
         benchmarks[0]['model'] = 'alpha-small'
         guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
         table = evidence.compile_table(guidance, catalog, benchmarks)
-        self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'])
+        self.assertNotIn(key('implementation', 'low', 'low'), table['rows'])
 
-    def test_benchmark_for_another_task_family_does_not_qualify(self):
+    def test_benchmark_for_another_work_kind_does_not_qualify(self):
         guidance, catalog, benchmarks = inputs()
-        benchmarks[0]['task_family'] = 'research'
+        benchmarks[0]['work_kind'] = 'investigation'
         guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
         table = evidence.compile_table(guidance, catalog, benchmarks)
-        self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'])
+        self.assertNotIn(key('implementation', 'low', 'low'), table['rows'])
 
     def test_duplicate_catalog_models_and_bad_check_times_are_rejected(self):
         guidance, catalog, benchmarks = inputs()
@@ -88,46 +88,45 @@ class CompileTests(unittest.TestCase):
 
     def test_empty_recommendation_is_not_shared_state(self):
         table = evidence.compile_table(*inputs())
-        result = evidence.lookup(table, dict(role='review', task_family='x', complexity_band='low', risk_band='low'))
+        result = evidence.lookup(table, dict(role='code-reviewer', work_kind='review', complexity_band='low',
+                                             risk_band='low'))
         result['reason'] = 'tampered'
         self.assertEqual(evidence.NO_RECOMMENDATION['reason'], 'no_recommendation')
 
-    def test_pipe_in_a_key_part_drops_only_that_row(self):
-        guidance, catalog, benchmarks = inputs()
-        guidance[0]['rows'][0]['task_family'] = 'imple|mentation'
-        table = evidence.compile_table(guidance, catalog, benchmarks)
-        self.assertIn('invalid_row', {item['reason'] for item in table['dropped']})
-        self.assertIn(key('worker', 'implementation', 'high', 'high'), table['rows'])
+    def test_rows_are_keyed_by_work_kind(self):
+        self.assertEqual(self.table['schema'], routing.TABLE_SCHEMA)
+        self.assertEqual(evidence.SCHEMA, routing.TABLE_SCHEMA)
+        self.assertTrue(all(name.count('|') == 2 for name in self.table['rows']))
 
     def test_guidance_citation_must_come_from_the_entry_holding_the_row(self):
         guidance, catalog, benchmarks = inputs()
         other = dict(id='guide-2', sha256='3' * 64, checked_at='2026-11-01T00:00:00Z', rows=[])
         guidance[0]['rows'][0]['strategies'][0]['evidence_refs'] = ['guide-2']
         table = evidence.compile_table(guidance + [other], catalog, benchmarks)
-        models = [(i['model'], i['effort']) for i in table['rows'][key('worker', 'implementation', 'medium', 'medium')]]
+        models = [(i['model'], i['effort']) for i in table['rows'][key('implementation', 'medium', 'medium')]]
         self.assertEqual(models, [('alpha-small', 'low')])
 
-    def test_benchmark_must_state_harness_and_task_family(self):
-        for missing in ('harness', 'task_family'):
+    def test_benchmark_must_state_harness_and_work_kind(self):
+        for missing in ('harness', 'work_kind'):
             guidance, catalog, benchmarks = inputs()
             del benchmarks[0][missing]
             guidance[0]['rows'][2]['strategies'][0]['evidence_refs'] = ['bench-beta']
             table = evidence.compile_table(guidance, catalog, benchmarks)
-            self.assertNotIn(key('worker', 'implementation', 'low', 'low'), table['rows'], missing)
+            self.assertNotIn(key('implementation', 'low', 'low'), table['rows'], missing)
 
     def test_removed_catalog_model_disappears_on_recompile(self):
         guidance, catalog, benchmarks = inputs()
         catalog = [item for item in catalog if item['model'] != 'alpha-small']
         table = evidence.compile_table(guidance, catalog, benchmarks)
         self.assertEqual([m for m, _ in [(i['model'], 0) for i in table['rows'][
-            key('worker', 'implementation', 'medium', 'medium')]]], ['alpha-large'])
+            key('implementation', 'medium', 'medium')]]], ['alpha-large'])
 
     def test_harness_must_match_when_catalog_declares_harnesses(self):
         guidance, catalog, benchmarks = inputs()
         catalog[0]['harnesses'] = ['other']
         table = evidence.compile_table(guidance, catalog, benchmarks)
         self.assertNotIn('alpha-large', [i['model'] for i in table['rows'][
-            key('worker', 'implementation', 'medium', 'medium')]])
+            key('implementation', 'medium', 'medium')]])
         self.assertIn('harness_unsupported', {item['reason'] for item in table['dropped']})
 
     def test_invalid_input_is_rejected(self):
@@ -138,14 +137,22 @@ class CompileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evidence.compile_table('x', catalog, benchmarks)
 
-    def test_control_rows_are_rejected(self):
-        for role in ('profiler', 'ranker'):
-            with self.subTest(role=role):
+    def test_rows_with_a_role_or_task_family_are_invalid(self):
+        for extra in (dict(role='worker'), dict(role='profiler'), dict(task_family='implementation')):
+            with self.subTest(extra=extra):
                 guidance, catalog, benchmarks = inputs()
-                guidance[0]['rows'].append(dict(guidance[0]['rows'][0], role=role))
-                with self.assertRaisesRegex(ValueError, 'Unknown row role'):
+                guidance[0]['rows'].append(dict(guidance[0]['rows'][0], **extra))
+                with self.assertRaisesRegex(ValueError, 'Invalid guidance row'):
                     evidence.compile_table(guidance, catalog, benchmarks)
         self.assertFalse(hasattr(evidence, 'CONTROL_ROLES'))
+
+    def test_unknown_work_kind_is_rejected(self):
+        for kind in ('profiler', 'imple|mentation', None):
+            with self.subTest(kind=kind):
+                guidance, catalog, benchmarks = inputs()
+                guidance[0]['rows'][0]['work_kind'] = kind
+                with self.assertRaisesRegex(ValueError, 'Unknown row work kind'):
+                    evidence.compile_table(guidance, catalog, benchmarks)
 
     def test_compile_takes_no_terms_input(self):
         with self.assertRaises(TypeError):
@@ -212,10 +219,11 @@ class RefreshTests(unittest.TestCase):
 class LookupTests(unittest.TestCase):
     def test_lookup_returns_strategies_or_an_empty_recommendation(self):
         table = evidence.compile_table(*inputs())
-        profile = dict(role='worker', task_family='implementation', complexity_band='medium', risk_band='medium')
+        profile = dict(role='software-engineer', work_kind='implementation', complexity_band='medium',
+                       risk_band='medium')
         found = evidence.lookup(table, profile)
         self.assertEqual([item['model'] for item in found], ['alpha-large', 'alpha-small'])
-        blocked = evidence.lookup(table, dict(profile, role='review'))
+        blocked = evidence.lookup(table, dict(profile, role='code-reviewer', work_kind='review'))
         self.assertEqual(blocked, evidence.NO_RECOMMENDATION)
         self.assertNotIn('blocked', blocked)
         self.assertEqual(evidence.lookup(None, profile), evidence.NO_RECOMMENDATION)

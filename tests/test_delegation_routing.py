@@ -63,7 +63,7 @@ class ManagedDelegation(AdmissionFixture, unittest.TestCase):
             revision = service.handle(json.dumps(dict(v=1, op='status')).encode())['settings_revision']
             choices = [dict(identity, funding='subscription') for identity in identities]
             answer = service.handle(json.dumps(dict(v=1, op='set', expected_revision=revision, change=dict(
-                worker_choices=dict(implementer=choices, reviewer=choices)))).encode())
+                worker_choices={'software-engineer': choices, 'code-reviewer': choices}))).encode())
         self.assertEqual(answer['state'], 'updated', answer)
 
     @staticmethod
@@ -303,9 +303,9 @@ class ManagedGraph(ManagedDelegation):
     planned = False
 
     def test_one_task_graph_each_job_binds_its_own_canonical_job(self):
-        value = self.plan_value(jobs=[dict(id='edit', role='worker', claims=[self.path_claim()], dependencies=[],
+        value = self.plan_value(jobs=[dict(id='edit', role='software-engineer', claims=[self.path_claim()], dependencies=[],
                                            max_attempts=3),
-                                      dict(id='docs', role='worker', claims=[self.path_claim('docs.md')],
+                                      dict(id='docs', role='software-engineer', claims=[self.path_claim('docs.md')],
                                            dependencies=[], max_attempts=3)])
         self.plan(value)
         (self.repo / 'docs.md').write_text('docs\n')
@@ -392,7 +392,7 @@ class ManagedReview(ManagedDelegation):
     planned = False
 
     def test_review_admission_goes_through_prepare_with_the_reviewer_role(self):
-        self.plan(self.plan_value(jobs=[dict(id='review', role='review', claims=[self.path_claim(mode='read')],
+        self.plan(self.plan_value(jobs=[dict(id='review', role='code-reviewer', claims=[self.path_claim(mode='read')],
                                              dependencies=[], max_attempts=3)]))
         request = self.prepare_request(job_id='review', dispatch_id='review-dispatch')
         request.pop('brief')
@@ -402,7 +402,7 @@ class ManagedReview(ManagedDelegation):
         self.assertTrue(prepared['launch_admitted'], {k: prepared.get(k) for k in ('routing', 'launch_admitted')})
         self.assertEqual(admit.count, 1)
         (assignment, *_), kwargs = admit.calls[0]
-        self.assertEqual(assignment['role'], 'reviewer')
+        self.assertEqual(assignment['role'], 'code-reviewer')
         self.assertEqual(kwargs['workflow']['locator']['job_id'], 'review')
 
 

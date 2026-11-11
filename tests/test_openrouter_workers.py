@@ -72,7 +72,7 @@ class WorkerTests(unittest.TestCase):
         self.settings = configure(self.source, executable=executable, auth=self.root / 'auth', routes=('workers',))
         self.runs = Path(self.settings['worker_root'])
         (self.source / 'input.txt').write_text('three lines\nof evidence\nfor review\n')
-        self.brief = dict(task_id='pilot-1', role='Scout', specialty='File analysis',
+        self.brief = dict(task_id='pilot-1', role='explorer-agent', specialty='File analysis',
                           coordinator_chat_id=str(uuid.uuid4()), model='vendor/model',
                           model_display_name='Model', provider='provider', objective='Read input.txt and count lines.',
                           source_root=str(self.source), files=['input.txt'], timeout_seconds=5,
@@ -304,7 +304,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         except ValueError as error:
             self.fail(f'Explicit custom role name must be supported: {error}')
         saved = json.loads((run / 'brief.json').read_text())
-        self.assertEqual(saved['role'], 'Scout')
+        self.assertEqual(saved['role'], 'explorer-agent')
         self.assertEqual(saved['specialty'], 'File analysis')
         self.assertEqual(saved['custom_role_name'], 'Security investigator · 東京')
         self.assertEqual(saved['model'], 'vendor/model')
@@ -347,7 +347,7 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
         self.assertNotEqual(external, self.brief['coordinator_chat_id'])
         self.assertEqual({event['agent_id'] for event in client.events}, {external})
         self.assertEqual({event['session_id'] for event in client.events}, {self.brief['coordinator_chat_id']})
-        self.assertEqual({event['agent_type'] for event in client.events}, {'Scout · Model'})
+        self.assertEqual({event['agent_type'] for event in client.events}, {'Explorer Agent · Model'})
         self.assertEqual([event['hook_event_name'] for event in client.events].count('SubagentStart'), 1)
         self.assertEqual([event['hook_event_name'] for event in client.events].count('SubagentStop'), 1)
 
@@ -398,12 +398,12 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             with patch.object(codex, 'observe_worker_visibility', return_value=observed):
                 native = native_helper.publish_native(context, child, 'Working', plugin, endpoint, account)
         self.assertTrue(native['delivered'])
-        self.assertEqual(native['visibility'], dict(version=1, role='Scout', specialty='File analysis',
+        self.assertEqual(native['visibility'], dict(version=2, role='explorer-agent', specialty='File analysis',
                                                    custom_role_name='Evidence scout'))
         external = str(uuid.uuid5(uuid.NAMESPACE_URL, str(run)))
         self.assertNotEqual(child, external)
         starts = {event['agent_id']: event['agent_type'] for event in client.events if event['hook_event_name'] == 'SubagentStart'}
-        self.assertEqual(starts, {external: 'Scout · Model', child: 'Evidence scout · Native model'})
+        self.assertEqual(starts, {external: 'Explorer Agent · Model', child: 'Evidence scout · Native model'})
 
     def test_slow_visibility_does_not_consume_worker_deadline(self):
         run = self.api.prepare(self.runs, dict(self.brief, timeout_seconds=1))

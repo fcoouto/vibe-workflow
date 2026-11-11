@@ -244,7 +244,7 @@ class LauncherBase(Stores):
 
     def launch(self, **options):
         options.setdefault('assignment', self.assignment())
-        options.setdefault('job', routing_launch.unplanned_job('implementer', SCOPE, 'Do the fixture task'))
+        options.setdefault('job', routing_launch.unplanned_job('software-engineer', SCOPE, 'Do the fixture task'))
         options.setdefault('prompt', 'Do the fixture task')
         return launcher.launch(self.checkout, host=options.pop('host', self.host),
                                service=options.pop('service', self.service), **options)
@@ -341,7 +341,7 @@ class LaunchTests(LauncherBase):
         service = Logged(self.settings, self.ledger_path, project=other)
         self.addCleanup(service.close)
         result = launcher.launch(other, host=self.host, service=service, assignment=self.assignment(),
-                                 job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+                                 job=routing_launch.unplanned_job('software-engineer', SCOPE, 'x'), prompt='x')
         self.assertEqual(result, dict(state='unmanaged', reason='project_not_managed'))
         self.assertEqual(self.host.requests, [])
 
@@ -416,7 +416,7 @@ class RefusalTests(LauncherBase):
         self.addCleanup(service.close)
         with mock.patch.object(routing_settings, 'managed_project', new=lambda path, settings_path=None: True):
             result = launcher.launch(self.checkout, host=self.host, service=service, assignment=self.assignment(),
-                                     job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+                                     job=routing_launch.unplanned_job('software-engineer', SCOPE, 'x'), prompt='x')
         self.assertEqual((result['state'], result['reason']), ('blocked', 'authority_not_required'))
         self.assertEqual(self.host.requests, [])
 
@@ -617,7 +617,7 @@ class CommandLineTests(LauncherBase):
         from scripts import opencode_launch
         stdout = []
         request = dict(v=1, op='launch', checkout=str(self.checkout), assignment=self.assignment(),
-                       job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+                       job=routing_launch.unplanned_job('software-engineer', SCOPE, 'x'), prompt='x')
         server = mock.Mock(directory=str(self.checkout))
         server.request, server.rpc = self.host.request, self.host.rpc
         with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
@@ -845,7 +845,7 @@ class SignalTests(LauncherBase):
         from scripts import opencode_launch
         stdout = []
         request = dict(v=1, op='launch', checkout=str(self.checkout), assignment=self.assignment(attempt),
-                       job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+                       job=routing_launch.unplanned_job('software-engineer', SCOPE, 'x'), prompt='x')
         server = mock.Mock(directory=str(self.checkout))
         server.request, server.rpc = self.host.request, self.host.rpc
         watched = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
@@ -862,7 +862,7 @@ class SignalTests(LauncherBase):
         from scripts import opencode_launch
         server = mock.Mock(directory=str(self.checkout))
         request = dict(v=1, op='launch', checkout=str(self.checkout), assignment=self.assignment(),
-                       job=routing_launch.unplanned_job('implementer', SCOPE, 'x'), prompt='x')
+                       job=routing_launch.unplanned_job('software-engineer', SCOPE, 'x'), prompt='x')
         stdout = []
         with mock.patch.object(opencode_launch.opencode_launcher, 'start_server', return_value=server), \
                 mock.patch.object(opencode_launch.command, 'managed_service', return_value=self.service), \
@@ -898,7 +898,7 @@ class ChoiceTests(unittest.TestCase):
                          dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS, funding='subscription'))
         self.assertEqual(launcher.choice('other', 'm', None)['harness'], 'opencode provider other')
         self.assertEqual(launcher.choice('other', 'm', None)['effort'], 'none')
-        assignment = dict(attempt_id='a', task='t', role='implementer', complexity_band='high', scope=SCOPE,
+        assignment = dict(attempt_id='a', task='t', role='software-engineer', work_kind='implementation', complexity_band='high', scope=SCOPE,
                           choice=launcher.choice(PROVIDER, MODEL, VARIANT))
         self.assertTrue(routing._valid_assignment(assignment))
 

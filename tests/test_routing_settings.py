@@ -62,24 +62,59 @@ class RoutingSettingsTests(unittest.TestCase):
                 routing_settings.update(self.path, dict(caps=bad), 1)
 
     def test_worker_choices_validated(self):
-        routing_settings.update(self.path, dict(worker_choices=dict(implementer=[CHOICE])), 0)
-        self.assertEqual(routing_settings.read(self.path)['worker_choices'], dict(implementer=[CHOICE]))
+        routing_settings.update(self.path, dict(worker_choices={'software-engineer': [CHOICE]}), 0)
+        self.assertEqual(routing_settings.read(self.path)['worker_choices'], {'software-engineer': [CHOICE]})
         missing = {k: v for k, v in CHOICE.items() if k != 'harness'}
-        for bad in (dict(planner=[CHOICE]), dict(reviewer=[missing]), dict(reviewer=[dict(CHOICE, extra=1)]),
-                    dict(reviewer=CHOICE), dict(reviewer=[dict(CHOICE, funding='free-money')]),
-                    dict(reviewer=[dict(CHOICE, model='')])):
+        for bad in ({'code-reviewer': [missing]}, {'code-reviewer': [dict(CHOICE, extra=1)]},
+                    {'code-reviewer': CHOICE}, {'code-reviewer': [dict(CHOICE, funding='free-money')]},
+                    {'code-reviewer': [dict(CHOICE, model='')]}):
             with self.subTest(bad), self.assertRaises(routing_settings.SettingsError):
                 routing_settings.update(self.path, dict(worker_choices=bad), 1)
 
-    def test_all_roles_accepted_and_order_kept(self):
+    def test_set_refuses_a_non_roster_worker_choice_key(self):
+        for key in ('implementer', 'reviewer', 'researcher', 'repair', 'worker', 'orchestrator', 'coordinator',
+                    'check', 'planner'):
+            with self.subTest(key), self.assertRaises(routing_settings.SettingsError) as caught:
+                routing_settings.update(self.path, dict(worker_choices={key: [CHOICE]}), 0)
+            self.assertEqual(str(caught.exception), 'invalid_worker_choices')
+        for name in ('ROLES', 'PROFILE_ROLES', 'EXPLICIT_ROLES'):
+            self.assertFalse(hasattr(routing_settings, name), name)
+
+    def test_legacy_worker_choice_key_is_reported_not_fatal(self):
         second = dict(CHOICE, model='n')
-        choices = {role: [CHOICE, second] for role in ('implementer', 'reviewer', 'researcher', 'repair')}
+        routing_settings.update(self.path, dict(smart_routing=False), 0)
+        stored = dict(version=1, revision=1, values=dict(smart_routing=False, worker_choices={
+            'implementer': [CHOICE], 'software-engineer': [second]}))
+        self.path.write_text(json.dumps(stored))
+        self.assertEqual(routing_settings.read(self.path)['worker_choices'], {'software-engineer': [second]})
+        values = routing_settings._load(self.path)[1]
+        self.assertEqual(routing_settings.warnings(values),
+                         [dict(code='worker_choice_key_unknown', key='implementer')])
+        routing_settings.update(self.path, dict(smart_routing=True), 1)
+        kept = json.loads(self.path.read_text())['values']['worker_choices']
+        self.assertEqual(kept['implementer'], [CHOICE])  # left in the file, never rewritten or used
+        self.assertEqual(routing_settings.warnings({}), [])
+
+    def test_all_routed_specialists_accepted_and_order_kept(self):
+        second = dict(CHOICE, model='n')
+        choices = {role: [CHOICE, second] for role in ('software-engineer', 'code-reviewer', 'explorer-agent',
+                                                       'debugger')}
         routing_settings.update(self.path, dict(worker_choices=choices), 0)
         self.assertEqual(routing_settings.read(self.path)['worker_choices'], choices)
 
+    def test_assignment_role_is_the_profile_role(self):
+        self.assertEqual(routing_settings.assignment_role('software-engineer'), 'software-engineer')
+        self.assertEqual(routing_settings.assignment_role('code-reviewer', 'code-reviewer'), 'code-reviewer')
+        for args, reason in ((('orchestrator',), 'coordinator_not_routed'),
+                             (('software-engineer', 'code-reviewer'), 'role_mismatch'),
+                             (('software-engineer', 'implementer'), 'role_mismatch')):
+            with self.subTest(args), self.assertRaises(routing_settings.SettingsError) as caught:
+                routing_settings.assignment_role(*args)
+            self.assertEqual(str(caught.exception), reason)
+
     def test_duplicate_worker_choices_rejected(self):
         with self.assertRaises(routing_settings.SettingsError):
-            routing_settings.update(self.path, dict(worker_choices=dict(reviewer=[CHOICE, dict(CHOICE)])), 0)
+            routing_settings.update(self.path, dict(worker_choices={'code-reviewer': [CHOICE, dict(CHOICE)]}), 0)
 
     def test_intermediate_directories_are_private(self):
         deep = Path(self.tmp.name).resolve() / 'a' / 'b' / 'settings.json'

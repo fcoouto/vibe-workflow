@@ -1585,14 +1585,14 @@ function realStores(admit: boolean) {
   const ledger = join(dir, "usage", "organizations.sqlite3")
   mkdirSync(dirname(settings), { recursive: true, mode: 0o700 })
   const table = join(dirname(settings), "strategy-table.json")
-  writeFileSync(table, JSON.stringify({ schema: 1, version: "t1", rows: { "worker|code|medium|medium": [
+  writeFileSync(table, JSON.stringify({ schema: 2, version: "t1", rows: { "implementation|medium|medium": [
     { strategy_id: "s-sub", model: ADMITTED.model, effort: ADMITTED.effort, harness: ADMITTED.harness, evidence_refs: ["g1"] }] } }))
   chmodSync(table, 0o600)
   if (admit) {
     const request = {
-      v: 1, op: "prepare", assignment: { attempt_id: "real-a1", task: "task-real", role: "implementer", scope: "scope1" },
-      job: { id: "job-1", role: "worker", scope_ref: "scope1", objective: "o", context: "c", profile: {
-        task_family: "code", complexity_band: "medium", risk_band: "medium", review_policy: "independent",
+      v: 1, op: "prepare", assignment: { attempt_id: "real-a1", task: "task-real", role: "software-engineer", scope: "scope1" },
+      job: { id: "job-1", role: "software-engineer", scope_ref: "scope1", objective: "o", context: "c", profile: {
+        complexity_band: "medium", risk_band: "medium", review_policy: "independent",
         context_tokens: 100, tools: ["edit"], uncertainty: "low" } },
       observations: { now: Math.floor(Date.now() / 1000), routes: [{ route: "sub", strategy_id: "s-sub", ...ADMITTED,
         account: "anthropic:acct", billing_class: "included_subscription", pool: "sub", demand: { "5h": 10 },

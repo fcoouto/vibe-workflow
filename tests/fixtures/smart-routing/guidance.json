@@ -5,8 +5,7 @@
   "checked_at": "2026-11-01T00:00:00Z",
   "rows": [
    {
-    "role": "worker",
-    "task_family": "implementation",
+    "work_kind": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "strategies": [
@@ -29,8 +28,7 @@
     ]
    },
    {
-    "role": "worker",
-    "task_family": "implementation",
+    "work_kind": "implementation",
     "complexity_band": "high",
     "risk_band": "high",
     "strategies": [
@@ -61,8 +59,7 @@
     ]
    },
    {
-    "role": "worker",
-    "task_family": "implementation",
+    "work_kind": "implementation",
     "complexity_band": "low",
     "risk_band": "low",
     "strategies": [

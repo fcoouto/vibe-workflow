@@ -72,7 +72,7 @@ ASSIGNMENT_FIELDS = {'attempt_id', 'task', 'role', 'scope', 'choice'}
 # What a client may see of an admission record: no account, credential reference, pressure or snapshot detail.
 ADMISSION_FIELDS = ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class', 'billing_class', 'mode',
                     'settings_revision', 'at', 'reserved', 'reason_codes', 'route_identity')
-PROFILE_FIELDS = ('semantic_digest', 'task_family', 'complexity_band', 'risk_band', 'review_policy', 'uncertainty')
+PROFILE_FIELDS = ('semantic_digest', 'work_kind', 'complexity_band', 'risk_band', 'review_policy', 'uncertainty')
 # admit() reports malformed input as pending; to a client it is a refusal, not a wait.
 SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'invalid_observation',
                  'invalid_binding', 'admission_error')
@@ -293,7 +293,9 @@ class Service:
     def _settings(self):
         try:
             current, values = routing_settings._load(self.settings_path)
-            return dict(routing_settings.resolve(values), revision=current)
+            resolved = dict(routing_settings.resolve(values), revision=current)
+            self._warnings = routing_settings.warnings(values)  # kept but ignored keys, for `check` and `status`
+            return resolved
         except SettingsError:
             raise Blocked('settings_unavailable') from None
 
@@ -442,7 +444,7 @@ class Service:
             require('table' not in body or self.test_inputs, 'invalid_request')
             ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                            profile_digest=profile['semantic_digest'])
-        admitted = dict(assignment, role=role, complexity_band=profile['complexity_band'])
+        admitted = dict(assignment, role=role, work_kind=profile['work_kind'], complexity_band=profile['complexity_band'])
         seen = None
         if 'observations' in body:
             observations = self._observations(body['observations'])
@@ -518,8 +520,9 @@ class Service:
         settings = self._settings()
         ledger = self._ledger(False)
         require(ledger is not None, 'ledger_absent')
-        return routing.check(ledger.snapshot(), facts, settings, now, attempt_id=body.get('attempt_id'),
-                             session_id=body.get('session_id'), authority=authority)
+        result = routing.check(ledger.snapshot(), facts, settings, now, attempt_id=body.get('attempt_id'),
+                               session_id=body.get('session_id'), authority=authority)
+        return dict(result, settings_warnings=self._warnings)
 
     def _dispatch(self, body):
         attempt, facts = body['attempt_id'], _facts(body['request'])
@@ -614,6 +617,7 @@ class Service:
         return routing.settle_root(report, root, accepted)
 
     def _status(self, body):
+        self._warnings = []
         try:
             settings = self._settings()
         except Blocked:
@@ -641,7 +645,8 @@ class Service:
         except Exception:  # noqa: BLE001 - a missing or failing store reader never fails status
             windows = dict(state='unavailable', reason='observation_store_invalid')
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, effective_caps=effective, ledger=ledger, test_inputs=self.test_inputs,
+                    settings_revision=revision, settings_warnings=self._warnings, effective_caps=effective, ledger=ledger,
+                    test_inputs=self.test_inputs,
                     project_pinned=self.project is not None,
                     windows=windows)
 

@@ -67,7 +67,7 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertIn('attempt_token', self.call('begin', self.begin_request()))
         [(assignment, result)] = calls
         self.assertEqual((result['status'], result['billing_class']), ('admitted', 'gateway'))
-        self.assertEqual(assignment['role'], 'researcher')
+        self.assertEqual(assignment['role'], 'explorer-agent')
         self.assertEqual(assignment['choice'], dict(provider='openrouter', model='model/v1', effort='none',
                                                     harness='openrouter-proposal', funding='api'))
         self.assertNotIn('workflow', bodies[0])
@@ -118,7 +118,7 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         bodies = self.prepared()
         begun = self.call('begin', request)
         [body] = bodies
-        self.assertEqual((body['job']['tools'], body['assignment']['role']), ([], 'researcher'))
+        self.assertEqual((body['job']['tools'], body['assignment']['role']), ([], 'explorer-agent'))
         result = self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))
         self.assertIn('source bytes', result['packet'])
         self.assertNotIn('outside the permission', result['packet'])

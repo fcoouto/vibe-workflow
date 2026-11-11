@@ -426,9 +426,9 @@ def listener():
 
 def prepare_request(attempt_id, task):
     return dict(
-        assignment=dict(attempt_id=attempt_id, task=task, role="implementer", scope="qual-scope"),
-        job=dict(id="job-" + attempt_id, role="worker", scope_ref="qual-scope", objective="o", context="c", profile=dict(
-            task_family="code", complexity_band="medium", risk_band="medium", review_policy="independent",
+        assignment=dict(attempt_id=attempt_id, task=task, role="software-engineer", scope="qual-scope"),
+        job=dict(id="job-" + attempt_id, role="software-engineer", scope_ref="qual-scope", objective="o", context="c", profile=dict(
+            complexity_band="medium", risk_band="medium", review_policy="independent",
             context_tokens=100, tools=["edit"], uncertainty="low")),
         observations=dict(now=int(time.time()), routes=[dict(
             route="sub", strategy_id="s-sub", provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME,

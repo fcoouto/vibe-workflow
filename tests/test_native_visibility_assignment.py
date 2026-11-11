@@ -21,7 +21,7 @@ class NativeVisibilityAssignmentTests(NativeVisibilityFixture, unittest.TestCase
         client, transport = fixture_transport()
         path = self.task_context / 'assignment.json'
         helper.prepare_native(path, dict(parent_session_id=self.parent, checkout=str(self.root),
-            task_name='review_original', visibility=dict(version=1, role='Reviewer', specialty='Read only')))
+            task_name='review_original', visibility=dict(version=2, role='code-reviewer', specialty='Read only')))
         self.child_thread['parentThreadId'] = str(uuid.uuid4())
         with patch.object(codex, '_native_reader', self.reader), patch.object(habblaud, 'transport', return_value=transport):
             result = helper.publish_native(path, self.child, 'Reviewing', self.root, 'http://127.0.0.1:1', 'account')
@@ -186,6 +186,61 @@ class NativeVisibilityAssignmentTests(NativeVisibilityFixture, unittest.TestCase
         self.assertEqual(client.events, [dict(hook_event_name='SubagentBadge', session_id=self.parent,
                                               agent_id=self.child, vcw_display_label='Audit lead · Native model')])
         self.assertEqual(path.read_bytes(), original)
+
+    def restore(self, path):
+        from runtime import habblaud
+        client, transport = fixture_transport()
+        with patch.object(habblaud, 'transport', return_value=transport):
+            return habblaud.restore_badge(path, self.root, 'http://127.0.0.1:1', 'account'), client.events
+
+    def test_restore_shows_the_roster_label_without_a_custom_name(self):
+        path = self.task_context / 'roster.json'
+        request = self.native_request()
+        request['visibility'] = {key: value for key, value in request['visibility'].items() if key != 'custom_role_name'}
+        worker_visibility.prepare_native(path, request)
+        saved = worker_visibility.read_context(path)
+        worker_visibility.save(path, saved | dict(observed=self.observe() | dict(
+            forwarded_label='Code Reviewer · Native model')))
+        original = path.read_bytes()
+        result, events = self.restore(path)
+        self.assertEqual(result, dict(delivered=True))
+        self.assertEqual(events[0]['vcw_display_label'], 'Code Reviewer · Native model')
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_restore_shows_a_stored_version_1_role_as_written(self):
+        path = self.task_context / 'stored.json'
+        worker_visibility.prepare_native(path, self.native_request())
+        saved = worker_visibility.read_context(path)
+        stored = dict(version=1, role='Reviewer', specialty='Read only')  # written before the roster
+        worker_visibility.save(path, saved | dict(visibility=stored, observed=self.observe() | dict(
+            forwarded_label='Reviewer · Native model')))
+        result, events = self.restore(path)
+        self.assertEqual(result, dict(delivered=True))
+        self.assertEqual(events[0]['vcw_display_label'], 'Reviewer · Native model')
+
+    def test_assignment_retry_reuses_a_stored_version_1_context(self):
+        helper = self.native_helper()
+        request = self.native_request() | dict(message='Review the original change.')
+        first = helper.prepare_assignment(request, context_directory=self.task_context)
+        path = Path(first['context'])
+        stored = dict(version=1, role='Reviewer', specialty='Read only', custom_role_name='Audit lead')
+        worker_visibility.save(path, worker_visibility.read_context(path) | dict(visibility=stored))
+        original = path.read_bytes()
+        retry = {key: value for key, value in request.items() if key != 'visibility'}
+        result = helper.prepare_assignment(retry, context_directory=self.task_context)
+        self.assertTrue(result['prepared'], result)
+        self.assertEqual(result['visibility'], stored)
+        self.assertEqual(result['message'], first['prompt_marker'] + '\n' + request['message'])
+        self.assertEqual(path.read_bytes(), original)
+        for refused in (retry | dict(visibility=stored),  # a supplied version 1 declaration is new input
+                        retry | dict(visibility=request['visibility'])):  # differs from the stored context
+            with self.subTest(refused=refused['visibility']):
+                answer = helper.prepare_assignment(refused, context_directory=self.task_context)
+                self.assertFalse(answer['prepared'])
+                self.assertEqual(answer['message'], request['message'])
+                self.assertEqual(path.read_bytes(), original)
+        unknown = helper.prepare_assignment(retry | dict(task_name='review_unknown'), context_directory=self.task_context)
+        self.assertFalse(unknown['prepared'])
 
     def test_restore_keeps_frozen_legacy_model_name(self):
         from runtime import habblaud

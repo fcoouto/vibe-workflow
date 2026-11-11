@@ -132,7 +132,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         self.assertEqual((only_api['status'], only_api['reason_code']), ('pending', 'no_funded_organization'))
         both = self.admit('b', routes, pools)
         self.assertEqual((both['status'], both['class'], both['route']), ('admitted', 'subscription', 's'))
-        cfg = settings(smart_routing=False, worker_choices=dict(implementer=[self.CHOICE]))
+        cfg = settings(smart_routing=False, worker_choices={'software-engineer': [self.CHOICE]})
         chosen = routing.admit(assignment('c'), ranking(), cfg, observations(routes, pools), ledger=self.ledger)
         self.assertEqual((chosen['status'], chosen['mode']), ('admitted', 'worker_choice'))
         self.assertEqual(self.ledger.snapshot()['organizations'], {})

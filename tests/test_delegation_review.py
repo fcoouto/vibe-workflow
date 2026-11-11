@@ -22,7 +22,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
     worker_reconciliation_request = AdmissionFixture.worker_reconciliation_request
 
     def review_plan(self, **updates):
-        return self.plan_value(jobs=[dict(id='review', role='review', claims=[self.path_claim(mode='read')],
+        return self.plan_value(jobs=[dict(id='review', role='code-reviewer', claims=[self.path_claim(mode='read')],
             dependencies=[], max_attempts=3)], **updates)
 
     def review_request(self, **updates):
@@ -36,7 +36,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
 
     def test_review_visibility_preserves_readonly_authority_and_digest_domains(self):
         self.plan(self.review_plan())
-        visibility = dict(version=1, role='Reviewer', specialty='Parser safety', custom_role_name='Safety reviewer')
+        visibility = dict(version=2, role='code-reviewer', specialty='Parser safety', custom_role_name='Safety reviewer')
         request = self.review_request(visibility=visibility)
         try:
             prepared = evidence.prepare_review(self.scope, request)
@@ -46,7 +46,7 @@ class Stage4NativeReviewTests(unittest.TestCase):
         self.assertEqual(prepared['visibility'], visibility)
         self.assertEqual(binding['visibility'], visibility)
         body = json.loads(prepared['prompt'])['ownership']
-        self.assertEqual(body['role'], 'review')
+        self.assertEqual(body['role'], 'code-reviewer')
         self.assertTrue(all(claim['mode'] == 'read' for claim in body['claims']))
         self.assertEqual(body['request']['visibility'], visibility)
         self.assertEqual(binding['task_name'], 'review_' + prepared['attempt_id'])
@@ -465,8 +465,8 @@ class Stage4NativeReviewTests(unittest.TestCase):
         request = self.review_request()
         committed = []
         prepare_native = delegation._prepare_native
-        def lose_response(scope, original_request, *, role):
-            response = prepare_native(scope, original_request, role=role)
+        def lose_response(scope, original_request, *, review):
+            response = prepare_native(scope, original_request, review=review)
             self.assertTrue(response['launch_admitted'])
             with state._database(scope) as visible:
                 records = self.api._ledger(scope, visible)

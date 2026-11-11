@@ -377,11 +377,11 @@ class ManagedProjectRefusalTests(unittest.TestCase):
         self.addCleanup(service.close)
         with patch.object(routing_observations, 'default_source', return_value=source):
             for attempt, choice in (('routed', None), ('chosen', dict(identity, funding='api'))):
-                assignment = dict(attempt_id=attempt, task='task-' + attempt, role='implementer', scope=scope)
+                assignment = dict(attempt_id=attempt, task='task-' + attempt, role='software-engineer', scope=scope)
                 if choice is not None:
                     assignment['choice'] = choice
                 request = routing_launch.prepare_request(
-                    assignment, routing_launch.unplanned_job('implementer', scope, 'managed proposal'))
+                    assignment, routing_launch.unplanned_job('software-engineer', scope, 'managed proposal'))
                 with self.subTest(attempt=attempt):
                     result = service.handle(json.dumps(request).encode())
                     self.assertEqual(result['state'], 'pending', result)

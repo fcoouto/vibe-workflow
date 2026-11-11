@@ -103,7 +103,7 @@ class Replay:
         self.refresh(now)
         if not self.smart:
             return self.arrive_off(event, now)
-        bucket = (event['role'], event['complexity'])
+        bucket = (event['work_kind'], event['complexity'])
         cost = event['sub_cost']
         padded, headroom, api_ok, policy = self.api_state(event, now)
         sub_pools = self.sub_feasible(cost)
@@ -145,7 +145,7 @@ class Replay:
             kind, _, name = route.partition(':')
             if kind == 'sub' and name in self.sub_feasible(event['sub_cost']):
                 if self.reserve(route, event, now):
-                    return self.admit(event, now, mode='off', bucket=(event['role'], event['complexity']),
+                    return self.admit(event, now, mode='off', bucket=(event['work_kind'], event['complexity']),
                                       shares=None, feasible=None, klass='subscription', route=route, candidates=None)
                 return
         self.log.append(dict(id=event['id'], at=now, outcome='pending', reason='worker_choice_unavailable'))
@@ -268,7 +268,7 @@ class ReplayTests(unittest.TestCase):
         base = load('mixed_load')
         events = []
         for i in range(jobs):
-            events += [dict(t=100000 + 100 * i, kind='arrive', id='h-%d' % i, role='implementer',
+            events += [dict(t=100000 + 100 * i, kind='arrive', id='h-%d' % i, work_kind='implementation',
                             complexity='medium', api_cost=2_000_000, sub_cost=0.005),
                        dict(t=100000 + 100 * i + 30, kind='complete', id='h-%d' % i, api_actual=1_000_000,
                             sub_actual=0.004)]
@@ -493,7 +493,7 @@ class AdmissionReplay:
         self.observe(now)
         profile = routing.ensure_profile(job)
         ranking = routing.rank(profile, self.table, None)
-        assignment = dict(attempt_id=job['id'], task=job['id'], role=routing_settings.PROFILE_ROLES[job['role']],
+        assignment = dict(attempt_id=job['id'], task=job['id'], role=profile['role'], work_kind=profile['work_kind'],
                           complexity_band=profile['complexity_band'], scope='scope1')
         outcome = routing.admit(assignment, ranking, self.settings, self.observations(now), ledger=self.ledger)
         entry = dict(id=job['id'], at=now, outcome=outcome['status'], ranked=list(ranking['strategy_ids']),
@@ -765,7 +765,7 @@ class DependencyPlanReplayTests(unittest.TestCase):
             self.assertEqual({profile['provenance'][f] for f in routing.SEMANTIC_FIELDS}, {'coordinator'})
 
     def test_a_profile_gap_takes_floors(self):
-        job = dict(self.scenario['jobs'][0], profile=dict(task_family='implementation'))
+        job = dict(self.scenario['jobs'][0], profile=dict(review_policy='independent'))
         profile = routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')})
         self.assertEqual({profile['provenance'][f] for f in ('complexity_band', 'risk_band')}, {'floor'})
 

@@ -23,6 +23,22 @@ MAX_CACHED = 8
 BRIEF_START = '<!-- task-profile:start (generated from templates/task-profile.json) -->'
 BRIEF_END = '<!-- task-profile:end -->'
 
+ORCHESTRATOR = 'orchestrator'
+CHECK = 'check'  # reserved job role for a check run: no model, not a specialist
+
+# The role names written before the roster. Stored records keep them; they are read, never written again.
+_IMPLEMENTS = {'work_kind': 'implementation', 'writes': True, 'reviews': False}
+_REVIEWS = {'work_kind': 'review', 'writes': False, 'reviews': True}
+_LEGACY_ENTRIES = {
+    'worker': _IMPLEMENTS, 'review': _REVIEWS,
+    'coordinator': {'id': ORCHESTRATOR, 'label': 'Orchestrator', 'work_kind': 'planning', 'writes': False,
+                    'reviews': False},
+    'implementer': _IMPLEMENTS, 'reviewer': _REVIEWS,
+    'researcher': {'work_kind': 'investigation', 'writes': False, 'reviews': False}, 'repair': _IMPLEMENTS,
+}
+_LEGACY_ENTRIES = {name: dict({'id': name, 'label': name}, **entry) for name, entry in _LEGACY_ENTRIES.items()}
+LEGACY = tuple(_LEGACY_ENTRIES)
+
 _cache = {}  # path -> ((size, modification time), validated template)
 
 
@@ -55,6 +71,8 @@ def _validate(template):
     for name, spec in fields.items():
         if spec.get('type') == 'integer':
             _require(type(spec.get('minimum')) is int and type(spec.get('maximum')) is int, 'invalid %s' % name)
+        if 'values' in spec and spec['values'] != 'roster':
+            _values(fields, name)  # every enum field, not only those with a floor
         if 'floor' in spec:
             _require(spec['floor'] in _values(fields, name), 'invalid floor for %s' % name)
     floors = template['write_floors']
@@ -121,7 +139,7 @@ def render_brief(template):
     choices = []
     for name, spec in fields.items():
         if name == 'role':
-            continue  # the specialist line arrives with the roster table (F2)
+            continue  # the Specialist line and the roster table cover it
         if isinstance(spec.get('values'), list):
             choices.append('%s (%s)' % (name, '|'.join(spec['values'])))
         elif spec.get('type') == 'integer':
@@ -129,12 +147,18 @@ def render_brief(template):
         else:
             choices.append('%s (%s)' % (name, spec.get('type')))
     lines = [BRIEF_START,
+             '- Specialist: [the id of the specialist whose when_to_use sentence fits this job, from the roster '
+             'table below; it is the job\'s role. The orchestrator is the user\'s coordinator and is never routed.]',
              '- Task profile: [choose each level from the table below and leave out a field you cannot judge: %s]'
              % ', '.join(choices),
              '', '| Field | Level | Definition | Example |', '| --- | --- | --- | --- |']
     for name, levels in template['levels'].items():
         lines += ['| %s | %s | %s | %s |' % (name, level, text['definition'], text['example'])
                   for level, text in levels.items()]
+    lines += ['', '| Specialist | Label | When to use | Work kind | Writes | Reviews |', '| --- | --- | --- | --- | --- | --- |']
+    lines += ['| `%s` | %s | %s | %s | %s | %s |' % (entry['id'], entry['label'], entry['when_to_use'], entry['work_kind'],
+                                                  'yes' if entry['writes'] else 'no', 'yes' if entry['reviews'] else 'no')
+              for entry in template['roster'] if entry['id'] != ORCHESTRATOR]
     floors = ['%s %s' % (name, spec['floor']) for name, spec in fields.items() if 'floor' in spec]
     raised = ['%s %s' % item for item in template['write_floors'].items()]
     lines += ['', 'Floors: a missing field takes %s; a job that writes files needs at least %s.'
@@ -174,3 +198,48 @@ def roster():
 def specialist(identifier):
     """The roster entry for `identifier`, or None. Only roster specialists match; `check` is not one."""
     return roster().get(identifier) if isinstance(identifier, str) else None
+
+
+def stored(identifier):
+    """The roster entry for `identifier`, or for an old role name in a stored record its fixed entry with
+    `legacy: True`; None otherwise. The only reader of the old names: new input is checked with `specialist`."""
+    if isinstance(identifier, str) and identifier in _LEGACY_ENTRIES:
+        return dict(_LEGACY_ENTRIES[identifier], legacy=True)
+    return specialist(identifier)
+
+
+def _attribute(identifier, name):
+    entry = stored(identifier)
+    return entry[name] if entry else None
+
+
+def routed(identifier):
+    """A roster specialist other than the orchestrator, whose model routing may choose."""
+    return identifier != ORCHESTRATOR and specialist(identifier) is not None
+
+
+def orchestrates(identifier):
+    """The orchestrator, or the stored value `coordinator`."""
+    return identifier in (ORCHESTRATOR, 'coordinator')
+
+
+def native(identifier):
+    """A native worker or reviewer job: a roster id or a stored old name, never the orchestrator or `check`."""
+    return not orchestrates(identifier) and stored(identifier) is not None
+
+
+def native_worker(identifier):
+    """A native job that is not a review, so the independent-review rules do not apply to it."""
+    return native(identifier) and not reviews(identifier)
+
+
+def reviews(identifier):
+    return _attribute(identifier, 'reviews') is True
+
+
+def writes(identifier):
+    return _attribute(identifier, 'writes') is True
+
+
+def work_kind(identifier):
+    return _attribute(identifier, 'work_kind')

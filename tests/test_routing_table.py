@@ -554,23 +554,23 @@ class RoundTripTests(Base):
     """Refresh, then a one-shot `routing.py prepare` ranks from the written table."""
     def write_evidence(self, digest='a'):
         guidance = [dict(id='g1', sha256=digest * 64, checked_at='2026-11-01T00:00:00Z', rows=[dict(
-            role='worker', task_family='code', complexity_band='medium', risk_band='medium',
+            work_kind='implementation', complexity_band='medium', risk_band='medium',
             strategies=[dict(model='m', effort='high', harness='h', evidence_refs=['g1'])])])]
         self.write_inputs([guidance, [dict(model='m', supported_efforts=['high'])], [], []])
 
     def prepare(self, ledger, strategy_id):
         choice = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')
-        setting = dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[choice])))
-        profile = dict(task_family='code', complexity_band='medium', risk_band='medium', review_policy='independent',
+        setting = dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'software-engineer': [choice]}))
+        profile = dict(complexity_band='medium', risk_band='medium', review_policy='independent',
                        context_tokens=100, tools=['edit'], uncertainty='low')
-        job = dict(id='job-1', role='worker', scope_ref='scope1', objective='o', context='c', profile=profile)
+        job = dict(id='job-1', role='software-engineer', scope_ref='scope1', objective='o', context='c', profile=profile)
         route = dict(route='sub', strategy_id=strategy_id, provider='anthropic', model='m', effort='high', harness='h',
                      account='anthropic:acct', billing_class='included_subscription', pool='sub', demand={'5h': 10},
                      capable=True, permitted=True, binding_enforceable=True)
         window = dict(id='5h', limit=1000, used=100, length=18000, reset_at=None, rolling=True, fresh=True)
         observations = dict(now=int(__import__('time').time()), routes=[route], pools=dict(sub=dict(windows=[window])))
         request = dict(v=1, op='prepare', job=job, observations=observations,
-                       assignment=dict(attempt_id='a1', task='t1', role='implementer', scope='scope1'))
+                       assignment=dict(attempt_id='a1', task='t1', role='software-engineer', scope='scope1'))
         results = []
         for op, body in (('set', setting), ('prepare', request)):
             done = subprocess.run([sys.executable, '-B', str(ROUTING), op, '--settings', str(self.settings),
@@ -584,7 +584,7 @@ class RoundTripTests(Base):
         self.write_evidence()
         code, report = self.refresh()
         self.assertEqual(code, 0, report)
-        strategy = self.stored()['rows']['worker|code|medium|medium'][0]['strategy_id']
+        strategy = self.stored()['rows']['implementation|medium|medium'][0]['strategy_id']
         response = self.prepare(self.root / 'usage' / 'ledger.sqlite3', strategy)
         self.assertEqual(response['state'], 'admitted', response)
         ranking = response['ranking']
@@ -603,7 +603,7 @@ class RoundTripTests(Base):
                               capture_output=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout)['state'], 'rolled_back')
-        strategy = self.stored()['rows']['worker|code|medium|medium'][0]['strategy_id']
+        strategy = self.stored()['rows']['implementation|medium|medium'][0]['strategy_id']
         response = self.prepare(self.root / 'usage' / 'ledger.sqlite3', strategy)
         self.assertEqual(response['state'], 'admitted', response)
         self.assertNotIn('table_unavailable', response['ranking']['reason_codes'])

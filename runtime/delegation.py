@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import delegation_routing, evidence, routing, startup, state
+from runtime import delegation_routing, evidence, routing, startup, state, task_profile
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -309,7 +309,7 @@ def _closure_guidance_inputs(context,db,records):
             capability_fingerprint=observed['capability_digest'])))
     records=evidence._canonical_plain(records)
     for record in records:
-        if record['data']['role'] in NATIVE_ROLES:
+        if task_profile.native(record['data']['role']):
             _require(fetch(record['data']['assignment'])==record['body'],'Native guidance assignment body changed')
             native(record['body'])
     capture=state._CAPTURE_SQL_SCOPE.get()
@@ -353,7 +353,7 @@ def _closure_guidance_inputs(context,db,records):
         if kind=='task-closure' and evidence._raw(owner).decode() not in successors:
             for certificate in compact.get('stopped',{}).get('assignments',[]):
                 ref=certificate['reference'];assignments[ref['id']]=state._retired_assignment(db,ref['id'])
-                if certificate['role'] in NATIVE_ROLES:native(fetch(ref['assignment']))
+                if task_profile.native(certificate['role']):native(fetch(ref['assignment']))
             for original in compact.get('scope_guidance',[]):
                 guidance=fetch(original['reference'])
                 _guidance(guidance,dict(client_surface=guidance.get('client_surface'),applicability=guidance.get('applicability')))
@@ -438,7 +438,7 @@ def _closure_guidance_assembly(inputs):
             binding={key:body['binding'][key] for key in ('client_surface','native_version','parent_session_id','task_name')},
             source_created_at=original['created_at'])
     for record in records:
-        if record['data']['role'] not in NATIVE_ROLES:continue
+        if not task_profile.native(record['data']['role']):continue
         reference=dict(authority=authority,id=record['id'],owner=record['owner'],assignment=record['data']['assignment'])
         native.append(assignment(record['body'],reference,record['data']['lifecycle']['created_at'],record['data']['request_digest']))
     rows=inputs['rows']
@@ -455,7 +455,7 @@ def _closure_guidance_assembly(inputs):
         if retained_support is not None:
             if retained_support['reference']!=dict(name=row[0],digest=row[1]):continue
             compact=retained_support['content']
-            certificates=[item for item in compact['stopped'].get('assignments',[]) if item['role'] in NATIVE_ROLES]
+            certificates=[item for item in compact['stopped'].get('assignments',[]) if task_profile.native(item['role'])]
             _require(len(compact['native_sources'])==len(compact['native_guidance'])==len(certificates),
                 'Retained native source coverage differs from issued certificates')
             for certificate in certificates:
@@ -487,12 +487,12 @@ def _closure_guidance_assembly(inputs):
             and marker['pins_digest']==state._digest(compact['pins']) and marker['created_at']==compact['created_at']==metadata['created_at'],
             'Retained scope-guidance receipt differs from original task identity/age')
         yield from _closure_guidance_job(dict(kind='stopped-certificate',owner=owner,receipt=dict(name=row[0],digest=row[1]),certificate=compact['stopped']))
-        _require(len(compact.get('native_guidance',[]))==sum(item['role'] in NATIVE_ROLES for item in compact['stopped'].get('assignments',[])),
+        _require(len(compact.get('native_guidance',[]))==sum(task_profile.native(item['role']) for item in compact['stopped'].get('assignments',[])),
             'Retained native guidance coverage differs from complete issued assignments')
         markers=[]
         for certificate in compact['stopped'].get('assignments',[]):
             ref=certificate['reference'];assignment_marker=inputs['assignment_markers'][ref['id']];markers.append([ref['id'],assignment_marker])
-            if certificate['role'] not in NATIVE_ROLES:continue
+            if not task_profile.native(certificate['role']):continue
             body=inputs['bodies'][evidence._raw(ref['assignment']).decode()]
             _require(body['owner']==ref['owner'] and body['role']==certificate['role'] and body['pins']==compact['pins'] and body['accepted_identity']==compact['accepted_identity']
                 and body['lifecycle']['created_at']==certificate['created_at'] and evidence._digest(body['request'])==certificate['request_digest'],
@@ -898,7 +898,7 @@ def _worker_scope(scope, claims, files=()):
                 raise state.StateError('Worker filesystem writes cannot enter a separate repository or submodule')
 
 
-def _delegation_plan(scope, plan):
+def _delegation_plan(scope, plan, new=False):
     evidence._bounded(plan)
     state._fields(plan, (*PLAN_FIELDS, 'git_directory'))
     state._text(plan['git_directory'], 'observed worktree Git directory', 4096)
@@ -944,14 +944,14 @@ def _delegation_plan(scope, plan):
             except ValueError as error:
                 raise state.StateError(str(error)) from None
         state._text(job['id'], 'delegation job id', 128)
-        _require(job['id'] not in by_id and job['role'] in {'worker', 'review', 'coordinator', 'check'}, 'Invalid job identity or role')
+        _require(job['id'] not in by_id and (job['role'] == task_profile.CHECK or (task_profile.specialist if new else task_profile.stored)(job['role']) is not None), 'Invalid job identity or role')
         state._integer(job['max_attempts'], 'job attempt limit', 1)
         _require(job['max_attempts'] <= limits['max_attempts'], 'Job attempts exceed the original task limit')
         _strings(job['dependencies'], 'job dependencies', maximum=len(jobs), limit=128)
         by_id[job['id']], claims[job['id']] = job, _claims(job['claims'])
-        if job['role'] == 'review':
-            _require(all(claim['mode'] == 'read' for claim in claims[job['id']]), 'Native review resources must be read-only')
-        if job['role'] == 'worker':
+        if task_profile.native(job['role']) and not task_profile.writes(job['role']):
+            _require(all(claim['mode'] == 'read' for claim in claims[job['id']]), 'Non-writing specialist resources must be read-only')
+        if task_profile.native_worker(job['role']):
             _worker_claims(scope, claims[job['id']], plan['git_directory'])
     # Iterative topological validation keeps depth independent of Python recursion.
     remaining = {identity: len(job['dependencies']) for identity, job in by_id.items()}
@@ -970,9 +970,9 @@ def _delegation_plan(scope, plan):
             if not remaining[dependent]:
                 ready.append(dependent)
     _require(visited == len(jobs), 'Unknown or cyclic delegation dependency')
-    coordinator = [claim for job in jobs if job['role'] == 'coordinator' for claim in claims[job['id']]]
+    coordinator = [claim for job in jobs if task_profile.orchestrates(job['role']) for claim in claims[job['id']]]
     for job in jobs:
-        if job['role'] == 'worker':
+        if task_profile.native_worker(job['role']):
             _require(not any(_conflict(a, b) for a in claims[job['id']] for b in coordinator),
                      'Worker scope overlaps coordinator-owned resources')
     return plan
@@ -990,7 +990,7 @@ def plan_delegation(scope, request):
     with state._database(scope) as db:
         evidence._task(db,scope,request)
     state._fields(request['plan'], PLAN_FIELDS)
-    plan = _delegation_plan(scope, dict(request['plan'], git_directory=_git_directory(scope)))
+    plan = _delegation_plan(scope, dict(request['plan'], git_directory=_git_directory(scope)), new=True)
     _require(plan['route']['parent_session_id'] == request['session_id'], 'Prepared native parent differs from task owner')
     with state._database(scope) as db:
         task = evidence._task(db, scope, request)
@@ -1001,14 +1001,14 @@ def plan_delegation(scope, request):
                         plan_digest=task['delegation']['plan']['digest'], limitations=ADMISSION_LIMITATIONS)
     _require(plan['limits']['deadline'] > _now(), 'Delegation admission deadline has elapsed')
     for job in plan['jobs']:
-        if job['role'] == 'worker':
+        if task_profile.native_worker(job['role']):
             _worker_scope(scope, job['claims'])
     reference = evidence._artifact(scope, plan, owner=evidence._artifact_owner(scope, task))
     with state._database(scope, write=True) as db:
         task = evidence._task(db, scope, request)
         _require('delegation' not in task, 'Delegation plan was concurrently established')
         for job in plan['jobs']:
-            if job['role'] == 'worker':
+            if task_profile.native_worker(job['role']):
                 _worker_scope(scope, job['claims'])
         task['delegation'] = dict(version=ADMISSION_VERSION, plan=reference, attempts_consumed=0, resource_units_consumed=0)
         if task['state'] == 'DONE':
@@ -1017,9 +1017,8 @@ def plan_delegation(scope, request):
         state._save(db, state._scope_id(scope), task)
     return dict(ok=True, revision=task['revision'], plan=reference, plan_digest=reference['digest'], limitations=ADMISSION_LIMITATIONS)
 
-
-NATIVE_ROLES = {'worker', 'review'}
-
+def _kind(role):  # an assignment's kind (a stored old name has the kind it names): (orchestrates, reviews, native)
+    return task_profile.orchestrates(role), task_profile.reviews(role), task_profile.native(role)
 
 def _stored_claims(claims, *, maximum=MAX_CLAIMS):
     _require(isinstance(claims, list) and 0 < len(claims) <= maximum, 'Invalid stored claims')
@@ -1113,7 +1112,7 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
         'diagnostic', 'observation', 'reconciliation', 'result'), ('lifecycle', 'workstream_dispatch', 'workstream_continuation'))
     _require(type(data['version']) is int and data['version'] == ADMISSION_VERSION and
              isinstance(identity, str) and re.fullmatch(r'[0-9a-f]{32}', identity) and
-             data['role'] in NATIVE_ROLES | {'coordinator', 'check'} and
+             (task_profile.stored(data['role']) is not None or data['role'] == task_profile.CHECK) and
              data['status'] in {'prepared', 'observed', 'uncertain'} | TERMINAL_ASSIGNMENTS, 'Invalid assignment ledger record')
     _require(_hex(data['request_digest']), 'Invalid assignment request digest')
     state._integer(data['revision'], 'stored assignment revision', 1)
@@ -1145,13 +1144,13 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
         all(_hex(body['pins'][key]) for key in ('policy_digest', 'runtime_digest')) and
         all(body['request'][key] == owner[key] for key in ('client', 'session_id', 'task_id', 'dispatch_id')),
         'Assignment original owner or pins are corrupt')
-    verifier = data['role'] == 'coordinator' and read(body['operation']).get('kind') == 'completion-verification'
+    verifier = task_profile.orchestrates(data['role']) and read(body['operation']).get('kind') == 'completion-verification'
     size = len(raw.encode('utf-8')) if isinstance(raw, str) else len(raw)
     _require(verifier or size <= MAX_INPUT, 'Assignment record exceeds its role-specific byte limit')
     _stored_claims(data['claims'], maximum=MAX_VERIFICATION_CLAIMS if verifier else MAX_CLAIMS)
     policy = read(body['policy'])
     _require(policy['policy_digest'] == body['pins']['policy_digest'], 'Immutable assignment policy binding changed')
-    if data['role'] in NATIVE_ROLES:
+    if task_profile.native(data['role']):
         state._fields(body, ('version', 'owner', 'pins', *canonical_fields, 'request', 'job_id', 'role', 'claims', 'resource_units',
             'revision', 'plan', 'plan_digest', 'git_routing', 'host_capacity', 'binding', 'candidate',
             'discovery', 'policy', 'report_contract', 'guidance', 'retry_of', 'diagnostic'), ('review', 'qualification_before'))
@@ -1161,7 +1160,7 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
             plan['route']['parent_session_id'] == session, 'Native assignment has no actual original plan')
         if 'qualification_before' in body:
             _qualification_before_data(read(body['qualification_before']), identity, owner, body)
-        if data['role'] == 'review':
+        if task_profile.reviews(data['role']):
             review = body['review']
             state._fields(review, ('assignment_digest', 'coverage', 'criteria', 'd5_plan'))
             _reference(review['d5_plan'])
@@ -1208,11 +1207,11 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
         if body['d6_plan'] is not None:
             _reference(body['d6_plan'])
             read(body['d6_plan'])
-        if data['role'] == 'coordinator':
+        if task_profile.orchestrates(data['role']):
             _require(operation['kind'] in {'coordinator-work', 'completion-verification'}, 'Invalid coordinator operation')
             if data['job_id'] is not None:
                 _require(body['d6_plan'] is not None and operation['id'] == data['job_id'] and
-                    any(job['id'] == data['job_id'] and job['role'] == 'coordinator'
+                    any(job['id'] == data['job_id'] and task_profile.orchestrates(job['role'])
                         for job in read(body['d6_plan'])['jobs']), 'Coordinator job binding is corrupt')
             if operation['kind'] == 'completion-verification':
                 _require(body['d5_plan'] is not None and all(c['mode'] == 'read' for c in data['claims']),
@@ -1236,7 +1235,7 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
                  {'completed', 'failed', 'cancelled'}, 'Settled assignment has no reconciled result')
         if data['status'] == COOPERATIVE_COMPLETED:
             proof = reconciliation.get('proof', {})
-            _require(data['role'] in NATIVE_ROLES and data['result'] == {'outcome': 'completed'} and
+            _require(task_profile.native(data['role']) and data['result'] == {'outcome': 'completed'} and
                      proof.get('kind') == COOPERATIVE_PROOF and proof.get('attempt_id') == identity and
                      proof.get('assignment_digest') == data['assignment']['digest'] and
                      data['observation'] is not None and proof.get('observation_digest') == data['observation']['digest'],
@@ -1353,7 +1352,7 @@ def _insert_assignment(db, scope, task, record):
     _record(scope, row, db=db)
     _invalidate_ready(db, scope, task, data['claims'])
     db.execute('insert into assignments values(?,?,?,?,?,?,?)', row)
-    if data['role'] in NATIVE_ROLES:
+    if task_profile.native(data['role']):
         task['delegation']['attempts_consumed'] += 1
         task['delegation']['resource_units_consumed'] += data['resource_units']
     if task['state'] == 'DONE':
@@ -1514,7 +1513,7 @@ def _qualification_allocation(scope, task, admission, records, *, additional_att
         task.get('delegation', {}).get('plan')), 'Original qualification plan binding changed')
     history = [record for record in records if all(record['owner'][key] == value for key, value in
         dict(scope_id=state._scope_id(scope), **{key:task[key] for key in ('client','session_id','task_id')}).items())
-        and (record['data']['role'] != 'coordinator'
+        and (not task_profile.orchestrates(record['data']['role'])
             or record['body']['request']['operation']['kind'] != 'completion-verification')]
     limits = admission.limits
     _require(limits['deadline'] > _now()
@@ -1543,8 +1542,8 @@ def _qualification_event_allocation(scope, db, task, admission, event):
         data = record['data']
         if (not all(record['owner'][key] == value for key, value in owner.items())
                 or record['body']['pins'] != task['pins']
-                or data['role'] not in NATIVE_ROLES or data['status'] != 'observed'
-                or event.tool_name == 'apply_patch' and data['role'] != 'worker'):
+                or not task_profile.native(data['role']) or data['status'] != 'observed'
+                or event.tool_name == 'apply_patch' and not task_profile.writes(data['role'])):
             continue
         receipt = _observed_worker_receipt(scope, db, record)
         if (receipt is not None and receipt['worker_id'] == event.session_id
@@ -1581,7 +1580,7 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
         owner, data = record['owner'], record['data']
         if (owner['scope_id'] != scope_id or owner['client'] != event.client
                 or event.hook_parent_session_id not in (None, owner['session_id'])
-                or owner['session_id'] == event.session_id or data['role'] != 'worker'):
+                or owner['session_id'] == event.session_id or not task_profile.native_worker(data['role'])):
             continue
         request = record['body']['request']
         if (data['status'] == 'prepared' and data['binding']['client_surface'] == 'codex-cli'
@@ -1643,10 +1642,10 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
 
 
 def _admission(scope, db, task, plan, job, claims, records, request):
-    admission = state._capability(scope, task, 'native-review' if job['role'] == 'review' else 'native-worker')
+    admission = state._capability(scope, task, 'native-review' if task_profile.reviews(job['role']) else 'native-worker')
     _qualification_allocation(scope, task, admission, records, additional_attempts=1,
         resource_units=request['resource_units'])
-    if job['role'] == 'worker':
+    if task_profile.native_worker(job['role']):
         _worker_scope(scope, job['claims'], request['brief']['files'])
         if 'foreground_wait' in request['brief']:
             _require(plan['route']['client_surface'] == 'codex-cli' and
@@ -1666,7 +1665,7 @@ def _admission(scope, db, task, plan, job, claims, records, request):
     _require(limits['deadline'] > _now(), 'Original delegation deadline has elapsed')
     owner_history = [r for r in records if all(r['owner'][key] == value for key, value in
         dict(scope_id=state._scope_id(scope), **{key: task[key] for key in ('client', 'session_id', 'task_id')}).items())]
-    own = [r for r in owner_history if r['data']['role'] in NATIVE_ROLES]
+    own = [r for r in owner_history if task_profile.native(r['data']['role'])]
     counters = task['delegation']
     _require(len(own) == counters['attempts_consumed'] and sum(r['data']['resource_units'] for r in own) == counters['resource_units_consumed'],
              'Original consumed delegation budgets disagree with immutable history')
@@ -1693,7 +1692,7 @@ def _admission(scope, db, task, plan, job, claims, records, request):
     else:
         _require('retry_of' not in request and 'diagnostic' not in request, 'First admission cannot invent a retry predecessor')
     unresolved = [r for r in records if r['data']['status'] != 'settled' and not _cooperative_for(scope, r, cooperative_task)]
-    managed = [r for r in unresolved if r['data']['role'] in {'worker', 'review'}]
+    managed = [r for r in unresolved if task_profile.native(r['data']['role'])]
     _require(sum(r in own for r in managed) < limits['max_parallel_workers'] and
              len(managed) < min([limits['host_capacity']] + [r['data']['host_capacity'] for r in managed]),
              'Managed worker capacity is exhausted, including uncertain historical admissions')
@@ -1744,7 +1743,7 @@ def _linked_review(scope, scope_id, task, attempt, records, *, context=None, db=
         return None
     record = next((r for r in records if r['id'] == attempt['id']), None)
     owner = dict(scope_id=scope_id, **{key: task[key] for key in ('client', 'session_id', 'task_id')})
-    _require(record is not None and record['data']['role'] == 'review' and
+    _require(record is not None and task_profile.reviews(record['data']['role']) and
         all(record['owner'][key] == value for key, value in owner.items()), 'Review ledger owner is absent or corrupt')
     data, review = record['data'], record['body']['review']
     _require(data['assignment']['digest'] == attempt['ledger_assignment_digest'] and
@@ -1754,7 +1753,7 @@ def _linked_review(scope, scope_id, task, attempt, records, *, context=None, db=
         review['d5_plan']['digest'] == attempt['plan_digest'] and review['assignment_digest'] == attempt['assignment_digest'] and
         read(attempt['assignment']) == dict(prompt=record['body']['request']['assignment']) and
         all(review[key] == attempt[key] for key in ('coverage', 'criteria')) and
-        data['binding']['task_name'] == attempt['task_name'] == _native_name(attempt['id'], 'review', record['body']['request']), 'Review D5/D6 immutable link changed')
+        data['binding']['task_name'] == attempt['task_name'] == _native_name(attempt['id'], record['data']['role'], record['body']['request']), 'Review D5/D6 immutable link changed')
     if attempt.get('ownership_reconciliation') is not None:
         _require(data['status'] in TERMINAL_ASSIGNMENTS and attempt['ownership_reconciliation'] == data['reconciliation'],
                  'Review ownership reconciliation link changed')
@@ -1816,7 +1815,7 @@ def _operation_reply(record, admitted=False):
 
 def _operation_record(scope, task, request, role, claims, identity, candidate, operation, job_id=None, *, byte_limit=MAX_INPUT, routing=None):
     d5_plan = task.get('evidence', {}).get('plan')
-    d6_plan = task.get('delegation', {}).get('plan') if role == 'coordinator' else None
+    d6_plan = task.get('delegation', {}).get('plan') if task_profile.orchestrates(role) else None
     owner = dict(scope_id=state._scope_id(scope), **{key: request[key] for key in ('client', 'session_id', 'task_id', 'dispatch_id')})
     operation = evidence._artifact(scope, dict(operation, decision_ref=task['decision_ref'], claims_digest=evidence._digest(claims)), owner=evidence._artifact_owner(scope, task))
     body = dict(version=ADMISSION_VERSION, owner=owner, pins=task['pins'], scope_ref=task['scope_ref'], decision_ref=task['decision_ref'],
@@ -1844,23 +1843,23 @@ def _coordinator_job(scope, task, request, claims, records):
         return None
     plan = _task_plan(scope, task)
     selected = next((job for job in plan['jobs'] if job['id'] == request['operation']['id']), None)
-    applicable = [job for job in plan['jobs'] if job['role'] == 'coordinator' and _held_overlap(claims, _claims(job['claims']))]
+    applicable = [job for job in plan['jobs'] if task_profile.orchestrates(job['role']) and _held_overlap(claims, _claims(job['claims']))]
     if selected is None and not applicable:
         return None
-    _require(selected is not None and selected['role'] == 'coordinator' and _claims(selected['claims']) == claims,
+    _require(selected is not None and task_profile.orchestrates(selected['role']) and _claims(selected['claims']) == claims,
              'Operation must match the exact applicable coordinator job')
     _require(plan['limits']['deadline'] > _now(), 'Original delegation deadline has elapsed')
     owner = dict(scope_id=state._scope_id(scope), **{key: task[key] for key in ('client', 'session_id', 'task_id')})
     history = [r for r in records if all(r['owner'][key] == value for key, value in owner.items())]
     validate_dependencies(scope, task, plan, selected, records)
-    _require(sum(r['data']['role'] == 'coordinator' and r['data']['job_id'] == selected['id'] for r in history) < selected['max_attempts'],
+    _require(sum(task_profile.orchestrates(r['data']['role']) and r['data']['job_id'] == selected['id'] for r in history) < selected['max_attempts'],
              'Original coordinator job attempt budget is exhausted')
     return selected['id']
 
 
 def _reserve_operation(scope, request, *, role, _verification=False, _cooperative=False):
     """Private model-free kernel; callers later attach actual D5 execution/operation lifecycles."""
-    _require(role in {'coordinator', 'check'}, 'Unsupported model-free role')
+    _require(role in {task_profile.ORCHESTRATOR, task_profile.CHECK}, 'Unsupported model-free role')
     byte_limit = evidence.MAX_ARTIFACT if _verification else MAX_INPUT
     claim_limit = MAX_VERIFICATION_CLAIMS if _verification else MAX_CLAIMS
     evidence._request(request, ('dispatch_id', 'claims', 'operation', 'reason', 'ownership_ref', 'stop_conditions'),
@@ -1875,7 +1874,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
     _require(request['operation']['kind'] == expected_kind, 'Operation role/kind mismatch')
     claims = _claims(request['claims'], maximum=claim_limit)
     if _verification:
-        _require(role == 'coordinator' and all(c['mode'] == 'read' for c in claims), 'Verifier barrier must be read-only')
+        _require(task_profile.orchestrates(role) and all(c['mode'] == 'read' for c in claims), 'Verifier barrier must be read-only')
         state._fields(request['verification'], ('purpose', 'git_directory', 'git_routing'))
     _require(not _cooperative or _verification and request['verification']['purpose'] == 'completion',
              'Cooperative verifier reservation requires local qualification completion')
@@ -1895,7 +1894,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
         records = _ledger(scope, db, task=request)
         replay = _replay(scope, records, request)
         if replay:
-            _require(replay['data']['role'] == role, 'Dispatch identity belongs to another role')
+            _require(_kind(replay['data']['role']) == _kind(role), 'Dispatch identity belongs to another role')
             return _operation_reply(replay)
         task = evidence._task(db, scope, request)
         operation = ('verify-merge' if request['verification']['purpose'] == 'merge-evidence' else 'verify-completion') if _verification else (
@@ -1908,7 +1907,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
         d5_plan = task.get('evidence', {}).get('plan')
         candidate = task.get('evidence', {}).get('candidate')
         d6_plan = task.get('delegation', {}).get('plan')
-        job_id = _coordinator_job(scope, task, request, claims, records) if role == 'coordinator' and not _verification else None
+        job_id = _coordinator_job(scope, task, request, claims, records) if task_profile.orchestrates(role) and not _verification else None
         if role == 'check':
             _require(d5_plan is not None and candidate is not None, 'Check requires its actual accepted D5 evidence')
             definition = next((c for c in evidence._read(scope, d5_plan)['checks'] if c['id'] == request['operation']['id']), None)
@@ -1923,7 +1922,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
         records = _ledger(scope, db, task=request)
         replay = _replay(scope, records, request)
         if replay:
-            _require(replay['data']['role'] == role, 'Dispatch identity belongs to another role')
+            _require(_kind(replay['data']['role']) == _kind(role), 'Dispatch identity belongs to another role')
             return _operation_reply(replay)
         task = evidence._task(db, scope, request)
         admission = state._capability(scope, task, operation)
@@ -1937,7 +1936,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
             task.get('evidence', {}).get('candidate') == candidate and task.get('delegation', {}).get('plan') == d6_plan,
             'Accepted operation context changed')
         _resources_available(scope, db, claims, records, cooperative_task=cooperative_task(task, admission))
-        if role == 'coordinator' and not _verification:
+        if task_profile.orchestrates(role) and not _verification:
             _require(_coordinator_job(scope, task, request, claims, records) == job_id, 'Coordinator job binding changed')
         _insert_assignment(db, scope, task, record)
         state._save(db, state._scope_id(scope), task)
@@ -1946,7 +1945,7 @@ def _reserve_operation(scope, request, *, role, _verification=False, _cooperativ
 
 def reserve_coordinator(scope, request):
     """Reserve already authorized model-free work; this grants no execution permission."""
-    return _reserve_operation(scope, request, role='coordinator')
+    return _reserve_operation(scope, request, role=task_profile.ORCHESTRATOR)
 
 
 def _validate_operation_proof(scope, record, task, proof, *, current_candidate_digest=None, cooperative=False):
@@ -1964,13 +1963,13 @@ def _validate_role_proof(record, task, proof, *, scope_id, revision, read, linke
     common = ('version', 'kind', 'identity', 'expected_pins', 'expected_revision', 'scope_id', 'attempt_id',
               'dispatch_id', 'assignment_digest', 'claims_digest', 'observation_ref', 'coordinator_ref')
     role = data['role']
-    _require(not cooperative or role in NATIVE_ROLES, 'Cooperative completion requires a native worker or reviewer')
+    _require(not cooperative or task_profile.native(role), 'Cooperative completion requires a native worker or reviewer')
     version = proof.get('version') if isinstance(proof, dict) else None
     _require(type(version) is int and (version == 2 or cooperative and version == 3), 'Unsupported role proof version')
     # Version 3 attests to coordinator submissions only. Version 2 retains its host-wide meaning.
     followup_fields = (('no_pending_continuation',) if version == 2 else
                        ('no_outstanding_coordinator_followups', 'coordinator_submissions_paused'))
-    if role == 'coordinator':
+    if task_profile.orchestrates(role):
         required = (*common, 'decision_ref', 'operation_id', 'operation_digest', 'operation_evidence',
                     'resource_observations', 'operation_stopped', 'operation_descendants_stopped')
         required += tuple(key for key, reference in (('d5_plan_digest', body['d5_plan']),
@@ -1999,7 +1998,7 @@ def _validate_role_proof(record, task, proof, *, scope_id, revision, read, linke
         proof['claims_digest'] == evidence._digest(data['claims']), 'Host proof does not bind the exact original reservation')
     for key in ('observation_ref', 'coordinator_ref'):
         state._text(proof[key], 'host ' + key)
-    if role == 'coordinator':
+    if task_profile.orchestrates(role):
         for key in ('d5_plan', 'd6_plan'):
             if body[key] is not None:
                 _require(proof[key + '_digest'] == body[key]['digest'], 'Coordinator proof changed original plan context')
@@ -2030,7 +2029,7 @@ def _validate_role_proof(record, task, proof, *, scope_id, revision, read, linke
             _require(proof['plan_digest'] == data['plan_digest'] and proof['execution_digest'] == execution,
                      'Check proof differs from actual D5 plan/execution')
         else:
-            if role == 'review':
+            if task_profile.reviews(role):
                 attempt = next((a for a in task['evidence']['attempts'] if a['id'] == record['id']), None)
                 _require(attempt is not None and linked_review(attempt) is not None,
                          'Review proof has no exact immutable D5 attempt/plain-prompt binding')
@@ -2049,13 +2048,13 @@ def _validate_role_proof(record, task, proof, *, scope_id, revision, read, linke
 
 def prepare_assignment(scope, request):
     """Reserve a worker only; D5 review preparation owns the sole review admission path."""
-    return delegation_routing.prepare(scope, request, 'worker', _prepare_native)  # C3-2: routing in a managed project
+    return delegation_routing.prepare(scope, request, False, _prepare_native)  # C3-2: routing in a managed project
 
 
-def _prepare_native(scope, request, *, role):
+def _prepare_native(scope, request, *, review):
     """Reserve before native spawn, returning launch admission only on a new committed row."""
     evidence._request(request, ('dispatch_id', 'job_id', 'selection', 'control_observation',
-        'discovery_expectation', 'guidance', 'resource_units', *(('brief',) if role == 'worker' else
+        'discovery_expectation', 'guidance', 'resource_units', *(('brief',) if not review else
         ('coverage', 'criteria', 'assignment'))), ('retry_of', 'diagnostic', 'workstream_revision', 'workstream_limits', 'workstream_context_id', 'continuation_limits', 'visibility'))
     request = json_object(evidence._raw(request))
     if 'visibility' in request:
@@ -2065,11 +2064,10 @@ def _prepare_native(scope, request, *, role):
     if 'continuation_limits' in request:
         _continuation_limits(request)
     if 'workstream_context_id' in request:
-        _require(role in {'worker', 'review'} and isinstance(request['workstream_context_id'], str), 'Visible native grouping requires an immutable context ID')
-        _native_name('0' * 32, role, request)
+        _require(isinstance(request['workstream_context_id'], str), 'Visible native grouping requires an immutable context ID')
     if 'workstream_revision' in request or 'workstream_limits' in request:
         from runtime.workstreams import validate_admission
-        _require(role == 'worker', 'Workstreams launch gates currently support implementer workers only')
+        _require(not review, 'Workstreams launch gates currently support implementer workers only')
         validate_admission(scope, request)
     state._text(request['dispatch_id'], 'stable dispatch id', 128)
     state._text(request['job_id'], 'delegation job id', 128)
@@ -2081,17 +2079,19 @@ def _prepare_native(scope, request, *, role):
         records = _ledger(scope, db, task=request)
         replay = _replay(scope, records, request)
         if replay:
-            _require(replay['data']['role'] == role, 'Dispatch identity belongs to another role')
-            return _reply(replay) if role == 'worker' else evidence._review_response(scope, db, request, replay)
+            _require(task_profile.native(replay['data']['role']) and task_profile.reviews(replay['data']['role']) == review, 'Dispatch identity belongs to another role')
+            return _reply(replay) if not review else evidence._review_response(scope, db, request, replay)
         task = evidence._task(db, scope, request)
-        state._capability(scope, task, 'native-review' if role == 'review' else 'native-worker')
+        state._capability(scope, task, 'native-review' if review else 'native-worker')
         plan = _task_plan(scope, task)
         proof_plan = evidence._read(scope, task['evidence']['plan'])
         plan_digest = task['delegation']['plan']['digest']
         generation = db.execute('select generation from checkouts where scope_id=?', (state._scope_id(scope),)).fetchone()[0]
         job = next((j for j in plan['jobs'] if j['id'] == request['job_id']), None)
-        _require(job is not None and job['role'] == role, 'This admission path requires its exact planned native role')
-        if role == 'worker':
+        _require(job is not None and task_profile.native(job['role']) and task_profile.reviews(job['role']) == review, 'This admission path requires its exact planned native role')
+        if 'workstream_context_id' in request:  # naming needs the planned job's specialist
+            _native_name('0' * 32, job['role'], request)
+        if not review:
             claims = _brief(scope, job, request['brief'], proof_plan)
         else:
             claims = _claims(job['claims'])
@@ -2102,13 +2102,13 @@ def _prepare_native(scope, request, *, role):
     git_routing = _git_routing(scope, plan['git_directory'])
     with state._database(scope) as db:
         task = evidence._task(db,scope,request)
-        state._capability(scope, task, 'native-review' if role == 'review' else 'native-worker')
+        state._capability(scope, task, 'native-review' if review else 'native-worker')
     observed, guidance = _discovery(scope, plan, request)
     candidate = evidence.capture_candidate(scope, proof_plan)
     _require(candidate['actual_policy_digest'] == task['pins']['policy_digest'], 'Actual policy changed from accepted task pins')
     candidate_ref = evidence._artifact(scope, candidate, owner=evidence._artifact_owner(scope, task))
     attempt_id, recorded = uuid.uuid4().hex, delegation_routing.records_model(scope, request['selection'])
-    binding = dict(attempt_id=attempt_id, parent_session_id=plan['route']['parent_session_id'], task_name=_native_name(attempt_id, role, request),
+    binding = dict(attempt_id=attempt_id, parent_session_id=plan['route']['parent_session_id'], task_name=_native_name(attempt_id, job['role'], request),
         candidate_digest=candidate_ref['digest'], requested_model=request['selection']['model']
         if recorded else None, requested_effort=request['selection']['effort']
         if recorded else None, client_surface=observed['client_surface'], native_version=observed['native_version'])
@@ -2116,7 +2116,7 @@ def _prepare_native(scope, request, *, role):
     content_binding = binding
     diagnostic = evidence._artifact(scope, request['diagnostic'], owner=evidence._artifact_owner(scope, task)) if 'diagnostic' in request else None
     owner = dict(scope_id=state._scope_id(scope), **{key: request[key] for key in ('client', 'session_id', 'task_id', 'dispatch_id')})
-    body = dict(version=ADMISSION_VERSION, owner=owner, pins=task['pins'], request=_semantic(request), job_id=job['id'], role=role,
+    body = dict(version=ADMISSION_VERSION, owner=owner, pins=task['pins'], request=_semantic(request), job_id=job['id'], role=job['role'],
         claims=claims, resource_units=request['resource_units'], revision=request['expected_revision'] + 1,
         plan=task['delegation']['plan'], plan_digest=plan_digest, git_routing=git_routing,
         host_capacity=plan['limits']['host_capacity'], binding=content_binding, candidate=candidate_ref,
@@ -2131,12 +2131,12 @@ def _prepare_native(scope, request, *, role):
     if task['pins']['schema_version'] == 3:
         body['accepted_identity'] = task['accepted_identity']
         body['lifecycle'] = dict(created_at=state._owner_time())
-    if role == 'review':
+    if review:
         body['review'] = dict(assignment_digest=hashlib.sha256(request['assignment'].encode()).hexdigest(),
             coverage=request['coverage'], criteria=request['criteria'], d5_plan=task['evidence']['plan'])
         body['report_contract'] = dict(version=1, assignment_digest=body['review']['assignment_digest'],
             required=['version', 'attempt_id', 'assignment_digest', 'candidate_digest', 'coverage', 'findings', 'limitations'])
-    data = dict(version=ADMISSION_VERSION, job_id=job['id'], role=role, status='prepared', request_digest=evidence._digest(_semantic(request)),
+    data = dict(version=ADMISSION_VERSION, job_id=job['id'], role=job['role'], status='prepared', request_digest=evidence._digest(_semantic(request)),
         assignment=None, candidate=candidate_ref, claims=claims, resource_units=request['resource_units'],
         revision=request['expected_revision'] + 1, plan_digest=plan_digest, host_capacity=plan['limits']['host_capacity'],
         binding=content_binding, retry_of=request.get('retry_of'), diagnostic=diagnostic,
@@ -2149,14 +2149,14 @@ def _prepare_native(scope, request, *, role):
         records = _ledger(scope, db, task=request)
         replay = _replay(scope, records, request)
         if replay:
-            _require(replay['data']['role'] == role, 'Dispatch identity belongs to another role')
-            return _reply(replay) if role == 'worker' else evidence._review_response(scope, db, request, replay)
+            _require(task_profile.native(replay['data']['role']) and task_profile.reviews(replay['data']['role']) == review, 'Dispatch identity belongs to another role')
+            return _reply(replay) if not review else evidence._review_response(scope, db, request, replay)
         task = evidence._task(db, scope, request)
         _require(_git_routing(scope, plan['git_directory']) == git_routing, 'Prepared Git routing changed before reservation commit')
         _require(task['delegation']['plan']['digest'] == plan_digest and _claims(job['claims']) == claims and
                  db.execute('select generation from checkouts where scope_id=?', (state._scope_id(scope),)).fetchone()[0] == generation,
                  'Prepared scope, policy, resources or checkout generation changed')
-        if role == 'review':
+        if review:
             evidence._review_admission(scope, task, proof_plan, request)
         else:
             _require(_brief(scope, job, request['brief'], proof_plan) == claims, 'Prepared worker resources changed')
@@ -2166,13 +2166,13 @@ def _prepare_native(scope, request, *, role):
             descriptor = state._canonical_plain(admission.original_attempt)['attempt'].get('probe')
             probe = None if descriptor is None else dict(descriptor=descriptor, before=setup_observation._probe_fact(
                 state._accepted_identity(scope.accepted_identity), descriptor['canary']))
-            if role == 'review' and probe is not None:
+            if review and probe is not None:
                 canary = str(Path(descriptor['canary']).relative_to(scope.repository_root))
                 sha256 = probe['before']['target']['fingerprint']['sha256']
                 if sha256 != descriptor['before_sha256'] and candidate['fingerprints'].get(canary, {}).get('sha256') == sha256:
                     # Keep the writer's preimage witness on its original assignment.
                     for prior in records:
-                        if prior['data']['role'] != 'worker' or not _cooperative_for(scope, prior, task):
+                        if not task_profile.writes(prior['data']['role']) or not _cooperative_for(scope, prior, task):
                             continue
                         completed = evidence._read(scope, prior['data']['reconciliation'], db=db)
                         if (completed['current_candidate']['digest'] == candidate_ref['digest']
@@ -2189,10 +2189,10 @@ def _prepare_native(scope, request, *, role):
         data['assignment'] = evidence._artifact(scope, body, owner=evidence._artifact_owner(scope, task), db=db)
         _insert_assignment(db, scope, task, dict(id=attempt_id, owner=owner, data=data, body=body))
         record = dict(id=attempt_id, owner=owner, data=data, body=body)
-        if role == 'review':
+        if review:
             task['evidence']['attempts'].append(evidence._review_attempt(scope, record, task=task, db=db))
         state._save(db, state._scope_id(scope), task)
-    if role == 'worker':
+    if not review:
         return _reply(record, admitted=True)
     with state._database(scope) as db:
         return evidence._review_response(scope, db, request, record, admitted=True)
@@ -2201,13 +2201,13 @@ def _prepare_native(scope, request, *, role):
 MAX_OBSERVATIONS = 32
 
 
-def _assignment(scope, db, request, *, roles=('worker',), records=None):
+def _assignment(scope, db, request, *, roles=(task_profile.native_worker,), records=None):
     _require(db is not None, 'Missing native assignment state')
     if state._retired_assignment(db, request['attempt_id']):
         raise state.StateError('Retired assignment evidence is unavailable or expired')
     records = _ledger(scope, db, task=request) if records is None else records
     record = next((r for r in records if r['id'] == request['attempt_id']), None)
-    _require(record is not None and record['data']['role'] in roles and
+    _require(record is not None and any(accept(record['data']['role']) for accept in roles) and
         record['owner'] == dict(scope_id=state._scope_id(scope),
             **{key: request[key] for key in ('client', 'session_id', 'task_id')},
             dispatch_id=record['owner']['dispatch_id']) and
@@ -2357,7 +2357,7 @@ def observe_execution_binding(scope, request):
             plan = _task_plan(scope, task)
             _require(plan['limits']['deadline'] > _now(), 'Original delegation deadline has elapsed')
             job = next((job for job in plan['jobs'] if job['id'] == data['job_id']), None)
-            _require(job is not None and job['role'] == 'worker' and _claims(job['claims']) == data['claims'],
+            _require(job is not None and task_profile.native_worker(job['role']) and _claims(job['claims']) == data['claims'],
                      'Original worker claims changed')
             proof_plan = _assignment_plan(scope, record, task)
             _require(task['evidence']['plan']['digest'] == evidence._digest(proof_plan),
@@ -2511,7 +2511,7 @@ def _observation_reply(record, reference, value, replayed=False):
 
 def _native_observer(record):
     from runtime.adapters.codex import observe_native_worker, observe_native_review_assignment
-    return observe_native_worker if record['data']['role'] == 'worker' else observe_native_review_assignment
+    return observe_native_worker if task_profile.native_worker(record['data']['role']) else observe_native_review_assignment
 
 
 def _cooperative_activity(activity):
@@ -2537,10 +2537,10 @@ def observe_assignment(scope, request):
     for key in ('attempt_id', 'parent_turn_id', 'spawn_item_id'):
         state._text(request[key], key, 256)
     with state._database(scope) as db:
-        record = _assignment(scope, db, request, roles=('worker', 'review'))
+        record = _assignment(scope, db, request, roles=(task_profile.native,))
         task = _assignment_task(scope, db, request, revision=False)
         _require(task['pins'] == record['body']['pins'], 'Original assignment task pins changed')
-        if record['data']['role'] == 'review':
+        if task_profile.reviews(record['data']['role']):
             attempt = next((a for a in task['evidence']['attempts'] if a['id'] == record['id']), None)
             _require(attempt is not None and _linked_review(scope, state._scope_id(scope), task, attempt, [record]) is not None,
                      'Review observation requires the exact retained D5 attempt')
@@ -2564,7 +2564,7 @@ def observe_assignment(scope, request):
             observed = {key: observed[key] for key in ('receipt', 'result')}
         receipt = _worker_receipt(scope, record, request, observed)
         result = observed['result']
-        if result is not None and record['data']['role'] == 'worker':
+        if result is not None and task_profile.native_worker(record['data']['role']):
             try:
                 report = _worker_report(scope, record, result)
             except (state.StateError, StartupError):
@@ -2605,7 +2605,7 @@ def observe_assignment(scope, request):
         value['activity'] = activity
     reference = evidence._artifact(scope, value, owner=evidence._artifact_owner(scope, task))
     with _reservation_write(scope) as db:
-        current = _assignment(scope, db, request, roles=('worker', 'review'))
+        current = _assignment(scope, db, request, roles=(task_profile.native,))
         duplicate = _observation_replay(scope, _worker_history(scope, current['data']['observation']), incoming)
         if duplicate:
             return _observation_reply(current, *duplicate, replayed=True)
@@ -2652,7 +2652,7 @@ def _confirm_cooperative_completion(scope, record, task, history, proof, assessm
              'Cooperative proof requires the exact completed turn and its observed activity')
     _require(proof['coordinator_ref'] == assessment['coordinator_ref'] and proof['observation_ref'] in assessment['evidence'],
              'Cooperative completion requires the bound independent activity and effects assessment')
-    if data['role'] == 'review':
+    if task_profile.reviews(data['role']):
         _require(original == candidate and not assessment['changed_paths'], 'Cooperative reviewer changed its candidate')
     else:
         variable = {'fingerprints', 'dirty_inventory', 'paths'}
@@ -2682,7 +2682,7 @@ def reconcile_assignment(scope, request):
     with state._database(scope) as db:
         _require(db is not None, 'Missing native assignment state')
         records = _ledger(scope, db, task=request)
-        record = _assignment(scope, db, request, roles=('worker', 'review', 'coordinator'), records=records)
+        record = _assignment(scope, db, request, roles=(task_profile.native, task_profile.orchestrates), records=records)
         prior_cooperative = None
         if record['data']['status'] in TERMINAL_ASSIGNMENTS:
             artifact = evidence._read(scope, record['data']['reconciliation'])
@@ -2724,14 +2724,14 @@ def reconcile_assignment(scope, request):
         _require(changed <= set(assessment['changed_paths']), 'Partial-change assessment omits actual candidate paths')
     if 'workstream_continuation' in record['data']:
         validate_settlement(scope, record, assessment['outcome'])
-    latest = _worker_history(scope, record['data']['observation']) if cooperative or record['data']['role'] == 'worker' else []
-    if assessment['outcome'] == 'completed' and record['data']['role'] == 'worker':
+    latest = _worker_history(scope, record['data']['observation']) if cooperative or task_profile.native_worker(record['data']['role']) else []
+    if assessment['outcome'] == 'completed' and task_profile.native_worker(record['data']['role']):
         observed = latest[0][1] if latest else None
         _require(observed is not None and observed['status'] == 'observed' and observed['error'] is None and
             observed['conflict'] is None and observed['report'] is not None and observed['report']['status'] == 'completed' and
             set(observed['report']['changed_paths']) <= set(assessment['changed_paths']),
             'Completed outcome requires an actual bound completed worker report and independent effects assessment')
-    if record['data']['role'] == 'review' and assessment['outcome'] == 'completed':
+    if task_profile.reviews(record['data']['role']) and assessment['outcome'] == 'completed':
         attempt = next(a for a in task['evidence']['attempts'] if a['id'] == record['id'])
         _require(attempt['status'] in {'collected', 'assessed'} and evidence._review_quality_matches(scope, attempt, record),
             'Completed review requires the exact latest collected D5 report and uncontradicted native completion')
@@ -2747,7 +2747,7 @@ def reconcile_assignment(scope, request):
     with _reservation_write(scope) as db:
         _require(db is not None, 'Missing native assignment state')
         records = _ledger(scope, db, task=request)
-        current = _assignment(scope, db, request, roles=('worker', 'review', 'coordinator'), records=records)
+        current = _assignment(scope, db, request, roles=(task_profile.native, task_profile.orchestrates), records=records)
         task = _assignment_task(scope, db, request)
         _require({item['id']: evidence._digest(item['data']) for item in records} == reservations,
                  'Shared reservation ownership changed during reconciliation; recapture candidate and proof')
@@ -2757,7 +2757,7 @@ def reconcile_assignment(scope, request):
         if cooperative:
             _require(evidence.capture_candidate(scope, plan) == candidate,
                      'Candidate changed before cooperative release; ownership retained')
-            if current['data']['role'] == 'worker' and 'qualification_before' in current['body']:
+            if task_profile.native_worker(current['data']['role']) and 'qualification_before' in current['body']:
                 before = evidence._read(scope, current['body']['qualification_before'], db=db)
                 if before['probe'] is not None:
                     from runtime.adapters.codex import patch_input_fingerprint
@@ -2774,7 +2774,7 @@ def reconcile_assignment(scope, request):
                     _require(len(paired) == 2 and paired[1] == ('PreToolUse', pre, 0)
                         and paired[0][0] == 'PostToolUse' and _hex(paired[0][1]) and paired[0][2] == 0,
                         'Cooperative canary completion requires exact paired hook receipts')
-        if current['data']['role'] == 'review':
+        if task_profile.reviews(current['data']['role']):
             attempt = next(a for a in task['evidence']['attempts'] if a['id'] == current['id'])
             _linked_review(scope, state._scope_id(scope), task, attempt, [current])
             attempt['ownership_reconciliation'] = reference
@@ -2811,7 +2811,7 @@ def prepared_native_assignment(scope, attempt_id):
         if state._retired_assignment(db, attempt_id):
             raise state.StateError('Retired native assignment evidence is unavailable or expired')
         found = next((r for r in _ledger(scope, db, assignment_id=attempt_id) if r['owner']['scope_id'] == state._scope_id(scope)), None)
-        _require(found is not None and found['data']['role'] == 'worker', 'Native worker assignment is absent or unqualified')
+        _require(found is not None and task_profile.native_worker(found['data']['role']), 'Native worker assignment is absent or unqualified')
         return _native_binding(found)
 
 
@@ -2823,7 +2823,7 @@ def prepared_native_review_assignment(scope, attempt_id):
             raise state.StateError('Retired native review evidence is unavailable or expired')
         record = next((r for r in _ledger(scope, db, assignment_id=attempt_id) if
             r['owner']['scope_id'] == state._scope_id(scope)), None) if db is not None else None
-        _require(record is not None and record['data']['role'] == 'review', 'Exact native review assignment is absent')
+        _require(record is not None and task_profile.reviews(record['data']['role']), 'Exact native review assignment is absent')
         owner = record['owner']
         task = state._task(db, owner['scope_id'], owner['client'], owner['session_id'], owner['task_id'])
         attempt = next((a for a in task['evidence']['attempts'] if a['id'] == attempt_id), None)
@@ -2876,7 +2876,7 @@ def delegation_status(scope, client, session_id, *, compact=False):
         report = dict(ok=True, revision=task['revision'] if task else None, pins=task['pins'] if task else None,
             plan=delegation['plan'] if delegation else None, budgets=budgets,
             assignments=[dict(attempt_id=r['id'], owner=r['owner'], **r['data']) for r in selected], conflicts=conflicts,
-            capacity=dict(unresolved_managed_workers=sum(r['data']['role'] in {'worker', 'review'} for r in unresolved),
+            capacity=dict(unresolved_managed_workers=sum(task_profile.native(r['data']['role']) for r in unresolved),
                 max_parallel_workers=plan['limits']['max_parallel_workers'] if plan else None,
                 observed_host_capacity=plan['limits']['host_capacity'] if plan else None),
             blockers=['Unreconciled assignment retains resource claims' for r in selected if r in unresolved],
@@ -2885,7 +2885,7 @@ def delegation_status(scope, client, session_id, *, compact=False):
         return _compact_delegation_status(report) if compact else report
 
 def _assignment_context(request, role):
-    if role == 'worker' and 'workstream_context_id' not in request:
+    if task_profile.native_worker(role) and 'workstream_context_id' not in request:
         limits = request.get('workstream_limits', {})
         _require(isinstance(limits, dict), 'Invalid Workstreams allocation fields')
         return limits.get('context_id')
@@ -3027,7 +3027,7 @@ def _continuation_save(scope, db, record, task, field, value):
 def _native_name(identity, role, request):
     from runtime.adapters.codex import native_task_name
     try:
-        return native_task_name(identity, role, _assignment_context(request, role))
+        return native_task_name(identity, 'review' if task_profile.reviews(role) else 'worker', _assignment_context(request, role))
     except StartupError:
         raise state.StateError('Invalid native assignment naming') from None
 
@@ -3058,7 +3058,7 @@ def consume_continuation(scope, request):
         current_claims = _claims(next(j for j in plan['jobs'] if j['id'] == record['data']['job_id'])['claims'])
         _require(current_claims == value['current_claims'], 'Continuation physical resource aliases changed')
         if record['data']['status'] == 'settled':
-            active = [r for r in records if r['data']['role'] in NATIVE_ROLES and r['data']['status'] != 'settled']
+            active = [r for r in records if task_profile.native(r['data']['role']) and r['data']['status'] != 'settled']
             own = [r for r in active if all(r['owner'][k] == record['owner'][k]
                 for k in ('scope_id', 'client', 'session_id', 'task_id'))]
             _require(len(own) < plan['limits']['max_parallel_workers'] and

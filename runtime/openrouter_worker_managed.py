@@ -22,10 +22,10 @@ import sys
 import time
 import uuid
 
-from runtime import external_delegation, openrouter_settings as settings
+from runtime import external_delegation, openrouter_settings as settings, task_profile
 
 HOST = 'openrouter_worker'
-ROLE = 'researcher'
+DEFAULT_SPECIALIST = 'software-engineer'  # a brief that names no routed roster specialist
 ADMISSION_EXPIRED = 'admission_expired'  # a prepared run never executed within routing.ADMISSION_TTL
 SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
 SELF_CHECK_UNSAFE = 'self_check_workdir_unsafe'
@@ -55,9 +55,10 @@ def _routed_request(api, brief, checkout, attempt):
     _, launch = api._shared()._routing()
     scope = launch.assignment_scope(checkout)
     choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'])
-    assignment = dict(attempt_id=attempt, role=ROLE, scope=scope, choice=choice,
+    role = brief.get('role') if task_profile.routed(brief.get('role')) else DEFAULT_SPECIALIST
+    assignment = dict(attempt_id=attempt, role=role, scope=scope, choice=choice,
                       task='worker:' + hashlib.sha256(brief['task_id'].encode()).hexdigest()[:32])
-    return assignment, launch.unplanned_job(ROLE, scope, brief['task_id'], tools=state.READ_ONLY)
+    return assignment, launch.unplanned_job(role, scope, brief['task_id'], tools=state.READ_ONLY)
 
 
 def _admit(api, service, checkout, brief, limits, attempt):

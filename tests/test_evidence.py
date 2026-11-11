@@ -58,7 +58,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
     def test_writer_first_prevents_verification_without_model_guidance(self):
         from runtime import delegation
         self.ready_proof_fixture()
-        writer = delegation._reserve_operation(self.scope, self.readiness_owner(), role='coordinator')
+        writer = delegation._reserve_operation(self.scope, self.readiness_owner(), role='orchestrator')
         with patch.object(delegation, 'guidance_status', side_effect=AssertionError('model-free verify queried guidance')):
             result = self.verify()
         self.assertFalse(result['verified'])
@@ -77,13 +77,13 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
             if not attempts:
                 attempts.append(True)
                 with self.assertRaises(state.StateError):
-                    delegation._reserve_operation(scope, writer, role='coordinator')
+                    delegation._reserve_operation(scope, writer, role='orchestrator')
             return original(scope, plan)
         with patch.object(self.api, 'capture_candidate', side_effect=capture):
             result = self.verify()
         self.assertTrue(result['verified'])
         with state._database(self.scope) as db:
-            records = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'coordinator']
+            records = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'orchestrator']
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]['data']['status'], 'settled')
         operation = self.api._read(self.scope, records[0]['body']['operation'])
@@ -99,15 +99,15 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.ready_proof_fixture()
         ready = self.verify()['task']
         writer = self.readiness_owner()
-        first = delegation._reserve_operation(self.scope, writer, role='coordinator')
+        first = delegation._reserve_operation(self.scope, writer, role='orchestrator')
         with state._database(self.scope) as db:
             current = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
         self.assertEqual(current['state'], 'REVIEW')
         self.assertEqual(current['revision'], ready['revision'] + 1)
-        self.assertTrue(delegation._reserve_operation(self.scope, writer, role='coordinator')['replayed'])
+        self.assertTrue(delegation._reserve_operation(self.scope, writer, role='orchestrator')['replayed'])
         failed = self.readiness_owner(session='third-parent')
         with self.assertRaises(state.StateError):
-            delegation._reserve_operation(self.scope, failed, role='coordinator')
+            delegation._reserve_operation(self.scope, failed, role='orchestrator')
         with state._database(self.scope) as db:
             self.assertEqual(state._task(db, state._scope_id(self.scope), 'codex', 'parent'), current)
             owner = state._task(db, state._scope_id(self.scope), 'codex', 'other-parent')
@@ -120,7 +120,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.verify()
         with state._database(self.scope) as db:
-            retained = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'coordinator']
+            retained = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'orchestrator']
         self.assertEqual(len(retained), 1)
         self.assertNotEqual(retained[0]['data']['status'], 'settled')
         before = retained[0]['data']
@@ -130,7 +130,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         with state._database(self.scope) as db:
             self.assertEqual(next(r for r in delegation._ledger(self.scope, db) if r['id'] == retained[0]['id'])['data'], before)
         with self.assertRaises(state.StateError):
-            delegation._reserve_operation(self.scope, self.readiness_owner(), role='coordinator')
+            delegation._reserve_operation(self.scope, self.readiness_owner(), role='orchestrator')
         current = state.task_status(self.scope, 'codex', 'parent')['task']
         with self.assertRaises(state.StateError):
             state.start_task(self.scope, self.identity | dict(task_id='replacement', mode='editable', decision_ref='user:accepted',
@@ -140,7 +140,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         from runtime import delegation
         self.plan()
         unrelated = delegation._reserve_operation(self.scope, self.readiness_owner(claims=[
-            dict(kind='service', key='fixture:independent', host='local', mode='read')]), role='coordinator')
+            dict(kind='service', key='fixture:independent', host='local', mode='read')]), role='orchestrator')
         failed = self.verify()
         self.assertFalse(failed['verified'])
         with state._database(self.scope) as db:
@@ -151,7 +151,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.assertEqual(verifier['data']['result']['outcome'], 'failed')
         reader = self.readiness_owner(identity=self.identity, dispatch='same-task-reader', claims=[
             dict(kind='path', key=str(self.repo / 'app.py'), mode='read')])
-        delegation._reserve_operation(self.scope, reader, role='coordinator')
+        delegation._reserve_operation(self.scope, reader, role='orchestrator')
         result = self.verify()
         self.assertFalse(result['verified'])
         self.assertTrue(any('ownership' in item for item in result['blockers']))
@@ -163,17 +163,17 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         from runtime import delegation
         self.ready_proof_fixture()
         service = dict(kind='service', key='fixture:used-db', host='local', mode='write')
-        plan = self.coordinator_resource_plan([dict(id='coordinator-service', role='coordinator', claims=[service], dependencies=[], max_attempts=1)])
+        plan = self.coordinator_resource_plan([dict(id='coordinator-service', role='orchestrator', claims=[service], dependencies=[], max_attempts=1)])
         delegation.plan_delegation(self.scope, self.request(plan=plan))
         independent = self.readiness_owner(claims=[service | dict(key='fixture:independent-db')])
-        delegation._reserve_operation(self.scope, independent, role='coordinator')
+        delegation._reserve_operation(self.scope, independent, role='orchestrator')
         ready = self.verify()['task']
         self.assertEqual(ready['state'], 'DONE')
         verification = self.api._read(self.scope, ready['evidence']['verification'])
         self.assertIn(service | dict(mode='read'), verification['resource_closure'])
         self.assertFalse(self.api.evidence_status(self.scope, 'codex', 'parent')['evidence']['blockers'])
         reader = self.readiness_owner(session='reader', claims=[service | dict(mode='read')])
-        delegation._reserve_operation(self.scope, reader, role='coordinator')
+        delegation._reserve_operation(self.scope, reader, role='orchestrator')
         with state._database(self.scope) as db:
             before_status = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
         self.assertEqual(before_status['state'], 'DONE')
@@ -210,10 +210,10 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         ready = self.verify()['task']
         original = self.api._read(self.scope, ready['evidence']['verification'])
         dependency = dict(kind='service', key='fixture:new-dependency', host='local', mode='read')
-        plan = self.coordinator_resource_plan([dict(id='new-dependency', role='coordinator', claims=[dependency],
+        plan = self.coordinator_resource_plan([dict(id='new-dependency', role='orchestrator', claims=[dependency],
             dependencies=[], max_attempts=1)])
         delegation.plan_delegation(self.scope, self.request(plan=plan))
-        owner = delegation._reserve_operation(self.scope, self.readiness_owner(claims=[dependency]), role='coordinator')
+        owner = delegation._reserve_operation(self.scope, self.readiness_owner(claims=[dependency]), role='orchestrator')
         status = self.api.evidence_status(self.scope, 'codex', 'parent')
         self.assertEqual(status['evidence']['candidate_digest'], original['candidate_digest'])
         self.assertTrue(any(owner['attempt_id'] in blocker for blocker in status['evidence']['blockers']))
@@ -227,7 +227,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         ready = self.verify()['task']
         before = json.loads(json.dumps(ready))
         dependency = dict(kind='service', key='fixture:first-plan-dependency', host='local', mode='read')
-        plan = self.coordinator_resource_plan([dict(id='dependency', role='coordinator', claims=[dependency],
+        plan = self.coordinator_resource_plan([dict(id='dependency', role='orchestrator', claims=[dependency],
             dependencies=[], max_attempts=1)])
         request = self.request(plan=plan)
         accepted = delegation.plan_delegation(self.scope, request)
@@ -271,7 +271,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.ready_proof_fixture()
         self.assertTrue(self.verify()['verified'])
         dependency = dict(kind='service', key='fixture:first-plan-reader', host='local', mode='read')
-        plan = self.coordinator_resource_plan([dict(id='dependency', role='coordinator', claims=[dependency],
+        plan = self.coordinator_resource_plan([dict(id='dependency', role='orchestrator', claims=[dependency],
             dependencies=[], max_attempts=1)])
         delegation.plan_delegation(self.scope, self.request(plan=plan))
         with state._database(self.scope) as db:
@@ -293,7 +293,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.assertEqual(foreign.repository_id,self.scope.repository_id)
         self.assertNotEqual(foreign.checkout_id,self.scope.checkout_id)
         request = self.readiness_owner(scope=foreign, claims=[dict(kind='git', key=str(self.scope.git_common_dir), mode='write')])
-        delegation._reserve_operation(foreign, request, role='coordinator')
+        delegation._reserve_operation(foreign, request, role='orchestrator')
         with state._database(self.scope) as db:
             current = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
         self.assertEqual(current['state'], 'REVIEW')
@@ -312,7 +312,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
             self.verify()
         with state._database(self.scope) as db:
             task = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
-            records = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'coordinator']
+            records = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'orchestrator']
         self.assertNotEqual(task['state'], 'DONE')
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]['data']['status'], 'prepared')
@@ -328,7 +328,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         def blockers(*args, **kwargs):
             result = original(*args, **kwargs)
             if not admitted:
-                admitted.append(delegation._reserve_operation(self.scope, reader, role='coordinator'))
+                admitted.append(delegation._reserve_operation(self.scope, reader, role='orchestrator'))
             return result
         with patch.object(self.api, '_blockers', side_effect=blockers):
             self.api.revalidate_ready(self.scope, 'codex', 'parent')
@@ -347,7 +347,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
             ready['evidence']['verification'] = fixture_artifact(self.scope,self.identity, verification,db=db)
             state._save(db, state._scope_id(self.scope), ready)
         independent = self.readiness_owner(claims=[dict(kind='service', key='fixture:independent', host='local', mode='read')])
-        delegation._reserve_operation(self.scope, independent, role='coordinator')
+        delegation._reserve_operation(self.scope, independent, role='orchestrator')
         with state._database(self.scope) as db:
             current = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
         self.assertEqual(current['state'], 'REVIEW')
@@ -359,7 +359,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         outside = self.root / 'outside-alias.py'
         os.link(self.repo / 'app.py', outside)
         reader = self.readiness_owner(claims=[dict(kind='path', key=str(outside), mode='read')])
-        delegation._reserve_operation(self.scope, reader, role='coordinator')
+        delegation._reserve_operation(self.scope, reader, role='orchestrator')
         result = self.verify()
         self.assertFalse(result['verified'])
         self.assertNotEqual(result['task']['state'], 'DONE')
@@ -370,7 +370,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.ready_proof_fixture()
         root = dict(kind='path', key=str(self.repo), mode='read')
         alias = root | dict(key=str(self.repo) + '/')
-        plan = self.coordinator_resource_plan([dict(id='coordinator-root', role='coordinator', claims=[alias], dependencies=[], max_attempts=1)])
+        plan = self.coordinator_resource_plan([dict(id='coordinator-root', role='orchestrator', claims=[alias], dependencies=[], max_attempts=1)])
         delegation.plan_delegation(self.scope, self.request(plan=plan))
         result = self.verify()
         self.assertTrue(result['verified'])
@@ -406,7 +406,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
     def test_verifier_preserves_maximum_accepted_d6_job_resource_union(self):
         from runtime import delegation
         self.ready_proof_fixture()
-        jobs = [dict(id='j' + str(job), role='coordinator', dependencies=[], max_attempts=1,
+        jobs = [dict(id='j' + str(job), role='orchestrator', dependencies=[], max_attempts=1,
             claims=[dict(kind='service', key='s' + format(job * 64 + item, 'x'), host='local', mode='read') for item in range(64)])
             for job in range(32)]
         plan = self.coordinator_resource_plan(jobs)
@@ -419,7 +419,7 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
         self.assertEqual({c['key'] for c in verification['resource_closure'] if c['kind'] == 'service'}, expected)
         self.assertGreater(len(verification['resource_closure']), 32 * 64)
         with state._database(self.scope) as db:
-            rows = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'coordinator']
+            rows = [r for r in delegation._ledger(self.scope, db) if r['data']['role'] == 'orchestrator']
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['data']['status'], 'settled')
 
@@ -470,9 +470,9 @@ class CooperativeQualificationTests(unittest.TestCase):
         native.root, native.repo = d5.root, d5.repo
         claims = [native.path_claim()]
         plan = native.plan_value(jobs=[
-            dict(id='edit', role='worker', claims=claims, dependencies=[], max_attempts=1),
+            dict(id='edit', role='software-engineer', claims=claims, dependencies=[], max_attempts=1),
             dict(id='unit', role='check', claims=[native.path_claim(mode='read')], dependencies=['edit'], max_attempts=1),
-            dict(id='review', role='review', claims=[native.path_claim(mode='read')], dependencies=['unit'], max_attempts=1)])
+            dict(id='review', role='code-reviewer', claims=[native.path_claim(mode='read')], dependencies=['unit'], max_attempts=1)])
         plan['limits'].update(max_attempts=2, max_resource_units=2, max_parallel_workers=1, host_capacity=1)
         native.plan(plan)
         review_request = d5.native_review_request(coverage=['general', 'security'], criteria=['works'],

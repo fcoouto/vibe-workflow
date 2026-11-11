@@ -110,13 +110,23 @@ class ManagedWorkerCase(ManagedRouting, unittest.TestCase):
 
 
 class ManagedPrepareTests(ManagedWorkerCase):
+    def test_the_worker_uses_the_specialist_its_brief_names(self):
+        self.manage()
+        calls, bodies = self.admissions(), self.prepared()
+        self.api.prepare(self.runs, dict(self.brief(), role='debugger'))
+        [(assignment, _)] = calls
+        self.assertEqual((assignment['role'], bodies[0]['job']['role']), ('debugger', 'debugger'))
+        from runtime import openrouter_worker_managed
+        self.assertFalse(hasattr(openrouter_worker_managed, 'ROLE'))
+
     def test_prepare_obtains_one_admission_on_the_gateway_route_before_writing_the_run(self):
         self.manage()
         calls, bodies = self.admissions(), self.prepared()
         run = self.api.prepare(self.runs, self.brief())
         [(assignment, result)] = calls
         self.assertEqual((result['status'], result['billing_class']), ('admitted', 'gateway'))
-        self.assertEqual(assignment['role'], 'researcher')
+        self.assertEqual(assignment['role'], 'software-engineer')  # the brief names no specialist
+        self.assertEqual(bodies[0]['job']['role'], 'software-engineer')
         self.assertEqual(assignment['choice'], dict(provider='openrouter', model='vendor/model', effort='low',
                                                     harness='opencode provider openrouter', funding='api'))
         self.assertTrue(result['route'].startswith('openrouter:vendor/model@provider|'), result['route'])

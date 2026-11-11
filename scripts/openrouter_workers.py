@@ -24,7 +24,6 @@ PACKAGE = Path(__file__).resolve().parents[1]
 if str(PACKAGE) not in sys.path: sys.path.insert(0, str(PACKAGE))
 from runtime import openrouter_settings as settings, onboarding, worker_visibility, external_delegation
 
-ROLES = worker_visibility.ROLES - {'Coordinator'}
 LIMIT = 4 * 1024 * 1024
 MAX_INPUT = 1024 * 1024
 
@@ -68,9 +67,9 @@ def save(path, value):
 
 def visibility_declaration(brief):
     role = brief.get('role')
-    if not isinstance(role, str) or role not in ROLES:
-        return None
-    return worker_visibility.optional_declaration(dict(version=1, role=role, specialty=brief.get('specialty'),
+    if not isinstance(role, str):
+        return None  # the brief's `role` is a roster specialist id; the declaration check refuses any other
+    return worker_visibility.optional_declaration(dict(version=2, role=role, specialty=brief.get('specialty'),
         **({'custom_role_name': brief['custom_role_name']} if 'custom_role_name' in brief else {})))
 
 
@@ -609,7 +608,7 @@ def status(run: Path, *, compact=False) -> dict:
 # -- Smart Routing managed launch (C.3 design 3.1, 3.3, 4.3, 6.3 C3-4b): runtime/openrouter_worker_managed.py ------
 # The managed path reads this module's live namespace (`_api`), so the seams below stay replaceable here.
 from runtime import openrouter_worker_managed as managed
-from runtime.openrouter_worker_managed import HOST, ROLE, RoutingRefused, SELF_CHECK_BUDGET, SELF_CHECK_UNSAFE
+from runtime.openrouter_worker_managed import HOST, RoutingRefused, SELF_CHECK_BUDGET, SELF_CHECK_UNSAFE
 _PROPOSALS = []
 
 

@@ -95,7 +95,7 @@ class ManagedState:
         from runtime import routing_launch
         scope = routing_launch.assignment_scope(self.project)
         assignment = dict(attempt_id=attempt, task="live-" + attempt, scope=scope, choice=self.choice(route=route))
-        return assignment, routing_launch.unplanned_job("implementer", scope, prompt)
+        return assignment, routing_launch.unplanned_job("software-engineer", scope, prompt)
 
 
 def attempt_id(prefix):

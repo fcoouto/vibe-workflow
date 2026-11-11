@@ -43,7 +43,7 @@ class RepositoryReadinessTests(unittest.TestCase):
                 self.calls = 0
                 request = test.local.readiness_owner(session='parent', identity=test.local.identity,
                     claims=[dict(kind='service', key='fixture-pr-metadata', host='local', mode='write')])
-                reserved = delegation._reserve_operation(test.scope, request, role='coordinator')
+                reserved = delegation._reserve_operation(test.scope, request, role='orchestrator')
                 self.operation = reserved['attempt_id']
                 test.request = test.local.request(action='ready', operation_id='metadata', publication_id='main')
                 with state._database(test.scope) as db:

@@ -26,9 +26,9 @@ class EvidenceVerificationTests(EvidenceFixture, unittest.TestCase):
         from runtime import delegation
         too_many = self.readiness_owner(claims=[dict(kind='service', key='s' + str(i), host='local', mode='read') for i in range(65)])
         with self.assertRaises(state.StateError):
-            delegation._reserve_operation(self.scope, too_many, role='coordinator')
+            delegation._reserve_operation(self.scope, too_many, role='orchestrator')
         request = self.readiness_owner()
-        admitted = delegation._reserve_operation(self.scope, request, role='coordinator')
+        admitted = delegation._reserve_operation(self.scope, request, role='orchestrator')
         with state._database(self.scope) as db:
             record = next(r for r in delegation._ledger(self.scope, db) if r['id'] == admitted['attempt_id'])
         data = dict(record['data'], result=dict(padding='x' * (128 * 1024)))

@@ -75,8 +75,8 @@ def usage():
     return dict(source='host_message_totals', requests=[dict(kind='primary', model='m', tokens=tokens)])
 
 
-def job(role='worker'):
-    return launcher.unplanned_job('implementer' if role == 'worker' else 'reviewer', SCOPE, 'Do the fixture task')
+def job(role='software-engineer'):
+    return launcher.unplanned_job(role, SCOPE, 'Do the fixture task')
 
 
 class IdentityTests(unittest.TestCase):
@@ -128,7 +128,8 @@ class IdentityTests(unittest.TestCase):
         choice = launcher.choice('openrouter_proposal', 'api', model='model/v1', provider='p', effort=None)
         self.assertEqual(choice, dict(provider='openrouter', model='model/v1', effort='none',
                                       harness='openrouter-proposal', funding='api'))
-        assignment = dict(attempt_id='a', task='t', role='researcher', complexity_band='high', scope=SCOPE, choice=choice)
+        assignment = dict(attempt_id='a', task='t', role='explorer-agent', work_kind='investigation', complexity_band='high',
+                          scope=SCOPE, choice=choice)
         self.assertTrue(routing._valid_assignment(assignment))
         with self.assertRaises(ValueError):
             launcher.choice('codex_native', 'gateway', model='m')
@@ -141,15 +142,17 @@ class IdentityTests(unittest.TestCase):
             self.assertNotIn(Path(temp).name, scope)
 
     def test_unplanned_job_is_a_conservative_digest_only_profile(self):
-        value = launcher.unplanned_job('researcher', SCOPE, 'Secret objective text')
+        value = launcher.unplanned_job('explorer-agent', SCOPE, 'Secret objective text')
         self.assertNotIn('Secret objective text', json.dumps(value))
         profile = routing.ensure_profile(value)
         self.assertEqual((profile['role'], profile['complexity_band'], profile['risk_band'], profile['review_policy']),
-                         ('worker', 'high', 'high', 'independent'))
-        self.assertEqual(routing_settings.assignment_role(profile['role'], 'researcher'), 'researcher')
-        self.assertEqual(launcher.unplanned_job('reviewer', SCOPE, 'x')['role'], 'review')
-        with self.assertRaises(ValueError):
-            launcher.unplanned_job('coordinator', SCOPE, 'x')
+                         ('explorer-agent', 'high', 'high', 'independent'))
+        self.assertEqual(routing_settings.assignment_role(profile['role'], 'explorer-agent'), 'explorer-agent')
+        self.assertEqual(launcher.unplanned_job('code-reviewer', SCOPE, 'x')['role'], 'code-reviewer')
+        self.assertFalse(hasattr(launcher, 'PROFILE_ROLE'))
+        for role in ('orchestrator', 'coordinator', 'researcher', 'implementer', 'check'):
+            with self.subTest(role), self.assertRaises(ValueError):
+                launcher.unplanned_job(role, SCOPE, 'x')
 
 
 class PreflightTests(unittest.TestCase):
@@ -331,7 +334,7 @@ class LaunchTests(Stores):
                                       assignment=dict(attempt_id='g1', task='task-g1',
                                                       scope=launcher.assignment_scope(self.checkout),
                                                       choice=dict(gateway, funding='api')),
-                                      job=launcher.unplanned_job('researcher', SCOPE, 'proposal'))
+                                      job=launcher.unplanned_job('explorer-agent', SCOPE, 'proposal'))
         self.assertEqual(refused, dict(state='blocked', reason='ledger_reconcile_pending', attempt_id='g1'))
         self.assertEqual(self.holds()['g1']['state'], 'released')  # the admitted dollar hold sent nothing
         self.assertEqual(self.launch(service=service)['state'], 'recorded')  # a subscription admission proceeds

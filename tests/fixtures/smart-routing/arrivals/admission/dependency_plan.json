@@ -31,8 +31,7 @@
     "checked_at": "2026-11-01T00:00:00Z",
     "rows": [
      {
-      "role": "worker",
-      "task_family": "implementation",
+      "work_kind": "implementation",
       "complexity_band": "medium",
       "risk_band": "medium",
       "strategies": [
@@ -243,11 +242,10 @@
  "jobs": [
   {
    "id": "job-1",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 1",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",
@@ -258,11 +256,10 @@
   },
   {
    "id": "job-2",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 2",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",
@@ -275,11 +272,10 @@
   },
   {
    "id": "job-3",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 3",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",
@@ -292,11 +288,10 @@
   },
   {
    "id": "job-4",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 4",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",
@@ -309,11 +304,10 @@
   },
   {
    "id": "job-5",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 5",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",
@@ -327,11 +321,10 @@
   },
   {
    "id": "job-6",
-   "role": "worker",
+   "role": "software-engineer",
    "scope_ref": "scope1",
    "objective": "replay job 6",
    "profile": {
-    "task_family": "implementation",
     "complexity_band": "medium",
     "risk_band": "medium",
     "review_policy": "independent",

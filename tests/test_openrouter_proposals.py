@@ -78,7 +78,7 @@ class ProposalCase(unittest.TestCase):
         return self.bind_request(dict(task_id=task, profile=PROFILE, model='model/v1', provider='p', effort=None,
                     snapshot_digest=self.call('status')['snapshot_digest'], approval_ref='approval/1', base_ref='git:abc',
                     output_tokens=500, timeout_seconds=60,
-                    visibility=dict(version=1, role='Scout', specialty='Proposal analysis'),
+                    visibility=dict(version=2, role='explorer-agent', specialty='Proposal analysis'),
                     requirements=dict(context_tokens=100, output_tokens=500, modalities=['text'], parameters=[])))
 
     def cli(self, action, request):
