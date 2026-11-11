@@ -29,11 +29,16 @@ coordinator or check. Review claims must be read-only. Claims use `kind`, `key`,
 `host:"local"`; ports use `tcp:N` or `udp:N` with N from 1 to 65,535. File aliases and overlapping directory claims remain validated.
 
 Budget integers are positive. Deadline is future Unix seconds; resource units
-remain at most 1,000,000,000 and deadline below 2^63. Worker concurrency must fit
-observed host capacity (maximum 1,024). Job attempts must fit task attempts;
+remain at most 1,000,000,000 and deadline below 2^63. No worker count limits
+admission (11 November 2026): omit `max_parallel_workers`, `host_capacity` and
+`capacity_ref`. A legacy plan may still carry all three (workers at most host
+capacity, at most 1,024, plus a reference); they are validated and reported as
+`capacity.legacy_declared` with `enforced:false`. Packages before this change
+reject plans without them; see the [downgrade limit](../docs/smart-routing-validation.md#edit-8-11-november-2026-no-worker-count-admission).
+Job attempts must fit task attempts;
 dependencies name distinct existing jobs without cycles. Byte/ledger bounds remain;
 no fixed 32-job ceiling applies. Fallback is stop or explicitly authorized
-direct-coordinator. Obtain capacity/route/ownership references from actual checks.
+direct-coordinator. Obtain route/ownership references from actual checks.
 
 <!-- example:plan -->
 ```json
@@ -63,10 +68,7 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
     "limits": {
       "max_attempts": 8,
       "max_resource_units": 8,
-      "deadline": "<DEADLINE>",
-      "max_parallel_workers": 4,
-      "host_capacity": 4,
-      "capacity_ref": "coordinator:observed-slots"
+      "deadline": "<DEADLINE>"
     },
     "fallback": {
       "action": "stop",

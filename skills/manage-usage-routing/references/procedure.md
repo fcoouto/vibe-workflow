@@ -277,8 +277,9 @@ waits rather than switching to another paid API. The existing native workflow ow
 actual child identity, permissions, completion and fresh independent review.
 
 Keep all pending API reservations and unresolved claims while native work proceeds.
-Independent tasks that fit the shared headroom and the concurrency caps (default 4 total,
-2 per account) may run in parallel; one unresolved task holds only its own exposure.
+Independent tasks that fit the shared headroom may run in parallel; no count of open
+tasks, in total or per account, limits them, and a saved `caps` value is reported as
+`legacy_caps` with `enforced:false`. One unresolved task holds only its own exposure.
 Tool-free API output cannot modify the source; the native agent must reread source
 and avoid applying late output without new checks/review. Handoff never asserts
 that the provider request stopped, settled, was free or consumed only the grant.

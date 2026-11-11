@@ -88,12 +88,14 @@ class ConversionTests(Funded, unittest.TestCase):
                     self.convert(M)
                 self.assertEqual(self.ledger.snapshot(), before)
 
-    def test_per_account_cap_counts_provider_accounts_across_runs_and_holds(self):
+    def test_a_converted_run_and_a_new_hold_share_one_provider_account_without_a_count(self):
+        """F5.A1 (was: the per-account cap counts runs and holds): the account inventory keeps both; money decides."""
         self.ledger.set_caps(40, 1)
         self.convert(M)
         pools = dict(g=funded_pool('org'))
         again = self.admit('b', [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})], pools)
-        self.assertIn('concurrency_cap', again['reason_codes'])  # F5.3: the legacy explicit choice's cause
+        self.assertEqual(again['reserved'], {'org:org': 1_200_000})  # the legacy explicit choice, funded by headroom
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct-A', 'acct-A'])
 
 
 class ExceptionFuzzTests(Funded, unittest.TestCase):

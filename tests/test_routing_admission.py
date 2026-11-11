@@ -395,25 +395,26 @@ class ReservationTests(Base):
 
 
 class ConcurrencyTests(Base):
-    def test_third_attempt_on_one_account_waits_and_closing_frees_a_place(self):
+    def test_a_third_attempt_on_one_account_keeps_its_ranked_route_under_saved_caps(self):
+        """F5.A1 (was: the third attempt waits for a concurrency place): saved caps of 4/2 are never enforced, so the
+        ranked first choice stays selected; nothing is diverted to another account to satisfy a count."""
         cfg = dict(settings(), caps=dict(total=4, per_account=2))
         self.ledger.set_caps(4, 2)
         routes = [sub_route('a', strategy='s-a', pool='pa', account='A'), sub_route('b', strategy='s-b', pool='pb', account='B')]
         pools = dict(pa=sub_pool(), pb=sub_pool())
-        self.assertEqual(self.admit('1', ['s-a'], routes, pools, cfg=cfg)['status'], 'admitted')
-        self.assertEqual(self.admit('2', ['s-a'], routes, pools, cfg=cfg)['status'], 'admitted')
-        third = self.admit('3', ['s-a'], routes, pools, cfg=cfg)
-        self.assertEqual((third['status'], third['reason_code']), ('pending', 'concurrency_cap'))
-        self.assertEqual(self.admit('4', ['s-a', 's-b'], routes, pools, cfg=cfg)['route'], 'b')
-        self.ledger.close_attempt('1', 'not_dispatched')
-        self.assertEqual(self.admit('3', ['s-a'], routes, pools, cfg=cfg)['status'], 'admitted')
+        for attempt in '123':
+            self.assertEqual(self.admit(attempt, ['s-a'], routes, pools, cfg=cfg)['status'], 'admitted', attempt)
+        self.assertEqual(self.admit('4', ['s-a', 's-b'], routes, pools, cfg=cfg)['route'], 'a')
+        self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['A'] * 4)
 
-    def test_global_cap_blocks_with_reason(self):
+    def test_saved_caps_of_one_never_produce_a_count_reason(self):
         cfg = dict(settings(), caps=dict(total=1, per_account=1))
         self.ledger.set_caps(1, 1)
         routes, pools = [sub_route('a')], dict(sub=sub_pool())
         self.admit('1', ['s-sub'], routes, pools, cfg=cfg)
-        self.assertEqual(self.admit('2', ['s-sub'], routes, pools, cfg=cfg)['reason_code'], 'concurrency_cap')
+        second = self.admit('2', ['s-sub'], routes, pools, cfg=cfg)
+        self.assertEqual(second['status'], 'admitted')
+        self.assertNotIn('concurrency_cap', json.dumps(second))
 
     def test_open_runs_count_toward_the_same_caps(self):
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), [])
@@ -532,24 +533,18 @@ class RequiredObservationTests(Base):
 
 
 class CapAndReuseTests(Base):
-    def test_the_stricter_of_settings_and_ledger_caps_applies_in_both_directions(self):
-        routes, pools = [sub_route('a')], dict(sub=sub_pool())
-        for label, ledger_caps, setting_caps in (('ledger', (1, 1), (40, 40)), ('settings', (40, 40), (1, 1))):
+    def test_neither_saved_ledger_caps_nor_settings_caps_limit_admission(self):
+        """F5.A1 (was: the stricter of both caps applies): each source, alone or per account, is history only."""
+        routes, pools = [sub_route('a', account='A')], dict(sub=sub_pool())
+        for label, ledger_caps, setting_caps in (('ledger', (1, 1), (40, 40)), ('settings', (40, 40), (1, 1)),
+                                                 ('per-account', (40, 1), (40, 40))):
             with self.subTest(label):
                 self.ledger.set_caps(*ledger_caps)
                 cfg = dict(settings(), caps=dict(total=setting_caps[0], per_account=setting_caps[1]))
                 first = self.admit(label + '1', ['s-sub'], routes, pools, cfg=cfg)
                 second = self.admit(label + '2', ['s-sub'], routes, pools, cfg=cfg)
-                self.assertEqual((first['status'], second['reason_code']), ('admitted', 'concurrency_cap'))
-                self.ledger.close_attempt(label + '1', 'not_dispatched')
-
-    def test_per_account_cap_is_also_the_stricter_of_both(self):
-        routes = [sub_route('a', account='A')]
-        pools = dict(sub=sub_pool())
-        self.ledger.set_caps(40, 1)
-        cfg = dict(settings(), caps=dict(total=40, per_account=40))
-        self.admit('1', ['s-sub'], routes, pools, cfg=cfg)
-        self.assertEqual(self.admit('2', ['s-sub'], routes, pools, cfg=cfg)['reason_code'], 'concurrency_cap')
+                self.assertEqual((first['status'], second['status']), ('admitted', 'admitted'))
+                self.assertEqual(self.ledger.snapshot()['caps'], dict(total=ledger_caps[0], per_account=ledger_caps[1]))
 
     def test_reused_attempt_id_after_record_pruning_is_rejected(self):
         for i in range(budget.MAX_ADMISSIONS + 2):
@@ -572,7 +567,7 @@ class CapAndReuseTests(Base):
 
 
 class UncertainHoldTests(Base):
-    def test_an_uncertain_hold_keeps_headroom_reduced_and_counts_toward_caps(self):
+    def test_an_uncertain_hold_keeps_headroom_reduced_and_its_account_open(self):
         routes, pools = [api_route('api', demand={'credit': 8 * M})], dict(api=api_pool(limit=10 * M, grant=False))
         self.assertEqual(self.admit('a', ['s-api'], routes, pools)['status'], 'admitted')
         self.ledger.mark_dispatched('a'); self.ledger.mark_uncertain('a')

@@ -38,15 +38,15 @@
       ]
     },
     "clients/delegation-requests.md": {
-      "sha256": "60c4f15c739986ac01142b29051f2494a044f0631d087c4a5a6fc8d8682fa37b",
+      "sha256": "347e3bc516ac3a1760e82db2c42554f2a0592f5435512f448898bd93d1e0edf5",
       "ranges": [
         [
           1,
-          199
+          190
         ],
         [
-          200,
-          310
+          191,
+          312
         ]
       ]
     },
@@ -220,7 +220,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "f6aee5b3be414a418bb8fcffbc0d1c22aa1ccd12d7b7896338e5b35150108a2a",
+      "sha256": "3899b0b2b91f97cfc1fd53677d0fbbcc17ec74bf9d99c9f45cb6db04cb612b06",
       "ranges": [
         [
           1,
@@ -400,7 +400,7 @@
       ]
     },
     "clients/workstreams.md": {
-      "sha256": "f535a3b79ef008fab99ce680902c6fb301baf57c196c46d977590fbad18e095d",
+      "sha256": "2f6bcd00859aecdb5c1025fd216e4f3597614a120e621cfed2e43b8c5bf38fb6",
       "ranges": [
         [
           1,
@@ -436,7 +436,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "449195828a1feeeb09242eede3caaf3a8a4c42d283dfff6ab6950add6f439201",
+      "sha256": "a970034fc38272c64632e4361af66bc5b1e8503b3354eb0037d0279e6ebdf25c",
       "ranges": [
         [
           1,
@@ -635,7 +635,7 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "11a8c924c166e5ff4f4fd344f81ab0a3a89e1b9e8eaa2b60f3248c6f66f6269b",
+      "sha256": "1255d179538856f259064147837fbd02dc172159e8c597dfb93f0e0f01a4cc55",
       "ranges": [
         [
           1,
@@ -647,7 +647,7 @@
         ],
         [
           255,
-          284
+          285
         ]
       ]
     },

@@ -47,7 +47,6 @@ class Replay:
         self.G = self.scenario['balance']
         self.balance = self.G
         self.ledger.observe(ORG, self.balance, 1, issued=self.G)
-        self.ledger.set_caps(**self.scenario['caps'])
         self.pools = self.scenario['pools']
         for pool in self.pools.values():
             for window in pool['windows']:
@@ -216,7 +215,8 @@ class Replay:
 
     # -- invariants ----------------------------------------------------------------------------------
     def verify(self, now):
-        """No funding violation: the protected allowance and every window stay inside their limits."""
+        """No funding violation: the protected allowance and every window stay inside their limits. F5.A1: no count
+        of open runs is an invariant; money and windows are."""
         data = self.ledger.snapshot()
         self.checks += 1
         check(budget.Ledger._credit_raw(data, ORG, now) >= 0, 'protected allowance breached')
@@ -224,9 +224,6 @@ class Replay:
             for window in pool['windows']:
                 check(window['used'] + window['reserved'] <= 1 + EPSILON, 'window over-committed')
                 check(window['reserved'] >= -EPSILON, 'negative hold')
-        open_runs = [r for r in data['runs'].values() if not r['closed']]
-        total, per_account = data['caps']['total'], data['caps']['per_account']
-        check(len(open_runs) <= total and len(open_runs) <= per_account, 'concurrency cap exceeded')
 
 
 def replay(name, settings=None):
@@ -308,15 +305,13 @@ class ReplayTests(unittest.TestCase):
         admitted = [item['id'] for item in log if item['outcome'] == 'admitted']
         self.assertEqual([r['id'] for r in records], admitted)
         refused = [item for item in log if item['outcome'] != 'admitted']
-        self.assertTrue(refused, 'the burst should hit the concurrency cap')
-        self.assertTrue(all(item['reason'] == 'concurrency_cap' for item in refused if item['outcome'] == 'rejected'))
+        self.assertFalse(any(item['reason'] == 'concurrency_cap' for item in refused))  # F5.A1: never a count reason
         self.assertFalse({item['id'] for item in refused} & set(admitted))
 
     def test_concurrent_claims_never_exceed_headroom(self):
         with tempfile.TemporaryDirectory() as folder:
             run = Replay(load('mixed_load'), folder)
             try:
-                run.ledger.set_caps(8, 8)
                 run.refresh(100000)
                 estimate = run.ledger.credit_headroom(ORG, 100000) // 2  # padded to 60% of headroom: one fits
                 revision, outcomes = run.revision(), []
@@ -438,8 +433,6 @@ class AdmissionReplay:
         self.identity = budget.initialize(path)
         self.ledger = budget.Ledger(path, self.identity)
         self.settings = dict(routing_settings.resolve(self.scenario['settings']), revision=1)
-        caps = self.settings['caps']
-        self.ledger.set_caps(caps['total'], caps['per_account'])
         org = self.scenario['organization']
         self.org, self.balance = org['id'], org['balance']
         self.ledger.configure(self.org, org['policy'], 0)
@@ -570,10 +563,6 @@ class AdmissionReplay:
         check(budget.Ledger._credit_raw(data, self.org, now) >= 0, 'organization credit overdrawn')
         open_attempts = budget.Ledger.open_attempts(data)
         check(sorted(open_attempts) == sorted(self.open), 'open attempts differ from open admissions')
-        accounts = list(open_attempts.values())
-        caps = self.settings['caps']
-        check(len(accounts) <= caps['total'], 'total concurrency cap exceeded')
-        check(all(accounts.count(a) <= caps['per_account'] for a in accounts), 'per-account cap exceeded')
 
 
 def run_admission(scenario, runner=None):
@@ -702,10 +691,10 @@ class CatalogRefreshReplayTests(unittest.TestCase):
 
 
 class DependencyPlanReplayTests(unittest.TestCase):
-    """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. Caps hold two at once."""
+    """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. No count limits the fan-out."""
 
     def schedule(self, run):
-        """Admit ready jobs in id order whenever capacity frees; finish the earliest-ending open job."""
+        """Admit ready jobs in id order whenever dependencies allow; finish the earliest-ending open job."""
         jobs = {job['id']: job for job in run.scenario['jobs']}
         done, ends, now = set(), {}, run.scenario['start']
         self.trace = []
@@ -733,7 +722,7 @@ class DependencyPlanReplayTests(unittest.TestCase):
 
     def test_jobs_are_admitted_in_dependency_order(self):
         """Checks the test's own `schedule`: the product does not order a DAG (Workstreams owns readiness). What it
-        contributes here is admitting each ready job alone, under the shared caps; see the fan-out test."""
+        contributes here is admitting each ready job alone, funded by windows and money; see the fan-out test."""
         deps = {job['id']: set(job['depends_on']) for job in self.scenario['jobs']}
         admitted = [step for step in self.trace if step[0] == 'admit']
         self.assertEqual(sorted(step[1] for step in admitted), sorted(deps))
@@ -745,18 +734,18 @@ class DependencyPlanReplayTests(unittest.TestCase):
         self.assertEqual(order[-1], 'job-6')
         self.assertLess(order.index('job-5'), order.index('job-6'))
 
-    def test_fan_out_waits_for_a_concurrency_place(self):
-        waits = [step for step in self.trace if step[0] == 'wait']
-        self.assertTrue(waits, 'three ready jobs under a cap of two must wait')
-        self.assertTrue(all(step[3] == 'concurrency_cap' for step in waits))
+    def test_a_fan_out_admits_every_ready_job_together_without_a_count_wait(self):
+        """F5.A1 (was: the fan-out waits for a concurrency place): the three ready jobs fit their windows, so all run
+        at once; nothing waits."""
+        self.assertEqual([step for step in self.trace if step[0] == 'wait'], [])
         peak, current = 0, 0
         for step in self.trace:
             current += {'admit': 1, 'done': -1}.get(step[0], 0)
             peak = max(peak, current)
-        self.assertEqual(peak, self.scenario['settings']['caps']['total'])
+        self.assertEqual(peak, 3)  # jobs 2, 3 and 4 after job-1
 
     def test_claims_are_released_on_settlement(self):
-        self.assertGreater(self.run_.checks, 12)
+        self.assertEqual(self.run_.checks, 12)  # one check per admission and per settlement; F5.A1: no waits
         self.assertEqual(budget.Ledger.held(self.snapshot), {})
         self.assertTrue(all(hold['closed'] for hold in self.snapshot['holds'].values()))
         self.assertEqual(len(self.snapshot['holds']), 6)

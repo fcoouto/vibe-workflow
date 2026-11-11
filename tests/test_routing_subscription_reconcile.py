@@ -111,7 +111,7 @@ class HostUsageTests(Subscription):
         self.assertEqual((hold['closed'], hold['state'], hold['amount']), (True, 'released', 0))
         self.assertEqual(self.held(), 0)  # the window claim is released, no debit is kept
         self.assertEqual(self.debits(), {})
-        self.assertNotIn('acct-a1', budget.Ledger.open_accounts(self.snapshot()))  # the concurrency place is free
+        self.assertNotIn('acct-a1', budget.Ledger.open_accounts(self.snapshot()))  # no open attempt remains
         self.assertEqual((self.settled(), self.credit()), (settled, credit))  # never dollars
         self.assertEqual(self.call(dict(v=1, op='check', attempt_id='a1', request=facts(),
                                         authority=self.tokens['a1'])), dict(blocked('attempt_closed'), settings_warnings=[]))
@@ -149,11 +149,9 @@ class HostUsageTests(Subscription):
 
 
 class AbandonTests(Subscription):
-    def test_abandon_frees_the_concurrency_place_and_keeps_the_window_claim_as_a_debit(self):
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=1, per_account=1))))
+    def test_abandon_releases_the_hold_and_keeps_the_window_claim_as_a_debit(self):
         self.sub_uncertain('a1')
         claims = dict(self.hold('a1')['windows'])
-        self.assertEqual(self.admit_pending('a2'), 'concurrency_cap')  # the uncertain hold keeps its place
         settled, credit = self.settled(), self.credit()
         moment = now()
         result = self.call(reconcile('a1', ABANDON))
@@ -168,7 +166,7 @@ class AbandonTests(Subscription):
         self.assertEqual(self.held(), claims[KEY])  # still counted against the window
         self.assertEqual(budget.Ledger.held(self.snapshot()), {})  # but no hold carries it
         self.assertEqual((self.settled(), self.credit()), (settled, credit))  # never dollars
-        self.assertEqual(self.admit_sub('a2')['state'], 'admitted')  # the concurrency place is free
+        self.assertEqual(self.admit_sub('a2')['state'], 'admitted')  # the debit, not a count, is what remains
         self.assertEqual(self.call(dict(v=1, op='check', attempt_id='a1', request=facts(),
                                         authority=self.tokens['a1'])), dict(blocked('attempt_closed'), settings_warnings=[]))
 
@@ -498,9 +496,6 @@ class MalformedTests(Subscription):
 
 class StatusTests(Subscription):
     def test_status_lists_uncertain_subscription_holds_and_window_debits(self):
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=32, per_account=32))))
-        with self.open_ledger() as ledger:
-            ledger.set_caps(32, 32)
         for i in range(18):
             self.sub_uncertain('s%02d' % i)
         ledger = self.status()
@@ -790,8 +785,8 @@ class ProcessTests(Subscription):
 
     def test_the_pilot_lost_acknowledgment_now_has_a_recovery_path(self):
         """Qualification attempt 4 (lost acknowledgment), end to end through one-shot commands on temporary stores:
-        dispatch, the launcher dies, `record uncertain`; before S3.6c no operator op applied to the hold."""
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=1, per_account=1))))
+        dispatch, the launcher dies, `record uncertain`; before S3.6c no operator op applied to the hold. F5.A1: another
+        attempt is no longer held behind it by a count; the uncertain hold keeps its own exposure until recovered."""
         self.service.close()
 
         def cli(op, request):
@@ -811,9 +806,9 @@ class ProcessTests(Subscription):
         self.assertEqual(cli('reconcile_uncertain', dict(v=1, op='reconcile_uncertain', attempt_id='p1',
                                                          event_id='u1', evidence=dict(kind='charge_reservation'))),
                          blocked('hold_state_forbidden'))
-        waiting = cli('prepare', prepare('p2', observations=observations(account='acct-p2'),
-                                         constraints=dict(allowed_strategy_ids=['s-sub'])))
-        self.assertEqual(waiting['reason'], 'concurrency_cap')
+        beside = cli('prepare', prepare('p2', observations=observations(account='acct-p2'),
+                                        constraints=dict(allowed_strategy_ids=['s-sub'])))
+        self.assertEqual(beside['state'], 'admitted', beside)
         status = cli('status', dict(v=1, op='status'))['ledger']
         self.assertEqual(status['reconcile']['reconcile_subscription']['ids'], ['p1'])
         self.assertEqual(status['reconcile_hint'], sub.HINT)
@@ -822,10 +817,8 @@ class ProcessTests(Subscription):
         self.assertEqual((result['state'], result['outcome']), ('recorded', 'abandoned'))
         self.assertEqual(cli('reconcile_subscription', reconcile('p1', ABANDON, 'op-1'))['duplicate'], True)
         status = cli('status', dict(v=1, op='status'))['ledger']
-        self.assertEqual((status['open_attempts'], status['reconcile_hint']), (0, None))
+        self.assertEqual((status['open_attempts'], status['reconcile_hint']), (1, None))  # p2 only
         self.assertEqual(status['reconcile']['window_debits']['keys'], [KEY])
-        self.assertEqual(cli('prepare', prepare('p2', observations=observations(account='acct-p2'),
-                                                constraints=dict(allowed_strategy_ids=['s-sub'])))['state'], 'admitted')
         self.assertEqual(cli('check', dict(v=1, op='check', attempt_id='p1', request=facts(),
                                            authority=sent['authority'])), dict(blocked('attempt_closed'), settings_warnings=[]))
 

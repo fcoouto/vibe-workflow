@@ -410,13 +410,7 @@ def _credential_reasons(route, scope, settings):
     return reasons
 
 
-def _caps(data, settings):
-    """(total, per_account): the stricter of the settings caps and the ledger-stored caps."""
-    stored_total, stored_account = Ledger._caps(data)
-    return min(settings['caps']['total'], stored_total), min(settings['caps']['per_account'], stored_account)
-
-
-def _candidate(data, route, observations, assignment, settings, held, accounts, now):
+def _candidate(data, route, observations, assignment, settings, held, now):
     """Return (candidate or None, reasons) for one route; eligibility, billing class, then feasibility."""
     cls = FUNDING_OF.get(route.get('billing_class')) if isinstance(route, dict) else None
     if cls is None:
@@ -435,8 +429,6 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         reasons.append('capability_missing')
     if route.get('permitted', True) is not True:
         reasons.append('not_permitted')
-    if accounts.count(route['account']) >= _caps(data, settings)[1]:
-        reasons.append('concurrency_cap')
     if reasons:
         return None, reasons
     funding = revision = None
@@ -490,15 +482,13 @@ def _choice_matches(entry, item):
 
 def _decide(data, assignment, ranking, settings, observations, workflow=None):
     now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
-    accounts, held = Ledger.open_accounts(data), sub_reconcile.held(data)  # S3.6c: plus window debits
-    if len(accounts) >= _caps(data, settings)[0]:
-        return _pending('concurrency_cap')
+    held = sub_reconcile.held(data)  # S3.6c: plus window debits. F5.A1: no count of open attempts admits or refuses
     explicit = assignment.get('choice')
     from runtime import routing_funding  # the ranked decision and the record (F5.2); never at module import time
     ranked = routing_funding.is_ranked(assignment, ranking, settings)
     candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
     for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
-        item, why = _candidate(data, route, observations, assignment, settings, held, accounts, now)
+        item, why = _candidate(data, route, observations, assignment, settings, held, now)
         if item is not None:
             candidates.append(item)
         excluded += why
@@ -538,9 +528,7 @@ def decision_rows(data, revision, now):
 
 
 def _dominant(excluded):
-    """The reason a pending assignment reports: a concurrency place first, then the commonest exclusion."""
-    if 'concurrency_cap' in excluded:
-        return 'concurrency_cap'
+    """The reason a pending assignment reports: the commonest actionable exclusion."""
     if excluded and set(excluded) == {'no_funded_organization'}:
         return 'no_funded_organization'  # the user enabled no organization for these routes; not an error
     if 'credential_unavailable' in excluded:
@@ -687,7 +675,7 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None,
     subscription window is a ``win:<pool>/<window>`` claim in its own units. A funded route the ledger's
     gates refuse (blocked, stale balance, cycle boundary, revision) is excluded with
     ``funding_unverified``; the collector's ``limit``/``used``/``protected`` can only make a dollar claim
-    stricter. The concurrency caps are the stricter of ``settings.caps`` and the ledger-stored caps. A ranked
+    stricter. No count of open attempts admits or refuses (F5.A1); saved caps are only read for status. A ranked
     decision funds only subscription routes (F5.3, ``routing_funding.choose``): paid routes are left out before any
     candidate check and never a fallback; a paid route is admitted only as an explicit or settings choice. Returns
     the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt) or ``status='pending'`` with a
@@ -1393,11 +1381,11 @@ def reconcile_summary(data):
 
 
 def ledger_summary(data):
-    """Counts and nonsecret labels only: open holds by state and unstamped, caps and the user's organizations."""
+    """Counts and nonsecret labels only: open holds by state and unstamped, the user's organizations and any saved
+    legacy caps (`legacy_caps`, `enforced: false`; F5.A1: no admission reads them)."""
     holds = {}
     for hold in Ledger.open_holds(data).values():
         holds[hold['state']] = holds.get(hold['state'], 0) + 1
-    total, per_account = Ledger._caps(data)
     organizations = [dict(id=key, enabled=not org.get('disabled', False))
                      for key, org in sorted(data['organizations'].items())]
     # Holds admitted before `authority_required` keep the old rules; the canary needs this count at zero.
@@ -1424,4 +1412,4 @@ def ledger_summary(data):
                 overrun_backlog=Ledger.overrun_backlog(data),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
                 unbound_open_holds=unbound,
-                caps=dict(total=total, per_account=per_account), organizations=organizations)
+                legacy_caps=dict(data['caps'], enforced=False) if 'caps' in data else None, organizations=organizations)

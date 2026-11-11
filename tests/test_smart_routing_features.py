@@ -33,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CHOICE = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')
 PROJECT = '/work/repo'  # the workflow locator cwd of tests.test_routing_gates
 # The reasons runtime.routing defines for an assignment no enabled route can serve yet (`_decide`, `_dominant`).
-READINESS_REASONS = ('no_feasible_route', 'credential_unavailable', 'no_funded_organization', 'concurrency_cap',
-                     'worker_choice_unavailable')
+READINESS_REASONS = ('no_feasible_route', 'credential_unavailable', 'no_funded_organization',
+                     'worker_choice_unavailable')  # F5.A1: no count reason
 
 
 class FixtureError(Exception):
@@ -397,8 +397,7 @@ class C2aStartupStatusNamingDiagnostics(command_tests.Base):
         self.assertEqual((off['state'], off['revision'], off['settings']['smart_routing']), ('updated', 1, False))
         self.assertNoOutwardCalls(counters)
         self.assertEqual(counters['ensure_profile'].count + counters['rank'].count, 0)
-        caps = dict(routing_settings.DEFAULTS['caps'])
-        changed = self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=caps)))
+        changed = self.call(dict(v=1, op='set', expected_revision=1, change=dict(T_hours=48)))
         self.assertIs(changed['settings']['smart_routing'], False)  # explicit values merge; defaults never reset
         stale = self.call(dict(v=1, op='set', expected_revision=0, change=dict(smart_routing=True)))
         self.assertEqual(stale, dict(v=1, state='blocked', reason='stale_revision'))
@@ -555,7 +554,7 @@ class C2bWorkstreamsDelegationResources(PinnedGates):
                 self.prepared('s-' + name)
                 self.workflow.update('build', **change)
                 self.assertRefused('s-' + name, 'binding_stale')
-                self.release('s-' + name)  # free the account's concurrency place for the next change
+                self.release('s-' + name)  # close the attempt before the next change
 
     def test_resource_and_funding_gates_bind_the_same_job_revision(self):
         """F12: admission binds the job revision and resource authority; headroom never stands in for them."""

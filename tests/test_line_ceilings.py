@@ -12,15 +12,15 @@ MAX_PYTHON_LINES = 1000
 BASELINE = {
     "runtime/adapters/codex.py": 1579,
     "runtime/changes.py": 6073,
-    "runtime/delegation.py": 3369,
+    "runtime/delegation.py": 3358,
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1427,
+    "runtime/routing.py": 1415,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
-    "runtime/usage_budget.py": 1553,
+    "runtime/usage_budget.py": 1540,
 }
 
 

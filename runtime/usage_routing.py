@@ -17,8 +17,7 @@ MAX_INPUT = 65536
 FUNDING_WARNING = ('Grant-only funding is best effort. Account auto-reload may buy credits and '
                    'the provider may consume other funding; local limits cannot guarantee otherwise.')
 HANDOFF_REASONS = frozenset(('insufficient_headroom', 'balance_stale_or_missing',
-    'expiry_or_cycle_boundary', 'evidence_deadline_expired', 'observation_stale',
-    'concurrency_cap'))
+    'expiry_or_cycle_boundary', 'evidence_deadline_expired', 'observation_stale'))  # F5.A1: no count reason
 
 
 def refuse_managed(path):
@@ -456,7 +455,6 @@ class Controller:
         require(task['native'].get('task') == task['task_id'], 'native_task_mismatch')
         # Operate on a deserialized snapshot: selection must not reserve or write.
         self.ledger._native(data, task['native'], self.clock())
-        self.ledger._check_caps(data, org_id)
         self.ledger._admit(data, org_id, task['task_id'],
                            bound['maximum_usd_micros'] + bound['count_maximum_usd_micros'],
                            config['org_revision'], self.clock())

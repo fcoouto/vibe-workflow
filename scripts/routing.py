@@ -669,7 +669,7 @@ class Service:
         except Blocked:
             settings = None
         revision = settings.pop('revision') if settings is not None else None
-        stored = usage_budget.DEFAULT_CAPS
+        stored = None  # F5.A1: the ledger's saved legacy caps, read only
         if self._open is None and not os.path.lexists(self.ledger_path):
             ledger = dict(state='absent')
         else:
@@ -678,20 +678,20 @@ class Service:
                 stale = len(routing.unsent_admissions(data, revision)) if revision is not None else None
                 ledger = dict(state='ready', stale_admissions=stale, legacy_outstanding=ledger_versions.outstanding(data),
                               **routing.ledger_summary(data))
-                stored = ledger['caps']
+                stored = data.get('caps')
             except (Blocked, BudgetError, sqlite3.Error) as error:
                 self.close()
                 reason = error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError) \
                     else 'ledger_busy' if _busy(error) else 'ledger_unavailable'
                 ledger = dict(state='unavailable', reason=reason)
-        # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
-        effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
+        # F5.A1: saved caps are history, never admission (no count limits workers); shown so nothing implies one.
+        legacy = dict(settings=(settings or {}).get('caps'), ledger=stored, enforced=False)
         try:
             windows = importlib.import_module(COLLECTOR).window_status(self.settings_path, self.clock())
         except Exception:  # noqa: BLE001 - a missing or failing store reader never fails status
             windows = dict(state='unavailable', reason='observation_store_invalid')
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, settings_warnings=self._warnings, effective_caps=effective, ledger=ledger,
+                    settings_revision=revision, settings_warnings=self._warnings, legacy_caps=legacy, ledger=ledger,
                     test_inputs=self.test_inputs,
                     project_pinned=self.project is not None,
                     windows=windows)

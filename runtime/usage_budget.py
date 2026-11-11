@@ -29,7 +29,7 @@ MAX_RECORD = 13_100_000
 FRESH_SECONDS = 900
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
-MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
+MAX_HOLDS = 256  # storage integrity, not a worker policy: released holds are pruned at the bound (F5.A1)
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
 # Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
 # A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow binding
@@ -60,7 +60,7 @@ HOLD_OUTCOMES = ('not_dispatched', 'complete', 'uncertain')
 BASIS_POINTS = 10000
 DEFAULT_ALLOWANCE_BP = 9800
 DEFAULT_MARGIN_BP = 2000
-DEFAULT_CAPS = dict(total=4, per_account=2)
+DEFAULT_CAPS = dict(total=4, per_account=2)  # legacy caps shape: stored values stay readable, never enforced
 POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit'
 # S3.6a accounting. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
 # Settled charges stay in R (like S1 run costs). Retiring one needs evidence that the observed balance reflects it
@@ -568,20 +568,15 @@ class Ledger:
         bound = integer(next_request_bound or 0)
         return max(-(-(estimate * (BASIS_POINTS + margin)) // BASIS_POINTS), bound)
 
-    @staticmethod
-    def _caps(data):
-        caps = data.get('caps', DEFAULT_CAPS)
-        return caps['total'], caps['per_account']
-
     def set_caps(self, total, per_account):
-        """Persist the concurrency caps (spec 7.4); defaults are 4 total and 2 per account."""
+        """Store legacy concurrency caps. F5.A1: kept readable for old ledgers and status; no admission reads them."""
         require(integer(total) > 0 and integer(per_account) > 0, 'invalid_caps')
         with self.transaction() as data:
             data['caps'] = dict(total=total, per_account=per_account)
 
     @staticmethod
     def open_attempts(data):
-        """One concurrency place per open attempt id, with its provider account.
+        """One entry per open attempt id, with its provider account (an inventory, not an admission count).
 
         A run converted from a hold keeps the hold's account and id, so the attempt is counted once whether its
         hold, its run or both are open. A run begun directly counts under its organization."""
@@ -594,12 +589,6 @@ class Ledger:
     @classmethod
     def open_accounts(cls, data):
         return list(cls.open_attempts(data).values())
-
-    @classmethod
-    def _check_caps(cls, data, account):
-        total, per_account = cls._caps(data)
-        accounts = cls.open_accounts(data)
-        require(len(accounts) < total and accounts.count(account) < per_account, 'concurrency_cap')
 
     @staticmethod
     def _active_call(run):
@@ -647,7 +636,6 @@ class Ledger:
             return run
         require(run_id not in data['holds'], 'attempt_id_in_use')  # an admitted attempt becomes a run only by conversion
         require(len(data['runs']) < MAX_RUNS, 'ledger_capacity_reached')
-        self._check_caps(data, organization)
         moved = 0
         if transfer_from is not None:
             moved = self._transfer(data, organization, transfer_from, maximum)
@@ -688,7 +676,7 @@ class Ledger:
         come from the hold; another `organization` raises `hold_organization_mismatch`. The run's own bound
         (`estimate` padded as in `begin`) must fit the hold, else `hold_exceeded`: a larger need goes through
         an explicit `top_up` and its headroom check. The whole hold amount moves 1:1 into the run's envelope,
-        so R and the attempt's single concurrency place are unchanged; window claims stay on the hold. Any
+        so R and the attempt's single open-attempt entry are unchanged; window claims stay on the hold. Any
         refusal leaves the ledger unchanged.
         """
         for value in (attempt_id, organization, digest): name(value)
@@ -863,7 +851,6 @@ class Ledger:
                 organization, amount = name(dollars[0][len(ORG):]), vector[dollars[0]]
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
-            self._check_caps(data, account)
             # A random nonce per admission keeps a reused attempt id from deriving the same host ids (S3.4).
             record = dict(record, nonce=secrets.token_hex(16))
             if data.get('authority_required'):
@@ -965,7 +952,7 @@ class Ledger:
             return dict(issued=True, state='dispatched', ids=dict(ids))
 
     def mark_uncertain(self, attempt_id):
-        """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
+        """Delivery cannot be established; the hold stays open and keeps its exposure.
 
         No proof of non-launch is accepted: an uncertain dollar hold stays counted until the operator's
         `reconcile_uncertain` settles it from receipts or charges its full reservation (S3.6b-2)."""

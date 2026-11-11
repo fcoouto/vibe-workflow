@@ -4,7 +4,7 @@ I1 per organization: B - protected - R >= 0, where R sums every run call and eve
 I2 pilot, task and cycle limits hold with holds included.
 I3 every dollar hold names an existing organization and carries an integer micro-unit amount.
 I4 conversion keeps reserved dollars and the organization unchanged.
-I5 each open attempt takes exactly one concurrency place.
+I5 each open attempt appears exactly once in the account inventory (F5.A1: an inventory, never a count limit).
 I6 a closed hold contributes 0; an uncertain hold contributes its full amount.
 I7 the record stays under MAX_RECORD at maximum table sizes.
 """
@@ -170,10 +170,11 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         team[0].update(route='team-api', strategy_id='s-team', pool='team')
         pools = dict(my_pools, team=team_pools['api'])
         self.assertEqual(self.admit('a', mine[:1], pools)['status'], 'admitted')
-        self.assertIn('concurrency_cap', self.admit('b', mine[:1], pools)['reason_codes'])  # personal account full
+        # F5.A1: a saved per-account cap of one is not enforced; the second personal attempt draws on its own money
+        self.assertEqual(self.admit('b', mine[:1], pools)['status'], 'admitted')
         self.assertEqual(self.admit('c', team[:1], pools)['reserved'], {'org:team': 1_200_000})
         self.assertEqual((self.ledger.headroom(budget.PERSONAL), self.ledger.headroom('team')),
-                         (9_800_000 - 1_200_000, 9_800_000 - 1_200_000))
+                         (9_800_000 - 2 * 1_200_000, 9_800_000 - 1_200_000))
         data = self.ledger.snapshot()
         self.assertEqual((data['holds']['a']['organization'], data['holds']['c']['organization']), ('personal', 'team'))
 

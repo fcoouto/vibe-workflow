@@ -140,7 +140,7 @@ class Base(unittest.TestCase):
         return done
 
     def release(self, attempt):
-        """Free the attempt's concurrency place (default cap: two open attempts per account)."""
+        """Close the attempt (`not_dispatched`), releasing its claims."""
         event = dict(event_id='nd-' + attempt, attempt_id=attempt, kind='not_dispatched')
         self.assertEqual(self.call(dict(v=1, op='record', event=event))['state'], 'recorded')
 
@@ -872,11 +872,12 @@ class RobustnessTests(Base):
         _, err = child.communicate(json.dumps(dict(v=1, op='status')).encode(), timeout=60)
         self.assertEqual((child.returncode, err), (0, b''))
 
-    def test_status_reports_effective_caps(self):
+    def test_status_reports_saved_caps_as_legacy_only(self):
+        """F5.A1 (was: status reports the stricter effective caps): saved caps are history, never enforced."""
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(caps=dict(total=3, per_account=1))))
-        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=3, per_account=1))
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=10, per_account=1))))
-        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=4, per_account=1))
+        status = self.call(dict(v=1, op='status'))
+        self.assertNotIn('effective_caps', status)
+        self.assertEqual(status['legacy_caps'], dict(settings=dict(total=3, per_account=1), ledger=None, enforced=False))
 
 
 if __name__ == '__main__':

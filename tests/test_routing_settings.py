@@ -25,7 +25,7 @@ class RoutingSettingsTests(unittest.TestCase):
         self.assertEqual((value['L'], value['H'], value['T_hours']), (0.65, 0.85, 72))
         self.assertEqual((value['min_elapsed_fraction'], value['lookback_hours'], value['margin_bp']),
                          (0.10, 72, usage_budget.DEFAULT_MARGIN_BP))
-        self.assertEqual(value['caps'], usage_budget.DEFAULT_CAPS)
+        self.assertNotIn('caps', value)  # F5.A1: no default cap; a saved one is read, never enforced
         self.assertEqual(value['worker_choices'], {})
 
     def test_explicit_off_survives_write_and_read(self):

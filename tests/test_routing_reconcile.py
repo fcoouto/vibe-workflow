@@ -546,11 +546,6 @@ class LegacyHandshakeTests(Reconcile):
 
 class DerivedUnblockTests(Reconcile):
     """B1-style: an organization is admissible only once every derived reason is gone, in any resolution order."""
-    def setUp(self):
-        super().setUp()
-        with self.open_ledger() as ledger:
-            ledger.set_caps(64, 64)
-
     def org(self, name):
         with self.open_ledger() as ledger:
             ledger.enable_organization(name, self.POLICY, 0)
@@ -703,10 +698,8 @@ class DerivedUnblockTests(Reconcile):
 class StatusTests(Reconcile):
     def test_status_lists_what_each_operator_op_can_resolve(self):
         with self.open_ledger() as ledger:
-            ledger.set_caps(32, 32)
             ledger.enable_organization('other', self.POLICY, 0)
             ledger.observe('other', self.BALANCE, now(), issued=self.BALANCE)
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=32, per_account=32))))
         self.start_run('s1')
         self.start_run('o1', 'other')
         for i in range(18):

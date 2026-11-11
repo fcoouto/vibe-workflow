@@ -4,7 +4,7 @@ dedicated drill routing state (a temporary managed project and temporary stores 
 production settings or ledger). clients/opencode.md#uncertain-subscription-holds-s36c.
 
 Drill 1 (1 call): `prepare` -> `dispatch` -> attach and prompt -> SIGTERM the launcher before it records completion
--> `uncertain` (window claim and concurrency place kept, `complete` answers `reconciliation_required`) -> one-shot
+-> `uncertain` (window claim and open attempt kept, `complete` answers `reconciliation_required`) -> one-shot
 `scripts/routing.py reconcile_subscription` with `evidence{kind: host_usage}` from a re-read of the idle session ->
 the same event again is a `duplicate`.
 Drill 2 (0 calls): kill after `dispatch`, before the prompt -> `uncertain` -> `abandon` -> one `window_debits` key,

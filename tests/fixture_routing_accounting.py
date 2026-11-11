@@ -75,10 +75,9 @@ class Accounting(DispatchBase):
         # Operator ops run only in a one-shot command (C3-0a review S1); only `main()` sets the flag in production.
         self.service = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
         self.call(dict(v=1, op='set', expected_revision=0,
-                       change=dict(api_usage_enabled=True, caps=dict(total=16, per_account=16))))
+                       change=dict(api_usage_enabled=True)))
         budget.initialize(self.ledger)
         with self.open_ledger() as ledger:
-            ledger.set_caps(16, 16)
             ledger.enable_organization('personal', self.POLICY, 0)
             ledger.observe('personal', self.BALANCE, now(), issued=self.BALANCE)
 

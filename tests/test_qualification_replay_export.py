@@ -26,7 +26,7 @@ class ExportTests(Temp):
         for item in canary.plan_assignments(count, tag):
             answer, _ = self.routing("prepare", **item["body"])
             self.assertEqual(answer.get("state"), "admitted", answer)
-            attempt = item["body"]["assignment"]["attempt_id"]  # closed, so the concurrency cap admits the next
+            attempt = item["body"]["assignment"]["attempt_id"]  # closed before the next, as the pilot runs serially
             closed, _ = self.routing("record", event=dict(event_id=attempt + "-nd", attempt_id=attempt, kind="not_dispatched"))
             self.assertEqual(closed.get("state"), "recorded", closed)
 
