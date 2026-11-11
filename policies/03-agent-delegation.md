@@ -103,8 +103,7 @@ coordinator retrieval.
 The coordinator collects and records receipt in the existing plan, then applies
 [review and integration](#review-integration-and-recovery) before acceptance.
 Release dependencies only when accepted outputs are available in the dependent
-checkout. When context crosses checkouts, use [consumer-context checking](../clients/template-tools.md#consumer-context) for the exact required paths and digests, unless existing assignment preparation already proves the same consumer copies.
-A child may stop at reviewable output; this does not complete the
+checkout. A child may stop at reviewable output; this does not complete the
 coordinator's requested scope or release uncertain ownership. Continue already
 authorized, dependency-ready work with the same owner through the supported
 continuation operation; passive message delivery is not execution. Reading status

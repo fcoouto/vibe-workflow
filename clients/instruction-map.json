@@ -317,7 +317,7 @@
       ]
     },
     "clients/template-tools.md": {
-      "sha256": "8117f8e971c80b327512bcceeddf8098de661e11f87f8a5e9d8aedea334d25a6",
+      "sha256": "6830aa54a35d2f1402da3b8335ee89434beecf736eb89235f704432cc47bc822",
       "ranges": [
         [
           1,
@@ -441,7 +441,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "3939cbb5b87eec74490c152e555d468acce73670fb5124a213963161d0aaefef",
+      "sha256": "449195828a1feeeb09242eede3caaf3a8a4c42d283dfff6ab6950add6f439201",
       "ranges": [
         [
           1,
@@ -453,7 +453,7 @@
         ],
         [
           92,
-          146
+          145
         ]
       ]
     },
@@ -697,7 +697,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "8dabdcd7f32ef08fc6471d3610fdb3d58e4be0ffc4aa600c160957c5c0dcaa11",
+      "sha256": "d3308a10bc3a42372e04a4e2e1aabdbbd18a40b903ab9c1ec1bd615af5942e17",
       "ranges": [
         [
           1,
@@ -705,10 +705,10 @@
         ],
         [
           34,
-          118
+          116
         ],
         [
-          119,
+          117,
           193
         ]
       ]

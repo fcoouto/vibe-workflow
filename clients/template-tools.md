@@ -1,6 +1,6 @@
 # Selective template assistance
 
-Load for selected template adaptation or required context transported between checkouts. The [onboarding owner](../skills/onboard-my-project/references/procedure.md#adapt-project-documents) retains document mapping and semantic decisions; [delegation](../policies/03-agent-delegation.md#progress-and-result-retrieval) retains dependency acceptance. Ordinary changes without these triggers do not load or run this helper.
+Load only when explicitly choosing this optional CLI for template preparation, mechanical document checks or consumer-context digest verification. Selective native reads and existing checks remain the default; adapting documents or crossing checkouts alone does not require this helper. Choose `prepare` and `check` independently, without duplicating existing evidence. The [onboarding owner](../skills/onboard-my-project/references/procedure.md#adapt-project-documents) retains document mapping and semantic decisions; [delegation](../policies/03-agent-delegation.md#progress-and-result-retrieval) retains dependency acceptance.
 
 ## Prepare selected shapes
 
@@ -20,7 +20,7 @@ Use the existing protected, project-relative before-images from authorized setup
 python3 -I -B <package>/scripts/template_tools.py check --cwd <consumer> --document README.md --document handbook/development.md --template project/product.md --template project/local-preparation.md --before <protected-before-directory> --quiet
 ```
 
-Run once after the explicit batch, before reporting its checks. Exit 0 means checked mechanical conditions passed; `--quiet` emits nothing on success. Exit 1 returns bounded findings; exit 2 means the operation was unavailable or invalid. Inspect findings against source and originals, repair authorized defects, and rerun only affected selections. An intentional original-line change needs its existing authorization and review, not automatic restoration or deletion. A green result establishes neither semantic preservation nor factual accuracy, acceptance, startup or agent routing.
+When this check is selected, run once after the explicit batch, before reporting its checks; `prepare` is not a prerequisite. Exit 0 means checked mechanical conditions passed; `--quiet` emits nothing on success. Exit 1 returns bounded findings; exit 2 means the operation was unavailable or invalid. Inspect findings against source and originals, repair authorized defects, and rerun only affected selections. An intentional original-line change needs its existing authorization and review, not automatic restoration or deletion. A green result establishes neither semantic preservation nor factual accuracy, acceptance, startup or agent routing.
 
 Checks cover exact nonblank original lines and multiplicity (reordering allowed), exact placeholders from selected templates, recognizable added author directions, and local file links. Existing author-like lines remain exempt from residue checks when their before-images match. Link targets resolve from each destination; linked files are checked directly, never crawled recursively or fetched from the network. Basic inline/reference links, ATX heading anchors, percent decoding and duplicate headings are supported. HTML, setext headings, directory links and other renderer extensions need native inspection; this is not a full Markdown parser.
 
@@ -28,7 +28,7 @@ Selections and all accessed file paths, including linked targets, templates, the
 
 ## Consumer context
 
-Before launching work that depends on transported context, compare the producer's retained, accepted digests against the actual consumer copies:
+When digest verification is needed and existing assignment evidence does not already establish it, this optional command compares the producer's retained, accepted digests against the actual consumer copies:
 
 ```text
 python3 -I -B <package>/scripts/template_tools.py check --cwd <consumer> --require rules.md=<accepted-sha256> --quiet
@@ -40,4 +40,4 @@ Repeat `--require` for each required path. Do not derive expected hashes from th
 
 `runtime.template_tools.notice(result, previous=None)` returns at most 1,000 characters, stays silent on success, and suppresses only a matching non-null fingerprint from the caller's previous result. The fingerprint includes checked content, dependencies, before-images and observed absences. Unreadable or oversized content has no reusable fingerprint. Callers own any saved fingerprint and must scope it to the same task/check selection; there is no helper state database.
 
-No native hook is installed. A future adapter must first prove usefulness and qualify actual client invocation and delivery. Trigger only for an explicitly tracked document batch or dependency launch; ignore unrelated edits, avoid repeated reads, keep success silent and feedback bounded. Do not block Stop by default, start repair/model loops, register hooks or change permissions from this procedure. Offline replay proves the callable helper only; model-token savings and native hook behavior need separately authorized observations.
+No native template hook is installed or enabled. The formatter is a callable utility, not an automatic trigger. A future adapter requires a separately selected scope, demonstrated usefulness and actual client invocation/delivery qualification. It must trigger only for an explicitly tracked document batch or dependency launch, ignore unrelated work, avoid repeated reads, keep success silent and feedback bounded. Do not block Stop by default, start repair/model loops, register hooks or change permissions from this procedure. Offline checks do not establish model-token savings or native hook qualification.

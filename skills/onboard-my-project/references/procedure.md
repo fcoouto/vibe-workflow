@@ -35,7 +35,7 @@ Adapt the local shapes below to project facts; they authorize neither prompt exe
 
 Distinguish observed facts, accepted decisions and proposed work. An unapproved next delivery stays proposed, with a concrete task and observable criterion. Infer required tools from inspected commands/code; an unknown minimum version does not make the tool itself unknown. Retain supplied dates and decision provenance in the existing owner.
 
-For selected template adaptation, load [template assistance](../../../clients/template-tools.md): prepare only the needed shapes and check the explicit destination batch against its protected originals. Reuse existing mappings and evidence; the helper does not decide applicability or meaning.
+Use selective native reads and existing checks by default. If a specific template-preparation or mechanical-check need warrants the optional CLI, load [template assistance](../../../clients/template-tools.md) and choose only the needed operation. Onboarding and document adaptation do not require helper invocation. Preserve the same mapping, original-content, link-verification and semantic-review duties with either approach.
 
 | Responsibility | Adaptation |
 | --- | --- |

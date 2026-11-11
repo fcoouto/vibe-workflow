@@ -1,5 +1,7 @@
 # Template Efficiency Implementation Plan
 
+**Current delivery scope:** the user subsequently approved wording improvements, optional tooling and retained evidence only. Selective native reads remain the default; template hooks stay disabled. The final section records this narrowing and supersedes the earlier default-helper rollout. Historical pilot results and limits remain unchanged.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Remove mechanical template work from model turns without creating another workflow engine.
@@ -99,3 +101,12 @@ The implementation is verified within the offline scope. A later authorized [pil
 - Semantic acceptance, baseline authenticity and changes after observation remain with existing agent/evidence owners: mechanical checks cannot authenticate them; callers must review meaning and recheck changed inputs.
 - Full Markdown conformance, HTML, setext headings, directory links and renderer extensions remain outside the documented basic parser: unsupported valid syntax can still need manual inspection.
 - Compromised installed-package code, hostile replacement of root ancestors, live deployments, unrelated modules and package-export cleanup remain outside this local review: package and roots are trusted anchors; no assurance is claimed for those environments.
+
+## Approved PR narrowing
+
+The user requested: “narrow the PR to the wording improvements and optional tooling, keep the evidence, and leave hooks disabled.” Apply this in the existing task worktree and update PR #254. No new live evaluation or merge is part of this follow-up; the pilot allocation remains closed. Preserve the existing manual-title pause.
+
+- [x] Make the helper guide and onboarding link explicitly optional, with independent `prepare` and `check` selection. Restore delegation's existing dependency-acceptance rule without the new helper mandate.
+- [x] Preserve wording fixes, production helper/tests and all pilot evidence; update design/provenance and regenerate the prepared instruction map.
+- [ ] Walk through ordinary adaptation, explicit check-only use and cross-checkout handoff with existing evidence. Verify unchanged preservation/link/semantic duties, no routine helper loading and no template hook registration. Run affected prepared-reader/helper tests, package validation and diff checks.
+- [ ] Commit, push and update PR scope/readiness. Reuse independent helper/security and pilot-evidence reviews because their implementation and evidence are unchanged; review this bounded instruction-only narrowing directly. Keep any wider merge-readiness gap separate from out-of-scope hook qualification.
