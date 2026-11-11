@@ -1,5 +1,14 @@
 # Policy source map
 
+## Smart Routing task profile template (F1) — 11 November 2026
+
+Slice F1 of the [Smart Routing redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md) adds the task profile template as data. Routing roles keep their current names until slice F2 switches code to the roster. No model, network or account call is part of this change.
+
+| Contract | Source |
+| --- | --- |
+| [templates/task-profile.json](../templates/task-profile.json) roster: 24 specialists with `id`, `label`, `when_to_use`, `work_kind`, `writes` and `reviews`; `runtime/task_profile.py` (`load`, `roster`, `specialist`) | The 23 entries of the Toolkit's representative roster at revision `790a895304e0c08b70a5b215c9d334f1c86b816c` ([subagent orchestration][delegation], Part A), with `when_to_use` written in this repository's wording, as the rule to write local contracts requires; the added `software-engineer`, the six work kinds and each entry's attributes come from [design section 5.2](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#52-specialist-roster), accepted by the user |
+| The template's fields, level definitions and examples, floors and size; the generated Task Profile section of [the worker brief](../templates/worker-brief.md) (`render_brief`, `brief_drift`); routing `prepare` reporting `missing_fields` without blocking | [Design section 5.3](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#53-task-profile-template) and plan tasks F1.1–F1.3, merged in #246; the floors equal `runtime/routing.py`'s constants, pinned by `tests/test_task_profile.py` |
+
 ## Graphify post-merge maintenance — 10 November 2026
 
 | Requirement | Owner and source |

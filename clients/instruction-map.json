@@ -38,7 +38,7 @@
       ]
     },
     "clients/delegation-requests.md": {
-      "sha256": "8787983e0a98e805b056dfe4ed6d8e2cc86c9767d6121221ec1b2fc4c68a7a2a",
+      "sha256": "6032978d908f708291b4453083701ed8981d46206d5a5eabb40a55433e231350",
       "ranges": [
         [
           1,
@@ -46,7 +46,7 @@
         ],
         [
           207,
-          302
+          305
         ]
       ]
     },
@@ -969,11 +969,11 @@
       ]
     },
     "templates/worker-brief.md": {
-      "sha256": "02ca2867804641a0a823e92fbe116e4c7316fb28b3371b134303c259ac7c2fca",
+      "sha256": "8dcc4c636ae462e9eb0082636b1353711f0e0a2c63af408938122e529b923086",
       "ranges": [
         [
           1,
-          15
+          32
         ]
       ]
     }
