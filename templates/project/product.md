@@ -34,7 +34,7 @@ Shape for the canonical product document or overview, adapted through [onboardin
 ## Acceptance and next delivery
 
 - Product acceptance: [observable outcomes, distinct from technical setup checks]
-- Next delivery: [smallest implementable task advancing the objective]
+- Next delivery: [smallest implementable task advancing the objective, proposed or accepted status, and observable criterion]
 
 ## Maintenance
 

@@ -1,0 +1,175 @@
+{
+  "operator": {
+    "collect.py": "31df115bb143f6b9a7837fa537cb9a11f111c2c9af25d25586de677fa61545bb",
+    "runner.py": "58625ccf47432464bda01a65e469e60ae19b323ed42588a29bd1df462e6b40a6",
+    "native_hook.py": "eac39d6153c032c2cfa8db897ad1ba048ec0a2e3fc26e9be5f439e2fda9fb486",
+    "adapter.mjs": "074327c6a53b0947f1fc7a2600230e89005396318b5981ab30ade3a8bea8ad25",
+    "native.py": "bc7f65d85d82297205f1bcabf9d363fb0c3961c3e4a276d36927c7b61abb5dc8",
+    "cases.py": "1a52ab2c6f1fc36b1c0169bf198569c079d110001577f6b5f32e5d35e628259d",
+    "test_adapter.mjs": "18fe80ad4fa409d3aa9b356662f541a4737a6acc52a95e8a05f618c728675052",
+    "test_pilot.py": "b20c09ac364aaa2f43937a145b104344d6840553952c157fcd6b9d8f04f890eb",
+    "helper.py": "245592b6ee8ffa8de79fca2e45ccd004599afe764f008015f6a77fc625f5cc31"
+  },
+  "package": {
+    "clients/instruction-map.json": "de2e26d76ebc336a25338e0648d731e30e847e6f84e49e1c494cb4a3e5d0f68c",
+    "runtime/template_tools.py": "1128ea5235108a77b05aaf4222940d5d7a0a974bb71bf5a4f5bdceea8fec1eaf",
+    "scripts/read_instructions.py": "e63661ed6a0bdd56c6049d870fe553138cb371f73dcccec6f185231441897146",
+    "scripts/template_tools.py": "f61ae4f201b4710728f073f23a58ed0cbc2bab87e56579e62821b43de785fe25",
+    "templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+    "templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+    "templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2"
+  },
+  "recovery_fixture_and_prompt_hashes": [
+    {
+      "name": "minimal-baseline-recovery",
+      "case": "minimal",
+      "arm": "baseline",
+      "allowed": [
+        "README.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "README.md": "c92295bdaf64c404d326d54c904f3643aa04ccdd2cb4fab25b65c48d16aa69ab",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "d121443eb908993687ccf041676c0e4d69c0268c1871d46b5423393f093b4a23"
+      },
+      "prompt_sha256": "9fd7de1cbaead7ca68afeb8e4c14610966dded25a35ce50170401e9fceacd369",
+      "recovery_of": "minimal-baseline"
+    },
+    {
+      "name": "minimal-helper-recovery",
+      "case": "minimal",
+      "arm": "helper",
+      "allowed": [
+        "README.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "README.md": "c92295bdaf64c404d326d54c904f3643aa04ccdd2cb4fab25b65c48d16aa69ab",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "36d2db62c46ecaa1f3e4576a4e12ad290f0218650ff1b1240b88f46f24ef6467"
+      },
+      "prompt_sha256": "032449e11cc28a479be60f1869bbaccd731eb20a55d807131ee4465d94c97995",
+      "recovery_of": "minimal-helper"
+    },
+    {
+      "name": "minimal-hook-recovery",
+      "case": "minimal",
+      "arm": "hook",
+      "allowed": [
+        "README.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "README.md": "c92295bdaf64c404d326d54c904f3643aa04ccdd2cb4fab25b65c48d16aa69ab",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "a0c8b446f8b3f7d929e58fadcf8af4107220f7b717149263f129dd5e02352da3"
+      },
+      "prompt_sha256": "413421e31dc88bc52ab7b639fc7677d333da8f492d0e91d06eaaa67f425aa70f",
+      "recovery_of": "minimal-hook"
+    },
+    {
+      "name": "customized-hook-recovery",
+      "case": "customized",
+      "arm": "hook",
+      "allowed": [
+        "README.md",
+        "handbook/overview.md",
+        "handbook/engineering.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "README.md": "733d9f24dd61d67fff808aaf1ba18c9f7b579473005c04cf11f5cd4b269c16ea",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "handbook/engineering.md": "dc0c71a7ddf439a3f1d030af50f89b552b53252e24552dd6abd197e1954cd855",
+        "handbook/overview.md": "f3cb7ac4a375b45517c0d8a6a04e8eaeeba65a2d758947aaebcc868cd6f69f82",
+        "opencode.json": "e94403ec3f3085388440cc6f03bbdf2c45862a0a8486b964be6652370e4529ba",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "prompt_sha256": "5f5d2d785ac6c65e6840567e2eecee4c5e877520f27a0fef5d91b30ab4ed3927",
+      "recovery_of": "customized-hook"
+    },
+    {
+      "name": "customized-helper-recovery",
+      "case": "customized",
+      "arm": "helper",
+      "allowed": [
+        "README.md",
+        "handbook/overview.md",
+        "handbook/engineering.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "README.md": "733d9f24dd61d67fff808aaf1ba18c9f7b579473005c04cf11f5cd4b269c16ea",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "handbook/engineering.md": "dc0c71a7ddf439a3f1d030af50f89b552b53252e24552dd6abd197e1954cd855",
+        "handbook/overview.md": "f3cb7ac4a375b45517c0d8a6a04e8eaeeba65a2d758947aaebcc868cd6f69f82",
+        "opencode.json": "973d36146d1b92e402e7a3ad340fd24bc560917fc25a26ef967f0b017d8a2c00",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "prompt_sha256": "52541a3a292ed00c7a70d64cff5a524d237f3b72e8a81af08c85b7e8df34c2c2",
+      "recovery_of": "customized-helper"
+    },
+    {
+      "name": "customized-baseline-recovery",
+      "case": "customized",
+      "arm": "baseline",
+      "allowed": [
+        "README.md",
+        "handbook/overview.md",
+        "handbook/engineering.md"
+      ],
+      "inputs": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "README.md": "733d9f24dd61d67fff808aaf1ba18c9f7b579473005c04cf11f5cd4b269c16ea",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "handbook/engineering.md": "dc0c71a7ddf439a3f1d030af50f89b552b53252e24552dd6abd197e1954cd855",
+        "handbook/overview.md": "f3cb7ac4a375b45517c0d8a6a04e8eaeeba65a2d758947aaebcc868cd6f69f82",
+        "opencode.json": "4fb34672d7f24bdb421d70a6b55fae15ce54bcf6bf2c2237bdff2aa83a3ec250",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "prompt_sha256": "f16c4964d27382b56eb670b15487f6507497e908a0964338e5eec0d219977dc6",
+      "recovery_of": "customized-baseline"
+    }
+  ],
+  "deadline": 1794433534.534194,
+  "operator_before_review": {
+    "collect.py": "c47ce0d5e6695f2e42364330403239073650b1847c11e3c10c4bab9219e9f668",
+    "runner.py": "58625ccf47432464bda01a65e469e60ae19b323ed42588a29bd1df462e6b40a6",
+    "native_hook.py": "eac39d6153c032c2cfa8db897ad1ba048ec0a2e3fc26e9be5f439e2fda9fb486",
+    "adapter.mjs": "074327c6a53b0947f1fc7a2600230e89005396318b5981ab30ade3a8bea8ad25",
+    "native.py": "bc7f65d85d82297205f1bcabf9d363fb0c3961c3e4a276d36927c7b61abb5dc8",
+    "cases.py": "d622c65d825a46cb88d5060392f13794e9fbcb7e841076ed1cc53ccc8daa7cad",
+    "test_adapter.mjs": "18fe80ad4fa409d3aa9b356662f541a4737a6acc52a95e8a05f618c728675052",
+    "test_pilot.py": "97f51069b690d48fdbdf8b3bf1dc467383a4a44ba30f09f1f290fde8a04b9328",
+    "helper.py": "245592b6ee8ffa8de79fca2e45ccd004599afe764f008015f6a77fc625f5cc31"
+  },
+  "review_fix": "F1: protected byte hashes and CRLF regression; final checks rerun without inference"
+}

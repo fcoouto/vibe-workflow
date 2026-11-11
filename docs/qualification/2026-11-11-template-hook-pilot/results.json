@@ -1,0 +1,2368 @@
+{
+  "attempts": [
+    {
+      "name": "opencode-probe",
+      "status": "interrupted",
+      "stopped": true,
+      "elapsed": null,
+      "error": "operator lost during harness location shutdown",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 1,
+        "notices": 0,
+        "ignored": 1,
+        "milliseconds": 39.2475000000004
+      },
+      "helper_calls": [],
+      "hook_observations": [
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "hook_error",
+          "tool": "patch",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 39.2475000000004
+        }
+      ],
+      "requests": 3,
+      "raw_tokens": [
+        {
+          "input": 1757,
+          "output": 48,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 177,
+          "output": 48,
+          "reasoning": 0,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        },
+        {
+          "input": 245,
+          "output": 93,
+          "reasoning": 91,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 2179,
+        "cache_read": 3328,
+        "cache_write": 0,
+        "output": 189,
+        "reasoning": 91,
+        "total": 5787
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "I\u2019ll follow the requested sequence and only edit `README.md`; I\u2019ll stop after reading `unrelated.txt`.",
+        "I read `README.md` and appended exactly `[Probe link](missing.md)`. The patch output only said \u201cSuccess. Updated the following files: M README.md\u201d; it did not mention `link_missing`.\n\nI can\u2019t continue the requested sequence: `pilot_batch` isn\u2019t available among my tools. I therefore didn\u2019t remove the link or read `unrelated.txt`. The repeated-feedback and successful-tool-output checks remain untested."
+      ],
+      "repair_responses": 0
+    },
+    {
+      "name": "claude-probe",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 11.566,
+      "error": null,
+      "client": "claude-code",
+      "hook": {
+        "invocations": 2,
+        "errors": 4,
+        "notices": 1,
+        "ignored": 1,
+        "milliseconds": 67.2229579940904
+      },
+      "helper_calls": [],
+      "hook_observations": [
+        {
+          "kind": "hook",
+          "tool": "Read",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 32.86062498227693
+        },
+        {
+          "kind": "hook",
+          "tool": "Write",
+          "ok": false,
+          "notice": "Template check: inspect these findings; no files changed.\nlink_missing: \"README.md\":4",
+          "milliseconds": 34.04533301363699
+        },
+        {
+          "kind": "hook_error",
+          "tool": "Read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.07820900646038353
+        },
+        {
+          "kind": "hook_error",
+          "tool": "Read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.08845797856338322
+        },
+        {
+          "kind": "hook_error",
+          "tool": "Write",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.07120802183635533
+        },
+        {
+          "kind": "hook_error",
+          "tool": "Read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.07912499131634831
+        },
+        {
+          "kind": "ignored",
+          "tool": "Read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.005999987479299307
+        }
+      ],
+      "raw_tokens": [
+        {
+          "input_tokens": 16,
+          "cache_creation_input_tokens": 3865,
+          "cache_read_input_tokens": 38960,
+          "output_tokens": 1399,
+          "output_tokens_details": {
+            "thinking_tokens": 145
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 3865,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 350,
+              "cache_read_input_tokens": 5957,
+              "cache_creation_input_tokens": 162,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 162
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard",
+          "fallback_credit": null
+        }
+      ],
+      "tokens": {
+        "input": 16,
+        "cache_read": 38960,
+        "cache_write": 3865,
+        "output": 1399,
+        "reasoning": 145,
+        "total": 44240,
+        "reasoning_in_output": true
+      },
+      "model": [
+        "claude-haiku-5-5"
+      ],
+      "requests": 8,
+      "repair_responses": null,
+      "agentic_turns": 8,
+      "permission_denials": [],
+      "handoff": "The probe ran as specified, one tool call at a time. I made no other edits, and no shell, network, delegation, or config changes.\n\n- **link_missing feedback:** The Write that appended `[Probe link](missing.md)` returned a PostToolUse hook note: `Template check: inspect these findings; no files changed.` followed by `link_missing: \"README.md\":4`.\n- **Duplicate suppression:** The second Read after the link was added returned only \"Wasted call \u2014 file unchanged since your last Read. Refer to that earlier tool_result instead.\" I did not see a second link_missing finding, so the duplicate was suppressed. Note that the first Read after the link was added returned the full file with no hook note, so the suppression is inferred from the second read's message and the absence of a repeat finding.\n- **Original tool output visibility:** The earlier tool outputs remained in context. The Write result reported \"file state is current in your context,\" and the Read after the restore showed the file's contents again.\n\nThe README was restored to its original three lines with a trailing newline, and `unrelated.txt` was read but not changed.",
+      "model_usage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 1399,
+          "cacheReadInputTokens": 38960,
+          "cacheCreationInputTokens": 3865,
+          "webSearchRequests": 0,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 145,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 3865,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "fixture_preserved": true
+    },
+    {
+      "name": "claude-diagnostic",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 12.148,
+      "error": null,
+      "client": "claude-code",
+      "hook": {
+        "invocations": 6,
+        "errors": 0,
+        "notices": 1,
+        "ignored": 1,
+        "milliseconds": 214.22229098971002
+      },
+      "helper_calls": [],
+      "hook_observations": [
+        {
+          "kind": "hook",
+          "tool": "Read",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 34.90195798804052
+        },
+        {
+          "kind": "hook",
+          "tool": "Write",
+          "ok": false,
+          "notice": "Template check: inspect these findings; no files changed.\nlink_missing: \"README.md\":4",
+          "milliseconds": 35.685749986441806
+        },
+        {
+          "kind": "hook",
+          "tool": "Read",
+          "ok": false,
+          "notice": "",
+          "milliseconds": 35.267500003101304
+        },
+        {
+          "kind": "hook",
+          "tool": "Read",
+          "ok": false,
+          "notice": "",
+          "milliseconds": 37.41429198998958
+        },
+        {
+          "kind": "hook",
+          "tool": "Write",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 35.17075002309866
+        },
+        {
+          "kind": "hook",
+          "tool": "Read",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 35.782040999038145
+        },
+        {
+          "kind": "ignored",
+          "tool": "Read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": 0.005958980182185769
+        }
+      ],
+      "raw_tokens": [
+        {
+          "input_tokens": 14,
+          "cache_creation_input_tokens": 2042,
+          "cache_read_input_tokens": 35711,
+          "output_tokens": 1537,
+          "output_tokens_details": {
+            "thinking_tokens": 148
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 2042,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 468,
+              "cache_read_input_tokens": 6003,
+              "cache_creation_input_tokens": 165,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 165
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard",
+          "fallback_credit": null
+        }
+      ],
+      "tokens": {
+        "input": 14,
+        "cache_read": 35711,
+        "cache_write": 2042,
+        "output": 1537,
+        "reasoning": 148,
+        "total": 39304,
+        "reasoning_in_output": true
+      },
+      "model": [
+        "claude-haiku-5-5"
+      ],
+      "requests": 7,
+      "repair_responses": null,
+      "agentic_turns": 8,
+      "permission_denials": [],
+      "handoff": "The probe ran, with one deviation from your instructions noted below.\n\n**Observed link_missing feedback:** After the Write that appended `[Probe link](missing.md)`, a PostToolUse hook reported `link_missing: \"README.md\":4` with the text \"Template check: inspect these findings; no files changed.\" The hook fired on the Write, not on the Read.\n\n**Duplicate suppression:** I did not observe it working as you described. I issued the two Reads of README.md in one parallel block, not one at a time as you asked. The second Read returned \"Wasted call \u2014 file unchanged since your last Read. Refer to that earlier tool_result instead.\" That message came from the tool, not from a hook, and it only fired because the file had not changed between the two calls. I have no evidence on whether the link_missing feedback itself was suppressed on repeat, since no second Write with the broken link occurred.\n\n**Original tool output visibility:** The first Read's output (lines 1\u20133) and the Write's success message stayed visible in the transcript after the hook feedback arrived. The hook output was added alongside them rather than replacing them.\n\n**Final state:**\n- README.md was restored to `# Probe`, a blank line, and `Keep this original line.` with a trailing newline. The final Read confirmed it.\n- Last, I read unrelated.txt, which contains `Unrelated file.`.\n- No other files were edited, and no shell, network, delegation, or configuration calls were made.",
+      "model_usage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 1537,
+          "cacheReadInputTokens": 35711,
+          "cacheCreationInputTokens": 2042,
+          "webSearchRequests": 0,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 148,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 2042,
+          "canonicalModel": "claude-haiku-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "fixture_preserved": true
+    },
+    {
+      "name": "opencode-diagnostic",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 27.923,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 2,
+        "errors": 0,
+        "notices": 1,
+        "ignored": 2,
+        "milliseconds": 92.52879199999916
+      },
+      "helper_calls": [],
+      "hook_observations": [
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "hook",
+          "tool": "patch",
+          "ok": false,
+          "notice": "Template check: inspect these findings; no files changed.\nlink_missing: \"README.md\":4",
+          "milliseconds": 46.84733299999971
+        },
+        {
+          "kind": "hook",
+          "tool": "patch",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 45.68145899999945
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        }
+      ],
+      "requests": 5,
+      "raw_tokens": [
+        {
+          "input": 1757,
+          "output": 20,
+          "reasoning": 56,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 205,
+          "output": 50,
+          "reasoning": 11,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        },
+        {
+          "input": 305,
+          "output": 50,
+          "reasoning": 205,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        },
+        {
+          "input": 452,
+          "output": 19,
+          "reasoning": 0,
+          "cache": {
+            "read": 1792,
+            "write": 0
+          }
+        },
+        {
+          "input": 248,
+          "output": 73,
+          "reasoning": 0,
+          "cache": {
+            "read": 2048,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 2967,
+        "cache_read": 7168,
+        "cache_write": 0,
+        "output": 212,
+        "reasoning": 272,
+        "total": 10619
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "The first edit feedback mentioned `link_missing`. I couldn\u2019t call `pilot_batch`: it isn\u2019t available among the tools in this session, so I can\u2019t determine whether repeated batch feedback would have been suppressed or whether successful tool output would have remained visible.\n\nI removed only the added link from `README.md` and read `unrelated.txt`."
+      ],
+      "repair_responses": 1
+    },
+    {
+      "name": "opencode-visibility",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 18.815,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 1,
+        "errors": 0,
+        "notices": 1,
+        "ignored": 1,
+        "milliseconds": 49.666417000000365
+      },
+      "helper_calls": [],
+      "hook_observations": [
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "hook",
+          "tool": "patch",
+          "ok": false,
+          "notice": "Template check: inspect these findings; no files changed.\nlink_missing: \"README.md\":4",
+          "milliseconds": 49.666417000000365
+        }
+      ],
+      "requests": 3,
+      "raw_tokens": [
+        {
+          "input": 1757,
+          "output": 18,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 147,
+          "output": 48,
+          "reasoning": 0,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        },
+        {
+          "input": 234,
+          "output": 74,
+          "reasoning": 273,
+          "cache": {
+            "read": 1664,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 2138,
+        "cache_read": 3328,
+        "cache_write": 0,
+        "output": 140,
+        "reasoning": 273,
+        "total": 5879
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "The first edit feedback mentioned `link_missing` for `README.md`. I can\u2019t continue the requested sequence because `pilot_batch` isn\u2019t available among the tools provided, so I haven\u2019t removed the link or read `unrelated.txt`. I can\u2019t determine whether repeated batch feedback would be suppressed or whether successful batch output would remain visible."
+      ],
+      "repair_responses": 0
+    },
+    {
+      "name": "minimal-baseline",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.05,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "baseline",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "db046a1de7bb7fa7131a3cb67ba45c4f000697d41bf5934229f415237cf170f1"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "7412ba0138e458e1b0f2359efd3827a4e4764b2c4dc4cd228845d2cff733207b",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "minimal-helper",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.048,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "helper",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "98bc4fde346bbeebb5cffe1261dfa794005f2c3447c28efd583cbd7bf8206d96"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "4f2daf90b6b531338b8b30a9c4d6bd50647147aecf18411af1e752033b5ff521",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "minimal-hook",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.044,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "hook",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "b3e90aa63046cd785fb0085684dce87fee8dbfead36f57ab6f3fffdeaa3a1b7c"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "cdb9e610e16df50564183f8c1e6d859c276c3c700f5fb8d47ce1f775aa228e0d",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "customized-hook",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.043,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "hook",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "7a7340b794ef8f339ffbec4aea3fb73a4457700c5351abbce2bb78f30c4e801e",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "6a8a0f2ebad89053e223d4ede8d31494037527a99140f6abe764794231b5f708",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "customized-helper",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.046,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "helper",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "240b0d3b8234eff0883c65ec62b75ba443807d0303f965bfad58874d1962b791",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "9f382c9586618a5bfaf8e5165a9543ed4979ea530759878eb40e0528c87908fa",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "customized-baseline",
+      "status": "failed_start",
+      "stopped": true,
+      "elapsed": 0.044,
+      "error": "ValueError: expiry cannot cover pilot",
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 0,
+      "raw_tokens": [],
+      "tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0,
+        "reasoning": 0,
+        "total": 0
+      },
+      "zero_basis": "authentication preflight refused before client/model startup",
+      "model": [],
+      "terminal": null,
+      "tools": [],
+      "handoff": [],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "baseline",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "213eb0b62c77984d6f5e89a8da16ce0f5bb94c9c63062af3a2a7bf83f9278e79",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "80732a2bf4c59cc0e9042f4ee2be026fb532f27508c80bd7b0c630ff44ea8e27",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pending manual review"
+    },
+    {
+      "name": "minimal-baseline-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 25.439,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 4,
+      "raw_tokens": [
+        {
+          "input": 2011,
+          "output": 156,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1551,
+          "output": 78,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 3710,
+          "output": 522,
+          "reasoning": 75,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 743,
+          "output": 108,
+          "reasoning": 0,
+          "cache": {
+            "read": 3584,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 8015,
+        "cache_read": 5504,
+        "cache_write": 0,
+        "output": 864,
+        "reasoning": 75,
+        "total": 14458
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "error"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "I\u2019ll inspect the project guidance, source/check, and all three requested templates, then update only `README.md`. I\u2019ll verify preservation, factual claims, links, and template residue using file reads/searches only.",
+        "Updated only `README.md`, preserving all original nonblank lines. It now documents the project\u2019s purpose, code map, observed behavior, Python 3 and standard-library prerequisites, supplied check evidence, known limits, fixture choices, missing setup evidence, and one explicitly proposed next task with observable acceptance.\n\nThe initial `python3 -B check.py` pass was supplied by the coordinator; I did not run it. The check covers only two addition examples, and the minimum Python version is unknown. Links point to existing files."
+      ],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "baseline",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "d121443eb908993687ccf041676c0e4d69c0268c1871d46b5423393f093b4a23"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\n## Purpose and scope\n\nThis project provides a small Python function that adds two values. Its current scope is the `add(a, b)` function in [arithmetic.py](arithmetic.py); a successful check currently demonstrates ordinary integer addition and cancellation to zero. No broader user workflow or product requirements are documented.\n\n## Code and behavior\n\n- [arithmetic.py](arithmetic.py) defines `add(a, b)` and returns `a + b`.\n- [check.py](check.py) imports `add` and uses assertions for `2 + 3 == 5` and `-2 + 2 == 0`.\n\nThe code and check use only Python language features and the standard import mechanism; there are no third-party package prerequisites evident in these files. A Python 3 interpreter is required by the documented check command. The minimum supported Python version is not established.\n\n## First run and check\n\nRun from the project directory:\n\n```sh\npython3 -B check.py\n```\n\nThe coordinator reports that this command passed on the initial fixture; that is supplied evidence, not a check run for this adaptation. The check's assertions verify the two examples above; successful completion produces no output. It does not establish behavior for other input types or edge cases.\n\n## Preparation and limits\n\nNo separate setup record or other setup evidence is present. No installation, external service, database, or credentials are indicated by the source and check. Fixture choices are Codex only, keep changes local, owner merges manually, and Workstreams disabled. Broader requirements, runtime minimum, and compatibility beyond the observed examples remain unknown.\n\n## Acceptance and proposed next task\n\nCurrent check acceptance is that both assertions in `check.py` pass. **Proposed next task:** add and check a case showing that adding two non-integer values supported by Python (for example, `1.5` and `2.0`) returns their sum. Observable acceptance: the added assertion passes when `python3 -B check.py` is run. This is proposed, not accepted or implemented.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "17124467fc34a1ad80c36369b1e4e1d296ce8d3e944cecc0d10427499162ec13",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    },
+    {
+      "name": "minimal-helper-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 24.466,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [
+        {
+          "operation": "prepare",
+          "ok": true,
+          "milliseconds": 36.37866600000007
+        },
+        {
+          "operation": "check",
+          "ok": true,
+          "milliseconds": 36.50724999999875
+        }
+      ],
+      "hook_observations": [
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 36.37866600000007
+        },
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 36.50724999999875
+        }
+      ],
+      "requests": 6,
+      "raw_tokens": [
+        {
+          "input": 2059,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1187,
+          "output": 62,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 561,
+          "output": 19,
+          "reasoning": 0,
+          "cache": {
+            "read": 2944,
+            "write": 0
+          }
+        },
+        {
+          "input": 232,
+          "output": 469,
+          "reasoning": 0,
+          "cache": {
+            "read": 3328,
+            "write": 0
+          }
+        },
+        {
+          "input": 593,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 3456,
+            "write": 0
+          }
+        },
+        {
+          "input": 227,
+          "output": 102,
+          "reasoning": 0,
+          "cache": {
+            "read": 3968,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 4859,
+        "cache_read": 15616,
+        "cache_write": 0,
+        "output": 680,
+        "reasoning": 0,
+        "total": 21155
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "template_prepare",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "template_check",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "Updated only `README.md`, combining product, overview, and local-preparation responsibilities. Preserved the original nonblank text and documented the code map, standard-library prerequisite, check command and limits, supplied initial check result, missing setup evidence, and a **PROPOSED** next task with observable acceptance.\n\nThe mechanical template check found no issues. I did not run the project check; the reported pass is coordinator-supplied. Next action: review the README; broader behavior remains unspecified."
+      ],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "helper",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "36d2db62c46ecaa1f3e4576a4e12ad290f0218650ff1b1240b88f46f24ef6467"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\n## Purpose and scope\n\nTiny Totals is a small Python project whose purpose is to add two values. Its essential behavior is the `add(a, b)` function in `arithmetic.py`, which returns `a + b`. The audience, usage context, and any broader product requirements are not documented. The current scope is limited to this function and its checks; user interface, persistence, services, and other features are not present in the inspected code.\n\n## Code map\n\n- `arithmetic.py` implements addition.\n- `check.py` checks that `add(2, 3)` returns `5` and `add(-2, 2)` returns `0`.\n\n## Prepare and verify\n\nThe code uses Python and the standard library only; no package installation or external service is indicated. The exact minimum Python version has not been established. Run the check from the project directory with:\n\n```sh\npython3 -B check.py\n```\n\nThe check uses assertions for the two examples above. A successful run produces no output and exits successfully; it verifies those examples, not all input types or behavior.\n\n## Acceptance and next delivery\n\nCurrent technical acceptance is that both assertions in `check.py` pass. **PROPOSED next task:** add checks for string concatenation and document that behavior; acceptance is that `check.py` includes an assertion that `add(\"a\", \"b\")` returns `\"ab\"` and the check passes.\n\n## Known limits and evidence\n\nThe implementation directly applies Python's `+` operator, so supported operands and errors follow Python behavior; there is no validation or broader documented contract. No setup record or additional preparation evidence was found. The coordinator reports that `python3 -B check.py` passed on the initial fixture; this is supplied evidence, not a check run in this adaptation.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "5ca1e5fa94433bc5753f3920101ace4614f01ae4f8bd4f9a4168359ba785b916",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    },
+    {
+      "name": "minimal-hook-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 25.208,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 1,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 6,
+        "milliseconds": 35.174332999999024
+      },
+      "helper_calls": [
+        {
+          "operation": "prepare",
+          "ok": true,
+          "milliseconds": 36.41079200000013
+        },
+        {
+          "operation": "check",
+          "ok": true,
+          "milliseconds": 34.98079100000177
+        }
+      ],
+      "hook_observations": [
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 36.41079200000013
+        },
+        {
+          "kind": "ignored",
+          "tool": "template_prepare",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "glob",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "hook",
+          "tool": "patch",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 35.174332999999024
+        },
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 34.98079100000177
+        },
+        {
+          "kind": "ignored",
+          "tool": "template_check",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        }
+      ],
+      "requests": 6,
+      "raw_tokens": [
+        {
+          "input": 2080,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1205,
+          "output": 62,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 579,
+          "output": 19,
+          "reasoning": 0,
+          "cache": {
+            "read": 2944,
+            "write": 0
+          }
+        },
+        {
+          "input": 250,
+          "output": 484,
+          "reasoning": 0,
+          "cache": {
+            "read": 3328,
+            "write": 0
+          }
+        },
+        {
+          "input": 626,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 3456,
+            "write": 0
+          }
+        },
+        {
+          "input": 265,
+          "output": 84,
+          "reasoning": 0,
+          "cache": {
+            "read": 3968,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 5005,
+        "cache_read": 15616,
+        "cache_write": 0,
+        "output": 677,
+        "reasoning": 0,
+        "total": 21298
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "template_prepare",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "template_check",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "Updated only `README.md`, combining the product, overview and preparation information. Original nonblank lines were preserved; the document check reported no findings.\n\nThe coordinator supplied evidence that `python3 -B check.py` passed on the initial fixture; I did not run it. The check covers only two addition examples, and the minimum Python version is unspecified. Next action: consider the explicitly proposed additional assertion."
+      ],
+      "repair_responses": 0,
+      "case": "minimal",
+      "arm": "hook",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "88491d96a5150826761c5ff8b4fd5c257aa71c49b998cfbfef542da29855abcb",
+        "arithmetic.py": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+        "check.py": "6d74e0d06e25072e5a4cab173259d26ff98decfd7273a80629a16c38f0fc515d",
+        "opencode.json": "a0c8b446f8b3f7d929e58fadcf8af4107220f7b717149263f129dd5e02352da3"
+      },
+      "outputs": {
+        "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\n## Purpose and scope\n\nTiny Totals provides a small Python `add(a, b)` function that returns the result of adding two values. The current scope is the addition function and its simple assertions; it does not include a command-line interface, user interface, persistence, services or integrations. No particular audience or access roles are specified.\n\n## Code and behavior\n\n- `arithmetic.py` defines `add(a, b)` using Python's `+` operator.\n- `check.py` imports `add` and asserts that `add(2, 3)` is `5` and `add(-2, 2)` is `0`.\n\nThe demonstrated behavior is limited to these examples; other input types and edge cases are not specified. No additional business, security, accessibility or data requirements are documented.\n\n## Prerequisites and first run\n\nThe project uses Python and only the standard library in its source and check; there is no package installation or external service requirement evident in the files. A minimum Python version is not specified. Run the check from the project directory:\n\n```sh\npython3 -B check.py\n```\n\nNo output with a successful exit indicates both assertions passed. This is the project's documented check; it does not establish broader behavior beyond those examples.\n\n## Acceptance and limits\n\nThe current check accepts the two asserted results above. Setup evidence beyond the supplied report is absent: the coordinator reports that `python3 -B check.py` passed on the initial fixture, and that is not a run performed here. No separate setup record, runtime minimum or additional test coverage is present.\n\n## Proposed next task\n\n**PROPOSED:** Add an assertion that `add(2, -3)` returns `-1` to `check.py`. Acceptance is observable when running `python3 -B check.py` exits successfully with that assertion included. This proposal is not accepted work.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "edd82bb643ee6f3af13671207306c555e702a1d70509e72a6deb8fbcb112bb4b",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    },
+    {
+      "name": "customized-hook-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 38.424,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 1,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 11,
+        "milliseconds": 34.4073750000025
+      },
+      "helper_calls": [
+        {
+          "operation": "prepare",
+          "ok": true,
+          "milliseconds": 35.34237499999972
+        },
+        {
+          "operation": "check",
+          "ok": true,
+          "milliseconds": 35.22416700000031
+        }
+      ],
+      "hook_observations": [
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 35.34237499999972
+        },
+        {
+          "kind": "ignored",
+          "tool": "template_prepare",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "glob",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "ignored",
+          "tool": "read",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        },
+        {
+          "kind": "hook",
+          "tool": "patch",
+          "ok": true,
+          "notice": "",
+          "milliseconds": 34.4073750000025
+        },
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 35.22416700000031
+        },
+        {
+          "kind": "ignored",
+          "tool": "template_check",
+          "ok": null,
+          "notice": null,
+          "milliseconds": null
+        }
+      ],
+      "requests": 6,
+      "raw_tokens": [
+        {
+          "input": 2114,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1240,
+          "output": 152,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 1099,
+          "output": 21,
+          "reasoning": 0,
+          "cache": {
+            "read": 3072,
+            "write": 0
+          }
+        },
+        {
+          "input": 343,
+          "output": 962,
+          "reasoning": 0,
+          "cache": {
+            "read": 3968,
+            "write": 0
+          }
+        },
+        {
+          "input": 1081,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 4224,
+            "write": 0
+          }
+        },
+        {
+          "input": 337,
+          "output": 139,
+          "reasoning": 0,
+          "cache": {
+            "read": 5120,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 6214,
+        "cache_read": 18304,
+        "cache_write": 0,
+        "output": 1302,
+        "reasoning": 0,
+        "total": 25820
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "template_prepare",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "template_check",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "Updated only `README.md`, `handbook/overview.md`, and `handbook/engineering.md`. Preserved the original nonblank lines and left code, checks, nested instructions, architecture, and fixture choices unchanged.\n\nThe coordinator supplied evidence that `python3 -B check.py` passed on the initial fixture; I did not run it. The documentation describes what it checks and notes the limits, including the unspecified minimum Python version and missing setup evidence. The proposed next task is an empty-label check, with observable acceptance stated.\n\n`template_check` reported no findings. Its checks are mechanical, not semantic acceptance. Next action: owner review; no independent acceptance is claimed."
+      ],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "hook",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "e94403ec3f3085388440cc6f03bbdf2c45862a0a8486b964be6652370e4529ba",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n\nLabel Tools trims surrounding whitespace from labels without changing their order, duplicates, or Unicode text.\n\n## Run and check\n\nRequires Python 3; the code uses only the standard library. From the repository root, run `python3 -B check.py`. It checks trimming, preservation of order and duplicates, and Unicode handling through assertions.\n\n## Documentation\n\n- [Product overview and acceptance](handbook/overview.md)\n- [Engineering and local preparation](handbook/engineering.md)\n- [Architecture](handbook/ARCHITECTURE.md)\n\n## Next delivery\n\nPROPOSED: Add a check for an empty label; acceptance: the check explicitly establishes whether trimming an empty or whitespace-only label returns an empty string.\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n\n## Purpose and audience\n\nLabel Tools provides a small normalization function for callers that need surrounding whitespace removed from label strings. The repository documents a check script; no specific end-user group or interface is evidenced.\n\n## Essential behavior and scope\n\n`src/cleaning.py` defines `normalize_labels(values)`, which applies Python's `strip()` to each value and returns the resulting list. It preserves input order and duplicate entries, and Python string stripping preserves the remaining Unicode text. The scope evidenced here is this pure transformation; there is no service or storage.\n\n## Code map and acceptance\n\n- `src/cleaning.py`: normalization implementation.\n- `src/AGENTS.md`: source rules, including preserving order, duplicates, and Unicode.\n- `check.py`: assertions for trimming, ordering, duplicate preservation, and Unicode.\n- `handbook/ARCHITECTURE.md`: architecture owner.\n\nAcceptance is the assertions in `check.py` passing without weakening them. Run `python3 -B check.py` as described in [engineering](engineering.md); it provides a lightweight executable check of the evidenced behaviors, not broad integration or production validation.\n\n## Constraints and limits\n\nPython standard library only; the code imports no third-party packages. No minimum Python version is specified; the required runtime is Python 3 as invoked by the documented command. No persistence, services, setup record, or external dependencies are evidenced. Behavior for non-string values and broader input validation is not specified by the existing checks.\n\n## Next delivery\n\nPROPOSED: Add a check for empty labels. Observable acceptance: an assertion states and verifies whether an empty or whitespace-only input label normalizes to the empty string. No implementation or policy change is implied until that proposal is accepted.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n\n## Prerequisites\n\nPython 3 is required for the documented command. The implementation and check use only the standard library; no package installation or services are indicated. No minimum Python version has been established.\n\n## First run and verification\n\nFrom the repository root, run:\n\n```sh\npython3 -B check.py\n```\n\nThe script uses assertions to check whitespace trimming, preserved order and duplicates, and Unicode handling. A successful run (exit status zero) means those assertions passed; it is not evidence of broader integration, deployment, or runtime compatibility. Coordinator-supplied evidence says this command passed on the initial fixture; this document update did not execute it.\n\n## Guidance and evidence limits\n\nThe [overview](overview.md) describes product behavior; [architecture](ARCHITECTURE.md) describes the code structure. Root `AGENTS.md` records Codex-only, local changes, manual owner merge, and disabled Workstreams choices; `src/AGENTS.md` owns source-specific rules. No separate setup evidence or setup record is present, so none is claimed here. No known issues have been evidenced.\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "4cfb052802bcc575d0a81f0588047f18ae3232a395bd6beda055b7ad256eb453",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    },
+    {
+      "name": "customized-helper-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 30.527,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [
+        {
+          "operation": "prepare",
+          "ok": true,
+          "milliseconds": 35.59162500000002
+        },
+        {
+          "operation": "check",
+          "ok": true,
+          "milliseconds": 34.46087500000067
+        }
+      ],
+      "hook_observations": [
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 35.59162500000002
+        },
+        {
+          "kind": "helper",
+          "tool": null,
+          "ok": true,
+          "notice": null,
+          "milliseconds": 34.46087500000067
+        }
+      ],
+      "requests": 6,
+      "raw_tokens": [
+        {
+          "input": 2093,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1224,
+          "output": 148,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 1207,
+          "output": 21,
+          "reasoning": 0,
+          "cache": {
+            "read": 2944,
+            "write": 0
+          }
+        },
+        {
+          "input": 323,
+          "output": 726,
+          "reasoning": 0,
+          "cache": {
+            "read": 3968,
+            "write": 0
+          }
+        },
+        {
+          "input": 953,
+          "output": 14,
+          "reasoning": 0,
+          "cache": {
+            "read": 4096,
+            "write": 0
+          }
+        },
+        {
+          "input": 336,
+          "output": 129,
+          "reasoning": 0,
+          "cache": {
+            "read": 4864,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 6136,
+        "cache_read": 17792,
+        "cache_write": 0,
+        "output": 1052,
+        "reasoning": 0,
+        "total": 24980
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "template_prepare",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "template_check",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "Updated only `README.md`, `handbook/overview.md`, and `handbook/engineering.md`. Original nonblank content was preserved; the mechanical template check found no issues. Links are to existing handbook owners.\n\nThe coordinator supplied evidence that `python3 -B check.py` passed on the initial fixture; I did not run it. The check covers trimming, order and duplicate preservation, and Unicode\u2014not empty inputs or non-string values. Minimum Python version is unknown.\n\n**Proposed next task:** add a check asserting `normalize_labels(['  ']) == ['']`. The output is reviewable, not independently accepted."
+      ],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "helper",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "973d36146d1b92e402e7a3ad340fd24bc560917fc25a26ef967f0b017d8a2c00",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n\nLabel Tools removes surrounding whitespace from labels without changing their order, duplicates or Unicode content.\n\nRun the check with `python3 -B check.py`. It uses the Python standard library and verifies trimming, order/duplicate preservation and a Unicode example. See [engineering](handbook/engineering.md) for preparation and [architecture](handbook/ARCHITECTURE.md) for the code map. No installation, services or storage are required. Minimum Python version is not established; first-run evidence was supplied by the coordinator, not run here.\n\nProposed next task: add an accepted check for an empty label; acceptance is an explicit assertion that normalization of `['  ']` returns `['']`.\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n\n## Purpose and scope\n\nThe utility normalizes labels by removing surrounding whitespace, helping callers obtain clean label strings while retaining the input sequence. Its scope is the pure transformation in `src/cleaning.py`; it has no persistence, services, authentication, UI or integrations. Callers provide values and receive a list with each value stripped. The implementation assumes values support `strip()`.\n\n## Acceptance and limits\n\n`check.py` asserts trimming, preservation of order and duplicates, and Unicode preservation. The supplied initial fixture check passed; no claim is made that it was run in this session. Empty-input behavior, non-string values and other whitespace cases are not explicitly covered by current checks.\n\nProposed next task: add a check for an empty label. Observable acceptance: assert `normalize_labels(['  ']) == ['']`.\n\n## Code and preparation\n\n`src/cleaning.py` implements the transformation; `check.py` contains its assertions. See [engineering](engineering.md) for standard-library prerequisites and the first-run command, and [architecture](ARCHITECTURE.md) for the architecture summary.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n\n## Preparation and verification\n\nNo install, package manager, service or data setup is required. Runtime is Python; the minimum supported version is not established. From the repository root, run `python3 -B check.py`. A successful run exits without assertion failure and demonstrates the examples encoded in `check.py`: whitespace trimming, order and duplicate retention, and Unicode preservation. The coordinator supplied evidence that this command passed on the initial fixture; it was not executed during this documentation trial.\n\n## Local guidance and limits\n\nThe project uses Codex only; keep changes local, the owner merges manually, and Workstreams are disabled. Setup evidence beyond the supplied initial check is absent. Current checks do not establish behavior for empty input or non-string values. See [product overview](overview.md) and [architecture](ARCHITECTURE.md).\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "2baca13a61a97135c212c9064ffbb1cf5e8a7dd4a107df5c7267d5ff78688e2b",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    },
+    {
+      "name": "customized-baseline-recovery",
+      "status": "finished",
+      "stopped": true,
+      "elapsed": 33.876,
+      "error": null,
+      "client": "opencode",
+      "hook": {
+        "invocations": 0,
+        "errors": 0,
+        "notices": 0,
+        "ignored": 0,
+        "milliseconds": 0
+      },
+      "helper_calls": [],
+      "hook_observations": [],
+      "requests": 5,
+      "raw_tokens": [
+        {
+          "input": 2045,
+          "output": 154,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        {
+          "input": 1950,
+          "output": 103,
+          "reasoning": 0,
+          "cache": {
+            "read": 1920,
+            "write": 0
+          }
+        },
+        {
+          "input": 582,
+          "output": 745,
+          "reasoning": 0,
+          "cache": {
+            "read": 3712,
+            "write": 0
+          }
+        },
+        {
+          "input": 975,
+          "output": 109,
+          "reasoning": 0,
+          "cache": {
+            "read": 4096,
+            "write": 0
+          }
+        },
+        {
+          "input": 1209,
+          "output": 164,
+          "reasoning": 0,
+          "cache": {
+            "read": 4992,
+            "write": 0
+          }
+        }
+      ],
+      "tokens": {
+        "input": 6761,
+        "cache_read": 14720,
+        "cache_write": 0,
+        "output": 1275,
+        "reasoning": 0,
+        "total": 22756
+      },
+      "model": [
+        "openai/gpt-6-luna#low"
+      ],
+      "terminal": "succeeded",
+      "tools": [
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "error"
+        },
+        {
+          "name": "patch",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "read",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        },
+        {
+          "name": "glob",
+          "status": "completed"
+        }
+      ],
+      "handoff": [
+        "Updated only `README.md`, `handbook/overview.md`, and `handbook/engineering.md`. Original nonblank lines were preserved; code, checks, nested instructions, and `handbook/ARCHITECTURE.md` remain unchanged. Links point to existing files, and no template placeholders were retained.\n\n**Checks:** Coordinator supplied `python3 -B check.py` passing on the initial fixture; I did not run it. Reviewed the edited files and link targets. No setup evidence beyond the supplied check was available.\n\n**Limits and next action:** No minimum Python version is established, and the check is focused rather than broad compatibility evidence. The proposed next task is an empty-label assertion with `normalize_labels(['']) == ['']`. Handoff is for review; it is not independently accepted."
+      ],
+      "repair_responses": 0,
+      "case": "customized",
+      "arm": "baseline",
+      "preservation_findings": [],
+      "protected_hashes": {
+        ".workflow/templates/project/local-preparation.md": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
+        ".workflow/templates/project/overview.md": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
+        ".workflow/templates/project/product.md": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
+        "AGENTS.md": "1d3ce032b1e55550e434ec4b45024bb03ac99f6b5cae5a2f822718d0bae10bca",
+        "check.py": "6d322f74ecaf115b012b9b432b8a157a48bc20a755043c1f203ebde8cee84db8",
+        "handbook/ARCHITECTURE.md": "628f1ed6eff7b01049e48b42bd4088ee3aaba142082ef1ae7334752e84965719",
+        "opencode.json": "4fb34672d7f24bdb421d70a6b55fae15ce54bcf6bf2c2237bdff2aa83a3ec250",
+        "src/AGENTS.md": "f179e05f41fd0e510d27360fd83856f346b4153e69d2dd423a49f5b62fda9307",
+        "src/cleaning.py": "ca96808deffc5b0c86fe9d113cf8fa311221421c4ef7026c9a3c61a100c495ff"
+      },
+      "outputs": {
+        "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n\nFor local prerequisites and verification, see [engineering](handbook/engineering.md).\n",
+        "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n\n## Purpose and scope\n\nLabel Tools provides a small, pure transformation for trimming whitespace at the\nedges of each label. It does not reorder, deduplicate, or otherwise rewrite\nlabels. Its audience is code calling the Python function; no user interface,\nstorage, or service is present.\n\nIncluded is `normalize_labels(values)`, which returns a list of individually\nstripped values. Persistence, integrations, and release-name changes are out of\nscope.\n\n## Code map and behavior\n\n- [`src/cleaning.py`](../src/cleaning.py) implements the transformation.\n- [`check.py`](../check.py) contains direct assertions for order, duplicate\n  retention, and Unicode handling.\n- [`ARCHITECTURE.md`](ARCHITECTURE.md) records the pure, storage-free design.\n\nEach input value has `strip()` applied and remains at the same position, so\nduplicates remain duplicates. Acceptance requires preserving order and\nduplicates while removing surrounding whitespace, including for Unicode\nlabels, as exercised by the check.\n\n## Constraints and next delivery\n\nThe implementation uses only Python's standard library and has no runtime\nservices or persistence. No minimum Python version is established by the\navailable evidence. The fixture records Codex as the selected client, keeps\nchanges local, and leaves merging to the owner; Workstreams are disabled.\n\n- Product acceptance: the documented transformation matches the checked\n  behavior without changing order, duplicate entries, or Unicode content.\n- Next delivery: **PROPOSED** \u2014 add a check for an empty label; acceptance is\n  an assertion that `normalize_labels([''])` returns `['']`.\n",
+        "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n\n## Prerequisites and first check\n\nPython 3 available as `python3` is required to run the check. The code imports\nonly the standard library; no package installation, external service, account,\ndatabase, or environment configuration is indicated. The evidence does not\nestablish a minimum Python version.\n\nFrom the repository root, run:\n\n```sh\npython3 -B check.py\n```\n\nThe command should exit successfully with no output. It runs the assertions in\n`check.py` against the transformation, covering whitespace trimming, order,\nduplicates, and a Unicode label. It is a focused check, not evidence of broader\nintegration or runtime compatibility.\n\nNo additional setup evidence or known issue has been provided. For product\nscope and the proposed next task, see [the product overview](overview.md).\n"
+      },
+      "mechanical": {
+        "ok": true,
+        "findings": [],
+        "finding_count": 0,
+        "fingerprint": "b93e88676c17f8b78a7b06e6bcae63efc9716f1e0e2c7ac974381e3c9839fbde",
+        "preservation": "checked",
+        "limits": {
+          "semantic": "No applicability, factual accuracy, semantic preservation or acceptance judgment.",
+          "markdown": "Inline/reference links and ATX headings only; no HTML, setext headings or renderer extensions.",
+          "preservation": "Exact nonblank lines and multiplicity; reordering allowed. Baseline trust is caller-owned."
+        }
+      },
+      "fixture_check": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "semantic": "pass: coordinator and independent reviewer inspected full outputs against frozen requirements"
+    }
+  ],
+  "started": 1794430834.534194,
+  "deadline": 1794433534.534194,
+  "cap": 18,
+  "review": {
+    "session": "ses_e337f7401ffe7plsnXwSmkrklQ",
+    "model": {
+      "id": "gpt-6-astra",
+      "providerID": "openai",
+      "variant": "high"
+    },
+    "responses": 13,
+    "tokens": {
+      "input": 64270,
+      "cache_read": 739840,
+      "cache_write": 0,
+      "output": 3727,
+      "reasoning": 1481,
+      "total": 809318
+    }
+  },
+  "allocation": {
+    "cap": 18,
+    "sessions": [
+      {
+        "name": "opencode-probe",
+        "at": 1794430834.534194,
+        "status": "interrupted",
+        "stopped_at": 1794431176.883122
+      },
+      {
+        "name": "claude-probe",
+        "at": 1794430834.5513878,
+        "status": "finished",
+        "stopped_at": 1794430846.1199942
+      },
+      {
+        "name": "claude-diagnostic",
+        "at": 1794430926.938453,
+        "status": "finished",
+        "stopped_at": 1794430939.087925
+      },
+      {
+        "name": "opencode-diagnostic",
+        "at": 1794431188.091501,
+        "status": "finished",
+        "stopped_at": 1794431216.015719
+      },
+      {
+        "name": "opencode-visibility",
+        "at": 1794431270.838584,
+        "status": "finished",
+        "stopped_at": 1794431289.653907
+      },
+      {
+        "name": "minimal-baseline",
+        "at": 1794431453.8388731,
+        "status": "failed_start",
+        "stopped_at": 1794431453.8900092
+      },
+      {
+        "name": "minimal-helper",
+        "at": 1794431453.838987,
+        "status": "failed_start",
+        "stopped_at": 1794431453.889867
+      },
+      {
+        "name": "minimal-hook",
+        "at": 1794431453.8909628,
+        "status": "failed_start",
+        "stopped_at": 1794431453.936882
+      },
+      {
+        "name": "customized-hook",
+        "at": 1794431453.892564,
+        "status": "failed_start",
+        "stopped_at": 1794431453.937474
+      },
+      {
+        "name": "customized-helper",
+        "at": 1794431453.9385228,
+        "status": "failed_start",
+        "stopped_at": 1794431453.985638
+      },
+      {
+        "name": "customized-baseline",
+        "at": 1794431453.9400058,
+        "status": "failed_start",
+        "stopped_at": 1794431453.985901
+      },
+      {
+        "name": "minimal-baseline-recovery",
+        "at": 1794431807.8023849,
+        "status": "finished",
+        "stopped_at": 1794431833.242545
+      },
+      {
+        "name": "minimal-helper-recovery",
+        "at": 1794431807.802397,
+        "status": "finished",
+        "stopped_at": 1794431832.273104
+      },
+      {
+        "name": "minimal-hook-recovery",
+        "at": 1794431832.2747571,
+        "status": "finished",
+        "stopped_at": 1794431857.484025
+      },
+      {
+        "name": "customized-hook-recovery",
+        "at": 1794431833.244603,
+        "status": "finished",
+        "stopped_at": 1794431871.670476
+      },
+      {
+        "name": "customized-helper-recovery",
+        "at": 1794431857.486254,
+        "status": "finished",
+        "stopped_at": 1794431888.015043
+      },
+      {
+        "name": "customized-baseline-recovery",
+        "at": 1794431871.673179,
+        "status": "finished",
+        "stopped_at": 1794431905.550266
+      },
+      {
+        "name": "independent-review",
+        "at": 1794432230.940496,
+        "status": "finished",
+        "stopped_at": 1794432544.172822
+      }
+    ],
+    "remaining_attempts": 0
+  }
+}

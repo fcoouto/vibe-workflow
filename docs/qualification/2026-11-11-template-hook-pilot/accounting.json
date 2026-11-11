@@ -1,0 +1,54 @@
+{
+  "snapshot_utc": "2026-11-11T21:30:42.654625+00:00",
+  "scope": "From explicit hook-pilot request msg_1cc56589d001EnIEYpOzb61k3D; coordinator completed responses and compactions only. Later publication/final-response usage excluded. No estimate for hidden upstream retries.",
+  "coordinator": {
+    "execution_review_publication:openai/gpt-6-astra#high": {
+      "responses": 68,
+      "input": 355241,
+      "cache_read": 11549312,
+      "cache_write": 0,
+      "output": 21354,
+      "reasoning": 13483,
+      "total": 11939390
+    },
+    "compaction:openai/gpt-6-astra#high": {
+      "responses": 2,
+      "input": 241193,
+      "cache_read": 225792,
+      "cache_write": 0,
+      "output": 4397,
+      "reasoning": 0,
+      "total": 471382
+    },
+    "preparation:openai/gpt-6-astra#high": {
+      "responses": 46,
+      "input": 182394,
+      "cache_read": 5847040,
+      "cache_write": 0,
+      "output": 21443,
+      "reasoning": 7101,
+      "total": 6057978
+    }
+  },
+  "coordinator_unsettled_responses": 1,
+  "reviewer": {
+    "session": "ses_e337f7401ffe7plsnXwSmkrklQ",
+    "model": {
+      "id": "gpt-6-astra",
+      "providerID": "openai",
+      "variant": "high"
+    },
+    "responses": 13,
+    "tokens": {
+      "input": 64270,
+      "cache_read": 739840,
+      "cache_write": 0,
+      "output": 3727,
+      "reasoning": 1481,
+      "total": 809318
+    }
+  },
+  "trial_tokens": 236296,
+  "coordinator_total": 18468750,
+  "observed_lower_bound_total": 19514364
+}
