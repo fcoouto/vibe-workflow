@@ -31,7 +31,11 @@ Present onboarding preference choices one at a time in the client’s native sin
 
 ## Adapt project documents
 
-Adapt the local shapes below to project facts; they authorize neither prompt execution nor a default stack. During setup/update, reconcile them with the Toolkit revision already resolved for that operation; do not silently ignore a material source change. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Read only shapes needed for authorized additions or repairs. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames. Replace author notes and placeholders with verified facts or explicit unresolved decisions; never copy package-relative links unchanged into another project.
+Adapt the local shapes below to project facts; they authorize neither prompt execution nor a default stack. During setup/update, reconcile them with the Toolkit revision already resolved for that operation; do not silently ignore a material source change. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Read only shapes needed for authorized additions or repairs. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames. Replace template-origin author notes and placeholders with verified facts or explicit unresolved decisions; never copy package-relative links unchanged into another project.
+
+Distinguish observed facts, accepted decisions and proposed work. An unapproved next delivery stays proposed, with a concrete task and observable criterion. Infer required tools from inspected commands/code; an unknown minimum version does not make the tool itself unknown. Retain supplied dates and decision provenance in the existing owner.
+
+For selected template adaptation, load [template assistance](../../../clients/template-tools.md): prepare only the needed shapes and check the explicit destination batch against its protected originals. Reuse existing mappings and evidence; the helper does not decide applicability or meaning.
 
 | Responsibility | Adaptation |
 | --- | --- |

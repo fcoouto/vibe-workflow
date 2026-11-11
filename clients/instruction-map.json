@@ -316,6 +316,15 @@
         ]
       ]
     },
+    "clients/template-tools.md": {
+      "sha256": "8117f8e971c80b327512bcceeddf8098de661e11f87f8a5e9d8aedea334d25a6",
+      "ranges": [
+        [
+          1,
+          43
+        ]
+      ]
+    },
     "clients/worker-visibility.md": {
       "sha256": "5aad8d6365c60d1551244f760c37ac56c20840ab9d908918a15e9bd92293cb58",
       "ranges": [
@@ -432,7 +441,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "449195828a1feeeb09242eede3caaf3a8a4c42d283dfff6ab6950add6f439201",
+      "sha256": "3939cbb5b87eec74490c152e555d468acce73670fb5124a213963161d0aaefef",
       "ranges": [
         [
           1,
@@ -444,7 +453,7 @@
         ],
         [
           92,
-          145
+          146
         ]
       ]
     },
@@ -688,7 +697,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "e232f47acac60c76a7d404037c3925f4f668d17c855bf091fb38420ea8b2d2b4",
+      "sha256": "8dabdcd7f32ef08fc6471d3610fdb3d58e4be0ffc4aa600c160957c5c0dcaa11",
       "ranges": [
         [
           1,
@@ -696,11 +705,11 @@
         ],
         [
           34,
-          123
+          118
         ],
         [
-          124,
-          189
+          119,
+          193
         ]
       ]
     },
@@ -901,7 +910,7 @@
       ]
     },
     "templates/project/local-preparation.md": {
-      "sha256": "88875a7148553b4e9263d5bfdeb63ea4078ce489b986d356ee0e9d3d4ee4f1ce",
+      "sha256": "448550fc3164f65e9731a30a0f742a71b6f556d6179c2821022b4ba334ad766e",
       "ranges": [
         [
           1,
@@ -910,7 +919,7 @@
       ]
     },
     "templates/project/overview.md": {
-      "sha256": "f7e31f6f39c5154c46d98840183bf34d0b77d491b1424d017446af52d197ca40",
+      "sha256": "e9743f28ae0e3c45849dd0ce26b451361e9c3fcbeebf22342eb9494cce4c9386",
       "ranges": [
         [
           1,
@@ -919,7 +928,7 @@
       ]
     },
     "templates/project/product.md": {
-      "sha256": "9ddbc827ea1b93cfdce895efbf4b4b0f0c203308752284c19fb50556c90c7b01",
+      "sha256": "1e0f3f87a7aae589b2dbf6d8a9df2267cc4370999c41510b15bbb49beb8f50d2",
       "ranges": [
         [
           1,

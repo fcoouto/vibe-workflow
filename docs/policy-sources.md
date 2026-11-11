@@ -225,6 +225,18 @@ native instruction use, pauses, provider actions, startup or first-badge renderi
 Actual execution and acceptance belong in the implementation record. This section
 is authoring provenance, not a second routine loading dependency.
 
+## Selective template assistance — 11 November 2026
+
+The user approved the [efficiency design](superpowers/specs/2026-11-11-template-efficiency-design.md) after retained template trials exposed context transport failures and copied author guidance. This local authoring update preserves the Toolkit requirements mapped in Phases 1 and 2 at revision `21b71b68679c11184f49c23168852014bf6dde8b`; it neither repins unrelated source contracts nor changes the newer specialist roster.
+
+| Requirement retained or clarified | Local owner and proof boundary |
+| --- | --- |
+| All nine document responsibilities remain assessed; only useful shapes load; combined destinations and existing customizations remain authoritative (Toolkit project defaults/manifest, Phase 2 mapping below) | `skills/onboard-my-project/references/procedure.md#adapt-project-documents`; selected preparation delegates exact delivery to the existing reader. No universal document schema or new mandatory files. |
+| Facts, accepted decisions and proposals stay distinct; next delivery has a concrete task and criterion; prerequisite inference does not invent minimum versions; supplied dates remain recorded | The adaptation owner and product/overview/preparation placeholders clarify existing scope/planning duties. Static route walkthroughs and offline failure replay are not fresh model behavior evidence. |
+| Original content, permissions, subscriptions, coordinator choices and evidence remain protected | `runtime/template_tools.py` reads explicit bounded local inputs; before-image comparison counts exact nonblank lines, not semantic equivalence. Existing setup/recovery controls still own changes. |
+| Dependencies must exist in the actual consumer checkout (existing delegation contract) | `clients/template-tools.md#consumer-context` checks accepted hashes, reusing equivalent assignment preparation. It grants no launch authority. |
+| Useful checks move out of repeated model turns; native execution and token claims require observed evidence (user-approved design; existing maintenance contract) | The read-only CLI and pure notice formatter have focused regression tests and protected synthetic replay. No native hook registration, automatic repair or model call. A fresh numeric budget remains required for live comparison; earlier failures stay retained. |
+
 ## Lifecycle and project artifacts — Phase 2, 5 November 2026
 
 The user approved the single lifecycle layout and compact child-report direction

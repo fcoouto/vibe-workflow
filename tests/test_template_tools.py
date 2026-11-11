@@ -197,6 +197,29 @@ class TemplateToolsTests(unittest.TestCase):
         self.assertFalse(json.loads(result.stdout)["ok"])
         self.assertNotIn("secret-not-a-digest", result.stdout + result.stderr)
 
+    def test_protected_project_replay_rejects_residue_links_and_missing_transport(self):
+        fixture = PACKAGE / "assets/harness-evaluation/phase-two/customized/input"
+        protected = {path.relative_to(fixture): path.read_bytes()
+                     for path in fixture.rglob("*") if path.is_file()}
+        shutil.copytree(fixture, self.root, dirs_exist_ok=True)
+        shutil.copytree(fixture, self.before, dirs_exist_ok=True)
+        original = (self.root / "README.md").read_text()
+        self.assertTrue(self.tools.check(self.root, ["README.md"], before=self.before)["ok"])
+        path = self.write("README.md", original + "\nOmit lines that don't apply; never invent values.\n[missing](handbook/missing.md)\n")
+        result = self.tools.check(self.root, ["README.md"], ["setup-record.md"], before=self.before)
+        self.assertEqual(self.codes(result), {"author_note", "link_missing"})
+        path.write_text(original)
+        self.assertTrue(self.tools.check(self.root, ["README.md"], ["setup-record.md"], before=self.before)["ok"])
+        expected = hashlib.sha256(protected[Path("handbook/overview.md")]).hexdigest()
+        required = {"handbook/overview.md": expected}
+        (self.root / "handbook/overview.md").unlink()
+        self.assertIn("context_unavailable", self.codes(self.tools.check(self.root, [], required=required)))
+        (self.root / "handbook/overview.md").write_bytes(protected[Path("handbook/overview.md")])
+        self.assertTrue(self.tools.check(self.root, [], required=required)["ok"])
+        for name, raw in protected.items():
+            self.assertEqual((fixture / name).read_bytes(), raw)
+            self.assertEqual((self.root / name).read_bytes(), raw)
+
 
 if __name__ == "__main__":
     unittest.main()
