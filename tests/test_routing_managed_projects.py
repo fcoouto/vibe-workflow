@@ -67,7 +67,7 @@ class ProjectPinTests(gate_tests.GateBase):
         self.unpinned()
         views = self.workflow.views
         response = self.call(prepare('p1', workflow=gate_tests.locator()))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='project_required'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='project_required', missing_fields=[]))
         self.assertEqual(self.workflow.views, views)
         self.assertFalse(self.ledger.exists())
 
@@ -97,7 +97,8 @@ class ObservationTests(ManagedBase):
     def test_without_a_collector_a_managed_prepare_is_observations_unavailable(self):
         with mock.patch.dict(sys.modules, {COLLECTOR: None}):
             response = self.call(without(prepare('m2'), 'observations'))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable',
+                                        missing_fields=[]))
         self.assertFalse(self.ledger.exists())
 
     def test_a_failing_or_malformed_collector_is_observations_unavailable(self):
@@ -106,7 +107,8 @@ class ObservationTests(ManagedBase):
                                                                           None)):
             with self.subTest(result=result, error=error), collector(result, error):
                 response = self.call(without(prepare('m3'), 'observations'))
-                self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable'))
+                self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable',
+                                                missing_fields=[]))
 
     def test_the_collector_is_called_with_the_pinned_project_and_seen_is_echoed_when_admitted(self):
         with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:

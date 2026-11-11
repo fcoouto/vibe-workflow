@@ -255,6 +255,7 @@ class Service:
 
     def handle(self, raw, op=None):
         request_id = None
+        self._missing = None  # set by `_prepare` once this request has a profile, then added to any answer
         try:
             value = parse(raw)
             require(type(value) is dict, 'invalid_request')
@@ -282,6 +283,8 @@ class Service:
             self.close()
             result = dict(state='blocked', reason='internal_error')
         response = dict(v=VERSION, **result)
+        if self._missing is not None:
+            response['missing_fields'] = self._missing
         if request_id is not None:
             response['id'] = request_id
         return response
@@ -428,6 +431,7 @@ class Service:
             profile = routing.ensure_profile(body['job'])
         except Exception:  # noqa: BLE001 - ProfileUnavailable or an unreadable job
             raise Blocked('profile_unavailable') from None
+        self._missing = list(profile['uncertain_fields'])  # fields that took floors; never a reason to block
         try:
             role = routing_settings.assignment_role(profile['role'], assignment.get('role'))
         except SettingsError as error:

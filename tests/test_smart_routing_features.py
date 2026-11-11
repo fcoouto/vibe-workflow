@@ -885,7 +885,7 @@ class C2dCouncilAndProjectReview(command_tests.Base):
         """F09/F13: a delegated reviewer keeps its own role; routing cannot relabel it to borrow worker routes."""
         response = self.call(prepare('rv1', job=job(role='review')) | dict(
             assignment=dict(attempt_id='rv1', task='task-rv1', role='implementer', scope=SCOPE)))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='role_mismatch'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='role_mismatch', missing_fields=[]))
 
     def test_the_review_instruction_check_accepts_only_a_positive_instruction(self):
         """The C3-6 marker cannot be satisfied by a prohibition or a sentence that routes something else."""
