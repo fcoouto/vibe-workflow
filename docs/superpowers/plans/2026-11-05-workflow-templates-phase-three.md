@@ -1,5 +1,7 @@
 # Workflow Templates Phase 3 Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map and `--prepare` were removed; map regeneration steps and observations below record earlier work, not current requirements.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans for authorized execution. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the existing native behavioral checks reusable from a local workflow package, starting with stale-handoff repair and read-only review.

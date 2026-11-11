@@ -1,5 +1,7 @@
 # Packaged instruction runner
 
+> **Update, 11 November 2026:** references to the stored manifest and its authoring command are historical; the manifest and `--prepare` were removed and the reader derives hashes and ranges from the selected current sources.
+
 The user approved replacing repeated generated loader code with one fixed packaged runner, including an extra helper command for small selections. This supersedes only the previous single-batch/no-helper optimization. Automatic draining and all delivery checks remain required.
 
 ## Approach

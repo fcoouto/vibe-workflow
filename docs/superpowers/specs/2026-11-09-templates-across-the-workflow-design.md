@@ -70,7 +70,7 @@ Deferred at the A–C decision:
 
 After A–C the five existing files stay flat: `worker-brief.md`, `task-record.md`, `review-report.md`, `pull-request.md`, `setup-record.md`. D adds the project-document family under `templates/project/`; it reuses the setup record instead of adding a second setup shape.
 
-Add subfolders and a `templates/README.md` index for authors when the folder passes about eight files, or when a family reaches three files (D would). The prepared instruction reader serves only top-level `templates/*.md` today. Subfolders need both its source discovery and its allowed-path rule extended, as for `skills/**`, the map regenerated and the nested-path test updated.
+Add subfolders and a `templates/README.md` index for authors when the folder passes about eight files, or when a family reaches three files (D would). The instruction reader's allowed-path rule serves nested `templates/**/*.md`, as for `skills/**`; package validation checks every such source directly.
 
 ## Delivery
 
@@ -78,7 +78,7 @@ One worktree, one branch and one PR for A, B and C:
 
 - **Templates:** add the three.
 - **Owners:** remove the moved field lists from `04`, `06`, `08` and the review and onboarding procedures, and link the templates where they are used. The PR template is linked from the publication path and the readiness owner.
-- **Coverage:** update the 5 November design's placement line and source-to-contract coverage; regenerate the instruction map.
+- **Coverage:** update the 5 November design's placement line and source-to-contract coverage.
 
 Acceptance:
 

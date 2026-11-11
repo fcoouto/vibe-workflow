@@ -140,11 +140,15 @@ def validate(root=ROOT):
         raise ValueError("Default hooks would duplicate Claude's explicit registration")
     local_file(root, "./clients/codex.md")
     local_file(root, "./runtime/adapters/codex.py")
-    from scripts.read_instructions import build_manifest
+    from scripts.read_instructions import instruction_name, source_entry, source_path
     local_file(root, "./scripts/read_instructions.py")
     local_file(root, "./scripts/drain_instructions.js")
-    if read_json(local_file(root, "./clients/instruction-map.json")) != build_manifest(root):
-        raise ValueError("Prepared instruction map is stale; run scripts/read_instructions.py --prepare during authoring")
+    for path in sorted([*(root / "clients").glob("*.md"), *(root / "policies").glob("*.md"),
+                        *(root / "templates").rglob("*.md"), *(root / "skills").rglob("*.md")]):
+        name = path.relative_to(root).as_posix()
+        if not instruction_name(name):
+            raise ValueError(f"Invalid instruction source name: {name}")
+        source_entry(source_path(root, name).read_bytes(), name)
     validate_codex_hooks(root, manifest)
     validate_startup_hook(root, claude, "claude-code", "CLAUDE_PLUGIN_ROOT")
     receiver = read_json(local_file(root, "./assets/habblaud/receiver.json"))

@@ -1,5 +1,7 @@
 # Project-document templates implementation plan
 
+> **Update, 11 November 2026:** the stored instruction map, `--prepare` and `build_manifest` were removed. Nested `templates/**/*.md` stay readable through the reader's allowed-path rule, and package validation checks every such source directly. Map regeneration steps below record earlier work, not current requirements.
+
 > **For agentic workers:** Use `executing-plans` for this single, coupled change.
 
 **Goal:** Implement candidate D: locally available project-document shapes for all nine onboarding responsibilities, without creating nine mandatory files.

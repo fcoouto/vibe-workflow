@@ -35,7 +35,6 @@ Make delegated work simpler and cheaper. All delegated work runs as native child
 | `clients/workstreams.md` | Add "branch or worktree" to the child record (`:42`); remove "add a coordination level" (`:80`, contradicts D2); the names subsection points to root naming only. |
 | `clients/workstreams-protocol.md`, `clients/evidence-review-prepare.md` | Replace the `WS42.01` examples with D5. |
 | `skills/workstreams/SKILL.md` | The naming route covers the coordinator title only. |
-| `clients/instruction-map.json` | Regenerate the map. |
 
 **Code**
 
@@ -61,7 +60,7 @@ Resource admission, capacity recovery, the managed task runtime itself, worker r
 5. Instruction paths, checked with representative tasks: a coordinator starting implementation loads the naming rules and adopts a title; a child's delegation path loads no title procedure.
 6. `clients/`, `policies/` and `skills/` no longer mention `workstreams_family.py`, `member: "C"`, a title `parent_session_id`, deliverable chats or `[W`.
 
-**Checks** (per [the development guide](../../development.md#checks)): regenerate the map with `python3 -B scripts/read_instructions.py --prepare`; `python3 -B scripts/validate.py`; the affected modules through `scripts/test_sharded.py`; commit, then the full suite once, because `scripts/workflow.py` is shared core and the policy edits reach many fixtures; `--fast` before `[READY]`.
+**Checks** (per [the development guide](../../development.md#checks)): `python3 -B scripts/validate.py`; the affected modules through `scripts/test_sharded.py`; commit, then the full suite once, because `scripts/workflow.py` is shared core and the policy edits reach many fixtures; `--fast` before `[READY]`.
 
 ## 7. Effect on other work
 

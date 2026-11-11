@@ -27,7 +27,7 @@ acknowledgments need no title update.
 
 ## Instruction output budgets
 
-Select only applicable instruction files. Supply Vibe paths relative to the package or as absolute paths; supply external skills and their triggered Markdown references as absolute paths. A selection may mix both: the reader determines each source's authority and retains its package or external checks. Never run `--prepare` during routine tasks.
+Select only applicable instruction files. Supply Vibe paths relative to the package or as absolute paths; supply external skills and their triggered Markdown references as absolute paths. A selection may mix both: the reader determines each source's authority and retains its package or external checks.
 
 With `functions.exec`, use this complete launcher in one invocation for each selection. Set only `root` and `paths`; keep the launcher body intact. It loads one fixed packaged runner per selection, which automatically drains continuations through separate `notify` outputs, including bounded small-page recovery. Do not print/collect batch bodies into the direct result, run continuation calls manually, or evaluate instruction contents. If the cell yields as running, wait for its terminal result before proceeding. Only `complete: true` establishes delivery of the selected text; it does not establish applicability, semantic compliance or retention after compaction.
 

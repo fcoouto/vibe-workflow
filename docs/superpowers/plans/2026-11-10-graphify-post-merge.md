@@ -30,8 +30,7 @@
 ### Task 1: Complete the shared maintenance procedure and its loading paths
 
 **Files:** Modify `policies/08-merge-readiness.md`, `policies/00-index.md`,
-`docs/development.md`, `skills/onboard-my-project/references/procedure.md`;
-regenerate `clients/instruction-map.json`.
+`docs/development.md`, `skills/onboard-my-project/references/procedure.md`.
 Create `clients/graphify-maintenance.md` and `tests/test_graphify_maintenance_instructions.py`.
 
 **Interfaces:** Existing setup decision and merge/synchronization observations in;
@@ -40,7 +39,7 @@ agent-executed Graphify maintenance and snapshot-bound result in the existing ta
 - [ ] Add focused instruction-delivery/routing tests; observe the intended baseline failure.
 - [ ] Link the existing merge owner to one selectively loaded maintenance procedure. Route index,
   local development and onboarding to it; retain source coverage and existing requirements.
-- [ ] Regenerate the instruction map and rerun focused tests plus package validation.
+- [ ] Rerun focused tests plus package validation.
 - [ ] Commit before broader checks. Run affected instruction, packaging and startup tests under the current development guide's proportionate-check rules.
 - [ ] Have one independent native reviewer assess the diff and walk through enabled,
   disabled, missing-graph, external-merge, unsafe-checkout and refresh-failure cases.

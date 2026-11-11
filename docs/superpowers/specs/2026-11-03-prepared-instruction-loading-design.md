@@ -1,5 +1,7 @@
 # Prepared Vibe instruction loading
 
+> **Update, 11 November 2026:** the stored manifest, `--prepare` and `build_manifest` described here were removed. The reader derives hashes and ranges from the selected current sources, and package validation checks every instruction source directly. This design records the earlier approach.
+
 The user approved implementing Vibe's prepared loading, preserving every requirement, independently reviewing and validating it, and repeating the existing paired benchmark. RTK, other plugins and their skills remain unchanged.
 
 ## Design

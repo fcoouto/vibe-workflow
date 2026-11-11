@@ -476,7 +476,7 @@ Rules the command applies:
 
 **Status (10 November 2026):** Done (#129): `tests/test_opencode_adapter.py` over the sanitized `p0-hook-event-excerpt.json` and `s3-3-shim-live.json` payloads.
 
-**Files:** create `runtime/adapters/opencode.py`, `clients/opencode.md`, `tests/test_opencode_adapter.py`; modify `clients/index.md`, `clients/instruction-map.json` and the support targets in `docs/onboard-my-project-plan.md#client-scope-and-adapter-organization`.
+**Files:** create `runtime/adapters/opencode.py`, `clients/opencode.md`, `tests/test_opencode_adapter.py`; modify `clients/index.md` and the support targets in `docs/onboard-my-project-plan.md#client-scope-and-adapter-organization`.
 
 - [x] Write failing tests against recorded, sanitized OpenCode V2 hook and event payloads: normalization yields task, parent, stage, attempt, session/message IDs, requested model/effort and route identity; unknown fields stay unknown.
 - [x] Run, implement, re-run; expected PASS.
@@ -640,7 +640,7 @@ C.1 comes after the C.3 phase W slices and the canary, and before phase R: C3-7 
 
 - Create `runtime/ledger_versions.py`, `runtime/routing_launch.py`, `runtime/routing_observations.py`, `runtime/routing_routes.json`, `runtime/delegation_routing.py`, `runtime/opencode_launcher.py` and `scripts/opencode_launch.py`. New code goes into new modules, so files already at their line ceilings do not grow.
 - Modify `scripts/routing.py`, `runtime/routing.py`, `runtime/usage_budget.py`, `runtime/delegation.py`, `runtime/evidence.py`, `runtime/workstreams.py`, `runtime/external_delegation.py`, `runtime/routing_settings.py`, `runtime/subscription_reconcile.py`, `runtime/usage_routing.py`, `scripts/usage_routing.py`, `runtime/usage_codex_host.py`, `runtime/usage_canary.py`, `runtime/usage_canary_host.py`, `scripts/usage_codex_host.js`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py` and the qualification harness under `tests/qualification/`.
-- Modify `policies/03-agent-delegation.md`, `clients/delegation.md`, `clients/delegation-requests.md`, `clients/evidence-review-prepare.md`, `clients/external-delegation.md`, `clients/opencode.md`, `clients/instruction-map.json`, `skills/review-my-project/`, `skills/manage-usage-routing/` and the affected OpenRouter and Workstreams skill texts.
+- Modify `policies/03-agent-delegation.md`, `clients/delegation.md`, `clients/delegation-requests.md`, `clients/evidence-review-prepare.md`, `clients/external-delegation.md`, `clients/opencode.md`, `skills/review-my-project/`, `skills/manage-usage-routing/` and the affected OpenRouter and Workstreams skill texts.
 
 Each slice's owned files and tests are in [design §6.3](../specs/2026-11-10-smart-routing-c3-wiring-design.md#63-slices), and [design Appendix A](../specs/2026-11-10-smart-routing-c3-wiring-design.md#appendix-a--inventory-at-the-pinned-base) gives every changed file one owner.
 

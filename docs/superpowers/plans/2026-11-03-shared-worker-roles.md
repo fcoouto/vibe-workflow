@@ -1,5 +1,7 @@
 # Shared worker roles implementation plan
 
+> **Update, 11 November 2026:** the stored instruction map was removed; any instruction-map refresh step below records earlier work, not a current requirement.
+
 **Goal:** carry explicit workflow roles and custom role names to optional Habblaud
 visibility for ordinary/managed native and OpenRouter workers, without changing
 execution authority, settings or identity.

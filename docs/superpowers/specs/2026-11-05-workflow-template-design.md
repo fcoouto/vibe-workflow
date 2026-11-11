@@ -83,7 +83,7 @@ Toolkit sources inform authoring, setup and updates. Routine tasks consume compl
 | Behavioral fixture | Disposable input and independently controlled evaluator for selected maintenance cases | Existing maintenance policy defines qualification and decision criteria. |
 | Optional future schema | Editor/API/form contract for a named consumer, only if a demonstrated need remains | One structural source of truth, with validator parity and migration compatibility; never a parallel authorization authority. |
 
-Keep short examples in their owner document. Extract only when size or a distinct loading trigger warrants it. No agent reads `templates/` as a catalog; each template is reached through its owner's link. Extend source-to-contract coverage for authoring; it remains outside routine loading. Update the existing prepared instruction map only when its actual input sources change.
+Keep short examples in their owner document. Extract only when size or a distinct loading trigger warrants it. No agent reads `templates/` as a catalog; each template is reached through its owner's link. Extend source-to-contract coverage for authoring; it remains outside routine loading.
 
 ### Mandatory versus optional
 

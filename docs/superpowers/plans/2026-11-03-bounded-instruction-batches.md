@@ -1,5 +1,7 @@
 # Bounded Instruction Batches Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map and `--prepare` were removed; the reader derives hashes and ranges from the selected current sources, and package validation checks every instruction source directly. Map regeneration steps below record earlier work, not current requirements.
+
 > **For agentic workers:** Use superpowers:executing-plans. Root implements this cohesive slice; a fresh independent reviewer checks the complete change.
 
 **Goal:** Remove mechanical continuation round trips while preserving complete applicable Vibe instructions.

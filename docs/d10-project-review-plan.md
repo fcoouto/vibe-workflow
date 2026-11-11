@@ -1,5 +1,7 @@
 # D10: Review my Project
 
+> **Update, 11 November 2026:** the stored instruction map, `--prepare` and `build_manifest` were removed. The reader derives hashes and line ranges from the selected current sources, and package validation checks every instruction source directly. Map-generation and regeneration steps below record earlier work, not current requirements.
+
 Instructions on `main` · 8 November 2026 · The review skill, its instruction-delivery tests and fixtures are on `main`, ported from the 5 November candidate below. The later report and retention runtime candidates described below (R1 and the original-report locator) were not merged; they are kept on the local-only `archive/d10-project-review` branch (commit `0465c93`). Managed detailed-report retention and complete client qualification remain unavailable.
 
 **Goal:** let the user review selected repositories or an umbrella, enrolled or not, without required or silent enrollment. The skill is **Review my Project**, ID `review-my-project`. D10 is a separate deliverable in the [canonical implementation plan](onboard-my-project-plan.md#5-small-deliverables); it does not block D6/D7 or become a mandatory onboarding step.

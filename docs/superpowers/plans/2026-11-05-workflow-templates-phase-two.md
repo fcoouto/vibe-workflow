@@ -1,5 +1,7 @@
 # Workflow Templates Phase 2 Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map and `--prepare` were removed; map regeneration steps and observations below record earlier work, not current requirements.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans for authorized execution. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Pilot one lifecycle layout, compact child reports and useful project-document adaptation while preserving existing authority and reducing repeated composition.

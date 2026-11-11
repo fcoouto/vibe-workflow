@@ -16,7 +16,7 @@ Each supported client keeps its own copy of the plugin and upgrades it with its 
 
 ## Plan
 
-Files: `runtime/package_versions.py` (new), `scripts/workflow.py`, `skills/prepare-my-workspace/SKILL.md` (stay within 150 words), `skills/prepare-my-workspace/references/upgrade.md` (new), `clients/instruction-map.json` (regenerated), `tests/test_package_versions.py` (new).
+Files: `runtime/package_versions.py` (new), `scripts/workflow.py`, `skills/prepare-my-workspace/SKILL.md` (stay within 150 words), `skills/prepare-my-workspace/references/upgrade.md` (new), `tests/test_package_versions.py` (new).
 
 1. Tests first: CLI output parsing for both clients (observed formats), record write/refusal/atomicity/permissions, `status` makes no writes, startup warning appended on mismatch, silent when the record is absent or corrupt, startup never writes or spawns a process, unenrolled startup stays silent.
 2. Implement the module, the `upgrade status|record` controls and the startup comparison.

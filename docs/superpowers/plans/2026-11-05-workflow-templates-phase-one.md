@@ -1,5 +1,7 @@
 # Workflow Templates Phase 1 Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map and `--prepare` were removed; map regeneration steps and observations below record earlier work, not current requirements.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Clarify ordinary versus managed instruction loading, prove two useful example patterns, and simplify delegation code only where the audit establishes a safe improvement.

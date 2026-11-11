@@ -1,5 +1,7 @@
 # Managed-runtime birth without unrelated machine history
 
+> **Update, 11 November 2026:** the stored instruction map was removed; where this plan refers to an instruction-map entry, the reader now derives hashes and ranges from the selected current sources. Resume the rest of this design unchanged.
+
 ## Authorized design
 
 The user requested a real no-history regression, a minimal implementation,

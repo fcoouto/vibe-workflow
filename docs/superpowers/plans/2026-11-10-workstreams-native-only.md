@@ -196,7 +196,6 @@ git commit -m "feat(delegation): reject workstream_context_id for new assignment
 
 **Files:**
 - Modify: `policies/03-agent-delegation.md`, `policies/07-context-and-handoff.md:35`, `clients/workstreams-naming.md`, `clients/workstreams-titles.md`, `clients/workstreams.md`, `clients/workstreams-protocol.md:59-71`, `clients/evidence-review-prepare.md:10`, `skills/workstreams/SKILL.md`
-- Regenerate: `clients/instruction-map.json`
 
 **Interfaces:**
 - Consumes: the D4 format from Task 1 and the CLI rejection from Task 2.
@@ -205,9 +204,9 @@ git commit -m "feat(delegation): reject workstream_context_id for new assignment
 
 Policy 03: native children only, one coordinator schedules all, a requested chat is an independent conversation; remove `:60-61` mapping and `:77-79` peer push. Naming: coordinator only, the D4 format, statuses, meter, PR merge gate. Titles: coordinator-only adoption and sync; no member, parent binding or family text. `workstreams.md`: add "branch or worktree" to the child record, remove `:80`. Protocol and review-prepare: native children use the attempt name; no context ID. Keep `SKILL.md` under 150 words.
 
-- [ ] **Step 2: Regenerate the map and validate**
+- [ ] **Step 2: Validate**
 
-Run: `python3 -B scripts/read_instructions.py --prepare && python3 -B scripts/validate.py`
+Run: `python3 -B scripts/validate.py`
 Expected: `"validation": "passed"`.
 
 - [ ] **Step 3: Check the wording is gone**

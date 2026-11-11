@@ -1,5 +1,7 @@
 # Prepared Instruction Loading Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map, `--prepare` and `build_manifest` described here were removed; the reader derives hashes and ranges from the selected current sources, and package validation checks every instruction source directly. The steps below record earlier work, not current requirements.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans. Root implements this cohesive slice; independent reviewers assess the result.
 
 **Goal:** Prepare and deliver applicable Vibe instructions without reconstructing clipped text.

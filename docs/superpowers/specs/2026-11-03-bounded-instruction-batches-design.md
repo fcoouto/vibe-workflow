@@ -1,5 +1,7 @@
 # Bounded instruction batches
 
+> **Update, 11 November 2026:** references to the stored manifest and its authoring command are historical; the manifest and `--prepare` were removed and the reader derives hashes and ranges from the selected current sources.
+
 The user approved bounded batches in the existing reader, preserving requirements, followed by independent review and the same implementation/review/resume benchmark. RTK, other plugins, model settings and authentication remain unchanged.
 
 Keep applicability selection with the coordinator. After selection, let the existing reader combine consecutive prepared pages without requiring a model decision for each page. Preserve exact source text, source order, duplicate elimination, path containment, complete range validation and revision-bound continuation. Validate the selected sources before emitting anything; a batch must not combine separate source observations.

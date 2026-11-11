@@ -1,5 +1,7 @@
 # External instruction loading
 
+> **Update, 11 November 2026:** references to the stored manifest and its authoring command are historical; the manifest and `--prepare` were removed and the reader derives hashes and ranges from the selected current sources.
+
 The paired benchmark's Graphify read lost 5,767 tokens inside a mixed child response. Vibe's existing recovery notice reached model context, but the model continued without recovery. The fix must prevent that read shape through Vibe while preserving external sources, their authority, all applicable instructions and the user's execution settings.
 
 ## Approach

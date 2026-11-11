@@ -1,5 +1,7 @@
 # Instruction Scope Routing Implementation Plan
 
+> **Update, 11 November 2026:** the stored instruction map and `--prepare` were removed; the reader derives hashes and ranges from the selected current sources, and package validation checks every instruction source directly. Map regeneration steps below record earlier work, not current requirements.
+
 > **For agentic workers:** Use superpowers:executing-plans. Root implements this cohesive slice; a fresh independent reviewer checks it before native qualification and benchmarking.
 
 **Goal:** Route explicit mixed instruction selections safely through the existing runner and remove the observed ad hoc recovery detour.

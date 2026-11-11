@@ -1,5 +1,7 @@
 # Instruction scope routing and recovery budgets
 
+> **Update, 11 November 2026:** references to the stored manifest and its authoring command are historical; the manifest and `--prepare` were removed and the reader derives hashes and ranges from the selected current sources.
+
 The user authorized fixing mixed-scope selections and recovery budgets through Vibe while preserving automatic draining, all source checks, RTK, other plugins and model settings. The observed failure combined an external guide and an absolute Vibe contract under a model-chosen external flag. The reader correctly rejected it, but the model's direct recovery combined child budgets without enough outer headroom.
 
 ## Design

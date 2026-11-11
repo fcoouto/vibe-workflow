@@ -586,7 +586,7 @@ Inventory scope: inspected `main` at the revision in section 10.1 plus the curre
 
 - [ ] Reconcile `main` and Checkout-only features; name the actual implementation owner for every F01–F17 row before retiring callers.
 - [ ] Route every applicable worker/proposal/control-inference path through shared policy and accounting, preserving the feature-specific constraints above.
-- [ ] Update instruction loading/source-to-contract coverage and `clients/instruction-map.json` when their owners change. Keep skill entry points within 150 words.
+- [ ] Update instruction loading/source-to-contract coverage when their owners change. Keep skill entry points within 150 words.
 - [ ] Exercise ON/OFF/readiness combinations and each row's boundary with adapter doubles/instruction walkthroughs before qualifying the live host.
 
 ## Appendix B — Whole-document review record
