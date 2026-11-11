@@ -10,6 +10,8 @@ During Runtime, read this index, every contract whose trigger applies, and appli
 
 Keep policy adoption, action applicability and action satisfaction distinct. Missing capabilities or unknown applicability cannot count as inapplicable or satisfied. Ordinary native editing, tests and review need no managed task state or runtime activation. Block only work that depends on a missing prerequisite; never silently skip an applicable mandatory requirement. Optional enforcement and advanced execution acquire only their own prerequisites when selected.
 
+Judge each trigger from the task's actual state and the request, whoever did the earlier work. When a trigger does not apply, leaving its contract unread is correct. When applicability is unknown, resolve it from current state or one question before the dependent action, or report it as unresolved.
+
 Use deterministic tooling or direct execution when sufficient. Consider delegation
 for useful context isolation, specialization, required independence or independent
 parallel work; only then load the dispatch contract. Direct work still follows
