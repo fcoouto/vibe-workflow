@@ -54,8 +54,8 @@
 
 **Files:** execution notes in this plan; private review report outside the checkout.
 
-- [ ] Inspect final diff and changed instruction routes; obtain one independent behavior/security review with read-only scope.
-- [ ] Resolve substantiated findings with focused regression proof; reuse unaffected results.
+- [x] Inspect final diff and changed instruction routes; obtain one independent behavior/security review with read-only scope.
+- [x] Resolve substantiated findings with focused regression proof; reuse unaffected results.
 - [ ] Record actual checks, observed overhead and unavailable live qualification; push and open a draft PR against `main`.
 
 ## Execution record
@@ -74,10 +74,28 @@ Status: WORKING. The user approved the design and requested continuation; implem
 
 ### Independent review preparation
 
-One native General child will review behavior and local filesystem/security boundaries, read-only on the entire branch. Its role is `code-reviewer`, specialty template assistance and filesystem boundaries. No external route or evaluation trial is requested. The current routing status reports no managed projects; Workstreams is enabled. Cached official OpenCode native guidance checked 8 November 2026 remains applicable (SHA-256 `fae88d07f36f0aad858eedd1b866f5e1ceccf082501e6ec246b6d44fbec711e1`). This harness permits model overrides only for explicit user model requests; retain native configured/inherited controls and coordinator settings. Actual child model/effort remain unknown unless reported by the native tool. Codex-specific UUID/display preparation does not apply to this OpenCode session; declare the role in the native brief without claiming badge rendering.
+One native General child reviewed behavior and local filesystem/security boundaries, read-only on the entire branch. Its role was `code-reviewer`, specialty template assistance and filesystem boundaries. No external route or evaluation trial was requested. Routing status reported no managed projects; Workstreams was enabled. Cached official OpenCode native guidance checked 8 November 2026 remained applicable (SHA-256 `fae88d07f36f0aad858eedd1b866f5e1ceccf082501e6ec246b6d44fbec711e1`). This harness permits model overrides only for explicit user model requests; native configured/inherited controls and coordinator settings were retained. The child reported GPT-6 Astra from its harness context; reasoning effort was not independently observed. Codex-specific UUID/display preparation did not apply to this OpenCode session; the role was declared in the native brief without claiming badge rendering.
+
+### Review disposition
+
+The native dispatch created child `ses_e33d2dfa5ffe7P9nixAPWPF4Gj`, which returned a private mode-0600 report for `11a8927..f09319f`. The report was read and all findings checked against source and reproductions. Three medium/Important findings entered one fix pass:
+
+| Finding | Disposition and proof |
+| --- | --- |
+| R1: Inline-code text disappeared from ATX heading anchors | Fixed by preserving visible code text for heading extraction while retaining code masking for link examples. `test_heading_anchors_preserve_visible_inline_code` failed first, then passed with an absent-fragment control. |
+| R2: Duplicate normalized reference labels used the last definition | Fixed by retaining the first definition. `test_duplicate_reference_labels_use_first_definition` failed in both orderings, then passed with case/whitespace-equivalent labels. |
+| R3: Duplicate headings and repeated anchored links caused excessive work | Fixed with next-suffix tracking and per-observation anchor caching. `test_duplicate_heading_collisions_and_repeated_links_finish_within_budget` exceeded its five-second deadline before the fix, then passed with 20,000 duplicate headings, 100 links and mixed heading collisions. |
+
+RED snapshot `ddef680` retained the three reproductions. GREEN candidate `567fbce` passed all 64 selected tests (23 helper, 32 reader, 9 harness) in 0.8 seconds wall time; the helper module took 0.4 seconds including the stress test. `python3 -B scripts/validate.py` passed without warnings and `git diff --check` passed. The coordinator inspected the final fix diff and reused unaffected independent coverage. No second review round or full suite was run. No minor findings were deferred.
+
+The implementation is verified within the offline scope. Publication remains a draft because fresh instruction-effectiveness evidence needs a new numeric pilot budget. Native hook registration remains dependent on actual client qualification. These pending observations do not become passes through the review or package checks.
 
 ### Execution rulings
 
 - Preserve current main's specialist roster rather than edit the historical evaluation branch; historical thirteen-template counts do not cover the newer machine contract.
 - Deliver the offline helper and callable feedback boundary first; token effectiveness and native hook behavior remain provisional until separately authorized observations.
 - Use only affected checks, following the user's limit and development guide, instead of generic skill full-suite instructions; unrelated regressions remain outside this proof. Reuse current successful runs instead of repeating them for bookkeeping.
+- Native hook delivery and token/billing/causal gains remain unassessed: neither a hook adapter nor an authorized pilot exists in this slice; users cannot infer effectiveness from offline checks.
+- Semantic acceptance, baseline authenticity and changes after observation remain with existing agent/evidence owners: mechanical checks cannot authenticate them; callers must review meaning and recheck changed inputs.
+- Full Markdown conformance, HTML, setext headings, directory links and renderer extensions remain outside the documented basic parser: unsupported valid syntax can still need manual inspection.
+- Compromised installed-package code, hostile replacement of root ancestors, live deployments, unrelated modules and package-export cleanup remain outside this local review: package and roots are trusted anchors; no assurance is claimed for those environments.
