@@ -100,15 +100,21 @@ def _legacy(run):
     return 'account' not in run
 
 
+def _unpriced(call):
+    """F5.A2: completed work whose billing is unknown (`cost: null`); it holds its full maximum until settled."""
+    return call['state'] == 'completed' and call['cost'] is None
+
+
 def outstanding(data):
-    """`status.ledger.legacy_outstanding`: every open legacy run call (reserved, in flight, unresolved or over-bound)
-    and every `legacy_block` organization, which must all be settled before C3-7; `ready` handoffs are counted for
+    """`status.ledger.legacy_outstanding`: every open legacy run call (reserved, in flight, unresolved or over-bound),
+    every completed call whose cost is still unknown (`unpriced`, even on a closed run) and every `legacy_block`
+    organization, which must all be settled before C3-7; `ready` handoffs are counted for
     information only (they hold no exposure). Ids, states and integer amounts only."""
     items = [dict(run_id=run_id, phase=phase, state=call['state'], maximum=call['maximum'],
-                  over_bound='over_bound' in call)
+                  over_bound='over_bound' in call, **({'unpriced': True} if _unpriced(call) else {}))
              for run_id, run in sorted(data['runs'].items()) if _legacy(run)
              for phase, call in sorted(run['calls'].items(), key=lambda item: PHASES.index(item[0]))
-             if call['state'] in OPEN or 'over_bound' in call]
+             if call['state'] in OPEN or 'over_bound' in call or _unpriced(call)]
     blocks = sorted(org_id for org_id, org in data['organizations'].items() if org.get('legacy_block'))
     ready = sum(1 for record in (data.get('handoffs') or {}).values()
                 if isinstance(record, dict) and record.get('state') == 'ready')
@@ -176,7 +182,8 @@ def _settle(ledger, event, digest, now):
         require(call is not None, 'unknown_call')
         require(_legacy(run), 'not_legacy_call')
         require('over_bound' not in call, 'block_not_pending')
-        require(call['state'] in OPEN, 'call_closed')
+        unpriced = _unpriced(call)  # F5.A2: completed work, unknown cost: receipts or charge_reservation only
+        require(call['state'] in OPEN or unpriced, 'call_closed')
         kind, maximum = evidence['kind'], call['maximum']
         require((kind == 'never_dispatched') == (call['state'] == 'reserved'), 'call_state_forbidden')
         over = False
@@ -199,7 +206,11 @@ def _settle(ledger, event, digest, now):
             charged, released, resolution = maximum, 0, dict(basis='charge_reservation')
         if not over:
             call.pop('provision', None)
+        if not over and not unpriced:  # terminal recovery: cancel only provably unsent siblings, then close
+            for other in run['calls'].values():
+                if other['state'] == 'reserved': other.update(cost=0, state='rejected-before-send')
             Ledger._close_run(data, run_id)
+        # Pricing completed work is a partial cost reconciliation: another phase and the run's lifetime are untouched.
         outcome = dict(state='recorded', duplicate=False, outcome='over_bound' if over else
                        'released' if kind == 'never_dispatched' else 'charged', run_id=run_id, phase=phase,
                        charged=charged, released=released, resolution=resolution,

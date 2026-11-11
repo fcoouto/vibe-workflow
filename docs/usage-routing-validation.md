@@ -562,3 +562,29 @@ In the live OpenRouter Desktop check, the native activity showed
 with synthetic settlement evidence. Live API registration and a Claude Code
 transport remain unqualified. The unresolved API charge stayed on hold during
 this integration.
+
+## API-money reservation and reconciliation (F5.A2) · 12 November 2026
+
+Registered for plan task F5, checkpoint A2, before any live use; earlier sections and their results stay as recorded.
+API Usage stays deferred now and required next, ranked selection stays subscription-only, `API_FUNDING_QUALIFIED`
+stays false and production OpenRouter stays deferred. Nothing here authorizes a live run.
+
+- **Whole-task envelope.** An S1 task reserves V = ceil(1.2 × (generation quote + count maximum)) before its first
+  paid send (`Ledger.reserve_task`): the count call holds its maximum and a generation placeholder the rest. The
+  generation grant (`reserve_call`) only binds the counted packet; it never lowers the reservation or adds money.
+  An under-estimate refuses with `envelope_exceeded`. The 20% buffer is fixed (`API_MONEY_BUFFER_BP = 2000`) and
+  separate from subscription `margin_bp`; funded routing constraints use it too.
+- **Unknown cost stays reserved.** The count transport returns no cost and the generation figure is a conservative
+  estimate, so the dormant runner records both as completed with `cost: null`, held at their full reservation, until
+  an operator settles them with receipts or the charge reservation. Pricing one phase never closes another.
+- **Balance coverage.** A trusted in-process `Coverage` may mark known settled charges that a staged balance
+  observation already reflects, so provider headroom stops subtracting them twice; task, cycle, pilot and live limits
+  still count them. No coverage producer is qualified.
+- **Approval.** The Codex host approves V. An explicit approved maximum below V refuses the task.
+- **Registered canary (ruling, 12 November 2026).** The foreground canary's approved maximum (50,640 micro-units),
+  packet and model stay unchanged. Its unbuffered quote is exactly 50,640, so its envelope (60,768) cannot fit and
+  it refuses before any credential, transport, monetary or native claim, restores off and stays consumed
+  (`tests/test_usage_canary_host.py`). The earlier successful runs remain historical evidence. Any further live
+  canary needs its own new registration and approval; this ruling grants none.
+- **Recovery evidence.** Scoped `reconcile` lists unpriced completed work as `unpriced_attempts` beside the
+  existing uncertain `pending_attempts`.

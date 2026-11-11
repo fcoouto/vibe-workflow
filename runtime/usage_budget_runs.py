@@ -28,6 +28,9 @@ def dispatch(ledger, run_id, phase, revision, now, *, live_gate=None):
         if run.get('consent') is not None:
             ledger._consent(data, run['consent'])
         budget.require(not run['closed'] and call['state'] == 'reserved', 'dispatch_forbidden')
+        # F5.A2: an ungranted placeholder never sends; an envelope's generation follows only completed count work.
+        budget.require(call['digest'] is not None and (phase != 'generation' or not run.get('envelope')
+                       or run['calls']['count']['state'] == 'completed'), 'call_not_granted')
         budget.require(run['revision'] == revision, 'policy_revision_changed')
         # The call's own reservation has already reduced headroom.
         ledger._live_admit(data, run['organization'], 0, now, live_gate, run)
@@ -92,4 +95,6 @@ def reject_unsent(ledger, run_id, phase):
         run = data['runs'][run_id]; call = run['calls'][phase]
         budget.require(call['state'] == 'dispatching', 'rejection_forbidden')
         call.update(cost=0, state='rejected-before-send')
+        for other in run['calls'].values():  # F5.A2: a never-granted or unsent sibling is cancelled with it
+            if other['state'] == 'reserved': other.update(cost=0, state='rejected-before-send')
         ledger._close_run(data, run_id)

@@ -167,7 +167,7 @@ class SmartBalanceTests(unittest.TestCase):
 
         state = self.ledger.snapshot()
         calls = state['runs']['run']['calls']
-        self.assertEqual((calls['count']['state'], calls['count']['cost']), ('completed', 7))
+        self.assertEqual((calls['count']['state'], calls['count']['cost'], calls['count']['maximum']), ('completed', None, 7))
         self.assertEqual((calls['generation']['state'], calls['generation']['cost']),
                          ('rejected-before-send', 0))
         self.assertNotIn('slot', state)

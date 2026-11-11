@@ -163,14 +163,11 @@ class CanaryHostTests(unittest.TestCase):
                 run.assert_not_called()
             self.assertEqual(control.status()['mode'], 'off')
 
-    def test_full_foreground_rehearsal_uses_one_count_and_generation(self):
-        count = Connection(Response(dict(object='response.input_tokens', input_tokens=5)))
-        reply = completed()
-        reply['model'] = self.config['profile']['model']
-        reply['usage'].update(input_tokens=5, total_tokens=22)
-        reply['usage']['input_tokens_details'] = dict(cached_tokens=0)
-        generate = Connection(Response(reply))
-        connections = iter((count, generate))
+    def test_registered_canary_refuses_its_buffered_task_before_any_send(self):
+        """F5.A2: the registered maximum (50,640) equals the canary's unbuffered quote, so its whole-task envelope
+        (ceil(50,640 x 1.2) = 60,768) cannot fit. The approved maximum and packet stay unchanged: the canary refuses
+        offline before any transport, credential, monetary or native claim, restores off and stays consumed. The
+        earlier successful rehearsals remain historical evidence; fake success is covered by the dormant runner."""
         with self.controller() as control:
             def dispatch(cwd, task, evidence):
                 changed = dict(task, packet=dict(task['packet'], text='Different task.'))
@@ -178,19 +175,38 @@ class CanaryHostTests(unittest.TestCase):
                 with self.assertRaisesRegex(BudgetError, 'routing_budget_required'):
                     control._run_live(changed, changed_evidence, connection_factory=lambda *args: self.fail('sent'),
                                       credential_resolver=lambda binding: self.fail('credential resolved'))
-                return control._run_live(
-                    task, evidence, connection_factory=lambda *args: next(connections),
-                    credential_resolver=lambda binding: b'synthetic-key')
+                return control._run_live(task, evidence, connection_factory=lambda *args: self.fail('sent'),
+                                         credential_resolver=lambda binding: self.fail('credential resolved'))
 
-            with patch.object(usage_routing, '_run_live', side_effect=dispatch):
-                result = self.execute()
-            self.assertTrue(result['requires_native_review'])
-            self.assertEqual(control.status()['mode'], 'off')
-            self.assertEqual([c.requests[0][1] for c in (count, generate)],
-                             ['/v1/responses/input_tokens', '/v1/responses'])
+            with patch.object(usage_routing, '_run_live', side_effect=dispatch) as run:
+                with self.assertRaisesRegex(BudgetError, 'insufficient_headroom'):
+                    self.execute()
+                run.assert_called_once()
+                data = control.ledger.snapshot()
+                self.assertEqual((data['runs'], data['native'], data['holds']), ({}, {}, {}))
+                self.assertEqual(budget_total(data, self.plan.organization), 0)
+                state = control.status()
+                self.assertEqual((state['mode'], state['canary_active']), ('off', False))
+                with self.assertRaisesRegex(BudgetError, 'canary_state_already_configured'):
+                    self.execute()
+                run.assert_called_once()
+
+    def test_production_reconfiguration_after_a_canary_preserves_its_history(self):
+        """Synthetic history (not the registered canary's execution): a later production budget configure and enable
+        keep earlier runs, native tasks and the organization record, with only revision and policy replaced."""
+        with self.controller() as control:
+            refuse = lambda cwd, task, evidence: control._run_live(  # noqa: E731  stages the grant, then refuses
+                task, evidence, connection_factory=lambda *args: self.fail('sent'),
+                credential_resolver=lambda binding: self.fail('credential resolved'))
+            with patch.object(usage_routing, '_run_live', side_effect=refuse):
+                with self.assertRaisesRegex(BudgetError, 'insufficient_headroom'):
+                    self.execute()
+            native = dict(account='account', task='history', windows=[])
+            control.ledger.begin(self.plan.organization, 'history', 'history', 'packet', 100, 1, 106, native)
+            control.ledger.dispatch('history', 'count', 1, 106)
+            control.ledger.complete('history', 'count', 80)
+            control.ledger.close_run('history')
             data = control.ledger.snapshot()
-            self.assertNotIn('slot', data)
-            self.assertEqual(len(data['native']), 1)
             old_org = data['organizations'][self.plan.organization]
             request = dict(version=2, expected_revision=3, expected_org_revision=1, binding=self.binding,
                            profile=self.config['profile'], class_name='proposal', mode='smart',
@@ -207,6 +223,9 @@ class CanaryHostTests(unittest.TestCase):
             self.assertEqual(refreshed['mode'], 'off')
             self.assertTrue(control.enable(6)['live_enabled'])
 
+
+def budget_total(data, organization):
+    return usage_budget.Ledger._total(data, organization) if organization in data['organizations'] else 0
 
 if __name__ == '__main__':
     unittest.main()

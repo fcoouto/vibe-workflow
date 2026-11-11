@@ -11,7 +11,7 @@ import stat
 import uuid
 
 from runtime import ledger_versions  # state versions and migration (C3-0a); it reads this module lazily
-from runtime import usage_budget_runs  # the S1 phase lifecycle; it reads this module lazily
+from runtime import usage_budget_money, usage_budget_runs  # S1 phases and API money; both read this module lazily
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
 # Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
@@ -402,7 +402,9 @@ class Ledger:
     def _credit_raw(cls, data, organization, now=None):
         org = data['organizations'][organization]
         require(org['balance'] is not None, 'balance_unverified')
-        return cls._available(org, now) - cls._protected(org) - cls._total(data, organization)
+        # F5.A2: a charge a trusted observation already reflects in B is not subtracted again (`_total` keeps it).
+        return cls._available(org, now) - cls._protected(org) - cls._total(data, organization) + \
+            usage_budget_money.covered(data, organization)
 
     @classmethod
     def _credit(cls, data, organization, now=None):
@@ -591,11 +593,7 @@ class Ledger:
     def open_accounts(cls, data):
         return list(cls.open_attempts(data).values())
 
-    @staticmethod
-    def _active_call(run):
-        """The call that still holds an envelope: reserved or in flight."""
-        active = [call for call in run['calls'].values() if call['state'] in ('reserved', 'dispatching')]
-        return active[-1] if active else None
+    _active_call = staticmethod(usage_budget_money.active_call)  # reserved or in flight; never a placeholder
 
     @classmethod
     def _transfer(cls, data, organization, transfer_from, amount_limit):
@@ -604,8 +602,8 @@ class Ledger:
         parent_id, amount = transfer_from
         name(parent_id); integer(amount)
         parent = data['runs'].get(parent_id)
-        require(parent is not None and not parent['closed'] and parent['organization'] == organization,
-                'transfer_forbidden')
+        require(parent is not None and not parent['closed'] and parent['organization'] == organization
+                and not parent.get('envelope'), 'transfer_forbidden')  # an envelope never holds review provision
         call = cls._active_call(parent)
         require(call is not None, 'transfer_forbidden')
         require(amount <= call.get('provision', 0) and amount <= amount_limit, 'provision_exceeded')
@@ -720,7 +718,8 @@ class Ledger:
         return dict(maximum=maximum, cost=None, digest=digest, state='reserved',
                     cycle=data['organizations'][run['organization']]['policy']['cycle'])
 
-    # The S1 phase lifecycle lives in usage_budget_runs (F5.A2 foundation); these keep their exact signatures.
+    reserve_task, reserve_call = usage_budget_money.reserve_task, usage_budget_money.reserve_call  # F5.A2 envelope
+    complete_unknown, apply_coverage = usage_budget_money.complete_unknown, usage_budget_money.apply_coverage
     def reserve_generation(self, run_id, digest, maximum, revision, now, *, live_gate=None):
         usage_budget_runs.reserve_generation(self, run_id, digest, maximum, revision, now, live_gate=live_gate)
 
@@ -1467,17 +1466,4 @@ class Ledger:
                 and not config['disabled'] and (pin['qualification_revision'] is None
                 or config['qualification_revision'] == pin['qualification_revision']), 'consent_changed')
 
-    def reconcile(self, *, scope=None):
-        """Report scoped recovery evidence without altering reservations."""
-        result = {'state': 'manual_recovery_required'}
-        if scope is None:
-            return result
-        pending = [dict(attempt_id=run_id + ':' + phase, reserved_usd_micros=call['maximum'],
-                        incomplete=call.get('incomplete'))
-                   for run_id, run in sorted(self.snapshot()['runs'].items())
-                   if (run.get('consent') or {}).get('scope') == scope
-                   for phase, call in run['calls'].items() if call['state'] == 'unresolved']
-        if pending:
-            result['pending'] = pending[0]
-            result['pending_attempts'] = pending
-        return result
+    reconcile = usage_budget_money.reconcile  # scoped recovery evidence; never alters reservations

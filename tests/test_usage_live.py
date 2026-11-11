@@ -103,7 +103,7 @@ class LiveAdmissionTests(unittest.TestCase):
         data = self.ledger.snapshot()
         self.assertEqual(len(data['native']), 1)
         self.assertNotIn('slot', data)
-        self.assertEqual(data['runs']['run']['calls']['count']['cost'], 7)
+        self.assertEqual({k: data['runs']['run']['calls']['count'][k] for k in ('cost', 'maximum')}, dict(cost=None, maximum=7))  # F5.A2: unpriced, held at its bound
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
             self.run_candidate(self.proof)
         self.assertEqual(self.factory.call_count, 2)
@@ -135,8 +135,10 @@ class LiveAdmissionTests(unittest.TestCase):
             result = routing.reconcile(self.controller.root, {})
         pending = dict(attempt_id='run:generation', reserved_usd_micros=generation['maximum'],
                        incomplete=diagnostic)
+        unpriced = dict(attempt_id='run:count', reserved_usd_micros=before['runs']['run']['calls']['count']['maximum'],
+                        cost='unknown', run_closed=False)  # F5.A2: the count's unknown cost is reported too
         self.assertEqual(result, dict(state='manual_recovery_required', pending=pending,
-                                      pending_attempts=[pending]))
+                                      pending_attempts=[pending], unpriced_attempts=[unpriced]))
         self.assertEqual(self.ledger.reconcile(scope='other'), {'state': 'manual_recovery_required'})
         self.assertEqual(self.ledger.snapshot(), before)
         with self.assertRaisesRegex(budget.BudgetError, 'live_run_id_already_used'):
@@ -242,7 +244,7 @@ class LiveAdmissionTests(unittest.TestCase):
             self.run_candidate(proof)
         self.factory.assert_called_once()
         self.assertEqual(len(counted.requests), 1)
-        self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['cost'], 7)
+        self.assertEqual({k: self.ledger.snapshot()['runs']['run']['calls']['count'][k] for k in ('cost', 'maximum')}, dict(cost=None, maximum=7))  # F5.A2: unpriced, held at its bound
 
     def test_smart_live_uses_verified_profile_without_quota_calibration(self):
         _, proof = self.smart_candidate(calibrated=False)
@@ -265,11 +267,11 @@ class LiveAdmissionTests(unittest.TestCase):
         proof = replace(self.proof, config_revision=4, org_revision=2,
                         policy_digest=admission.digest(request['policy']), profile_digest=admission.digest(profile),
                         task_digest=admission.digest(candidate), grant=replace(self.proof.grant, balance=100_000))
-        with self.assertRaisesRegex(budget.BudgetError, 'live_cap_exceeded'):
+        with self.assertRaisesRegex(budget.BudgetError, 'envelope_exceeded'):  # F5.A2: no spill, no top-up
             self.run_candidate(proof, candidate)
         self.assertEqual(len(self.factory.return_value.requests), 1)
         self.assertNotIn('slot', self.ledger.snapshot())
-        self.assertEqual(self.ledger.snapshot()['runs']['run']['calls']['count']['cost'], 7)
+        self.assertEqual({k: self.ledger.snapshot()['runs']['run']['calls']['count'][k] for k in ('cost', 'maximum')}, dict(cost=None, maximum=7))  # F5.A2: unpriced, held at its bound
 
     def test_disable_while_transport_prepares_prevents_count_post(self):
         self.controller.enable(1)

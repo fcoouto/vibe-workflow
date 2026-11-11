@@ -442,7 +442,7 @@ def _candidate(data, route, observations, assignment, settings, held, now):
         except BudgetError:
             return None, ['funding_unverified']
     windows = {window['id']: window for window in pool['windows']}
-    vector, constraints = {}, []
+    vector, constraints, money = {}, [], usage_budget.usage_budget_money.API_MONEY_BUFFER_BP  # F5.A2: dollars
     bounds = route.get('next_request_bound') or {}
     for window_id, estimate in route['demand'].items():
         window = windows.get(window_id)
@@ -453,7 +453,7 @@ def _candidate(data, route, observations, assignment, settings, held, now):
         if stale:
             return None, ['stale_observation']
         try:
-            reserve = Ledger._reserve(estimate, bounds.get(window_id), settings['margin_bp'])
+            reserve = Ledger._reserve(estimate, bounds.get(window_id), money if funding else settings['margin_bp'])
         except BudgetError:
             return None, ['invalid_observation']
         key = ORG + funding if funding else _window_key(route['pool'], window_id)

@@ -1,5 +1,17 @@
 # Policy source map
 
+## Smart Routing: API-money reservation and reconciliation (F5.A2) — 12 November 2026
+
+Checkpoint A2 of plan task F5 implements the user's whole-task 20% API-money reservation and reconciliation in the
+inactive S1 ledger and dormant hosts. The registered criteria are in [usage-routing validation](usage-routing-validation.md#api-money-reservation-and-reconciliation-f5a2--12-november-2026). No live, model or provider call is part of these contracts; no coverage producer is qualified.
+
+| Contract | Source |
+| --- | --- |
+| [Usage routing delegation](../skills/manage-usage-routing/references/delegation.md): whole-task envelope V = ceil(1.2 × estimate) before the count, one reservation for both phases, `envelope_exceeded`, unpriced phases kept reserved until operator settlement | The user's 20% requirement (F5 plan); `runtime/usage_budget_money.py` (`reserve_task`, `reserve_call`, `complete_unknown`, `active_call`), `runtime/usage_budget_runs.py` (`dispatch`, `reject_unsent`), `runtime/usage_routing.py` (`_evaluate`, `_run`), `runtime/usage_codex_host.py` (`_proposal`), `runtime/routing.py` (`_candidate`); `tests/test_api_money.py` |
+| Unpriced completed calls recoverable by `settle_legacy_call` (receipts or charge reservation, never `never_dispatched`), listed in `legacy_outstanding`; pricing one phase keeps the other and the run | `runtime/ledger_versions.py` (`_settle`, `outstanding`); `tests/test_api_money.py` `UnpricedRecoveryTests` |
+| Typed `Coverage`/`ChargeRef` bound to scope, configuration revision, binding digest and the exact staged `live_funding` observation; only provider headroom excludes covered charges | `runtime/usage_admission.py`, `runtime/usage_budget_money.py` (`stage_coverage`, `covered`); `tests/test_api_money.py` `CoverageTests` |
+| Handoff rows, handoff claims and reused routing configurations use the growing-write admission; handoff native metadata is bounded by `MAX_INPUT` | `runtime/usage_routing.py` (`request_handoff`, `claim_handoff`, `enable`); `tests/test_api_money.py` `MetadataGrowthTests`, `tests/test_api_money_capacity.py` |
+
 ## Smart Routing: no worker-count admission (F5.A1) — 11 November 2026
 
 Checkpoint A1 of plan task F5 removes every count-based admission limit, on the user's decision of 11 November 2026. It is a local deviation from the Toolkit's onboarding and parallel-wave wording, which asks for concurrency limits: here only real constraints limit concurrency. The registered criteria change is [validation Edit 8](smart-routing-validation.md#edit-8-11-november-2026-no-worker-count-admission). No model, network, account or provider call is part of these contracts, and none of the pending financial or fallback work is claimed.

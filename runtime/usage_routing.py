@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from runtime import startup, usage_admission, usage_credentials, external_delegation
 from runtime.usage_budget import BudgetError, FRESH_SECONDS, Ledger, fields, integer, name, require
+from runtime.usage_budget_money import buffered
 
 PACKAGE = Path(__file__).resolve().parents[1]
 MAX_INPUT = 65536
@@ -304,7 +305,7 @@ class Controller:
         require(mode in (None, 'smart'), 'invalid_mode')
         if reuse_scope is not None:
             name(reuse_scope)
-        with self.ledger.transaction() as data:
+        with self.ledger.transaction(grows=True) as data:  # reuse may add a routing configuration row
             config = data.get('routing', {}).get(self.scope)
             require((config['revision'] if config else 0) == expected_revision, 'consent_revision_changed')
             if config is None:
@@ -455,8 +456,8 @@ class Controller:
         require(task['native'].get('task') == task['task_id'], 'native_task_mismatch')
         # Operate on a deserialized snapshot: selection must not reserve or write.
         self.ledger._native(data, task['native'], self.clock())
-        self.ledger._admit(data, org_id, task['task_id'],
-                           bound['maximum_usd_micros'] + bound['count_maximum_usd_micros'],
+        self.ledger._admit(data, org_id, task['task_id'],  # F5.A2: the whole-task envelope V, buffered 20%
+                           buffered(bound['maximum_usd_micros'] + bound['count_maximum_usd_micros']),
                            config['org_revision'], self.clock())
         return dict(decision='eligible', reason='qualified_profile_and_budget', maximum_usd_micros=bound['maximum_usd_micros'],
                     consent=self._consent(config, pin_qualification))
@@ -484,10 +485,13 @@ class Controller:
         require(type(task['api_only']) is bool and type(task['reviewer_available']) is bool, 'invalid_task')
         require(type(task['packet']) is dict and type(task['packet'].get('text')) is str and
                 len(json.dumps(task['packet']).encode()) <= MAX_INPUT, 'invalid_handoff_packet')
+        require(len(json.dumps(task['native']).encode()) <= MAX_INPUT, 'invalid_handoff_native')  # stored as given
         self._snapshots(task['snapshots'])
         packet_id = profile_digest(task['packet'])
         key = profile_digest(dict(scope=self.scope,task=task['task_id']))
-        with self.ledger.transaction() as data:
+        # F5.A2: a new or changed handoff row is table growth: the growing-write admission (SOFT_RECORD) keeps the
+        # settlement headroom; an unchanged replay writes nothing and still answers.
+        with self.ledger.transaction(grows=True) as data:
             config = self._config(data)
             require(not config['disabled'], 'disabled')
             records = data.setdefault('handoffs',{})
@@ -524,7 +528,7 @@ class Controller:
         """Claim once BEFORE host native dispatch; a replay must observe, never respawn."""
         name(task_id); name(attempt_id)
         key = profile_digest(dict(scope=self.scope,task=task_id))
-        with self.ledger.transaction() as data:
+        with self.ledger.transaction(grows=True) as data:  # the claim adds native authority: growing write
             record = data.get('handoffs',{}).get(key)
             require(record is not None, 'handoff_missing')
             if record['claim_attempt'] is not None:
@@ -669,22 +673,22 @@ class Controller:
         else:
             deadline = min(deadline, now + 300)
         packet_id = openai_api.packet_digest(packet)
-        self.ledger.begin(org_id, task['task_id'], run_id, packet_id, profile['count_maximum'],
-                          config['org_revision'], now, task['native'],
-                          consent=decision['consent'], live_gate=live_gate)
+        self.ledger.reserve_task(org_id, task['task_id'], run_id, packet_id,  # V before the first paid send
+                                 decision['maximum_usd_micros'] + profile['count_maximum'], profile['count_maximum'],
+                                 config['org_revision'], now, task['native'], consent=decision['consent'], live_gate=live_gate)
         phase = 'count'
         try:
             dispatch = dict(phase=phase, attempt_id=run_id+':'+phase, packet_digest=packet_id,
                             committed=True, deadline=deadline)
             counted = self._transmit(packet, binding, dispatch, connection_factory,
                                      run_id, config['org_revision'], credential_resolver, live_gate, final_check)
-            self.ledger.complete(run_id, phase, profile['count_maximum'])
+            self.ledger.complete_unknown(run_id, phase)  # the count transport reports no cost: never its bound
             packet['input_tokens'] = counted['input_tokens']
             bound = quote(packet, profile, self.clock())
             self._snapshots(task['snapshots'])
             packet_id = openai_api.packet_digest(packet)
-            self.ledger.reserve_generation(run_id, packet_id, bound['maximum_usd_micros'],
-                                           config['org_revision'], self.clock(), live_gate=live_gate)
+            self.ledger.reserve_call(run_id, 'generation', packet_id, bound['maximum_usd_micros'],
+                                     config['org_revision'], self.clock(), live_gate=live_gate)
             phase = 'generation'
             dispatch.update(phase=phase, attempt_id=run_id+':'+phase, packet_digest=packet_id)
             result = self._transmit(packet, binding, dispatch, connection_factory,
@@ -694,12 +698,12 @@ class Controller:
             # Use conservative rates; retain local charge even if provider balance includes it.
             if result['output_tokens'] == 0:
                 raise BudgetError('incomplete_output')
-            actual = quote(used, profile, self.clock())['maximum_usd_micros']
-            self.ledger.complete(run_id, phase, actual)
+            actual = quote(used, profile, self.clock())['maximum_usd_micros']  # a conservative estimate, not a charge
+            self.ledger.complete_unknown(run_id, phase)
             return dict(accepted=False, requires_native_review=True,
                         text=result['text'], request_id=result['request_id'], run_id=run_id,
                         execution_route='openai-api',
-                        reported_cost_usd_micros=actual, profile_digest=profile_digest(profile))
+                        reported_cost_usd_micros=actual, cost_basis='estimate', profile_digest=profile_digest(profile))
         except BaseException as error:
             record = self.ledger.snapshot()['runs'][run_id]['calls'].get(phase)
             if record and record['state'] == 'dispatching':

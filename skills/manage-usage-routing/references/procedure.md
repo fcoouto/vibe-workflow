@@ -136,7 +136,8 @@ Profile fields: `model`, `reasoning`, `tier` (`default`), `input_rate`,
 `max_output_tokens`, `verified_at`, `valid_until`, `count_maximum`. Rates are integer
 USD micro-units per million tokens; times are integer UTC epoch seconds.
 The quote uses the highest input rate and total output including reasoning.
-Counting has its own maximum charge. A digest binds inputs without authenticating
+Counting has its own maximum charge. Admission holds 120% of the quote plus that
+maximum for the whole task (see [delegation](delegation.md)). A digest binds inputs without authenticating
 counts/prices or granting spending permission. Use synthetic inputs for tests.
 
 Activation authorizes coding-source packets and automatic selection; an optional saved restriction follows the [shared permission contract](../../../clients/external-delegation.md#saved-permission-optional). Preserve the existing budget and funding choices.
@@ -209,7 +210,10 @@ disabled target keeps its own settings and revision checks; reuse fields cannot
 replace them (`already_configured`). Disable never silently reattaches a setup.
 The public `run` path remains unavailable.
 Live evidence belongs to the trusted host. `reconcile` takes `{}` and reports
-`manual_recovery_required`, not guessed settlement or cleared deductions.
+`manual_recovery_required`, not guessed settlement or cleared deductions. Scoped
+recovery evidence lists uncertain calls (`pending_attempts`) and completed work whose
+cost is still unknown (`unpriced_attempts`, closed runs included); both keep their
+full reservation until settled.
 
 ### Regular-routing budget
 
