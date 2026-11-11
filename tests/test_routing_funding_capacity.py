@@ -19,6 +19,16 @@ def unique(index, value):
     return ('%05d' % index + value)[:256]
 
 
+def largest_new_record(ledger):
+    """F5.4: the actual record the routing builder makes for the largest shipped-path subscription admission (ten
+    Go candidates with three windows each, maximal identities and binding), as `Ledger.admit` would store it."""
+    from tests import test_routing_admission as admission
+    request, ranked, snapshot, job = admission.largest_replay()
+    with ledger.transaction(write=False) as data:
+        decided = routing._decide(data, request, ranked, admission.settings(), snapshot, job)
+    return dict(decided['record'], nonce='0' * 32, authority_required=True)
+
+
 def padded(item, size):
     """`item` with a `pad` field making its compact JSON exactly `size` characters."""
     item = dict(item, pad='')
@@ -27,28 +37,31 @@ def padded(item, size):
 
 
 class CapacityTests(Funded, unittest.TestCase):
-    def long_admission(self, attempt, windows):
-        """A real admission with 256-character identifiers everywhere and `windows` demanded windows."""
+    def long_admission(self, attempt, windows, fill='x'):
+        """A real admission with 256-character identifiers everywhere and `windows` demanded windows; a non-ASCII
+        `fill` makes every identifier but the organization's serialize as six-character escapes."""
+        text = lambda tag: (tag + fill * 256)[:256]  # noqa: E731
         organization = long('org')
         if organization not in self.ledger.snapshot()['organizations']:
             self.ledger.configure(organization, policy(cycle=long('cycle')), 0)
             self.ledger.observe(organization, 10**12, NOW, issued=10**12)
-        ids = [long('w%d' % i) for i in range(windows)]
-        pools = {long('pool'): dict(billing_class='api_grant', windows=[window(i, organization=organization)
+        ids = [text('w%d' % i) for i in range(windows)]
+        pools = {text('pool'): dict(billing_class='api_grant', windows=[window(i, organization=organization)
                                                                         for i in ids])}
-        api = route(long('r'), long('pool'), 'api_grant', long('acct%s' % attempt), {i: M for i in ids})
-        api.update(strategy_id=long('sid'), model=long('m'), harness=long('h'), provider=long('p'))
-        api['credential']['ref'] = long('ref')
-        obs = dict(observations([api], pools), snapshot_id=long('snap'))
-        rank = dict(strategy_ids=[long('sid')], reason_codes=[long('code')] * routing.MAX_REASONS,
-                    table_version=long('t'), profile_digest=long('d'))
+        api = route(text('r'), text('pool'), 'api_grant', text('acct%s' % attempt), {i: M for i in ids})
+        api.update(strategy_id=text('sid'), model=text('m'), harness=text('h'), provider=text('p'))
+        api['credential']['ref'] = text('ref')
+        obs = dict(observations([api], pools), snapshot_id=text('snap'))
+        rank = dict(strategy_ids=[text('sid')], reason_codes=[text('code')] * routing.MAX_REASONS,
+                    table_version=text('t'), profile_digest=text('d'))
         choice = dict({key: api[key] for key in routing.ROUTE_IDENTITY}, funding='api')  # F5.3: the legacy choice
-        return routing.admit(dict(assignment(long(attempt), long('task')), choice=choice), rank, settings(), obs,
+        return routing.admit(dict(assignment(text(attempt), text('task')), choice=choice), rank, settings(), obs,
                              ledger=self.ledger)
 
     def test_an_oversized_admission_is_pending_and_writes_nothing(self):
         before = self.ledger.snapshot()
-        result = self.long_admission('big', routing.MAX_WINDOWS)
+        # F5.4: the 10,752 cap admits the ASCII form of this admission (9,016 characters); escaped text exceeds it.
+        result = self.long_admission('big', routing.MAX_WINDOWS, fill='\u00e9')
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'record_too_large'))
         self.assertEqual(self.ledger.snapshot()['holds'], before['holds'])
         self.assertEqual(self.long_admission('one', 1)['status'], 'admitted')  # long ids alone still fit
@@ -102,7 +115,11 @@ class CapacityTests(Funded, unittest.TestCase):
             unique(i, long('cycle')): budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_CYCLES)})
         data['settled_tasks'] = {'%064x' % i: budget.MAX_INTEGER for i in range(budget.MAX_SETTLED_TASKS)}
         data['organizations'][organization]['legacy_block'] = True  # the only stored block source (v4)
-        data['admissions'] = [padded(dict(attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
+        # F5.4: every retained slot holds the actual largest new record shape, snapshot detail included (the worst
+        # case lasts its 24 hours), padded to the admission bound it must fit.
+        largest = largest_new_record(self.ledger)
+        self.assertLessEqual(len(json.dumps(largest, separators=(',', ':'))), budget.MAX_ADMISSION_BYTES)
+        data['admissions'] = [padded(dict(largest, attempt_id=unique(i, long('a'))), budget.MAX_ADMISSION_BYTES)
                               for i in range(budget.MAX_ADMISSIONS)]
         # An admitted hold at its bound plus the fixed fields dispatch, uncertainty and proof add later (S3.4).
         data['holds'] = {unique(i, long('h')): padded(dict(closed=False), budget.MAX_HOLD_BYTES + budget.DISPATCH_HOLD_BYTES
@@ -122,8 +139,8 @@ class CapacityTests(Funded, unittest.TestCase):
         data[subscription_reconcile.DEBITS] = {
             ('win:' + unique(i, long('p')) + '/' + long('w')): dict(units=budget.MAX_INTEGER, at=budget.MAX_INTEGER)
             for i in range(subscription_reconcile.MAX_WINDOW_DEBITS)}
-        # C3-0a: state v5 adds no field (C3-0a's operator ops only change or remove existing ones), so the worst case
-        # is unchanged: 10,716,910 characters, 89.31% of MAX_RECORD.
+        # F5.4 (approved caps): with every admission slot at the new 10,752 bound the body written here is
+        # 11,765,486 characters, and 11,784,912 once a non-growing write re-serializes it (below 90% of 13,100,000).
         self.assertEqual(data['version'], ledger_versions.STATE_VERSION)
         raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
         sizes = {key: len(json.dumps(value, separators=(',', ':'))) for key, value in data.items()}
@@ -132,6 +149,10 @@ class CapacityTests(Funded, unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as db:
             db.execute('UPDATE ledger SET body=?', (raw,)); db.commit()
         self.ledger.set_caps(5, 2)  # a full ledger still reads and commits a non-growing write
+        with closing(sqlite3.connect(self.path)) as db:
+            stored = len(db.execute('SELECT body FROM ledger').fetchone()[0])
+        self.assertLessEqual(stored, budget.MAX_RECORD * 0.9)  # the body that write stored keeps the margin too
+        self.assertGreater(stored, budget.SOFT_RECORD)
         with self.assertRaisesRegex(budget.BudgetError, 'ledger_capacity_reached'):
             self.ledger.configure(long('another'), policy(), 0)
 

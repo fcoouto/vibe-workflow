@@ -46,6 +46,23 @@ def _eligible(route):
         routing._text(route.get(key)) for key in ('route', 'pool', 'account', 'strategy_id'))
 
 
+def _shortlist(observations, ranking):
+    """The ranked decision's shortlist: the snapshot's own, else the cut of a caller's routes passing `_eligible`."""
+    return observations['shortlist'] if 'shortlist' in observations else subscription_shortlist(
+        ranking['strategy_ids'], [route for route in observations['routes'] if _eligible(route)])
+
+
+def admitted(assignment, role, profile, harnesses):
+    """The assignment `scripts/routing.py` admits: the caller's fields, the specialist's role, the validated
+    profile's work kind and bands, `floor_filled` (its `missing_fields` were not empty) and the effective allowed
+    harnesses (empty without that constraint; a malformed list is refused by `routing.rank` first)."""
+    harnesses = list(dict.fromkeys(harnesses)) if type(harnesses) is list and all(map(routing._text, harnesses)) \
+        else []
+    return dict(assignment, role=role, work_kind=profile['work_kind'], complexity_band=profile['complexity_band'],
+                risk_band=profile['risk_band'], floor_filled=bool(profile['uncertain_fields']),
+                allowed_harnesses=sorted(harnesses))
+
+
 def ranked_routes(observations, ranking):
     """The routes a ranked decision evaluates: subscription routes of the shortlisted ids only (the snapshot's own
     `shortlist`, else `subscription_shortlist` over the routes passing `_eligible`). F5.3: a paid route is left out
@@ -53,9 +70,7 @@ def ranked_routes(observations, ranking):
     shortlist only narrows: its routes still meet every check in `_candidate`, and a missing route is never rebuilt.
     In a caller's own snapshot a route failing `_eligible` takes no place but still reaches `_candidate`, which
     refuses it with its own reason (it can never be admitted)."""
-    routes, supplied = observations['routes'], 'shortlist' in observations
-    shortlist = observations['shortlist'] if supplied else subscription_shortlist(
-        ranking['strategy_ids'], [route for route in routes if _eligible(route)])
+    routes, supplied, shortlist = observations['routes'], 'shortlist' in observations, _shortlist(observations, ranking)
     return [route for route in routes if route.get('billing_class') not in routing.FUNDED and (
         route.get('billing_class') != SUBSCRIPTION or route.get('strategy_id') in shortlist
         or not (supplied or _eligible(route)))]
@@ -94,22 +109,56 @@ def ranked(data, candidates, excluded, ranking, settings, observations, bucket):
     return None, chosen, shares
 
 
+def _replay(item, ranked):
+    """One stored candidate: the pool once, its window constraints without the repeated pool (costs per candidate)."""
+    constraints = [{key: value for key, value in constraint.items() if key != 'pool'}
+                   for constraint in item['constraints']]
+    return dict(route=item['route'], strategy_id=item['spec'].get('strategy_id') if ranked else None,
+                cls=item['cls'], pool=item['pool'], constraints=constraints)
+
+
 def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking, settings, observations,
            workflow):
-    """The admission answer for the chosen route: its record, vector, account, time and revision."""
+    """The admission answer for the chosen route: its record, vector, account, time and revision.
+
+    F5.4: the record stores what the strict replay recomputes from it alone (`routing_funding.choose` over
+    `pressure.candidates`, each constraint given its candidate's pool back): `ranking.shortlist` (the subscription
+    ids before any window check), the chosen `strategy_id`, `score_version` (None until L3) and the source's
+    `routes_version` (audit only, never regenerated); `risk_band`, `floor_filled` and the chosen `strategy`; and in
+    `pressure`, the snapshot detail removed after 24 hours, `epoch`, `feasible`, `minimum_horizon`, the effective
+    `allowed_harnesses` and, for a ranked decision, the feasible subscription `candidates` in shortlist order. A
+    worker-choice record keeps the legacy contract: an empty shortlist, no candidates, the chosen route's
+    constraints."""
     now, horizon = observations['now'], observations.get('minimum_horizon', routing.DEFAULT_MINIMUM_HORIZON)
     item = next(c for c in candidates if c['route'] == chosen)
     spec = item['spec']
     credential = spec.get('credential') or {}
+    ranked = mode == 'ranked'
+    harnesses = assignment.get('allowed_harnesses') or []
+    if type(harnesses) is not list or not all(map(routing._text, harnesses)):
+        raise ValueError('invalid_assignment')
+    order = {sid: i for i, sid in enumerate(ranking.get('strategy_ids', []))}
+    feasible = sorted((c for c in candidates if c['cls'] == 'subscription' and c['spec'].get('strategy_id') in order),
+                      key=lambda c: order[c['spec']['strategy_id']]) if ranked else []
+    pressure = dict(u=u, e=e, **_snapshot(item, now, horizon), epoch=observations.get('epoch_at', 0),
+                    feasible=['subscription'] if ranked else [item['cls']], minimum_horizon=horizon,
+                    allowed_harnesses=sorted(harnesses))
+    if ranked:
+        pressure['candidates'] = [_replay(c, True) for c in feasible]
     record = dict(attempt_id=assignment['attempt_id'], task=assignment['task'], bucket=bucket, shares=shares,
                   **{'class': item['cls']}, route=item['route'], pool=item['pool'], account=spec['account'],
                   route_identity=routing.route_identity(*(spec.get(field) for field in routing.ROUTE_IDENTITY)),
                   billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
-                  pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
+                  pressure=pressure, reserved=dict(item['vector']),
                   settings_revision=settings.get('revision', 0), organization_revision=item['revision'], at=now,
                   mode=mode,
                   snapshot_id=observations.get('snapshot_id'),
                   reason_codes=list(dict.fromkeys(reasons)),
-                  ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
+                  ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest'),
+                               shortlist=list(_shortlist(observations, ranking)) if ranked else [],
+                               strategy_id=spec.get('strategy_id') if ranked else None, score_version=None,
+                               routes_version=observations.get('routes_version')),
+                  risk_band=assignment.get('risk_band'), floor_filled=assignment.get('floor_filled'),
+                  strategy={field: spec.get(field) for field in routing.ROUTE_IDENTITY})
     record['binding'] = routing_gates.binding(copy.deepcopy(workflow), routing.credential_marker(data, record))
     return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])

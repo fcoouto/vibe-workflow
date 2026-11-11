@@ -142,6 +142,28 @@ class SubscriptionFlowTests(Flow):
         self.assertEqual(self.state_files(), everything)  # route lookups: every state file byte-identical
         self.assertFalse([name for name in everything if 'route' in Path(name).name and name.endswith('.json')])
 
+    def test_unmanaged_prepare_record_has_null_routes_version(self):
+        """F5.4: a caller's own snapshot (no `excluded`, no `rejected`) through an unmanaged service stores a null
+        routes version, and the exact replay recomputes class and route from the record alone, with no source."""
+        from tests.test_routing_admission import replayed
+        self.qualify()
+        self.table(codex_strategy())
+        unmanaged = command.Service(self.settings, self.ledger_path)
+        self.addCleanup(unmanaged.close)
+        route = dict(IDENTITY, route='caller-route', strategy_id='s-codex', account='caller-acct',
+                     billing_class='included_subscription', pool='caller-pool', demand={'7d': 5}, capable=True,
+                     permitted=True, binding_enforceable=True)
+        snapshot = dict(now=now(), routes=[route], pools={'caller-pool': dict(windows=[dict(
+            id='7d', limit=1000, used=100, length=604800, reset_at=now() + 3600, rolling=False, fresh=True)])})
+        answer = unmanaged.handle(json.dumps(dict(self.body('u1'), observations=snapshot)).encode())
+        self.assertEqual(answer['state'], 'admitted', answer)
+        record = unmanaged._ledger(False).snapshot()['admissions'][-1]
+        self.assertIsNone(record['ranking']['routes_version'])
+        self.assertEqual(record['ranking']['shortlist'], ['s-codex'])
+        with mock.patch.object(collector, 'default_source', side_effect=AssertionError('no live source')), \
+                mock.patch.object(collector.LocalSource, 'windows', side_effect=AssertionError('no window read')):
+            self.assertEqual(replayed(record, []), ('caller-route', 'subscription'))
+
     def test_explicit_choice_outside_the_row_still_admits(self):
         self.qualify()
         self.table(codex_strategy())

@@ -18,24 +18,24 @@ MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9
 # within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
 # dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, require_authority,
 # convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
-# never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
+# never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the measured worst case
 # (tests/test_routing_funding_capacity.py CapacityTests: every table and entry at its bound, 256-character ASCII
 # identifiers, every native task finished, every call with a maximal `incomplete` record, one `over_bound` marker per
-# run and S3.6c's 32 window debits): 10,716,910, 89.31% with S3.6a's settlement (352 per hold), a legacy block (10.53M, 87.8% after
-# S3.5's binding allowance). The margin to the 90% test ceiling is thin: avoid further per-hold or per-call fields. S3.6a's event and root tables
-# are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
+# run, S3.6c's 32 window debits, S3.6a's settlement, every admission at F5.4's bound): 11,784,912 once stored, 89.96% of
+# the 13,100,000 approved for F5.4 (code before it reads at most 12,000,000). The margin to the 90% ceiling is thin:
+# avoid further per-hold, per-call or per-admission fields. Event and root tables are separate rows (own bounds).
 SOFT_RECORD = 6_000_000
-MAX_RECORD = 12_000_000
+MAX_RECORD = 13_100_000
 FRESH_SECONDS = 900
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
 # Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
-# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow
-# binding (S3.5, runtime/routing_gates.py), bounded by MAX_BINDING_BYTES on top of the S3.4 record allowance.
+# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow binding
+# (S3.5, runtime/routing_gates.py) and F5.4's replay detail (largest shipped path measured 10,675) on top of S3.4's.
 MAX_BINDING_BYTES = 2560
-MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES
+MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES + 4096
 MAX_HOLD_BYTES = 2048
 # Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
 # worst-case capacity test counts every hold at both bounds.

@@ -180,11 +180,15 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "85a4192a79a50e2d1a954e5985c4cb87644fd564038af4242780ca4049aa2b8a",
+      "sha256": "28bcd3109e394c085405db33145aa978fb56aed6c3127ba1ead83ea61bf85438",
       "ranges": [
         [
           1,
-          119
+          122
+        ],
+        [
+          123,
+          124
         ]
       ]
     },

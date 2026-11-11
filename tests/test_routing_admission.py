@@ -6,7 +6,9 @@ import threading
 import unittest
 from pathlib import Path
 
-from runtime import routing, routing_settings, usage_budget as budget
+import json
+
+from runtime import routing, routing_funding, routing_gates, routing_settings, usage_budget as budget
 
 NOW = 1_000_000
 M = 1_000_000
@@ -581,6 +583,154 @@ class UncertainHoldTests(Base):
         with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
             self.ledger.close_attempt('a', 'complete')
         self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'pending')
+
+
+
+# -- F5.4: the replay fields ------------------------------------------------------------------------------------
+GO_PATH, GO_POOL, GO_WINDOWS = 'opencode-go-subscription', 'opencode-go-subscription', ('rolling', 'weekly', 'monthly')
+GO_HARNESS = 'opencode provider opencode-go'
+
+
+def go_route(index, sid=None, model=None, effort='high', demand=None):
+    """A route of the largest shipped path (OpenCode Go: three demanded windows), as `routing_paths` names it."""
+    sid = sid or 's%d' % index
+    return dict(route='%s:%s' % (GO_PATH, sid), strategy_id=sid, provider='opencode-go', model=model or 'go-%d' % index,
+                effort=effort, harness=GO_HARNESS, account='opencode-go:' + '0' * 16,
+                billing_class='included_subscription', pool=GO_POOL, demand=demand or {w: 3 for w in GO_WINDOWS},
+                capable=True, permitted=True, binding_enforceable=True)
+
+
+def go_pool(used=100):
+    return dict(windows=[dict(id=window, limit=1000, used=used, length=86400, reset_at=NOW + 3600 * (i + 1),
+                              rolling=False, fresh=True) for i, window in enumerate(GO_WINDOWS)])
+
+
+def replayed(record, earlier):
+    """`(route, class)` from the stored record alone: its candidates (their pool expanded into each constraint),
+    shares, bucket, epoch, feasible classes, time and minimum horizon, and the earlier records of its revision."""
+    pressure = record['pressure']
+    candidates = [dict(route=c['route'], pool=c['pool'], cls=c['cls'], constraints=[
+        dict(constraint, pool=c['pool']) for constraint in c['constraints']]) for c in pressure['candidates']]
+    rows = [r for r in earlier if r['settings_revision'] == record['settings_revision']]
+    return routing_funding.choose(candidates, record['shares'], rows, record['bucket'], pressure['epoch'],
+                                  pressure['feasible'], record['at'], pressure['minimum_horizon'])
+
+
+def largest_replay(unicode=False, ids=64):
+    """Ten Go candidates at the shipped path's largest supported identities, a maximal binding and, with
+    `unicode`, escaped non-ASCII text in every free-text identity field."""
+    char = '\U0001F600' if unicode else 'x'
+    sid = lambda i: ('%02d' % i + 'x' * ids)[:ids]  # noqa: E731 - routing_paths.STRATEGY_ID: 64 characters
+    routes = [go_route(i, sid=sid(i), model=('m%02d' % i + char * 128)[:128], effort=char * 64)
+              for i in range(10)]
+    hexa = 'f' * 64
+    job = dict(locator={key: '/' + 'x' * (limit - 1) for key, limit in routing_gates.LOCATOR_LIMITS.items()},
+               role='r' * routing_gates.MAX_ROLE, revision=hexa, semantic_digest=hexa,
+               dependencies=dict(count=routing_gates.MAX_DEPENDENCIES, digest=hexa), ownership=hexa, resource=hexa)
+    attempt = ('big' + char * 256)[:256]
+    request = dict(assignment(attempt, risk_band='high', floor_filled=True,
+                              allowed_harnesses=[GO_HARNESS] + ['h%d' % i for i in range(1, 8)]),
+                   task=('t' + char * 256)[:256])
+    ranked = dict(ranking(*[route['strategy_id'] for route in routes]), table_version=char * 256,
+                  profile_digest=hexa, reason_codes=[char * 256] * routing.MAX_REASONS)
+    snapshot = observations(routes, {GO_POOL: go_pool(used=0)}, routes_version='%016x' % 0, epoch_at=NOW,
+                            snapshot_id=char * 256)
+    return request, ranked, snapshot, job
+
+
+class ReplayRecordTests(Base):
+    """F5.4: an admission record stores what the strict replay recomputes, and nothing a client sees grows."""
+
+    def subs(self, *demands):
+        routes = [sub_route('r%d' % i, pool='p%d' % (i % 2), strategy='s%d' % i, account='acct%d' % i,
+                            demand={'5h': demand}) for i, demand in enumerate(demands)]
+        return routes, dict(p0=sub_pool(), p1=sub_pool(used=300))
+
+    def test_admission_record_carries_the_replay_fields(self):
+        routes, pools = self.subs(10, 20, 30)
+        result = routing.admit(assignment('a', risk_band='high', floor_filled=True, allowed_harnesses=['h']),
+                               ranking('s0', 's1', 's2'), settings(),
+                               observations(routes, pools, routes_version='rv-1', epoch_at=5, minimum_horizon=600),
+                               ledger=self.ledger)
+        self.assertEqual(result['status'], 'admitted', result)
+        record = self.ledger.snapshot()['admissions'][0]
+        chosen = next(route for route in routes if route['route'] == record['route'])
+        self.assertEqual(record['ranking'], dict(table_version='t1', profile_digest='d1', shortlist=['s0', 's1', 's2'],
+                                                 strategy_id=chosen['strategy_id'], score_version=None,
+                                                 routes_version='rv-1'))
+        self.assertEqual((record['risk_band'], record['floor_filled']), ('high', True))
+        self.assertEqual(record['strategy'], {key: chosen[key] for key in routing.ROUTE_IDENTITY})
+        pressure = record['pressure']
+        self.assertEqual((pressure['epoch'], pressure['feasible'], pressure['minimum_horizon'],
+                          pressure['allowed_harnesses']), (5, ['subscription'], 600, ['h']))
+        self.assertEqual(pressure['candidates'], [
+            dict(route='r%d' % i, strategy_id='s%d' % i, cls='subscription', pool='p%d' % (i % 2),
+                 constraints=[dict(window='5h', headroom=900 if i % 2 == 0 else 700, cost=cost, resets_at=None)])
+            for i, cost in enumerate((10, 20, 30))])
+        from scripts import routing as command
+        self.assertEqual(command.ADMISSION_FIELDS, ('attempt_id', 'task', 'bucket', 'route', 'pool', 'class',
+                                                    'billing_class', 'mode', 'settings_revision', 'at', 'reserved',
+                                                    'reason_codes', 'route_identity'))  # a client sees nothing new
+
+    def test_class_and_route_recompute_from_the_record_alone(self):
+        pools = dict(p0=go_pool(used=100), p1=go_pool(used=500))
+        routes = [dict(go_route(0, demand=dict(rolling=5, weekly=5, monthly=5)), pool='p0'),
+                  dict(go_route(1, demand=dict(rolling=40, weekly=2, monthly=2)), pool='p0', account='b'),
+                  dict(go_route(2, demand=dict(rolling=1, weekly=1, monthly=1)), pool='p1', account='c')]
+        for i in range(6):
+            self.admit('a%d' % i, ['s0', 's1', 's2'], routes, pools, epoch_at=3)
+        records = self.ledger.snapshot()['admissions']
+        self.assertEqual(len(records), 6)
+        for index, record in enumerate(records):
+            with self.subTest(record=record['attempt_id']):
+                self.assertEqual(replayed(record, records[:index]), (record['route'], record['class']))
+
+    def test_two_routes_on_one_pool_keep_their_own_costs(self):
+        routes = [sub_route('cheap', strategy='s-cheap', demand={'5h': 10}),
+                  sub_route('dear', strategy='s-dear', account='b', demand={'5h': 400})]
+        self.admit('a', ['s-cheap', 's-dear'], routes, dict(sub=sub_pool()))
+        candidates = self.ledger.snapshot()['admissions'][0]['pressure']['candidates']
+        self.assertEqual([(c['route'], c['pool'], [k['cost'] for k in c['constraints']]) for c in candidates],
+                         [('cheap', 'sub', [10]), ('dear', 'sub', [400])])
+
+    def test_largest_shipped_path_record_fits_the_size_limit(self):
+        request, ranked, snapshot, job = largest_replay()
+        result = routing.admit(request, ranked, settings(), snapshot, ledger=self.ledger, workflow=job)
+        self.assertEqual(result['status'], 'admitted', result)
+        record = self.ledger.snapshot()['admissions'][0]
+        self.assertEqual(len(record['pressure']['candidates']), 10)
+        self.assertEqual(len(record['ranking']['shortlist']), 10)
+        self.assertLessEqual(len(json.dumps(record, separators=(',', ':'))), budget.MAX_ADMISSION_BYTES)
+
+    def test_oversized_replay_detail_refuses_without_a_hold(self):
+        request, ranked, snapshot, job = largest_replay(unicode=True)
+        before = self.ledger.snapshot()
+        result = routing.admit(request, ranked, settings(), snapshot, ledger=self.ledger, workflow=job)
+        self.assertEqual((result['status'], result['reason_code']), ('pending', 'record_too_large'))
+        self.assertEqual(self.ledger.snapshot(), before)  # refused before any hold or record is written
+
+    def test_new_worker_choice_record_uses_the_legacy_replay_contract(self):
+        choice = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')
+        cfg = settings(smart_routing=False, worker_choices={'software-engineer': [choice]})
+        self.admit('a', [], [sub_route('sub')], dict(sub=sub_pool()), cfg=cfg)
+        record = self.ledger.snapshot()['admissions'][0]
+        self.assertEqual((record['mode'], record['ranking']['shortlist'], record['ranking']['strategy_id']),
+                         ('worker_choice', [], None))
+        self.assertNotIn('candidates', record['pressure'])
+        self.assertEqual(record['pressure']['constraints'],
+                         [dict(pool='sub', window='5h', headroom=900, cost=10, resets_at=None)])  # the chosen route's
+
+    def test_snapshot_detail_is_removed_after_a_day_and_the_rest_stays(self):
+        routes, pools = self.subs(10, 20)
+        self.admit('a', ['s0', 's1'], routes, pools)
+        self.ledger.close_attempt('a', 'not_dispatched')
+        kept = {key: value for key, value in self.ledger.snapshot()['admissions'][0].items()
+                if key not in ('pressure', 'snapshot_id')}
+        self.ledger.expire_evidence(NOW + budget.RETENTION['snapshot'] + 1)
+        record = self.ledger.snapshot()['admissions'][0]
+        self.assertNotIn('pressure', record)
+        self.assertEqual(record, kept)  # ranking, strategy, risk band and floor stay for the 14-day diagnostics
+        self.assertEqual(record['ranking']['shortlist'], ['s0', 's1'])
 
 
 if __name__ == '__main__':
