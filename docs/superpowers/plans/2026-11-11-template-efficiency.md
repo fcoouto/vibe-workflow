@@ -60,7 +60,7 @@
 
 ## Execution record
 
-Status: WAITING for a fresh numeric live-pilot budget. The user approved the design and requested continuation; implementation ran inline. The offline/helper slice is implemented, independently reviewed and published in draft [PR #254](https://github.com/fcoouto/vibe-workflow/pull/254), branch `feat/template-efficiency`, against `main` at `11a8927c44c6c0c0965b836c9b00d81fb0115591`. The PR opened `[BLOCKED]`; no merge occurred. Current main's generated worker specialist roster is preserved. Historical evaluation remains on its original branch/PR. The previous live-inference budget is closed. A new numeric pilot budget and native hook qualification remain dependent follow-up work, not implied passes.
+Status: the offline/helper slice is implemented, independently reviewed and published in draft [PR #254](https://github.com/fcoouto/vibe-workflow/pull/254), branch `feat/template-efficiency`, against `main` at `11a8927c44c6c0c0965b836c9b00d81fb0115591`. The PR opened `[BLOCKED]`; no merge occurred. Implementation ran inline. Current main's generated worker specialist roster is preserved. Historical evaluation remains on its original branch/PR and its live-inference budget remains closed. The user subsequently approved a separate 12-session, two-concurrent, 45-minute subscription-only pilot. The [pilot plan](2026-11-11-template-hook-pilot.md) owns that follow-up; approval is not native qualification or savings evidence.
 
 ### Offline evidence
 
