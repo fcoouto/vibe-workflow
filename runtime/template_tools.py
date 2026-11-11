@@ -86,7 +86,10 @@ class _Reads:
             self.cache[key] = raw
             return raw
         except ValueError as error:
-            self.complete = False
+            if str(error) == "file_missing":
+                self.hashes[key] = "missing"
+            else:
+                self.complete = False
             if len(self.cache) < MAX_PATHS:
                 self.cache[key] = error
             raise
