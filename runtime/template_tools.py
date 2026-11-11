@@ -179,8 +179,8 @@ def prepare(root, templates, context, *, page=1, revision=None):
                 context=context_hashes, revision=current, instructions=instructions)
 
 
-def _prose(text):
-    """Keep line positions while masking fenced and inline code examples."""
+def _prose(text, *, mask_inline=True):
+    """Keep line positions while masking fenced and optionally inline code examples."""
     fence = None
     for line in text.splitlines():
         marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
@@ -192,20 +192,22 @@ def _prose(text):
             fence = marker[1]
             yield ""
         else:
-            yield re.sub(r"(`+)[^`]*?\1", "", line)
+            yield re.sub(r"(`+)[^`]*?\1", "", line) if mask_inline else line
 
 
 def _anchors(text):
-    used = set()
-    for line in _prose(text):
+    used, next_suffix = set(), {}
+    for line in _prose(text, mask_inline=False):
         heading = re.match(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", line)
         if heading:
             slug = re.sub(r"[^\w\- ]", "", heading[1].lower()).replace(" ", "-")
-            candidate, number = slug, 0
+            number = next_suffix.get(slug, 0)
+            candidate = f"{slug}-{number}" if number else slug
             while candidate in used:
                 number += 1
                 candidate = f"{slug}-{number}"
             used.add(candidate)
+            next_suffix[slug] = number + 1
     return used
 
 
@@ -220,7 +222,7 @@ def _links(text):
     for line in lines:
         match = _REFERENCE.match(line)
         if match:
-            definitions[" ".join(match[1].lower().split())] = match[2] or match[3]
+            definitions.setdefault(" ".join(match[1].lower().split()), match[2] or match[3])
     for number, line in enumerate(lines, 1):
         if _REFERENCE.match(line):
             continue
@@ -270,6 +272,7 @@ def check(root, documents, templates=(), *, before=None, required=None):
     sources = _templates(reads, templates)
     baseline = _root(before) if before is not None else None
     findings, count = [], 0
+    anchors = {}
 
     def add(code, path, line=None):
         nonlocal count
@@ -327,8 +330,11 @@ def check(root, documents, templates=(), *, before=None, required=None):
                     continue
                 destination, anchor = local
                 raw = reads.read(root, destination)
-                if anchor and anchor not in _anchors(raw.decode("utf-8")):
-                    add("anchor_missing", name, number)
+                if anchor:
+                    if destination not in anchors:
+                        anchors[destination] = _anchors(raw.decode("utf-8"))
+                    if anchor not in anchors[destination]:
+                        add("anchor_missing", name, number)
             except (ValueError, UnicodeError) as error:
                 code = str(error)
                 code = {"file_missing": "link_missing", "path_unsafe": "link_unsafe"}.get(code, code)
