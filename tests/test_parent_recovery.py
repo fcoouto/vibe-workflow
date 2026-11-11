@@ -385,8 +385,8 @@ class IndependentRecoveryTests(unittest.TestCase):
     def test_reenable_preserves_consumed_intent_episode_and_manual_suspension(self):
         from runtime import state
         import time
-        now = int(time.time())
         self.register()
+        now = int(time.time())
         observation = dict(thread_status='idle', turn_status='failed', turn_id='failed',
             error_code='serverOverloaded', will_retry=None)
         with patch('runtime.startup.acquire_project_entry',side_effect=lambda *args,**kwargs:test_acquisition(self.fixture.scope)):

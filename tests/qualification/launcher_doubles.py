@@ -14,6 +14,16 @@ from runtime import routing_launch
 from runtime.adapters import opencode as adapter
 
 
+
+def attach_route(value):
+    """`provider/model[#variant]` as the shim's `spawnModel` reads it: no `#` is an omitted variant (null), and a `#`
+    without a variant is malformed (None)."""
+    route, separator, variant = value.partition("#")
+    provider, _, model = route.partition("/")
+    if separator and not variant:
+        return None
+    return dict(provider=provider, model=model, variant=variant if separator else None)
+
 class FakeLauncherHost:
     def __init__(self, directory, workdir, settings=None, ledger=None, environ=None, **knobs):
         self.directory, self.workdir, self.environ = str(directory), Path(workdir), dict(environ or {})
@@ -67,10 +77,11 @@ class FakeLauncherHost:
                 self.unobserved.add(payload["session_id"])  # created before attach: the shim never saw it
             return 200, dict(state="attached")
         if method == "attach":
-            route, _, variant = payload["model"].partition("#")
-            provider, _, model = route.partition("/")
-            facts = dict(provider=provider, model=model, variant=variant, harness=routing_launch.shim_harness(provider),
-                         kind="primary", funding_pool=payload["funding_pool"])
+            parsed = attach_route(payload["model"])
+            if parsed is None:
+                return 500, None  # the shim's `invalid_attach`
+            facts = dict(parsed, harness=routing_launch.shim_harness(parsed["provider"]), kind="primary",
+                         funding_pool=payload["funding_pool"])
             from scripts import routing as command
             shim = command.Service(*self.stores, serving=True)  # per call: the launch may run in another thread
             try:

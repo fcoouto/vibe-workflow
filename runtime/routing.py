@@ -639,11 +639,11 @@ def _amounts(value, allow_none=False):
 
 
 def _valid_assignment(assignment):
-    if not isinstance(assignment, dict) or not all(_text(assignment.get(key)) for key in
-                                                   ('attempt_id', 'task', 'role', 'work_kind', 'complexity_band', 'scope')):
-        return False
-    choice = assignment.get('choice')
-    return choice is None or (type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding')))
+    choice = assignment.get('choice') if isinstance(assignment, dict) else None  # with an optional pinned `endpoint`
+    return isinstance(assignment, dict) and all(_text(assignment.get(key)) for key in (
+        'attempt_id', 'task', 'role', 'work_kind', 'complexity_band', 'scope')) and (choice is None or (
+            type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding'))
+            and _optional(choice.get('endpoint'), _text)))
 
 
 def _valid_route(route):
@@ -680,9 +680,9 @@ def _valid_pool(pool):
 
 
 def _valid_observations(observations):
-    if type(observations) is not dict or not _amount(observations.get('now')):
-        return False
-    if not (_optional(observations.get('snapshot_id'), _text) and _optional(observations.get('epoch_at'), _finite)
+    if type(observations) is not dict or not _amount(observations.get('now')) or not (
+            all(_optional(observations.get(key), _text) for key in ('snapshot_id', 'routes_version'))
+            and _optional(observations.get('epoch_at'), _finite)
             and _optional(observations.get('minimum_horizon'), lambda v: _finite(v) and v > 0)):
         return False
     routes, pools = observations.get('routes'), observations.get('pools')

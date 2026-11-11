@@ -8,12 +8,16 @@ never guessed. Model, effort and harness names appear only as data.
 Input shapes (all plain JSON):
   guidance:   [{id, sha256, checked_at, rows:[{work_kind, complexity_band, risk_band,
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
-  catalog:    [{model, supported_efforts, harnesses?, context_limit?}]     # native catalog shape (runtime/delegation.py)
+  catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?}]  # one client's own catalog
   benchmarks: [{id, model, harness, work_kind, sha256, checked_at}]        # harness and work_kind are required to match
 
 A row's work kind is one of the task profile template's; a row naming a `role` or `task_family` (the schema-1
 shape) is invalid, so republished guidance must drop them. Guidance evidence binds to its own entry: a strategy may cite only the guidance entry whose rows contain it.
-A catalog entry without ``harnesses`` accepts any harness. A strategy's ``endpoint`` defaults to its harness.
+Catalog identity is ``(model, harness)``: each entry lists its harnesses explicitly (never a wildcard), ``model`` is
+the launch identifier that harness accepts, and its efforts are only those the actual dispatch can express. An empty
+``supported_efforts`` permits only ``effort: null`` (omit the parameter). The entry's optional ``provider`` is copied
+onto each strategy for route generation. A strategy's ``endpoint`` defaults to its harness and is kept only when
+it differs.
 OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
 An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
 """
@@ -60,6 +64,8 @@ def _sha(value, field):
 
 
 def _catalog(items):
+    """``{(model, harness): {efforts, provider, context_limit}}``; a duplicate pair or a missing harness list is
+    invalid, while the same model on different harnesses is not."""
     live = {}
     for item in _list(items, 'catalog'):
         _require(isinstance(item, dict), 'Invalid catalog entry')
@@ -68,12 +74,15 @@ def _catalog(items):
         _require(isinstance(efforts, list) and all(isinstance(e, str) and 0 < len(e) <= 64 for e in efforts),
                  'Invalid catalog efforts')
         harnesses = item.get('harnesses')
-        _require(harnesses is None or isinstance(harnesses, list) and all(isinstance(h, str) for h in harnesses),
-                 'Invalid catalog harnesses')
+        _require(isinstance(harnesses, list) and harnesses and all(isinstance(h, str) and 0 < len(h) <= 64
+                                                                   for h in harnesses), 'Invalid catalog harnesses')
+        provider = item.get('provider')
+        _require(provider is None or isinstance(provider, str) and 0 < len(provider) <= 64, 'Invalid catalog provider')
         limit = item.get('context_limit')
         _require(limit is None or type(limit) is int and limit >= 0, 'Invalid catalog context limit')
-        _require(model not in live, 'Duplicate catalog model')
-        live[model] = dict(efforts=efforts, harnesses=harnesses, context_limit=limit)
+        for harness in harnesses:
+            _require((model, harness) not in live, 'Duplicate catalog model and harness')
+            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit)
     return live
 
 
@@ -135,14 +144,13 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
                                 evidence_refs=list(item.get('evidence_refs') or []))
                 _require(all(isinstance(ref, str) for ref in strategy['evidence_refs']), 'Invalid evidence reference')
                 reason = None
-                model = live.get(strategy['model'])
+                model = live.get((strategy['model'], strategy['harness']))  # this harness's own entry only
                 if model is None:
-                    reason = 'model_not_in_catalog'
+                    reason = 'harness_unsupported' if any(name == strategy['model'] for name, _ in live) \
+                        else 'model_not_in_catalog'
                 elif strategy['effort'] is None and model['efforts'] or (
                         strategy['effort'] is not None and strategy['effort'] not in model['efforts']):
                     reason = 'effort_unsupported'
-                elif model['harnesses'] is not None and strategy['harness'] not in model['harnesses']:
-                    reason = 'harness_unsupported'
                 elif not _qualified(strategy, kind, refs, entry.get('id')):
                     reason = 'evidence_missing'
                 if reason:
@@ -152,9 +160,14 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
                     [strategy['endpoint']] if strategy['endpoint'] != strategy['harness'] else []))[:16]
                 if model['context_limit'] is not None:
                     strategy['context_limit'] = model['context_limit']
+                if model['provider'] is not None:
+                    strategy['provider'] = model['provider']
+                if strategy['endpoint'] == strategy['harness']:
+                    del strategy['endpoint']
                 if all(existing['strategy_id'] != strategy['strategy_id'] for existing in target):
-                    target.append({k: strategy[k] for k in ('strategy_id', 'model', 'effort', 'harness',
-                                                            'evidence_refs', 'context_limit') if k in strategy})
+                    target.append({k: strategy[k] for k in ('strategy_id', 'model', 'effort', 'harness', 'provider',
+                                                            'endpoint', 'evidence_refs', 'context_limit')
+                                   if k in strategy})
     rows = {name: value for name, value in rows.items() if value}
     checks = [source['checked_at'] for source in sources]
     return dict(schema=SCHEMA, version=_digest([SCHEMA, rows, sources]), compiled_at=now or _now(),

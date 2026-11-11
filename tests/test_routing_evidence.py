@@ -129,6 +129,71 @@ class CompileTests(unittest.TestCase):
             key('implementation', 'medium', 'medium')]])
         self.assertIn('harness_unsupported', {item['reason'] for item in table['dropped']})
 
+    def test_same_model_on_two_harnesses_has_independent_efforts(self):
+        """F4.2: catalog identity is (model, harness). One harness accepts an explicit effort, the other only
+        omission (`effort: null`); neither inherits the other's efforts."""
+        guidance, catalog, benchmarks = inputs()
+        catalog = [dict(model='shared', harnesses=['h-explicit'], supported_efforts=['high']),
+                   dict(model='shared', harnesses=['h-omit'], supported_efforts=[])]
+        row = guidance[0]['rows'][0]
+        row['strategies'] = [dict(model='shared', effort=effort, harness=harness, evidence_refs=['guide-1'])
+                             for harness in ('h-explicit', 'h-omit') for effort in ('high', None)]
+        table = evidence.compile_table(guidance, catalog, benchmarks)
+        kept = [(item['harness'], item['effort']) for item in table['rows'][key('implementation', 'medium', 'medium')]]
+        self.assertEqual(kept, [('h-explicit', 'high'), ('h-omit', None)])
+        dropped = {(item['model'], item['effort'], item['reason']) for item in table['dropped']}
+        self.assertTrue({('shared', None, 'effort_unsupported'), ('shared', 'high', 'effort_unsupported')} <= dropped)
+
+    def test_duplicate_model_harness_pair_is_rejected(self):
+        guidance, catalog, benchmarks = inputs()
+        twice = [dict(model='m', harnesses=['h1', 'h2'], supported_efforts=[]),
+                 dict(model='m', harnesses=['h2'], supported_efforts=['low'])]
+        with self.assertRaisesRegex(ValueError, 'Duplicate catalog'):
+            evidence.compile_table(guidance, twice, benchmarks)
+        with self.assertRaisesRegex(ValueError, 'Duplicate catalog'):
+            evidence.compile_table(guidance, [dict(model='m', harnesses=['h1', 'h1'], supported_efforts=[])],
+                                   benchmarks)
+        evidence.compile_table(guidance, [twice[0], dict(twice[1], harnesses=['h3'])], benchmarks)
+
+    def test_catalog_requires_explicit_harnesses(self):
+        guidance, catalog, benchmarks = inputs()
+        for harnesses in (None, [], [''], [5], 'native'):
+            with self.subTest(harnesses=harnesses):
+                entry = dict(catalog[0])
+                entry.pop('harnesses', None)
+                if harnesses is not None:
+                    entry['harnesses'] = harnesses
+                with self.assertRaisesRegex(ValueError, 'Invalid catalog harnesses'):
+                    evidence.compile_table(guidance, [entry], benchmarks)
+
+    def test_benchmark_does_not_cross_harnesses(self):
+        guidance, catalog, benchmarks = inputs()
+        catalog = [dict(item, harnesses=['native', 'other']) if item['model'] == 'beta-new' else item
+                   for item in catalog]
+        strategy = guidance[0]['rows'][2]['strategies'][0]
+        guidance[0]['rows'][2]['strategies'] = [dict(strategy, harness='other', evidence_refs=['bench-beta'])]
+        table = evidence.compile_table(guidance, catalog, benchmarks)  # the benchmark is for `native` only
+        self.assertNotIn(key('implementation', 'low', 'low'), table['rows'])
+        guidance[0]['rows'][2]['strategies'] = [dict(strategy, evidence_refs=['bench-beta'])]
+        table = evidence.compile_table(guidance, catalog, benchmarks)
+        self.assertEqual([item['harness'] for item in table['rows'][key('implementation', 'low', 'low')]], ['native'])
+
+    def test_strategies_carry_the_catalog_provider_and_a_distinct_endpoint(self):
+        """F4.2: route generation needs `provider`, and `endpoint` when it differs from the harness; ids unchanged."""
+        guidance, catalog, benchmarks = inputs()
+        before = evidence.compile_table(guidance, catalog, benchmarks)
+        catalog[0]['provider'] = 'vendor-a'
+        guidance[0]['rows'][0]['strategies'][1]['endpoint'] = 'pinned-endpoint'
+        guidance[0]['rows'][0]['strategies'][0]['endpoint'] = 'native'  # equal to the harness: not copied
+        table = evidence.compile_table(guidance, catalog, benchmarks)
+        first, second = table['rows'][key('implementation', 'medium', 'medium')]
+        self.assertEqual((first['provider'], first.get('endpoint')), ('vendor-a', None))
+        self.assertEqual((second.get('provider'), second['endpoint']), (None, 'pinned-endpoint'))
+        old = {item['model']: item['strategy_id'] for item in before['rows'][key('implementation', 'medium', 'medium')]}
+        self.assertEqual(first['strategy_id'], old['alpha-large'])
+        with self.assertRaisesRegex(ValueError, 'Invalid catalog provider'):
+            evidence.compile_table(guidance, [dict(catalog[0], provider='p' * 65)], benchmarks)
+
     def test_invalid_input_is_rejected(self):
         guidance, catalog, benchmarks = inputs()
         guidance[0]['rows'][0]['complexity_band'] = 'enormous'

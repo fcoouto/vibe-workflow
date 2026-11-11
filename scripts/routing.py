@@ -24,8 +24,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import (ledger_versions, routing, routing_gates, routing_settings, subscription_reconcile,  # noqa: E402
-                     usage_budget)
+from runtime import (ledger_versions, routing, routing_gates, routing_paths, routing_settings,  # noqa: E402
+                     subscription_reconcile, usage_budget)
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -58,12 +58,16 @@ FIELDS = dict(prepare=({'assignment', 'job'}, {'observations', 'table', 'constra
               resolve_block=({'organization', 'reason', 'decision', 'event_id'}, {'ids', 'marker'}),
               drop_debit=({'key', 'marker', 'event_id'}, set()),
               settle_legacy_call=({'run_id', 'phase', 'evidence', 'event_id'}, set()),
-              seed_window=({'pool', 'window', 'used', 'limit', 'reset_at', 'length', 'event_id'}, set()))
+              seed_window=({'pool', 'window', 'used', 'limit', 'reset_at', 'length', 'event_id'}, set()),
+              qualify_path=({'path', 'demand', 'evidence'}, {'account'}), unqualify_path=({'path'}, set()),
+              native_prepare=({'client', 'assignment', 'job'}, {'profile'}),
+              native_complete=({'attempt_id', 'outcome'}, set()))
 # Operator ops are one-shot commands only (`operator_op_not_served`): they need the `one_shot` flag that only `main()`
 # sets. Neither the OpenCode shim's persistent `--serve` child, which a plugin or worker can reach, nor any in-process
 # service (a launcher's `managed_service` included) can settle, release or unblock anything (C.3 design 3.5, 3.7).
 OPERATOR_OPS = ('resolve_cost_unknown', 'resolve_overrun', 'reconcile_uncertain', 'resolve_block',
-                'reconcile_subscription', 'drop_debit', 'settle_legacy_call', 'seed_window')
+                'reconcile_subscription', 'drop_debit', 'settle_legacy_call', 'seed_window', 'qualify_path',
+                'unqualify_path')
 # Loaded only by the ops that need them (the user's lightweight rule): the collector and window store
 # (`prepare` for a managed project, `seed_window`, `status`) and the self-check's process modules.
 # Retention cleanup (S3.6a) runs on a write command's first ledger use, then at most once per interval while serving.
@@ -79,13 +83,13 @@ SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'i
 # The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
 # `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
-# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's behavioural
-# self-check passes. (name, kind, target): `module` calls `<module>:<function>(workdir)`; `script` loads
-# PACKAGE/<target> by path and calls its `managed_self_check(workdir)`; `manifest` needs one qualified route in
-# PACKAGE/<target>; `heading` needs a `Managed projects` heading in PACKAGE/<target>.
+# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's check passes. In a
+# child: `module` `<module>:<function>(workdir)`, `script` PACKAGE/<target>'s `managed_self_check(workdir)`, `paths`
+# `<module>:<function>(settings path)`, `heading` a `Managed projects` heading; in process: `sources` (F4R-03).
 CAPABILITIES = (
     ('collector_and_launcher', 'module', 'runtime.routing_launch:managed_self_check'),  # C3-1
-    ('route_manifest', 'manifest', 'runtime/routing_routes.json'),  # C3-1, content per user decision 5
+    ('route_manifest', 'paths', 'runtime.routing_paths:gate'),  # F4: path rules, qualifications and the table
+    ('subscription_sources', 'sources', 'runtime.native_routing:activation_readiness'),  # F4R-03: per managed host
     ('native_delegation', 'module', 'runtime.delegation_routing:managed_self_check'),  # C3-2
     ('opencode_launcher', 'module', 'runtime.opencode_launcher:managed_self_check'),  # C3-3
     ('openrouter_proposals', 'script', 'scripts/openrouter_proposals.py'),  # C3-4a
@@ -93,14 +97,9 @@ CAPABILITIES = (
     ('api_usage', 'module', 'runtime.usage_routing:managed_self_check'),  # C3-5
     ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
 )
-# Enrolled clients whose coordinator has a managed delegation path (policy 03 `Managed projects`): codex through
-# native delegation preparation (C3-2), opencode through the managed launcher (C3-3). Claude Code native subagents
-# have none, so a project enrolled only for clients outside this list is refused (`advisory_host_unmanaged`); a mix
-# may join, and policy 03's hold covers a Claude Code coordinator there. The user's decision 2 (whether advisory
-# hosts get automatic selection) may change this list. `opencode` is forward-compatible: onboarding records only codex
-# and claude-code entries today (runtime/onboarding.py, clients/startup.md), so an OpenCode-coordinated project must
-# be enrolled for codex to be activated.
-MANAGED_HOSTS = ('codex', 'opencode')
+# Clients with a managed delegation path (policy 03 `Managed projects`): codex (C3-2, the native bridge), opencode (the
+# launcher, C3-3), claude-code (the native bridge, F4.6); a project enrolled only for others: `advisory_host_unmanaged`.
+MANAGED_HOSTS = ('codex', 'opencode', 'claude-code')
 SELF_CHECK_TIMEOUT = 10
 SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
 SELF_CHECK_MARK = 'managed-self-check:'
@@ -110,15 +109,15 @@ SELF_CHECK_CHILD = r'''
 import sys
 sys.path.insert(0, sys.argv[1])
 import importlib, importlib.util, json, os, re
-package, kind, target, workdir = sys.argv[1:5]
+package, kind, target, workdir, settings = sys.argv[1:6]
 def run():
-    if kind == 'module':
+    if kind in ('module', 'paths'):
         name, _, function = target.partition(':')
         try:
             check = getattr(importlib.import_module(name), function)
         except (ImportError, AttributeError):
             return ['self_check_missing']
-        return check(workdir)
+        return check(settings if kind == 'paths' else workdir)
     path = os.path.join(package, target)
     if not os.path.isfile(path):
         return ['self_check_missing']
@@ -130,13 +129,7 @@ def run():
         return ['self_check_missing'] if check is None else check(workdir)
     with open(path, encoding='utf-8') as handle:
         text = handle.read()
-    if kind == 'heading':
-        return [] if re.search(r'^#+ Managed projects[ \t]*$', text, re.M) else ['heading_missing']
-    data = json.loads(text)
-    if not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('routes'), list):
-        return ['manifest_invalid']  # C3-1's manifest is {version: 1, ..., routes: [...]}
-    qualified = any(isinstance(r, dict) and r.get('status') == 'qualified' for r in data['routes'])
-    return [] if qualified else ['no_qualified_route']
+    return [] if re.search(r'^#+ Managed projects[ \t]*$', text, re.M) else ['heading_missing']
 try:
     result = run()
 except Exception:
@@ -198,7 +191,8 @@ def _facts(value):
     require(bound is None or (type(bound) is dict and len(bound) <= usage_budget.MAX_CLAIMS and all(
         type(key) is str and 0 < len(key) <= usage_budget.MAX_KEY and key.isprintable() and _amount(amount)
         for key, amount in bound.items())), 'invalid_request')
-    return value
+    # An omitted effort (a host's null variant) is the identity's `none` sentinel; a nonempty variant stays as sent.
+    return value if value['variant'] is not None else dict(value, variant='none')
 
 
 def _table_shape(value):
@@ -375,8 +369,8 @@ class Service:
         return dict(value, now=now)
 
     def _rank(self, profile, body):
+        """(ranking, the table it ranked from)."""
         constraints = body.get('constraints', {})
-        require(type(constraints) is dict, 'invalid_request')
         try:
             fallback = routing.rank(profile, {}, constraints)
         except ValueError:
@@ -393,8 +387,8 @@ class Service:
         if not routing._valid_ranking(ranking):  # the same shape admit() requires; a bad one falls back
             ranking, problem = fallback, 'table_unavailable'
         if problem:
-            ranking = dict(ranking, reason_codes=ranking['reason_codes'] + [problem])
-        return ranking
+            ranking, table = dict(ranking, reason_codes=ranking['reason_codes'] + [problem]), {}
+        return ranking, table
 
     def _managed(self):
         """Whether this pinned service serves a managed project. An unreadable answer counts as managed (fail
@@ -407,31 +401,36 @@ class Service:
         except Exception:  # noqa: BLE001 - fail closed: caller observations are refused
             return True
 
-    def _collect(self, assignment):
+    def _collect(self, selected):
         """The collector's snapshot and `seen` revisions for a managed project; `seen` passes through as an opaque
         mapping. The collector reads this service's own stores, never the defaults. A missing or failing collector
         admits nothing (`observations_unavailable`). Under `--serve` it never starts the Codex window reader (R7)."""
         try:
-            result = importlib.import_module(COLLECTOR).collect(str(self.project), assignment,
-                                                                settings_path=self.settings_path,
-                                                                ledger_path=self.ledger_path,
-                                                                refresh_windows=not self.serving)
+            result = importlib.import_module(COLLECTOR).collect(
+                str(self.project), selected['assignment'], settings_path=self.settings_path, ledger_path=self.ledger_path,
+                refresh_windows=not self.serving, **{key: selected[key] for key in self.SELECTION})
         except Exception:  # noqa: BLE001 - missing module (before C3-1) or a collector failure
             raise Blocked('observations_unavailable') from None
         require(type(result) is dict and {'observations', 'seen'} <= set(result) and type(result['seen']) is dict,
                 'observations_unavailable')
-        return result['observations'], result['seen']
+        return result['observations'], result['seen'], result.get('boundaries') or {}
 
-    def _prepare(self, body):
-        assignment = body['assignment']
-        require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS, 'invalid_request')
-        managed = self._managed()
-        require(not managed or self.test_inputs or 'observations' not in body, 'observations_not_accepted')
-        require(managed or 'observations' in body, 'invalid_request')
+    SELECTION = ('table', 'strategy_ids', 'choices', 'harnesses')
+
+    def _select(self, body):
+        """What `prepare` and the internal `preview` share: the request and harness checks, settings, profile, role,
+        ranking and `routing_paths.selection`. A collector-mode body (no `observations`) must allow at least one
+        harness (`harness_required`), whether Smart Routing is on or off."""
+        assignment, constraints = body['assignment'], body.get('constraints', {})
+        require(type(assignment) is dict and set(assignment) <= ASSIGNMENT_FIELDS and type(constraints) is dict,
+                'invalid_request')
+        harnesses = constraints.get('allowed_harnesses')
+        require('observations' in body or (type(harnesses) is list and harnesses and all(map(_text, harnesses))),
+                'harness_required')
         settings = self._settings()
         try:
             profile = routing.ensure_profile(body['job'])
-        except Exception:  # noqa: BLE001 - ProfileUnavailable or an unreadable job
+        except Exception:  # noqa: BLE001 - ProfileUnavailable (a missing or corrupt template too) or an unreadable job
             raise Blocked('profile_unavailable') from None
         self._missing = list(profile['uncertain_fields'])  # fields that took floors; never a reason to block
         try:
@@ -439,17 +438,48 @@ class Service:
         except SettingsError as error:
             raise Blocked(str(error)) from None
         if settings['smart_routing']:
-            ranking = self._rank(profile, body)
+            ranking, table = self._rank(profile, body)
         else:
             require('table' not in body or self.test_inputs, 'invalid_request')
-            ranking = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
-                           profile_digest=profile['semantic_digest'])
+            ranking, table = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
+                                  profile_digest=profile['semantic_digest']), None
         admitted = dict(assignment, role=role, work_kind=profile['work_kind'], complexity_band=profile['complexity_band'])
-        seen = None
-        if 'observations' in body:
+        mode, entries = routing_paths.selection(admitted, settings, ranking['strategy_ids'])
+        return dict(assignment=admitted, settings=settings, profile=profile, ranking=ranking, table=table, mode=mode,
+                    strategy_ids=entries if mode == 'ranked' else None, choices=[] if mode == 'ranked' else entries,
+                    harnesses=harnesses)
+
+    def preview(self, body):
+        """Internal, in-process (F7's request-specific need): the shared shortlist for one collector-mode `prepare`
+        body, with no workflow binding, ledger, window read, reader, admission or write. Not a protocol operation."""
+        try:
+            require(type(body) is dict and {'assignment', 'job'} <= set(body) <= set(FIELDS['prepare'][1]) - {
+                'observations'} | {'assignment', 'job'}, 'invalid_request')  # `workflow` is ignored: nothing is bound
+            require(self.project is not None, 'project_required')
+            selected = self._select(body)
+            cut = importlib.import_module(COLLECTOR).shortlist(
+                str(self.project), selected['assignment'], settings_path=self.settings_path,
+                **{key: selected[key] for key in self.SELECTION})
+        except Blocked as error:
+            return dict(error.detail, state='blocked', reason=error.reason)
+        except Exception:  # noqa: BLE001 - unreadable rules or qualifications: fixed reason, never a traceback
+            return dict(state='blocked', reason='observations_unavailable')
+        return dict(state='previewed', mode=selected['mode'], ranking=selected['ranking'], shortlist=cut['shortlist'],
+                    routes=[route['route'] for route in cut['routes']], excluded=cut['excluded'],
+                    routes_version=cut['routes_version'])
+
+    def _prepare(self, body):
+        require(type(body['assignment']) is dict and set(body['assignment']) <= ASSIGNMENT_FIELDS, 'invalid_request')
+        managed = self._managed()
+        require(not managed or self.test_inputs or 'observations' not in body, 'observations_not_accepted')
+        require(managed or 'observations' in body, 'invalid_request')
+        selected = self._select(body)
+        settings, profile, ranking, admitted = (selected[key] for key in ('settings', 'profile', 'ranking', 'assignment'))
+        seen, boundaries = None, {}
+        if 'observations' in body:  # a caller's own snapshot gets no recheck: it carries no trusted boundary
             observations = self._observations(body['observations'])
         else:
-            collected, seen = self._collect(admitted)
+            collected, seen, boundaries = self._collect(selected)
             observations = self._observations(collected)
         echo = {} if seen is None else dict(seen=seen)  # C3-1's revisions, unchanged, in every answer that follows
         bound = self._workflow_binding(body, profile)
@@ -458,6 +488,9 @@ class Service:
                 else dict(state='blocked', reason=bound[1], **echo)
         ledger = self._ledger(True, write=True)
         self._expire(ledger)
+        if boundaries:  # F4R-09: each pool's stored state, rechecked inside the admission transaction
+            ledger = importlib.import_module(COLLECTOR).rechecked_ledger(ledger, self.settings_path, observations,
+                                                                         boundaries)
         # S3.6c debits clear only in the one-shot command or from a managed project's collector-built snapshot outside
         # `--serve` (C3-0a): never in the shim's persistent child, never from an in-process caller's own snapshot.
         clear = self.one_shot or (seen is not None and not self.serving)
@@ -579,6 +612,19 @@ class Service:
         result = routing_observations.seed_window(self._ledger(True, write=True), event, self.clock(),
                                                   self.settings_path)
         return dict(result, event_id=event['event_id']) if result['state'] == 'recorded' else result
+
+    def _native_prepare(self, body):  # F4.6: the logic lives in runtime/native_routing.py
+        return importlib.import_module('runtime.native_routing').command_prepare(self, body)
+
+    def _native_complete(self, body):
+        return importlib.import_module('runtime.native_routing').command_complete(self, body)
+
+    def _qualify_path(self, body):
+        """Operator record of a path's measured demand (F4.1); the body lives in `routing_paths.operation`."""
+        return routing_paths.operation('qualify_path', self.settings_path, body, self.clock(), self.test_inputs)
+
+    def _unqualify_path(self, body):
+        return routing_paths.operation('unqualify_path', self.settings_path, body, self.clock(), self.test_inputs)
 
     def _operator(self, event, reason='invalid_request', apply=None):
         require(event is not None, reason)
@@ -733,7 +779,7 @@ class Service:
             _require_managed_hosts(delegation_routing, sorted(set(value) - set(self._settings()['managed_projects'])))
             require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
                 'managed_projects']))), 'open_unrouted_assignments')
-            codes = activation_gate()
+            codes = activation_gate(self.settings_path, sorted(set(value) - set(self._settings()['managed_projects'])))
             if codes:
                 raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
         return dict(change, managed_projects=value)
@@ -814,9 +860,10 @@ def _package():
     return state.PACKAGE
 
 
-def _self_check(kind, target):
+def _self_check(kind, target, settings_path):
     """One capability's self-check in a child of this interpreter, in a fresh owner-only sandbox with a fixed
-    environment, deleted afterwards. Returns its failure codes ([] when it passes)."""
+    environment, deleted afterwards; `paths` checks read the service's absolute `settings_path`, the others ignore
+    it. Returns its failure codes ([] when it passes)."""
     import shutil, signal, subprocess, tempfile  # noqa: E401 - only `set managed_projects` runs self-checks
     folder = Path(tempfile.mkdtemp(prefix='routing-self-check-')).resolve()
     try:
@@ -824,7 +871,7 @@ def _self_check(kind, target):
             (folder / name).mkdir(mode=0o700)
         env = dict(PATH='/usr/bin:/bin', HOME=str(folder / 'home'), TMPDIR=str(folder / 'tmp'), LANG='C.UTF-8')
         child = subprocess.Popen([sys.executable, '-I', '-B', '-c', SELF_CHECK_CHILD, str(_package()), kind, target,
-                                  str(folder / 'work')], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  str(folder / 'work'), str(settings_path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.DEVNULL, env=env, cwd=folder / 'work', start_new_session=True)
         try:
             output, _ = child.communicate(timeout=SELF_CHECK_TIMEOUT)
@@ -876,11 +923,15 @@ def _require_managed_hosts(delegation_routing, projects):
         raise Blocked('advisory_host_unmanaged', projects=advisory)
 
 
-def activation_gate():
-    """The failing capabilities as {name: codes}; empty when every self-check passes."""
+def activation_gate(settings_path, projects=()):
+    """The failing capabilities as {name: codes}; empty when every check passes."""
     failures = {}
     for name, kind, target in CAPABILITIES:
-        codes = _self_check(kind, target)
+        if kind == 'sources':
+            module, _, function = target.partition(':')
+            codes = getattr(importlib.import_module(module), function)(list(projects), settings_path)
+        else:
+            codes = _self_check(kind, target, settings_path)
         if codes:
             failures[name] = codes
     return failures

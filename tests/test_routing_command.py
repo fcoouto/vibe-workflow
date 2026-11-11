@@ -871,5 +871,6 @@ class RobustnessTests(Base):
         self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=10, per_account=1))))
         self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=4, per_account=1))
 
+
 if __name__ == '__main__':
     unittest.main()

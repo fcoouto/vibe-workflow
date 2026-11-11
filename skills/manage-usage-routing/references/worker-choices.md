@@ -39,11 +39,27 @@ and it authorizes no spending. Change it only on the user's explicit request.
   `funding`. Each value is a nonempty printable string of at most 256
   characters, and `funding` is `subscription` or `api`. Any other entry gives
   `invalid_worker_choice`.
-- Copy `provider`, `model`, `effort` and `harness` exactly from a route the
-  project already uses, such as the `route` of an earlier admission or launch
-  reply. Do not write vendor model names from memory. A choice that matches no
-  available route makes routing answer `worker_choice_unavailable`, never a
-  substitute.
+- Take each identity field from a source that shows it. Admission and launch
+  replies name only the model and effort, never `provider` or `harness`.
+  - `harness` and `provider`: the path for the client that launches the worker
+    in the shipped path rules, `runtime/routing_routes.json` in the package.
+    Codex native subagents use harness `codex-native` and provider `openai`.
+  - All four fields together: copy one strategy from the compiled table,
+    `strategy-table.json` beside the routing settings file. Its `model`,
+    `effort`, `harness` and `provider` are the values routing compares. Keep
+    a nonempty `effort` exactly. Where the strategy's `effort` is `null` or
+    absent, the model has no effort control and the table stores no text:
+    write the text `none` in the choice, as the settings schema requires a
+    string. Routing matches it to that strategy's route, and the launch then
+    sends no effort.
+  - Anything those files do not show, such as a model missing from the table
+    or a client with no path, is unavailable: ask the user for it, from the
+    launching client's own model list. Never infer a field from a model name or
+    write vendor model names from memory, and never sign in, connect or
+    activate a client to discover one.
+
+  A choice that matches no available route makes routing answer
+  `worker_choice_unavailable`, never a substitute.
 - `funding: api` only selects an API-funded route that the existing API Usage
   enablement, funding and caps already admit. It never enables API Usage, buys
   credit or authorizes a paid fallback.

@@ -88,12 +88,27 @@ def managed_gateway(testcase, repo, *endpoints):
 
 class Funding:
     """A source double over the fixture's: `organization` renames the dollar windows' organization and `extra`
-    routes come first in the manifest (so they shape a shared pool)."""
+    routes come first in its fixed list (so they shape a shared pool). Lookups answer from that whole list."""
     def __init__(self, source, organization=None, extra=()):
         self.source, self.organization, self.extra = source, organization, list(extra)
 
-    def manifest(self):
-        return self.extra + self.source.manifest()
+    def manifest(self, table=None, choices=()):
+        return self.extra + self.source.manifest(table, choices)
+
+    def _fixed(self):
+        return routing_observations.StaticSource(self.manifest())
+
+    def admitted_route(self, route_id, identity=None):
+        return self._fixed().admitted_route(route_id, identity)
+
+    def pins_endpoint(self, route_id, identity, endpoint):
+        return self._fixed().pins_endpoint(route_id, identity, endpoint)
+
+    def seedable(self, pool, window):
+        return self._fixed().seedable(pool, window)
+
+    def routes_version(self, table=None):
+        return None
 
     def windows(self, pool, now):
         return [dict(window, organization=self.organization) if self.organization and window.get('organization')

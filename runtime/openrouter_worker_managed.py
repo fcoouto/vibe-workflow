@@ -54,7 +54,8 @@ def _routed_request(api, brief, checkout, attempt):
     from runtime import openrouter_worker_routing as state
     _, launch = api._shared()._routing()
     scope = launch.assignment_scope(checkout)
-    choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'])
+    choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'],
+                           endpoint=launch.pinned_endpoint(HOST, provider=brief['provider']))
     role = brief.get('role') if task_profile.routed(brief.get('role')) else DEFAULT_SPECIALIST
     assignment = dict(attempt_id=attempt, role=role, scope=scope, choice=choice,
                       task='worker:' + hashlib.sha256(brief['task_id'].encode()).hexdigest()[:32])
@@ -68,15 +69,17 @@ def _admit(api, service, checkout, brief, limits, attempt):
     if reason is not None:
         return None, reason
     assignment, job = _routed_request(api, brief, checkout, attempt)
-    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
+    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits,
+                                                             harnesses=launch.host_harnesses(HOST)))
     if prepared.get('state') != 'admitted':
         reason = prepared.get('reason')
         return None, reason if isinstance(reason, str) and reason else 'routing_unavailable'
     admission = prepared['admission']
     identity = launch.route_identity(HOST, model=brief['model'], provider=brief['provider'], effort=brief['effort'])
     _, reason = launch.admitted_check(admission, host=HOST, catalog=[identity], settings_path=service.settings_path)
-    if reason is None and not api._shared()._endpoint(service.settings_path, admission['route'], brief['provider']):
-        reason = launch.CATALOG_MISMATCH  # the admitted manifest route must pin this brief's endpoint
+    if reason is None and not api._shared()._endpoint(service.settings_path, admission['route'], identity,
+                                                      brief['provider']):
+        reason = launch.CATALOG_MISMATCH  # the admitted route must pin this brief's endpoint
     if reason is not None:
         return None, reason
     reserved = [value for key, value in (admission.get('reserved') or {}).items() if key.startswith('org:')]

@@ -2,11 +2,11 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "b5b004df4b8db81fb278269e18caba23cef6be7d7da200a7bf47e83ebc87dac3",
+      "sha256": "794751c55b0bd2259bda2c54b878f255e250d69ca4bde4f1e73fd5a7f31ceb64",
       "ranges": [
         [
           1,
-          21
+          52
         ]
       ]
     },
@@ -20,11 +20,11 @@
       ]
     },
     "clients/codex.md": {
-      "sha256": "73a13bfeb6ce7abf13614afce978981cf2474ce4bf429f5bdd15bd80dc8f052e",
+      "sha256": "bcc3943236d45fdcb3a2cf2bdc2fea7bbea1bdcdb0b721c21ab39594611a7310",
       "ranges": [
         [
           1,
-          63
+          67
         ]
       ]
     },
@@ -180,11 +180,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "4153c3a0775f368d05127195417798469eaab925dab9eaa1f3ca1cec7a08e531",
+      "sha256": "85a4192a79a50e2d1a954e5985c4cb87644fd564038af4242780ca4049aa2b8a",
       "ranges": [
         [
           1,
-          103
+          119
         ]
       ]
     },
@@ -216,7 +216,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "e871ce8559617e6c25e080b227f5e7bbfacd28048644b1db6c24b1f064d6c11b",
+      "sha256": "f6aee5b3be414a418bb8fcffbc0d1c22aa1ccd12d7b7896338e5b35150108a2a",
       "ranges": [
         [
           1,
@@ -256,11 +256,15 @@
         ],
         [
           309,
-          339
+          337
         ],
         [
-          340,
-          350
+          338,
+          361
+        ],
+        [
+          362,
+          362
         ]
       ]
     },
@@ -428,7 +432,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "02c1b52869cfd4504bab419de4f52d32253bf1cafc33d38bc20899d1419309cf",
+      "sha256": "449195828a1feeeb09242eede3caaf3a8a4c42d283dfff6ab6950add6f439201",
       "ranges": [
         [
           1,
@@ -436,10 +440,10 @@
         ],
         [
           39,
-          97
+          91
         ],
         [
-          98,
+          92,
           145
         ]
       ]
@@ -644,11 +648,11 @@
       ]
     },
     "skills/manage-usage-routing/references/worker-choices.md": {
-      "sha256": "2544a2b6979c1d0a8c80210c072bbffa3dd74e55079e223f45b225b5e2b8bee2",
+      "sha256": "64afb9162963eb0123fbda74224a628f501884b1e119fc9bbdada89baa1144c5",
       "ranges": [
         [
           1,
-          55
+          71
         ]
       ]
     },
