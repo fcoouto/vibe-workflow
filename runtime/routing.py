@@ -542,25 +542,12 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     ranked = settings['smart_routing'] and not explicit and bool(ranking.get('strategy_ids'))
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
     u = e = None
+    from runtime import routing_funding  # the ranked decision and the record (F5.2); never at module import time
     if ranked:
-        order = {sid: i for i, sid in enumerate(ranking['strategy_ids'])}
-        pool = sorted((c for c in candidates if c['spec'].get('strategy_id') in order),
-                      key=lambda c: order[c['spec']['strategy_id']])
-        by_class = {cls: [c for c in pool if c['cls'] == cls] for cls in ('api', 'subscription')}
-        feasible = [cls for cls, items in by_class.items() if items]
-        if not feasible:
-            return _pending(_dominant(excluded), excluded)
-        if len(feasible) == 2:
-            u, why = _utilization(by_class['subscription'], held, settings, now)
-            e = _expiry(by_class['api'], observations, settings, now)
-            reasons += why
-            api = allocator.api_share(u, e, settings['L'], settings['H'])
-        else:
-            api = 1.0 if feasible == ['api'] else 0.0  # hard overrides
-        shares = dict(api=api, subscription=1 - api)
-        rows = decision_rows(data, settings.get('revision', 0), now)
-        cls = allocator.choose_class(shares, rows, bucket, observations.get('epoch_at', 0), feasible)
-        chosen = allocator.choose_route(by_class[cls], now, horizon) if cls else None
+        pending, chosen, shares, u, e = routing_funding.ranked(data, candidates, excluded, ranking, settings,
+                                                               observations, held, bucket, reasons)
+        if pending is not None:
+            return pending
         mode = 'ranked'
     else:
         entries = [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
@@ -576,21 +563,8 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
             return _pending('explicit_choice_unavailable' if explicit else 'worker_choice_unavailable', excluded)
     if chosen is None:
         return _pending(_dominant(excluded), excluded)
-    item = next(c for c in candidates if c['route'] == chosen)
-    spec = item['spec']
-    credential = spec.get('credential') or {}
-    record = dict(attempt_id=assignment['attempt_id'], task=assignment['task'], bucket=bucket, shares=shares,
-                  **{'class': item['cls']}, route=item['route'], pool=item['pool'], account=spec['account'],
-                  route_identity=route_identity(*(spec.get(field) for field in ROUTE_IDENTITY)),
-                  billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
-                  pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
-                  settings_revision=settings.get('revision', 0), organization_revision=item['revision'], at=now,
-                  mode=mode,
-                  snapshot_id=observations.get('snapshot_id'),
-                  reason_codes=list(dict.fromkeys(reasons)),
-                  ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
-    record['binding'] = routing_gates.binding(copy.deepcopy(workflow), credential_marker(data, record))
-    return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])
+    return routing_funding.record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking,
+                                  settings, observations, workflow)
 
 
 def decision_rows(data, revision, now):
