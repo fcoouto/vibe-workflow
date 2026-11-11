@@ -1,5 +1,6 @@
 """Strategy table compilation: evidence-qualified, live-catalog-checked, never guessed."""
 import copy
+from fractions import Fraction
 import json
 from pathlib import Path
 import re
@@ -33,9 +34,12 @@ class CompileTests(unittest.TestCase):
 
     def test_rows_are_versioned_ordered_and_cite_evidence(self):
         row = key('implementation', 'medium', 'medium')
-        self.assertEqual(self.models(row), [('alpha-large', 'high'), ('alpha-small', 'low')])
-        first = self.table['rows'][row][0]
-        self.assertEqual(set(first) - {'context_limit'}, {'strategy_id', 'model', 'effort', 'harness', 'evidence_refs'})
+        # F5.2: both unpriced, so the lower effort of its model's catalog list comes first
+        self.assertEqual(self.models(row), [('alpha-small', 'low'), ('alpha-large', 'high')])
+        first = self.table['rows'][row][1]
+        self.assertEqual(set(first) - {'context_limit'}, {'strategy_id', 'model', 'effort', 'harness', 'evidence_refs',
+                                                          'list_price_micros'})
+        self.assertIsNone(first['list_price_micros'])
         self.assertEqual(first['context_limit'], 200000)
         self.assertEqual(first['evidence_refs'], ['guide-1'])
         self.assertRegex(self.table['version'], r'^[0-9a-f]{64}$')
@@ -186,7 +190,7 @@ class CompileTests(unittest.TestCase):
         guidance[0]['rows'][0]['strategies'][1]['endpoint'] = 'pinned-endpoint'
         guidance[0]['rows'][0]['strategies'][0]['endpoint'] = 'native'  # equal to the harness: not copied
         table = evidence.compile_table(guidance, catalog, benchmarks)
-        first, second = table['rows'][key('implementation', 'medium', 'medium')]
+        second, first = table['rows'][key('implementation', 'medium', 'medium')]  # F5.2: lower effort first
         self.assertEqual((first['provider'], first.get('endpoint')), ('vendor-a', None))
         self.assertEqual((second.get('provider'), second['endpoint']), (None, 'pinned-endpoint'))
         old = {item['model']: item['strategy_id'] for item in before['rows'][key('implementation', 'medium', 'medium')]}
@@ -228,6 +232,78 @@ class CompileTests(unittest.TestCase):
         before = copy.deepcopy(values)
         evidence.compile_table(*values)
         self.assertEqual(values, before)
+
+
+class ListPriceTests(unittest.TestCase):
+    """F5.2: an optional catalog `list_price` in dollars per million tokens orders each row by value."""
+
+    ROW = key('implementation', 'medium', 'medium')
+
+    def compile(self, strategies, prices):
+        guidance, catalog, benchmarks = inputs()
+        guidance[0]['rows'][0]['strategies'] = [dict(model=model, effort=effort, harness='native',
+                                                     evidence_refs=['guide-1']) for model, effort in strategies]
+        for item in catalog:
+            if item['model'] in prices:
+                item['list_price'] = prices[item['model']]
+        return evidence.compile_table(guidance, catalog, benchmarks)
+
+    def order(self, table):
+        return [(item['model'], item['effort'], item['list_price_micros']) for item in table['rows'][self.ROW]]
+
+    def test_price_is_three_parts_input_one_part_output(self):
+        table = self.compile([('alpha-large', 'high')], {'alpha-large': dict(input=1.0, output=5.0)})
+        self.assertEqual(self.order(table), [('alpha-large', 'high', 2_000_000)])
+        self.assertIs(type(table['rows'][self.ROW][0]['list_price_micros']), int)
+        zero = self.compile([('alpha-large', 'high')], {'alpha-large': dict(input=0, output=0)})
+        self.assertEqual(self.order(zero), [('alpha-large', 'high', 0)])
+
+    def test_rows_are_ordered_by_price_then_effort_then_guidance_order(self):
+        table = self.compile([('alpha-large', 'max'), ('alpha-large', 'low'), ('alpha-small', 'high'),
+                              ('beta-new', 'low'), ('alpha-small', 'low')],
+                             {'alpha-large': dict(input=2, output=2), 'alpha-small': dict(input=1, output=1),
+                              'beta-new': dict(input=1, output=1)})
+        self.assertEqual(self.order(table), [
+            ('beta-new', 'low', 1_000_000),  # effort index 0, first of the ties in guidance order
+            ('alpha-small', 'low', 1_000_000),
+            ('alpha-small', 'high', 1_000_000),
+            ('alpha-large', 'low', 2_000_000),
+            ('alpha-large', 'max', 2_000_000)])
+
+    def test_unpriced_candidates_come_last(self):
+        table = self.compile([('alpha-small', 'low'), ('alpha-large', 'high'), ('beta-new', 'low')],
+                             {'alpha-large': dict(input=50, output=50)})
+        self.assertEqual(self.order(table), [('alpha-large', 'high', 50_000_000), ('alpha-small', 'low', None),
+                                             ('beta-new', 'low', None)])
+
+    def test_large_finite_prices_compile_without_overflow(self):
+        largest = 1.7976931348623157e308
+        cases = ((dict(input=1e308, output=1e308), int(1e308) * 10**6),
+                 (dict(input=largest, output=0), round(Fraction(3 * int(largest), 4) * 10**6)),
+                 (dict(input=10**400, output=1), round(Fraction(3 * 10**400 + 1, 4) * 10**6)),
+                 (dict(input=0, output=10**400), 10**400 // 4 * 10**6))
+        for price, micros in cases:
+            with self.subTest(price=price):
+                table = self.compile([('alpha-large', 'high')], {'alpha-large': price})
+                self.assertEqual(self.order(table), [('alpha-large', 'high', micros)])
+
+    def test_normal_prices_keep_the_stated_rounding(self):
+        for price in (dict(input=1.0, output=5.0), dict(input=0.1, output=0.2), dict(input=2.5e-6, output=2.5e-6),
+                      dict(input=1.5e-6, output=0.5e-6), dict(input=3, output=0), dict(input=0.15, output=0.6)):
+            with self.subTest(price=price):
+                expected = round((3 * price['input'] + price['output']) / 4 * 1_000_000)
+                table = self.compile([('alpha-large', 'high')], {'alpha-large': price})
+                self.assertEqual(self.order(table), [('alpha-large', 'high', expected)])
+
+    def test_invalid_list_price_is_refused(self):
+        for value in (dict(input=-1, output=1), dict(input=1, output=float('nan')), dict(input=float('inf'), output=1),
+                      dict(input=True, output=1), dict(input='1', output=1), dict(input=1), dict(input=1, output=1,
+                      cached=1), [1, 1], 1.0):
+            with self.subTest(value=value):
+                guidance, catalog, benchmarks = inputs()
+                catalog[0]['list_price'] = value
+                with self.assertRaisesRegex(ValueError, 'Invalid catalog list price'):
+                    evidence.compile_table(guidance, catalog, benchmarks)
 
 
 class RefreshTests(unittest.TestCase):
@@ -287,7 +363,7 @@ class LookupTests(unittest.TestCase):
         profile = dict(role='software-engineer', work_kind='implementation', complexity_band='medium',
                        risk_band='medium')
         found = evidence.lookup(table, profile)
-        self.assertEqual([item['model'] for item in found], ['alpha-large', 'alpha-small'])
+        self.assertEqual([item['model'] for item in found], ['alpha-small', 'alpha-large'])  # F5.2 effort order
         blocked = evidence.lookup(table, dict(profile, role='code-reviewer', work_kind='review'))
         self.assertEqual(blocked, evidence.NO_RECOMMENDATION)
         self.assertNotIn('blocked', blocked)

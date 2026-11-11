@@ -16,7 +16,7 @@ BASELINE = {
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1460,
+    "runtime/routing.py": 1448,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,

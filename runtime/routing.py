@@ -321,6 +321,7 @@ MAX_POOLS = 64
 MAX_WINDOWS = 8
 MAX_STRATEGIES = 256
 MAX_REASONS = 16
+MAX_SHORTLIST = 10  # F5.2: the subscription shortlist (`routing_funding.SHORTLIST_MAX`)
 
 
 def _pending(reason, reasons=()):
@@ -503,24 +504,6 @@ def _utilization(candidates, held, settings, now):
     return best, list(dict.fromkeys(reasons))
 
 
-def _expiry(candidates, observations, settings, now):
-    """E from the earliest-expiring grant of a feasible, eligible direct route; gateways never contribute."""
-    grants = [observations['pools'][item['pool']]['grant'] for item in candidates
-              if item['spec']['billing_class'] == 'api_grant' and 'grant' in observations['pools'][item['pool']]]
-    grants = [grant for grant in grants if grant['expires_at'] > now]
-    if not grants:
-        return 0.0
-    grant = min(grants, key=lambda item: item['expires_at'])
-    return allocator.expiry_pressure(grant['remaining'], grant.get('expected_spend', 0),
-                                     (grant['expires_at'] - now) / SECONDS_PER_HOUR, settings['T_hours'])
-
-
-def _snapshot(item, now, horizon):
-    found = allocator.binding_constraint(item['constraints'], now, horizon)
-    pressure = None if found is None or found[1] is None else float(found[0] / found[1])
-    return dict(pressure=pressure, constraints=[dict(c) for c in item['constraints']])
-
-
 def _choice_matches(entry, item):
     spec = item['spec']
     return all(spec.get(field) == entry[field] for field in ROUTE_IDENTITY) and item['cls'] == entry['funding']
@@ -531,18 +514,18 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     accounts, held = Ledger.open_accounts(data), sub_reconcile.held(data)  # S3.6c: plus window debits
     if len(accounts) >= _caps(data, settings)[0]:
         return _pending('concurrency_cap')
-    candidates, excluded = [], []
-    for route in observations['routes']:
+    explicit = assignment.get('choice')
+    from runtime import routing_funding  # the ranked decision and the record (F5.2); never at module import time
+    ranked = routing_funding.is_ranked(assignment, ranking, settings)
+    candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
+    for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
         item, why = _candidate(data, route, observations, assignment, settings, held, accounts, now)
         if item is not None:
             candidates.append(item)
         excluded += why
     bucket = [assignment['work_kind'], assignment['complexity_band']]
-    explicit = assignment.get('choice')
-    ranked = settings['smart_routing'] and not explicit and bool(ranking.get('strategy_ids'))
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
     u = e = None
-    from runtime import routing_funding  # the ranked decision and the record (F5.2); never at module import time
     if ranked:
         pending, chosen, shares, u, e = routing_funding.ranked(data, candidates, excluded, ranking, settings,
                                                                observations, held, bucket, reasons)
@@ -659,10 +642,12 @@ def _valid_observations(observations):
             and _optional(observations.get('epoch_at'), _finite)
             and _optional(observations.get('minimum_horizon'), lambda v: _finite(v) and v > 0)):
         return False
-    routes, pools = observations.get('routes'), observations.get('pools')
+    routes, pools, shortlist = observations.get('routes'), observations.get('pools'), observations.get('shortlist', [])
     return (type(routes) is list and len(routes) <= MAX_ROUTES and all(_valid_route(r) for r in routes)
             and type(pools) is dict and len(pools) <= MAX_POOLS
-            and all(_part(key) and _valid_pool(pool) for key, pool in pools.items()))
+            and all(_part(key) and _valid_pool(pool) for key, pool in pools.items())
+            and type(shortlist) is list and len(shortlist) <= MAX_SHORTLIST and all(map(_text, shortlist))
+            and len(set(shortlist)) == len(shortlist))  # F5.2: optional, distinct bounded ids
 
 
 def _valid_ranking(ranking):
@@ -693,7 +678,9 @@ def _shape_error(assignment, ranking, settings, observations):
                                  ('invalid_observation', _valid_observations, observations)):
         if not valid(value):
             return reason
-    return None
+    from runtime import routing_funding  # F5.2: in a ranked decision a shortlist only narrows the ranking
+    ranked = routing_funding.is_ranked(assignment, ranking, settings)
+    return 'invalid_observation' if ranked and not routing_funding.in_ranking_order(observations, ranking) else None
 
 
 def admit(assignment, ranking, settings, observations, *, ledger, workflow=None, clear_debits=False):
@@ -704,7 +691,8 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None,
     resolved ``routing_settings`` dict plus ``revision``.
 
     ``observations`` is the collector's cached snapshot ``{now, routes, pools, snapshot_id?, epoch_at?,
-    minimum_horizon?}``; ``snapshot_id`` is stamped into the record for audit. Health keys are REQUIRED and
+    minimum_horizon?, shortlist?}``; ``snapshot_id`` is stamped into the record for audit. A ranked decision sees one
+    subscription shortlist (``routing_funding.ranked_routes``), cut before any window. Health keys are REQUIRED and
     never default: per route ``capable``, ``permitted`` (bool), ``demand`` (dict), ``route``, ``pool``,
     ``account``; subscription routes ``binding_enforceable``; direct API and gateway routes
     ``funding_verified`` and a ``credential`` ``{ref, scope, state}`` (None means unavailable; gateways also

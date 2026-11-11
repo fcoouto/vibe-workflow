@@ -19,7 +19,7 @@ import sqlite3
 import time
 import uuid
 
-from runtime import routing, routing_paths, subscription_billing, usage_budget
+from runtime import routing, routing_funding, routing_paths, subscription_billing, usage_budget
 
 WINDOWS_FILE = 'window-observations.json'
 ENTITLEMENTS_FILE = 'entitlements.json'
@@ -593,9 +593,11 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
     whose harness is outside `harnesses` silently (for this host it does not exist; None keeps nothing); the reasons
     that need no window (an invalid route, a `not_entitled` mark, a ranked dollar route, the integration and credential
     checks of an explicit gateway choice, a subscription route without a current subscription-only billing fact);
-    then the first MAX_ROUTES in request order. It reads rules, qualifications, entitlement marks, the source's billing
-    facts and, only for a surviving explicit gateway choice, the cached OpenRouter status; never a window, the ledger,
-    a reader or the network, and it writes nothing. `shortlist` holds strategy ids."""
+    then, for a ranking, its one subscription shortlist (`routing_funding.subscription_shortlist`, at most ten ids over
+    the whole filtered order; a later refusal never refills it), and the first MAX_ROUTES in request order. It reads
+    rules, qualifications, entitlement marks, the source's billing facts and, only for a surviving explicit gateway
+    choice, the cached OpenRouter status; never a window, the ledger, a reader or the network, and it writes nothing.
+    `shortlist` holds strategy ids."""
     source = source if source is not None else default_source(settings_path)
     now = int(time.time())
     allowed = set(harnesses or ())
@@ -654,9 +656,11 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
         elif spec['billing_class'] in routing.FUNDED:
             kept['credential'] = source.credential(copy.deepcopy(spec), scope)
         routes.append(kept)
+    ids = routing_funding.subscription_shortlist(strategy_ids, routes) if strategy_ids is not None else []
+    if strategy_ids is not None:
+        routes = [route for route in routes if route['strategy_id'] in ids]
     routes = routes[:routing.MAX_ROUTES]
-    ids = [route['strategy_id'] for route in routes] if strategy_ids is not None else []
-    return dict(routes=routes, excluded=excluded, shortlist=list(dict.fromkeys(ids)), seen=seen,
+    return dict(routes=routes, excluded=excluded, shortlist=ids, seen=seen,
                 routes_version=source.routes_version(table))
 
 
@@ -668,8 +672,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     private window and entitlement files, and `ledger_path` the ledger whose organizations fund dollar routes. It
     never opens a default path. Routes are the request's own (`strategy_ids` of a ranking over `table`, else
     `choices`) after the host's `harnesses` and the static checks of `shortlist`; nothing generated is stored.
-    `observations` is the snapshot `routing.admit` takes plus `excluded`, one fixed reason per route left out, and
-    `routes_version`; `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed).
+    `observations` is the snapshot `routing.admit` takes, with `shortlist` (the ranked ids its routes come from, before
+    any window), plus `excluded`, one fixed reason per route left out, and `routes_version`; `seen` holds only the
+    revisions read: `openrouter_revision` (null when unread or not needed).
 
     `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
     `codex app-server` first when a kept route needs its reading and it is missing or stale; this is the collector's
@@ -744,7 +749,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
         routes.append(route)
     used = {route['pool'] for route in routes}
     observations = dict(now=now, routes=routes, pools={key: pool for key, pool in pools.items() if key in used},
-                        excluded=excluded, routes_version=cut['routes_version'])
+                        shortlist=cut['shortlist'], excluded=excluded, routes_version=cut['routes_version'])
     return dict(observations=observations, seen=seen, boundaries={key: boundaries[key] for key in used})
 
 
