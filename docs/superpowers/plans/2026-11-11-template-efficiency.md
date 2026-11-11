@@ -88,14 +88,14 @@ The native dispatch created child `ses_e33d2dfa5ffe7P9nixAPWPF4Gj`, which return
 
 RED snapshot `ddef680` retained the three reproductions. GREEN candidate `567fbce` passed all 64 selected tests (23 helper, 32 reader, 9 harness) in 0.8 seconds wall time; the helper module took 0.4 seconds including the stress test. `python3 -B scripts/validate.py` passed without warnings and `git diff --check` passed. The coordinator inspected the final fix diff and reused unaffected independent coverage. No second review round or full suite was run. No minor findings were deferred.
 
-The implementation is verified within the offline scope. Publication remains a draft because fresh instruction-effectiveness evidence needs a new numeric pilot budget. Native hook registration remains dependent on actual client qualification. These pending observations do not become passes through the review or package checks.
+The implementation is verified within the offline scope. A later authorized [pilot](2026-11-11-template-hook-pilot.md) measured higher total consumption: helper +24.0% versus baseline, hook +2.1% versus helper. Its independent review and byte-hash preservation checks passed after one low-severity collector fix. Publication remains draft because native OpenCode deduplication and Codex trust qualification are incomplete. No production hook registration follows from the pilot.
 
 ### Execution rulings
 
 - Preserve current main's specialist roster rather than edit the historical evaluation branch; historical thirteen-template counts do not cover the newer machine contract.
 - Deliver the offline helper and callable feedback boundary first; token effectiveness and native hook behavior remain provisional until separately authorized observations.
 - Use only affected checks, following the user's limit and development guide, instead of generic skill full-suite instructions; unrelated regressions remain outside this proof. Reuse current successful runs instead of repeating them for bookkeeping.
-- Native hook delivery and token/billing/causal gains remain unassessed: neither a hook adapter nor an authorized pilot exists in this slice; users cannot infer effectiveness from offline checks.
+- In the original offline slice, native hook delivery and gains were unassessed. The subsequent pilot owns its scoped observations; it found no total-token savings and does not establish billing or causal gains.
 - Semantic acceptance, baseline authenticity and changes after observation remain with existing agent/evidence owners: mechanical checks cannot authenticate them; callers must review meaning and recheck changed inputs.
 - Full Markdown conformance, HTML, setext headings, directory links and renderer extensions remain outside the documented basic parser: unsupported valid syntax can still need manual inspection.
 - Compromised installed-package code, hostile replacement of root ancestors, live deployments, unrelated modules and package-export cleanup remain outside this local review: package and roots are trusted anchors; no assurance is claimed for those environments.

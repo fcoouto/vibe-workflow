@@ -2,6 +2,10 @@
 
 Approved on 11 November 2026: at most 12 fresh sessions, two concurrent, 45 minutes from the first live launch, existing subscriptions only. The detailed [plan](../../superpowers/plans/2026-11-11-template-hook-pilot.md) was subsequently approved for inline execution.
 
+## Execution disposition
+
+The protocol below records the intended design. The user later approved six recovery attempts after six pre-inference expiry failures, raising the attempt cap to 18 without changing concurrency or the 21:45:34.534 UTC deadline. All 18 reservations are settled, including one independent review. Failures remain in the evidence. The [report](report.md#protocol-deviations) identifies unsatisfied qualification prerequisites and execution deviations; no later wording converts them into passes. Final review corrected protected-file comparison to use frozen byte hashes, and all six recoveries passed that stronger check without further inference.
+
 ## Frozen comparisons
 
 Use the unchanged bundled `phase-two/minimal/input` and `phase-two/customized/input` fixtures. All arms receive the same original files, three selected templates (`project/product.md`, `project/overview.md`, `project/local-preparation.md`), requirements, writable paths and quality criteria. No arm must produce the historical nine-document layout.
