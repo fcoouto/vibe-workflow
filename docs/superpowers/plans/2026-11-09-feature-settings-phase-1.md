@@ -49,7 +49,7 @@ Each step starts with failing tests (TDD) and ends with its listed check passing
 8. **This repository.**
    - `.gitignore`: replace `/.vibe-workflow/` with `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`.
    - Commit `.vibe-workflow/settings.json` with the Workstreams value the user chooses.
-   - `AGENTS.md`: one line pointing feature authors to a new author contract, `clients/features.md`, which describes the manifest and settings file. Update `docs/setup.md`, `docs/policy-sources.md` and the instruction map.
+   - `AGENTS.md`: one line pointing feature authors to a new author contract, `clients/features.md`, which describes the manifest and settings file. Update `docs/setup.md` and the instruction map.
    - Check: `validate.py`, link check of changed instructions.
 
 9. **Verification and review.**

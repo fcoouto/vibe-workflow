@@ -1,6 +1,6 @@
 # API usage activation
 
-> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the current [Agent Delegation](../../../policies/03-agent-delegation.md#select-capability-and-dispatch) and [shared external delegation](../../../clients/external-delegation.md#select-before-dispatch) contracts supersede it.
 
 The user approved simplifying activation by reusing existing setup, fixing the
 cross-project policy invalidation bug, and the public name **Manage API Usage**.

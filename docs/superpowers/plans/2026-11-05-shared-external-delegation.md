@@ -46,7 +46,7 @@
 
 ### Task 3: Contracts and verification
 
-**Files:** `policies/03-agent-delegation.md`, `clients/external-delegation.md`, affected route/management references, `docs/policy-sources.md`, design and this plan.
+**Files:** `policies/03-agent-delegation.md`, `clients/external-delegation.md`, affected route/management references, design and this plan.
 
 - [x] Define shared selection/permission/provenance once with explicit loading triggers; keep entrypoints within 150 words.
 - [x] Walk source-free legacy, scoped automatic source, local-priority and copied-file worker instruction paths.

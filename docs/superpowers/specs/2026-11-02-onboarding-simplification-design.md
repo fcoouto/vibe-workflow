@@ -151,7 +151,7 @@ A new supported configuration operation may eventually reconcile a changed insta
 - `runtime/adapters/codex.py` and corresponding client routes: only change response adaptation if necessary; retain existing permissions and event contracts.
 - `policies/10-project-onboarding.md`, skill entry point and inspect/apply references: integrate the approved authorization flow once, retaining conditional loading and the 150-word entry limit.
 - A conditionally loaded Reviewed Configuration reference: use plain-language output, exact useful paths and visible recovery limits.
-- Startup/runtime contracts and `docs/policy-sources.md`: keep behavior and source-to-contract coverage consistent.
+- Startup/runtime contracts: keep behavior and source-to-contract coverage consistent.
 - Existing startup/hook/transaction tests: add behavior cases at the responsible boundary rather than assertions about wording.
 
 The source merge must retain branch-only Council/integration features and unrelated local edits. Resolve shared runtime interfaces semantically; do not select one side for every conflict. Do not recreate the separately delivered file-inventory fix.

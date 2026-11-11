@@ -100,7 +100,7 @@ Coordinator acceptance still verifies findings, actual checks, current candidate
 
 Keep coordination rules in policy 03, proof reuse in policy 05, selective retrieval/durable records in policy 07, maintenance in policy 09, and capability qualification in policy 11. Change only rules that need clarification; reference their existing owners instead of repeating them in every client/skill.
 
-Update affected client/worker procedures with exact compact/detail loading triggers and observation limitations. Keep skill entry points within 150 words. Follow Skill Creator and preserve source-to-contract coverage in `docs/policy-sources.md`. Any necessary Toolkit research belongs to authoring, never routine execution.
+Update affected client/worker procedures with exact compact/detail loading triggers and observation limitations. Keep skill entry points within 150 words. Follow Skill Creator and preserve source-to-contract coverage. Any necessary Toolkit research belongs to authoring, never routine execution.
 
 ## Verification and completion
 

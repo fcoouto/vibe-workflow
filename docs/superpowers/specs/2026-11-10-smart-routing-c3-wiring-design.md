@@ -463,7 +463,7 @@ The protocol is defined once here and applies to every slice.
 
   **Unexpected-pass rule.** The slice that makes a contract pass removes that contract's marker in the same PR. Otherwise the module's `_PASSED` check fails the run. A contract that still fails after its marker is removed means the slice is not done. Structural changes to the file go through Lane D.
 - **`clients/instruction-map.json`** is generated. Never hand-merge it. On a conflict, `git merge origin/main`, then run `python3 -B scripts/read_instructions.py --prepare` and commit the result.
-- **`docs/policy-sources.md`** is append-only. Each slice appends its own section and never edits another's. On a conflict, take `origin/main`'s version, re-append your own section, and commit.
+- **Shared records** that several slices write are append-only. Each slice appends its own section and never edits another's, so each section keeps its owner (see [ownership and parallel work](../../../policies/03-agent-delegation.md#ownership-and-parallel-work)). On a conflict, take `origin/main`'s version, re-append your own section, and commit.
 - **Only C3-0b and C3-0a (and later C3-7) edit `scripts/routing.py`, and only C3-0a edits `runtime/routing.py`.** C3-1, C3-3, C3-4a, C3-4b, C3-5 and C3-6 never edit either file. When one of them needs a service change, it is added to C3-0b's or C3-0a's scope or to a follow-up by the same owner, never edited in parallel. The one exception is C3-2's activation precondition (above), made after C3-0b and C3-0a had merged.
 
 ### 6.2 DAG

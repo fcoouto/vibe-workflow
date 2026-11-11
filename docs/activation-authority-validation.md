@@ -6,8 +6,9 @@ enough to allow autonomous agentic actions using those means." The user also
 retired Manual mode ("That doesn't have to be documented anywhere in our
 workflow") and chose that activation covers Smart Routing control-plane
 endpoints that may retain data, while terms forbidding confidential data and
-explicit restrictions still exclude them. The decision and its provenance are in
-the [source map](policy-sources.md#activation-authority--9-november-2026).
+explicit restrictions still exclude them. The decision is carried by
+[Agent Delegation](../policies/03-agent-delegation.md#select-capability-and-dispatch) and the
+[shared external delegation contract](../clients/external-delegation.md#select-before-dispatch).
 
 ## What changed
 

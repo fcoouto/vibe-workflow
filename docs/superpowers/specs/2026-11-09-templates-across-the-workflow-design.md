@@ -78,7 +78,7 @@ One worktree, one branch and one PR for A, B and C:
 
 - **Templates:** add the three.
 - **Owners:** remove the moved field lists from `04`, `06`, `08` and the review and onboarding procedures, and link the templates where they are used. The PR template is linked from the publication path and the readiness owner.
-- **Coverage:** update the 5 November design's placement line and `docs/policy-sources.md`; regenerate the instruction map.
+- **Coverage:** update the 5 November design's placement line and source-to-contract coverage; regenerate the instruction map.
 
 Acceptance:
 

@@ -20,7 +20,7 @@ Incomplete JSON/body counts must never be emitted as complete. Source text and s
 
 ### Task 1: Reader, helper and owning route
 
-**Files:** `scripts/read_instructions.py`, new `scripts/drain_instructions.js`, `runtime/state.py` (existing runtime fingerprint list only), `clients/codex.md`, `clients/instruction-map.json`, `docs/policy-sources.md`, `scripts/validate.py`, `tests/test_prepared_instructions.py`, new `tests/test_instruction_drain.py` and `tests/instruction_drain.cjs`.
+**Files:** `scripts/read_instructions.py`, new `scripts/drain_instructions.js`, `runtime/state.py` (existing runtime fingerprint list only), `clients/codex.md`, `clients/instruction-map.json`, `scripts/validate.py`, `tests/test_prepared_instructions.py`, new `tests/test_instruction_drain.py` and `tests/instruction_drain.cjs`.
 
 **Interfaces:** Add `--json` and exclusive `--helper`; preserve existing page APIs and plain CLI. Envelope fields and injected helper callbacks follow the spec. The Node test executes the actual Codex bootstrap with real Python reader calls and controlled native transport failures.
 

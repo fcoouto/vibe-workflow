@@ -28,7 +28,7 @@
 
 ### Task 1: Prepared reader and startup integration
 
-**Files:** Create `scripts/read_instructions.py`, `clients/instruction-map.json`, `tests/test_prepared_instructions.py`. Modify `runtime/startup.py`, `clients/codex.md`, `scripts/validate.py`, affected startup tests and `docs/policy-sources.md`.
+**Files:** Create `scripts/read_instructions.py`, `clients/instruction-map.json`, `tests/test_prepared_instructions.py`. Modify `runtime/startup.py`, `clients/codex.md`, `scripts/validate.py`, affected startup tests.
 
 **Interfaces:** `build_manifest(root) -> dict`; `load_page(root, paths, page=1, revision=None) -> dict`; `render_page(result) -> str`; CLI `read_instructions.py bootstrap`, or selected paths with `--page` and `--revision`; authoring-only `--prepare`.
 

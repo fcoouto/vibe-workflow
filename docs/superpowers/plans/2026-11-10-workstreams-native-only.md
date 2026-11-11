@@ -195,7 +195,7 @@ git commit -m "feat(delegation): reject workstream_context_id for new assignment
 ### Task 3: Shrink the contracts
 
 **Files:**
-- Modify: `policies/03-agent-delegation.md`, `policies/07-context-and-handoff.md:35`, `clients/workstreams-naming.md`, `clients/workstreams-titles.md`, `clients/workstreams.md`, `clients/workstreams-protocol.md:59-71`, `clients/evidence-review-prepare.md:10`, `skills/workstreams/SKILL.md`, `docs/policy-sources.md`
+- Modify: `policies/03-agent-delegation.md`, `policies/07-context-and-handoff.md:35`, `clients/workstreams-naming.md`, `clients/workstreams-titles.md`, `clients/workstreams.md`, `clients/workstreams-protocol.md:59-71`, `clients/evidence-review-prepare.md:10`, `skills/workstreams/SKILL.md`
 - Regenerate: `clients/instruction-map.json`
 
 **Interfaces:**
@@ -222,7 +222,7 @@ From the policy index, follow two representative tasks and record the files reac
 - [ ] **Step 5: Commit**
 
 ```bash
-git add policies clients skills docs/policy-sources.md
+git add policies clients skills
 git commit -m "docs(workstreams): native children only; coordinator-only titles"
 ```
 

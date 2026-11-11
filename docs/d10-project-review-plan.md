@@ -48,7 +48,7 @@ Each finding gives evidence/location, impact, confidence, the smallest useful fi
 
 ## Delivery ownership and boundaries
 
-**Canonical owner:** project-review authoring/implementation owner, with independent review. Preserve the user's coordinator settings and existing task/scope-based worker-selection rules. Follow the [instruction authoring standard](../AGENTS.md#instruction-authoring): eventual entry point at most 150 words, containing purpose, essential boundaries and selective loading triggers; detailed procedures load only for the selected review. Existing project workflow and evidence contracts remain their rule owners.
+**Canonical owner:** project-review authoring/implementation owner, with independent review. Preserve the user's coordinator settings and existing task/scope-based worker-selection rules. Follow the [instruction authoring standard](development.md#instruction-authoring): eventual entry point at most 150 words, containing purpose, essential boundaries and selective loading triggers; detailed procedures load only for the selected review. Existing project workflow and evidence contracts remain their rule owners.
 
 | Subdeliverable | Dependencies and boundary | Acceptance evidence |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Private persistence stays unavailable, rather than creating another registry,
 allowance or mandatory database. Later persistence work belongs to the existing
 evidence/state owners and requires coordinated interface ownership before edits.
 
-The source-map entry for these contracts is recorded in [policy sources](policy-sources.md#review-my-project-d10--8-november-2026).
+Source-to-contract coverage for these contracts is maintained outside routine loading paths.
 
 The coordinator owns the final canonical source-map and onboarding-plan status
 reconciliation. This outcome does not edit those shared files, core state/evidence,

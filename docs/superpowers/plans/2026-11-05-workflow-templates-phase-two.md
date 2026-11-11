@@ -75,7 +75,7 @@ Routine agents gain no new required artifact, schema, repeated declaration, repo
 
 **Interfaces:** Consumes self-reviewed Task 1–2 sources and Task 2 input identities. Coordinator preflight produces the consistent, frozen candidate for independent review; native cases consume that reviewed candidate. Briefs receive the task and applicable candidate instructions; evaluator expectations and accepted checks remain outside writable scope. Use existing title controls and native report delivery. Explicit candidate delivery proves scoped instruction use, not startup integration. Native metadata/readback and visible rendering are different evidence.
 
-- [x] Before freezing or loading changed instructions, update `docs/policy-sources.md` for actual authoring decisions, then run `python3 -B scripts/read_instructions.py --prepare`, `python3 -B -m unittest tests.test_prepared_instructions`, `python3 -B scripts/validate.py` and `git diff --check`. Resolve stale-map failures rather than bypass the reader. Coordinator owns these shared files.
+- [x] Before freezing or loading changed instructions, update source-to-contract coverage for actual authoring decisions, then run `python3 -B scripts/read_instructions.py --prepare`, `python3 -B -m unittest tests.test_prepared_instructions`, `python3 -B scripts/validate.py` and `git diff --check`. Resolve stale-map failures rather than bypass the reader. Coordinator owns these shared files.
 - [x] Freeze the consistent candidate/base hashes and accepted inputs; obtain the wave's bounded independent review before native dispatch. Scope each writer and report route through the existing delegation procedure. Use at most one lifecycle worker and one onboarding worker initially; reuse their contexts for related steps when appropriate. Run document adaptation before tasks that must enter through its generated guidance. Root owns acceptance and independent observations. Extra contexts/retries need a concrete isolation or evidence reason within the original evaluation budget.
 - [x] Select the cases below as one finite matrix. A required unavailable observation remains unqualified and blocks that capability's acceptance, while independent work may continue. Package/static checks cannot substitute for native actions. Observe only the current authorized family; respect Desktop UI restrictions and all other active chats.
 
@@ -94,7 +94,7 @@ Routine agents gain no new required artifact, schema, repeated declaration, repo
 
 ## Task 4: Reconcile owners, verify scope and hand off
 
-**Files:** Verify `docs/policy-sources.md` and `clients/instruction-map.json` prepared before review/native loading in Task 3; update this plan and the design with actual results. Coordinator owns these shared files.
+**Files:** Verify `clients/instruction-map.json` prepared before review/native loading in Task 3; update this plan and the design with actual results. Coordinator owns these shared files.
 
 **Interfaces:** `scripts/read_instructions.py --prepare` remains the sole prepared-map generator. Existing task/evaluation records own execution evidence; no new ledger or status service.
 

@@ -27,7 +27,7 @@
 
 ### Task 1: Reader, boundary proof and loading route
 
-**Files:** `scripts/read_instructions.py`, `tests/test_prepared_instructions.py`, `runtime/startup.py`, `tests/test_startup.py`, `clients/codex.md`, `clients/instruction-map.json`, `docs/policy-sources.md`.
+**Files:** `scripts/read_instructions.py`, `tests/test_prepared_instructions.py`, `runtime/startup.py`, `tests/test_startup.py`, `clients/codex.md`, `clients/instruction-map.json`.
 
 **Interfaces:** Add `load_batch(root, paths, page=1, revision=None)`; preserve `load_page` and `render_page`. Batch results include `last_page`; CLI adds `--batch` and retains `--page`/`--revision`.
 

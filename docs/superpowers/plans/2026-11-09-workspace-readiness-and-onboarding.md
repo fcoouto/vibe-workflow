@@ -37,7 +37,7 @@ Source of truth: `clients/workspace-requirements.json`; `clients/workspace-requi
 
 A tool with no official support for a client is `not supported` with the reason, never installed by improvisation. Agent clients themselves are discovered, not required.
 
-**Removed (local deviation, user decision 2026-11-10):** Docker and Docker Compose; Node.js LTS, npm and pnpm; the Node version manager; ripgrep, fd and jq; the system package manager step; "update every other global component". Recorded in `docs/policy-sources.md` with the Toolkit revision. A project that needs any of them declares it, and onboarding reports it as a project need.
+**Removed (local deviation, user decision 2026-11-10):** Docker and Docker Compose; Node.js LTS, npm and pnpm; the Node version manager; ripgrep, fd and jq; the system package manager step; "update every other global component". Recorded with the Toolkit revision in the source-to-contract coverage. A project that needs any of them declares it, and onboarding reports it as a project need.
 
 **Refresh:** the list records the Toolkit revision it was written from. Workflow maintenance (policy 09) reviews it when the Toolkit's mandatory list changes.
 

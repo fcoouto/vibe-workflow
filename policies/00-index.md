@@ -34,9 +34,9 @@ Policy contracts retain their adopted project scope. Rows labelled "Repository" 
 | [Workflow Maintenance](09-workflow-maintenance.md) | During initial setup; after material instruction, memory or capability changes; for recurring workflow failures, authorized updates or explicitly selected behavior evaluations. |
 | [Project Onboarding](10-project-onboarding.md) | Explicit project enrollment, setup update/repair, or expansion to additional repositories or clients. |
 | [Tool Integrations](11-tool-integrations.md) | When selecting or changing integrations, using unqualified capabilities, or investigating failures that invalidate qualification. |
-| Repository: [Development guide](../docs/development.md) | Before changing anything: a file, setting, branch, commit or PR. Documentation, one-line fixes and settings commands count. Also before selecting checks, validating, testing, pushing or creating a release archive. |
+| Repository: [Development guide](../docs/development.md) | Before repository-specific planning, design, implementation, review or maintenance decisions, including read-only work; before changing any file, setting, branch, commit or PR; before selecting checks, validating, testing, pushing or creating a release archive. Documentation, one-line fixes and settings commands count. |
 | Repository: [Clients](../clients/index.md) | Before client-specific work; load only the entry whose trigger applies. |
 | Repository workflow operation: `skills/<name>/SKILL.md` | Before an explicit workflow operation; read its entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation. |
 | Repository: [Setup record](../docs/setup.md) | Before decisions about setup, maintenance or undo. |
 | Repository: [Client interface layout](../docs/onboard-my-project-plan.md#client-scope-and-adapter-organization) | Before adding a client adapter. |
-| Repository: [Instruction authoring](../AGENTS.md#instruction-authoring) | Before creating or changing a skill or workflow instruction. |
+| Repository: [Instruction authoring](../docs/development.md#instruction-authoring) | Before planning, reviewing, creating or changing a skill or workflow instruction. |

@@ -55,24 +55,6 @@ The [development guide](docs/development.md) owns these rules and their detail.
 - Keep a short handoff for unfinished multi-session work in the existing plan or task record ([Context and Handoff](policies/07-context-and-handoff.md)), not in permanent memory.
 - With no safe alternative, report the blocker, the completed work and what is needed to resume.
 
-## Repository constraints
-
-- Wrap the full Vibe Coding Toolkit; preserve its scope and requirements, except local deviations recorded in [docs/policy-sources.md](docs/policy-sources.md).
-- Use Toolkit as the authoring, setup and update authority. Write complete local runtime contracts; do not copy prompts or require a Toolkit checkout, snapshot or fetch during routine tasks.
-- Keep environment preparation, project enrollment, and routine development distinct. Onboarding checks workspace readiness first and hands missing required items to preparation.
-- Make basic onboarding useful without a runtime database or repository-enforcement prerequisite. Ordinary development uses native editing, checks and review; advanced controls acquire their own prerequisites only when selected. Preserve explicitly selected protections and allow configuration recovery when qualification is unavailable.
-- Reassess complex controls against concrete user risks; consolidate duplicate checks and evidence while preserving applicable requirements.
-- Keep each Python file at or under 1000 lines so agents can read it in context. `scripts/validate.py` enforces this; the legacy runtime modules it lists have fixed ceilings that must not be raised. Split by responsibility instead.
-
-## Instruction authoring
-
-- Use OpenAI's `skill-creator` as the standard when creating or changing skills and workflow instructions.
-- Keep each skill entry point within 150 words. Define each wrapper rule once.
-- Keep purpose, essential constraints, and explicit loading triggers in entry points. Load complete local procedures only when applicable; upstream research belongs to authoring, setup and updates.
-- Preserve every requirement when shortening or reorganizing instructions. Maintain [source-to-contract coverage](docs/policy-sources.md) for authoring and updates; keep provenance out of routine loading paths.
-- Check affected instruction paths with representative tasks: required procedures load, every applicable requirement is satisfied, and unrelated material stays unloaded. Word counts and package validation alone do not prove behavior.
-- Write human-facing guidance in plain language: explain purpose, next action, and what completion means.
-
 ## Tools and style
 
 - Superpowers, Ponytail, RTK, Context7 and Caveman are the user's own installs. Use the relevant ones and scale them to the task; explicit instructions and already authorized execution take precedence over repeated approvals.

@@ -20,7 +20,7 @@ The short launcher must reject clipped, empty, wrong-kind/version, nonzero or un
 
 ### Task 1: Move the loader into the fixed runner
 
-**Files:** `scripts/drain_instructions.js`, `clients/codex.md`, `tests/instruction_drain.cjs`, `docs/policy-sources.md`, generated `clients/instruction-map.json`. Keep the reader CLI and runtime pin list unchanged.
+**Files:** `scripts/drain_instructions.js`, `clients/codex.md`, `tests/instruction_drain.cjs`, generated `clients/instruction-map.json`. Keep the reader CLI and runtime pin list unchanged.
 
 **Interfaces:** `drainInstructions({root, paths, external, exec, emit})` performs all instruction reads and returns the unchanged complete receipt. The launcher obtains only the fixed `--helper` envelope and supplies `tools.exec_command`/`notify`.
 

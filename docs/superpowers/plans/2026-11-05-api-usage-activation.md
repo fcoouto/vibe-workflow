@@ -37,7 +37,7 @@ explicit enablement without copying project authority.
 - Modify: `scripts/usage_routing.py` only if the existing enable schema needs CLI support.
 - Test: `tests/test_usage_settings.py`, `tests/test_usage_budget.py`, and affected routing/CLI tests.
 - Modify: `skills/manage-usage-routing/SKILL.md`, `agents/openai.yaml`, and relevant references.
-- Modify: `README.md`, `docs/policy-sources.md`, `docs/usage-routing-validation.md`.
+- Modify: `README.md`, `docs/usage-routing-validation.md`.
 
 **Interfaces:**
 - Preserve existing configure/enable/status inputs and outputs; optional metadata or reuse selection may be added.

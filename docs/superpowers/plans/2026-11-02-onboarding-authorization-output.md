@@ -40,7 +40,7 @@
 
 ### Task 2: Implement the instruction and output contract
 
-**Modify:** `policies/10-project-onboarding.md`, `skills/onboard-my-project/SKILL.md`, `skills/onboard-my-project/references/procedure.md`, `skills/onboard-my-project/references/apply-and-recovery.md`, `docs/policy-sources.md`.
+**Modify:** `policies/10-project-onboarding.md`, `skills/onboard-my-project/SKILL.md`, `skills/onboard-my-project/references/procedure.md`, `skills/onboard-my-project/references/apply-and-recovery.md`.
 
 **Create:** `skills/onboard-my-project/references/reviewed-configuration.md`.
 

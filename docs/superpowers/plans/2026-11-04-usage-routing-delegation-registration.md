@@ -50,7 +50,7 @@ Before implementation, the coordinator must reconcile the completed, reviewed sl
 | `policies/03-agent-delegation.md`, `clients/delegation.md` | Narrow loading/selection bridge to existing Usage Routing procedure, without rewriting native controls. |
 | `skills/manage-usage-routing/references/delegation.md`, `references/codex-host.md` | External assignment/evidence ownership and precise host registration behavior. |
 | `clients/worker-visibility.md` | Shared display contract and actual-route/client distinction. |
-| `docs/policy-sources.md`, `docs/usage-routing-validation.md` | Coverage and honest offline/live qualification record. |
+| `docs/usage-routing-validation.md` | Honest offline/live qualification record. |
 | `clients/instruction-map.json` | Regenerate with existing authoring tool if changed instruction sources require it. |
 
 `runtime/usage_budget.py`, native D5/D6 schemas, existing handoff controls, installed Habblaud hooks and transport are consumers/invariants to inspect and regression-test, not new implementation targets. Do not add a Claude host, Anthropic API route or generic adapter registry.
@@ -103,12 +103,12 @@ Usage Routing proposals are tool-free external work. Associate native supervisor
 
 ### Task 3: Document client boundaries and validate the integrated slice
 
-**Files:** Modify `clients/worker-visibility.md`, `skills/manage-usage-routing/references/codex-host.md`, `docs/policy-sources.md`, `docs/usage-routing-validation.md`; regenerate `clients/instruction-map.json` if required by these edits.
+**Files:** Modify `clients/worker-visibility.md`, `skills/manage-usage-routing/references/codex-host.md`, `docs/usage-routing-validation.md`; regenerate `clients/instruction-map.json` if required by these edits.
 
 **Interfaces:** No new executable interface. Document Task 2's internal helper contract, actual route versus client transport, and the existing `generation_ready` bridge result. Existing native declaration, dispatch and handoff interfaces remain authoritative.
 
 - [ ] Update the triggered contracts to explain that registration follows verified generation, external completion is not acceptance, and Habblaud failure cannot veto native review. Specify that the installed transport currently posts Codex hooks; do not claim passing a `claude` string enables Claude Code. A future host must supply its own trusted admission/approval, native reviewer observations, parent verification and qualified client transport while reusing common routing/accounting and this display helper.
-- [ ] Add source-to-contract coverage for selection, evidence ownership, display identity, uncertainty and review. Keep research references in `docs/policy-sources.md`; preserve entry-point limits and existing loading triggers. Regenerate with `python3 -B scripts/read_instructions.py --prepare` if the instruction map requires it.
+- [ ] Add source-to-contract coverage for selection, evidence ownership, display identity, uncertainty and review. Keep research references in the existing source-to-contract coverage; preserve entry-point limits and existing loading triggers. Regenerate with `python3 -B scripts/read_instructions.py --prepare` if the instruction map requires it.
 - [ ] Re-run the four representative loading paths from Task 1 plus ordinary native review, unresolved external generation with authorized native handoff, completed API proposal with unavailable Habblaud, and a proposed Claude Code host with no qualified transport. Verify required procedures load, unrelated setup stays unloaded, native claims/review remain mandatory, and Claude live execution remains unqualified. Record actual checks and limitations, not inferred behavioral success from string matches.
 - [ ] Run `python3 -B -m unittest discover -s tests -p 'test_usage*.py'`, `python3 -B -m unittest discover -s tests -p 'test_worker_visibility.py'`, and `python3 -B scripts/validate.py`. Record exact results and any baseline failures separately. Use existing host tests for settlement, one task through review and no repeat live run.
 - [ ] Obtain required independent review of the final integrated candidate against current `main`; resolve blockers and recheck affected tests. Report offline package proof, instruction-path evidence, and live client qualification in separate fields. Coordinator commits only when separately authorized: `docs: define usage routing registration boundaries`.

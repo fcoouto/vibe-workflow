@@ -22,7 +22,7 @@ External mode must not bypass packaged-source validation, follow references, acc
 
 ### Task 1: Reader and loading route
 
-**Files:** `scripts/read_instructions.py`, `tests/test_prepared_instructions.py`, `clients/codex.md`, `clients/instruction-map.json`, `docs/policy-sources.md`.
+**Files:** `scripts/read_instructions.py`, `tests/test_prepared_instructions.py`, `clients/codex.md`, `clients/instruction-map.json`.
 
 **Interfaces:** Add keyword-only `external=False` to `load_page` and `load_batch`, and CLI `--external`. Preserve existing defaults/schema. External results carry `external=True`; render an external header and repeat `--external` in continuation. Share source-range preparation with existing authoring.
 

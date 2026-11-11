@@ -1,6 +1,6 @@
 # Smart Routing (Vibe Router) Implementation Plan
 
-> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the current [Agent Delegation](../../../policies/03-agent-delegation.md#select-capability-and-dispatch) and [shared external delegation](../../../clients/external-delegation.md#select-before-dispatch) contracts supersede it.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -640,7 +640,7 @@ C.1 comes after the C.3 phase W slices and the canary, and before phase R: C3-7 
 
 - Create `runtime/ledger_versions.py`, `runtime/routing_launch.py`, `runtime/routing_observations.py`, `runtime/routing_routes.json`, `runtime/delegation_routing.py`, `runtime/opencode_launcher.py` and `scripts/opencode_launch.py`. New code goes into new modules, so files already at their line ceilings do not grow.
 - Modify `scripts/routing.py`, `runtime/routing.py`, `runtime/usage_budget.py`, `runtime/delegation.py`, `runtime/evidence.py`, `runtime/workstreams.py`, `runtime/external_delegation.py`, `runtime/routing_settings.py`, `runtime/subscription_reconcile.py`, `runtime/usage_routing.py`, `scripts/usage_routing.py`, `runtime/usage_codex_host.py`, `runtime/usage_canary.py`, `runtime/usage_canary_host.py`, `scripts/usage_codex_host.js`, `scripts/openrouter_proposals.py`, `scripts/openrouter_workers.py` and the qualification harness under `tests/qualification/`.
-- Modify `policies/03-agent-delegation.md`, `clients/delegation.md`, `clients/delegation-requests.md`, `clients/evidence-review-prepare.md`, `clients/external-delegation.md`, `clients/opencode.md`, `docs/policy-sources.md`, `clients/instruction-map.json`, `skills/review-my-project/`, `skills/manage-usage-routing/` and the affected OpenRouter and Workstreams skill texts.
+- Modify `policies/03-agent-delegation.md`, `clients/delegation.md`, `clients/delegation-requests.md`, `clients/evidence-review-prepare.md`, `clients/external-delegation.md`, `clients/opencode.md`, `clients/instruction-map.json`, `skills/review-my-project/`, `skills/manage-usage-routing/` and the affected OpenRouter and Workstreams skill texts.
 
 Each slice's owned files and tests are in [design §6.3](../specs/2026-11-10-smart-routing-c3-wiring-design.md#63-slices), and [design Appendix A](../specs/2026-11-10-smart-routing-c3-wiring-design.md#appendix-a--inventory-at-the-pinned-base) gives every changed file one owner.
 

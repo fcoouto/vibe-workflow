@@ -30,8 +30,8 @@
 ### Task 1: Complete the shared maintenance procedure and its loading paths
 
 **Files:** Modify `policies/08-merge-readiness.md`, `policies/00-index.md`,
-`docs/development.md`, `skills/onboard-my-project/references/procedure.md`,
-`docs/policy-sources.md`; regenerate `clients/instruction-map.json`.
+`docs/development.md`, `skills/onboard-my-project/references/procedure.md`;
+regenerate `clients/instruction-map.json`.
 Create `clients/graphify-maintenance.md` and `tests/test_graphify_maintenance_instructions.py`.
 
 **Interfaces:** Existing setup decision and merge/synchronization observations in;

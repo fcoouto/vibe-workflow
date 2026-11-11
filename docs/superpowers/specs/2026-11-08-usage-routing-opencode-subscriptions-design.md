@@ -1,6 +1,6 @@
 # Smart Routing — Vibe Router integration design
 
-> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the [activation authority decision](../../policy-sources.md#activation-authority--9-november-2026) and the current contracts supersede it.
+> **9 November 2026:** activation is now the only approval for API Usage and OpenRouter, and Manual mode is retired. Where this document requires a separate approval, permission, approval line, endpoint opt-in or Manual selection, the current [Agent Delegation](../../../policies/03-agent-delegation.md#select-capability-and-dispatch) and [shared external delegation](../../../clients/external-delegation.md#select-before-dispatch) contracts supersede it.
 
 - **Version:** 1.5 design draft
 - **Date:** 2026-11-08
@@ -586,7 +586,7 @@ Inventory scope: inspected `main` at the revision in section 10.1 plus the curre
 
 - [ ] Reconcile `main` and Checkout-only features; name the actual implementation owner for every F01–F17 row before retiring callers.
 - [ ] Route every applicable worker/proposal/control-inference path through shared policy and accounting, preserving the feature-specific constraints above.
-- [ ] Update instruction loading/source-to-contract coverage in `docs/policy-sources.md` and `clients/instruction-map.json` when their owners change. Keep skill entry points within 150 words.
+- [ ] Update instruction loading/source-to-contract coverage and `clients/instruction-map.json` when their owners change. Keep skill entry points within 150 words.
 - [ ] Exercise ON/OFF/readiness combinations and each row's boundary with adapter doubles/instruction walkthroughs before qualifying the live host.
 
 ## Appendix B — Whole-document review record

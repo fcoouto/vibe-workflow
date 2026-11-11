@@ -35,7 +35,7 @@ Make delegated work simpler and cheaper. All delegated work runs as native child
 | `clients/workstreams.md` | Add "branch or worktree" to the child record (`:42`); remove "add a coordination level" (`:80`, contradicts D2); the names subsection points to root naming only. |
 | `clients/workstreams-protocol.md`, `clients/evidence-review-prepare.md` | Replace the `WS42.01` examples with D5. |
 | `skills/workstreams/SKILL.md` | The naming route covers the coordinator title only. |
-| `docs/policy-sources.md`, `clients/instruction-map.json` | Update rows; regenerate the map. |
+| `clients/instruction-map.json` | Regenerate the map. |
 
 **Code**
 

@@ -28,7 +28,7 @@
 
 ## Task 1: Local templates and reader support
 
-**Files:** `templates/project/{product,overview,shared-instructions,claude-instructions,architecture,design,local-preparation,quality}.md`; `templates/README.md`, `templates/LICENSE`; `scripts/read_instructions.py`; `tests/test_prepared_instructions.py`; `skills/onboard-my-project/references/procedure.md`; `docs/policy-sources.md`; existing design; generated `clients/instruction-map.json`.
+**Files:** `templates/project/{product,overview,shared-instructions,claude-instructions,architecture,design,local-preparation,quality}.md`; `templates/README.md`, `templates/LICENSE`; `scripts/read_instructions.py`; `tests/test_prepared_instructions.py`; `skills/onboard-my-project/references/procedure.md`; existing design; generated `clients/instruction-map.json`.
 
 **Interfaces:** Existing `instruction_name(name)` and `build_manifest(root)` accept nested `templates/**/*.md` while retaining their public shapes and checks. Onboarding's nine-row table remains the routing owner. No new schema or runtime state.
 

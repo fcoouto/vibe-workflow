@@ -401,7 +401,7 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "d258de3b734af6b323314cd509076124a8a97f136c8d19a1347edc85ba76023d",
+      "sha256": "17087b0460cc2a30703f92f1b03aced8f52f67375519b6f1fe8180fe6caeee95",
       "ranges": [
         [
           1,
@@ -852,7 +852,7 @@
       ]
     },
     "templates/README.md": {
-      "sha256": "5b1c5b2b1e71c2807bd86f9879a8fb716a60d070ea95c67093f18f1f43c82a5c",
+      "sha256": "82b8c1a47408c87588fb2417f404951ed49c2729e8583099ed89095ed2528d01",
       "ranges": [
         [
           1,

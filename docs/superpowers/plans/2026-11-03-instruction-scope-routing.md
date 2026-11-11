@@ -20,7 +20,7 @@ Automatic routing must never reclassify a package escape as external or replace 
 
 ### Task 1: Automatic authority and owning recovery route
 
-**Files:** `scripts/read_instructions.py`, `scripts/drain_instructions.js`, `clients/codex.md`, generated `clients/instruction-map.json`, `docs/policy-sources.md`, `tests/test_prepared_instructions.py`, `tests/instruction_drain.cjs`.
+**Files:** `scripts/read_instructions.py`, `scripts/drain_instructions.js`, `clients/codex.md`, generated `clients/instruction-map.json`, `tests/test_prepared_instructions.py`, `tests/instruction_drain.cjs`.
 
 **Interfaces:** `load_page/load_batch(..., auto=False)` retain existing defaults. `--auto` selects per-source validation and a mode-bound revision. Automatic JSON envelopes expose `mode="auto"`; the runner uses `--auto`, removes the global external choice and otherwise retains its read/drain contract.
 
