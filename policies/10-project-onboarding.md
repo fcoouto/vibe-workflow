@@ -10,7 +10,6 @@ For each new setup/update, resolve the current Toolkit revision once and use cat
 
 | Element | Contract |
 | --- | --- |
-| Trigger | Explicit project enrollment, an authorized setup update/repair, or expansion to additional repositories or clients. |
 | Decision | Identify relevant components, compatible existing tools and any material choices. Resolve conflicts without weakening security, permissions or explicit user requirements. |
 | Required action | Inspect relevant instructions/configuration, make authorized changes recoverably, and leave useful guidance, working project commands, relevant checks, limitations and an undo location. |
 | Evidence | Record the target, choices, changes, checks actually run, limitations and recovery location. Keep unknown or unobserved behavior explicit. |

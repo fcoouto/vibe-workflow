@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | During initial setup; after material changes to instructions, memory, clients, models, permissions, skills or integrations; after a recurring workflow failure; during an authorized update or evaluation, including a Toolkit update that changes the environment guide's required list. |
 | Decision | Identify affected capabilities and evidence, then choose requalification or a justified improvement trial. Distinguish configuration, discovery, trust, actual execution and unsupported behavior. |
 | Required action | Diagnose the observed failure, run relevant checks in disposable environments and compare a bounded candidate only when warranted. Preserve working configuration and active-task rules; apply only verified, authorized changes with recovery, using the task [edit destination and publication path](02-task-planning.md#planning-and-verification). |
 | Evidence | Record mode, versions, client/model and observable effort, sanitized authentication mode, permissions, input/check identities, commands/results, observed actions, elapsed time, adopted/rejected changes and limitations. Record tokens or cost only when observed. |

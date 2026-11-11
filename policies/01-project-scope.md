@@ -8,7 +8,6 @@ Apply the agreed workflow within the enrolled project and authorized task scope.
 
 | Element | Contract |
 | --- | --- |
-| Trigger | During onboarding or updates; at task startup or resume; after changes to repository/client scope, instructions, permissions or accepted policy. |
 | Decision | Determine whether enrollment covers the actual repository, worktree and client; establish applicable instructions and current decisions. Separate observed facts, inherited decisions, assumptions and pending proposals. |
 | Required action | Check actual checkout; read applicable project and directory instructions and route through the policy index. Apply the authority and conflict rules below. Preserve local changes, customizations and authorization; reuse confirmed decisions unless their basis changes. |
 | Evidence | Record project/checkout/worktree/client identity, applicable instruction paths, Toolkit and policy revisions, decision provenance, unresolved conflicts and affected actions. Keep credentials out of these records. |

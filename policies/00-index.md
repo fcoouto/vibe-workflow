@@ -14,10 +14,7 @@ During Runtime, read this index and every applicable contract or guide below in 
 
 Keep policy adoption, action applicability and action satisfaction distinct. Missing capabilities or unknown applicability cannot count as inapplicable or satisfied. Ordinary native editing, tests and review need no managed task state or runtime activation. Block only work that depends on a missing prerequisite; never silently skip an applicable mandatory requirement. Optional enforcement and advanced execution acquire only their own prerequisites when selected.
 
-Use deterministic tooling or direct execution when sufficient. Consider delegation
-for useful context isolation, specialization, required independence or independent
-parallel work; only then load the dispatch contract. Direct work still follows
-planning, verification and applicable review requirements.
+Direct work still follows planning, verification and applicable review requirements.
 
 Policy contracts retain their adopted project scope. Rows labelled "Repository" apply only to work on this toolkit repository; other enrolled projects keep their own guides, commands and project rules.
 
@@ -26,14 +23,14 @@ Policy contracts retain their adopted project scope. Rows labelled "Repository" 
 | [Project Scope](01-project-scope.md) | During onboarding or updates; at task startup or resume; after changes to repository/client scope, instructions, permissions or accepted policy. |
 | [Task Planning](02-task-planning.md) | Before implementation; when resuming work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
 | [Agent Delegation](03-agent-delegation.md) | When considering a worker and before every subagent or worker call, including a read-only check or a worker the user asks for by name; after failed attempts, stalled repair/validation progress, or scope/capacity changes affecting delegated work. |
-| [Security Review](04-security-review.md) | After implementing a deliverable, before completion or merge; after changes affecting review coverage or evidence. |
-| [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting completion or merge; after changes affecting evidence. |
-| [Code Review](06-code-review.md) | Before every merge; before completing nontrivial or review-required work; when requested; after changes affecting review evidence. |
-| [Context and Handoff](07-context-and-handoff.md) | At task startup or resume; when behavior, commands, configuration or material decisions change; before handoff. |
-| [Merge Readiness](08-merge-readiness.md) | When opening or updating a PR; before declaring merge readiness or merging, including a direct commit or push to a merge target; when synchronizing merged changes; after changes to the candidate, base, required evidence or enforcement. |
-| [Workflow Maintenance](09-workflow-maintenance.md) | During initial setup; after material instruction, memory or capability changes; for recurring workflow failures, authorized updates or explicitly selected behavior evaluations. |
-| [Project Onboarding](10-project-onboarding.md) | Explicit project enrollment, setup update/repair, or expansion to additional repositories or clients. |
-| [Tool Integrations](11-tool-integrations.md) | When selecting or changing integrations, using unqualified capabilities, or investigating failures that invalidate qualification. |
+| [Security Review](04-security-review.md) | After implementing a deliverable (a task or wave), before completion or merge; reassess after changes affecting review coverage or evidence. |
+| [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting a completed step, deliverable or merge; after changes affecting the candidate, check definitions, policy, execution environment or evidence. |
+| [Code Review](06-code-review.md) | Before every merge; before completing nontrivial work or work requiring review under the task/project rules; when explicitly requested; after changes affecting prior review evidence. |
+| [Context and Handoff](07-context-and-handoff.md) | At task startup or resume; when behavior, commands, schema, boundaries, configuration or material decisions change; before handing off unfinished work. |
+| [Merge Readiness](08-merge-readiness.md) | When opening or updating a PR; before declaring merge readiness or merging, including a direct commit or push to a merge target; when synchronizing merged changes; after candidate/base changes, changed check definitions or policy, new findings, or changes to required evidence or repository enforcement. |
+| [Workflow Maintenance](09-workflow-maintenance.md) | During initial setup; after material changes to instructions, memory, clients, models, permissions, skills, integrations or capabilities; after a recurring workflow failure; during an authorized update or evaluation, including explicitly selected behavior evaluations and a Toolkit update that changes the environment guide's required list. |
+| [Project Onboarding](10-project-onboarding.md) | Explicit project enrollment, an authorized setup update/repair, or expansion to additional repositories or clients. |
+| [Tool Integrations](11-tool-integrations.md) | When selecting, adding, updating, repairing, removing or changing an integration; using a new or unqualified capability; after changes or failures that invalidate prior qualification; investigating failures that invalidate qualification. |
 | Repository: [Development guide](../docs/development.md) | Before repository-specific planning, design, implementation, review or maintenance decisions, including read-only work; before changing any file, setting, branch, commit or PR; before selecting checks, validating, testing, pushing or creating a release archive. Documentation, one-line fixes and settings commands count. |
 | Repository: [Clients](../clients/index.md) | Before client-specific work; load only the entry whose trigger applies. |
 | Repository workflow operation: `skills/<name>/SKILL.md` | Before an explicit workflow operation; read its entry point and triggered references. Keep workspace preparation, project onboarding and routine development scoped to the requested operation. |
