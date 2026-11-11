@@ -197,8 +197,8 @@ class NativeLaunchTests(NativeBase):
         self.billing()
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=self.now)
-        self.table(extra=[dict(strategy_id='s-oc', model='haiku', effort='low', harness='claude-agent-sdk via opencode',
-                               provider='claude-agent', evidence_refs=['g'])])
+        self.table(extra=[dict(strategy_id='s-oc', model='invented-claude-small', effort='low',
+                               harness='claude-agent-sdk via opencode', provider='claude-agent', evidence_refs=['g'])])
         permit = self.prepare('claude-code')
         self.assertTrue(permit['route'].startswith(CLAUDE_PATH + ':'), permit)
 
@@ -251,7 +251,7 @@ class NativeLaunchTests(NativeBase):
                               evidence='synthetic-1', now=int(time.time()))
         alias = pinned.handle(json.dumps(routing_launch.prepare_request(
             dict(attempt_id='oc-q', task='task-oc-q', scope=routing_launch.assignment_scope(self.checkout),
-                 choice=dict(provider='claude-agent', model='haiku', effort='low',
+                 choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
         self.assertEqual(alias['state'], 'pending', alias)  # the OpenCode alias of the pool is held back too
@@ -302,7 +302,7 @@ class NativeLaunchTests(NativeBase):
                               evidence='synthetic-1', now=int(time.time()))
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
             dict(attempt_id='oc-x', task='task-oc-x', scope=routing_launch.assignment_scope(self.checkout),
-                 choice=dict(provider='claude-agent', model='haiku', effort='low',
+                 choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
         self.assertEqual(held['state'], 'admitted', held)
@@ -325,6 +325,38 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual(self.complete('n1', dict(kind='complete'))['state'], 'recorded')
         self.assertEqual(self.boundary(), first)
         self.assertEqual(self.prepare('claude-code', 'n2')['state'], 'dispatched')
+
+    def test_a_completion_between_collection_and_admission_is_seen_by_the_admission(self):
+        """F4R-09: a second prepare collects while the first hold still counts, then the first completes, then the
+        second admits. The admission rechecks the pool's boundary inside its ledger transaction: pending, never the
+        consumed headroom."""
+        self.billing()
+        self.window('claude-subscription', '5h', 18000, used=993, later=1)  # room for one reservation only
+        self.assertEqual(self.prepare('claude-code', 'first')['state'], 'dispatched')
+        real = routing.admit
+        order = []
+
+        def interleave(assignment, *args, **kwargs):
+            if assignment['attempt_id'] == 'racing' and not order:
+                order.append('completed')  # after `racing` was collected, before its admission transaction
+                self.assertEqual(self.complete('first', dict(kind='complete'))['state'], 'recorded')
+            return real(assignment, *args, **kwargs)
+        with mock.patch.object(routing, 'admit', interleave):
+            racing = self.prepare('claude-code', 'racing')
+        self.assertEqual(order, ['completed'])
+        self.assertEqual(racing['state'], 'pending', racing)
+        self.assertNotIn('racing', self.holds())
+
+    def test_an_admission_that_commits_before_the_completion_keeps_its_reservation(self):
+        """The inverse order: the second admission commits first (the hold still counted, so it does not fit), then
+        the first completes; nothing reuses the headroom and ordinary shared reservations still count."""
+        self.billing()
+        self.window('claude-subscription', '5h', 18000, used=980, later=1)  # room for two reservations
+        self.assertEqual(self.prepare('claude-code', 'a')['state'], 'dispatched')
+        self.assertEqual(self.prepare('claude-code', 'b')['state'], 'dispatched')  # both reservations fit
+        self.assertEqual(self.prepare('claude-code', 'c')['state'], 'pending')  # a third does not
+        self.assertEqual(self.complete('a', dict(kind='complete'))['state'], 'recorded')
+        self.assertEqual(self.prepare('claude-code', 'd')['state'], 'pending')  # the consumed reading is stale now
 
     def test_not_started_after_a_permit_is_held_for_operator_recovery(self):
         """13b: once the permit is out, routing cannot verify that an advisory native launch never started, and the
@@ -400,7 +432,7 @@ class NativeLaunchTests(NativeBase):
         self.addCleanup(pinned.close)
         held = pinned.handle(json.dumps(routing_launch.prepare_request(
             dict(attempt_id='oc', task='task-oc', scope=routing_launch.assignment_scope(self.checkout),
-                 choice=dict(provider='claude-agent', model='haiku', effort='low',
+                 choice=dict(provider='claude-agent', model='invented-claude-small', effort='low',
                              harness='claude-agent-sdk via opencode', funding='subscription')), self.job(),
             harnesses=['claude-agent-sdk via opencode'])).encode())
         self.assertEqual(held['state'], 'admitted', held)  # the OpenCode alias holds the shared Claude allowance
@@ -409,6 +441,35 @@ class NativeLaunchTests(NativeBase):
         self.assertEqual((permit['state'], tool.calls), ('pending', []), permit)
         self.window('claude-subscription', '5h', 18000, used=1000, later=2)
         self.assertEqual(self.prepare('codex', 'c1')['state'], 'dispatched')  # another pool is unaffected
+
+
+class NativeScopeTests(NativeBase):
+    """F4R-04: an ordinary native request may omit `assignment.scope` and `job.scope_ref`; both come from the pinned
+    `--project`. A supplied assignment scope that names another checkout is refused, never ignored."""
+
+    def request(self, attempt, assignment=None, job=None):
+        body = dict(dict(attempt_id=attempt, task='task-' + attempt), **(assignment or {}))
+        return dict(v=1, op='native_prepare', client='claude-code', assignment=body, job=job or self.job())
+
+    def test_an_omitted_scope_is_the_pinned_projects(self):
+        self.billing()
+        job = self.job()
+        del job['scope_ref']
+        with mock.patch.object(native_routing, 'prepare', wraps=native_routing.prepare) as spy:
+            permit = self.command(self.request('scoped', job=job))
+        self.assertEqual(permit['state'], 'dispatched', permit)
+        scope = routing_launch.assignment_scope(self.checkout)
+        self.assertEqual((spy.call_args.kwargs['assignment']['scope'], spy.call_args.kwargs['job']['scope_ref']),
+                         (scope, scope))
+
+    def test_a_scope_naming_another_checkout_is_refused_and_holds_nothing(self):
+        self.billing()
+        other = routing_launch.assignment_scope(self.root)
+        answer = self.command(self.request('foreign', dict(scope=other)))
+        self.assertEqual((answer['state'], answer['reason']), ('blocked', 'scope_mismatch'), answer)
+        self.assertNotIn('foreign', self.holds())
+        same = self.command(self.request('same', dict(scope=routing_launch.assignment_scope(self.checkout))))
+        self.assertEqual(same['state'], 'dispatched', same)  # the matching scope is still accepted
 
 
 class NativeBoundaryTests(NativeBase):
@@ -448,8 +509,8 @@ class NativeBoundaryTests(NativeBase):
     def test_a_foreign_catalog_is_refused(self):
         self.billing()
         with mock.patch.object(native_catalog, 'catalog', lambda settings_path, client: ([
-                routing_launch.route_identity('opencode', provider='claude-agent', model='haiku', effort='low')],
-                None)):
+                routing_launch.route_identity('opencode', provider='claude-agent', model='invented-claude-small',
+                                              effort='low')], None)):
             self.assertEqual(self.prepare('claude-code')['reason'], 'foreign_catalog')
         self.assertEqual(self.holds(), {})
 
@@ -508,6 +569,72 @@ class NativeBoundaryTests(NativeBase):
 
 
 
+def documented_bridge():
+    """The bridge's two documented commands from `clients/claude-code.md`, and a request body built only from
+    documented text: the placeholders, a specialist id from the roster table and task-profile values from the field
+    list in the linked worker brief (templates/worker-brief.md)."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    text = (root / 'clients' / 'claude-code.md').read_text()
+    blocks = [' '.join(block.replace('\\\n', ' ').split()) for block in re.findall(r'```sh\n(.*?)```', text, re.S)]
+    prepare, complete = (next(block for block in blocks if 'routing.py ' + op in block)
+                         for op in ('native_prepare', 'native_complete'))
+    self_check = unittest.TestCase()
+    self_check.assertIn('../templates/worker-brief.md', text)  # where the job's role and profile are defined
+    brief = (root / 'templates' / 'worker-brief.md').read_text()
+    roster = re.findall(r'^\| `([a-z-]+)` \|', brief, re.M)
+    fields = dict(re.findall(r'(\w+) \(([a-z|]+)\)', brief))
+    self_check.assertIn('software-engineer', roster)
+    profile = dict(complexity_band='low', risk_band='low', review_policy='independent', uncertainty='low')
+    for field, value in profile.items():
+        self_check.assertIn(value, fields[field].split('|'))
+    self_check.assertIn('context_tokens (integer', brief)
+    profile['context_tokens'] = 100
+
+    def fill(command_text, attempt):
+        return (command_text.replace('<new id>', attempt).replace('<id>', attempt)
+                .replace('<task id>', 'task-' + attempt).replace('<specialist id>', 'software-engineer')
+                .replace('<task profile>', json.dumps(profile, separators=(',', ':'))))
+    return text, prepare, complete, fill
+
+
+def split(command_text):
+    """(request body, argv after `scripts/routing.py`) of one documented `printf ... | python3 ...` command."""
+    import shlex
+    body, _, call = command_text.partition('|')
+    words = shlex.split(body)
+    return json.loads(words[2]), shlex.split(call)[shlex.split(call).index('scripts/routing.py') + 1:]
+
+
+class DocumentedRequestTests(NativeBase):
+    """F4R-04: the documented request, built from documented text alone, selects, launches once and settles under
+    the labelled source doubles; nothing in it comes from a test job or scope fixture."""
+
+    def run_documented(self, command_text):
+        body, argv = split(command_text)
+        argv = [item for item in argv if item != '/absolute/project/path' and item != '--project']
+        stdout = io.BytesIO()
+        command.main([*argv, '--settings', str(self.settings), '--ledger', str(self.ledger_path), '--project',
+                      str(self.checkout)], io.BytesIO(json.dumps(body).encode()), stdout)
+        return json.loads(stdout.getvalue())
+
+    def test_the_documented_request_launches_once_and_settles(self):
+        self.billing()
+        _, prepare, complete, fill = documented_bridge()
+        tool = NativeTool()
+        with mock.patch.object(native_routing, 'prepare', wraps=native_routing.prepare) as spy:
+            permit = self.run_documented(fill(prepare, 'doc-launch'))
+        self.assertEqual(permit['state'], 'dispatched', permit)
+        self.assertEqual(permit['model'], SNAPSHOTS['claude-code'][0]['alias'])  # the low-complexity row's model
+        settled = self.run_documented(fill(complete, 'doc-launch').replace(
+            '"outcome":{"kind":"complete"}', json.dumps(dict(outcome=tool(permit)))[1:-1]))
+        self.assertEqual(settled['state'], 'recorded', settled)
+        self.assertEqual(len(tool.calls), 1)
+        self.assertEqual(spy.call_args.kwargs['assignment']['scope'], routing_launch.assignment_scope(self.checkout))
+        self.assertTrue(self.holds()['doc-launch']['closed'])
+
+
 class BridgeInstructionTests(unittest.TestCase):
     """The documented bridge commands, run as written against disposable stores: on the real sources they answer a
     structured refusal and start nothing, and policy 03 sends a Claude Code coordinator to them."""
@@ -515,13 +642,9 @@ class BridgeInstructionTests(unittest.TestCase):
 
     def test_documented_bridge_commands_run_and_fail_closed_on_the_real_sources(self):
         import os
-        import re
         import tempfile
         from pathlib import Path
-        text = (self.ROOT / 'clients' / 'claude-code.md').read_text()
-        blocks = [' '.join(block.replace('\\\n', ' ').split()) for block in re.findall(r'```sh\n(.*?)```', text, re.S)]
-        prepare, complete = (next(block for block in blocks if 'routing.py ' + op in block)
-                             for op in ('native_prepare', 'native_complete'))
+        text, prepare, complete, fill = documented_bridge()
         self.assertIn('../policies/03-agent-delegation.md#managed-projects', text)
         self.assertIn('claude-code.md#native-routing-bridge',
                       (self.ROOT / 'policies' / '03-agent-delegation.md').read_text())
@@ -533,18 +656,16 @@ class BridgeInstructionTests(unittest.TestCase):
             settings = temp / 'routing' / 'settings.json'
             routing_settings.update(settings, dict(managed_projects=[str(project)]), 0)
             stores = '--settings %s --ledger %s' % (settings, temp / 'usage' / 'ledger.sqlite3')
-            job = json.dumps(command_tests.job(), separators=(',', ':'))
 
             def run(command_text):
-                command_text = (command_text.replace('/absolute/project/path', '%s %s' % (project, stores))
-                                .replace('<job>', job).replace('<new id>', 'doc-1').replace('<id>', 'doc-1')
-                                .replace('<task id>', 'task-doc').replace('<assignment scope>', SCOPE))
+                command_text = fill(command_text, 'doc-1').replace('/absolute/project/path',
+                                                                   '%s %s' % (project, stores))
+                self.assertNotIn('<', command_text.partition('|')[0])  # every placeholder is documented and filled
                 done = subprocess.run(['sh', '-c', command_text], cwd=self.ROOT, stdin=subprocess.DEVNULL,
                                       capture_output=True, timeout=60, env=dict(os.environ, HOME=str(home)))
                 return json.loads(done.stdout)
             self.assertEqual(run(prepare), dict(v=1, state='blocked', reason='native_binding_unverified'))
             self.assertEqual(run(complete)['state'], 'blocked')  # nothing was admitted, so nothing settles
-
 
 if __name__ == '__main__':
     unittest.main()

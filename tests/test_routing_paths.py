@@ -246,6 +246,38 @@ def qualified(*records):
     return {path_id: dict(demand=demand, account=None, evidence='e', qualified_at=1) for path_id, demand in records}
 
 
+class SharedPoolAccountTests(Folder):
+    """F4R-02: the paths of one shared pool draw on one account. A qualification whose effective account differs
+    from another qualified path's on the same pool is refused; a conflicting stored record leaves the pool out."""
+
+    def qualify(self, path, demand, account=None):
+        return paths.qualify(self.settings, path, demand=demand, evidence='e', now=1, account=account)
+
+    def test_paths_of_one_pool_need_one_account(self):
+        self.qualify('claude-native-subscription', {'5h': 5, '7d': 5})  # the rule's account
+        self.qualify('opencode-claude-subscription', {'5h': 5, '7d': 5}, account='claude-plan')  # the same one
+        target = self.settings.parent / paths.QUALIFICATIONS_FILE
+        before = target.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'pool_account_conflict'):
+            self.qualify('opencode-claude-subscription', {'5h': 5, '7d': 5}, account='another-plan')
+        self.assertEqual(target.read_bytes(), before)  # refused under the lock: nothing written
+        self.qualify('codex-chatgpt-subscription', {'7d': 5}, account='another-plan')  # another pool: independent
+        with self.assertRaisesRegex(ValueError, 'pool_account_conflict'):
+            self.qualify('opencode-chatgpt-subscription', {'7d': 5})  # its default account differs on that pool
+
+    def test_a_stored_conflict_leaves_the_pool_out(self):
+        target = self.settings.parent / paths.QUALIFICATIONS_FILE
+        record = lambda account: dict(demand={'5h': 5, '7d': 5}, account=account, evidence='e', qualified_at=1)  # noqa
+        target.write_text(json.dumps(dict(version=1, paths={
+            'claude-native-subscription': record(None), 'opencode-claude-subscription': record('another-plan'),
+            'codex-chatgpt-subscription': dict(record(None), demand={'7d': 5})})))
+        target.chmod(0o600)
+        before = target.read_bytes()
+        found = [item['path'] for item in paths.resolved(paths.load_rules(), paths.qualifications(self.settings))]
+        self.assertEqual(found, ['codex-chatgpt-subscription'])  # neither Claude path: no account is chosen
+        self.assertEqual(target.read_bytes(), before)  # never rewritten
+
+
 class GenerationTests(unittest.TestCase):
     rules = rules_of(sub_path(), gateway_path())
 

@@ -27,11 +27,16 @@ Load in a [managed project](../policies/03-agent-delegation.md#managed-projects)
 1. From the package root, prepare through the Bash tool with one JSON request:
 
    ```sh
-   printf '%s' '{"v":1,"client":"claude-code","assignment":{"attempt_id":"<new id>","task":"<task id>","scope":"<assignment scope>"},"job":<job>}' \
+   printf '%s' '{"v":1,"client":"claude-code","assignment":{"attempt_id":"<new id>","task":"<task id>"},"job":{"role":"<specialist id>","profile":<task profile>}}' \
      | python3 -I -B scripts/routing.py native_prepare --project /absolute/project/path
    ```
 
-   `job` is the planned job with its task `profile`; add `"profile"` only for a coordinator-supplied profile. Never add a catalog, quota, window or observation field: the request is refused (`invalid_request`), and the catalog comes from the client's own stored snapshot.
+   Fill in the job from the [worker brief's task profile](../templates/worker-brief.md):
+   - `<new id>`: a fresh attempt id for this one launch; `<task id>`: the task the worker or reviewer serves.
+   - `<specialist id>`: the roster id whose "When to use" sentence fits the job. It is the worker's role; the orchestrator is never routed.
+   - `<task profile>`: a JSON object with each field you can judge, from that brief's levels: `complexity_band` and `risk_band` (`low`, `medium`, `high`, `critical`), `review_policy` (`none`, `self`, `independent`, `strict`), `uncertainty` (`low`, `medium`, `high`), `context_tokens` (integer, 0 to 1000000000) and `tools` (list). Leave out a field you cannot judge; use `{}` when you can judge none. A missing field takes its floor (`complexity_band` and `risk_band` `high`, `review_policy` `independent`), so guessing is never needed.
+
+   Routing derives the assignment scope from `--project`; a supplied `scope` that names another checkout is refused (`scope_mismatch`). Never add a catalog, quota, window or observation field: the request is refused (`invalid_request`), and the catalog comes from the client's own stored snapshot.
 2. Only `"state":"dispatched"` is a permit. Invoke the native Agent once with exactly its `model` alias and, when `effort` is not null, that effort; with `effort` null set none. Do not change coordinator or global defaults to make a model fit. Any other answer launches nothing: report its `state` and `reason`. `already_prepared` and `already_dispatched` mean an earlier call carried the permit; never respawn.
 3. After the Agent returns, settle once:
 
@@ -40,7 +45,7 @@ Load in a [managed project](../policies/03-agent-delegation.md#managed-projects)
      | python3 -I -B scripts/routing.py native_complete --project /absolute/project/path
    ```
 
-   `kind` is `complete`, `not_started` (the Agent never started) or `unknown` (you cannot tell whether it ran). After a permit, routing cannot verify that a launch never started, so `not_started` and `unknown` are both recorded `uncertain` (`disposition: uncertain`): the capacity stays held until the operator's `reconcile_subscription`, and the attempt never gets another permit. Add `model` or `effort` only when the result shows what was served; the answer's `served` then reports `substituted` or `effort_changed` instead of relabelling the launch. A repeated report is a `duplicate` and changes nothing; only an attempt the bridge prepared is settled here (`not_a_native_attempt` otherwise).
+   `kind` is `complete`, `not_started` (the Agent never started) or `unknown` (you cannot tell whether it ran). After a permit, routing cannot verify that a launch never started, so `not_started` and `unknown` are both recorded `uncertain` (`disposition: uncertain`): the capacity stays held until the operator's `reconcile_subscription`, and the attempt never gets another permit. Add `model` or `effort` only when the result shows what was served; the answer's `served` then reports `substituted` or `effort_changed` instead of relabelling the launch. A repeated report is a `duplicate` and changes nothing; only an attempt the bridge prepared is settled here (`not_a_native_attempt` otherwise), and an attempt admitted by a managed delegation path settles on that path (`managed_delegation_required`).
 
    A native result reports no usage reading, so `complete` marks the pool's current readings as used: no alias of that pool (native or OpenCode) is admitted again until a reading observed after the completion arrives. If that mark cannot be written, nothing is recorded and the capacity stays held; report it and settle again.
 

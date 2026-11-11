@@ -389,9 +389,9 @@ class CodexDelegationFlowTests(AdmissionFixture, unittest.TestCase):
         self.pools = []
         real = collector.LocalSource.windows
 
-        def windows(source, pool, now):
+        def windows(source, pool, now, **read_once):  # `stored`: the collector's one store read (F4R-09)
             self.pools.append(pool)
-            return real(source, pool, now)
+            return real(source, pool, now, **read_once)
         refuse = mock.Mock(side_effect=AssertionError('no Codex reader process or network call in P2'))
         for patcher in (mock.patch.object(collector.LocalSource, 'windows', windows),
                         mock.patch.object(codex_rate_limits, 'read_windows', refuse),
@@ -416,6 +416,27 @@ class CodexDelegationFlowTests(AdmissionFixture, unittest.TestCase):
         with closing(command.Service(self.settings, self.ledger)) as service:
             data = service._ledger(False).snapshot()
         return next(record for record in data['admissions'] if record['attempt_id'] == attempt_id)
+
+    def test_the_native_bridge_never_settles_a_managed_delegation_attempt(self):
+        """F4R-06: an attempt admitted by Codex delegation preparation (workflow-bound, on the native Codex path) keeps
+        its own observe/settle flow; `native_complete` refuses it and changes no ledger, hold or boundary."""
+        self.qualify(CODEX_PATH, {'7d': 5})
+        self.seed(CODEX_POOL, '7d', 604800, 'seed-codex-7d')
+        prepared = self.prepare(dispatch_id='bridge-refusal')
+        self.assertTrue(prepared['launch_admitted'], prepared)
+        attempt = prepared['attempt_id']
+        with closing(command.Service(self.settings, self.ledger)) as service:
+            before = service._ledger(False).snapshot()
+        stdout = io.BytesIO()
+        command.main(['native_complete', '--settings', str(self.settings), '--ledger', str(self.ledger), '--project',
+                      str(self.repo)], io.BytesIO(json.dumps(dict(v=1, op='native_complete', attempt_id=attempt,
+                                                                    outcome=dict(kind='complete'))).encode()), stdout)
+        answer = json.loads(stdout.getvalue())
+        self.assertEqual((answer['state'], answer['reason']), ('blocked', 'managed_delegation_required'), answer)
+        with closing(command.Service(self.settings, self.ledger)) as service:
+            self.assertEqual(service._ledger(False).snapshot(), before)
+        self.assertEqual(before['holds'][attempt]['state'], 'dispatched')
+        self.assertEqual(collector.consumed_at(self.settings, CODEX_POOL), 0)
 
     def test_codex_explicit_choice_admits_on_a_qualified_path(self):
         first = self.prepare(dispatch_id='explicit-1')  # no path qualified yet: nothing to admit, no substitute
@@ -467,6 +488,7 @@ class CodexDelegationFlowTests(AdmissionFixture, unittest.TestCase):
 
 
 GO_PATH, CLAUDE_HARNESS = 'opencode-go-subscription', 'claude-agent-sdk via opencode'
+CLAUDE_MODEL = 'invented-claude-small'  # an invented OpenCode Claude model
 WORKSPACE = 'wrk_invented'
 
 
@@ -476,7 +498,7 @@ class GoHost(launcher_tests.FakeHost):
 
     def __init__(self, *args, **knobs):
         super().__init__(*args, **knobs)
-        self.models = [dict(providerID='claude-agent', id='haiku', variants=['low']),
+        self.models = [dict(providerID='claude-agent', id=CLAUDE_MODEL, variants=['low']),
                        dict(providerID='openai', id='invented-chatgpt-model', variants=['high']),
                        dict(providerID='opencode-go', id='invented-go-one', variants=['high']),
                        dict(providerID='opencode-go', id='invented-go-two', variants=['high'])]
@@ -599,7 +621,7 @@ class OpenCodeLaunchFlowTests(Stores):
         self.doubles()
         self.qualify_go()
         self.qualify_others()
-        claude = self.strategy('s-claude', 'haiku', 'claude-agent', CLAUDE_HARNESS, effort='low')
+        claude = self.strategy('s-claude', CLAUDE_MODEL, 'claude-agent', CLAUDE_HARNESS, effort='low')
         chatgpt = self.strategy('s-chatgpt', 'invented-chatgpt-model', 'openai', 'opencode provider openai')
         self.table(claude, chatgpt, *self.go_strategies())  # the third family is ranked last; pressure decides
         self.host.usage = go_usage(now())
@@ -662,6 +684,159 @@ class OpenCodeLaunchFlowTests(Stores):
                 self.assertEqual(self.host.usage_reads - before, 1 if reads else 0)
                 self.host.models = models
 
+    # -- F4R-01: completions that report no covering reading -----------------------------------------------------
+    def claude_only(self):
+        self.doubles(demand=False, semantics=False)
+        routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
+                              evidence='synthetic-1', now=now())
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            collector.store_window(self.settings, 'claude-subscription', dict(
+                id=window, limit=1000, used=100, length=length, reset_at=now() + 3600, rolling=False,
+                observed_at=now() - 5, unit=collector.WINDOW_UNIT))
+        self.table(self.strategy('s-claude', CLAUDE_MODEL, 'claude-agent', CLAUDE_HARNESS, effort='low'))
+
+    def test_a_completion_without_a_reading_makes_the_pool_stale_for_every_alias(self):
+        self.claude_only()
+        self.host.rate_limit = None  # the launch reports no reading
+        store = collector.window_path(self.settings)
+        before = json.loads(store.read_bytes())['pools']
+        self.assertEqual(self.launch('miss-1')['state'], 'recorded')
+        self.assertEqual(json.loads(store.read_bytes())['pools'], before)  # nothing invented
+        self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+        second = self.launch('miss-2')
+        self.assertEqual(second['state'], 'pending', second)  # not the same pre-launch headroom
+        self.assertEqual(self.order.count('create'), 1)
+        self.assertEqual(collector.consumed_at(self.settings, 'chatgpt-subscription'), 0)  # other pools untouched
+
+    def test_a_partial_reading_marks_the_pool_too(self):
+        self.claude_only()
+        resets = now() + 3000
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=resets, unifiedWindows=dict(
+            five_hour=dict(utilization=0.25, resetsAt=resets, status='allowed')))  # 5h only: 7d is not covered
+        self.assertEqual(self.launch('part-1')['state'], 'recorded')
+        self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+        self.assertEqual(self.launch('part-2')['state'], 'pending')
+
+    def test_a_covering_settled_reading_keeps_the_pool_usable(self):
+        self.claude_only()
+        resets = now() + 3000
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=resets, unifiedWindows=dict(
+            five_hour=dict(utilization=0.25, resetsAt=resets, status='allowed'),
+            seven_day=dict(utilization=0.1, resetsAt=resets + 86400, status='allowed')))
+        self.assertEqual(self.launch('cover-1')['state'], 'recorded')
+        self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)  # its own reading counts
+        self.assertEqual(self.launch('cover-2')['state'], 'recorded')
+
+    def covering(self, five_hour, seven_day):
+        resets = now() + 3000
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=resets, unifiedWindows=dict(
+            five_hour=dict(utilization=five_hour, resetsAt=resets, status='allowed'),
+            seven_day=dict(utilization=seven_day, resetsAt=resets + 86400, status='allowed')))
+
+    def test_a_whole_covering_completion_between_collection_and_admission_is_seen(self):
+        """F4R-09 (covering readings): `late` collects the pool at 100/1000, then `early` runs a whole launch whose own
+        settled readings (999/1000, covering both claims) are stored and whose hold is released, then `late` admits.
+        No consumed boundary moved; the admission still sees that the pool's stored readings changed: pending."""
+        self.claude_only()
+        self.covering(0.999, 0.999)
+        real, order = routing.admit, []
+
+        def interleave(assignment, *args, **kwargs):
+            if assignment['attempt_id'] == 'late' and not order:
+                order.append('early')
+                self.assertEqual(self.launch('early')['state'], 'recorded')  # after `late` collected
+                self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)  # covered: no mark
+            return real(assignment, *args, **kwargs)
+        with mock.patch.object(routing, 'admit', interleave):
+            late = self.launch('late')
+        self.assertEqual(order, ['early'])
+        self.assertEqual(late['state'], 'pending', late)  # never the 100/1000 headroom collected before
+        self.assertEqual(self.order.count('create'), 1)
+
+    def test_another_pools_reading_between_collection_and_admission_changes_nothing(self):
+        """The recheck is per pool: a reading stored for another pool in between leaves this snapshot usable."""
+        self.claude_only()
+        self.covering(0.25, 0.1)
+        real = routing.admit
+
+        def interleave(assignment, *args, **kwargs):
+            collector.store_window(self.settings, 'chatgpt-subscription', dict(
+                id='7d', limit=1000, used=500, length=604800, reset_at=now() + 3600, rolling=False,
+                observed_at=now(), unit=collector.WINDOW_UNIT))
+            return real(assignment, *args, **kwargs)
+        with mock.patch.object(routing, 'admit', interleave):
+            self.assertEqual(self.launch('other-pool')['state'], 'recorded')
+
+    def stale_reading(self, observed_at):
+        """A launch whose reported reading is an older cached one (labelled double: only its time is older)."""
+        real = opencode_launcher.windows
+        return mock.patch.object(opencode_launcher, 'windows', lambda observation: [
+            dict(window, observed_at=observed_at) for window in real(observation)])
+
+    def test_an_older_cached_reading_that_leaves_the_store_unchanged_covers_nothing(self):
+        """F4R-01: the store keeps its newer reading, so the launch's ids alone are not coverage; the pool is marked."""
+        self.claude_only()  # readings observed 5 s ago
+        self.covering(0.25, 0.1)
+        store = collector.window_path(self.settings)
+        before = json.loads(store.read_bytes())['pools']
+        with self.stale_reading(now() - 60):
+            self.assertEqual(self.launch('cached-1')['state'], 'recorded')
+        self.assertEqual(json.loads(store.read_bytes())['pools'], before)  # nothing replaced, nothing redated
+        self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+        self.assertEqual(self.launch('cached-2')['state'], 'pending')
+
+    def test_a_reading_observed_before_the_admission_covers_nothing(self):
+        """A stored reading older than the admission cannot show that launch's use, even when it replaced an older
+        one."""
+        self.claude_only()  # readings observed 5 s ago
+        self.covering(0.25, 0.1)
+        with self.stale_reading(now() - 2):
+            self.assertEqual(self.launch('before-1')['state'], 'recorded')
+        self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+
+    def test_a_reading_the_store_did_not_keep_covers_nothing(self):
+        """Store result, not ids: another writer's reading of the same window and second is kept, so the launch's own
+        reading (same time, other content) was not stored and covers nothing, though it is not older than the
+        admission."""
+        self.claude_only()
+        self.covering(0.25, 0.1)
+        real, at = opencode_launcher.windows, now()
+
+        def superseded(observation):
+            found = [dict(window, observed_at=at) for window in real(observation)]
+            for window in found:  # the other writer's reading lands first, in the same second
+                collector.store_window(self.settings, 'claude-subscription', dict(window, used=window['used'] + 1))
+            return found
+        with mock.patch.object(opencode_launcher, 'windows', superseded):
+            self.assertEqual(self.launch('kept-1')['state'], 'recorded')
+        self.assertGreater(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+
+    def test_a_failed_boundary_write_keeps_the_capacity_held(self):
+        self.claude_only()
+        self.host.rate_limit = None
+        with mock.patch.object(collector, 'mark_consumed', side_effect=OSError('store unwritable')):
+            result = self.launch('fail-1')
+        self.assertEqual(result['state'], 'uncertain', result)  # never released: the operator reconciles it
+        self.assertEqual(self.holds()['fail-1']['state'], 'uncertain')
+
+    def test_a_refused_attach_used_nothing_and_marks_nothing(self):
+        self.claude_only()
+        self.host.attach_ok = False  # no session is created and nothing is sent
+        self.assertEqual(self.launch('attach-1')['reason'], 'attach_failed')
+        self.assertEqual(collector.consumed_at(self.settings, 'claude-subscription'), 0)
+        self.host.attach_ok = True
+        self.host.rate_limit = None
+        self.assertEqual(self.launch('attach-2')['state'], 'recorded')  # the pool was still usable
+
+    def test_a_go_completion_marks_its_pool(self):
+        self.doubles()
+        self.qualify_go()
+        self.table(*self.go_strategies())
+        self.host.usage = go_usage(now())
+        self.assertEqual(self.launch('go-1')['state'], 'recorded')
+        self.assertGreater(collector.consumed_at(self.settings, GO_PATH), 0)  # a Go launch reports no reading
+        self.assertEqual(self.launch('go-2')['state'], 'pending')  # the bound read finds the pool fresh-but-used
+
     # -- P1 ------------------------------------------------------------------------------------------------------
     def test_opencode_ranked_launch_on_the_local_source(self):
         """P1 with synthetic billing: no window → pending; recovery seed → launch and settled reading; fresh
@@ -670,7 +845,7 @@ class OpenCodeLaunchFlowTests(Stores):
         self.doubles(demand=False, semantics=False)
         routing_paths.qualify(self.settings, 'opencode-claude-subscription', demand={'5h': 5, '7d': 5},
                               evidence='synthetic-1', now=now())
-        self.table(self.strategy('s-claude', 'haiku', 'claude-agent', CLAUDE_HARNESS, effort='low'))
+        self.table(self.strategy('s-claude', CLAUDE_MODEL, 'claude-agent', CLAUDE_HARNESS, effort='low'))
         excluded, admitted = [], []  # the collector's and the admission's own reasons (the answer reports the dominant)
         real_collect, real_admit = collector.collect, routing.admit
 

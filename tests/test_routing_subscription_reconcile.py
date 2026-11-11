@@ -626,7 +626,7 @@ class ServeClearingTests(Subscription):
             self.addCleanup(service.close)
 
         def request(attempt):
-            value = prepare(attempt, constraints=dict(allowed_strategy_ids=['s-sub']))
+            value = prepare(attempt, constraints=dict(allowed_strategy_ids=['s-sub'], allowed_harnesses=['h']))  # F4.4
             value.pop('observations')
             return json.dumps(value).encode()
         with collector(dict(observations=self.qualifying(debit, 'acct-b0'), seen={})) as calls:

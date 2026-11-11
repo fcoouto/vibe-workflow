@@ -49,6 +49,8 @@ Source assessment only, for the [redesign plan's F4.5](superpowers/plans/2026-11
 
 **Still gated (release blockers for Go):** the observable no-paid-crossover producer; meter rolling/fixed semantics, the monthly length and the observation-time/cache semantics; model-dependent demand normalization and measured demand; this machine's actual `opencode-go` connection and catalog. Each needs separately authorized evidence. Until then the Go path is unavailable and the route row above is unchanged.
 
+**Activation (initial-review correction F4R-03):** a project joins `managed_projects` only when each of its managed hosts has a qualified subscription path with a current billing fact (native hosts also need a catalog bound to the current client). No billing producer is qualified, so activation refuses every host today (`<host>_billing_unverified`). A Go completion reports no reading, so it marks its pool's readings as used until a later reading arrives.
+
 ## Contradictions and risks
 
 1. **Anthropic's documents disagree.** Support pages say plan-signed Agent SDK usage draws from subscription limits. The Agent SDK overview says third-party products may not offer claude.ai login or rate limits unless previously approved. The OpenCode provider specification itself asks whether Anthropic approval is needed. Treat the reference route as **tolerated, not guaranteed**.

@@ -630,6 +630,26 @@ def _account_of(settings_path, source, route):
     return spec['account'] if isinstance(spec, dict) and isinstance(spec.get('account'), str) else None
 
 
+def _store_settled(attempt, admission, settings_path):
+    """Before the releasing `record complete` (`routing_launch.launch`'s `settled`): store the launch's own settled
+    rate-limit readings for the admitted pool, with their reported observation times, and return the ids of the
+    windows they cover. A reading covers its window only when the store now holds it (an older cached reading that
+    left a newer one in place covers nothing) and it was observed no earlier than the admission (an earlier one cannot
+    show this launch's use). A launch that reported none returns none; a store failure raises (it covers nothing). A
+    refused attach created no session and sent nothing, so it used none of its claims: every claimed window is
+    covered."""
+    if attempt.refusal is not None and not attempt.attached:
+        return [key.split('/', 1)[1] for key in (admission.get('reserved') or {}) if key.startswith(routing.WIN)]
+    if attempt.read is None:
+        return []
+    admitted_at, covered = admission.get('at'), []
+    for window in windows(attempt.read['result'].get('rate_limit')):
+        held = routing_observations.store_window(settings_path, admission['pool'], window)
+        if held is True and routing._amount(admitted_at) and window['observed_at'] >= admitted_at:
+            covered.append(window['id'])
+    return covered
+
+
 def _finish(result, gate, attempt, detached, settings_path, source):
     if result.get('state') == 'uncertain':
         recovery = result.get('recovery')
@@ -642,12 +662,6 @@ def _finish(result, gate, attempt, detached, settings_path, source):
         return result
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
     admission = result.get('admission') or {}
-    if admission.get('billing_class') == 'included_subscription':
-        try:  # telemetry for the collector; an unusable observation is skipped, never fatal
-            for window in windows(attempt.read['result'].get('rate_limit')):
-                routing_observations.store_window(settings_path, admission['pool'], window)
-        except (OSError, ValueError, KeyError, TypeError):
-            result['windows_stored'] = False
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
         if account_name is None:  # never a mark without its account: the route stays a candidate, the result says why
@@ -710,7 +724,9 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                                                'opencode', listed, dollar=API_FUNDING_QUALIFIED),
                                            before_prepare=lambda request: opencode_subscription.refresh(  # F4.5 Go
                                                service, lambda: host.request('GET', opencode_subscription.USAGE_PATH),
-                                               request, now=int(time.time())))
+                                               request, now=int(time.time())),
+                                           settled=lambda admission: _store_settled(attempt, admission,
+                                                                                    service.settings_path))
         except BaseException:
             # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`;
             # close or mark the hold it leaves before re-raising.

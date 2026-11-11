@@ -167,10 +167,11 @@ class LocalSource:
         raw = json.dumps([rules, qualified, version], sort_keys=True, separators=(',', ':')).encode()
         return hashlib.sha256(raw).hexdigest()[:16]
 
-    def windows(self, pool, now):
+    def windows(self, pool, now, stored=None):
+        """`pool`'s stored readings; from `stored` (one read of the window store) when the caller already has it."""
         if self.settings_path is None:
             return []
-        stored = _read(window_path(self.settings_path)).get('pools', {})
+        stored = (_read(window_path(self.settings_path)) if stored is None else stored).get('pools', {})
         return [dict(window, id=key) for key, window in sorted(stored.get(pool, {}).items())]
 
     def credential(self, route, scope):
@@ -288,6 +289,14 @@ def _valid_window(window):
             and (window.get('organization') is None or routing._text(window['organization'])))
 
 
+def pool_state(stored, pool):
+    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary.
+    Any reading stored for the pool, or a moved boundary, changes it; another pool's activity does not."""
+    raw = json.dumps([stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)], sort_keys=True,
+                     separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def consumed_at(settings_path, pool):
     """When a launch that reported no reading last settled on `pool` (0 when none, or with no settings path). A
     reading observed at or before it no longer counts as fresh: the launch used headroom that reading still shows."""
@@ -324,7 +333,8 @@ def store_window(settings_path, pool, window):
     """Record one window observation for `pool` (the launcher stores what it read after settlement). An older
     observation never replaces a newer one, and one dated beyond now plus CLOCK_MARGIN is refused, so a future-dated
     record can never shadow later ones. A host observation always replaces an operator seed (`seed_window`), and
-    it can never carry a `source` itself."""
+    it can never carry a `source` itself. True when the store holds exactly this observation afterwards (stored now,
+    or already stored); False when a newer reading was kept instead."""
     if not routing._part(pool) or not _valid_window(window) or 'source' in window \
             or window['observed_at'] > time.time() + CLOCK_MARGIN:
         raise ValueError('invalid_window_observation')
@@ -332,9 +342,12 @@ def store_window(settings_path, pool, window):
         value = _read(path) or dict(version=1, pools={})
         windows = value['pools'].setdefault(pool, {})
         current = windows.get(window['id'])
+        entry = {key: item for key, item in window.items() if key != 'id'}
         if current is None or current.get('source') == SEED_SOURCE or window['observed_at'] > current['observed_at']:
-            windows[window['id']] = {key: item for key, item in window.items() if key != 'id'}
+            windows[window['id']] = entry
             _write(path, value)
+            return True
+        return current == entry
 
 
 def _host_windows():
@@ -670,7 +683,7 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     if refresh_windows and type(source) is LocalSource and cut['routes']:
         unread = refresh_needed(cut['routes'], settings_path)
     now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
-    routes, pools = [], {}
+    routes, pools, boundaries = [], {}, {}
 
     def leave(route, reason):
         excluded.append(dict(route=route['route'], reason=reason))
@@ -686,11 +699,18 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
             route['integration_enabled'] = True
         if spec['pool'] not in pools:
             windows = []
-            try:
-                boundary = consumed_at(settings_path, spec['pool'])
+            try:  # one read: the pool's readings, its boundary and the identity the admission rechecks (F4R-09)
+                stored = _read(window_path(settings_path)) if settings_path is not None else {}
+                boundary = stored.get('consumed', {}).get(spec['pool'], 0)
+                boundary = boundary if routing._amount(boundary) else 0
+                boundaries[spec['pool']] = pool_state(stored, spec['pool'])
             except (OSError, ValueError):
-                boundary = now  # an unreadable boundary leaves every reading of the pool stale (fail closed)
-            for window in source.windows(spec['pool'], now):
+                stored, boundary = None, now  # an unreadable store leaves every reading of the pool stale (fail closed)
+                boundaries[spec['pool']] = None
+            own = stored is not None and type(source) is LocalSource and source.settings_path is not None \
+                and Path(source.settings_path) == Path(settings_path)
+            found = source.windows(spec['pool'], now, stored=stored) if own else source.windows(spec['pool'], now)
+            for window in found:
                 if not _valid_window(window):
                     continue
                 item = {key: window[key] for key in WINDOW_FIELDS if key in window}
@@ -725,4 +745,39 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     used = {route['pool'] for route in routes}
     observations = dict(now=now, routes=routes, pools={key: pool for key, pool in pools.items() if key in used},
                         excluded=excluded, routes_version=cut['routes_version'])
-    return dict(observations=observations, seen=seen)
+    return dict(observations=observations, seen=seen, boundaries={key: boundaries[key] for key in used})
+
+
+class _Rechecked:
+    """The ledger as `routing.admit` sees it for a collector-built snapshot (F4R-09): inside the admission's own
+    transaction, a pool whose stored state changed since the snapshot's read (`pool_state`: a completion stored its
+    settled readings or moved the consumed boundary, then released its hold) has every window of the snapshot marked
+    not fresh, so the decision cannot reuse that headroom. A store that cannot be read counts as changed. Every
+    completion writes the store before its ledger release, and the ledger serializes the release with this
+    transaction. Everything else is the ledger's."""
+
+    def __init__(self, ledger, settings_path, observations, boundaries):
+        self._ledger, self._settings = ledger, settings_path
+        self._observations, self._boundaries = observations, boundaries
+
+    def __getattr__(self, name):
+        return getattr(self._ledger, name)
+
+    def admit(self, attempt_id, decide):
+        def rechecked(data):
+            try:
+                stored = _read(window_path(self._settings))
+            except (OSError, ValueError, TypeError):  # TypeError: no settings path
+                stored = None
+            for pool, state in self._boundaries.items():
+                if stored is None or state is None or pool_state(stored, pool) != state:
+                    for window in self._observations.get('pools', {}).get(pool, {}).get('windows', []):
+                        window['fresh'] = False
+            return decide(data)
+        return self._ledger.admit(attempt_id, rechecked)
+
+
+def rechecked_ledger(ledger, settings_path, observations, boundaries):
+    """`ledger` with the pool-state recheck for this collector-built `observations` (`boundaries`: each kept pool's
+    `pool_state` from the snapshot's own read); unchanged without boundaries."""
+    return _Rechecked(ledger, settings_path, observations, boundaries) if boundaries else ledger

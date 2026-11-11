@@ -292,7 +292,8 @@ def _blocked(reason, **extra):
 
 
 def launch(service, *, host, assignment, job, catalog, transport, workflow=None, constraints=None, planned=False,
-           profile=None, settings_path=None, source=None, kind='primary', harnesses=None, before_prepare=None):
+           profile=None, settings_path=None, source=None, kind='primary', harnesses=None, before_prepare=None,
+           settled=None):
     """Run one managed attempt through the routing service `service` (pinned; in-process `handle`).
 
     `transport(route, *, authority, session_id, message_id)` performs the host send. It is the only receiver of the
@@ -305,7 +306,13 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     admitted billing class is a dollar class, so no caller flag can skip them. `harnesses` defaults to the host's
     own (`host_harnesses` over the same `catalog` the admitted check uses); an empty set sends nothing.
     `before_prepare(request)` (code only: the OpenCode launcher's Go usage refresh) runs once just before `prepare`;
-    a failure there never blocks, it only leaves a reading stale or unobserved."""
+    a failure there never blocks, it only leaves a reading stale or unobserved.
+
+    Before a subscription `complete` releases the hold's window claims, `settled(admission)` (code only) stores the
+    launch's own settled readings and returns the window ids stored. Claims that no settled reading covers mean the
+    pool's readings no longer show the used headroom: the pool's consumed boundary is written first (once per
+    attempt), so no alias of the pool reuses it until a later reading. If that cannot be written the attempt is
+    recorded `uncertain` instead: its capacity stays held until the operator reconciles it."""
     if getattr(service, 'project', None) is None:
         return _blocked(PROJECT_REQUIRED)
     settings_path = service.settings_path if settings_path is None else settings_path
@@ -353,6 +360,10 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
         _record(service, attempt, 'uncertain')
         return dict(state='uncertain', attempt_id=attempt, recovery='reconcile_subscription'
                     if admission.get('billing_class') not in routing.FUNDED else 'reconcile_uncertain')
+    if outcome['kind'] == 'complete' and admission.get('billing_class') == 'included_subscription' \
+            and not _covered_or_marked(service, admission, settled, settings_path):
+        _record(service, attempt, 'uncertain')
+        return dict(state='uncertain', attempt_id=attempt, recovery='reconcile_subscription')
     extra = {'usage': outcome['usage']} if outcome['kind'] == 'complete' and 'usage' in outcome else {}
     recorded = _record(service, attempt, outcome['kind'], **extra)
     result = dict(state='recorded' if recorded.get('state') == 'recorded' else 'blocked', attempt_id=attempt,
@@ -362,6 +373,24 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     if 'seen' in prepared:
         result['seen'] = prepared['seen']
     return result
+
+
+def _covered_or_marked(service, admission, settled, settings_path):
+    """True when the launch's settled readings cover every window it claimed, or the consumed boundary is written;
+    False when neither holds (the caller then keeps the capacity held)."""
+    claimed = {key.split('/', 1)[1] for key in (admission.get('reserved') or {}) if key.startswith(routing.WIN)}
+    try:
+        covered = set(settled(admission)) if settled is not None else set()
+    except Exception:  # noqa: BLE001 - a reading that could not be stored covers nothing
+        covered = set()
+    if claimed <= covered:
+        return True
+    try:
+        routing_observations.mark_consumed(settings_path or service.settings_path, admission['pool'], int(time.time()),
+                                           admission['attempt_id'])
+    except Exception:  # noqa: BLE001 - OSError, ValueError: never release without the boundary
+        return False
+    return True
 
 
 # -- activation-gate self-check -----------------------------------------------------------------------------------

@@ -125,6 +125,8 @@ def complete(service, *, attempt_id, outcome):
     record, client, admitted, hold = _admitted(service, attempt_id)
     if record is None or client is None:
         return _blocked('not_a_native_attempt')  # never admitted, or another launcher's: nothing to settle here
+    if ((record.get('binding') or {}).get('job')) is not None:
+        return _blocked('managed_delegation_required')  # a workflow-bound delegation attempt settles on its own path
     kind = 'complete' if outcome['kind'] == 'complete' else 'uncertain'
     if kind == 'complete' and hold == 'dispatched' and record.get('billing_class') == 'included_subscription':
         try:
@@ -175,14 +177,21 @@ def _runtime_delegation(project, client):
 
 
 def command_prepare(service, body):
-    """`native_prepare` (one-shot only): the request names no catalog or quota; the adapter supplies the catalog."""
+    """`native_prepare` (one-shot only): the request names no catalog or quota; the adapter supplies the catalog.
+    The assignment `scope` (and a job without `scope_ref`) is the pinned `--project`'s; a supplied assignment scope
+    that names another checkout is refused (`scope_mismatch`), never ignored."""
     if not service.one_shot:
         return _blocked('native_op_not_served')
     client = body.get('client')
-    if client not in CLIENTS or type(body.get('assignment')) is not dict:
+    if client not in CLIENTS or type(body.get('assignment')) is not dict or type(body.get('job')) is not dict:
         return _blocked('invalid_request')
     if service.project is None:
         return _blocked(routing_launch.PROJECT_REQUIRED)
+    scope = routing_launch.assignment_scope(service.project)
+    if body['assignment'].get('scope', scope) != scope:
+        return _blocked('scope_mismatch')
+    assignment, job = dict(body['assignment'], scope=scope), dict(body['job'])
+    job.setdefault('scope_ref', scope)
     if not routing_launch.managed(service.project, service.settings_path):
         return dict(state='unmanaged', reason=routing_launch.PROJECT_NOT_MANAGED)
     reason = _runtime_delegation(service.project, client)
@@ -191,8 +200,7 @@ def command_prepare(service, body):
     entries, reason = native_catalog.catalog(service.settings_path, client)
     if reason is not None:
         return _blocked(reason)
-    return prepare(service, client=client, assignment=body['assignment'], job=body['job'], catalog=entries,
-                   profile=body.get('profile'))
+    return prepare(service, client=client, assignment=assignment, job=job, catalog=entries, profile=body.get('profile'))
 
 
 def command_complete(service, body):
@@ -200,3 +208,50 @@ def command_complete(service, body):
     if not service.one_shot:
         return _blocked('native_op_not_served')
     return complete(service, attempt_id=body['attempt_id'], outcome=body['outcome'])
+
+
+# -- activation source readiness (F4R-03) -------------------------------------------------------------------------
+def _usable(paths, settings_path, client, native, now):
+    """None when one qualified subscription path of `paths` has a current billing fact (and, for the native bridge,
+    a bound catalog), else the first reason found."""
+    from runtime import subscription_billing
+    if not paths:
+        return 'no_qualified_path'
+    source = collector.default_source(settings_path)
+    if not any(subscription_billing.verified(source, dict(route=path['path'] + ':activation', account=path['account'],
+                                                          pool=path['pool']), now) for path in paths):
+        return subscription_billing.UNVERIFIED
+    return native_catalog.catalog(settings_path, client)[1] if native else None
+
+
+def activation_readiness(projects, settings_path):
+    """The activation gate's in-process `subscription_sources` capability: [] when every managed host of every project
+    being added has at least one qualified subscription path with locally verifiable current sources (a billing
+    fact; for the ordinary native bridge also a catalog bound to the current client), else `<host>_<reason>` codes.
+    A Codex host with runtime task state keeps its own delegation path and needs billing only. Reads enrolment and
+    local source state only: no quota read, reader, client process or provider call. Status, disable and removal
+    never run it."""
+    from scripts import routing as command
+    from runtime import delegation_routing
+    rules, qualified = routing_paths.load_rules(), routing_paths.qualifications(settings_path)
+    found = [item for item in routing_paths.resolved(rules, qualified)
+             if item['billing_class'] == routing_paths.SUBSCRIPTION and item.get('status') != routing_paths.TEST_ONLY]
+    now, codes = int(time.time()), []
+    for project in projects:
+        try:
+            hosts = [host for host in delegation_routing.enrolled_hosts(project) if host in command.MANAGED_HOSTS]
+        except Exception:  # noqa: BLE001 - an enrolment that cannot be read never activates
+            return ['enrolment_unavailable']
+        for host in hosts:
+            if host == 'opencode':
+                paths, native = [item for item in found if 'host' not in item], False
+            else:
+                paths = [item for item in found if item.get('host') == CLIENTS[host]]
+                native = _runtime_delegation(project, host) is None
+                if host == 'claude-code' and not native:
+                    codes.append('claude_code_native_bridge_unavailable')
+                    continue
+            reason = _usable(paths, settings_path, host, native, now)
+            if reason is not None:
+                codes.append('%s_%s' % (host.replace('-', '_'), reason))
+    return sorted(set(codes))[:16]

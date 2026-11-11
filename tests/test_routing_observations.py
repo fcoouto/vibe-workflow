@@ -153,8 +153,11 @@ def kept(result):
 class CollectorTests(Stores):
     def test_a_qualified_subscription_route_with_fresh_telemetry_is_a_candidate(self):
         result = self.collect([sub_route()], dict(sub=[sub_window(self.now)]))
-        self.assertEqual(set(result), {'observations', 'seen'})
+        self.assertEqual(set(result), {'observations', 'seen', 'boundaries'})
         self.assertEqual(result['seen'], dict(openrouter_revision=None))  # no gateway route needed OpenRouter
+        store = collector.window_path(self.settings)  # F4R-09: the snapshot's own read (none: a static source)
+        stored = json.loads(store.read_bytes()) if store.exists() else {}
+        self.assertEqual(result['boundaries'], {'sub': collector.pool_state(stored, 'sub')})
         observations = result['observations']
         self.assertLessEqual(abs(observations['now'] - self.now), 5)
         self.data()  # the ledger admit writes to
@@ -678,9 +681,9 @@ class LocalSourceTests(Stores):
         read = []
         real = collector.LocalSource.windows
 
-        def spy(source, pool, now):
+        def spy(source, pool, now, **read_once):  # `stored`: the collector's one store read (F4R-09)
             read.append(pool)
-            return real(source, pool, now)
+            return real(source, pool, now, **read_once)
         table = table_of(strategy('c1'), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
         with mock.patch.object(collector.LocalSource, 'windows', spy):
             result = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CHATGPT_HARNESS])

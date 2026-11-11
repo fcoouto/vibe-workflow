@@ -243,8 +243,9 @@ class ActivationGateTests(Base):
 
     def test_the_gate_lists_every_phase_w_capability(self):
         self.assertEqual([name for name, _, _ in command.CAPABILITIES],
-                         ['collector_and_launcher', 'route_manifest', 'native_delegation', 'opencode_launcher',
-                          'openrouter_proposals', 'openrouter_workers', 'api_usage', 'instructions'])
+                         ['collector_and_launcher', 'route_manifest', 'subscription_sources', 'native_delegation',
+                          'opencode_launcher', 'openrouter_proposals', 'openrouter_workers', 'api_usage',
+                          'instructions'])
         self.assertEqual(command._package(), state.PACKAGE)
 
     def test_an_in_process_service_refuses_add_and_remove(self):
@@ -299,7 +300,7 @@ class ActivationGateTests(Base):
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
         self.assertEqual(response['codes']['simulated_missing'], ['self_check_missing'])
         self.assertIn('route_manifest', response['failing'])
-        self.assertEqual(len(spawned), len(capabilities))
+        self.assertEqual(len(spawned), len(capabilities) - 1)  # `subscription_sources` runs in process (F4R-03)
         self.assertEqual(sorted(response['failing']), sorted(response['codes']))
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
         for argv, kwargs in spawned:
@@ -572,6 +573,64 @@ def write_table(settings, *strategies):
 
 
 CODEX_STRATEGY = dict(strategy_id='s1', model='invented-model', effort='high', harness='codex-native', provider='openai')
+
+
+class SourceReadinessTests(Base):
+    """F4R-03: a project joins only when each of its managed hosts has at least one usable subscription path with
+    locally verifiable current sources (billing; for the ordinary native bridge also a bound native catalog). It reads
+    the projects' enrolment and local source state in process: no quota read, reader, client process or provider."""
+
+    def setUp(self):
+        super().setUp()
+        from runtime import routing_paths
+        self.project = Path(self.temp.name).resolve() / 'checkout'
+        self.project.mkdir()
+        routing_paths.qualify(self.settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='e',
+                              now=1)
+        routing_paths.qualify(self.settings, 'codex-chatgpt-subscription', demand={'7d': 5}, evidence='e', now=1)
+
+    def ready(self, hosts, runtime=()):
+        from runtime import delegation_routing, native_routing
+        with mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=list(hosts)), \
+                mock.patch.object(native_routing, '_runtime_delegation',
+                                  lambda project, client: 'managed_delegation_required' if client in runtime else None):
+            return native_routing.activation_readiness([str(self.project)], self.settings)
+
+    def doubles(self, billing=True, native=True):
+        from runtime import routing_observations, subscription_billing
+        from runtime.adapters import native_catalog
+        stack = []
+        if billing:
+            stack.append(mock.patch.object(routing_observations.LocalSource, 'billing', lambda source, route, now:
+                                           subscription_billing.double('activation')(route, now)))
+        if native:
+            binding = dict(client_version='v', connection='c', controls='x')
+            for client in ('claude-code', 'codex'):
+                native_catalog.store_snapshot(self.settings, client, dict(binding=binding, models=[
+                    dict(alias='invented-alias', resolved=None, efforts=['high'])]))
+            stack.append(mock.patch.object(native_catalog, 'current_binding', lambda client: binding))
+        return stack
+
+    def test_the_real_sources_refuse_each_managed_host_with_its_reason(self):
+        self.assertEqual(self.ready(['claude-code']), ['claude_code_billing_unverified'])
+        self.assertEqual(self.ready(['codex'], runtime=['codex']), ['codex_billing_unverified'])
+        self.assertEqual(self.ready(['opencode']), ['opencode_no_qualified_path'])
+
+    def test_a_usable_path_per_host_is_enough_and_native_hosts_need_their_catalog(self):
+        patches = self.doubles(native=False)
+        with patches[0]:
+            self.assertEqual(self.ready(['claude-code']), ['claude_code_native_binding_unverified'])
+            self.assertEqual(self.ready(['codex'], runtime=['codex']), [])  # managed Codex: its own path, billing only
+        with self.doubles()[0], self.doubles()[1]:
+            self.assertEqual(self.ready(['claude-code']), [])
+            self.assertEqual(self.ready(['claude-code', 'codex']), [])  # mixed: each host has a usable path
+            self.assertEqual(self.ready(['claude-code', 'opencode']), ['opencode_no_qualified_path'])
+
+    def test_an_unreadable_enrolment_fails_closed(self):
+        from runtime import delegation_routing, native_routing
+        with mock.patch.object(delegation_routing, 'enrolled_hosts', side_effect=OSError('unreadable')):
+            self.assertEqual(native_routing.activation_readiness([str(self.project)], self.settings),
+                             ['enrolment_unavailable'])
 
 
 class PathActivationTests(unittest.TestCase):

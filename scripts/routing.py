@@ -83,13 +83,13 @@ SHAPE_REASONS = ('invalid_assignment', 'invalid_ranking', 'invalid_settings', 'i
 # The observation collector (C3-1; C.3 design 3.3, store paths by coordinator decision):
 # `collect(project, assignment, *, settings_path, ledger_path, source=None) -> {observations, seen}`.
 COLLECTOR = 'runtime.routing_observations'
-# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's behavioural
-# self-check passes. (name, kind, target): `module` calls `<module>:<function>(workdir)`; `script` loads
-# PACKAGE/<target> by path and calls its `managed_self_check(workdir)`; `paths` calls `<module>:<function>` with the
-# service's settings path (F4: a qualified path generates a route); `heading` needs a `Managed projects` heading.
+# Activation gate (C.3 design 4.2): a project joins `managed_projects` only when every capability's check passes. In a
+# child: `module` `<module>:<function>(workdir)`, `script` PACKAGE/<target>'s `managed_self_check(workdir)`, `paths`
+# `<module>:<function>(settings path)`, `heading` a `Managed projects` heading; in process: `sources` (F4R-03).
 CAPABILITIES = (
     ('collector_and_launcher', 'module', 'runtime.routing_launch:managed_self_check'),  # C3-1
     ('route_manifest', 'paths', 'runtime.routing_paths:gate'),  # F4: path rules, qualifications and the table
+    ('subscription_sources', 'sources', 'runtime.native_routing:activation_readiness'),  # F4R-03: per managed host
     ('native_delegation', 'module', 'runtime.delegation_routing:managed_self_check'),  # C3-2
     ('opencode_launcher', 'module', 'runtime.opencode_launcher:managed_self_check'),  # C3-3
     ('openrouter_proposals', 'script', 'scripts/openrouter_proposals.py'),  # C3-4a
@@ -97,9 +97,8 @@ CAPABILITIES = (
     ('api_usage', 'module', 'runtime.usage_routing:managed_self_check'),  # C3-5
     ('instructions', 'heading', 'policies/03-agent-delegation.md'),  # C3-6
 )
-# Enrolled clients whose coordinator has a managed delegation path (policy 03 `Managed projects`): codex (C3-2 and the
-# native bridge), opencode (the managed launcher, C3-3) and claude-code (the native bridge, F4.6). A project enrolled
-# only for other clients is refused (`advisory_host_unmanaged`).
+# Clients with a managed delegation path (policy 03 `Managed projects`): codex (C3-2, the native bridge), opencode (the
+# launcher, C3-3), claude-code (the native bridge, F4.6); a project enrolled only for others: `advisory_host_unmanaged`.
 MANAGED_HOSTS = ('codex', 'opencode', 'claude-code')
 SELF_CHECK_TIMEOUT = 10
 SELF_CHECK_REAP = 5  # bound on collecting a killed check's output; a descendant outside its group cannot hold the gate
@@ -414,7 +413,7 @@ class Service:
             raise Blocked('observations_unavailable') from None
         require(type(result) is dict and {'observations', 'seen'} <= set(result) and type(result['seen']) is dict,
                 'observations_unavailable')
-        return result['observations'], result['seen']
+        return result['observations'], result['seen'], result.get('boundaries') or {}
 
     SELECTION = ('table', 'strategy_ids', 'choices', 'harnesses')
 
@@ -476,11 +475,11 @@ class Service:
         require(managed or 'observations' in body, 'invalid_request')
         selected = self._select(body)
         settings, profile, ranking, admitted = (selected[key] for key in ('settings', 'profile', 'ranking', 'assignment'))
-        seen = None
-        if 'observations' in body:
+        seen, boundaries = None, {}
+        if 'observations' in body:  # a caller's own snapshot gets no recheck: it carries no trusted boundary
             observations = self._observations(body['observations'])
         else:
-            collected, seen = self._collect(selected)
+            collected, seen, boundaries = self._collect(selected)
             observations = self._observations(collected)
         echo = {} if seen is None else dict(seen=seen)  # C3-1's revisions, unchanged, in every answer that follows
         bound = self._workflow_binding(body, profile)
@@ -489,6 +488,9 @@ class Service:
                 else dict(state='blocked', reason=bound[1], **echo)
         ledger = self._ledger(True, write=True)
         self._expire(ledger)
+        if boundaries:  # F4R-09: each pool's stored state, rechecked inside the admission transaction
+            ledger = importlib.import_module(COLLECTOR).rechecked_ledger(ledger, self.settings_path, observations,
+                                                                         boundaries)
         # S3.6c debits clear only in the one-shot command or from a managed project's collector-built snapshot outside
         # `--serve` (C3-0a): never in the shim's persistent child, never from an in-process caller's own snapshot.
         clear = self.one_shot or (seen is not None and not self.serving)
@@ -777,7 +779,7 @@ class Service:
             _require_managed_hosts(delegation_routing, sorted(set(value) - set(self._settings()['managed_projects'])))
             require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
                 'managed_projects']))), 'open_unrouted_assignments')
-            codes = activation_gate(self.settings_path)
+            codes = activation_gate(self.settings_path, sorted(set(value) - set(self._settings()['managed_projects'])))
             if codes:
                 raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
         return dict(change, managed_projects=value)
@@ -921,11 +923,15 @@ def _require_managed_hosts(delegation_routing, projects):
         raise Blocked('advisory_host_unmanaged', projects=advisory)
 
 
-def activation_gate(settings_path):
-    """The failing capabilities as {name: codes}; empty when every self-check passes."""
+def activation_gate(settings_path, projects=()):
+    """The failing capabilities as {name: codes}; empty when every check passes."""
     failures = {}
     for name, kind, target in CAPABILITIES:
-        codes = _self_check(kind, target, settings_path)
+        if kind == 'sources':
+            module, _, function = target.partition(':')
+            codes = getattr(importlib.import_module(module), function)(list(projects), settings_path)
+        else:
+            codes = _self_check(kind, target, settings_path)
         if codes:
             failures[name] = codes
     return failures

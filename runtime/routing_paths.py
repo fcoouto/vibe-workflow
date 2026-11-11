@@ -195,6 +195,11 @@ def qualify(settings_path, path_id, *, demand, evidence, account=None, now, rule
     record = dict(demand=dict(demand), account=account, evidence=evidence, qualified_at=now)
     with _locked(target):
         value = _read(target) or dict(version=QUALIFICATIONS_VERSION, paths={})
+        by_id = {item['path']: item for item in rules['paths']}
+        if any(other != path_id and other in by_id and by_id[other]['pool'] == rule['pool']
+               and (stored.get('account') or by_id[other]['account']) != (account or rule['account'])
+               for other, stored in value['paths'].items()):
+            _invalid('pool_account_conflict')  # one shared pool draws on one account (F4R-02); nothing is written
         value['paths'][path_id] = record
         _write(target, value)
     return dict(state='qualified', path=path_id, **record)
@@ -229,14 +234,19 @@ def operation(name, settings_path, body, now, test_inputs=False):
 
 def resolved(rules, qualified):
     """The qualified paths in rule order, each with its rule fields, its `demand` and the account that applies (the
-    qualification's, else the rule's). A qualification whose windows no longer match its rule is left out."""
+    qualification's, else the rule's). A qualification whose windows no longer match its rule is left out, and so is
+    every path of a shared pool whose qualified paths name different accounts (a stored conflict: no account is
+    chosen and nothing is rewritten)."""
     found = []
     for rule in rules['paths']:
         record = qualified.get(rule['path'])
         if record is None or not _demand_ok(rule, record.get('demand')):
             continue
         found.append(dict(rule, demand=dict(record['demand']), account=record.get('account') or rule['account']))
-    return found
+    accounts = {}
+    for item in found:
+        accounts.setdefault(item['pool'], set()).add(item['account'])
+    return [item for item in found if len(accounts[item['pool']]) == 1]
 
 
 def path_of(route_id):

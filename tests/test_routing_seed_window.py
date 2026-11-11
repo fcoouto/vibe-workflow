@@ -322,7 +322,7 @@ class StoreTests(SeedBase):
         host = sub_window(int(time.time()), used=640)
         outcome, result = self.race(lambda: collector._store_seed(self.settings, self.seed_event(), self.now),
                                     lambda: collector.store_window(self.settings, 'sub', host))
-        self.assertEqual((outcome, result['overlapped'], result['value']), (None, False, None))
+        self.assertEqual((outcome, result['overlapped'], result['value']), (None, False, True))  # stored (F4R-09)
         window = self.stored()['sub']['5h']
         self.assertEqual((window['used'], window.get('source')), (640, None))
 
@@ -330,7 +330,7 @@ class StoreTests(SeedBase):
         host = sub_window(int(time.time()), used=640)
         outcome, result = self.race(lambda: collector.store_window(self.settings, 'sub', host),
                                     lambda: collector._store_seed(self.settings, self.seed_event(), self.now))
-        self.assertEqual((outcome, result['overlapped'], result['value']), (None, False, 'fresh_observation_exists'))
+        self.assertEqual((outcome, result['overlapped'], result['value']), (True, False, 'fresh_observation_exists'))
         window = self.stored()['sub']['5h']
         self.assertEqual((window['used'], window.get('source')), (640, None))
 

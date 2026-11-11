@@ -492,7 +492,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         # re-check after the write removes the project again before refusing.
         settings, committed = self.settings_path(), []
 
-        def gate(settings_path=None):
+        def gate(settings_path=None, projects=()):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -536,7 +536,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         self.addCleanup(shutil.rmtree, other)
         routing_settings.update(settings, dict(managed_projects=[str(other)]), 0)
 
-        def gate(settings_path=None):
+        def gate(settings_path=None, projects=()):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -753,8 +753,12 @@ class RealScopeResolver(ManagedDelegation):
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
         self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])  # no runtime scope to read
         settings, run, native, doubles = self.bridged()
-        joined = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
-        self.assertEqual(joined['state'], 'updated', joined)  # the real gate passed with the qualified native path
+        refused = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'managed_path_incomplete'), refused)
+        self.assertEqual(refused['codes'], {'subscription_sources': ['claude_code_billing_unverified']})  # F4R-03
+        with doubles[0], doubles[1]:  # the real gate's children, plus this host's sources (labelled doubles)
+            joined = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
+        self.assertEqual(joined['state'], 'updated', joined)
         self.assertEqual(run(dict(v=1, op='set', authority_required=True))['state'], 'updated')
         unverified = native('claude-code', 'bridge-0')
         self.assertEqual((unverified['state'], unverified['reason']), ('blocked', 'native_binding_unverified'))
