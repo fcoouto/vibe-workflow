@@ -4,7 +4,7 @@
 
 **Your first tool call in every session is to read the memory index described in [Memory](#memory-and-project-preferences).** Do it before any other read, search or command, for a question as much as for a task.
 
-A factual question about the repository needs only the memory read: answer it from the actual files, then stop.
+For factual-only repository questions without worker consideration or calls, read memory, answer from actual files, then stop.
 
 Any other task, including a non-factual child task, starts with the [policy index](policies/00-index.md) read in full, before any file, setting, Git or PR change; review; check selection; completion or readiness decision; resuming work; deciding whether to use a worker, even if declining; or worker call, even a read-only check or a worker the user names. Follow its single routing table and read every applicable contract and guide in full before the action it guards.
 
