@@ -19,7 +19,7 @@ from tests.test_routing_evidence import NoHardCodedModelTests, inputs
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts' / 'routing_table.py'
 ROUTING = ROOT / 'scripts' / 'routing.py'
-NAMES = ('guidance', 'catalog', 'benchmarks', 'terms')
+NAMES = ('guidance', 'catalog', 'benchmarks')
 
 
 class Base(unittest.TestCase):
@@ -73,6 +73,17 @@ class WriteTests(Base):
         self.assertTrue(all(len(value) == 64 for value in table['input_digests'].values()))
         self.assertEqual(report['version'], table['version'])
         self.assertEqual([p.name for p in self.table.parent.iterdir()], ['strategy-table.json'])  # no temp left
+
+    def test_a_terms_file_left_in_the_sources_folder_is_ignored(self):
+        self.assertEqual(routing_table.INPUTS, ('guidance', 'catalog', 'benchmarks'))
+        (self.evidence / 'terms.json').write_text('{not json')
+        code, report = self.refresh()
+        self.assertEqual((code, report['state']), (0, 'refreshed'), report)
+        self.assertEqual(set(self.stored()['input_digests']), set(NAMES))
+        out = io.StringIO()
+        with mock.patch('sys.stdout', out):
+            code = routing_table.main(self.args('--terms', str(self.evidence / 'terms.json')))
+        self.assertEqual((code, json.loads(out.getvalue())['reason']), (2, 'usage_error'))
 
     def test_reader_accepts_the_written_table(self):
         self.refresh()
@@ -167,7 +178,7 @@ class FailureTests(Base):
         self.assertEqual(self.stored()['compiled_at'], '2026-11-10T00:00:00Z')
 
     def test_first_failure_without_a_table_writes_nothing(self):
-        (self.evidence / 'terms.json').write_text('{not json')
+        (self.evidence / 'benchmarks.json').write_text('{not json')
         code, report = self.refresh()
         self.assertEqual((code, report['state'], report['reason']), (1, 'blocked', 'no_verified_table'))
         self.assertFalse(self.table.exists())
@@ -181,7 +192,7 @@ class FailureTests(Base):
             'infinity': lambda v: v.__setitem__(1, b'[{"model": "a", "supported_efforts": [], "context_limit": 1e999}]'),
             'duplicate key': lambda v: v.__setitem__(1, b'[{"model": "a", "model": "b", "supported_efforts": []}]'),
             'nested': lambda v: v.__setitem__(2, b'[' * 100000 + b']' * 100000),
-            'not utf-8': lambda v: v.__setitem__(3, b'\xff\xfe'),
+            'not utf-8': lambda v: v.__setitem__(2, b'\xff\xfe'),
             'wrong top type': lambda v: v.__setitem__(0, {'rows': []}),
             'wrong field type': lambda v: v[1][0].__setitem__('supported_efforts', 'high'),
             'bool limit': lambda v: v[1][0].__setitem__('context_limit', True),
@@ -199,7 +210,7 @@ class FailureTests(Base):
 
     def test_a_fifo_input_is_refused_without_waiting(self):
         self.refresh(now='2026-11-01T00:00:00Z')
-        fifo = self.evidence / 'terms.json'
+        fifo = self.evidence / 'benchmarks.json'
         fifo.unlink()
         os.mkfifo(fifo)
         code, report = self.refresh(now='2026-11-09T00:00:00Z')
@@ -214,14 +225,14 @@ class FailureTests(Base):
         return code, json.loads(out.getvalue())
 
     def test_a_symlinked_input_is_refused(self):
-        real = self.root / 'real-terms.json'
-        real.write_bytes((self.evidence / 'terms.json').read_bytes())
-        link = self.root / 'linked-terms.json'
+        real = self.root / 'real-benchmarks.json'
+        real.write_bytes((self.evidence / 'benchmarks.json').read_bytes())
+        link = self.root / 'linked-benchmarks.json'
         link.symlink_to(real)
-        self.assertEqual(self.refresh_with('terms', link), (1, dict(v=1, state='blocked', reason='unsafe_input')))
+        self.assertEqual(self.refresh_with('benchmarks', link), (1, dict(v=1, state='blocked', reason='unsafe_input')))
         self.assertFalse(self.table.exists())
         self.refresh(now='2026-11-01T00:00:00Z')
-        code, report = self.refresh_with('terms', link)
+        code, report = self.refresh_with('benchmarks', link)
         self.assertEqual((code, report['state'], report['reason']), (1, 'kept', 'unsafe_input'))
         self.assertEqual(self.stored()['compiled_at'], '2026-11-01T00:00:00Z')
 

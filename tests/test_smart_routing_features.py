@@ -498,16 +498,14 @@ class PinnedGates(gate_tests.GateBase):
 class C2bWorkstreamsDelegationResources(PinnedGates):
     """F03 Workstreams, F11 planning/native delegation/continuation, F12 resource admission, F16 context."""
 
-    def test_a_supplied_profile_needs_no_jev_and_only_semantic_changes_reprofile(self):
-        """F03/F16: a valid profile takes zero Jev calls; progress or unrelated metadata does not reprofile."""
-        jev = Counter(lambda view, fields: {}, name='jev')
-        base = routing.ensure_profile(job(), jev=jev)
-        self.assertEqual(jev.count, 0)
-        progress = routing.ensure_profile(job(progress=dict(done=3, total=5), status='running', attempt=2), jev=jev)
+    def test_a_supplied_profile_is_reused_and_only_semantic_changes_reprofile(self):
+        """F03/F16: a valid profile is used as supplied; progress or unrelated metadata does not reprofile."""
+        base = routing.ensure_profile(job())
+        self.assertEqual(base['uncertain_fields'], [])
+        progress = routing.ensure_profile(job(progress=dict(done=3, total=5), status='running', attempt=2))
         self.assertEqual(progress['semantic_digest'], base['semantic_digest'])
-        changed = routing.ensure_profile(job(objective='A different objective'), jev=jev)
+        changed = routing.ensure_profile(job(objective='A different objective'))
         self.assertNotEqual(changed['semantic_digest'], base['semantic_digest'])
-        self.assertEqual(jev.count, 0)
 
     def test_one_task_graph_ready_jobs_admit_dependent_and_conflicting_jobs_wait(self):
         """F03: the workflow is the only graph; distinct ready jobs admit, dependent and conflicting ones wait."""
