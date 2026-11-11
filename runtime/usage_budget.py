@@ -11,6 +11,7 @@ import stat
 import uuid
 
 from runtime import ledger_versions  # state versions and migration (C3-0a); it reads this module lazily
+from runtime import usage_budget_runs  # the S1 phase lifecycle; it reads this module lazily
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
 # Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
@@ -719,75 +720,21 @@ class Ledger:
         return dict(maximum=maximum, cost=None, digest=digest, state='reserved',
                     cycle=data['organizations'][run['organization']]['policy']['cycle'])
 
+    # The S1 phase lifecycle lives in usage_budget_runs (F5.A2 foundation); these keep their exact signatures.
     def reserve_generation(self, run_id, digest, maximum, revision, now, *, live_gate=None):
-        name(digest)
-        with self.transaction(grows=True) as data:
-            run = data['runs'][run_id]
-            require(not run['closed'] and run['calls']['count']['state'] == 'completed', 'count_not_completed')
-            require('generation' not in run['calls'], 'attempt_exists')
-            require(run['revision'] == revision, 'policy_revision_changed')
-            self._live_admit(data, run['organization'], maximum, now, live_gate, run)
-            self._admit(data, run['organization'], run['task'], maximum, revision, now)
-            run['calls']['generation'] = self._call(data, run, maximum, digest)
+        usage_budget_runs.reserve_generation(self, run_id, digest, maximum, revision, now, live_gate=live_gate)
 
     def dispatch(self, run_id, phase, revision, now, *, live_gate=None):
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            if run.get('consent') is not None:
-                self._consent(data, run['consent'])
-            require(not run['closed'] and call['state'] == 'reserved', 'dispatch_forbidden')
-            require(run['revision'] == revision, 'policy_revision_changed')
-            # The call's own reservation has already reduced headroom.
-            self._live_admit(data, run['organization'], 0, now, live_gate, run)
-            self._admit(data, run['organization'], run['task'], 0, revision, now)
-            require(self._headroom(data, run['organization'], run['task']) >= 0, 'insufficient_headroom')
-            policy = data['organizations'][run['organization']]['policy']
-            require((policy['pilot_limit'] is None or self._total(data, run['organization']) <= policy['pilot_limit'])
-                    and (policy['task_limit'] is None
-                         or self._total(data, run['organization'], run['task']) <= policy['task_limit']),
-                    'limits_changed')
-            cap = policy['amount'] if policy['ceiling'] == 'custom' else policy['grant_amount']
-            require(policy['ceiling'] == 'none' or self._total(data, run['organization'], cycle=policy['cycle']) <= cap, 'limits_changed')
-            require(self._credit_raw(data, run['organization'], now) >= 0, 'credit_changed')
-            call['state'] = 'dispatching'
-            data['native'][run['native']]['latest_at'] = now
+        usage_budget_runs.dispatch(self, run_id, phase, revision, now, live_gate=live_gate)
 
     def complete(self, run_id, phase, actual):
-        integer(actual)
-        overrun = False
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            require(call['state'] in ('dispatching', 'unresolved'), 'completion_forbidden')
-            # Over-bound is sticky: a later (lower) report never settles the call or unblocks its organization.
-            require('over_bound' not in call, 'over_bound_unresolved')
-            if actual > call['maximum']:
-                call.update(state='unresolved', over_bound=actual); overrun = True  # blocks via block_reasons
-            else:
-                call.update(cost=actual, state='completed')  # Charges actual; unused padding is released.
-                call.pop('provision', None)
-                if phase == 'generation':
-                    self._close_run(data, run_id)
-        require(not overrun, 'cost_exceeds_bound')
+        usage_budget_runs.complete(self, run_id, phase, actual)
 
     def uncertain(self, run_id, phase, *, incomplete=None):
-        with self.transaction() as data:
-            call = data['runs'][run_id]['calls'][phase]
-            require(call['state'] == 'dispatching', 'uncertainty_forbidden')
-            call['state'] = 'unresolved'
-            if incomplete is not None:
-                try:
-                    size = len(json.dumps(incomplete, allow_nan=False, separators=(',', ':')))
-                except (TypeError, ValueError, RecursionError):
-                    size = MAX_INCOMPLETE_BYTES + 1
-                call['incomplete'] = incomplete if size <= MAX_INCOMPLETE_BYTES else dict(omitted='too_large')
+        usage_budget_runs.uncertain(self, run_id, phase, incomplete=incomplete)
 
     def close_run(self, run_id):
-        with self.transaction() as data:
-            run = data['runs'][run_id]
-            require(not any(c['state'] in ('dispatching', 'unresolved') for c in run['calls'].values()), 'request_may_be_running')
-            for call in run['calls'].values():
-                if call['state'] == 'reserved': call.update(cost=0, state='rejected-before-send')
-            self._close_run(data, run_id)
+        usage_budget_runs.close_run(self, run_id)
 
     @staticmethod
     def held(data):
@@ -1510,11 +1457,7 @@ class Ledger:
 
     def reject_unsent(self, run_id, phase):
         """Host transport established no send; not a user/worker receipt."""
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            require(call['state'] == 'dispatching', 'rejection_forbidden')
-            call.update(cost=0, state='rejected-before-send')
-            self._close_run(data, run_id)
+        usage_budget_runs.reject_unsent(self, run_id, phase)
 
     @staticmethod
     def _consent(data, pin):
