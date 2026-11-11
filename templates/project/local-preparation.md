@@ -4,7 +4,7 @@ Shape for the contributor guide or equivalent, adapted through [onboarding](../.
 
 ## Prerequisites
 
-[Actually required runtimes, package manager and tools, compatibility checks and reusable global tools; no other developer's cache paths.]
+[Required runtimes, package manager and tools; observed version constraints or unknown minimum versions; compatibility checks and reusable global tools; no other developer's cache paths.]
 
 ## First run
 
