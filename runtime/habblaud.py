@@ -367,10 +367,14 @@ def openrouter_publisher(plugin_root, run, endpoint, account, declaration_for_br
     receipt = run / 'visibility.json'
     try:
         brief = json.loads((run / 'brief.json').read_text())
-        metadata = declaration_for_brief(brief)
+        previous = read(receipt)
+        if previous and 'binding' in previous:
+            # A published run keeps the declaration its receipt froze, version 1 included; a new run reads the brief.
+            metadata = None if previous.get('visibility') is None else stored_declaration(previous['visibility'])
+        else:
+            metadata = declaration_for_brief(brief)
         display_role = {key: value for key, value in metadata.items() if key != 'custom_role_name'} if metadata else None
         model = brief.get('model_display_name') or brief['model']
-        previous = read(receipt)
         if previous and 'binding' in previous:
             # A published run keeps its original label when verification resumes.
             legacy_label = display_label(metadata, model)

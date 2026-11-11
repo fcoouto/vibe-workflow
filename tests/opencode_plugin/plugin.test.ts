@@ -1638,8 +1638,8 @@ test("the real child: prepare, health, dispatch, attach with the token, then che
     await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
     // A token-less check and a wrong token are refused by the command itself.
     const raw = (extra: Record<string, unknown>) => stores.command("check", { attempt_id: "real-a1", session_id: session, request: REAL_REQUEST, ...extra })
-    assert.deepEqual(raw({}), { v: 1, state: "blocked", reason: "authority_required" })
-    assert.deepEqual(raw({ authority: "x".repeat(43) }), { v: 1, state: "blocked", reason: "authority_invalid" })
+    assert.deepEqual(raw({}), { v: 1, state: "blocked", reason: "authority_required", settings_warnings: [] })
+    assert.deepEqual(raw({ authority: "x".repeat(43) }), { v: 1, state: "blocked", reason: "authority_invalid", settings_warnings: [] })
     assert.equal(raw({ authority }).authority, "verified")
     const input = { session_id: session, attempt_id: "real-a1", authority, funding_pool: "sub", model: "claude-agent/haiku#low" }
     for (const bad of [{ authority: "x".repeat(43) }, { authority: authority.slice(0, -1) + (authority.endsWith("A") ? "B" : "A") },

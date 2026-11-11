@@ -78,13 +78,8 @@ printf '%s' '{"v":1,"expected_revision":<revision>,"change":{"api_usage_enabled"
 
 On a disable request, set it to `false` the same way, then report both states.
 
-Set explicit `worker_choices` only on the user's request, through the same
-one-shot command. Key each list by a routed roster specialist id from
-[the task profile template](../../../templates/task-profile.json), such as
-`software-engineer`; the orchestrator and old role names are refused with
-`invalid_worker_choices`. A key written before the roster stays in the file
-unused, and `status` and `check` list it in `settings_warnings` as
-`worker_choice_key_unknown`; re-key it only when the user asks.
+Smart Routing worker choices follow [worker choices](worker-choices.md); they
+need none of the API Usage steps here.
 
 ## Read-only status, quoting and selection
 

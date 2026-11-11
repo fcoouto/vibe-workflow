@@ -582,11 +582,11 @@
       ]
     },
     "skills/manage-usage-routing/SKILL.md": {
-      "sha256": "db81370aeb712920aa643416845e9bdf48dd0eded4a9e359d8aa1d95b609f5b1",
+      "sha256": "dc1dde5e2bb9e03882b57c0c90b0eeb21744a86036eaf80b92b321ac710d5279",
       "ranges": [
         [
           1,
-          21
+          22
         ]
       ]
     },
@@ -627,7 +627,7 @@
       ]
     },
     "skills/manage-usage-routing/references/procedure.md": {
-      "sha256": "74930e7b035f3b6b12f66e073d6c074edc96ef7f4f2d52ea401c7e5cde17334f",
+      "sha256": "11a8c924c166e5ff4f4fd344f81ab0a3a89e1b9e8eaa2b60f3248c6f66f6269b",
       "ranges": [
         [
           1,
@@ -635,11 +635,20 @@
         ],
         [
           129,
-          250
+          254
         ],
         [
-          251,
-          289
+          255,
+          284
+        ]
+      ]
+    },
+    "skills/manage-usage-routing/references/worker-choices.md": {
+      "sha256": "2544a2b6979c1d0a8c80210c072bbffa3dd74e55079e223f45b225b5e2b8bee2",
+      "ranges": [
+        [
+          1,
+          55
         ]
       ]
     },

@@ -368,6 +368,23 @@ print(json.dumps({{'type':'step_finish','part':{{'reason':'stop','cost':0,'token
             self.assertTrue(publish('accepted')['delivered'])
         self.assertEqual({event['agent_type'] for event in client.events}, {'Evidence scout · Model'})
 
+    def test_pre_roster_receipt_keeps_its_stored_badge_and_its_binding(self):  # an old brief label, a version 1 receipt
+        from runtime import habblaud; from tests.fixture_worker_visibility import fixture_transport
+        reviewer, scout = dict(version=1, role='Reviewer', specialty='File analysis'), dict(version=1, role='Scout', specialty='File analysis', custom_role_name='Evidence scout')
+        for stored, label, parent in ((reviewer, 'Reviewer · Model', None), (scout, 'Evidence scout · Model', None), (reviewer, 'Reviewer · Model', str(uuid.uuid4()))):
+            (client, transport), run = fixture_transport(), self.api.prepare(self.runs, dict(self.brief, task_id=('legacy-%s-%s' % (stored['role'], bool(parent))).lower()))
+            brief = json.loads((run / 'brief.json').read_text()) | {k: v for k, v in stored.items() if k in ('role', 'custom_role_name')}
+            binding = dict(parent=brief['coordinator_chat_id'], agent_id=str(uuid.uuid5(uuid.NAMESPACE_URL, str(run))), label=label, cwd=brief['source_root'])
+            self.assertTrue(habblaud.publisher(transport, 'http://127.0.0.1:1', 'account', binding, stored, run / 'visibility.json')('Working')['delivered'])
+            (run / 'brief.json').write_text(json.dumps(brief | ({'coordinator_chat_id': parent} if parent else {}))); self.assertIsNone(self.api.visibility_declaration(brief))
+            saved, sent = [(run / name).read_bytes() for name in ('brief.json', 'visibility.json')], len(client.events)
+            with self.subTest(label=label, changed=bool(parent)), patch.object(habblaud, 'transport', return_value=transport):
+                result = self.api.habblaud_publisher(self.root, run, 'http://127.0.0.1:1', 'account')('accepted')
+                self.assertEqual(result['delivered'], not parent, result)  # a changed binding is refused
+                self.assertEqual(({event['agent_type'] for event in client.events}, (run / 'brief.json').read_bytes()), ({label}, saved[0]))
+                self.assertEqual((json.loads((run / 'visibility.json').read_text())['visibility'], json.loads((run / 'visibility.json').read_text())['binding']['label']), (stored, label))
+                self.assertTrue(not parent or ((run / 'visibility.json').read_bytes(), len(client.events)) == (saved[1], sent))
+
     def test_approved_native_fallback_preserves_frozen_name_with_a_real_child_id(self):
         from runtime import habblaud, worker_visibility
         from runtime.adapters import codex

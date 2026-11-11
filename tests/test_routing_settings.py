@@ -229,5 +229,52 @@ class RoutingSettingsTests(unittest.TestCase):
         self.assertNotIn('workstreams', json.loads(self.path.read_text()).get('values', {}))
 
 
+class WorkerChoiceInstructionTests(unittest.TestCase):
+    """The worker-choice instructions state the validator's contract and load nothing for API setup."""
+    SKILL = Path(__file__).resolve().parents[1] / 'skills' / 'manage-usage-routing'
+
+    def test_worker_choice_requests_find_a_complete_selective_contract(self):
+        entry = (self.SKILL / 'SKILL.md').read_text()
+        description = next(line for line in entry.splitlines() if line.startswith('description:'))
+        self.assertIn('worker choice', description)
+        self.assertIn('(references/worker-choices.md)', entry)
+        text = (self.SKILL / 'references' / 'worker-choices.md').read_text()
+        for field in sorted(routing_settings.CHOICE_FIELDS):
+            self.assertIn('`%s`' % field, text)
+        for value in (*routing_settings.FUNDING, str(routing_settings.MAX_CHOICES), '256', 'routing.py status',
+                      'routing.py set', 'expected_revision', 'invalid_worker_choices', 'invalid_worker_choice',
+                      'duplicate_worker_choice', 'worker_choice_key_unknown', 'stale_revision', 'orchestrator'):
+            self.assertIn(value, text)
+        for unloaded in ('keychain-setup.md', 'first-canary.md', 'delegation.md', 'procedure.md'):
+            self.assertNotIn(unloaded, text)  # a worker-choice request loads no API setup, canary or delegation
+
+
+    def test_documented_commands_run_against_disposable_stores(self):
+        import re, subprocess
+        text = (self.SKILL / 'references' / 'worker-choices.md').read_text()
+        blocks = [' '.join(block.replace('\\\n', ' ').split()) for block in re.findall(r'```sh\n(.*?)```', text, re.S)]
+        status, update = (next(block for block in blocks if 'routing.py ' + op in block) for op in ('status', 'set'))
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp).resolve()
+            (temp / 'project').mkdir()
+            (temp / 'home').mkdir(mode=0o700)
+            stores = '--settings %s --ledger %s' % (temp / 'routing' / 'settings.json', temp / 'usage' / 'ledger.sqlite3')
+
+            def run(command):
+                command = command.replace('/absolute/project/path', '%s %s' % (temp / 'project', stores))
+                done = subprocess.run(['sh', '-c', command], cwd=root, stdin=subprocess.DEVNULL, capture_output=True,
+                                      timeout=60, env=dict(os.environ, HOME=str(temp / 'home')))
+                return json.loads(done.stdout)
+
+            before = run(status)
+            self.assertEqual((before['state'], before['settings_revision'], before['settings_warnings']), ('ok', 0, []))
+            choice = {'software-engineer': [CHOICE]}
+            written = run(update.replace('<revision>', str(before['settings_revision']))
+                          .replace('<map>', json.dumps(choice, separators=(',', ':'))))
+            self.assertEqual((written['state'], written['revision']), ('updated', 1), written)
+            self.assertEqual(run(status)['settings']['worker_choices'], choice)
+
+
 if __name__ == '__main__':
     unittest.main()
