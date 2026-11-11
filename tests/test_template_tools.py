@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -54,6 +55,38 @@ class TemplateToolsTests(unittest.TestCase):
         self.write(".workflow/OWNER.md", "# Owner\n", self.before)
         with self.assertRaisesRegex(ValueError, "context_unavailable"):
             self.tools.prepare(self.root, ["worker-brief.md"], [".workflow/OWNER.md"])
+
+    def test_prepare_refuses_stale_packaged_templates(self):
+        package = self.base / "package"
+        shutil.copytree(PACKAGE / "templates", package / "templates")
+        (package / "clients").mkdir()
+        shutil.copyfile(PACKAGE / "clients/instruction-map.json", package / "clients/instruction-map.json")
+        (package / "templates/project/product.md").write_text("changed")
+        with patch.object(self.tools, "PACKAGE", package):
+            with self.assertRaisesRegex(ValueError, "prepared_source_unavailable"):
+                self.tools.prepare(self.root, ["project/product.md"], [])
+
+    def test_prepare_revision_binds_consumer_context(self):
+        path = self.write("rules.md", "original")
+        first = self.tools.prepare(self.root, ["project/product.md"], ["rules.md"])
+        path.write_text("changed")
+        with self.assertRaisesRegex(ValueError, "context_changed"):
+            self.tools.prepare(self.root, ["project/product.md"], ["rules.md"], revision=first["revision"])
+
+    def test_duplicate_documents_are_checked_once_and_bad_roots_fail(self):
+        self.write("README.md", "[bad](missing.md)\n")
+        result = self.tools.check(self.root, ["README.md", "README.md"])
+        self.assertEqual(len(result["findings"]), 1)
+        with self.assertRaisesRegex(ValueError, "root_unavailable"):
+            self.tools.check(self.base / "absent", [])
+
+    def test_changed_link_content_invalidates_notice_fingerprint(self):
+        self.write("README.md", "[bad](owner.md#absent)\n")
+        target = self.write("owner.md", "# Owner\n")
+        first = self.tools.check(self.root, ["README.md"])
+        target.write_text("# New owner\n")
+        second = self.tools.check(self.root, ["README.md"])
+        self.assertTrue(self.tools.notice(second, previous=first["fingerprint"]))
 
     def test_required_digest_checks_the_actual_consumer_copy(self):
         path = self.write("rules.md", "original")
