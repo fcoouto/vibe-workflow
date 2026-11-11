@@ -27,13 +27,13 @@ import stat
 import subprocess
 import time
 
-from runtime import routing_observations as observations, usage_budget
+from runtime import routing_observations as observations, routing_paths, usage_budget
 
 POOL = 'chatgpt-subscription'
 LIMIT_ID = 'codex'
 METHODS = ('initialize', 'initialized', 'account/rateLimits/read')
 CLIENT_NAME = 'vibe_workflow_rate_limits'
-# Codex reports window lengths in minutes; only lengths with a manifest window id are understood.
+# Codex reports window lengths in minutes; only lengths with a path rule window id are understood.
 WINDOW_IDS = {300: '5h', 10080: '7d'}
 LIMIT = 1000  # observations.WINDOW_UNIT: thousandths of the provider's utilisation
 # 5 s bounds one read: the app-server starts in well under a second and the read is one backend request; a
@@ -64,17 +64,13 @@ class ReadError(Exception):
 
 
 def applies(route):
-    """Whether a manifest route's windows come from this reader: an included-subscription route on the pool."""
+    """Whether a route's windows come from this reader: an included-subscription route on the pool."""
     return type(route) is dict and route.get('pool') == POOL and route.get('billing_class') == 'included_subscription'
 
 
-def declared_windows(manifest):
-    """The window ids the manifest knows for the pool: its `pools` entry, else the demand of its routes."""
-    pool = (manifest.get('pools') or {}).get(POOL) if type(manifest.get('pools')) is dict else None
-    if type(pool) is dict and type(pool.get('windows')) is list:
-        return {item['id'] for item in pool['windows'] if type(item) is dict and type(item.get('id')) is str}
-    return {key for route in manifest.get('routes', []) if type(route) is dict and route.get('pool') == POOL
-            and type(route.get('demand')) is dict for key in route['demand']}
+def declared_windows(rules):
+    """The window ids the path rules declare for the pool (`routing_paths.pool_windows`)."""
+    return routing_paths.pool_windows(rules, POOL)
 
 
 # -- the child process -------------------------------------------------------------------------------------------
@@ -317,15 +313,15 @@ def parse(result, now, declared):
     return windows
 
 
-def read_windows(*, command=None, environ=None, timeout=TIMEOUT, manifest=None, timing=None):
+def read_windows(*, command=None, environ=None, timeout=TIMEOUT, rules=None, timing=None):
     """One read: the pool's window observations, or ReadError."""
     environ = os.environ if environ is None else environ
     try:
-        manifest = observations.load_manifest() if manifest is None else manifest
+        rules = routing_paths.load_rules() if rules is None else rules
     except (OSError, ValueError):
         raise ReadError('route_manifest_invalid') from None
     result = exchange(command or default_command(environ), environ, timeout, timing)
-    return parse(result, int(time.time()), declared_windows(manifest))
+    return parse(result, int(time.time()), declared_windows(rules))
 
 
 # -- on demand, once per pool ------------------------------------------------------------------------------------
@@ -364,9 +360,10 @@ def _pool_lock(settings_path, pool, wait=0.0):
 
 def _fresh(settings_path, need, now):
     stored = {item.get('id'): item for item in observations.LocalSource(settings_path).windows(POOL, now)}
+    boundary = observations.consumed_at(settings_path, POOL)  # a reading a settled native launch used is stale
     return bool(stored) and all(type(stored.get(key, {}).get('observed_at')) is int
                                 and 0 <= now - stored[key]['observed_at'] <= observations.FRESH_SECONDS
-                                for key in (need or stored))
+                                and stored[key]['observed_at'] > boundary for key in (need or stored))
 
 
 def _state(folder):
@@ -383,7 +380,7 @@ def _record(folder, failure):
         observations._write(path, value)
 
 
-def refresh(settings_path, *, need=None, force=False, command=None, environ=None, timeout=TIMEOUT, manifest=None,
+def refresh(settings_path, *, need=None, force=False, command=None, environ=None, timeout=TIMEOUT, rules=None,
             timing=None):
     """Make the pool's reading fresh if it is not: `{state, reason?, windows?}`, never raises.
 
@@ -405,7 +402,7 @@ def refresh(settings_path, *, need=None, force=False, command=None, environ=None
                     and 0 <= now - failure['at'] < FAILURE_BACKOFF:
                 return dict(state='backoff', reason=failure.get('reason'))
             try:
-                windows = read_windows(command=command, environ=environ, timeout=timeout, manifest=manifest,
+                windows = read_windows(command=command, environ=environ, timeout=timeout, rules=rules,
                                        timing=timing)
                 try:
                     for item in windows:

@@ -197,8 +197,23 @@ class ManagedSelectionModes(ManagedDelegation):
 
 
 class ManagedRelease(ManagedDelegation):
+    def test_the_codex_host_never_considers_a_route_it_cannot_send(self):
+        """F4.4: worker_choices list the fixture CHOICE (an anthropic route Codex lacks) first; the Codex host's
+        harness filter leaves it out, so the native route is admitted instead of failing at the catalog check."""
+        with self.managed(NATIVE):
+            prepared = self.api.prepare_assignment(self.scope, self.routed_request())
+        self.assertTrue(prepared['launch_admitted'], prepared)
+        self.assertEqual(prepared['routing'], dict(state='admitted', mode='worker_choice'))
+
+    def test_the_request_carries_the_codex_hosts_harnesses(self):
+        bodies, real = [], command.Service._prepare
+        with self.managed(NATIVE), mock.patch.object(command.Service, '_prepare',
+                                                     lambda service, body: bodies.append(body) or real(service, body)):
+            self.api.prepare_assignment(self.scope, self.routed_request())
+        self.assertEqual([body['constraints']['allowed_harnesses'] for body in bodies], [['codex-native']])
+
     def test_a_routed_catalog_mismatch_releases_the_never_launched_assignment(self):
-        with self.managed(NATIVE):  # worker_choices list the fixture CHOICE first: an anthropic route Codex lacks
+        with self.managed(NATIVE), mock.patch.object(delegation_routing, '_catalog', return_value=[]):
             prepared = self.api.prepare_assignment(self.scope, self.routed_request())
             self.assertFalse(prepared['launch_admitted'])
             self.assertEqual(prepared['routing'], dict(state='blocked', reason='catalog_mismatch'))
@@ -206,7 +221,7 @@ class ManagedRelease(ManagedDelegation):
             record = self.raw_assignment(prepared['attempt_id'])
             self.assertEqual((record['status'], record['result']), ('settled', dict(outcome='cancelled')))
             self.assertEqual(prepared['release']['status'], 'settled')
-            self.worker_choices(self.native())
+        with self.managed(NATIVE):
             again = self.api.prepare_assignment(self.scope, self.routed_request(
                 dispatch_id='request-2', **self.retry(prepared)))
         self.assertTrue(again['launch_admitted'], again)  # claims and resource units were free again
@@ -220,11 +235,12 @@ class ManagedRelease(ManagedDelegation):
                              observed_at=now, unit=routing_observations.WINDOW_UNIT)]
             return None
         request = self.routed_request()
-        with self.managed(NATIVE, windows=windows):  # worker_choices list the fixture CHOICE first
+        with self.managed(NATIVE, windows=windows):
             waiting = self.api.prepare_assignment(self.scope, request)
             self.assertEqual(waiting['routing']['state'], 'pending', waiting)
             spent['value'] = False
-            replay = self.api.prepare_assignment(self.scope, request)
+            with mock.patch.object(delegation_routing, '_catalog', return_value=[]):  # the host's catalog lacks it
+                replay = self.api.prepare_assignment(self.scope, request)
             self.assertEqual(replay['routing'], dict(state='blocked', reason='catalog_mismatch',
                                                      reconcile_required=True))
             self.assertFalse(replay['launch_admitted'])
@@ -476,7 +492,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         # re-check after the write removes the project again before refusing.
         settings, committed = self.settings_path(), []
 
-        def gate():
+        def gate(settings_path=None, projects=()):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -520,7 +536,7 @@ class ReviewS1DoubleLaunch(ManagedDelegation):
         self.addCleanup(shutil.rmtree, other)
         routing_settings.update(settings, dict(managed_projects=[str(other)]), 0)
 
-        def gate():
+        def gate(settings_path=None, projects=()):
             committed.append(self.prepare(**self.inherit_request()))
             return []
         with mock.patch.object(command, 'activation_gate', side_effect=gate), \
@@ -548,6 +564,7 @@ class RealScopeResolver(ManagedDelegation):
 
     def enrol_as(self, client, runtime):
         record = json.loads(self.scope.authority_path.read_bytes())
+        self.runtime_configuration = record['repositories'][0]['checkouts'][0]['clients'][0]['configuration']['runtime']
         for repository in record['repositories']:
             for checkout in repository['checkouts']:
                 for entry in checkout['clients']:
@@ -646,7 +663,9 @@ class RealScopeResolver(ManagedDelegation):
                     else:
                         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), expected)
 
-    def test_a_suspended_codex_entry_does_not_let_a_claude_project_join(self):
+    def test_a_suspended_codex_entry_leaves_a_claude_only_project_on_the_native_bridge(self):
+        """F4.6: Claude Code has a managed path (the native bridge), so a Claude-only enrolment passes the host check
+        (the suspended codex entry adds no host); the unresolvable suspended runtime scope then fails S1c closed."""
         record = json.loads(self.scope.authority_path.read_bytes())
         for repository in record['repositories']:
             for checkout in repository['checkouts']:
@@ -657,8 +676,8 @@ class RealScopeResolver(ManagedDelegation):
                 checkout['clients'].append(entry)
         self.scope.authority_path.write_text(json.dumps(record))
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
-        refused = self.activate()
-        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'advisory_host_unmanaged'))
+        stopped = self.activate()  # past the host rule, the S1c precondition still applies and fails closed here
+        self.assertEqual((stopped['state'], stopped['reason']), ('blocked', 'open_unrouted_assignments'), stopped)
 
     def activate(self):
         settings = Path(tempfile.mkdtemp()).resolve() / 'settings.json'
@@ -669,17 +688,97 @@ class RealScopeResolver(ManagedDelegation):
                 managed_projects=[str(self.repo)]))).encode())
 
     def test_the_activation_host_check_reads_the_real_enrolment(self):
-        # #222 follow-up: policy 03's Claude Code rule, enforced from the canonical record.
+        # #222 follow-up, updated by F4.6: the host rule read from the canonical record.
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['codex'])
         with self.qualified():
             self.assertEqual(self.activate()['state'], 'updated')
         self.enrol_as('claude-code', runtime=True)
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
-        refused = self.activate()
-        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'advisory_host_unmanaged'))
+        stopped = self.activate()  # F4.6: past the host rule (the native bridge); its runtime scope is unresolvable
+        self.assertEqual((stopped['state'], stopped['reason']), ('blocked', 'open_unrouted_assignments'), stopped)
         self.enrol_as('opencode', runtime=False)  # no runtime state, but its managed launcher is a managed path
         self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['opencode'])
         self.assertEqual(self.activate()['state'], 'updated')
+
+    def bridged(self):
+        """Temporary routing stores with the native Claude path qualified and ranked, a fresh reading, and the
+        labelled doubles for the unqualified sources (client binding, catalog snapshot, billing fact)."""
+        import io
+        from runtime import routing_observations, routing_paths, subscription_billing
+        from runtime.adapters import native_catalog
+        from tests.test_routing_command import job
+        folder = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, folder)
+        settings, ledger = folder / 'routing' / 'settings.json', folder / 'usage' / 'ledger.sqlite3'
+        settings.parent.mkdir(mode=0o700)
+        now = int(__import__('time').time())
+        routing_paths.qualify(settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='synthetic-1',
+                              now=now)
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            routing_observations.store_window(settings, 'claude-subscription', dict(
+                id=window, limit=1000, used=100, length=length, reset_at=now + 3600, rolling=False, observed_at=now,
+                unit=routing_observations.WINDOW_UNIT))
+        profile = routing.ensure_profile(job())
+        row = '|'.join((profile['work_kind'], profile['complexity_band'], profile['risk_band']))
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(dict(schema=2, version='tv-bridge', rows={row: [
+            dict(strategy_id='s-claude', model='invented-claude', effort='high', harness='claude-native',
+                 provider='anthropic', evidence_refs=['g'])]})))
+        (settings.parent / 'strategy-table.json').chmod(0o600)
+        binding = dict(client_version='invented-2', connection='native-login', controls='agent-alias-effort')
+        native_catalog.store_snapshot(settings, 'claude-code', dict(binding=binding, models=[
+            dict(alias='invented-claude', resolved=None, efforts=['high'])]))
+        native_catalog.store_snapshot(settings, 'codex', dict(binding=binding, models=[
+            dict(alias='invented-codex', resolved=None, efforts=['high'])]))
+        double = subscription_billing.double('real-enrolment')
+        doubles = [mock.patch.object(native_catalog, 'current_binding', lambda client: binding),
+                   mock.patch.object(routing_observations.LocalSource, 'billing',
+                                     lambda source, route, at: double(route, at))]
+
+        def run(request):
+            stdout = io.BytesIO()
+            command.main([request['op'], '--settings', str(settings), '--ledger', str(ledger), '--project',
+                          str(self.repo)], io.BytesIO(json.dumps(request).encode()), stdout)
+            return json.loads(stdout.getvalue())
+
+        def native(client, attempt):
+            return run(dict(v=1, op='native_prepare', client=client, job=job(), assignment=dict(
+                attempt_id=attempt, task='task-' + attempt, scope=routing_launch.assignment_scope(self.repo))))
+        return settings, run, native, doubles
+
+    def test_a_claude_only_ordinary_enrolment_activates_and_launches_through_the_bridge(self):
+        """13b: the actual canonical record, enrolled for Claude Code only with no runtime task state, through the
+        real host rule, the real S1c resolver, the real activation gate and the real bridge; only the unqualified
+        sources are doubled. Then a mixed enrolment keeps Codex's runtime path, and the real binding refuses."""
+        self.enrol_as('claude-code', runtime=False)
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code'])
+        self.assertEqual(delegation_routing.open_unrouted_assignments(self.repo), [])  # no runtime scope to read
+        settings, run, native, doubles = self.bridged()
+        refused = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
+        self.assertEqual((refused['state'], refused['reason']), ('blocked', 'managed_path_incomplete'), refused)
+        self.assertEqual(refused['codes'], {'subscription_sources': ['claude_code_billing_unverified']})  # F4R-03
+        with doubles[0], doubles[1]:  # the real gate's children, plus this host's sources (labelled doubles)
+            joined = run(dict(v=1, op='set', expected_revision=0, change=dict(managed_projects=[str(self.repo)])))
+        self.assertEqual(joined['state'], 'updated', joined)
+        self.assertEqual(run(dict(v=1, op='set', authority_required=True))['state'], 'updated')
+        unverified = native('claude-code', 'bridge-0')
+        self.assertEqual((unverified['state'], unverified['reason']), ('blocked', 'native_binding_unverified'))
+        with doubles[0], doubles[1]:
+            permit = native('claude-code', 'bridge-1')
+            self.assertEqual((permit['state'], permit['model'], permit['effort']),
+                             ('dispatched', 'invented-claude', 'high'), permit)
+            done = run(dict(v=1, op='native_complete', attempt_id='bridge-1', outcome=dict(kind='complete')))
+            self.assertEqual(done['state'], 'recorded', done)
+        record = json.loads(self.scope.authority_path.read_bytes())  # a mixed enrolment: Codex keeps runtime state
+        for repository in record['repositories']:
+            for checkout in repository['checkouts']:
+                entry = json.loads(json.dumps(checkout['clients'][0]))
+                entry['client'], entry['configuration']['runtime'] = 'codex', self.runtime_configuration
+                checkout['clients'].append(entry)
+        self.scope.authority_path.write_text(json.dumps(record))
+        self.assertEqual(delegation_routing.enrolled_hosts(self.repo), ['claude-code', 'codex'])
+        with doubles[0], doubles[1], self.qualified():
+            self.assertEqual(native('codex', 'bridge-codex')['reason'], 'managed_delegation_required')  # D5/D6 stay
+            self.assertNotEqual(native('claude-code', 'bridge-2').get('reason'), 'managed_delegation_required')
 
     def test_a_mixed_enrolment_may_be_activated(self):
         record = json.loads(self.scope.authority_path.read_bytes())

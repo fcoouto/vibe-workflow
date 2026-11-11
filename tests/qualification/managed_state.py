@@ -74,10 +74,10 @@ class ManagedState:
                     **{key: picked[key] for key in routing.ROUTE_IDENTITY})
 
     def static_source(self):
-        from runtime import routing_observations
+        from runtime import routing_observations, subscription_billing
         return routing_observations.StaticSource([self.spec(route) for route in self.routes], lambda pool, at: [dict(
             id="5h", limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
-            unit=WINDOW_UNIT)])
+            unit=WINDOW_UNIT)], billing=subscription_billing.double("qualification-managed-state"))  # labelled double
 
     @contextlib.contextmanager
     def source_installed(self):

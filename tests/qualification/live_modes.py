@@ -99,21 +99,21 @@ class LiveEnv:
         short-lived `codex app-server`, the reader's own timeout and stop sequence): `{windows: [window], declared}`,
         or `{reason}` with the reader's fixed reason. A5 reads once before and once after its launch only. Nothing is
         stored: no routing settings or window store (the user's or a temporary one) is read or written, so two reads
-        in the same second are both kept (a store keeps only the newer of two). The shipped manifest's declared
+        in the same second are both kept (a store keeps only the newer of two). The shipped path rules' declared
         windows for the pool are used when it declares any; only when it declares none does the read accept every
         window the reader understands (`WINDOW_IDS`), marked `declared: False`."""
-        from runtime import codex_rate_limits as reader, routing_observations
+        from runtime import codex_rate_limits as reader, routing_paths
         self.counts["codex_reads"] += 1
         try:
-            manifest = routing_observations.load_manifest()
+            rules = routing_paths.load_rules()
         except (OSError, ValueError):
             return dict(reason="route_manifest_invalid")
-        declared = bool(reader.declared_windows(manifest))
+        declared = bool(reader.declared_windows(rules))
         if not declared:
-            manifest = dict(pools={reader.POOL: dict(windows=[dict(id=key) for key in sorted(reader.WINDOW_IDS.values())])})
+            rules = dict(paths=[dict(pool=reader.POOL, windows=sorted(reader.WINDOW_IDS.values()))])
         try:
             return dict(windows=reader.read_windows(command=self.codex_command(), environ=self.codex_environ,
-                                                    manifest=manifest), declared=declared)
+                                                    rules=rules), declared=declared)
         except reader.ReadError as error:
             return dict(reason=str(error) if str(error) in reader.REASONS else "codex_reader_failed")
         except (OSError, ValueError):  # never fails A5: recorded, and A5 goes on without a ChatGPT sample
@@ -314,7 +314,7 @@ def plan(mode, args):
 
 def measure_demand(args):
     """`measure-demand`: the per-launch window demand from the readings the budgeted launches stored (0 calls, no
-    process, no server); written to `--out` with the manifest suggestion."""
+    process, no server); written to `--out` with the per-path suggestion and the proposed `qualify_path` requests."""
     CallLedger(args.call_ledger)  # the readings live next to a valid, owner-only ledger
     outputs.check_out(args.out)
     found = dict(mode="measure-demand", plan=plan("measure-demand", args),
@@ -323,7 +323,7 @@ def measure_demand(args):
     if Redactor().leaks(text):
         raise Refused("the demand report did not pass the leak check")
     Path(args.out).write_text(text + "\n")
-    print(json.dumps(found["demand"]["suggestion"], indent=2))
+    print(json.dumps(dict(requests=found["demand"]["requests"], paths=found["demand"]["paths"]), indent=2))
     return 0
 
 

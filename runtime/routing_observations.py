@@ -1,10 +1,11 @@
 """The Smart Routing observation collector (C.3 design 3.3, 3.4): the `observations` snapshot `prepare` trusts.
 
-It reads local trusted records only: the route manifest, stored rate-limit observations, the entitlement record,
-the ledger it is given and `openrouter_settings.status`. It never reads a secret, makes a network call, calls a
-model or takes the OpenRouter admission lock; the one exception is the opt-in Codex window read (`refresh_windows`,
-R7), which runs `codex app-server` read-only. Window and entitlement files live next to the routing settings path
-the caller gives, never under a path derived from HOME.
+It reads local trusted records only: the path rules and qualifications (routes are generated in memory from them,
+never stored), stored rate-limit observations, the entitlement record, the ledger it is given and
+`openrouter_settings.status`. It never reads a secret, makes a network call, calls a model or takes the OpenRouter
+admission lock; the one exception is the opt-in Codex window read (`refresh_windows`, R7), which runs
+`codex app-server` read-only for a kept stale route. Window and entitlement files live next to the routing settings
+path the caller gives, never under a path derived from HOME.
 """
 from contextlib import closing, contextmanager
 import copy
@@ -13,13 +14,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 import uuid
 
-from runtime import routing, usage_budget
+from runtime import routing, routing_paths, subscription_billing, usage_budget
 
-MANIFEST = Path(__file__).with_name('routing_routes.json')
 WINDOWS_FILE = 'window-observations.json'
 ENTITLEMENTS_FILE = 'entitlements.json'
 FRESH_SECONDS = usage_budget.FRESH_SECONDS  # the same 900 s freshness the ledger applies to balances
@@ -27,10 +28,10 @@ MAX_FILE = 1 << 20
 MAX_MARKS = 256
 CLOCK_MARGIN = routing.MAX_CLOCK_DRIFT  # seconds a stored observation may run ahead of this clock
 LEDGER_WAIT = 0.2  # seconds: a busy ledger leaves dollar routes unverified, it never stalls prepare
-# The unit of stored subscription window observations: a thousandth of the provider's utilisation (limit 1000). The
-# manifest declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and its
-# windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
-WINDOW_UNIT = 'utilization_thousandths'
+# The unit of stored subscription window observations: a thousandth of the provider's utilisation (limit 1000). A
+# subscription path declares it (`window_unit`) and each stored window carries it (`unit`), so a route's `demand` and
+# its windows can never be in different units; the OpenCode launcher (C3-3) stores windows in this unit by this name.
+WINDOW_UNIT = routing_paths.WINDOW_UNIT
 # The host's subscription windows in that unit, defined once here for routing: every window's limit (its full scale)
 # and each provider window's (id, length in seconds). The OpenCode launcher stores its observations with these values;
 # a test keeps its own copies equal until it re-exports these.
@@ -50,17 +51,49 @@ SEED_FIELDS = ('pool', 'window', 'used', 'limit', 'reset_at', 'length', 'event_i
 STORE_ERRORS = ('observation_store_unsafe', 'observation_store_invalid', 'observation_store_full')
 
 
+SUFFIX = re.compile(r'choice:[0-9a-f]{16}|' + routing_paths.STRATEGY_ID.pattern)  # what generation produces
+STORE_REASONS = ('route_manifest_invalid', 'path_qualifications_invalid')
+
+
+def _same(route, identity, fields=routing.ROUTE_IDENTITY):
+    return identity is None or (type(identity) is dict and all(route.get(key) == identity.get(key) for key in fields))
+
+
 class StaticSource:
-    """A source built in code (tests, the fixture and the self-check sandbox); never selected by input.
+    """A source built in code (tests, the fixture and the self-check sandbox); never selected by input. Its routes
+    are a fixed list, so it answers every lookup from that list and has no `routes_version`.
 
     `windows` maps a pool to its window observations or is a callable `(pool, now)`; `credential` is a callable
-    `(route, scope)` returning binding readiness metadata `{state, scope, ref}` or None."""
+    `(route, scope)` returning binding readiness metadata `{state, scope, ref}` or None; `billing` is a callable
+    `(route, now)` returning a subscription billing fact (`runtime/subscription_billing.py`), normally that module's
+    labelled `double`. Without it every subscription route is `billing_unverified`. `model_demand` is a callable
+    `(route) -> bool`: whether a `demand_scope: per_model` path's demand is verified for the route's model; without it
+    such routes are `demand_unverified`."""
 
-    def __init__(self, routes, windows=None, credential=None):
+    def __init__(self, routes, windows=None, credential=None, billing=None, model_demand=None):
         self.routes, self._windows, self._credential = copy.deepcopy(list(routes)), windows or {}, credential
+        self._billing, self._model_demand = billing, model_demand
 
-    def manifest(self):
+    def manifest(self, table=None, choices=()):
         return copy.deepcopy(self.routes)
+
+    def admitted_route(self, route_id, identity=None):
+        found = next((route for route in validate_routes(self.routes) if type(route) is dict
+                      and route.get('route') == route_id and route.get('status') == 'qualified'), None)
+        return copy.deepcopy(found) if found is not None and _same(found, identity) else None
+
+    def pins_endpoint(self, route_id, identity, endpoint):
+        found = self.admitted_route(route_id, identity)
+        return found is not None and found.get('endpoint') == endpoint
+
+    def seedable(self, pool, window):
+        routes = [route for route in self.routes if type(route) is dict and route.get('pool') == pool]
+        return not any(route.get('billing_class') in routing.FUNDED for route in routes) and any(
+            route.get('status') == 'qualified' and route.get('billing_class') == 'included_subscription'
+            and type(route.get('demand')) is dict and window in route['demand'] for route in routes)
+
+    def routes_version(self, table=None):
+        return None
 
     def windows(self, pool, now):
         found = self._windows(pool, now) if callable(self._windows) else self._windows.get(pool, [])
@@ -69,9 +102,16 @@ class StaticSource:
     def credential(self, route, scope):
         return None if self._credential is None else self._credential(route, scope)
 
+    def billing(self, route, now):
+        return None if self._billing is None else self._billing(route, now)
+
+    def model_demand(self, route):
+        return None if self._model_demand is None else self._model_demand(route)
+
 
 class LocalSource:
-    """The production source: the shipped manifest, the private window store and no secret.
+    """The production source: routes generated in memory from the shipped path rules, the path qualifications and
+    the request's table or choices; the private window store; and no secret. Nothing it answers is written.
 
     It reports no credential. For gateway routes the collector derives binding readiness itself from the cached
     `openrouter_settings.status` report and never asks a source; direct API routes (API Usage) stay unwired, so they
@@ -80,20 +120,69 @@ class LocalSource:
     def __init__(self, settings_path=None):
         self.settings_path = settings_path
 
-    def manifest(self):
-        """The shipped routes, each carrying the manifest's top-level `window_unit` unless it declares its own."""
-        manifest = load_manifest()
-        unit = manifest.get('window_unit')
-        return [dict(route, window_unit=route.get('window_unit', unit)) if type(route) is dict and unit is not None
-                else route for route in manifest['routes']]
+    def _paths(self):
+        """(rules, qualifications), or ValueError with a fixed reason."""
+        return routing_paths.load_rules(), routing_paths.qualifications(self.settings_path)
 
-    def windows(self, pool, now):
+    def manifest(self, table=None, choices=()):
         if self.settings_path is None:
             return []
-        stored = _read(window_path(self.settings_path)).get('pools', {})
+        return routing_paths.generate(*self._paths(), table, choices)['routes']
+
+    def _path(self, route_id, identity):
+        """The qualified resolved path a well-formed route id names, when `identity` (if any) is on its provider and
+        harness; else None."""
+        path_id, _, suffix = (route_id if type(route_id) is str else '').partition(':')
+        if self.settings_path is None or not SUFFIX.fullmatch(suffix):
+            return None
+        rules, qualified = self._paths()
+        found = next((item for item in routing_paths.resolved(rules, qualified) if item['path'] == path_id), None)
+        return found if found is not None and _same(found, identity, ('provider', 'harness')) else None
+
+    def admitted_route(self, route_id, identity=None):
+        found = self._path(route_id, identity)
+        return None if found is None else dict(route=route_id, **{key: found[key] for key in (
+            'path', 'pool', 'account', 'billing_class', 'provider', 'harness')})
+
+    def pins_endpoint(self, route_id, identity, endpoint):
+        """Whether `route_id` is the choice route of `identity` at `endpoint` on its path. A strategy route never
+        pins one: no launcher sends a ranked gateway admission (decision B)."""
+        found = self._path(route_id, identity)
+        return found is not None and type(identity) is dict and route_id == routing_paths.choice_id(
+            found['path'], found['provider'], identity.get('model'), identity.get('effort'), found['harness'], endpoint)
+
+    def seedable(self, pool, window):
+        if self.settings_path is None:
+            return False
+        rules, qualified = self._paths()
+        return not any(item['pool'] == pool for item in rules['paths']
+                       if item['billing_class'] != routing_paths.SUBSCRIPTION) and any(
+            item['pool'] == pool and window in item['windows'] for item in routing_paths.resolved(rules, qualified)
+            if item['billing_class'] == routing_paths.SUBSCRIPTION)
+
+    def routes_version(self, table=None):
+        """16 hex characters naming the rules, the qualifications and the table version routes come from."""
+        rules, qualified = self._paths() if self.settings_path is not None else (routing_paths.load_rules(), {})
+        version = table.get('version') if type(table) is dict else None
+        raw = json.dumps([rules, qualified, version], sort_keys=True, separators=(',', ':')).encode()
+        return hashlib.sha256(raw).hexdigest()[:16]
+
+    def windows(self, pool, now, stored=None):
+        """`pool`'s stored readings; from `stored` (one read of the window store) when the caller already has it."""
+        if self.settings_path is None:
+            return []
+        stored = (_read(window_path(self.settings_path)) if stored is None else stored).get('pools', {})
         return [dict(window, id=key) for key, window in sorted(stored.get(pool, {}).items())]
 
     def credential(self, route, scope):
+        return None
+
+    def billing(self, route, now):
+        """No qualified subscription-only billing producer exists (F4.5/F4.6): none, read from nowhere."""
+        return None
+
+    def model_demand(self, route):
+        """No per-model demand mapping is qualified (OpenCode Go's allowance is model-dependent): none."""
         return None
 
 
@@ -109,9 +198,9 @@ def assignment_scope(checkout):
 
 
 def validate_routes(routes):
-    """`routes`, or ValueError when a manifest is unusable. The route identity has no endpoint field yet, so two
-    `qualified` routes with the same identity but different endpoints (an absent endpoint counts as one) could be
-    confused at dispatch: the whole manifest is refused instead of picking one."""
+    """`routes`, or ValueError when a fixed route list is unusable. Generated routes are never ambiguous
+    (`routing_paths.generate` skips them); a fixed list qualifying one identity at two endpoints (an absent endpoint
+    counts as one) could be confused at dispatch, so the whole list is refused instead of picking one."""
     if type(routes) is not list:
         raise ValueError('route_manifest_invalid')
     endpoints = {}
@@ -121,31 +210,6 @@ def validate_routes(routes):
             if endpoints.setdefault(identity, route.get('endpoint')) != route.get('endpoint'):
                 raise ValueError('route_manifest_endpoint_ambiguous')
     return routes
-
-
-def manifest_routes(source):
-    """The source's manifest routes after `validate_routes`; every reader of a manifest goes through here."""
-    return validate_routes(source.manifest())
-
-
-def load_manifest(path=MANIFEST):
-    value = json.loads(Path(path).read_text())
-    if type(value) is not dict or value.get('version') != 1 or type(value.get('routes')) is not list \
-            or ('window_unit' in value and not routing._text(value['window_unit'])):
-        raise ValueError('route_manifest_invalid')
-    validate_routes(value['routes'])
-    return value
-
-
-def manifest_check(source=None):
-    """The activation-gate data check (C.3 design 4.2): the manifest is valid and at least one route is
-    `qualified`."""
-    try:
-        routes = manifest_routes(source or default_source())
-    except (OSError, ValueError):
-        return ['route_manifest_invalid']
-    return [] if any(type(route) is dict and route.get('status') == 'qualified' for route in routes) \
-        else ['route_manifest_unqualified']
 
 
 # -- private local stores ----------------------------------------------------------------------------------------
@@ -225,11 +289,52 @@ def _valid_window(window):
             and (window.get('organization') is None or routing._text(window['organization'])))
 
 
+def pool_state(stored, pool):
+    """A digest of `pool`'s part of one read of the window store: its stored readings and its consumed boundary.
+    Any reading stored for the pool, or a moved boundary, changes it; another pool's activity does not."""
+    raw = json.dumps([stored.get('pools', {}).get(pool), stored.get('consumed', {}).get(pool)], sort_keys=True,
+                     separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def consumed_at(settings_path, pool):
+    """When a launch that reported no reading last settled on `pool` (0 when none, or with no settings path). A
+    reading observed at or before it no longer counts as fresh: the launch used headroom that reading still shows."""
+    if settings_path is None:
+        return 0
+    value = _read(window_path(settings_path)).get('consumed', {}).get(pool)
+    return value if routing._amount(value) else 0
+
+
+MAX_CONSUMED_BY = 256  # recent attempts per pool whose completion already wrote the boundary
+
+
+def mark_consumed(settings_path, pool, at, attempt):
+    """Record that `attempt`'s launch settled on `pool` at `at` without a reading (native completion, F4.6), once per
+    attempt: under the store's lock a repeated or concurrent call for the same attempt changes nothing. The time only
+    moves forward; the pool's readings stay as they are, and a reading observed after it restores the pool. True when
+    this call wrote it."""
+    if not routing._part(pool) or not routing._amount(at) or not routing._text(attempt):
+        raise ValueError('invalid_window_observation')
+    with _locked(window_path(settings_path)) as path:
+        value = _read(path) or dict(version=1, pools={})
+        done = value.setdefault('consumed_by', {}).setdefault(pool, [])
+        if attempt in done:
+            return False
+        done.append(attempt)
+        del done[:-MAX_CONSUMED_BY]
+        consumed = value.setdefault('consumed', {})
+        consumed[pool] = max(at, consumed.get(pool, 0))
+        _write(path, value)
+        return True
+
+
 def store_window(settings_path, pool, window):
     """Record one window observation for `pool` (the launcher stores what it read after settlement). An older
     observation never replaces a newer one, and one dated beyond now plus CLOCK_MARGIN is refused, so a future-dated
     record can never shadow later ones. A host observation always replaces an operator seed (`seed_window`), and
-    it can never carry a `source` itself."""
+    it can never carry a `source` itself. True when the store holds exactly this observation afterwards (stored now,
+    or already stored); False when a newer reading was kept instead."""
     if not routing._part(pool) or not _valid_window(window) or 'source' in window \
             or window['observed_at'] > time.time() + CLOCK_MARGIN:
         raise ValueError('invalid_window_observation')
@@ -237,9 +342,12 @@ def store_window(settings_path, pool, window):
         value = _read(path) or dict(version=1, pools={})
         windows = value['pools'].setdefault(pool, {})
         current = windows.get(window['id'])
+        entry = {key: item for key, item in window.items() if key != 'id'}
         if current is None or current.get('source') == SEED_SOURCE or window['observed_at'] > current['observed_at']:
-            windows[window['id']] = {key: item for key, item in window.items() if key != 'id'}
+            windows[window['id']] = entry
             _write(path, value)
+            return True
+        return current == entry
 
 
 def _host_windows():
@@ -266,19 +374,16 @@ def seed_event(value):
 
 
 def _subscription_window(settings_path, pool, window, length):
-    """Whether `window` of `pool` is a subscription window of that `length`: a qualified `included_subscription`
-    route of the manifest names it in its `demand` (plans differ in which windows they have), the host stores that
-    window id with exactly that length, and no dollar route of any status draws on the pool."""
+    """Whether `window` of `pool` is a subscription window of that `length`: the source's `seedable` (a qualified
+    subscription path on the pool lists the window, plans differ in which windows they have, and no dollar path draws
+    on the pool; no table is needed) and the host stores that window id with exactly that length."""
     if _host_windows()[1].get(window) != length:
         return False
     try:
-        routes = [route for route in manifest_routes(default_source(settings_path))
-                  if type(route) is dict and route.get('pool') == pool]
-    except (OSError, ValueError):
-        raise usage_budget.BudgetError('route_manifest_invalid') from None
-    return not any(route.get('billing_class') in routing.FUNDED for route in routes) and any(
-        route.get('status') == 'qualified' and route.get('billing_class') == 'included_subscription'
-        and type(route.get('demand')) is dict and window in route['demand'] for route in routes)
+        return default_source(settings_path).seedable(pool, window) is True
+    except (OSError, ValueError) as error:
+        reason = str(error) if str(error) in STORE_REASONS else 'route_manifest_invalid'
+        raise usage_budget.BudgetError(reason) from None
 
 
 def _store_seed(settings_path, event, now):
@@ -292,8 +397,9 @@ def _store_seed(settings_path, event, now):
             usage_budget.require(type(current) is dict and routing._amount(current.get('observed_at')),
                                  'observation_store_invalid')
             usage_budget.require(current.get('organization') is None, 'invalid_request')
-            usage_budget.require(current.get('source') == SEED_SOURCE or now - current['observed_at'] > FRESH_SECONDS,
-                                 'fresh_observation_exists')
+            usage_budget.require(current.get('source') == SEED_SOURCE or now - current['observed_at'] > FRESH_SECONDS
+                                 or current['observed_at'] <= value.get('consumed', {}).get(event['pool'], 0),
+                                 'fresh_observation_exists')  # a reading a settled launch already used is stale
         windows[event['window']] = dict({key: event[key] for key in ('used', 'limit', 'reset_at', 'length')},
                                         rolling=False, unit=WINDOW_UNIT, source=SEED_SOURCE, observed_at=now)
         _write(path, value)
@@ -436,9 +542,9 @@ def _ledger_data(ledger_path):
     return data if type(data) is dict and type(data.get('organizations')) is dict else None
 
 
-def _refresh_windows(specs, settings_path, marks):
-    """R7: make the Codex pool's reading fresh before it is read, only for routes this `prepare` could admit
-    (`runtime/codex_rate_limits.py`: on demand, one reader per pool, a fixed reason and no retry on failure).
+def refresh_needed(specs, settings_path, marks=()):
+    """R7: make the Codex pool's reading fresh before it is read, only for the routes `shortlist` kept for this
+    request (`runtime/codex_rate_limits.py`: on demand, one reader per pool, a fixed reason and no retry on failure).
     Returns `{pool: reason}` for each pool left without a fresh reading (`reader_busy` or a `codex_*` reason)."""
     from runtime import codex_rate_limits
     need = {}
@@ -455,54 +561,79 @@ def _refresh_windows(specs, settings_path, marks):
     return failed
 
 
-def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False):
-    """Build `{observations, seen}` for `prepare` from local records (C.3 design 3.3, collector return shape).
+def _model_demand(source, spec):
+    """Whether the source verifies a `demand_scope: per_model` path's demand for this route's model (exactly True)."""
+    answer = getattr(source, 'model_demand', None)
+    try:
+        return callable(answer) and answer(copy.deepcopy(spec)) is True
+    except Exception:  # noqa: BLE001 - an unreadable mapping is an unverified one, never an error or a pass
+        return False
 
-    It reads only the stores the calling service uses: `settings_path` locates the private window and entitlement
-    files and `ledger_path` the ledger whose organizations fund dollar routes. It never opens a default path.
-    `observations` is the snapshot `routing.admit` takes plus `excluded`, one fixed reason per route left out;
-    `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed).
 
-    A gateway route's credential is derived here from the same cached `status` report, never from the source: it is
-    ready only when the report is enabled, lists the host's route and is locally `ready`, and names an activation.
-    A manifest `validate_routes` refuses raises ValueError, so `prepare` fails closed.
+def _requested(source, table, strategy_ids, choices):
+    """The routes one request needs from `source`, in its order: ranked strategy ids in ranking order, or the
+    routes without a `strategy_id` that match a choice by identity and funding (never by a generated id)."""
+    if strategy_ids is not None:
+        specs = validate_routes(source.manifest(table, ()))
+        by_id = {}
+        for spec in specs:
+            if type(spec) is dict and spec.get('strategy_id') is not None:
+                by_id.setdefault(spec['strategy_id'], []).append(spec)
+        return [spec for sid in dict.fromkeys(strategy_ids) for spec in by_id.get(sid, [])]
+    specs = validate_routes(source.manifest(None, list(choices)))
+    return [spec for spec in specs if type(spec) is dict and 'strategy_id' not in spec and any(
+        type(entry) is dict and routing._choice_matches(entry, dict(spec=spec, cls=routing.FUNDING_OF.get(
+            spec.get('billing_class')))) for entry in choices)]
 
-    `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
-    `codex app-server` first when its reading is missing or stale; this is the collector's only process or network
-    use, and a failed read leaves the route stale or unobserved."""
+
+def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
+              source=None):
+    """The shared pre-window cut `collect` and the internal request preview both use: `{routes, excluded, shortlist,
+    seen, routes_version}`. In order: the request's routes (`_requested`); the host filter, which drops every route
+    whose harness is outside `harnesses` silently (for this host it does not exist; None keeps nothing); the reasons
+    that need no window (an invalid route, a `not_entitled` mark, a ranked dollar route, the integration and credential
+    checks of an explicit gateway choice, a subscription route without a current subscription-only billing fact);
+    then the first MAX_ROUTES in request order. It reads rules, qualifications, entitlement marks, the source's billing
+    facts and, only for a surviving explicit gateway choice, the cached OpenRouter status; never a window, the ledger,
+    a reader or the network, and it writes nothing. `shortlist` holds strategy ids."""
     source = source if source is not None else default_source(settings_path)
-    data = _ledger_data(ledger_path)
+    now = int(time.time())
+    allowed = set(harnesses or ())
     scope = assignment.get('scope') if type(assignment) is dict else None
     try:
         marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
         marks_reason = None
     except (OSError, ValueError, KeyError, TypeError):
         marks, marks_reason = set(), 'entitlement_unavailable'
-    unread = {}
-    if refresh_windows and type(source) is LocalSource and marks_reason is None:
-        unread = _refresh_windows(manifest_routes(source), settings_path, marks)
-    now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
-    routes, pools, excluded, cache = [], {}, [], {}
+    routes, excluded, cache = [], [], {}
     seen = dict(openrouter_revision=None)
 
     def leave(route, reason):
         excluded.append(dict(route=route.get('route') if type(route) is dict and routing._text(route.get('route'))
                              else None, reason=reason))
 
-    for spec in manifest_routes(source):
+    for spec in _requested(source, table, strategy_ids, choices):
+        if spec.get('harness') not in allowed:
+            continue
         reason = _manifest_reason(spec)
         if reason is None:
             reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
+        if reason is None and strategy_ids is not None and spec['billing_class'] in routing.FUNDED:
+            reason = 'billing_class_excluded'  # ranked dollar routes stay out before any funding read (decision B)
+        if reason is None and spec['billing_class'] == 'included_subscription' \
+                and not routing._text(spec.get('window_unit')):
+            reason = 'window_unit_undeclared'  # its demand's unit is unknown: fail closed
+        if reason is None and spec['billing_class'] == 'included_subscription' \
+                and not subscription_billing.verified(source, spec, now):
+            reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
+        if reason is None and spec.get('demand_scope') == routing_paths.MODEL_DEMAND \
+                and not _model_demand(source, spec):
+            reason = 'demand_unverified'  # the path's measured demand is not known to hold for this model
         if reason is not None:
             leave(spec, reason)
             continue
-        billing = spec['billing_class']
-        dollar = billing in routing.FUNDED
-        route = {key: copy.deepcopy(spec[key]) for key in ROUTE_FIELDS if key in spec}
-        route.update(capable=True, permitted=True)
-        if billing == 'included_subscription':
-            route['binding_enforceable'] = spec.get('binding_enforceable', True) is True
-        if billing == 'gateway':
+        kept = copy.deepcopy(spec)
+        if spec['billing_class'] == 'gateway':
             if 'openrouter' not in cache:
                 cache['openrouter'] = _openrouter(project)
                 report = cache['openrouter'][0]
@@ -516,21 +647,74 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
                     and report.get('local_configuration') == 'ready'):
                 leave(spec, 'integration_disabled')
                 continue
-            credential = _gateway_credential(report)
-            if credential is None:
+            kept['credential'] = _gateway_credential(report)
+            if kept['credential'] is None:
                 leave(spec, 'credential_unavailable')
                 continue
+        elif spec['billing_class'] in routing.FUNDED:
+            kept['credential'] = source.credential(copy.deepcopy(spec), scope)
+        routes.append(kept)
+    routes = routes[:routing.MAX_ROUTES]
+    ids = [route['strategy_id'] for route in routes] if strategy_ids is not None else []
+    return dict(routes=routes, excluded=excluded, shortlist=list(dict.fromkeys(ids)), seen=seen,
+                routes_version=source.routes_version(table))
+
+
+def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False, table=None,
+            strategy_ids=None, choices=(), harnesses=None):
+    """Build `{observations, seen}` for `prepare` from local records (C.3 design 3.3, collector return shape).
+
+    It reads only the stores the calling service uses: `settings_path` locates the path qualifications and the
+    private window and entitlement files, and `ledger_path` the ledger whose organizations fund dollar routes. It
+    never opens a default path. Routes are the request's own (`strategy_ids` of a ranking over `table`, else
+    `choices`) after the host's `harnesses` and the static checks of `shortlist`; nothing generated is stored.
+    `observations` is the snapshot `routing.admit` takes plus `excluded`, one fixed reason per route left out, and
+    `routes_version`; `seen` holds only the revisions read: `openrouter_revision` (null when unread or not needed).
+
+    `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
+    `codex app-server` first when a kept route needs its reading and it is missing or stale; this is the collector's
+    only process or network use, and a failed read leaves the route stale or unobserved."""
+    source = source if source is not None else default_source(settings_path)
+    cut = shortlist(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
+                    choices=choices, harnesses=harnesses, source=source)
+    excluded, seen = cut['excluded'], cut['seen']
+    data = _ledger_data(ledger_path)
+    unread = {}
+    if refresh_windows and type(source) is LocalSource and cut['routes']:
+        unread = refresh_needed(cut['routes'], settings_path)
+    now = int(time.time())  # after any read, so a window just stored is not dated ahead of it
+    routes, pools, boundaries = [], {}, {}
+
+    def leave(route, reason):
+        excluded.append(dict(route=route['route'], reason=reason))
+
+    for spec in cut['routes']:
+        billing = spec['billing_class']
+        dollar = billing in routing.FUNDED
+        route = {key: copy.deepcopy(spec[key]) for key in ROUTE_FIELDS if key in spec}
+        route.update(capable=True, permitted=True)
+        if billing == 'included_subscription':
+            route['binding_enforceable'] = spec.get('binding_enforceable', True) is True
+        if billing == 'gateway':
             route['integration_enabled'] = True
-        if billing == 'included_subscription' and not routing._text(spec.get('window_unit')):
-            leave(spec, 'window_unit_undeclared')  # its demand's unit is unknown: fail closed
-            continue
         if spec['pool'] not in pools:
             windows = []
-            for window in source.windows(spec['pool'], now):
+            try:  # one read: the pool's readings, its boundary and the identity the admission rechecks (F4R-09)
+                stored = _read(window_path(settings_path)) if settings_path is not None else {}
+                boundary = stored.get('consumed', {}).get(spec['pool'], 0)
+                boundary = boundary if routing._amount(boundary) else 0
+                boundaries[spec['pool']] = pool_state(stored, spec['pool'])
+            except (OSError, ValueError):
+                stored, boundary = None, now  # an unreadable store leaves every reading of the pool stale (fail closed)
+                boundaries[spec['pool']] = None
+            own = stored is not None and type(source) is LocalSource and source.settings_path is not None \
+                and Path(source.settings_path) == Path(settings_path)
+            found = source.windows(spec['pool'], now, stored=stored) if own else source.windows(spec['pool'], now)
+            for window in found:
                 if not _valid_window(window):
                     continue
                 item = {key: window[key] for key in WINDOW_FIELDS if key in window}
-                item['fresh'] = 0 <= now - window['observed_at'] <= FRESH_SECONDS
+                item['fresh'] = 0 <= now - window['observed_at'] <= FRESH_SECONDS and window['observed_at'] > boundary
                 organization = (data or {}).get('organizations', {}).get(item.get('organization'))
                 if item.get('organization') and 'organization_revision' not in item and organization is not None:
                     item['organization_revision'] = organization['revision']
@@ -556,9 +740,44 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
                 leave(spec, 'funding_unverified')
                 continue
             route['funding_verified'] = True
-            route['credential'] = credential if billing == 'gateway' else source.credential(copy.deepcopy(spec), scope)
+            route['credential'] = spec.get('credential')
         routes.append(route)
     used = {route['pool'] for route in routes}
-    observations = dict(now=now, routes=routes[:routing.MAX_ROUTES],
-                        pools={key: pool for key, pool in pools.items() if key in used}, excluded=excluded)
-    return dict(observations=observations, seen=seen)
+    observations = dict(now=now, routes=routes, pools={key: pool for key, pool in pools.items() if key in used},
+                        excluded=excluded, routes_version=cut['routes_version'])
+    return dict(observations=observations, seen=seen, boundaries={key: boundaries[key] for key in used})
+
+
+class _Rechecked:
+    """The ledger as `routing.admit` sees it for a collector-built snapshot (F4R-09): inside the admission's own
+    transaction, a pool whose stored state changed since the snapshot's read (`pool_state`: a completion stored its
+    settled readings or moved the consumed boundary, then released its hold) has every window of the snapshot marked
+    not fresh, so the decision cannot reuse that headroom. A store that cannot be read counts as changed. Every
+    completion writes the store before its ledger release, and the ledger serializes the release with this
+    transaction. Everything else is the ledger's."""
+
+    def __init__(self, ledger, settings_path, observations, boundaries):
+        self._ledger, self._settings = ledger, settings_path
+        self._observations, self._boundaries = observations, boundaries
+
+    def __getattr__(self, name):
+        return getattr(self._ledger, name)
+
+    def admit(self, attempt_id, decide):
+        def rechecked(data):
+            try:
+                stored = _read(window_path(self._settings))
+            except (OSError, ValueError, TypeError):  # TypeError: no settings path
+                stored = None
+            for pool, state in self._boundaries.items():
+                if stored is None or state is None or pool_state(stored, pool) != state:
+                    for window in self._observations.get('pools', {}).get(pool, {}).get('windows', []):
+                        window['fresh'] = False
+            return decide(data)
+        return self._ledger.admit(attempt_id, rechecked)
+
+
+def rechecked_ledger(ledger, settings_path, observations, boundaries):
+    """`ledger` with the pool-state recheck for this collector-built `observations` (`boundaries`: each kept pool's
+    `pool_state` from the snapshot's own read); unchanged without boundaries."""
+    return _Rechecked(ledger, settings_path, observations, boundaries) if boundaries else ledger
