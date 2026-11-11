@@ -159,6 +159,8 @@ Prepare ready jobs just in time. Planning estimates for the backlog are not spen
 
 ### 5.1 Task profiles and optional Jev enrichment
 
+> **10 November 2026: replaced.** The [Smart Routing redesign](2026-11-10-smart-routing-redesign-design.md#513-removing-jev) removes Jev and the profiler and ranker control roles; the coordinator supplies the profile and gaps take floors ([Task Profile template](2026-11-10-smart-routing-redesign-design.md#53-task-profile-template)). This section is kept as written, as history.
+
 The coordinator is the primary profiler. The Workstreams job schema requires structured `TaskProfile` fields, which the coordinator fills while writing the bounded brief; code validates them behind the shared `ensure_profile` service used by Workstreams and ordinary delegation. Missing or invalid fields take conservative values from deterministic floors (higher complexity/risk bands, stricter review). Jev is an optional enrichment for unresolved semantic fields, available only when the user has configured an OpenCode Console key for it; default-on routing never requires or configures Jev. Its deployed model/version is resolved from the current decision-model catalog and recorded as data; no fixed model ID or reasoning string is compiled into workflow rules. Complete, valid supplied profiles bypass inference.
 
 Input consists of the bounded task brief and relevant ongoing-task metadata. A short follow-up such as “implement it” inherits the actual assignment's scope and risk. Output is a typed `TaskProfile`: task family, complexity, risk, context requirements, tools/modalities, review requirements, uncertainty and per-field provenance. Known context sizes and required tools come from host facts where available, not solely from model estimates.
@@ -187,6 +189,8 @@ This replaces manually curated commercial-model tiers. Task/risk thresholds rema
 **Control-plane data handling.** Any model used for profiling or ranking must have zero-retention, no-training terms for the actual endpoint, unless the user explicitly opts in for that endpoint. Endpoints whose terms forbid confidential data are never eligible. Free status and terms are rechecked at each refresh because free endpoints are time-limited.
 
 ### 5.3 Optional model ranker
+
+> **10 November 2026: replaced.** The [Smart Routing redesign](2026-11-10-smart-routing-redesign-design.md#511-optional-ranking-model) replaces this model ranker with its optional ranking model (section 5.11). This section is kept as written, as history.
 
 Model ranking is not required for v1 dispatch. It is promoted only when a pre-registered replay and quality evaluation shows it beats the deterministic ranker (section 13). If a promoted ranker is unavailable, times out or returns invalid output, the assignment uses the deterministic ranking with reason `router_unavailable` or `ranking_invalid` instead of waiting.
 
@@ -472,6 +476,8 @@ One logical ledger authority owns financial decisions across worktrees. The Open
 Unresolved old executions block affected cutover until their ownership can be established. No-backward-compatibility does not mean deleting charges or making uncertain capacity available again. The user can later delete the standalone planning checkout without affecting the feature.
 
 ## 11. Accounting, retention and later learning
+
+> **10 November 2026: replaced.** The [Smart Routing redesign](2026-11-10-smart-routing-redesign-design.md#59-learning-loop) replaces this section's later learning with its learning loop and replay (sections 5.9 and 5.10). This section is kept as written, as history.
 
 The primary metric is total attributable resource use per independently accepted delivery over a defined mature cohort. Sum each root's coordinator, profiling, routing, implementation, review, repair, checks, escalation and auxiliary work once, including failed/abandoned attempts. One acceptance costing 100 units plus one rejection costing 90 gives 190 units per accepted delivery. Unresolved tasks retain cost-to-date separately; zero acceptances has no finite ratio.
 
