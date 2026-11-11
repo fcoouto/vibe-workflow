@@ -93,7 +93,7 @@ class ConversionTests(Funded, unittest.TestCase):
         self.convert(M)
         pools = dict(g=funded_pool('org'))
         again = self.admit('b', [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})], pools)
-        self.assertEqual(again['reason_code'], 'concurrency_cap')
+        self.assertIn('concurrency_cap', again['reason_codes'])  # F5.3: the legacy explicit choice's cause
 
 
 class ExceptionFuzzTests(Funded, unittest.TestCase):

@@ -10,7 +10,7 @@ from unittest import mock
 import urllib.request
 from runtime import routing, usage_budget as budget
 from scripts import routing as command
-from tests.test_routing_command import API, M, api_observations, facts, now, prepare
+from tests.test_routing_command import API, API_CHOICE, M, api_observations, facts, now, prepare
 from tests.test_routing_dispatch import dispatch, record
 from tests import fixture_routing_accounting as fixture
 from tests.fixture_routing_accounting import DAY, complete, settle, usage, where
@@ -235,7 +235,8 @@ class RetentionTests(fixture.Accounting):
         obs = api_observations(at=observed + DAY + 1)  # the balance snapshot is past its 24-hour retention
         with self.open_ledger() as ledger:
             result = routing.admit(dict(attempt_id='x', task='t', role='software-engineer', work_kind='implementation', complexity_band='medium',
-                                        scope='scope1'), dict(strategy_ids=['s-api'], reason_codes=[]), settings,
+                                        scope='scope1', choice=dict(API_CHOICE)),  # F5.3: the legacy paid choice
+                                   dict(strategy_ids=['s-api'], reason_codes=[]), settings,
                                    obs, ledger=ledger)
         self.assertEqual(result['status'], 'pending')  # an expired snapshot never funds a decision
 

@@ -68,11 +68,18 @@ def observations(at=None, **route):
     return dict(now=now() if at is None else at, routes=[spec], pools=dict(sub=dict(windows=[window])))
 
 
+# F5.3: a ranked decision never funds a paid route. A request narrowed to the paid `s-api` strategy is sent as the
+# legacy explicit choice of that route instead, so the dollar-gate and accounting tests keep their synthetic coverage.
+API_CHOICE = dict(provider='anthropic', model='m', effort='high', harness='api', funding='api')
+
+
 def prepare(attempt, **extra):
     request = dict(v=1, op='prepare', assignment=dict(attempt_id=attempt, task='task-' + attempt, role='software-engineer',
                                                       scope=SCOPE),
                    job=job(), observations=observations())
     request.update(extra)
+    if (extra.get('constraints') or {}).get('allowed_strategy_ids') == ['s-api']:
+        request['assignment']['choice'] = dict(API_CHOICE)
     return request
 
 

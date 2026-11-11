@@ -515,6 +515,9 @@ class AdmissionReplay:
 
     def complete(self, attempt, now):
         """Settle at 80% of each reserved amount; subscription use reaches the collector's next snapshot."""
+        if attempt not in self.open:  # F5.3: a ranked arrival only paid capacity could fund waited; nothing to settle
+            self.log.append(dict(id=attempt, at=now, outcome='never_admitted'))
+            return None
         record = self.open.pop(attempt)
         self.observe(now)
         reserved = record['reserved']
@@ -640,7 +643,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
                    if self.run_.deployments[granted[e['id']]['route']]['model'] == 'alpha-small' or
                    self.run_.deployments[granted[e['id']]['route']]['effort'] == 'high']
         self.assertTrue(retired, 'an admission on a now-retired option must still be open at the refresh')
-        self.assertEqual({granted[e['id']]['class'] for e in retired}, set(CLASSES))
+        self.assertEqual({granted[e['id']]['class'] for e in retired}, {'subscription'})  # F5.3: ranked never pays
         holds = self.snapshot['holds']
         for attempt in granted:
             settlement, hold = self.run_.settlements[attempt], holds[attempt]
@@ -678,7 +681,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
         run, snapshot = run_admission(self.scenario, at_refresh)
         self.assertTrue(self.observed)
         # Settled charges stay counted: headroom never exceeds the issued balance less protection and every charge.
-        self.assertGreater(run.charged, 0)
+        self.assertEqual(run.charged, 0)  # F5.3: ranked arrivals fund only subscriptions; no dollar is charged
         self.assertGreater(run.checks, 0)
         org = snapshot['organizations'][run.org]
         self.assertLessEqual(budget.Ledger._credit(snapshot, run.org, run.observed_at),
@@ -690,7 +693,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
         records = self.snapshot['admissions']
         self.assertEqual(strip_nonce(snapshot['admissions']), strip_nonce(records))
         self.assertEqual(len(records), len([e for e in self.run_.log if e['outcome'] == 'admitted']))
-        self.assertEqual({r['class'] for r in records}, set(CLASSES))
+        self.assertEqual({r['class'] for r in records}, {'subscription'})  # F5.3: ranked never pays
         replay_classes(self, records)
         for record in records:
             d = self.run_.deployments[record['route']]

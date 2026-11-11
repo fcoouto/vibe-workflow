@@ -119,6 +119,12 @@ class Funded:
         return revision
 
     def admit(self, attempt, routes, pools, ids=None, task=None, cfg=None):
+        """A ranked admission; a set of only paid routes goes through the legacy explicit choice of the first instead
+        (F5.3: a ranked decision never funds a paid route; the synthetic API arithmetic keeps its coverage there)."""
+        if routes and all(item['billing_class'] in routing.FUNDED for item in routes):
+            choice = dict({key: routes[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
+            return routing.admit(dict(assignment(attempt, task), choice=choice), ranking(), cfg or settings(),
+                                 observations(routes, pools), ledger=self.ledger)
         ids = ids or [item['strategy_id'] for item in routes]
         return routing.admit(assignment(attempt, task), ranking(*ids), cfg or settings(), observations(routes, pools),
                              ledger=self.ledger)

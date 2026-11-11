@@ -42,7 +42,9 @@ class CapacityTests(Funded, unittest.TestCase):
         obs = dict(observations([api], pools), snapshot_id=long('snap'))
         rank = dict(strategy_ids=[long('sid')], reason_codes=[long('code')] * routing.MAX_REASONS,
                     table_version=long('t'), profile_digest=long('d'))
-        return routing.admit(assignment(long(attempt), long('task')), rank, settings(), obs, ledger=self.ledger)
+        choice = dict({key: api[key] for key in routing.ROUTE_IDENTITY}, funding='api')  # F5.3: the legacy choice
+        return routing.admit(dict(assignment(long(attempt), long('task')), choice=choice), rank, settings(), obs,
+                             ledger=self.ledger)
 
     def test_an_oversized_admission_is_pending_and_writes_nothing(self):
         before = self.ledger.snapshot()

@@ -483,27 +483,6 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
                 spec=route, windows=pool['windows'], revision=revision), []
 
 
-def _utilization(candidates, held, settings, now):
-    """Lowest projected maximum over feasible subscription routes; unknown is conservative, never zero."""
-    best, reasons = None, []
-    for item in candidates:
-        windows, reserve_new = [], {}
-        for window in item['windows']:
-            limit = window['limit']
-            windows.append(dict(id=window['id'], used=None if window.get('used') is None else window['used'] / limit,
-                                reserved=held.get(_window_key(item['pool'], window['id']), 0) / limit,
-                                length=window.get('length'), reset_at=window.get('reset_at'),
-                                fresh=window.get('fresh', True), rolling=window.get('rolling', False)))
-            reserve_new[window['id']] = item['vector'].get(_window_key(item['pool'], window['id']), 0) / limit
-        value, why = allocator.projected_utilization(windows, reserve_new, now, settings['min_elapsed_fraction'])
-        reasons += why
-        best = value if best is None or (value is not None and value < best) else best
-    if best is None:
-        reasons.append('utilization_unknown')
-        best = 1.0
-    return best, list(dict.fromkeys(reasons))
-
-
 def _choice_matches(entry, item):
     spec = item['spec']
     return all(spec.get(field) == entry[field] for field in ROUTE_IDENTITY) and item['cls'] == entry['funding']
@@ -527,8 +506,8 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
     u = e = None
     if ranked:
-        pending, chosen, shares, u, e = routing_funding.ranked(data, candidates, excluded, ranking, settings,
-                                                               observations, held, bucket, reasons)
+        pending, chosen, shares = routing_funding.ranked(data, candidates, excluded, ranking, settings, observations,
+                                                         bucket)
         if pending is not None:
             return pending
         mode = 'ranked'
@@ -708,15 +687,15 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None,
     subscription window is a ``win:<pool>/<window>`` claim in its own units. A funded route the ledger's
     gates refuse (blocked, stale balance, cycle boundary, revision) is excluded with
     ``funding_unverified``; the collector's ``limit``/``used``/``protected`` can only make a dollar claim
-    stricter. The concurrency caps are the stricter of ``settings.caps``
-    and the ledger-stored caps. Unknown utilization (no usable subscription window) deliberately counts as
-    u = 1.0 with ``utilization_unknown``: it pushes toward API, which stays gated by enablement, headroom
-    and funding. Returns the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt)
-    or ``status='pending'`` with a ``reason_code``. Pending and duplicate decisions consume nothing, create
-    no record and leave the ledger unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while
-    it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority: ``dispatch`` issues it
-    for the hold, and lifecycle events go through ``record_event``. ``Ledger.convert_hold`` (which turns a
-    dollar hold into the attempt's run claim without changing R) still requires an admitted hold.
+    stricter. The concurrency caps are the stricter of ``settings.caps`` and the ledger-stored caps. A ranked
+    decision funds only subscription routes (F5.3, ``routing_funding.choose``): paid routes are left out before any
+    candidate check and never a fallback; a paid route is admitted only as an explicit or settings choice. Returns
+    the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt) or ``status='pending'`` with a
+    ``reason_code``. Pending and duplicate decisions consume nothing, create no record and leave the ledger
+    unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while it is among the ledger's last
+    ``MAX_SEEN`` ids. This is not dispatch authority: ``dispatch`` issues it for the hold, and lifecycle events go
+    through ``record_event``. ``Ledger.convert_hold`` (which turns a dollar hold into the attempt's run claim
+    without changing R) still requires an admitted hold.
 
     The whole input shape is validated first (types, finite numbers within ``MAX_INTEGER``, integer
     demands and bounds, identifiers within the ledger's 256-character name limit, table sizes); a malformed

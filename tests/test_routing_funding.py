@@ -20,13 +20,14 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
             with self.subTest(kind):
                 pools = dict(p=dict(billing_class=kind, windows=[window()]))
                 result = self.admit('a-' + kind, [route('r', 'p', kind, 'acct', {'credit': M})], pools)
-                self.assertEqual((result['status'], result['reason_code']), ('pending', 'no_funded_organization'))
+                self.assertEqual(result['status'], 'pending')
+                self.assertIn('no_funded_organization', result['reason_codes'])  # F5.3: the legacy choice's cause
         self.assertEqual(self.ledger.snapshot()['holds'], {})
 
     def test_b1_unknown_organization_is_excluded(self):
         pools = dict(p=funded_pool('ghost'))
         result = self.admit('a', [route('r', 'p', 'api_grant', 'acct', {'credit': M})], pools)
-        self.assertEqual(result['reason_code'], 'no_funded_organization')
+        self.assertIn('no_funded_organization', result['reason_codes'])
         self.assertEqual(self.ledger.snapshot()['organizations'], {})  # routing never creates one
 
     def test_blocked_organization_cannot_hide_behind_an_unlabelled_pool(self):
@@ -129,7 +130,8 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
     def test_no_organization_leaves_subscription_and_worker_choices_working(self):
         routes, pools = self.routes()
         only_api = self.admit('a', routes[:1], pools)
-        self.assertEqual((only_api['status'], only_api['reason_code']), ('pending', 'no_funded_organization'))
+        self.assertEqual(only_api['status'], 'pending')
+        self.assertIn('no_funded_organization', only_api['reason_codes'])
         both = self.admit('b', routes, pools)
         self.assertEqual((both['status'], both['class'], both['route']), ('admitted', 'subscription', 's'))
         cfg = settings(smart_routing=False, worker_choices={'software-engineer': [self.CHOICE]})
@@ -168,7 +170,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         team[0].update(route='team-api', strategy_id='s-team', pool='team')
         pools = dict(my_pools, team=team_pools['api'])
         self.assertEqual(self.admit('a', mine[:1], pools)['status'], 'admitted')
-        self.assertEqual(self.admit('b', mine[:1], pools)['reason_code'], 'concurrency_cap')  # personal account full
+        self.assertIn('concurrency_cap', self.admit('b', mine[:1], pools)['reason_codes'])  # personal account full
         self.assertEqual(self.admit('c', team[:1], pools)['reserved'], {'org:team': 1_200_000})
         self.assertEqual((self.ledger.headroom(budget.PERSONAL), self.ledger.headroom('team')),
                          (9_800_000 - 1_200_000, 9_800_000 - 1_200_000))
@@ -236,7 +238,8 @@ class ObservationNitTests(Funded, unittest.TestCase):
         api = route('r', 'g', 'api_grant', 'acct', {'credit': M})
         api['credential']['state'] = 'locked'
         result = self.admit('a', [api], dict(g=funded_pool('org')))
-        self.assertEqual((result['status'], result['reason_code']), ('pending', 'credential_unavailable'))
+        self.assertEqual(result['status'], 'pending')
+        self.assertIn('credential_unavailable', result['reason_codes'])
 
 
 if __name__ == '__main__':

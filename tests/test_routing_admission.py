@@ -92,7 +92,13 @@ class Base(unittest.TestCase):
         self.temp.cleanup()
 
     def admit(self, attempt, ids, routes, pools, cfg=None, **kwargs):
+        """A ranked admission over `ids`; when every route they select is paid, the legacy explicit choice of the
+        first instead (F5.3: a ranked decision never funds a paid route; its dollar gates keep their coverage)."""
         extra = {key: kwargs.pop(key) for key in ('epoch_at',) if key in kwargs}
+        selected = [route for route in routes if route.get('strategy_id') in ids]
+        if selected and 'choice' not in kwargs and all(route['billing_class'] in routing.FUNDED for route in selected):
+            kwargs['choice'] = dict({key: selected[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
+            ids = []
         return routing.admit(assignment(attempt, **kwargs), ranking(*ids), cfg or settings(),
                              observations(routes, pools, **extra), ledger=self.ledger)
 
@@ -102,13 +108,16 @@ class EligibilityTests(Base):
         routes = [sub_route('sub'), api_route('api', **api)]
         return routes, dict(sub=sub_pool(), api=api_pool())
 
-    def test_api_usage_off_excludes_direct_api_and_its_expiry_pressure(self):
+    def test_a_ranked_decision_funds_the_subscription_whatever_api_usage_says(self):
+        """F5.3 (was: API Usage off excludes the direct API route and its expiry pressure): ranked admission never
+        funds a paid route, so an expiring grant gives no API share with API Usage on or off."""
         routes, pools = self.both()
         pools['api'] = api_pool(expires=NOW + 3600)
         on = self.admit('on', ['s-sub', 's-api'], routes, pools)
         off = self.admit('off', ['s-sub', 's-api'], routes, pools, cfg=settings(api_usage_enabled=False))
-        self.assertGreater(on['shares']['api'], 0.9)
-        self.assertEqual((off['class'], off['route'], off['shares']['api'], off['pressure']['e']), ('subscription', 'sub', 0.0, None))
+        for result in (on, off):
+            self.assertEqual((result['class'], result['route'], result['shares']['api'], result['pressure']['e']),
+                             ('subscription', 'sub', 0.0, None))
 
     def test_smart_routing_on_does_not_enable_api_usage(self):
         routes, pools = self.both()
@@ -145,7 +154,7 @@ class EligibilityTests(Base):
         routes = [sub_route('sub'), api_route('gw', kind='gateway', pool='gw', strategy='s-gw', integration_enabled=True)]
         pools = dict(sub=sub_pool(), gw=api_pool(kind='gateway', expires=NOW + 3600))
         result = self.admit('a', ['s-sub', 's-gw'], routes, pools)
-        self.assertEqual((result['class'], result['pressure']['e']), ('subscription', 0.0))
+        self.assertEqual((result['class'], result['pressure']['e']), ('subscription', None))  # F5.3: no paid share
 
     def test_purchased_usage_is_never_subscription_headroom(self):
         purchased = sub_route('buy', strategy='s-buy', billing_class='purchased_usage')
@@ -177,7 +186,8 @@ class EligibilityTests(Base):
                             run.append((result['class'], result['shares']['api'], result['billing_class']))
                     outcomes.append(run)
         self.assertEqual(outcomes[0], outcomes[1])
-        self.assertEqual({kind for _, _, kind in outcomes[0]}, {'api_grant', 'included_subscription'})
+        self.assertEqual({kind for _, _, kind in outcomes[0]}, {'included_subscription'})  # F5.3: ranked never pays
+        self.assertEqual({share for _, share, _ in outcomes[0]}, {0.0})
 
     def test_subscription_stays_available_when_api_usage_is_off(self):
         for provider in ('anthropic', 'openai'):
@@ -242,22 +252,25 @@ class ModeAndFallbackTests(Base):
 
 
 class AllocationTests(Base):
-    def test_class_choice_follows_persisted_records_and_survives_reopen(self):
+    def test_ranked_records_carry_only_subscription_shares_and_survive_reopen(self):
+        """F5.3 (was: the class choice follows persisted records at u = 0.74, 9 API / 11 subscription): a ranked
+        decision has no paid share, so every persisted record is a subscription one. `allocator.choose_class` keeps
+        its own direct tests."""
         routes = [sub_route('sub', demand={'5h': 0}), api_route('api', demand={'credit': 1})]
-        pools = dict(sub=sub_pool(used=740), api=api_pool(grant=False))  # u = 0.74: shares 0.45 API / 0.55
+        pools = dict(sub=sub_pool(used=740), api=api_pool(grant=False))
         classes = []
         for i in range(20):
             if i == 10:
                 self.ledger.close()
                 self.ledger = budget.Ledger(self.path, self.identity)
             classes.append(self.admit('a%d' % i, ['s-sub', 's-api'], routes, pools)['class'])
-        self.assertEqual((classes.count('api'), classes.count('subscription')), (9, 11))
+        self.assertEqual(classes, ['subscription'] * 20)
         records = self.ledger.snapshot()['admissions']
         self.assertEqual(len(records), 20)
-        self.assertAlmostEqual(records[0]['shares']['api'], 0.45)
+        self.assertEqual(records[0]['shares'], dict(api=0.0, subscription=1.0))
         self.assertEqual(records[0]['bucket'], ['implementation', 'medium'])
 
-    def test_new_settings_revision_starts_a_new_epoch(self):
+    def test_a_new_settings_revision_never_tips_a_ranked_decision_to_paid(self):
         routes = [sub_route('sub', demand={'5h': 0}), api_route('api', demand={'credit': 1})]
         pools = dict(sub=sub_pool(used=750), api=api_pool(grant=False))  # 50/50
         for i in range(3):
@@ -266,33 +279,37 @@ class AllocationTests(Base):
                              ledger=self.ledger)
         later = routing.admit(assignment('z'), ranking('s-sub', 's-api'), dict(settings(), revision=4),
                               observations(routes, pools), ledger=self.ledger)
-        self.assertEqual(same['class'], 'subscription')  # four admissions so far: API, sub, API, sub
-        self.assertEqual(later['class'], 'api')  # a fresh epoch: the tie favors API
+        self.assertEqual(same['class'], 'subscription')
+        self.assertEqual(later['class'], 'subscription')  # F5.3 (was: a fresh epoch's tie favors API): never paid
 
-    def test_hard_overrides_and_pending(self):
+    def test_without_subscription_capacity_a_ranked_decision_waits(self):
+        """F5.3 (was: hard overrides, a stale subscription sending the decision to API): it waits instead."""
         routes = [sub_route('sub'), api_route('api')]
         stale = dict(sub=sub_pool(fresh=False), api=api_pool())
-        self.assertEqual(self.admit('a', ['s-sub', 's-api'], routes, stale)['class'], 'api')
+        self.assertEqual(self.admit('a', ['s-sub', 's-api'], routes, stale)['status'], 'pending')
         no_api = self.admit('b', ['s-sub', 's-api'], routes, dict(sub=sub_pool(used=990), api=api_pool()),
                             cfg=settings(api_usage_enabled=False))
         self.assertEqual(no_api['status'], 'pending')
         both = self.admit('c', ['s-sub', 's-api'], routes, dict(sub=sub_pool(fresh=False), api=api_pool(limit=1)))
         self.assertEqual((both['status'], both['reason_code']), ('pending', 'no_feasible_route'))
-        self.assertEqual(len(self.ledger.snapshot()['admissions']), 1)
+        self.assertEqual(len(self.ledger.snapshot()['admissions']), 0)
 
-    def test_unknown_utilization_is_conservative_not_healthy(self):
+    def test_unknown_utilization_never_pushes_a_ranked_decision_to_paid(self):
+        """F5.3 (was: unknown utilization counts as u = 1.0 and sends the decision to API): no API share exists."""
         extra = [dict(id='wk', limit=1000, used=None, length=604800, reset_at=NOW + 1000, fresh=True)]
         routes = [sub_route('sub'), api_route('api')]
         result = self.admit('a', ['s-sub', 's-api'], routes, dict(sub=sub_pool(extra=extra), api=api_pool()))
-        self.assertIn('utilization_unknown', result['reason_codes'])
-        self.assertEqual((result['class'], result['shares']['api']), ('api', 1.0))
+        self.assertNotIn('utilization_unknown', result['reason_codes'])
+        self.assertEqual((result['class'], result['shares']['api']), ('subscription', 0.0))
 
-    def test_expiry_pressure_prefers_the_expiring_grant_route(self):
+    def test_an_expiring_grant_never_pulls_a_ranked_decision_to_paid(self):
+        """F5.3 (was: expiry pressure prefers the expiring grant route): ranked admission computes no expiry
+        pressure; `allocator.expiry_pressure` keeps its own direct tests."""
         routes = [sub_route('sub'), api_route('api')]
         pools = dict(sub=sub_pool(), api=api_pool(expires=NOW + 3 * 3600))
         result = self.admit('a', ['s-sub', 's-api'], routes, pools)
-        self.assertGreater(result['pressure']['e'], 0.9)
-        self.assertEqual(result['class'], 'api')
+        self.assertIsNone(result['pressure']['e'])
+        self.assertEqual(result['class'], 'subscription')
 
     def test_zero_demand_candidates_are_finite(self):
         routes = [sub_route('sub', demand={})]
@@ -316,7 +333,8 @@ class ReservationTests(Base):
             # Dollar claims are keyed by the funding organization, not by the collector's pool/window.
             self.assertEqual((result['status'], result['reserved']['org:api-org']), ('admitted', expected))
         fourth = self.admit('t3', ['s-api'], routes(3 * M), pools)
-        self.assertEqual((fourth['status'], fourth['reason_code']), ('pending', 'no_feasible_route'))
+        self.assertEqual(fourth['status'], 'pending')
+        self.assertIn('insufficient_headroom', fourth['reason_codes'])  # F5.3: the legacy explicit choice's cause
         self.ledger.close_attempt('t5', 'not_dispatched')
         self.assertEqual(self.admit('t3', ['s-api'], routes(3 * M), pools)['status'], 'admitted')
         self.assertEqual(sum(self.ledger.held(self.ledger.snapshot()).values()), 12 * M + 9_600_000 + 3_600_000)
@@ -343,7 +361,8 @@ class ReservationTests(Base):
 
         def race(name):
             with budget.Ledger(self.path, self.identity) as ledger:
-                results.append(routing.admit(assignment(name), ranking('s-api'), settings(),
+                choice = dict({key: routes[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')  # F5.3
+                results.append(routing.admit(assignment(name, choice=choice), ranking(), settings(),
                                              observations(routes, pools), ledger=ledger)['status'])
 
         threads = [threading.Thread(target=race, args=(name,)) for name in ('a', 'b')]

@@ -666,6 +666,7 @@ class C2cApiUsageAndOpenRouter(Funded):
     def api_only(self, attempt):
         request = prepare(attempt, observations=api_observations())
         request['observations']['routes'] = request['observations']['routes'][1:]
+        request['assignment']['choice'] = dict(command_tests.API_CHOICE)  # F5.3: ranked never pays; the legacy choice
         return request
 
     def test_api_usage_stays_off_until_explicitly_enabled(self):

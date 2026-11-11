@@ -48,27 +48,17 @@ def _eligible(route):
 
 def ranked_routes(observations, ranking):
     """The routes a ranked decision evaluates: subscription routes of the shortlisted ids only (the snapshot's own
-    `shortlist`, else `subscription_shortlist` over the routes passing `_eligible`), paid routes unchanged. A supplied
+    `shortlist`, else `subscription_shortlist` over the routes passing `_eligible`). F5.3: a paid route is left out
+    here, before any candidate check, whatever the settings enable; it is never a ranked fallback. A supplied
     shortlist only narrows: its routes still meet every check in `_candidate`, and a missing route is never rebuilt.
     In a caller's own snapshot a route failing `_eligible` takes no place but still reaches `_candidate`, which
     refuses it with its own reason (it can never be admitted)."""
     routes, supplied = observations['routes'], 'shortlist' in observations
     shortlist = observations['shortlist'] if supplied else subscription_shortlist(
         ranking['strategy_ids'], [route for route in routes if _eligible(route)])
-    return [route for route in routes if route.get('billing_class') != SUBSCRIPTION
-            or route.get('strategy_id') in shortlist or not (supplied or _eligible(route))]
-
-
-def _expiry(candidates, observations, settings, now):
-    """E from the earliest-expiring grant of a feasible, eligible direct route; gateways never contribute."""
-    grants = [observations['pools'][item['pool']]['grant'] for item in candidates
-              if item['spec']['billing_class'] == 'api_grant' and 'grant' in observations['pools'][item['pool']]]
-    grants = [grant for grant in grants if grant['expires_at'] > now]
-    if not grants:
-        return 0.0
-    grant = min(grants, key=lambda item: item['expires_at'])
-    return allocator.expiry_pressure(grant['remaining'], grant.get('expected_spend', 0),
-                                     (grant['expires_at'] - now) / routing.SECONDS_PER_HOUR, settings['T_hours'])
+    return [route for route in routes if route.get('billing_class') not in routing.FUNDED and (
+        route.get('billing_class') != SUBSCRIPTION or route.get('strategy_id') in shortlist
+        or not (supplied or _eligible(route)))]
 
 
 def _snapshot(item, now, horizon):
@@ -77,30 +67,31 @@ def _snapshot(item, now, horizon):
     return dict(pressure=pressure, constraints=[dict(c) for c in item['constraints']])
 
 
-def ranked(data, candidates, excluded, ranking, settings, observations, held, bucket, reasons):
-    """The ranked branch: `(pending, chosen, shares, u, e)`; `pending` is the answer to return when no class is
-    feasible, else None. `reasons` gains the utilization reasons in place."""
+def choose(candidates, shares, rows, bucket, epoch, feasible, now, horizon):
+    """F5.3: `(route, class)` of a ranked decision over the feasible subscription candidates in shortlist order, or
+    `(None, None)`. Pure; `allocator.choose_class` and `allocator.choose_route` unchanged (window pressure, held
+    reservations, binding reset horizons, one weight per pool). A paid candidate or feasible class is refused
+    (`billing_class_excluded`), never replayed as a subscription."""
+    if any(item.get('cls') != 'subscription' for item in candidates) or set(feasible) - {'subscription'}:
+        raise ValueError('billing_class_excluded')
+    cls = allocator.choose_class(shares, rows, bucket, epoch, feasible)
+    chosen = allocator.choose_route(candidates, now, horizon) if cls else None
+    return (chosen, cls) if chosen is not None else (None, None)
+
+
+def ranked(data, candidates, excluded, ranking, settings, observations, bucket):
+    """The ranked branch: `(pending, chosen, shares)`; `pending` is the answer to return when no subscription
+    candidate is feasible, else None. Subscription capacity alone funds it: no paid share, fallback or reason."""
     now, horizon = observations['now'], observations.get('minimum_horizon', routing.DEFAULT_MINIMUM_HORIZON)
-    u = e = None
     order = {sid: i for i, sid in enumerate(ranking['strategy_ids'])}
-    pool = sorted((c for c in candidates if c['spec'].get('strategy_id') in order),
+    pool = sorted((c for c in candidates if c['cls'] == 'subscription' and c['spec'].get('strategy_id') in order),
                   key=lambda c: order[c['spec']['strategy_id']])
-    by_class = {cls: [c for c in pool if c['cls'] == cls] for cls in ('api', 'subscription')}
-    feasible = [cls for cls, items in by_class.items() if items]
-    if not feasible:
-        return routing._pending(routing._dominant(excluded), excluded), None, None, u, e
-    if len(feasible) == 2:
-        u, why = routing._utilization(by_class['subscription'], held, settings, now)
-        e = _expiry(by_class['api'], observations, settings, now)
-        reasons += why
-        api = allocator.api_share(u, e, settings['L'], settings['H'])
-    else:
-        api = 1.0 if feasible == ['api'] else 0.0  # hard overrides
-    shares = dict(api=api, subscription=1 - api)
+    if not pool:
+        return routing._pending(routing._dominant(excluded), excluded), None, None
+    shares = dict(api=0.0, subscription=1.0)
     rows = routing.decision_rows(data, settings.get('revision', 0), now)
-    cls = allocator.choose_class(shares, rows, bucket, observations.get('epoch_at', 0), feasible)
-    chosen = allocator.choose_route(by_class[cls], now, horizon) if cls else None
-    return None, chosen, shares, u, e
+    chosen, _ = choose(pool, shares, rows, bucket, observations.get('epoch_at', 0), ['subscription'], now, horizon)
+    return None, chosen, shares
 
 
 def record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking, settings, observations,

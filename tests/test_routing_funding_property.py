@@ -16,7 +16,8 @@ CAPS = (6, 3)
 
 
 class Property:
-    """One random sequence over 2 organizations x {subscription, api_grant, gateway} with a shared organization."""
+    """One random sequence over 2 organizations x {subscription, api_grant, gateway} with a shared organization.
+    Ranked admissions fund only subscription routes (F5.3); dollar holds come from legacy explicit choices."""
     def __init__(self, test, seed):
         self.test, self.rng = test, random.Random(seed)
         self.seed = seed
@@ -103,12 +104,19 @@ class Property:
             routes.append(route('r-' + pool, pool, self.kinds[pool], account, demand))
         task = self.rng.choice(('t1', 't2', 't3'))
         cfg = settings(caps=dict(total=CAPS[0], per_account=CAPS[1]))
-        result = routing.admit(assignment(self.fresh_id('h'), task), ranking(*[r['strategy_id'] for r in routes]),
+        paid = [r for r in routes if r['billing_class'] != 'included_subscription']
+        # F5.3: a ranked decision funds only subscription routes; a paid route is reached through the legacy explicit
+        # choice (synthetic coverage of the dollar invariants, not a paid production path).
+        legacy = bool(paid) and self.rng.random() < 0.75
+        request = dict(assignment(self.fresh_id('h'), task), choice=dict(
+            {key: paid[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')) if legacy else \
+            assignment(self.fresh_id('h'), task)
+        result = routing.admit(request, ranking() if legacy else ranking(*[r['strategy_id'] for r in routes]),
                                cfg, observations(routes, self.pools, self.clock), ledger=self.ledger)
         self.test.assertIn(result['status'], ('admitted', 'pending'))
         if result['status'] == 'pending':
             self.test.assertEqual(self.ledger.snapshot(), before)
-        if not self.orgs:
+        if not self.orgs or not legacy:
             self.test.assertTrue(result['status'] == 'pending' or result['class'] == 'subscription')
 
     def op_begin(self, before):
