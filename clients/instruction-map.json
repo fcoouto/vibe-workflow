@@ -419,11 +419,11 @@
       ]
     },
     "policies/02-task-planning.md": {
-      "sha256": "3f20ddca3879198d72b6b406d952e227fffbb4bd9f9fbfdce3110d5cb5ab8d98",
+      "sha256": "48bc712cf41881cc0052e6813ad432966f583ddd15e194377bc99b1cca794b0f",
       "ranges": [
         [
           1,
-          38
+          39
         ]
       ]
     },
