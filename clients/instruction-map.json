@@ -409,11 +409,11 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "91560e39a37dd44604aaea8342317c17791a2f1f11d100c87c78972a4b13a824",
+      "sha256": "99b6b13bff913354ed60a977606ba7d834a2962429f3ed57e8c57e8c2f50395f",
       "ranges": [
         [
           1,
-          30
+          32
         ]
       ]
     },
@@ -427,11 +427,11 @@
       ]
     },
     "policies/02-task-planning.md": {
-      "sha256": "3f20ddca3879198d72b6b406d952e227fffbb4bd9f9fbfdce3110d5cb5ab8d98",
+      "sha256": "2b0ad5c74674dd47dafaa378de02f549f80376012eb9680ab6cac84e0506dfe3",
       "ranges": [
         [
           1,
-          38
+          39
         ]
       ]
     },
