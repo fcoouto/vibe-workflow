@@ -757,6 +757,148 @@ When F4 merges, the coordinator marks #227 `[SUPERSEDED]` and closes it.
 
 ## Slice F5: Value order, funding order and replay fields
 
+### Authorized F5 amendment: counts and inactive API accounting (11 November)
+
+**Spec:** the [requirements amendment](../specs/2026-11-10-smart-routing-redesign-design.md#requirements-amendment-11-november-2026)
+supersedes conflicting inherited count rules. The user explicitly requested
+implementation and acceptance checks before any merge, with **20% API-money-only
+buffering**, not 50%. Keep the current F5 worktree and outcome owner. The earlier
+F5.1 registration and F5.2–F5.4 history remain valid history, not proof of these
+new criteria. Add a dated registration amendment; do not rewrite prior results
+or restore historical files the user deleted.
+
+**Global constraints for this amendment:**
+
+- No fixed native/subscription/API worker admission count or replacement
+  chat/session/process/provider count; legacy values remain readable but inactive.
+- Keep real provider throttling, subscription quota equations and margins,
+  physical ownership, actual host-resource checks, protected balance, finite task
+  authority, idempotency, unsent release and uncertain exposure.
+- Reuse the existing shared ledger and funding identity, reservations, dispatch
+  grants, settlement and reconciliation. No new store, scheduler or dependency.
+- API estimate plus 20% applies to the whole task before its first paid send.
+  Integer rounding is upward. $50 available/$10 estimated gives $12 held/$38 free.
+- Reflection evidence binds the exact balance and charges; timestamps alone do
+  not release charges. Provider headroom and historical task/cycle spend differ.
+- API Usage remains deferred now and required next release; ranked routes remain
+  subscription-only. `API_FUNDING_QUALIFIED=False`; production OpenRouter deferred.
+  No activation, new account/key/organization, purchase, paid overflow, settings
+  change or live call is authorized. Use only disposable synthetic funding.
+- Existing storage approval is only 10,752 bytes per admission and 13,100,000
+  bytes per ledger. No larger bound, retention reduction or replay truncation.
+- Retain all source qualification gates, permissions, customizations, the user's
+  coordinator and worker choices, lightweight reads and original finding history.
+
+**Review focus:** legacy tiny saved caps must not remain shadow admission rules;
+two genuine monetary contenders must race for insufficient shared funds;
+partial reflection must retain unrelated and uncertain costs; a request rejected
+before send must not leak an envelope; a running or uncertain prior attempt must
+not become a fallback launch. Each condition has a required check below.
+
+#### F5.A0: Resolve interfaces and inventory (read-only checkpoint)
+
+**Inputs:** existing F5 source, `new-requirements-evaluation.md` in the existing
+task ledger, and independent findings F5R-1/2/3. **Output:** exact implementation
+interfaces, producer/consumer/test inventory and realistic capacity measurement
+in that ledger's `F5-amendment-design-report.md`.
+
+- [ ] Trace count, API reservation, balance observation and fallback callers,
+  including D6 initial admission/continuation and coordinator guidance.
+- [ ] Specify how one task envelope covers the existing count/generation phases
+  without reserving the same dollars twice. Specify exact reliable reflection
+  evidence for S1 runs and S3.6 holds, legacy behavior and trust boundaries.
+- [ ] Measure F5R-1 with realistic clocks, production-produced bounds, all demanded
+  windows and maximum costs; preserve the exact storage approval. Diagnose the
+  paid-helper and missing-replay test masking in F5R-2/3.
+- [ ] Parent accepts the concrete interfaces and extends the execution brief
+  before affected code changes. A genuine storage conflict stops for a decision;
+  independent count removal may continue if its acceptance remains well-defined.
+
+#### F5.A1: Retire artificial counts across admission and callers
+
+**Files:** `runtime/usage_budget.py`, `runtime/routing.py`,
+`runtime/routing_settings.py`, `runtime/delegation.py`, `scripts/routing.py`,
+their directly affected callers/tests, `clients/delegation-requests.md`,
+`policies/03-agent-delegation.md` when its count guidance applies,
+`skills/manage-usage-routing/references/{procedure,delegation}.md`,
+`docs/smart-routing-validation.md`, `docs/policy-sources.md` and generated map.
+Use the A0 inventory to name any other direct consumer before editing it.
+
+**Interfaces:** existing admission/dispatch/status signatures remain compatible;
+obsolete stored `caps`, `max_parallel_workers` and `host_capacity` are history,
+not effective capacity. New requests need no obsolete policy count. Keep genuine
+physical claims, task attempts/deadline/resource budgets and provider/window gates.
+
+- [ ] Write focused regressions proving at least six eligible independent tasks
+  admit, including at least three on one account, for subscription, API-money
+  ledger and native D6 initial/continuation paths. Include legacy caps set to one.
+  Preserve tests for physical alias conflict, real quota exhaustion and task
+  authority. Observe the intended count-refusal failure before implementation.
+- [ ] Remove enforcement at its shared owners, update callers/fixtures/status
+  without rewriting saved settings/history, and update current guidance plus a
+  dated registration amendment. Do not replace the removed limits with counts.
+- [ ] Run affected ledger/routing/delegation/launcher/settings tests in stable
+  private-HOME snapshots, inspect the actual diff and trace three representative
+  instruction paths. Regenerate the instruction map; validate the package.
+- [ ] Parent commits the complete checkpoint after verifying its focused proof.
+
+#### F5.A2: Whole-task API-money reservation and reflected-charge reconciliation
+
+**Files:** `runtime/usage_budget.py`, `runtime/usage_routing.py`,
+`runtime/usage_admission.py`, `runtime/ledger_versions.py` only if required for
+read compatibility, directly affected API hosts/observation consumers and tests,
+and their owning procedure/source-coverage documents. A0 supplies exact method
+signatures and witness fields; do not invent an alternative ledger.
+
+- [ ] Write failing tests for the $50/$10/+20% envelope, shared-account aliases,
+  clients/worktrees and synchronized real monetary contention. Assert at least
+  one admitted and one funds-refused contender when their total exceeds funds.
+  Do not use ranked paid routes that this release excludes as the contenders.
+- [ ] Write failing lifecycle tests: known actual $8 leaves $42; observing a
+  provider balance of $42 with reliable coverage of that same charge still leaves
+  $42. Replay does not add funds. Partial coverage retains other charges; missing,
+  stale, contradictory or mismatched evidence never releases uncertain exposure.
+  Task/cycle financial limits still include reflected spend.
+- [ ] Cover provably unsent whole-task release, count-only completion, generation
+  never sent, running/uncertain outcomes, crash/retry idempotency, under-estimates,
+  exhausted authority and no unlimited automatic top-up. Observe intended RED.
+- [ ] Implement the accepted A0 interfaces using existing immediate transactions,
+  phase grants and charge identities. Reconcile provider headroom separately
+  from cumulative authority without double-reserving count/generation funds.
+- [ ] Run the focused financial/lifecycle/race regressions and direct/transitive
+  API host tests with private HOME, zero network and stable source. Verify the
+  API-off/qualification guards remain unchanged. Parent verifies and commits.
+
+#### F5.A3: Ordered continuation, truthful replay/capacity and final acceptance
+
+**Files:** `runtime/routing.py`, `runtime/routing_funding.py`,
+`runtime/external_delegation.py` only if it owns an affected continuation,
+`scripts/routing.py`, actual affected launchers/native preflights and their tests;
+F5R-1/2/3 test/fixture owners and documentation from A0. No ranked paid activation.
+
+- [ ] Pin API off, insufficient, stale/missing balance, unauthorized, unqualified
+  and unavailable routes beside a healthy eligible subscription. Exercise actual
+  ordered production choice/launcher paths with disposable evidence; each must
+  reach the eligible subscription without a global capacity refusal.
+- [ ] Pin no eligible alternative's actual reason, explicit model/API-only
+  constraints, no unauthorized funding switch, and running/uncertain prior work
+  with zero duplicate dispatch. Observe intended failures, then fix narrowly.
+- [ ] Resolve F5R-1 with production-bound capacity proof at realistic time and
+  maximum supported costs, including maximal-ledger settlement below 90% of the
+  approved hard bound. Preserve pre-hold oversize refusal and old-reader limits.
+  Fix/disposition F5R-2/3 without silently turning ranked tests into paid choices
+  or treating unexplained missing admissions as successful replay.
+- [ ] Run the complete amended acceptance matrix and affected caller/instruction
+  checks. Parent commits; validate and run the full suite on the exact final
+  candidate with the checkout frozen. Report skips and unavailable client/source
+  qualification separately; passing synthetic tests do not authorize activation.
+- [ ] Obtain independent spec/code/security review covering the amended code and
+  guidance, with explicit scope/round limits. The original F5 review's single
+  correction check remains scoped to F5R-1/2/3; new requirements justify new
+  coverage, not an erased review history. Fix blockers and rerun invalidated proof.
+- [ ] Recheck current main, candidate, clean layers and evidence before any PR
+  readiness/merge. No F6/F7/F8 dependency is released before accepted F5.
+
 Shared core. **Owned files:** `runtime/routing_evidence.py`, `runtime/routing.py`, `runtime/routing_funding.py`, `runtime/routing_paths.py` (replace F4's provisional cut), `runtime/routing_observations.py` (the shared cut), `runtime/usage_budget.py` (capacity comment; constants only after measured approval), `scripts/routing.py`, `scripts/validate.py` (ceilings only), `tests/test_routing_evidence.py`, `tests/test_routing_ranker.py`, `tests/test_routing_funding_order.py`, `tests/test_routing_funding.py`, `tests/test_routing_funding_property.py`, `tests/test_routing_funding_capacity.py`, `tests/test_routing_gates.py`, `tests/test_routing_production_flows.py`, `tests/fixture_routing_funding.py`, `tests/test_routing_admission.py`, `tests/test_routing_observations.py`, `tests/qualification/replay_export.py`, `tests/test_qualification_replay_export.py`, `docs/smart-routing-validation.md`, `clients/guidance-publication.md`.
 
 ### Task F5.1: Pre-registration Edit 7

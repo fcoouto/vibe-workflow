@@ -2,6 +2,68 @@
 
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
+## Requirements amendment, 11 November 2026
+
+The user authorized these changes after reviewing the six-requirement gap
+assessment. This amendment overrides conflicting concurrency and API accounting
+statements in this design and its inherited contracts. Historical registrations
+and results remain unchanged; current guidance and acceptance criteria receive a
+dated amendment before any governed run.
+
+1. **No artificial delegation counts.** Do not enforce 4 total, 2 per account or
+   equivalent limits on native, subscription or API Usage delegation. Do not
+   substitute counts of chats, sessions, processes or provider identities. Read
+   legacy settings, plans and records without enforcing obsolete caps. Preserve
+   actual provider throttling, subscription quotas, physical resource ownership,
+   real host-resource admission, financial protections and finite task authority.
+   Bounded storage remains an integrity limit, not a replacement worker policy.
+2. **Whole-task API-money reservation.** Before any paid dispatch, estimate the
+   whole delegated task's API monetary cost and reserve it with a **20% buffer**
+   in the existing shared funding ledger. Use integer monetary units and round
+   upward. With $50 of available authorized funds and a $10 estimate, reserve $12
+   and leave $38. The example's $50 is already available after any protected
+   allowance; it does not remove the existing protected-balance policy. Account
+   aliases, clients, concurrent tasks and worktrees share one funding authority
+   and atomic reservation. No new budget store or scheduler is permitted.
+   Subscription quota-window reservation margins remain unchanged.
+3. **Correct reconciliation.** Known completion charges actual cost and releases
+   unused reservation exactly once. A provider balance and local charge must not
+   deduct the same reflected cost twice. Reflection requires reliable evidence
+   tied to that balance and those charges, not a newer timestamp or an inferred
+   balance delta. Keep actual task/cycle spending for authority checks even when
+   a charge no longer reduces provider-balance headroom. Provably unsent work
+   releases its reservation fully. Running or uncertain attempts retain their
+   exposure until reconciled. Extra paid work must fit both available approved
+   funds and task authority; do not add unlimited automatic top-ups. Local
+   reservations are not provider-side guarantees against in-flight overspend.
+4. **Route-local refusal and ordered continuation.** Skip API routes without
+   sufficient unreserved funds, reliable funding evidence, authorization,
+   qualification or availability. Continue through other eligible routes in the
+   existing order, including native subscriptions. Preserve suitability and
+   explicit model/funding constraints. Report the actual reason when none fits.
+   Never dispatch a duplicate while a prior attempt runs or remains uncertain.
+5. **Implementation is not activation.** Implement and test these semantics with
+   disposable synthetic funds while **API Usage remains deferred this release
+   and required next release**. Keep ranked selection subscription-only,
+   `API_FUNDING_QUALIFIED=False`, and production OpenRouter deferred. No disabled
+   integration, key, account, organization, purchase, paid overflow, setting change
+   or live API call is authorized. The earlier API-change non-goal yields only to
+   this inactive reservation/reconciliation/fallback implementation.
+6. **Complete caller and guidance coverage.** Remove count-based refusals in the
+   ledger, router, native admission and continuation, launchers, coordinator
+   instructions and caller-side preflights. Retain readable history without
+   presenting obsolete caps as effective protection. Preserve the lightweight
+   rule: stale-AND-needed reads, no measurement/ranking model calls, polling,
+   timers or daemons.
+
+Acceptance requires more than four total delegations and more than two on one
+account when genuine quotas/funds permit; the $50/$10/+20% example; real racing
+monetary contenders; exact settlement, unsent cancellation, partial reflection
+and uncertain exposure; unavailable API with an eligible subscription; precise
+no-alternative refusal; and explicit identity with no duplicate uncertain send.
+Run these checks and obtain independent review on the final amended candidate
+before any merge. The old-scope F5 suite and review do not establish this proof.
+
 This design changes parts of two earlier documents and leaves the rest of them in force:
 
 - [Smart Routing design, 8 November](2026-11-08-usage-routing-opencode-subscriptions-design.md): it replaces sections 5.1 (Jev), 5.3 (optional model ranker) and 11 ("later learning"), and adds one rule to section 7.2 (when OpenRouter may be chosen).
