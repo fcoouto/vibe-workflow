@@ -556,7 +556,7 @@ class RoundTripTests(Base):
         guidance = [dict(id='g1', sha256=digest * 64, checked_at='2026-11-01T00:00:00Z', rows=[dict(
             work_kind='implementation', complexity_band='medium', risk_band='medium',
             strategies=[dict(model='m', effort='high', harness='h', evidence_refs=['g1'])])])]
-        self.write_inputs([guidance, [dict(model='m', supported_efforts=['high'])], [], []])
+        self.write_inputs([guidance, [dict(model='m', harnesses=['h'], supported_efforts=['high'])], [], []])
 
     def prepare(self, ledger, strategy_id):
         choice = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')

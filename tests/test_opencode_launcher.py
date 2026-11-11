@@ -15,10 +15,10 @@ import unittest
 from unittest import mock
 
 from runtime import opencode_launcher as launcher, routing, routing_launch, routing_observations as collector, \
-    routing_settings, state
+    routing_settings, state, subscription_billing
 from runtime.adapters import opencode as adapter
 from scripts import routing as command
-from tests.test_routing_observations import SCOPE, Stores, ready, sub_window
+from tests.test_routing_observations import SCOPE, Stores, ready, request_of, sub_window
 
 PROVIDER, MODEL, VARIANT = 'claude-agent', 'haiku', 'low'
 HARNESS = adapter.HARNESS[PROVIDER]
@@ -67,8 +67,8 @@ class FakeHost:
 
     def _check(self, session, attempt, token, pool, model, kind='primary'):
         provider, rest = model.split('/', 1)
-        name, _, variant = rest.partition('#')
-        facts = dict(provider=provider, model=name, variant=variant, harness=adapter.HARNESS.get(
+        name, _, variant = rest.partition('#')  # no `#`: no variant, null as the shim's routeFacts reports it
+        facts = dict(provider=provider, model=name, variant=variant or None, harness=adapter.HARNESS.get(
             provider, 'opencode provider %s' % provider), kind=kind, funding_pool=pool)
         answer = self.shim.handle(json.dumps(dict(v=1, op='check', attempt_id=attempt, session_id=session,
                                                   authority=token, request=facts)).encode())
@@ -173,8 +173,12 @@ class FakeHost:
                 raise self.prompt_raises
             sid, held = parts[2], self.attached.get(parts[2])
             session['messages'].append(dict(id=body.get('id') or self._id('msg'), type='user', time=dict(created=now)))
+            # The shim's `model.request` check of the session's own requested model (not the attach string).
+            requested = session['record']['model'] or {}
+            spoken = '%s/%s' % (requested.get('providerID'), requested.get('id')) + (
+                '#' + requested['variant'] if requested.get('variant') is not None else '')
             allowed = held is not None and self._check(sid, held['attempt_id'], held['authority'], held['funding_pool'],
-                                                       held['model'])
+                                                       spoken)
             if allowed:
                 self._assistant(sid, held, now)
                 if self.child:
@@ -223,7 +227,8 @@ class LauncherBase(Stores):
         self.routes = [route()]
         self.windows = {POOL: [sub_window(self.now)], 'gw': []}
         patches = [mock.patch.object(collector, 'default_source', lambda settings_path=None: collector.StaticSource(
-                       self.routes, self.windows, ready)),
+                       self.routes, self.windows, ready,  # a labelled double supplies positive billing
+                       billing=subscription_billing.double('opencode-launcher'))),
                    mock.patch.object(routing_settings, 'managed_project', new=self.managed_project),
                    mock.patch.object(launcher, 'IDLE_POLL', 0), mock.patch.object(launcher, 'REREAD_WAIT', 0)]
         for patch in patches:
@@ -346,6 +351,40 @@ class LaunchTests(LauncherBase):
         self.assertEqual(self.host.requests, [])
 
 
+class HostRuleTests(LauncherBase):
+    """F4.4 and the effort omission contract on the OpenCode launcher."""
+
+    def test_the_request_carries_the_opencode_hosts_harnesses(self):
+        prepared = []
+        real = command.Service._prepare
+        with mock.patch.object(command.Service, '_prepare', lambda service, body: prepared.append(body) or
+                               real(service, body)):
+            self.assertEqual(self.launch()['state'], 'recorded')
+        # The catalog lists claude-agent and openrouter; only the subscription path's harness is sent.
+        self.assertEqual(prepared[0]['constraints'], dict(allowed_harnesses=[HARNESS]))
+
+    def test_a_catalog_naming_no_path_sends_nothing(self):
+        self.host.models = [dict(providerID='unlisted', id='m', variants=['low'])]
+        result = self.launch()
+        self.assertEqual(result, dict(state='blocked', reason='harness_required'))
+        self.assertNotIn('prepare', self.order)
+
+    def test_a_launch_without_an_effort_omits_the_variant_end_to_end(self):
+        """The admitted identity carries `none`; attach, the session, the shim's model check and accounting all see
+        an omitted variant, never a literal `none`, and the hold settles."""
+        self.host.models = [dict(providerID=PROVIDER, id=MODEL)]  # no variants: only omission is expressible
+        self.routes = [route(effort='none')]
+        result = self.launch(assignment=self.assignment(effort='none'))
+        self.assertEqual(result['state'], 'recorded', result)
+        self.assertEqual(self.host.created['model'], dict(id=MODEL, providerID=PROVIDER))
+        self.assertNotIn('#', json.dumps([self.host.attached, self.host.created]))
+        [assistant] = [item for session in self.host.sessions.values() for item in session['messages']
+                       if item['type'] == 'assistant']  # the shim's check allowed the model request
+        self.assertNotIn('variant', assistant['model'])
+        self.assertEqual(self.holds()['a1']['state'], 'released')
+        self.assertNotIn('"none"', json.dumps(self.host.created))
+
+
 class RefusalTests(LauncherBase):
     """Each refusal happens before any session is created (C.3 design 6.3 C3-3)."""
 
@@ -397,10 +436,27 @@ class RefusalTests(LauncherBase):
                       checkout=str(self.checkout), activation=dict(ref='activation:openrouter:s:r3'))
         choice = dict(provider='openrouter', model='vendor/model', effort='low', harness=gateway()['harness'],
                       funding='api')
-        with mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)):
+        prepared = []
+        real = command.Service._prepare
+        with mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(report)), \
+                mock.patch.object(command.Service, '_prepare', lambda service, body: prepared.append(body) or
+                                  real(service, body)):
             result = self.launch(assignment=self.assignment('g1', **choice))
-        self.assert_refused('api_funding_unqualified', result, closed='g1')
+        # F4.4: the OpenCode host's harnesses exclude the dollar paths' until API funding is qualified, so the
+        # gateway choice is never admitted (no hold to close) and nothing is created.
+        self.assertEqual((result['state'], result['reason']), ('pending', 'explicit_choice_unavailable'), result)
+        self.assertNotIn(('POST', '/api/session'), self.host.requests)
+        self.assertNotIn('g1', self.holds() if self.ledger_path.exists() else {})
+        self.assertEqual(prepared[0]['constraints']['allowed_harnesses'], [HARNESS])
         self.assertFalse(launcher.API_FUNDING_QUALIFIED)
+
+    def test_the_gate_still_refuses_an_api_funded_dispatch(self):
+        """Defense in depth below the host filter: the gate refuses a dollar admission before `dispatch`."""
+        gate = launcher._Gate(self.service, self.host)
+        gate.admission = dict(billing_class='gateway', attempt_id='g2')
+        answer = gate.handle(json.dumps(dict(v=1, op='dispatch', attempt_id='g2', request={})).encode())
+        self.assertEqual((answer['state'], answer['reason']), ('blocked', 'api_funding_unqualified'))
+        self.assertNotIn('dispatch', self.order)
 
     def test_a_refused_attach_creates_nothing_and_closes_the_hold(self):
         self.host.attach_ok = False
@@ -641,11 +697,14 @@ class FlakySource:
     def __init__(self, routes):
         self.routes, self.calls = routes, 0
 
-    def manifest(self):
+    def admitted_route(self, route_id, identity=None):
         self.calls += 1
         if self.calls > 1:
             raise OSError('manifest unreadable')
-        return [dict(item) for item in self.routes]
+        return collector.StaticSource(self.routes).admitted_route(route_id, identity)
+
+    def billing(self, route, now):
+        return subscription_billing.double('flaky-source')(route, now)
 
 
 class NotEntitledTests(LauncherBase):
@@ -812,11 +871,15 @@ class WindowUnitTests(LauncherBase):
         local = collector.default_source(self.settings)
         found = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
                                   ledger_path=self.ledger_path,
-                                  source=collector.StaticSource([route()], local.windows, ready))
+                                  source=collector.StaticSource([route()], local.windows, ready,
+                                                                billing=subscription_billing.double('local-windows')),
+                                  **request_of([route()]))
         self.assertEqual([item['route'] for item in found['observations']['routes']], ['claude-haiku-low'])
         mismatched = collector.collect(str(self.checkout), dict(scope='s'), settings_path=self.settings,
                                        ledger_path=self.ledger_path, source=collector.StaticSource(
-                                           [route(window_unit='percent')], local.windows, ready))
+                                           [route(window_unit='percent')], local.windows, ready,
+                                           billing=subscription_billing.double('local-windows')),
+                                       **request_of([route()]))
         self.assertEqual(mismatched['observations']['excluded'],
                          [dict(route='claude-haiku-low', reason='window_unit_mismatch')])
 

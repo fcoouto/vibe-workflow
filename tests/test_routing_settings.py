@@ -248,6 +248,36 @@ class WorkerChoiceInstructionTests(unittest.TestCase):
         for unloaded in ('keychain-setup.md', 'first-canary.md', 'delegation.md', 'procedure.md'):
             self.assertNotIn(unloaded, text)  # a worker-choice request loads no API setup, canary or delegation
 
+    def test_identity_fields_come_from_sources_that_carry_them(self):
+        """F2-N1: native admission replies name no provider or harness, so the guide names the path rules and the
+        compiled table, whose fields routing compares, and asks for anything they do not show."""
+        from runtime import routing_launch, routing_paths
+        text = ' '.join((self.SKILL / 'references' / 'worker-choices.md').read_text().split())
+        self.assertNotIn('earlier admission or launch reply', text)
+        for source in ('runtime/routing_routes.json', 'strategy-table.json', 'ask the user'):
+            self.assertIn(source, text)
+        rules = routing_paths.load_rules()  # the named rules carry both fields on every path
+        self.assertTrue(all(rule['provider'] and rule['harness'] for rule in rules['paths']))
+        codex = routing_launch.route_identity('codex_native', model='m')
+        self.assertIn('`%s` and provider `%s`' % (codex['harness'], codex['provider']), text)
+        self.assertIn('`%s`' % codex['effort'], text)  # a model without an effort control
+        self.assertTrue(any(rule['harness'] == codex['harness'] and rule['provider'] == codex['provider']
+                            for rule in rules['paths']))
+
+    def test_a_compiled_null_effort_becomes_none_only_in_the_choice(self):
+        """F2-N1 correction: the compiled table keeps `effort: null` (test_routing_evidence
+        `test_same_model_on_two_harnesses_has_independent_efforts`); the generated route identity uses the text
+        `none`, which a settings choice must name, and the launch sends no effort."""
+        from runtime import routing_paths
+        text = ' '.join((self.SKILL / 'references' / 'worker-choices.md').read_text().split())
+        self.assertNotIn('is written as effort `none`', text)
+        for phrase in ('`effort` is `null`', 'write the text `none` in the choice', 'sends no effort'):
+            self.assertIn(phrase, text)
+        path = dict(next(rule for rule in routing_paths.load_rules()['paths'] if rule['harness'] == 'codex-native'),
+                    demand={'7d': 1})
+        route = routing_paths.strategy_route(path, dict(strategy_id='s1', model='m', effort=None))
+        self.assertEqual(route['effort'], 'none')  # the identity a choice with effort `none` matches
+
 
     def test_documented_commands_run_against_disposable_stores(self):
         import re, subprocess

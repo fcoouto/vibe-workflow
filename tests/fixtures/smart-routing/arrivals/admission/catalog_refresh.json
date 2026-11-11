@@ -222,6 +222,7 @@
  "catalog": [
   {
    "model": "alpha-large",
+   "harnesses": ["native", "api"],
    "supported_efforts": [
     "low",
     "high",
@@ -231,6 +232,7 @@
   },
   {
    "model": "alpha-small",
+   "harnesses": ["native"],
    "supported_efforts": [
     "low",
     "high"
@@ -314,6 +316,7 @@
    "catalog": [
     {
      "model": "alpha-large",
+     "harnesses": ["native", "api"],
      "supported_efforts": [
       "low",
       "max"
@@ -322,6 +325,7 @@
     },
     {
      "model": "gamma-new",
+     "harnesses": ["native"],
      "supported_efforts": [
       "low"
      ],

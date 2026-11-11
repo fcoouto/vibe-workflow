@@ -8,6 +8,8 @@
 
 The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) need. The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.
 
+**What this session qualifies (F4).** There is no route manifest any more. The package ships model-free path rules (`runtime/routing_routes.json`); each `prepare` generates routes in memory from the qualified paths and the strategy table, and no file holds a route. This scheduled session qualifies only the OpenCode subscription paths it measures. The operator works in stages, each with its own prerequisite: `measure-demand` ([step 6](#6-measure-demand-no-calls)), then `qualify_path` for each proposed request, then `seed_window` for each demanded window ([step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)), then activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)). The gateway check (step 5) and the Codex path qualify nothing in this canary (decisions A and C of the [redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#coordinator-calls-for-the-users-review)). A new model on a qualified path needs no new session unless its allowance or demand semantics differ ([F4.5](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f45-opencode-subscription-connection-and-allowance-binding)). The separate evidence the release matrix still needs (OpenCode Go connections, native Codex and Claude Code launches, a qualified Claude usage reader and an account-scoped subscription-only billing boundary) is named in F4.5 and [F4.6](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f46-native-only-selection-and-launch-for-codex-and-claude-code); this session does not supply it.
+
 ### Before the session
 
 - Run in a quiet window: no other lanes, workers or OpenCode sessions using the same logins, because another session's use inflates every window reading.
@@ -72,11 +74,11 @@ stat -f '%m %z' ~/.codex/auth.json
 
 - **Proves** pre-canary item 9: Codex accepts the reader's handshake, the real spawn and read time (`timing.spawn_ms`, `timing.wall_ms`), whether a read rewrote `auth.json` (the two `stat` lines, and the reader's own `codex_auth_changed`), and which windows this plan reports. `--settings` points at a temporary directory so the production routing state is untouched. The [reader's contract](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#codex-window-reader) defines the reasons.
 - **Expect:** 0 tokens, 1 process (`codex app-server`), at most about 5.6 s.
-- **Pass:** without the production manifest (#227 unmerged) the answer is `failed` with `codex_pool_undeclared`, which the reader reaches only after a complete, well-formed read, with timing present; it does not show which windows were read. With the manifest it is `stored` with the plan's windows (only `7d` expected). The `auth.json` times are unchanged. **Fail:** any other `codex_*` reason, such as `codex_protocol_unexpected` or `codex_auth_changed`. The account check is manual: the user confirms the Codex login and OpenCode's Sign in with ChatGPT are the same account; the reader never prints an account id.
+- **Pass:** the shipped path rules declare the `chatgpt-subscription` pool's `7d` window, so the answer is `stored` with the plan's windows (only `7d` expected); a reported window the rules do not declare is `codex_window_undeclared`. (Before F4, without the manifest of #227, the expected answer was `failed` with `codex_pool_undeclared`.) The `auth.json` times are unchanged. **Fail:** any other `codex_*` reason, such as `codex_protocol_unexpected` or `codex_auth_changed`. The account check is manual: the user confirms the Codex login and OpenCode's Sign in with ChatGPT are the same account; the reader never prints an account id.
 
 ### 5. OpenRouter gateway (purpose `gateway`)
 
-Run it only after a clean `launcher-probes` run on the same day: the gateway refuses an `--isolation-result` that does not show A1–A4 passed, no blockers and verified cleanup, that is older than 12 hours or not from today, or that comes from another OpenCode version or mode. It also needs the user's decision 4, because it spends real API dollars, and an OpenRouter key the user creates with its own credit limit of at most $1.00.
+The scheduled OpenCode canary session skips this step (decision A); a separately approved gateway run qualifies no path, and `measure-demand` proposes no gateway request. Run it only after a clean `launcher-probes` run on the same day: the gateway refuses an `--isolation-result` that does not show A1–A4 passed, no blockers and verified cleanup, that is older than 12 hours or not from today, or that comes from another OpenCode version or mode. It also needs the user's decision 4, because it spends real API dollars, and an OpenRouter key the user creates with its own credit limit of at most $1.00.
 
 ```sh
 Q=$(mktemp -d) && chmod 700 "${Q:?}"
@@ -97,9 +99,36 @@ python3 -B tests/qualification/live_modes.py gateway --isolated-dir "${Q:?}" --c
 python3 -B tests/qualification/live_modes.py measure-demand --call-ledger "${L:?}" --out "${OUT:?}/demand.json"
 ```
 
-- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. It suggests the largest delta plus 50% (at least 1) as the manifest `demand`. Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool's readings come from A5: one Codex rate-limit read before its launch and one after, through `runtime/codex_rate_limits.py` (0 tokens, the user's Codex login used read-only, nothing stored). It reads the windows the manifest declares for the pool; while it declares none, it reads the reader's known windows (`5h`, `7d`) and marks each reading, per-launch entry and suggestion `declared: false`. A failed read is recorded as `A5.demand.reason` (the reader's fixed reason); A5 is not failed for it, and that run gives the pool no sample.
+- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. Each reading is tagged with the path id of the route the harness launched, the run id and the launch's account, model and effort; readings pair only on the same path and account. The suggestion is the largest delta plus 50% (at least 1). Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool's readings come from A5: one Codex rate-limit read before its launch and one after, through `runtime/codex_rate_limits.py` (0 tokens, the user's Codex login used read-only, nothing stored). It reads the windows the path rules declare for the pool. A failed read is recorded as `A5.demand.reason` (the reader's fixed reason); A5 is not failed for it, and that run gives the pool no sample.
+- **Proposes** one `qualify_path` request (`requests` in the output) per subscription path whose samples from one known account cover every window the path's rule names, bound to that account, with the measured demand and the run ids as `evidence`. `paths` says why each other path has none:
+  - a window whose every sample is `below_resolution` (the reading did not move; not proof of precise launch usage) gets the floor demand 10 and is listed in `floor_windows` beside the request;
+  - a window with no sample at all gives no request (`window_unmeasured`, with `missing_windows`);
+  - samples of several accounts are never combined (`account_ambiguous`), and samples without an account never qualify (`account_unknown`). A5's Codex readings have no account-bound source, so they propose no ChatGPT request;
+  - a gateway path is never proposed (`gateway_not_qualified`).
+
+  A request qualifies a path's demand only, never its billing boundary or account entitlement.
 - **Expect:** 0 calls, 0 processes, under 1 s.
-- **Pass:** a measured delta for every window a manifest route demands. **Fail:** a window reported with a reason instead of a value; that route's demand stays unmeasured and #227 does not merge with it.
+- **Pass:** a request for every OpenCode subscription path this session launched on. **Fail:** a path reported with a reason instead of a request; that path stays unqualified.
+
+### 6a. Qualify the measured paths and seed their windows (no calls)
+
+Run these one-shot operator operations against the production routing settings (the canary of [step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only) runs there). Each refuses under `--serve`, so no launcher or plugin can run them.
+
+```sh
+python3 -B scripts/routing.py qualify_path <<'EOF'
+<one object from "requests" in "${OUT:?}/demand.json", unchanged>
+EOF
+python3 -B scripts/routing.py seed_window <<'EOF'
+{"v": 1, "op": "seed_window", "pool": "<the path's pool>", "window": "<window id>", "used": <thousandths now used>, "limit": 1000, "reset_at": <epoch seconds>, "length": <host length of that window, seconds>, "event_id": "<a new id>"}
+EOF
+```
+
+1. **`qualify_path`**, once per proposed request. It needs a path from the shipped rules that is not `test_only`, demand keys equal to that path's windows (thousandths, 1 to 1000), and the run ids as `evidence`. It writes `path-qualifications.json` beside the routing settings, owner-only. `unqualify_path {path}` removes a qualification; a held admission on that path is then refused at dispatch.
+2. **`seed_window`**, once for each window a qualified path demands, from the host's current reading of that window. It needs a qualified path on the pool, not a table, and follows the [seed rules](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#seed-window): `limit` 1000, the host's `length`, refused while a fresh host reading exists, fresh for 900 s, replaced by the first host reading. Seed again after a stale gap where no eligible pool is fresh. A seed is recovery input, never billing or entitlement proof.
+3. **Activation** is [step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only). Its `route_manifest` check passes only when a qualified, non-test path has a table strategy with that path's harness and provider (`no_qualified_path` or `no_generated_route` otherwise). It reads the shipped rules and the qualification and table files beside the settings path the command uses, and nothing else.
+
+- **Expect:** 0 calls, one short process per operation.
+- **Pass:** each `qualify_path` answers `qualified`, each `seed_window` answers `recorded`, and `status` lists the seeded windows with `source: operator`. **Fail:** any `blocked` reason; fix its input and repeat that operation only.
 
 ### 7. Canary admission export (no calls)
 
@@ -119,7 +148,7 @@ For the production-ledger canary (step 8), replace `--canary-state "${CS:?}"` wi
 
 The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
 
-1. **The user activates the project.** Only the user adds the checkout to the production `managed_projects`, with the one-shot `scripts/routing.py set` (it passes only once the activation gate passes). The harness never changes `managed_projects` and refuses a project that is not on it.
+1. **The user activates the project.** Only the user adds the checkout to the production `managed_projects`, with the one-shot `scripts/routing.py set` (it passes only once the activation gate passes, including the path check of [step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)). The harness never changes `managed_projects` and refuses a project that is not on it.
 2. **The production ledger must exist and be clean.** The harness never creates, initializes or resets it. An unclean state (open attempts or holds, Smart Routing off, API Usage on, an enabled organization, raised caps) is refused before any write, with the condition named; fix it through `scripts/routing.py`, for example settle open holds with the one-shot operator ops.
 3. **Run the canary:**
 
@@ -529,6 +558,8 @@ Also recorded:
 | 4 lost acknowledgment | counted; message absent; `uncertain` keeps exposure | Launcher killed after `dispatch` (exit −9). The hold was `dispatched` and counted, and the derived message and session returned HTTP 404. A session-only check answered `authority_required`. `record uncertain` → hold `uncertain`, still open; a check answered `attempt_uncertain`; `complete` answered `reconciliation_required`. | pass |
 | 4 operator recovery for an uncertain subscription hold | none exists | `reconcile_uncertain` → `hold_state_forbidden`. **No operator path exists for an uncertain subscription hold**: it stays open and counted. Here it stayed only in the temporary ledger, which was deleted. | recorded gap |
 
+*Note, 11 November 2026:* the recorded result above stands for this run. The gap has since closed: #192 added the one-shot `reconcile_subscription` for uncertain subscription holds, and [step 3](#3-lost-acknowledgment-drill-s36c-purpose-drill) of the runbook exercises it.
+
 **Order evidence.** For the guard probe, `qual-pre` recorded the request and then `qual-post` recorded `guard_variant`, after it in time. For the pending probe, only `qual-pre` recorded it. Together these show the hook order `qual-pre` → shim → `qual-post`. Two requests were off the route, and neither was sent: the `haiku#high` guard probe and the `sonnet` command child.
 
 **Latency.** Shim time is measured from the `qual-pre` hook to the `qual-post` hook:
@@ -610,7 +641,7 @@ The per-criterion table is in the [validation results](smart-routing-validation.
 
 - **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.
 - **`version_changed` on every live aggregate (accepted, open P0.8 item).** The resync gives zero deltas. Whether `durable.version` is a version per aggregate or per event type is not established.
-- **Uncertain subscription holds (follow-up).** They have no operator recovery path. The plan's follow-up task "subscription hold reconcile" is required before cutover and before any production use of enforced routing. The bounded pilot keeps its dedicated canary ledger; only the approved canary runs on the production ledger ([step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)).
+- **Uncertain subscription holds (follow-up, since closed).** At this re-run they had no operator recovery path. The plan's follow-up task "subscription hold reconcile" was required before cutover and before any production use of enforced routing. It exists since #192: the one-shot `reconcile_subscription` settles an uncertain subscription hold from a re-read of the session or abandons it ([step 3](#3-lost-acknowledgment-drill-s36c-purpose-drill) exercises it). The bounded pilot keeps its dedicated canary ledger; only the approved canary runs on the production ledger ([step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)).
 - **Probe exposure.** The probes' reserved calls count against the cap of the purpose they run under (`pilot` in canary mode).
 
 ## Settling a dead run's reservation

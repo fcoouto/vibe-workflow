@@ -61,3 +61,7 @@ In enrolled checkouts, the existing `PostToolUse` hook surfaces the observed chi
 ## Startup implementation
 
 Read [startup implementation and qualification](codex-startup-implementation.md) when implementing or diagnosing startup, preparing enrollment, qualifying a client adapter, or changing hook registration, trust or packaging.
+
+## Native routing
+
+In a [managed project](../policies/03-agent-delegation.md#managed-projects), a checkout whose Codex enrolment keeps runtime task state routes native workers through [delegation preparation](delegation.md#prepare-and-launch-once), with its task bindings. Without that state, use the [native routing bridge](claude-code.md#native-routing-bridge) with `"client":"codex"`; its permit, single launch, settlement and refusals are the same, and the bridge refuses a checkout that has runtime state (`managed_delegation_required`).

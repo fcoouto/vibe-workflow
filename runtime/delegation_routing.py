@@ -169,8 +169,8 @@ def admit(service, scope, request, *, attempt_id, routing_attempt, choice, const
     if choice is not None:
         assignment['choice'] = choice
     try:
-        body = routing_launch.prepare_request(assignment, job, workflow=locator,
-                                              constraints=constraints, planned=True)
+        body = routing_launch.prepare_request(assignment, job, workflow=locator, constraints=constraints, planned=True,
+                                              harnesses=routing_launch.host_harnesses(HOST))
     except routing_launch.Refused as error:
         return dict(state='blocked', reason=error.reason)
     answer = _call(service, body)
@@ -585,7 +585,7 @@ def _self_check_in_child(workdir):
     if root is None:
         return ['self_check_workdir_unsafe']
     from types import SimpleNamespace
-    from runtime import routing_observations, routing_settings
+    from runtime import routing_observations, routing_settings, subscription_billing
     checkout = root / 'checkout'
     checkout.mkdir(mode=0o700)
     identity = routing_launch.route_identity(HOST, model='self-check-model', effort='high')
@@ -594,7 +594,8 @@ def _self_check_in_child(workdir):
               account='self-check', demand={'5h': 1}, binding_enforceable=True,
               window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
-                               observed_at=at, unit=routing_observations.WINDOW_UNIT)])
+                               observed_at=at, unit=routing_observations.WINDOW_UNIT)],
+        billing=subscription_billing.double('self-check'))  # sandbox only: no production billing producer exists
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
     job = dict(id='self-check', role='software-engineer', scope_ref='self-check', claims=[], objective=None, context=None)

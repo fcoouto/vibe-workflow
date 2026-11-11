@@ -211,7 +211,9 @@ def managed_project_fixture(test, checkout, routes=()):
         return dict(state='ready', scope=scope, ref='fixture-openrouter') if route['billing_class'] == 'gateway' \
             else None
 
-    source = observations.StaticSource(manifest, windows, credential)
+    from runtime import subscription_billing  # a labelled code-level double: no production billing producer exists
+    source = observations.StaticSource(manifest, windows, credential,
+                                       billing=subscription_billing.double('managed-project-fixture'))
     patch(routing_settings, 'managed_project', lambda path, *args, **kwargs: Path(path).resolve() == root)
     patch(observations, 'default_source', lambda *args, **kwargs: source)
     yield dict(routes=manifest, settings=settings, ledger=ledger)

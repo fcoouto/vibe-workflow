@@ -16,10 +16,11 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import opencode_launcher, routing_observations as collector, routing_settings
+from runtime import opencode_launcher, routing_observations as collector, routing_settings, subscription_billing
 from scripts import routing as command
 from tests.test_routing_launch import IDENTITY, job
-from tests.test_routing_observations import SCOPE, Stores, gateway_route, gateway_window, sub_route, sub_window
+from tests.test_routing_observations import (SCOPE, Stores, gateway_route, gateway_window, request_of, sub_route,
+                                             sub_window)
 
 SECRET = 'sk-never-in-the-audit'
 
@@ -32,11 +33,18 @@ def seed(event_id='seed-1', **change):
 
 
 class Local(collector.LocalSource):
-    """The production source, reading the real private window store, with a test manifest."""
+    """The production source, reading the real private window store, with fixed test routes standing in for the
+    generated ones; `seedable` answers from those routes as a fixed source does."""
     ROUTES = (sub_route(), gateway_route())
 
-    def manifest(self):
+    def manifest(self, table=None, choices=()):
         return [dict(route) for route in self.ROUTES]
+
+    def seedable(self, pool, window):
+        return collector.StaticSource(self.ROUTES).seedable(pool, window)
+
+    def billing(self, route, now):
+        return subscription_billing.double('seed-window')(route, now)  # labelled double: no production producer
 
 
 class SeedBase(Stores):
@@ -59,7 +67,7 @@ class SeedBase(Stores):
 
     def collect(self):
         return collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
-                                 ledger_path=self.ledger_path)
+                                 ledger_path=self.ledger_path, **request_of([sub_route()]))
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -398,8 +406,9 @@ class EndToEndTests(SeedBase):
         self.addCleanup(pinned.close)
 
         def prepare(attempt):
-            request = dict(v=1, op='prepare', job=job(), assignment=dict(
-                attempt_id=attempt, task='task-' + attempt, scope=SCOPE, choice=dict(IDENTITY, funding='subscription')))
+            request = dict(v=1, op='prepare', job=job(), constraints=dict(allowed_harnesses=[IDENTITY['harness']]),
+                           assignment=dict(attempt_id=attempt, task='task-' + attempt, scope=SCOPE,
+                                           choice=dict(IDENTITY, funding='subscription')))
             return pinned.handle(json.dumps(request).encode())
 
         def status():

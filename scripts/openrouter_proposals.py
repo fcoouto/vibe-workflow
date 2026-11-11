@@ -527,15 +527,14 @@ def _unsent(granted, store, now):
             pass
 
 
-def _endpoint(settings_path, route, provider):
-    """The admitted route pins this request's endpoint: its manifest entry names it (the OpenRouter catalog check)."""
+def _endpoint(settings_path, route, identity, endpoint):
+    """The admitted route pins this request's endpoint for its identity (the OpenRouter catalog check): the source's
+    read-only `pins_endpoint`, which the workers share."""
     from runtime import routing_observations
     try:
-        specs = routing_observations.default_source(settings_path).manifest()
+        return routing_observations.default_source(settings_path).pins_endpoint(route, identity, endpoint) is True
     except (OSError, ValueError, KeyError, TypeError):
         return False
-    return any(type(spec) is dict and spec.get('route') == route and spec.get('endpoint') == provider
-               for spec in specs)
 
 
 def _prepare(service, checkout, request, limits, attempt):
@@ -550,16 +549,17 @@ def _prepare(service, checkout, request, limits, attempt):
     scope = launch.assignment_scope(checkout)
     assignment = dict(attempt_id=attempt, role='explorer-agent', scope=scope,
                       task='proposal:' + hashlib.sha256(request['task_id'].encode()).hexdigest()[:32],
-                      choice=launch.choice(HOST, 'api', **fields))
+                      choice=launch.choice(HOST, 'api', endpoint=launch.pinned_endpoint(HOST, **fields), **fields))
     job = launch.unplanned_job('explorer-agent', scope, request['task_id'])
-    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
+    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits,
+                                                             harnesses=launch.host_harnesses(HOST)))
     if prepared.get('state') != 'admitted':
         reason = prepared.get('reason')
         return None, reason if isinstance(reason, str) and reason else 'routing_unavailable'
     admission = prepared['admission']
-    facts, reason = launch.admitted_check(admission, host=HOST, catalog=[launch.route_identity(HOST, **fields)],
-                                          settings_path=service.settings_path)
-    if reason is None and not _endpoint(service.settings_path, admission['route'], request['provider']):
+    identity = launch.route_identity(HOST, **fields)
+    facts, reason = launch.admitted_check(admission, host=HOST, catalog=[identity], settings_path=service.settings_path)
+    if reason is None and not _endpoint(service.settings_path, admission['route'], identity, request['provider']):
         reason = launch.CATALOG_MISMATCH
     if reason is not None:
         return None, reason

@@ -15,8 +15,9 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 
-from runtime import routing, routing_observations, routing_settings, task_profile
+from runtime import routing, routing_observations, routing_paths, routing_settings, subscription_billing, task_profile
 from runtime.adapters import opencode as opencode_adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6); `project_required` is the routing service's own code.
@@ -29,15 +30,17 @@ WORKFLOW_REQUIRED = 'workflow_required'
 CATALOG_MISMATCH = 'catalog_mismatch'
 ROUTE_NOT_ENTITLED = 'route_not_entitled'
 DOLLAR_ROUTE_NEEDS_ENFORCED_HOST = 'dollar_route_needs_enforced_host'
+HARNESS_REQUIRED = 'harness_required'
 
 # host -> (provider, harness); a None provider comes from the host's own request. A None harness is the OpenCode
 # shim's name for the provider (`harnessFor` in runtime/adapters/opencode_plugin.ts, `HARNESS` in the Python adapter),
 # because the shim's `routing.attach` checks an admission with exactly that name.
-HOSTS = dict(codex_native=('openai', 'codex-native'), openrouter_proposal=('openrouter', 'openrouter-proposal'),
+HOSTS = dict(codex_native=('openai', 'codex-native'), claude_native=('anthropic', 'claude-native'),
+             openrouter_proposal=('openrouter', 'openrouter-proposal'),
              openrouter_worker=('openrouter', None), opencode=(None, None), api_usage=('openai', 'api'))
 PINNED_ENDPOINT = ('openrouter_proposal', 'openrouter_worker')  # the request's `provider` is the pinned endpoint
 # Advisory hosts cannot block a send before it happens, so they never get a dollar route (C.3 design 3.7).
-ADVISORY_HOSTS = ('codex_native',)
+ADVISORY_HOSTS = ('codex_native', 'claude_native')
 CONSERVATIVE_FLOORS = dict(complexity_band='high', risk_band='high', review_policy='independent')
 
 
@@ -73,18 +76,40 @@ def shim_harness(provider):
 def pinned_endpoint(host, **fields):
     """The OpenRouter endpoint a gateway host pins (its request's `provider`), else None.
 
-    Not part of the route identity yet: until an identity extension adds it, the manifest refuses two qualified
-    routes that differ only by endpoint (`routing_observations.validate_routes`), and a gateway host compares this
-    value with its admitted manifest route's `endpoint`."""
+    Not part of the route identity: it travels in the choice (`choice(..., endpoint=...)`), the choice route's id
+    includes it, and a gateway host asks its source whether the admitted route pins it (`pins_endpoint`)."""
     return fields.get('provider') if host in PINNED_ENDPOINT else None
 
 
-def choice(host, funding, **fields):
+def choice(host, funding, *, endpoint=None, **fields):
     """The only `assignment.choice` shape `routing._valid_assignment` accepts: the route identity plus `funding`
-    (`subscription`, or `api` for direct API and gateway routes)."""
+    (`subscription`, or `api` for direct API and gateway routes) and, when given, the pinned `endpoint`."""
     if funding not in routing_settings.FUNDING:
         raise ValueError('invalid_funding')
-    return dict(route_identity(host, **fields), funding=funding)
+    if endpoint is not None and not (type(endpoint) is str and 0 < len(endpoint) <= 256 and endpoint.isprintable()):
+        raise ValueError('invalid_endpoint')
+    return dict(route_identity(host, **fields), funding=funding, **({} if endpoint is None else dict(endpoint=endpoint)))
+
+
+# host -> its fixed harness set; `opencode` derives its set from its catalog and the path rules (`host_harnesses`).
+FIXED_HARNESSES = dict(codex_native=('codex-native',), claude_native=('claude-native',),
+                       openrouter_proposal=('openrouter-proposal',),
+                       openrouter_worker=('opencode provider openrouter',))
+
+
+def host_harnesses(host, catalog=(), *, dollar=False, rules=None):
+    """The harnesses a launching host can send on, sorted. The OpenCode host's are those of its catalog entries that
+    a path of the rules names, without the dollar paths' harnesses unless `dollar`; unreadable rules give none."""
+    if host in FIXED_HARNESSES:
+        return FIXED_HARNESSES[host]
+    if host != 'opencode':
+        return ()
+    try:
+        rules = routing_paths.load_rules() if rules is None else rules
+    except ValueError:
+        return ()
+    named = {item['harness'] for item in rules['paths']} - (set() if dollar else routing_paths.dollar_harnesses(rules))
+    return tuple(sorted({entry.get('harness') for entry in catalog if type(entry) is dict} & named))
 
 
 # The assignment `scope` credential readiness is compared with; the collector derives gateway credentials with it.
@@ -102,10 +127,18 @@ def unplanned_job(role, scope_ref, objective, *, tools=None):
                 requirement_floors=dict(CONSERVATIVE_FLOORS))
 
 
-def prepare_request(assignment, job, *, workflow=None, constraints=None, planned=False, profile=None):
-    """The `prepare` request a launcher sends. It never carries observations; a planned job needs `workflow`."""
+def prepare_request(assignment, job, *, harnesses, workflow=None, constraints=None, planned=False, profile=None):
+    """The `prepare` request a launcher sends. It never carries observations; a planned job needs `workflow`.
+    `harnesses` (the launching host's, `host_harnesses`) is sent as `constraints.allowed_harnesses`, intersected with
+    any the caller's constraints already allow; an empty set is refused before anything is sent."""
     if planned and workflow is None:
         raise Refused(WORKFLOW_REQUIRED)
+    constraints = copy.deepcopy(constraints) if constraints is not None else {}
+    allowed = set(harnesses or ())
+    if type(constraints) is dict and 'allowed_harnesses' in constraints:
+        allowed &= set(constraints['allowed_harnesses'] or ())
+    if not allowed or not all(type(item) is str for item in allowed):
+        raise Refused(HARNESS_REQUIRED)
     if type(job) is not dict:
         raise Refused('profile_unavailable')
     job = copy.deepcopy(job)
@@ -114,8 +147,7 @@ def prepare_request(assignment, job, *, workflow=None, constraints=None, planned
     request = dict(v=1, op='prepare', assignment=copy.deepcopy(assignment), job=job)
     if workflow is not None:
         request['workflow'] = dict(workflow)
-    if constraints is not None:
-        request['constraints'] = copy.deepcopy(constraints)
+    request['constraints'] = dict(constraints, allowed_harnesses=sorted(allowed))
     return request
 
 
@@ -195,31 +227,54 @@ def recovery_hints(status):
 def admitted_check(admission, *, host, catalog, settings_path=None, source=None):
     """(dispatch facts, None) when the admitted route may be sent on this host, else (None, reason).
 
-    Advisory hosts never send on a dollar route. With a source or settings path, the route must be `qualified` in
-    the manifest and carry no `not_entitled` mark (C.3 design 3.4). The admitted identity must be in the host's
-    actual catalog: entries are `{provider, model, effort, harness}` as the host lists them."""
+    Advisory hosts never send on a dollar route. With a source or settings path, the source must still answer the
+    route (`admitted_route`: on a generated route, its path is qualified; the dispatch check is by path), on the
+    admission's pool and billing class and the provider and harness of the catalog entry the admitted identity
+    digest decodes to, with no `not_entitled` mark (C.3 design 3.4). The admitted identity must be in the host's
+    actual catalog: entries are `{provider, model, effort, harness}` as the host lists them. Last, a subscription
+    admission needs a current subscription-only billing fact for its route, pool and account (the ledger record's,
+    else the source route's; two different ones verify nothing) from the source (the given one, else the default for
+    `settings_path`; `billing_unverified` otherwise), checked here, just before dispatch, as well as at collection.
+    Nothing is written."""
     if admission.get('billing_class') in routing.FUNDED and host in ADVISORY_HOSTS:
         return None, DOLLAR_ROUTE_NEEDS_ENFORCED_HOST
+    admitted, entry = admission.get('route_identity'), None
+    for item in catalog:
+        identity = [item.get(field) if type(item) is dict else None for field in routing.ROUTE_IDENTITY]
+        if admitted is not None and routing.route_identity(*identity) == admitted:
+            entry = dict(zip(routing.ROUTE_IDENTITY, identity))
+            break
+    spec = None
     if source is not None or settings_path is not None:
         try:
-            listed = {route['route']: route for route in routing_observations.manifest_routes(
-                source or routing_observations.default_source(settings_path))
-                if type(route) is dict and route.get('status') == 'qualified'}
+            spec = (source or routing_observations.default_source(settings_path)).admitted_route(
+                admission.get('route'), entry)
             marks = routing_observations.entitlement_marks(settings_path) if settings_path is not None else []
         except (OSError, ValueError, KeyError, TypeError):
             return None, ROUTE_NOT_ENTITLED
-        spec = listed.get(admission.get('route'))
-        if spec is None or any(mark.get('route') == spec['route'] and mark.get('account') == spec.get('account')
-                               for mark in marks):
+        if spec is None or (spec.get('pool'), spec.get('billing_class')) != (admission.get('pool'),
+                                                                             admission.get('billing_class')) \
+                or any(mark.get('route') == spec['route'] and mark.get('account') == spec.get('account')
+                       for mark in marks):
             return None, ROUTE_NOT_ENTITLED
-    admitted = admission.get('route_identity')
-    for entry in catalog:
-        identity = [entry.get(field) if type(entry) is dict else None for field in routing.ROUTE_IDENTITY]
-        if admitted is not None and routing.route_identity(*identity) == admitted:
-            provider, model, effort, harness = identity
-            return dict(provider=provider, model=model, variant=effort, harness=harness, kind='primary',
-                        funding_pool=admission.get('pool')), None
-    return None, CATALOG_MISMATCH
+    if entry is None:
+        return None, CATALOG_MISMATCH
+    if admission.get('billing_class') == 'included_subscription':
+        # The ledger record names its account; the public admission does not, so the source's route supplies it.
+        accounts = {value for value in (admission.get('account'), (spec or {}).get('account')) if value is not None}
+        route = dict(route=admission.get('route'), pool=admission.get('pool'),
+                     account=accounts.pop() if len(accounts) == 1 else None)
+        if not subscription_billing.verified(source or routing_observations.default_source(settings_path), route,
+                                             int(time.time())):
+            return None, subscription_billing.UNVERIFIED
+    return dict(provider=entry['provider'], model=entry['model'], variant=entry['effort'], harness=entry['harness'],
+                kind='primary', funding_pool=admission.get('pool')), None
+
+
+def transport_route(facts, route):
+    """What a transport receives: the dispatch facts with the admitted route id, and the identity's `none` effort
+    sentinel decoded to None (omit the effort parameter; never a literal `none`)."""
+    return dict(facts, route=route, variant=None if facts.get('variant') == 'none' else facts.get('variant'))
 
 
 # -- the launch -------------------------------------------------------------------------------------------------
@@ -237,7 +292,7 @@ def _blocked(reason, **extra):
 
 
 def launch(service, *, host, assignment, job, catalog, transport, workflow=None, constraints=None, planned=False,
-           profile=None, settings_path=None, source=None, kind='primary'):
+           profile=None, settings_path=None, source=None, kind='primary', harnesses=None, before_prepare=None):
     """Run one managed attempt through the routing service `service` (pinned; in-process `handle`).
 
     `transport(route, *, authority, session_id, message_id)` performs the host send. It is the only receiver of the
@@ -247,13 +302,17 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
     there is no fallback to another selector or route.
 
     The subscription preflight runs before `prepare`; the dollar items run again on a fresh `status` whenever the
-    admitted billing class is a dollar class, so no caller flag can skip them."""
+    admitted billing class is a dollar class, so no caller flag can skip them. `harnesses` defaults to the host's
+    own (`host_harnesses` over the same `catalog` the admitted check uses); an empty set sends nothing.
+    `before_prepare(request)` (code only: the OpenCode launcher's Go usage refresh) runs once just before `prepare`;
+    a failure there never blocks, it only leaves a reading stale or unobserved."""
     if getattr(service, 'project', None) is None:
         return _blocked(PROJECT_REQUIRED)
     settings_path = service.settings_path if settings_path is None else settings_path
     try:
         request = prepare_request(assignment, job, workflow=workflow, constraints=constraints, planned=planned,
-                                  profile=profile)
+                                  profile=profile, harnesses=host_harnesses(host, catalog) if harnesses is None
+                                  else harnesses)
     except Refused as error:
         return _blocked(error.reason)
     reason = preflight(_call(service, dict(v=1, op='status')))
@@ -261,6 +320,11 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
         return _blocked(reason)
     if not managed(service.project, settings_path):
         return dict(state='unmanaged', reason=PROJECT_NOT_MANAGED)
+    if before_prepare is not None:
+        try:
+            before_prepare(request)
+        except Exception:  # noqa: BLE001 - a failed refresh leaves the route stale or unobserved, never an error
+            pass
     prepared = _call(service, request)
     if prepared.get('state') != 'admitted':
         return {key: prepared[key] for key in ('state', 'reason', 'reasons') if key in prepared}
@@ -278,7 +342,7 @@ def launch(service, *, host, assignment, job, catalog, transport, workflow=None,
         _record(service, attempt, 'not_dispatched')
         return _blocked(reason, attempt_id=attempt)
     try:
-        outcome = transport(dict(facts, route=admission['route']), authority=sent.pop('authority'),
+        outcome = transport(transport_route(facts, admission['route']), authority=sent.pop('authority'),
                             session_id=sent.get('session_id'), message_id=sent.get('message_id'))
     except Exception:  # noqa: BLE001 - an unconfirmed host launch is never retried with a second dispatch
         _record(service, attempt, 'uncertain')
@@ -387,7 +451,8 @@ def _self_check_in_child(workdir):
               account='self-check', demand={'5h': 1}, binding_enforceable=True,
               window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
-                               observed_at=at, unit=routing_observations.WINDOW_UNIT)])
+                               observed_at=at, unit=routing_observations.WINDOW_UNIT)],
+        billing=subscription_billing.double('self-check'))  # sandbox only: no production billing producer exists
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
@@ -423,7 +488,8 @@ def _self_check_in_child(workdir):
                                                  settings_path=service.settings_path, ledger_path=service.ledger_path)
         offered = dict(prepare_request(dict(attempt_id='offered', task='self-check-offered',
                                             scope=assignment_scope(checkout)),
-                                       unplanned_job('software-engineer', assignment_scope(checkout), 'offered')),
+                                       unplanned_job('software-engineer', assignment_scope(checkout), 'offered'),
+                                       harnesses=host_harnesses('codex_native')),
                        observations=collected['observations'])
         if _call(service, offered).get('reason') != 'observations_not_accepted':
             codes.append('caller_observations_accepted')

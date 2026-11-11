@@ -2,11 +2,11 @@
   "version": 1,
   "files": {
     "clients/claude-code.md": {
-      "sha256": "b5b004df4b8db81fb278269e18caba23cef6be7d7da200a7bf47e83ebc87dac3",
+      "sha256": "153284319f810a1ed83303071324ceb90e979ea88a76281f917b66756b1921cf",
       "ranges": [
         [
           1,
-          21
+          47
         ]
       ]
     },
@@ -20,11 +20,11 @@
       ]
     },
     "clients/codex.md": {
-      "sha256": "73a13bfeb6ce7abf13614afce978981cf2474ce4bf429f5bdd15bd80dc8f052e",
+      "sha256": "bcc3943236d45fdcb3a2cf2bdc2fea7bbea1bdcdb0b721c21ab39594611a7310",
       "ranges": [
         [
           1,
-          63
+          67
         ]
       ]
     },
@@ -180,11 +180,11 @@
       ]
     },
     "clients/guidance-publication.md": {
-      "sha256": "4153c3a0775f368d05127195417798469eaab925dab9eaa1f3ca1cec7a08e531",
+      "sha256": "85a4192a79a50e2d1a954e5985c4cb87644fd564038af4242780ca4049aa2b8a",
       "ranges": [
         [
           1,
-          103
+          119
         ]
       ]
     },
@@ -216,7 +216,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "e871ce8559617e6c25e080b227f5e7bbfacd28048644b1db6c24b1f064d6c11b",
+      "sha256": "51850dbce2a3b3f2a03391cd68617b05cd25afd4d170838bb418ad9bc7e4a47d",
       "ranges": [
         [
           1,
@@ -260,7 +260,7 @@
         ],
         [
           340,
-          350
+          361
         ]
       ]
     },
@@ -428,7 +428,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "02c1b52869cfd4504bab419de4f52d32253bf1cafc33d38bc20899d1419309cf",
+      "sha256": "7cda72b66ebe907cf9517127c2bba543fac0b0ddd3adbaa212019f9ff3759240",
       "ranges": [
         [
           1,
@@ -436,10 +436,10 @@
         ],
         [
           39,
-          97
+          92
         ],
         [
-          98,
+          93,
           145
         ]
       ]
@@ -644,11 +644,11 @@
       ]
     },
     "skills/manage-usage-routing/references/worker-choices.md": {
-      "sha256": "2544a2b6979c1d0a8c80210c072bbffa3dd74e55079e223f45b225b5e2b8bee2",
+      "sha256": "64afb9162963eb0123fbda74224a628f501884b1e119fc9bbdada89baa1144c5",
       "ranges": [
         [
           1,
-          55
+          71
         ]
       ]
     },

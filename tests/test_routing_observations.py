@@ -12,7 +12,8 @@ import unittest
 from unittest import mock
 import urllib.request
 
-from runtime import openrouter_settings, routing, routing_observations as collector, usage_credentials
+from runtime import openrouter_settings, routing, routing_observations as collector, subscription_billing, \
+    usage_credentials
 from scripts import routing as command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,30 @@ def gateway_window(at, organization='or-org'):
 
 def ready(route, scope):
     return dict(state='ready', scope=scope, ref='ref-' + route['route'])
+
+
+def choice_of(route, **extra):
+    """The explicit choice that selects a fixed route by identity and funding (never by its id)."""
+    return dict({key: route[key] for key in routing.ROUTE_IDENTITY},
+                funding=routing.FUNDING_OF.get(route.get('billing_class'), 'subscription'), **extra)
+
+
+def request_of(routes):
+    """F4's request interface for fixed routes: one choice per well-formed route and the harnesses they name."""
+    usable = [route for route in routes if type(route) is dict and all(routing._text(route.get(key))
+                                                                       for key in routing.ROUTE_IDENTITY)]
+    return dict(choices=[choice_of(route) for route in usable],
+                harnesses=sorted({route['harness'] for route in usable}))
+
+
+def ranked_of(routes):
+    """A ranked request over fixed routes: each route's own `strategy_id` (its id when absent), in list order."""
+    routes = [dict(route, strategy_id=route.get('strategy_id', route.get('route'))) if type(route) is dict else route
+              for route in routes]
+    harnesses = sorted({route.get('harness') for route in routes if type(route) is dict
+                        and type(route.get('harness')) is str})
+    return routes, dict(strategy_ids=[route['strategy_id'] for route in routes if type(route) is dict
+                                      and routing._text(route.get('strategy_id'))], harnesses=harnesses)
 
 
 ACTIVATION = 'activation:openrouter:scope-id:r4'
@@ -110,10 +135,11 @@ class Stores(unittest.TestCase):
         ledger = self.service._ledger(True, write=True)
         return ledger.snapshot()
 
-    def collect(self, routes, windows, project=None):
-        source = collector.StaticSource(routes, windows, ready)
+    def collect(self, routes, windows, project=None, **request):
+        # A labelled code-level double supplies positive billing; no production producer exists.
+        source = collector.StaticSource(routes, windows, ready, billing=subscription_billing.double('stores'))
         return collector.collect(str(project or self.root), dict(scope=SCOPE), settings_path=self.settings,
-                                 ledger_path=self.ledger_path, source=source)
+                                 ledger_path=self.ledger_path, source=source, **(request or request_of(routes)))
 
 
 def excluded(result):
@@ -147,10 +173,11 @@ class CollectorTests(Stores):
         self.assertEqual(admitted['status'], 'admitted', admitted)
 
     def test_an_unknown_unqualified_or_malformed_manifest_route_is_excluded(self):
-        routes = [sub_route('unverified', status='unverified'), sub_route('unsupported', status='unsupported'),
-                  sub_route('nostatus', status=None), sub_route('purchased', billing_class='purchased_usage'),
-                  dict(route='broken', status='qualified'), sub_route('ok')]
-        result = self.collect(routes, dict(sub=[sub_window(self.now)]))
+        routes, request = ranked_of([
+            sub_route('unverified', status='unverified'), sub_route('unsupported', status='unsupported'),
+            sub_route('nostatus', status=None), sub_route('purchased', billing_class='purchased_usage'),
+            dict(route='broken', status='qualified', harness='codex-native'), sub_route('ok')])
+        result = self.collect(routes, dict(sub=[sub_window(self.now)]), **request)
         self.assertEqual(excluded(result), dict(unverified='route_unqualified', unsupported='route_unqualified',
                                                 nostatus='route_unqualified', purchased='billing_class_excluded',
                                                 broken='route_invalid'))
@@ -187,23 +214,22 @@ class CollectorTests(Stores):
         self.assertEqual(excluded(result), dict(sub='window_unit_mismatch'))
 
     def test_the_local_source_declares_the_shipped_window_unit_and_stores_it(self):
-        manifest = json.loads(collector.MANIFEST.read_text())
-        self.assertEqual(manifest['window_unit'], collector.WINDOW_UNIT)
+        from runtime import routing_paths
+        rules = routing_paths.load_rules()
+        self.assertTrue(all(item['window_unit'] == collector.WINDOW_UNIT for item in rules['paths']
+                            if item['billing_class'] == 'included_subscription'))
         local = collector.default_source(self.settings)
-        self.assertTrue(all(route['window_unit'] == collector.WINDOW_UNIT for route in local.manifest()))
         collector.store_window(self.settings, 'sub', sub_window(self.now))
         self.assertEqual([window['unit'] for window in local.windows('sub', self.now)], [collector.WINDOW_UNIT])
         result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
                                    ledger_path=self.ledger_path,
-                                   source=collector.StaticSource([sub_route()], local.windows, ready))
+                                   source=collector.StaticSource([sub_route()], local.windows, ready,
+                                                                 billing=subscription_billing.double('local-windows')),
+                                   **request_of([sub_route()]))
         self.assertEqual(set(kept(result)), {'sub'})
         for bad in (dict(sub_window(self.now), unit=''), dict(sub_window(self.now), unit=5)):
             with self.assertRaisesRegex(ValueError, 'invalid_window_observation'):
                 collector.store_window(self.settings, 'sub', bad)
-        path = self.root / 'routes.json'
-        path.write_text(json.dumps(dict(version=1, window_unit=7, routes=[])))
-        with self.assertRaisesRegex(ValueError, 'route_manifest_invalid'):
-            collector.load_manifest(path)
 
     def test_a_not_entitled_route_stays_excluded_until_cleared(self):
         windows = dict(sub=[sub_window(self.now)])
@@ -252,48 +278,53 @@ class CollectorTests(Stores):
         source = collector.default_source(self.settings)
         self.assertEqual([window['used'] for window in source.windows('sub', self.now)], [100])
         self.assertIsNone(source.credential(gateway_route(), SCOPE))  # a secret is never resolved
-        shipped = source.manifest()
-        self.assertTrue(shipped)
-        self.assertFalse([route for route in shipped if route.get('status') == 'qualified'])
+        self.assertEqual(source.manifest(), [])  # no path is qualified: nothing is generated
         with self.assertRaises(ValueError):
             collector.store_window(self.settings, 'sub', dict(sub_window(self.now), limit=0))
 
-    def test_the_shipped_manifest_qualifies_no_route_until_user_decision_5(self):
-        manifest = json.loads(collector.MANIFEST.read_text())
-        self.assertEqual(manifest['decision'], 'pending: C.3 design 7.1 user decision 5')
-        self.assertEqual(collector.manifest_check(), ['route_manifest_unqualified'])
+    def test_without_a_qualified_path_the_local_source_generates_nothing(self):
+        from runtime import routing_paths
+        self.assertEqual(routing_paths.gate(self.settings), ['no_qualified_path'])
+        choice = dict(provider='openai', model='m', effort='high', harness='codex-native', funding='subscription')
         result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
-                                   ledger_path=self.ledger_path)
-        self.assertEqual(result['observations']['routes'], [])
-        self.assertTrue(result['observations']['excluded'])
-        qualified = collector.StaticSource([sub_route()], {}, ready)
-        self.assertEqual(collector.manifest_check(qualified), [])
+                                   ledger_path=self.ledger_path, choices=[choice], harnesses=['codex-native'])
+        self.assertEqual((result['observations']['routes'], result['observations']['excluded']), ([], []))
+        self.assertRegex(result['observations']['routes_version'], r'^[0-9a-f]{16}$')
 
     def test_no_request_field_or_setting_selects_the_source(self):
         """Only code replaces `default_source` (C.3 design 3.3): `collect` takes no request input naming one."""
         seen = []
         with mock.patch.object(collector, 'default_source',
                                lambda settings_path=None: seen.append(settings_path) or
-                               collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready)):
+                               collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready,
+                                                      billing=subscription_billing.double('default-source'))):
             result = collector.collect(str(self.root), dict(scope=SCOPE, source='local'),
-                                       settings_path=self.settings, ledger_path=self.ledger_path)
+                                       settings_path=self.settings, ledger_path=self.ledger_path,
+                                       **request_of([sub_route()]))
         self.assertEqual(seen, [self.settings])
         self.assertEqual(set(kept(result)), {'sub'})
 
 
-    def test_the_shipped_test_only_route_stays_excluded_with_fresh_telemetry_and_funding(self):
-        """The shipped manifest's `test_only` route is never a candidate, however good its observations are."""
+    def test_the_shipped_test_only_path_generates_nothing_with_fresh_telemetry_and_funding(self):
+        """The shipped `test_only` path is never qualified in production, so no route is generated for it, however
+        good its observations are; `qualify_path` refuses it outside test inputs."""
+        from runtime import routing_paths
         self.fund()
-        test_only = [route for route in collector.load_manifest()['routes'] if route['status'] == 'test_only']
+        test_only = [item for item in routing_paths.load_rules()['paths'] if item.get('status') == 'test_only']
         self.assertTrue(test_only)
-        for route in test_only:
-            for window_id in route['demand']:
-                collector.store_window(self.settings, route['pool'], sub_window(self.now, id=window_id))
+        for item in test_only:
+            for window_id in item['windows']:
+                collector.store_window(self.settings, item['pool'], sub_window(self.now, id=window_id))
+            with self.assertRaisesRegex(ValueError, 'path_test_only'):
+                routing_paths.qualify(self.settings, item['path'], demand={key: 1 for key in item['windows']},
+                                      evidence='e', now=self.now)
+        choices = [dict(provider=item['provider'], model='test-model', effort='none', harness=item['harness'],
+                        funding='subscription') for item in test_only]
         result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
-                                   ledger_path=self.ledger_path)
-        self.assertEqual(result['observations']['routes'], [])
-        self.assertEqual(result['observations']['pools'], {})
-        self.assertEqual(excluded(result), {route['route']: 'route_unqualified' for route in test_only})
+                                   ledger_path=self.ledger_path, choices=choices,
+                                   harnesses=[item['harness'] for item in test_only])
+        self.assertEqual((result['observations']['routes'], result['observations']['pools']), ([], {}))
+        self.assertEqual(excluded(result), {})
 
     def test_a_future_dated_window_observation_is_refused(self):
         """A record dated beyond now plus the clock margin could shadow every later observation."""
@@ -319,9 +350,10 @@ class CollectorTests(Stores):
                 mock.patch.object(usage_settings, 'directory', refuse('usage_settings.directory')), \
                 mock.patch.object(openrouter_settings, 'status', lambda cwd: dict(status)):
             result = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
-                                       ledger_path=self.ledger_path, source=source)
+                                       ledger_path=self.ledger_path, source=source, **request_of([gateway_route()]))
             elsewhere = collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.root / 'other' / 's.json',
-                                          ledger_path=self.root / 'other' / 'l.sqlite3', source=source)
+                                          ledger_path=self.root / 'other' / 'l.sqlite3', source=source,
+                                          **request_of([gateway_route()]))
         self.assertEqual(kept(result)['gw']['funding_verified'], True)  # this ledger's organization, this window
         self.assertEqual(excluded(elsewhere), dict(gw='funding_unverified'))  # another ledger funds nothing
         self.assertEqual(collector.default_source(self.root / 'other' / 's.json').windows('gw', self.now), [])
@@ -330,13 +362,8 @@ class CollectorTests(Stores):
 
 
 class ManifestEndpointTests(Stores):
-    """C3-1b: the route identity has no endpoint, so a manifest qualifying one identity at two endpoints is refused
-    as a whole (fail closed) rather than letting either route stand for the other."""
-
-    def write(self, routes):
-        path = self.root / 'routes.json'
-        path.write_text(json.dumps(dict(version=1, routes=routes)))
-        return path
+    """C3-1b: a fixed route list qualifying one identity at two endpoints is refused as a whole (fail closed) rather
+    than letting either route stand for the other. Generated routes skip such strategies instead (test_routing_paths)."""
 
     def test_two_qualified_routes_differing_only_by_endpoint_refuse_the_manifest(self):
         ambiguous = [gateway_route('gw-p', endpoint='p'), gateway_route('gw-q', endpoint='q', account='other')]
@@ -345,9 +372,7 @@ class ManifestEndpointTests(Stores):
         for routes in (ambiguous, missing):
             with self.subTest(routes=[route['route'] for route in routes]):
                 with self.assertRaisesRegex(ValueError, 'route_manifest_endpoint_ambiguous'):
-                    collector.load_manifest(self.write(routes))
-                source = collector.StaticSource(routes, dict(gw=[gateway_window(self.now)]), ready)
-                self.assertEqual(collector.manifest_check(source), ['route_manifest_invalid'])
+                    collector.validate_routes(routes)
                 with self.assertRaisesRegex(ValueError, 'route_manifest_endpoint_ambiguous'):  # prepare fails closed
                     self.collect(routes, dict(gw=[gateway_window(self.now)]))
 
@@ -355,9 +380,7 @@ class ManifestEndpointTests(Stores):
         routes = [gateway_route('gw-p', endpoint='p'), gateway_route('gw-p2', endpoint='p', account='other'),
                   gateway_route('gw-q', endpoint='q', status='unverified'),  # not qualified: never confusable
                   gateway_route('gw-m2', endpoint='q', model='model/v2')]  # another identity
-        self.assertEqual(collector.load_manifest(self.write(routes))['routes'], routes)
-        self.assertEqual(collector.manifest_check(collector.StaticSource(routes)), [])
-        self.assertEqual(collector.load_manifest(), json.loads(collector.MANIFEST.read_text()))  # shipped one is valid
+        self.assertEqual(collector.validate_routes(routes), routes)
 
 
 class GatewayDerivationTests(Stores):
@@ -459,6 +482,210 @@ class GatewayDerivationTests(Stores):
         self.assertEqual(result['seen'], dict(openrouter_revision=None))
         self.assertEqual((admission.call_count, status.call_count), (0, 1))  # no retry loop
         self.assertLess(elapsed, 5)
+
+
+CLAUDE_PATH, CHATGPT_PATH = 'opencode-claude-subscription', 'opencode-chatgpt-subscription'
+CLAUDE_HARNESS, CHATGPT_HARNESS = 'claude-agent-sdk via opencode', 'opencode provider openai'
+
+
+def strategy(sid, harness=CLAUDE_HARNESS, provider='claude-agent', model=None, effort='high', **extra):
+    return dict(strategy_id=sid, model=model or 'invented-' + sid, effort=effort, harness=harness, provider=provider,
+                evidence_refs=['g'], **extra)
+
+
+def table_of(*strategies):
+    return dict(schema=2, version='tv1', rows={'implementation|high|high': list(strategies)})
+
+
+class LocalSourceTests(Stores):
+    """F4.2/F4.4 on the production source: routes generated in memory from the shipped rules, qualifications in this
+    test's private store and the request's table or choices. These pin behavior implemented before they were
+    written (no test-first claim)."""
+
+    def setUp(self):
+        super().setUp()
+        # No production billing producer exists: a labelled code-level double stands in for this class's flows.
+        billing = mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now:
+                                    subscription_billing.double('local-source-tests')(route, now))
+        billing.start()
+        self.addCleanup(billing.stop)
+
+    def qualify(self, path=CLAUDE_PATH, demand=None):
+        from runtime import routing_paths
+        demand = demand or ({'5h': 10, '7d': 2} if path == CLAUDE_PATH else {'7d': 3})
+        routing_paths.qualify(self.settings, path, demand=demand, evidence='e', now=self.now)
+
+    def store(self, pool, *ids, at=None):
+        for window in ids:
+            collector.store_window(self.settings, pool, sub_window(self.now if at is None else at, id=window))
+
+    def collect(self, routes=None, windows=None, project=None, **request):
+        request.setdefault('harnesses', [CLAUDE_HARNESS, CHATGPT_HARNESS])
+        return collector.collect(str(project or self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                 ledger_path=self.ledger_path, **request)
+
+    def test_not_entitled_mark_still_excludes_a_generated_route(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        table = table_of(strategy('s1'))
+        route = 'opencode-claude-subscription:s1'
+        self.assertEqual(set(kept(self.collect(table=table, strategy_ids=['s1']))), {route})
+        collector.mark_not_entitled(self.settings, route, 'claude-plan', self.now)
+        self.assertEqual(excluded(self.collect(table=table, strategy_ids=['s1'])), {route: 'not_entitled'})
+        choice = dict(provider='claude-agent', model='invented-s1', effort='high', harness=CLAUDE_HARNESS,
+                      funding='subscription')
+        chosen = self.collect(choices=[choice])  # the choice route of the same model has its own id: no carry-over
+        self.assertEqual(len(kept(chosen)), 1)
+        self.assertRegex(next(iter(kept(chosen))), r'^opencode-claude-subscription:choice:[0-9a-f]{16}$')
+
+    def test_local_source_without_a_settings_path_has_no_route(self):
+        self.qualify()
+        source = collector.LocalSource(None)
+        self.assertEqual(source.manifest(table_of(strategy('s1'))), [])
+        self.assertIsNone(source.admitted_route('opencode-claude-subscription:s1'))
+        self.assertIs(source.seedable('claude-subscription', '5h'), False)
+        self.assertEqual(source.windows('claude-subscription', self.now), [])
+
+    def test_collect_reads_only_the_ranked_strategies(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        strategies = [strategy('s%02d' % n) for n in range(80)]
+        ranked = ['s07', 's03', 's70', 's11', 's42']
+        result = self.collect(table=table_of(*strategies), strategy_ids=ranked)
+        self.assertEqual([route['strategy_id'] for route in result['observations']['routes']], ranked)
+        self.assertEqual(result['observations']['excluded'], [])  # the 75 others are never considered
+
+    def test_collector_route_count_bound(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        strategies = [strategy('s%03d' % n) for n in range(100)]
+        cut = collector.shortlist(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                  table=table_of(*strategies), strategy_ids=[item['strategy_id'] for item in strategies],
+                                  harnesses=[CLAUDE_HARNESS])
+        self.assertEqual(len(cut['routes']), routing.MAX_ROUTES)
+        self.assertEqual(cut['shortlist'], ['s%03d' % n for n in range(routing.MAX_ROUTES)])  # ranking order kept
+
+    def test_static_source_answers_the_whole_interface(self):
+        static = collector.StaticSource([sub_route(), gateway_route(pool='gw')], dict(sub=[sub_window(self.now)]))
+        for name in ('manifest', 'admitted_route', 'pins_endpoint', 'seedable', 'routes_version', 'windows',
+                     'credential', 'billing'):
+            self.assertTrue(callable(getattr(static, name)), name)
+            self.assertTrue(callable(getattr(collector.LocalSource(self.settings), name)), name)
+        self.assertEqual([route['route'] for route in static.manifest(table_of(strategy('x')), [{}])], ['sub', 'gw'])
+        self.assertEqual(static.admitted_route('sub')['account'], 'sub-account')
+        self.assertIsNone(static.admitted_route('sub', dict(choice_of(sub_route()), model='other')))
+        self.assertIs(static.pins_endpoint('gw', choice_of(gateway_route()), 'p'), True)
+        self.assertIs(static.pins_endpoint('gw', choice_of(gateway_route()), 'q'), False)
+        self.assertIs(static.seedable('sub', '5h'), True)
+        self.assertIs(static.seedable('gw', 'credit'), False)
+        self.assertIsNone(static.routes_version(table_of()))
+
+    def test_reader_runs_only_for_a_kept_chatgpt_route(self):
+        from runtime import codex_rate_limits
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        self.store('claude-subscription', '5h', '7d')
+        self.store('chatgpt-subscription', '7d', at=self.now - collector.FRESH_SECONDS - 60)  # stale
+        table = table_of(strategy('c1'), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+        with mock.patch.object(codex_rate_limits, 'refresh', side_effect=Refused('codex reader')):
+            claude_only = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CLAUDE_HARNESS],
+                                       refresh_windows=True)
+        self.assertEqual(set(kept(claude_only)), {'opencode-claude-subscription:c1'})
+        reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
+        with mock.patch.object(codex_rate_limits, 'refresh', reader):
+            both = self.collect(table=table, strategy_ids=['o1', 'c1'], refresh_windows=True)
+        self.assertEqual(reader.call_count, 1)  # once, for the kept ChatGPT route's pool only
+        self.assertEqual(reader.call_args.kwargs['need'], ('7d',))
+        self.assertEqual(excluded(both), {'opencode-chatgpt-subscription:o1': 'codex_unavailable'})
+
+    def test_choice_filter_keeps_static_source_ids(self):
+        routes = [sub_route('fixed-a'), sub_route('fixed-b', model='other'),
+                  sub_route('ranked', strategy_id='s-ranked')]
+        result = self.collect_static(routes, choices=[choice_of(routes[0])])
+        self.assertEqual(set(kept(result)), {'fixed-a'})  # by identity and funding; a strategy route never matches
+        wrong_funding = self.collect_static(routes, choices=[dict(choice_of(routes[0]), funding='api')])
+        self.assertEqual(kept(wrong_funding), {})
+
+    def collect_static(self, routes, **request):
+        source = collector.StaticSource(routes, dict(sub=[sub_window(self.now)]), ready,
+                                        billing=subscription_billing.double('collect-static'))
+        return collector.collect(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                 ledger_path=self.ledger_path, source=source, harnesses=['codex-native'], **request)
+
+    def test_shortlist_and_collect_share_the_pre_window_cut(self):
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        self.store('claude-subscription', '5h', '7d')
+        table = table_of(strategy('c1'), strategy('c2'), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+        collector.mark_not_entitled(self.settings, 'opencode-claude-subscription:c2', 'claude-plan', self.now)
+        request = dict(table=table, strategy_ids=['c2', 'o1', 'c1'], harnesses=[CLAUDE_HARNESS, CHATGPT_HARNESS])
+        cut = collector.shortlist(str(self.root), dict(scope=SCOPE), settings_path=self.settings, **request)
+        with mock.patch.object(collector, 'shortlist', wraps=collector.shortlist) as shared:
+            result = self.collect(**request)
+        self.assertEqual(shared.call_count, 1)
+        self.assertEqual(cut['shortlist'], ['o1', 'c1'])
+        self.assertEqual(cut['excluded'], [dict(route='opencode-claude-subscription:c2', reason='not_entitled')])
+        self.assertEqual(result['observations']['excluded'][:1], cut['excluded'])  # the same static exclusions first
+        self.assertEqual(excluded(result)['opencode-chatgpt-subscription:o1'], 'window_unobserved')  # then windows
+        self.assertEqual(result['observations']['routes_version'], cut['routes_version'])
+
+    def test_shortlist_never_reads_windows_or_ledger_or_refreshes(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        before = sorted((path.name, path.read_bytes()) for path in self.settings.parent.iterdir() if path.is_file())
+        with mock.patch.object(collector.LocalSource, 'windows', side_effect=Refused('windows')), \
+                mock.patch.object(collector, '_ledger_data', side_effect=Refused('ledger')), \
+                mock.patch.object(collector, 'refresh_needed', side_effect=Refused('refresh')), \
+                mock.patch.object(collector, '_openrouter', side_effect=Refused('openrouter')), \
+                mock.patch.object(collector, 'store_window', side_effect=Refused('write')):
+            cut = collector.shortlist(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
+                                      table=table_of(strategy('s1')), strategy_ids=['s1'], harnesses=[CLAUDE_HARNESS])
+        self.assertEqual(cut['shortlist'], ['s1'])
+        after = sorted((path.name, path.read_bytes()) for path in self.settings.parent.iterdir() if path.is_file())
+        self.assertEqual(after, before)
+        self.assertFalse(self.ledger_path.exists())
+
+    def test_ranked_paid_route_never_reads_openrouter_status(self):
+        """A synthetic qualified gateway path survives the host filter but a ranked dollar route is excluded before
+        any funding or OpenRouter status read (decision B)."""
+        from runtime import routing_paths
+        rules = routing_paths.load_rules()
+        routing_paths.qualify(self.settings, 'openrouter-proposals', demand={'credit': 5}, evidence='e', now=self.now,
+                              rules=rules)
+        gateway = strategy('g1', harness='openrouter-proposal', provider='openrouter', effort=None, endpoint='ep')
+        with mock.patch.object(collector, '_openrouter', side_effect=Refused('openrouter')), \
+                mock.patch.object(openrouter_settings, 'status', side_effect=Refused('status')):
+            result = self.collect(table=table_of(gateway), strategy_ids=['g1'], harnesses=['openrouter-proposal'])
+        self.assertEqual(excluded(result), {'openrouter-proposals:g1': 'billing_class_excluded'})
+        self.assertEqual(result['seen'], dict(openrouter_revision=None))
+
+    def test_host_filter_drops_routes_silently_before_every_other_step(self):
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        table = table_of(strategy('c1'), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+        collector.mark_not_entitled(self.settings, 'opencode-chatgpt-subscription:o1', 'chatgpt-plan', self.now)
+        result = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CLAUDE_HARNESS])
+        self.assertNotIn('opencode-chatgpt-subscription:o1', json.dumps(result))  # not even its not_entitled mark
+        self.assertEqual(excluded(result), {'opencode-claude-subscription:c1': 'window_unobserved'})
+        nothing = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=None)
+        self.assertEqual((nothing['observations']['routes'], nothing['observations']['excluded']), ([], []))
+
+    def test_pool_windows_are_read_only_for_paths_the_host_can_send(self):
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        self.store('claude-subscription', '5h', '7d')
+        self.store('chatgpt-subscription', '7d')
+        read = []
+        real = collector.LocalSource.windows
+
+        def spy(source, pool, now):
+            read.append(pool)
+            return real(source, pool, now)
+        table = table_of(strategy('c1'), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+        with mock.patch.object(collector.LocalSource, 'windows', spy):
+            result = self.collect(table=table, strategy_ids=['o1', 'c1'], harnesses=[CHATGPT_HARNESS])
+        self.assertEqual(read, ['chatgpt-subscription'])
+        self.assertEqual(set(result['observations']['pools']), {'chatgpt-subscription'})
 
 
 class ManagedFixtureTests(unittest.TestCase):

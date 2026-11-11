@@ -292,7 +292,9 @@ class Drill:
         from runtime import opencode_launcher
         read = opencode_launcher.account(self.host, session, funding="subscription", attempt=attempt, authority=None)
         usage = read["result"].get("usage")
-        reading = demand.from_observation(read["result"].get("rate_limit"), "drill1", "sub")  # the re-read's own data
+        reading = demand.from_observation(  # the re-read's own data, bound to the drill's path, run and route
+            read["result"].get("rate_limit"), "drill1", "sub", path=demand.path_for(ROUTE[0]), run=self.run_id,
+            account=state.account, model=ROUTE[1], effort=ROUTE[2])
         self.facts["demand_reading"] = reading is not None
         if reading is not None and self.demand_log is not None:
             self.demand_log.append(reading)

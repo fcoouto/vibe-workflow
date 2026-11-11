@@ -27,7 +27,8 @@ import sys
 import tempfile
 import time
 
-from runtime import opencode_accounting, routing, routing_launch, routing_observations
+from runtime import opencode_accounting, opencode_subscription, routing, routing_launch, routing_observations, \
+    subscription_billing
 from runtime.adapters import opencode as adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6). Codes from the core and the routing command pass through.
@@ -540,7 +541,9 @@ class _Attempt:
     def __call__(self, route, *, authority, session_id, message_id):
         self._token, self.session = authority, session_id
         attempt = self.gate.attempt_id
-        model = '%s/%s#%s' % (route['provider'], route['model'], route['variant'])
+        # An omitted effort (None) is sent as no variant, to the shim and the session alike; the routing check reads
+        # a missing variant as the admitted identity's `none` sentinel.
+        model = '%s/%s' % (route['provider'], route['model']) + ('' if route['variant'] is None else '#' + route['variant'])
         try:
             status, body = self.host.rpc('attach', dict(session_id=session_id, attempt_id=attempt, authority=authority,
                                                         funding_pool=route['funding_pool'], model=model,
@@ -553,7 +556,8 @@ class _Attempt:
         self.attached = True
         status, created = self.host.request('POST', '/api/session', dict(
             id=session_id, title=SESSION_TITLE, permissions=WORKER_RULES, location=dict(directory=self.host.directory),
-            model=dict(id=route['model'], providerID=route['provider'], variant=route['variant'])))
+            model=dict(id=route['model'], providerID=route['provider'],
+                       **({} if route['variant'] is None else dict(variant=route['variant'])))))
         if status != 200 or (_data(created) or {}).get('id') != session_id:
             raise Unconfirmed('session_unconfirmed')
         began = int(time.time() * 1000)
@@ -617,14 +621,13 @@ def _interrupted(service, gate):
 
 
 def _account_of(settings_path, source, route):
+    """The account of the admitted route, from the source's read-only lookup (the qualified path's for a generated
+    route), or None."""
     try:
-        manifest = (source or routing_observations.default_source(settings_path)).manifest()
+        spec = (source or routing_observations.default_source(settings_path)).admitted_route(route)
     except (OSError, ValueError):
         return None
-    for spec in manifest:
-        if isinstance(spec, dict) and spec.get('route') == route and isinstance(spec.get('account'), str):
-            return spec['account']
-    return None
+    return spec['account'] if isinstance(spec, dict) and isinstance(spec.get('account'), str) else None
 
 
 def _finish(result, gate, attempt, detached, settings_path, source):
@@ -698,11 +701,16 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
         gate = _Gate(service, host, options)
         attempt = _Attempt(host, gate, prompt, idle_timeout)
         detached = None
+        listed = catalog(host)  # read once: the host's harnesses before `prepare` and the admitted check after it
         try:
-            result = routing_launch.launch(gate, host='opencode', assignment=assignment, job=job, catalog=catalog(host),
+            result = routing_launch.launch(gate, host='opencode', assignment=assignment, job=job, catalog=listed,
                                            transport=attempt, workflow=workflow, constraints=constraints,
                                            planned=planned, profile=profile, settings_path=service.settings_path,
-                                           source=source)
+                                           source=source, harnesses=routing_launch.host_harnesses(
+                                               'opencode', listed, dollar=API_FUNDING_QUALIFIED),
+                                           before_prepare=lambda request: opencode_subscription.refresh(  # F4.5 Go
+                                               service, lambda: host.request('GET', opencode_subscription.USAGE_PATH),
+                                               request, now=int(time.time())))
         except BaseException:
             # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`;
             # close or mark the hold it leaves before re-raising.
@@ -723,14 +731,15 @@ class _SelfCheckHost:
     def __init__(self, shim, directory):
         self.shim, self.directory, self.created, self.tokens, self.sessions = shim, directory, 0, [], {}
         self.healthy, self.denies, self.attach_ok = True, list(adapter.MANAGED_DENIES), True
-        self.models = [dict(providerID='self-check', id='self-check-model', variants=['high'])]
+        self.models = [dict(providerID=SELF_CHECK_PROVIDER, id='self-check-model', variants=['high'])]
 
     def rpc(self, method, payload):
         if method == 'health':
             return (200, dict(state='ok', managed_denies=list(self.denies))) if self.healthy else (500, None)
         self.tokens.append(payload.get('authority'))
         if method == 'attach':
-            facts = dict(provider='self-check', model='self-check-model', variant='high', harness=routing_launch.shim_harness('self-check'),
+            facts = dict(provider=SELF_CHECK_PROVIDER, model='self-check-model', variant='high',
+                         harness=routing_launch.shim_harness(SELF_CHECK_PROVIDER),
                          kind='primary', funding_pool=payload['funding_pool'])
             answer = self.shim.handle(json.dumps(dict(v=1, op='check', attempt_id=payload['attempt_id'],
                                                       session_id=payload['session_id'], authority=payload['authority'],
@@ -763,7 +772,7 @@ class _SelfCheckHost:
             self.sessions[parts[2]] += [
                 dict(id=body['id'], type='user', time=dict(created=now)),
                 dict(id='msg_selfcheckassistant', type='assistant', finish='stop', cost=0, tokens=tokens,
-                     model=dict(id='self-check-model', providerID='self-check', variant='high'),
+                     model=dict(id='self-check-model', providerID=SELF_CHECK_PROVIDER, variant='high'),
                      time=dict(created=now, completed=now + 1)),
                 dict(id='msg_selfcheckidle', type='idle', outcome='succeeded', time=dict(created=now + 2))]
             return 200, dict(data=dict(id=body['id']))
@@ -772,6 +781,8 @@ class _SelfCheckHost:
 
 
 _SELF_CHECK_CHILD = False  # set only by SELF_CHECK_CHILD's code, never from the environment or a request
+# The self-check's provider: one a shipped subscription path names, so the host's harness set reaches `prepare`.
+SELF_CHECK_PROVIDER = 'openai'
 SELF_CHECK_MARK = 'opencode-launcher-self-check:'
 SELF_CHECK_CHILD = (
     'import json, sys\n'
@@ -825,13 +836,13 @@ def _self_check_in_child(workdir):
     from scripts import routing as command  # the gate puts the plugin package root first on sys.path
     checkout = root / 'checkout'
     checkout.mkdir(mode=0o700)
-    picked = choice('self-check', 'self-check-model', 'high')
+    picked = choice(SELF_CHECK_PROVIDER, 'self-check-model', 'high')
     spec = dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
                 account='self-check', demand={'5h': 1}, binding_enforceable=True, window_unit=WINDOW_UNIT,
                 **{key: picked[key] for key in routing.ROUTE_IDENTITY})
     source = routing_observations.StaticSource([spec], lambda pool, at: [dict(
         id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
-        unit=WINDOW_UNIT)])
+        unit=WINDOW_UNIT)], billing=subscription_billing.double('self-check'))  # sandbox only: no real producer
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
@@ -844,7 +855,8 @@ def _self_check_in_child(workdir):
             return ['self_check_store_unavailable']
         cases = (('unhealthy', dict(healthy=False), HOST_UNHEALTHY, 'host_not_checked'),
                  ('advisory', dict(denies=[]), PROFILE_NOT_ENFORCED, 'profile_not_checked'),
-                 ('catalog', dict(models=[]), routing_launch.CATALOG_MISMATCH, 'catalog_not_checked'),
+                 ('catalog', dict(models=[dict(providerID=SELF_CHECK_PROVIDER, id='self-check-model', variants=['low'])]),
+                  routing_launch.CATALOG_MISMATCH, 'catalog_not_checked'),
                  ('attach', dict(attach_ok=False), ATTACH_FAILED, 'attach_not_checked'))
         for name, knobs, reason, code in cases + (('launch', {}, None, 'managed_launch_failed'),):
             host = _SelfCheckHost(shim, str(checkout))

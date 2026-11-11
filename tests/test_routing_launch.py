@@ -11,7 +11,8 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import routing, routing_launch as launcher, routing_observations as collector, routing_settings, state
+from runtime import routing, routing_launch as launcher, routing_observations as collector, routing_settings, state, \
+    subscription_billing
 from scripts import routing as command
 from tests.test_routing_observations import SCOPE, Stores, ready, sub_route, sub_window
 
@@ -194,25 +195,28 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(unknown, dict(enabled=None, ready=False, reason='settings_unavailable'))
 
 
+HARNESSES = launcher.host_harnesses('codex_native')
+
+
 class RequestTests(unittest.TestCase):
     def test_a_planned_job_without_workflow_is_refused(self):
         assignment = dict(attempt_id='a', task='t', scope=SCOPE)
         with self.assertRaises(launcher.Refused) as caught:
-            launcher.prepare_request(assignment, job(), planned=True)
+            launcher.prepare_request(assignment, job(), planned=True, harnesses=HARNESSES)
         self.assertEqual(caught.exception.reason, 'workflow_required')
         locator = dict(client='codex', cwd='/work/repo', session_id='s', task_id='t', job_id='j', attempt_id='a')
-        bound = launcher.prepare_request(assignment, job(), workflow=locator, planned=True)
+        bound = launcher.prepare_request(assignment, job(), workflow=locator, planned=True, harnesses=HARNESSES)
         self.assertEqual(bound['workflow'], locator)
-        explicit = launcher.prepare_request(assignment, job())
-        self.assertEqual(set(explicit), {'v', 'op', 'assignment', 'job'})  # never observations
+        explicit = launcher.prepare_request(assignment, job(), harnesses=HARNESSES)
+        self.assertEqual(set(explicit), {'v', 'op', 'assignment', 'job', 'constraints'})  # never observations
 
     def test_the_job_is_canonical_and_never_widened(self):
         with self.assertRaises(launcher.Refused) as caught:
-            launcher.prepare_request(dict(attempt_id='a', task='t', scope=SCOPE), None)
+            launcher.prepare_request(dict(attempt_id='a', task='t', scope=SCOPE), None, harnesses=HARNESSES)
         self.assertEqual(caught.exception.reason, 'profile_unavailable')
         canonical = job()
         request = launcher.prepare_request(dict(attempt_id='a', task='t', scope=SCOPE), canonical, profile=dict(
-            complexity_band='critical'))
+            complexity_band='critical'), harnesses=HARNESSES)
         self.assertEqual(request['job'], dict(canonical, profile=dict(complexity_band='critical')))
         self.assertNotIn('profile', canonical)  # the caller's canonical job is never changed in place
         self.assertNotIn('observations', request)
@@ -226,7 +230,8 @@ class LaunchTests(Stores):
         self.service.close()
         self.service = ManagedStub(self.settings, self.ledger_path, project=self.checkout)
         self.addCleanup(self.service.close)
-        self.source = collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready)
+        self.source = collector.StaticSource([sub_route()], dict(sub=[sub_window(self.now)]), ready,
+                                             billing=subscription_billing.double('launch-tests'))  # labelled double
         self.patches = [mock.patch.object(collector, 'default_source', lambda settings_path=None: self.source),
                         mock.patch.object(routing_settings, 'managed_project', create=True,
                                           new=self.managed_project)]
@@ -295,9 +300,16 @@ class LaunchTests(Stores):
     def test_a_not_entitled_route_is_refused_by_the_launcher(self):
         prepared = self.launch(transport=Transport(error=RuntimeError('never reached')), catalog=[])
         self.assertEqual(prepared['reason'], 'catalog_mismatch')  # admitted, then closed
-        collector.mark_not_entitled(self.settings, 'sub', 'sub-account', self.now)
-        admission = dict(route='sub', billing_class='included_subscription',
+        admission = dict(route='sub', billing_class='included_subscription', pool='sub',
                          route_identity=routing.route_identity(*IDENTITY.values()))
+        self.assertIsNone(launcher.admitted_check(admission, host='codex_native', catalog=[IDENTITY],
+                                                  settings_path=self.settings, source=self.source)[1])
+        for name, change in (('pool', dict(pool='other')), ('billing_class', dict(billing_class='gateway'))):
+            with self.subTest(mismatch=name):  # the source's route must be on the admission's pool and class
+                self.assertEqual(launcher.admitted_check(dict(admission, **change), host='openrouter_proposal',
+                                                         catalog=[IDENTITY], settings_path=self.settings,
+                                                         source=self.source), (None, 'route_not_entitled'))
+        collector.mark_not_entitled(self.settings, 'sub', 'sub-account', self.now)
         self.assertEqual(launcher.admitted_check(admission, host='codex_native', catalog=[IDENTITY],
                                                  settings_path=self.settings, source=self.source),
                          (None, 'route_not_entitled'))
@@ -323,7 +335,8 @@ class LaunchTests(Stores):
         self.assertNotIn('dollar', inspect.signature(launcher.launch).parameters)
         self.fund()
         self.source = collector.StaticSource([gateway_route(), sub_route()],
-                                             dict(gw=[gateway_window(self.now)], sub=[sub_window(self.now)]), ready)
+                                             dict(gw=[gateway_window(self.now)], sub=[sub_window(self.now)]), ready,
+                                             billing=subscription_billing.double('launch-tests'))
         report = dict(enabled=True, routes=['proposals'], local_configuration='ready', revision=1,
                       checkout=str(self.checkout), activation=dict(ref='activation:openrouter:s:r1'))
         gateway = launcher.route_identity('openrouter_proposal', model='model/v1', provider='p', effort=None)
@@ -340,7 +353,8 @@ class LaunchTests(Stores):
         self.assertEqual(self.launch(service=service)['state'], 'recorded')  # a subscription admission proceeds
 
     def test_a_pending_assignment_holds_nothing_and_never_falls_back(self):
-        self.source = collector.StaticSource([sub_route()], {}, ready)  # no telemetry yet
+        self.source = collector.StaticSource([sub_route()], {}, ready,  # no telemetry yet
+                                             billing=subscription_billing.double('launch-tests'))
         result = self.launch()
         self.assertEqual(result['state'], 'pending', result)
         self.assertEqual(self.transport.calls, [])
@@ -350,6 +364,124 @@ class LaunchTests(Stores):
         result = self.launch(transport=Transport(error=TimeoutError('no acknowledgment')))
         self.assertEqual(result, dict(state='uncertain', attempt_id='a1', recovery='reconcile_subscription'))
         self.assertEqual(self.holds()['a1']['state'], 'uncertain')
+
+
+class PathRouteTests(Stores):
+    """F4.2 and F4.4: choices carry an optional endpoint, the dispatch check asks the source by path, the transport
+    never receives a literal `none` effort, and each host sends only its own harnesses."""
+
+    def setUp(self):
+        super().setUp()
+        # No production billing producer exists: a labelled code-level double stands in for this class's flows.
+        billing = mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now:
+                                    subscription_billing.double('path-route-tests')(route, now))
+        billing.start()
+        self.addCleanup(billing.stop)
+
+    def test_choice_carries_an_optional_endpoint(self):
+        bare = launcher.choice('openrouter_proposal', 'api', model='v/m', provider='p', effort=None)
+        self.assertNotIn('endpoint', bare)
+        pinned = launcher.choice('openrouter_proposal', 'api', model='v/m', provider='p', effort=None,
+                                 endpoint=launcher.pinned_endpoint('openrouter_proposal', provider='p'))
+        self.assertEqual(pinned, dict(bare, endpoint='p'))
+        self.assertEqual(pinned['provider'], 'openrouter')  # the identity still names the gateway, not the endpoint
+        for bad in ('', 'x' * 257, 5):
+            with self.subTest(endpoint=bad), self.assertRaises(ValueError):
+                launcher.choice('openrouter_proposal', 'api', model='v/m', provider='p', effort=None, endpoint=bad)
+        assignment = dict(attempt_id='a', task='t', role='software-engineer', work_kind='implementation',
+                          complexity_band='low', scope=SCOPE)
+        self.assertTrue(routing._valid_assignment(dict(assignment, choice=pinned)))
+        self.assertTrue(routing._valid_assignment(dict(assignment, choice=bare)))  # a gateway choice needs none
+        self.assertFalse(routing._valid_assignment(dict(assignment, choice=dict(pinned, endpoint=''))))
+
+    def test_admitted_check_accepts_an_explicit_choice_route(self):
+        from runtime import routing_paths
+        routing_paths.qualify(self.settings, 'codex-chatgpt-subscription', demand={'7d': 5}, evidence='e', now=self.now)
+        [path] = routing_paths.resolved(routing_paths.load_rules(), routing_paths.qualifications(self.settings))
+        route = routing_paths.choice_route(path, dict(IDENTITY, funding='subscription'))
+        admission = dict(route=route['route'], pool='chatgpt-subscription', billing_class='included_subscription',
+                         route_identity=routing.route_identity(*IDENTITY.values()))
+        facts, reason = launcher.admitted_check(admission, host='codex_native', catalog=[IDENTITY],
+                                                settings_path=self.settings)
+        self.assertIsNone(reason)
+        self.assertEqual((facts['model'], facts['variant'], facts['funding_pool']), ('m', 'high', 'chatgpt-subscription'))
+        foreign = dict(IDENTITY, provider='anthropic')  # the digest decodes to another provider than the path's
+        self.assertEqual(launcher.admitted_check(dict(admission, route_identity=routing.route_identity(
+            *foreign.values())), host='codex_native', catalog=[foreign], settings_path=self.settings),
+            (None, 'route_not_entitled'))
+        for bad in ('codex-chatgpt-subscription', 'codex-chatgpt-subscription:choice:zz',
+                    'opencode-claude-subscription:' + '0' * 16):
+            with self.subTest(route=bad):
+                self.assertEqual(launcher.admitted_check(dict(admission, route=bad), host='codex_native',
+                                                         catalog=[IDENTITY], settings_path=self.settings),
+                                 (None, 'route_not_entitled'))
+
+    def test_omitted_effort_is_not_a_literal_transport_value(self):
+        """Dispatch checks the identity's `none` sentinel; the transport receives None (omit the parameter)."""
+        omitted = dict(IDENTITY, effort='none')
+        source = collector.StaticSource([sub_route(effort='none')], dict(sub=[sub_window(self.now)]), ready,
+                                        billing=subscription_billing.double('launch-tests'))
+        checkout = self.root / 'checkout'
+        checkout.mkdir()
+        service = command.Service(self.settings, self.ledger_path, project=checkout)
+        self.addCleanup(service.close)
+        self.assertEqual(self.call(dict(v=1, op='set', authority_required=True))['state'], 'updated')
+        transport = Transport()
+        with mock.patch.object(collector, 'default_source', lambda settings_path=None: source), \
+                mock.patch.object(routing_settings, 'managed_project', create=True,
+                                  new=lambda path, settings_path=None: Path(path).resolve() == checkout.resolve()):
+            result = launcher.launch(service, host='codex_native', catalog=[omitted], transport=transport,
+                                     settings_path=self.settings, job=job(), assignment=dict(
+                                         attempt_id='n1', task='task-n1', scope=SCOPE,
+                                         choice=dict(omitted, funding='subscription')))
+        self.assertEqual(result['state'], 'recorded', result)
+        [call] = transport.calls
+        self.assertIsNone(call['route']['variant'])
+        self.assertNotIn('"none"', json.dumps(call['route']))
+
+    def test_host_harnesses_per_host(self):
+        self.assertEqual(launcher.host_harnesses('codex_native'), ('codex-native',))
+        self.assertEqual(launcher.host_harnesses('claude_native'), ('claude-native',))
+        self.assertEqual(launcher.host_harnesses('openrouter_proposal'), ('openrouter-proposal',))
+        self.assertEqual(launcher.host_harnesses('openrouter_worker'), ('opencode provider openrouter',))
+        self.assertEqual(launcher.host_harnesses('api_usage'), ())
+        catalog = [launcher.route_identity('opencode', provider=provider, model='m', effort='high')
+                   for provider in ('claude-agent', 'openai', 'unlisted')]
+        self.assertEqual(launcher.host_harnesses('opencode', catalog),
+                         ('claude-agent-sdk via opencode', 'opencode provider openai'))
+        self.assertEqual(launcher.host_harnesses('opencode', []), ())
+        with mock.patch('runtime.routing_paths.load_rules', side_effect=ValueError('route_manifest_invalid')):
+            self.assertEqual(launcher.host_harnesses('opencode', catalog), ())
+
+    def test_opencode_host_excludes_dollar_harnesses_until_api_funding_is_qualified(self):
+        from runtime import opencode_launcher
+        self.assertIs(opencode_launcher.API_FUNDING_QUALIFIED, False)
+        catalog = [launcher.route_identity('opencode', provider=provider, model='m', effort='high')
+                   for provider in ('openai', 'openrouter')]
+        self.assertEqual(launcher.host_harnesses('opencode', catalog), ('opencode provider openai',))
+        self.assertEqual(launcher.host_harnesses('opencode', catalog, dollar=True),
+                         ('opencode provider openai', 'opencode provider openrouter'))
+
+    def test_prepare_request_intersects_the_callers_harnesses(self):
+        assignment = dict(attempt_id='a', task='t', scope=SCOPE)
+        request = launcher.prepare_request(assignment, job(), harnesses=('h1', 'h2'),
+                                           constraints=dict(allowed_harnesses=['h2', 'h3'], excluded_models=['x']))
+        self.assertEqual(request['constraints'], dict(allowed_harnesses=['h2'], excluded_models=['x']))
+        self.assertEqual(launcher.prepare_request(assignment, job(), harnesses=('h2', 'h1'))['constraints'],
+                         dict(allowed_harnesses=['h1', 'h2']))
+
+    def test_an_empty_harness_set_is_refused_before_prepare(self):
+        assignment = dict(attempt_id='a', task='t', scope=SCOPE)
+        for harnesses, constraints in (((), None), (None, None), (('h1',), dict(allowed_harnesses=['h2']))):
+            with self.subTest(harnesses=harnesses, constraints=constraints):
+                with self.assertRaises(launcher.Refused) as caught:
+                    launcher.prepare_request(assignment, job(), harnesses=harnesses, constraints=constraints)
+                self.assertEqual(caught.exception.reason, 'harness_required')
+        service = mock.Mock(project=self.root)
+        result = launcher.launch(service, host='opencode', catalog=[], transport=Transport(), job=job(),
+                                 assignment=assignment, settings_path=self.settings)
+        self.assertEqual(result, dict(state='blocked', reason='harness_required'))
+        self.assertEqual(service.handle.call_count, 0)  # nothing was sent, not even `status`
 
 
 class SelfCheckTests(unittest.TestCase):

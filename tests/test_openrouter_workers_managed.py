@@ -128,7 +128,8 @@ class ManagedPrepareTests(ManagedWorkerCase):
         self.assertEqual(assignment['role'], 'software-engineer')  # the brief names no specialist
         self.assertEqual(bodies[0]['job']['role'], 'software-engineer')
         self.assertEqual(assignment['choice'], dict(provider='openrouter', model='vendor/model', effort='low',
-                                                    harness='opencode provider openrouter', funding='api'))
+                                                    harness='opencode provider openrouter', funding='api',
+                                                    endpoint='provider'))  # F4.2: the pinned endpoint travels
         self.assertTrue(result['route'].startswith('openrouter:vendor/model@provider|'), result['route'])
         self.assertFalse({'workflow', 'observations'} & set(bodies[0]))
         self.assertEqual(sorted(bodies[0]['job']['tools']), sorted(READ_ONLY))
@@ -321,6 +322,30 @@ class ManagedExecuteTests(ManagedWorkerCase):
         self.assertEqual(self.execute(run)['state'], 'awaiting_verification')
         self.assertNotEqual(self.hosts[-1].created['permissions'], launcher.WORKER_RULES)
         self.assertEqual(launcher.rule_effect(self.hosts[-1].created['permissions'], 'edit'), 'deny')
+
+    def test_nested_prepare_refusal_settles_the_known_attempt(self):
+        """F4.4 traced through `execute → opencode_launcher.launch → routing_launch.launch → Routed.handle`: a worker
+        server whose catalog lists only the gateway model gives the OpenCode host an empty harness set (dollar paths
+        stay excluded while API funding is unqualified), so the nested launch refuses before its duplicate `prepare`.
+        Nothing is sent and `_settle_run` closes the known attempt. This synthetic failure path does not qualify
+        production gateway dispatch, and API_FUNDING_QUALIFIED is never patched here."""
+        self.assertIs(launcher.API_FUNDING_QUALIFIED, False)
+        self.manage()
+        self.serve(models=[dict(providerID='openrouter', id='vendor/model', variants=['low'])])
+        bodies = self.prepared()
+        run = self.api.prepare(self.runs, self.brief())
+        self.assertEqual(len(bodies), 1)  # the worker's own admission
+        self.assertEqual(bodies[0]['constraints']['allowed_harnesses'], ['opencode provider openrouter'])
+        self.assertEqual(self.holds(), {'admitted': 1})  # the known attempt
+        result = self.execute(run)
+        self.assertEqual((result['state'], result['failure']['reason']), ('failed', 'harness_required'), result)
+        self.assertEqual(len(bodies), 1)  # the nested launch sent no second `prepare`
+        [host] = self.hosts
+        self.assertFalse(hasattr(host, 'created'))
+        self.assertNotIn('prompt', host.order)
+        self.assertEqual(self.holds(), {})  # the finalizer settled the known attempt: no leaked hold
+        self.assertEqual(self.routing_state(run), 'settled')
+        self.assertFalse(result['response'])
 
     def test_every_exit_before_dispatch_closes_the_hold(self):
         self.manage()
@@ -526,7 +551,7 @@ class ManagedSelfCheckTests(ManagedWorkerCase):
         outside = tempfile.TemporaryDirectory()  # self.tmp holds this class's patched default routing state
         self.addCleanup(outside.cleanup)
         self.assertEqual(self.api.managed_self_check(Path(outside.name).resolve() / 'self-check'), [])
-        self.assertEqual(command._self_check('script', 'scripts/openrouter_workers.py'), [])
+        self.assertEqual(command._self_check('script', 'scripts/openrouter_workers.py', Path(outside.name) / 'settings.json'), [])
 
     def test_the_self_check_flag_refuses_an_unsafe_workdir(self):
         crowded = self.root / 'crowded'

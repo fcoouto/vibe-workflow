@@ -338,7 +338,7 @@ class ManagedProjectRefusalTests(unittest.TestCase):
         from runtime import usage_canary
         from scripts import routing as command
         self.assertEqual(routing.managed_self_check(str(self.root / 'check')), [])
-        self.assertEqual(command._self_check('module', 'runtime.usage_routing:managed_self_check'), [])
+        self.assertEqual(command._self_check('module', 'runtime.usage_routing:managed_self_check', self.settings), [])
         self.assertEqual(sorted(path.name for path in (self.root / 'check').iterdir()), ['check', 'home', 'tmp'])
         self.assertEqual(list((self.root / 'check' / 'home').iterdir()), [])
         original = usage_canary.run
@@ -381,11 +381,14 @@ class ManagedProjectRefusalTests(unittest.TestCase):
                 if choice is not None:
                     assignment['choice'] = choice
                 request = routing_launch.prepare_request(
-                    assignment, routing_launch.unplanned_job('software-engineer', scope, 'managed proposal'))
+                    assignment, routing_launch.unplanned_job('software-engineer', scope, 'managed proposal'),
+                    harnesses=[identity['harness']])
                 with self.subTest(attempt=attempt):
                     result = service.handle(json.dumps(request).encode())
                     self.assertEqual(result['state'], 'pending', result)
-                    self.assertIn('api_usage_disabled', json.dumps(result))
+                    # F4: a request without a choice, ranking or worker choice considers no route at all; the
+                    # explicit API choice reaches the route and is refused for API Usage being off.
+                    self.assertIn('api_usage_disabled' if choice else 'worker_choice_unavailable', json.dumps(result))
         self.assertFalse(service._settings()['api_usage_enabled'])
 
 
