@@ -1,5 +1,6 @@
 """Codex session-file usage reader: synthetic files only, never the real ~/.codex."""
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 import itertools
 import json
@@ -25,6 +26,11 @@ VERSION = "0.167.0"
 QUALIFIED = frozenset({VERSION})
 KEYS = codex_usage.COUNTERS
 UNKNOWN = dict.fromkeys(KEYS)
+
+
+def identity(path):
+    info = os.stat(path)
+    return info.st_dev, info.st_ino
 
 
 def at(hour, minute=0, day=12):
@@ -414,22 +420,57 @@ class CodexUsageTests(unittest.TestCase):
 
     # Lookup
 
+    @contextlib.contextmanager
+    def spy(self):
+        """Record the names of non-directory open attempts and the identity of every listed directory."""
+        opened, listed = [], []
+        real_open, real_listdir = os.open, os.listdir
+
+        def fake_open(path, flags, *args, **kwargs):
+            if not flags & os.O_DIRECTORY:
+                opened.append(os.path.basename(path))
+            return real_open(path, flags, *args, **kwargs)
+
+        def fake_listdir(path):
+            info = os.fstat(path) if isinstance(path, int) else os.stat(path)
+            listed.append((info.st_dev, info.st_ino))
+            return real_listdir(path)
+
+        with (patch.object(codex_usage.os, "open", side_effect=fake_open),
+              patch.object(codex_usage.os, "listdir", side_effect=fake_listdir)):
+            yield opened, listed
+
     def test_lookup_lists_only_window_folders_and_opens_only_the_thread_file(self):
         target = self.standard(folder=self.folder(day=10))
         decoy = self.standard(folder=self.folder(day=2, month=10), mode=0o000)
         other = self.standard(thread=OTHER, folder=self.folder(day=10), mode=0o000)
         newer = self.standard(thread=OTHER, folder=self.folder(day=13), mode=0o000)
-        listed, opened = [], []
-        real_listdir, real_open = os.listdir, os.open
-        with (patch.object(codex_usage.os, "listdir", side_effect=lambda p: listed.append(Path(p)) or real_listdir(p)),
-              patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
-                           or real_open(p, *a, **k))):
+        with self.spy() as (opened, listed):
             result = self.read()
         self.assertEqual(result["usage"], totals(250))
-        self.assertEqual(opened, [target])
-        self.assertEqual(listed, [newer.parent, target.parent])
-        self.assertNotIn(decoy.parent, listed)
-        self.assertNotIn(other, opened)
+        self.assertEqual(opened, [target.name])
+        self.assertEqual(listed, [identity(newer.parent), identity(target.parent)])
+        self.assertNotIn(identity(decoy.parent), listed)
+        self.assertNotIn(other.name, opened)
+
+    def test_directory_swapped_before_open_cannot_redirect_the_read(self):
+        self.standard()
+        day = self.folder()
+        outside = self.root / "outside"
+        outside.mkdir()
+        self.write([meta(), token(at(9, 30), 1), token(at(10, 30), 999)], folder=outside)
+        real_open, swapped = os.open, []
+
+        def swap_then_open(path, flags, *args, **kwargs):
+            if not flags & os.O_DIRECTORY and not swapped:
+                swapped.append(day.rename(day.with_name("12-moved")))
+                day.symlink_to(outside)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(codex_usage.os, "open", side_effect=swap_then_open):
+            result = self.read()
+        self.assertTrue(swapped)
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
 
     def test_lookup_window_is_thirty_days_plus_one(self):
         for day, month, found in ((13, 11, True), (14, 11, False), (14, 10, True), (13, 10, False)):
@@ -457,8 +498,7 @@ class CodexUsageTests(unittest.TestCase):
         self.standard(thread=OTHER, name=f"rollout-x-{OTHER}.jsonl")
         self.standard(thread=OTHER, name=f"rollout-2026-11-12T09-00-00-{OTHER}.jsonl.bak")
         self.standard(thread=OTHER, name=f"rollout-2026-11-12T9-00-00-{OTHER}.jsonl")
-        opened, real_open = [], os.open
-        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(p) or real_open(p, *a, **k)):
+        with self.spy() as (opened, _):
             for short in ("000000000001", "8000-000000000001", "0000-7000-8000-000000000001"):
                 with self.subTest(short=short):
                     self.assertIsNone(codex_usage.find_thread_file(
@@ -497,6 +537,12 @@ class CodexUsageTests(unittest.TestCase):
         with self.assertRaises(codex_usage.UsageGap) as raised:
             codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
         self.assertEqual((raised.exception.code, str(raised.exception)), ("thread_file_ambiguous",) * 2)
+
+    def test_codex_home_that_is_a_file_is_not_found(self):
+        home = self.root / "home-file"
+        home.write_bytes(b"")
+        with patch.dict(os.environ, {"CODEX_HOME": str(home)}):
+            self.assertGap(self.read(), "thread_file_not_found")
 
     def test_missing_codex_home_is_not_found(self):
         with patch.dict(os.environ, {"CODEX_HOME": str(self.root / "absent")}):
@@ -592,12 +638,46 @@ class CodexUsageTests(unittest.TestCase):
         self.page([meta(at(11), thread=OTHER)], thread=OTHER, mode=0o000)
         self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_notauuid.jsonl", mode=0o000)
         self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_{PAGE}_{PAGE2}.jsonl", mode=0o000)
-        opened, real_open = [], os.open
-        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
-                          or real_open(p, *a, **k)):
+        with self.spy() as (opened, _):
             result = self.read()
         self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
-        self.assertEqual(opened, [plain])
+        self.assertEqual(opened, [plain.name])
+
+    def test_middle_page_without_token_rows_carries_the_total(self):
+        self.plain()
+        self.page([meta(at(11)), context(at(11, 5), model="gpt-5.5-mini", effort="low")])
+        self.page([meta(at(11, 40)), token(at(11, 45), 201), token(at(11, 50), 260)], "11-40-00", PAGE2)
+        result = self.read()
+        self.assertEqual((result["gaps"], result["baseline"], result["usage"]), ([], totals(100), totals(160)))
+        self.assertEqual([item["model"] for item in result["model_settings"]], ["gpt-5.5", "gpt-5.5-mini"])
+        self.page([meta(at(11, 40)), token(at(11, 45), 202)], "11-40-00", PAGE2)
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_malformed_marker_row_in_an_earlier_file_matches_the_single_file_gap(self):
+        bad = b'{"type": "event_msg", "payload": {"type": "token_count", "x": "' + SECRET.encode()
+        big = json.dumps(token(at(9, 40), 1, info={"total_token_usage": totals(1), "pad": "x" * 5000})).encode()
+        for row, code in ((bad, "file_unreadable"), (big, "line_too_large")):
+            with self.subTest(code=code), patch.object(codex_usage, "MAX_LINE", 4096):
+                plain = self.write([meta(), token(at(9, 30), 100), row, token(at(10, 30), 200)])
+                self.assertGap(self.read(), code)
+                page = self.page([meta(at(11)), token(at(11, 10), 201)])
+                self.assertGap(self.read(), code)
+                page.unlink()
+                plain.unlink()
+
+    def test_page_name_collision_id_is_refused_before_lookup(self):
+        collision = f"{THREAD}_{PAGE}"
+        page = self.page([meta(at(11)), token(at(11, 10), 201)])
+        self.assertEqual(page.name, f"rollout-2026-11-12T11-00-00-{collision}.jsonl")
+        calls = (lambda: self.read(collision),
+                 lambda: self.acquire([{"thread_id": collision, "role": "worker"}]),
+                 lambda: codex_usage.find_thread_files(collision, started_at=START, cutoff_at=CUTOFF,
+                                                       deadline=time.monotonic() + 30))
+        with self.spy() as (opened, listed):
+            for call in calls:
+                with self.assertRaisesRegex(ValueError, "^Invalid Codex thread ID$"):
+                    call()
+        self.assertEqual((opened, listed), ([], []))
 
     def test_page_rows_must_follow_earlier_files_in_time(self):
         self.plain()
@@ -622,12 +702,10 @@ class CodexUsageTests(unittest.TestCase):
     def test_page_after_cutoff_is_not_opened(self):
         self.write([meta(), token(at(9, 30), 100), token(at(10, 30), 200), token(at(12, 30), 300)])
         page = self.page([meta(at(13)), token(at(13, 10), 301)], "13-00-00", mode=0o000)
-        opened, real_open = [], os.open
-        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
-                          or real_open(p, *a, **k)):
+        with self.spy() as (opened, _):
             result = self.read()
         self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
-        self.assertNotIn(page, opened)
+        self.assertNotIn(page.name, opened)
 
     def test_thread_byte_limit_spans_files(self):
         self.plain()
@@ -736,7 +814,7 @@ class CodexUsageTests(unittest.TestCase):
             self.read(deadline=True)
 
     def test_invalid_thread_ids_are_rejected_before_lookup(self):
-        for value in ("../" + THREAD, "a*b", "a/b", "", "x" * 129, None, "a.b", "ä"):
+        for value in ("../" + THREAD, "a*b", "a/b", "", "x" * 129, None, "a.b", "ä", "a_b", f"{THREAD}_{PAGE}"):
             with self.subTest(value=value), patch.object(codex_usage.os, "listdir") as listing:
                 with self.assertRaisesRegex(ValueError, "^Invalid Codex thread ID$"):
                     self.read(value)
