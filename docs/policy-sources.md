@@ -1,5 +1,23 @@
 # Policy source map
 
+## Reconcile #248 with #256 — 12 November 2026
+
+The user requested updating open #248 against current `main`, preserving its
+map-free reader and #256's universal checkout contract, then running focused
+validation. This does not authorize merging #248 or rerunning its adherence
+experiments. Integration keeps current `main`'s retired-document deletions and
+newer managed-host/runtime behavior, #248's consolidated trigger table and reader
+source boundaries, and #256's task-entry/review-only triggers and complete
+delivery procedure. The duplicate Task Planning trigger row stays removed;
+the expanded trigger is retained once in the index.
+
+The newer optional template helper was the sole live consumer of the removed
+reader `MAP` attribute. Its test first reproduced that incompatibility. Preparation
+now uses current source bytes and revision-bound invalidation without reading or
+writing a stored map. Validator conflict resolution preserves both direct
+instruction-source validation and current `task_profile.brief_drift` checks.
+Historical map-generation results remain history, not authoring requirements.
+
 ## Repository `AGENTS.md` on the Toolkit template — 10 November 2026
 
 This repository's own [AGENTS.md](../AGENTS.md) uses the wording and style of the Toolkit's [`AGENTS.md` template][agents-current] (revision `7ef68dd7b00ddfc5cd464458855e4ab66dd2128f`, SHA-256 `ccc115e84c9b4b28f979d1480dcd52e1bd9d76bca0383f33d538ddab24a6cfc8`), at the user's request of 10 November 2026: make the instructions clearer and check with lightweight models that agents follow them. The user's follow-up keeps the existing policy-based structure: the entry point starts the load, the [policy index](../policies/00-index.md) owns one routing table, and individual policies retain their complete procedures. The [shared instructions](../templates/project/shared-instructions.md) that onboarding writes for other projects are unchanged except for the one delegation sentence recorded in the delegation clarification below, and policy procedures other than the index's loading rules are unchanged.

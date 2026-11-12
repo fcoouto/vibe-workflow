@@ -79,9 +79,9 @@ changes. No installed-client or other-project update is part of this task.
 - [x] Keep the stored map, `build_manifest` and `--prepare` writer removed.
   Preserve #248's single trigger table while carrying #256's expanded task-entry
   and review-only triggers, checkout rule and complete delivery procedure.
-- [ ] Adapt the newer template-helper consumer to the map-free reader; exercise
+- [x] Adapt the newer template-helper consumer to the map-free reader; exercise
   current-source delivery and revision invalidation before and after the fix.
-- [ ] Remove active regeneration requirements from surviving newer guidance;
+- [x] Remove active regeneration requirements from surviving newer guidance;
   keep historical evidence explicitly historical.
 - [ ] Commit and run focused reader, template, startup, checkout, package and
   managed-host checks plus package validation and whitespace checks.
@@ -92,3 +92,10 @@ changes. No installed-client or other-project update is part of this task.
 Rollback before publishing uses the existing PR head; after publishing, recovery
 uses explicit follow-up commits. Do not force-push, reset a peer branch, restore
 the stored map or switch the primary checkout. No adherence experiment is rerun.
+
+The integration regression first failed in the committed merge candidate with
+`AttributeError: module 'scripts.read_instructions' has no attribute 'MAP'` in
+three template-preparation cases. The narrow fix removes that obsolete read;
+the replacement test verifies current template text, changed-source revision
+invalidation and absence of any generated map. The earlier stale-map test was
+adapted to the intended current-source contract, not bypassed.
