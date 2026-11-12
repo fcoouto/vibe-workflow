@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import json
@@ -732,9 +733,13 @@ class ReplayRecordTests(Base):
     def test_oversized_replay_detail_refuses_without_a_hold(self):
         request, ranked, snapshot, job = largest_replay(unicode=True)
         before = self.ledger.snapshot()
-        result = routing.admit(request, ranked, settings(), snapshot, ledger=self.ledger, workflow=job)
+        with mock.patch.object(budget, 'MAX_ADMISSION_BYTES', 10752):  # scaled (F5.S): the old number, in bytes
+            result = routing.admit(request, ranked, settings(), snapshot, ledger=self.ledger, workflow=job)
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'record_too_large'))
         self.assertEqual(self.ledger.snapshot(), before)  # refused before any hold or record is written
+        admitted = routing.admit(request, ranked, settings(), snapshot, ledger=self.ledger, workflow=job)
+        self.assertEqual(admitted['status'], 'admitted')  # the real 256 KiB byte bound holds it, Unicode intact
+        self.assertEqual(self.ledger.snapshot()['admissions'][-1]['attempt_id'], request['attempt_id'])
 
     def test_new_worker_choice_record_uses_the_legacy_replay_contract(self):
         choice = dict(provider='anthropic', model='m', effort='high', harness='h', funding='subscription')

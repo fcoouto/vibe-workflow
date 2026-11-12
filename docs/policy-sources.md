@@ -1,5 +1,16 @@
 # Policy source map
 
+## Smart Routing: approved storage amendment (F5.S) — 12 November 2026
+
+The user approved the coordinator's generous storage design. The registered result is in
+[usage-routing validation](usage-routing-validation.md#approved-storage-amendment-f5s--12-november-2026).
+Historical capacity figures stay as they were measured.
+
+| Contract | Source |
+| --- | --- |
+| Compact lossless UTF-8 ledger body; byte guards: 256 KiB record, 32 KiB hold, 16 KiB binding (admission and dispatch), 192 MiB growing-write budget including R, 256 MiB ceiling and read limit; event and root rows keep their character limits | Approved F5.S design and plan; `runtime/usage_budget_storage.py` (`serialize`, `encoded_size`, `remaining_growth`, `require_growth`, `body_for_write`), `runtime/usage_budget.py` (constants, `transaction`, `admit`, `observe`), `runtime/routing_gates.py` (`valid_binding`), byte read guards in `runtime/routing_observations.py`, `runtime/usage_settings.py`, `scripts/routing.py`; `tests/test_routing_storage.py` |
+| Settlement space reserved by growing writes, including a funded hold's post-soft conversion into a run, native task and finished key; lot metadata growth is a growing write, scalar refresh is not | `runtime/usage_budget_storage.py` (`remaining_growth`, `convertible`), `runtime/usage_budget.py` (`observe`); `tests/test_routing_storage.py` (`ReserveTests`, `ScaledSoftTests`) |
+
 ## Smart Routing: ordered refusal and replay corrections (F5.A3) — 12 November 2026
 
 Checkpoint A3 of plan task F5 closes the original review's test-masking findings and proves ordered route-local refusal

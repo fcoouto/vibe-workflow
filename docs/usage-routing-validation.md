@@ -588,3 +588,29 @@ stays false and production OpenRouter stays deferred. Nothing here authorizes a 
   canary needs its own new registration and approval; this ruling grants none.
 - **Recovery evidence.** Scoped `reconcile` lists unpriced completed work as `unpriced_attempts` beside the
   existing uncertain `pending_attempts`.
+
+## Approved storage amendment (F5.S) · 12 November 2026
+
+The user approved the coordinator's generous storage design. These constants are the coordinator's design, not
+numbers the user specified. Nothing here authorizes a live run, changes money limits, retention, the 20% API-money
+buffer, subscription margins or the API-off boundary. Earlier capacity figures (for example F5.4's 10,752-character
+record and 13,100,000-character ledger) stay as historical results for the limits of their time.
+
+- **Byte limits.** The shared usage ledger body is stored as compact, lossless UTF-8 JSON. Its limits, and those of
+  one admission record, one hold and one workflow binding, are UTF-8 bytes: 256 KiB per admission record, 32 KiB per
+  hold, 16 KiB per binding (checked at admission and again at dispatch), a 192 MiB new-data budget and a 256 MiB
+  ledger ceiling, which is also the read limit.
+- **Reserved settlement space.** New data (admissions, runs, organizations, handoffs, routing configurations, lot
+  lists that grow) is accepted only while the body plus R fits the 192 MiB budget:
+  R = 4 KiB per run + 1 KiB per hold + 64 KiB per funded unconverted hold + 24 KiB per organization + 8 KiB per
+  native task + 4 KiB per routing configuration + 256 KiB. R prepays what settlement, uncertainty, coverage,
+  observation, native release and a hold's conversion into a run can still add, so admitted work can always settle.
+  No worker, account or organization count is added.
+- **Measured maxima** (public admission, ten-digit clock): caller-maximal record 192,682 bytes, hold about 19.6 K
+  and binding 7,357 bytes in 4-byte text; one conversion adds at most 34,975 bytes.
+- **Unchanged.** Event and root rows keep their character limits (16,384 and 98,304); dispatch, settlement and
+  `incomplete` allowances keep their numbers.
+- **Older packages.** They still read a UTF-8 body up to their own 13,100,000-character limit. They refuse larger
+  ledgers and Unicode bindings above their old escaped limit (fail-closed), with state preserved. Ledgers written
+  before this amendment never prepaid R: they stay readable and keep every exposure, and new admission waits until
+  body plus R fits.

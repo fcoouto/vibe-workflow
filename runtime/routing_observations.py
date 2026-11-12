@@ -534,7 +534,7 @@ def _ledger_data(ledger_path):
         usage_budget.private(path)
         with closing(sqlite3.connect('%s?mode=ro' % path.as_uri(), uri=True, timeout=LEDGER_WAIT)) as db:
             row = db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
-        if row is None or len(row[0]) > usage_budget.MAX_RECORD:
+        if row is None or len(row[0].encode()) > usage_budget.MAX_RECORD:
             return None
         data = json.loads(row[0])
     except (OSError, ValueError, sqlite3.Error, usage_budget.BudgetError):

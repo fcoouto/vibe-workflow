@@ -147,8 +147,8 @@ def binding(job, credential):
 
 
 def binding_fits(job):
-    """Whether a job binding still fits MAX_BINDING_BYTES once serialized with the largest credential marker.
-    Character limits alone do not bound bytes: non-ASCII text serializes as six-byte escapes."""
+    """Whether a job binding still fits MAX_BINDING_BYTES (UTF-8 bytes, F5.S) once serialized with the largest
+    credential marker. The stored binding value is unchanged; only its measured size is in bytes."""
     return valid_job_binding(job) and valid_binding(binding(job, None if job is None else _CREDENTIAL_PLACEHOLDER))
 
 
@@ -158,7 +158,7 @@ def valid_binding(value):
         return False
     if not valid_job_binding(value['job']) or not (value['credential'] is None or _hex(value['credential'])):
         return False
-    return len(json.dumps(value, separators=(',', ':'))) <= MAX_BINDING_BYTES
+    return len(json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode()) <= MAX_BINDING_BYTES  # bytes
 
 
 def verdict(job, view):

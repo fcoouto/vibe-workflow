@@ -11,33 +11,30 @@ import stat
 import uuid
 
 from runtime import ledger_versions  # state versions and migration (C3-0a); it reads this module lazily
-from runtime import usage_budget_money, usage_budget_runs  # S1 phases and API money; both read this module lazily
+from runtime import usage_budget_money, usage_budget_runs, usage_budget_storage  # each reads this module lazily
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
-# Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
-# begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
-# within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
-# dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, require_authority,
-# convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
-# never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the measured worst case
-# (tests/test_routing_funding_capacity.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record, one `over_bound` marker per
-# run, S3.6c's 32 window debits, S3.6a's settlement, every admission at F5.4's bound): 11,784,912 once stored, 89.96% of
-# the 13,100,000 approved for F5.4 (code before it reads at most 12,000,000). The margin to the 90% ceiling is thin:
-# avoid further per-hold, per-call or per-admission fields. Event and root tables are separate rows (own bounds).
-SOFT_RECORD = 6_000_000
-MAX_RECORD = 13_100_000
+# Two body limits in UTF-8 bytes of compact, lossless JSON (F5.S, approved storage amendment; usage_budget_storage).
+# A growing write (`grows=True`: begin, top_up, reserve_*, admit, configure, enable_organization, a lot list that grows,
+# handoffs) commits only while body + R (the growth existing owners may still add) stays within SOFT_RECORD; past it,
+# `ledger_capacity_reached`. Every other write (dispatch, dispatch_hold, complete, uncertain, reject_unsent, close_run,
+# mark_*, close_attempt, convert_hold, scalar observe, disable_organization, release_native, settlement) only needs the
+# body within MAX_RECORD: R prepaid its growth, including a hold's conversion into a run and native task, so admitted
+# work can always settle. MAX_RECORD is also the read limit. Ledgers written by older code did not prepay R: they stay
+# readable and keep every exposure, and new admission waits until body + R fits. Event and root rows are separate
+# and keep their character limits (MAX_EVENT_BYTES, MAX_ROOT_BYTES).
+SOFT_RECORD = 192 * 1024 * 1024
+MAX_RECORD = 256 * 1024 * 1024
 FRESH_SECONDS = 900
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
 MAX_HOLDS = 256  # storage integrity, not a worker policy: released holds are pruned at the bound (F5.A1)
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
-# Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
-# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow binding
-# (S3.5, runtime/routing_gates.py) and F5.4's replay detail (largest shipped path measured 10,675) on top of S3.4's.
-MAX_BINDING_BYTES = 2560
-MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES + 4096
-MAX_HOLD_BYTES = 2048
+# Per-entry bounds in UTF-8 bytes (F5.S); a larger admission is refused with `record_too_large` and writes nothing.
+# Measured caller maxima (tests/test_routing_storage.py): record 192,682, hold about 19.6 K, binding 7,357 bytes.
+MAX_BINDING_BYTES = 16 * 1024
+MAX_ADMISSION_BYTES = 256 * 1024
+MAX_HOLD_BYTES = 32 * 1024
 # Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
 # worst-case capacity test counts every hold at both bounds.
 DISPATCH_HOLD_BYTES = 256
@@ -238,16 +235,14 @@ class Ledger:
         self.db.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         try:
             row = self.db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
-            require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
+            require(row is not None and usage_budget_storage.text_size(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
             original = json.loads(row[0]) if write else None
             ledger_versions.upgrade(data, self.identity)  # refuses an unknown version, then migrates in place
             yield data
             self._check()
             if write and data != original:
-                raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
-                require(len(raw) <= (SOFT_RECORD if grows else MAX_RECORD), 'ledger_capacity_reached')
-                self.db.execute('UPDATE ledger SET body=? WHERE id=1', (raw,))
+                self.db.execute('UPDATE ledger SET body=? WHERE id=1', (usage_budget_storage.body_for_write(data, grows=grows),))
             self.db.execute('COMMIT')
         except BaseException:
             self.db.execute('ROLLBACK')
@@ -326,9 +321,12 @@ class Ledger:
             require(org['observed_at'] is None or observed_at > org['observed_at'], 'observation_not_newer')
             lots = self._lots(org, lots)
             self._note_balance(org, balance, issued)
+            grew = lots is not None and usage_budget_storage.encoded_size(lots) > usage_budget_storage.encoded_size(
+                org.get('lots', []))  # F5.S: lot metadata that grows (same length included) is a growing write
             if lots is not None:
                 org['lots'] = lots
             org['observed_at'] = observed_at
+            if grew: usage_budget_storage.require_growth(data)
 
     @staticmethod
     def _note_balance(org, balance, issued=None):
@@ -807,7 +805,7 @@ class Ledger:
             hold.update(zip(('root', 'stage'), self._record_root(record, task)))
             for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
                 try:
-                    size = len(json.dumps(entry, allow_nan=False, separators=(',', ':')))
+                    size = usage_budget_storage.encoded_size(entry)  # UTF-8 bytes (F5.S)
                 except (TypeError, ValueError, RecursionError) as error:
                     raise BudgetError('invalid_admission') from error
                 require(size <= limit, 'record_too_large')

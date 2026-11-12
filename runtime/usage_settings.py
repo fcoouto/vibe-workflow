@@ -92,7 +92,7 @@ def _controller(cwd, *, create=False, discover=False, attach=False):
             # First binding to an existing canonical database; subsequent reads pin identity.
             with closing(sqlite3.connect(f'{database.as_uri()}?mode=ro',uri=True)) as db:
                 row = db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
-                require(row is not None and len(row[0]) <= usage_budget.MAX_RECORD, 'invalid_ledger')
+                require(row is not None and len(row[0].encode()) <= usage_budget.MAX_RECORD, 'invalid_ledger')
                 identity = json.loads(row[0])['identity']
         else:
             require(not any(folder.glob('checkout-*.json')), 'manual_recovery_required')

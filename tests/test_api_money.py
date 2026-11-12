@@ -39,7 +39,14 @@ def native_of(task_id, account='acct', windows=()):
 
 class MetadataGrowthTests(Store):
     """Handoff records and handoff claims add table rows: they use the growing-write admission (SOFT_RECORD), so
-    queued metadata can never consume the headroom that settlement of already-admitted work needs."""
+    queued metadata can never consume the headroom that settlement of already-admitted work needs. SCALED (F5.S):
+    the soft limit is lowered to its old 6,000,000 bytes so the fill stays small."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        soft = mock.patch.object(budget, 'SOFT_RECORD', 6_000_000)
+        soft.start(); self.addCleanup(soft.stop)
 
     def handoff(self, task_id, payload=0, account='acct'):
         windows = ['w' * payload] if payload else []

@@ -904,10 +904,13 @@ class ReviewFollowUpTests(GateBase):
         self.assertIsNone(command._arguments(['status', '--project']))
 
     def test_an_oversized_serialized_binding_is_refused_at_prepare(self):
-        wide = '/work/repo/' + '\u00e9' * 500  # within the character bound, but escapes to six bytes per character
+        wide = '/work/repo/' + '\u00e9' * 500  # F5.S: 1,000 UTF-8 bytes, within the real 16 KiB byte bound
+        self.assertEqual(self.call(prepare('fits', workflow=locator(cwd=wide)))['state'], 'admitted')
+        scaled = mock.patch.object(routing_gates, 'MAX_BINDING_BYTES', 1024)  # scaled: an oversize binding
+        scaled.start(); self.addCleanup(scaled.stop)
         response = self.call(prepare('big', workflow=locator(cwd=wide)))
         self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large', missing_fields=[]))
-        self.assertFalse(self.ledger.exists() and budget.Ledger.open_holds(self.snapshot()))
+        self.assertEqual(sorted(budget.Ledger.open_holds(self.snapshot())), ['fits'])
         oversized = routing_gates.job_binding(locator(cwd=wide), self.workflow.view(locator()))
         self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='software-engineer', work_kind='implementation', complexity_band='medium',
                                             scope=SCOPE), dict(strategy_ids=[], reason_codes=[]),

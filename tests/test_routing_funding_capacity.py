@@ -4,6 +4,7 @@ import copy
 import json
 import sqlite3
 import unittest
+from unittest import mock
 from runtime import ledger_versions, routing, subscription_reconcile, usage_budget as budget
 from tests.fixture_routing_funding import Funded, M, NOW, assignment, authorize, funded_pool, native, observations, policy, route, settings, window
 
@@ -59,9 +60,11 @@ class CapacityTests(Funded, unittest.TestCase):
                              ledger=self.ledger)
 
     def test_an_oversized_admission_is_pending_and_writes_nothing(self):
+        # F5.S: Unicode is measured in UTF-8 bytes against 256 KiB, so this admission now fits as it is.
+        self.assertEqual(self.long_admission('big', routing.MAX_WINDOWS, fill='\u00e9')['status'], 'admitted')
         before = self.ledger.snapshot()
-        # F5.4: the 10,752 cap admits the ASCII form of this admission (9,016 characters); escaped text exceeds it.
-        result = self.long_admission('big', routing.MAX_WINDOWS, fill='\u00e9')
+        with mock.patch.object(budget, 'MAX_ADMISSION_BYTES', 10752):  # scaled: the old number, now in bytes
+            result = self.long_admission('again', routing.MAX_WINDOWS, fill='\u00e9')
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'record_too_large'))
         self.assertEqual(self.ledger.snapshot()['holds'], before['holds'])
         self.assertEqual(self.long_admission('one', 1)['status'], 'admitted')  # long ids alone still fit
@@ -139,13 +142,19 @@ class CapacityTests(Funded, unittest.TestCase):
         data[subscription_reconcile.DEBITS] = {
             ('win:' + unique(i, long('p')) + '/' + long('w')): dict(units=budget.MAX_INTEGER, at=budget.MAX_INTEGER)
             for i in range(subscription_reconcile.MAX_WINDOW_DEBITS)}
-        # F5.4 (approved caps): with every admission slot at the new 10,752 bound the body written here is
-        # 11,765,486 characters, and 11,784,912 once a non-growing write re-serializes it (below 90% of 13,100,000).
+        # Conservative control: every table and slot at its bound. F5.4 measured 11,784,912 characters with the old
+        # 10,752/2,048 slot padding; F5.S pads each slot to the approved 256 KiB/32 KiB byte bounds (83,986,158 bytes),
+        # which stays below 90% of MAX_RECORD and, with its reserve R, inside the 192 MiB soft budget. The soft-limit
+        # transition below is checked SCALED at the old 6,000,000 number.
+        from runtime import usage_budget_storage as storage
         self.assertEqual(data['version'], ledger_versions.STATE_VERSION)
         raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
         sizes = {key: len(json.dumps(value, separators=(',', ':'))) for key, value in data.items()}
-        self.assertLessEqual(len(raw), budget.MAX_RECORD * 0.9, sizes)  # at least 10% margin
-        self.assertGreater(len(raw), budget.SOFT_RECORD)  # beyond the soft limit: only settlement continues
+        self.assertLessEqual(storage.encoded_size(data), budget.MAX_RECORD * 0.9, sizes)  # at least 10% margin
+        self.assertLessEqual(storage.encoded_size(data) + storage.remaining_growth(data), budget.SOFT_RECORD)
+        soft = mock.patch.object(budget, 'SOFT_RECORD', 6_000_000)
+        soft.start(); self.addCleanup(soft.stop)
+        self.assertGreater(len(raw), budget.SOFT_RECORD)  # scaled: beyond the soft limit only settlement continues
         with closing(sqlite3.connect(self.path)) as db:
             db.execute('UPDATE ledger SET body=?', (raw,)); db.commit()
         self.ledger.set_caps(5, 2)  # a full ledger still reads and commits a non-growing write
@@ -171,9 +180,13 @@ class CapacityTests(Funded, unittest.TestCase):
 
 
 class SoftLimitTests(Funded, unittest.TestCase):
-    """Above SOFT_RECORD nothing adds exposure; everything that settles or reduces it still commits."""
+    """Above SOFT_RECORD nothing adds exposure; everything that settles or reduces it still commits. SCALED (F5.S):
+    the soft limit is lowered to its old 6,000,000 bytes so the fill stays small; the real 192 MiB budget and R are
+    proved in tests/test_routing_storage.py."""
     def setUp(self):
         super().setUp()
+        soft = mock.patch.object(budget, 'SOFT_RECORD', 6_000_000)
+        soft.start(); self.addCleanup(soft.stop)
         self.fund(balance=100 * M)
         pools = dict(g=funded_pool('org'))
         self.routes = [route('r', 'g', 'api_grant', 'acct', {'credit': M})]

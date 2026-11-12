@@ -141,8 +141,10 @@ class ValidStateCapacityTests(unittest.TestCase):
         org['settled']['covered'] = MAX
         org['live_funding'] = dict(observed_at=MAX, digest='f' * 64)
         size = self.stored(data)
-        self.assertLessEqual(size, budget.MAX_RECORD * 0.9)
-        self.assertGreater(size, budget.SOFT_RECORD)
+        self.assertLessEqual(size, budget.MAX_RECORD * 0.9)  # every slot at the approved F5.S bounds
+        self.assertGreater(size, 6_000_000)  # beyond the legacy soft limit: the settlement-only regime
+        from runtime import usage_budget_storage as storage  # F5.S: the same state plus R fits the real soft budget
+        self.assertLessEqual(storage.encoded_size(data) + storage.remaining_growth(data), budget.SOFT_RECORD)
         # A closed hold's settlement with a coverage mark stays inside the existing padded settlement allowance.
         settlement = dict(reserved=MAX, charged=MAX, released=MAX, overrun=MAX, cost=MAX, cost_source=max(budget.COST_SOURCES, key=len),
                           resolution=dict(basis='reservation_floor', receipts=32, receipts_digest='f' * 32),

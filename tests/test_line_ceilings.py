@@ -20,7 +20,7 @@ BASELINE = {
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
-    "runtime/usage_budget.py": 1469,
+    "runtime/usage_budget.py": 1467,
 }
 
 

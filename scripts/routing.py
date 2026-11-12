@@ -353,7 +353,7 @@ class Service:
                     raise
                 row = None
             if row is not None:
-                require(len(row[0]) <= usage_budget.MAX_RECORD, 'invalid_ledger')
+                require(len(row[0].encode()) <= usage_budget.MAX_RECORD, 'invalid_ledger')
                 return usage_budget.name(json.loads(row[0])['identity'])
             time.sleep(0.01)
         raise Blocked('ledger_unavailable')
