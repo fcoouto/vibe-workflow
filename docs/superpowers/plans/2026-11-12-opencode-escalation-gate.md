@@ -4,40 +4,41 @@
 
 **Goal:** Ship the policy changes and the mechanical OpenCode stuck-pattern escalation gate (delivery step 1 of the design); the routed judge gets its own plan once Smart Routing can route it.
 
-**Architecture:** A pure, dependency-free TypeScript state machine (`gate.ts`) decides trips, holds, stages and releases from observed events. A thin OpenCode V2 server plugin (`index.ts`) feeds it hook and event data, applies its decisions through `permission.evaluate` and `tool.execute.before`, mirrors state to `ctx.storage`, and fails open. Policies 01 and 03 change first, so the gate implements the new rule.
+**Architecture:** A pure, dependency-free TypeScript state machine (`gate.ts`) decides trips, holds, stages and releases from observed events. A thin OpenCode V2 server plugin (`index.ts`) feeds it hook and event data, applies its decisions through `permission.evaluate`, and fails open. State lives in memory only. Policies 01 and 03 change first, so the gate implements the new rule.
 
 **Tech Stack:** TypeScript run by OpenCode's embedded runtime and by `node --test` (types stripped); Python 3.11 standard library for the feature manifest and test wrapper; Markdown policies.
 
-**Spec:** `docs/superpowers/specs/2026-11-12-opencode-escalation-gate-design.md`
+**Spec:** `docs/superpowers/specs/2026-11-12-opencode-escalation-gate-design.md`, including its "Plan review changes" section, which takes precedence over earlier sections where they differ.
 
 ## Global Constraints
 
 - OpenCode V2 server plugin API; host OpenCode 2.2.6. No `experimental` API.
 - No dependencies, no package manager, no build step.
-- Plugin directory: `runtime/adapters/opencode_workflow/` with `index.ts` (OpenCode loads a directory's `index`). This replaces the spec's single file `runtime/adapters/opencode_workflow.ts`, because a `plugins` path entry loads a directory.
-- The routing shim `runtime/adapters/opencode_plugin.ts` is not modified; the gate may import its exported pure helpers (`routeFacts`, `derivedSession`).
-- Feature `escalation_gate`: default `{"enabled": false}`, control `settings`, consent `none`, settings `repair_rounds` (integer, default `2`), `check_patterns` (array), `ladder` (array, default `[]`).
+- Plugin directory: `runtime/adapters/opencode_workflow/` with `index.ts` (OpenCode loads a directory's `index`).
+- The routing shim `runtime/adapters/opencode_plugin.ts` is neither modified nor imported; the gate keeps its own copies of the two small helpers it needs (route facts, derived-session shape).
+- Feature `escalation_gate`: default `{"enabled": false}`, control `settings`, consent `none`, settings `check_patterns` (array) and `ladder` (array, default `[]`). Repair rounds are a constant `2`.
 - Escalation limit `3`; one re-evaluation reset per file.
-- Variant order `low`, `medium`, `high`, `xhigh`, `max`.
-- No model calls, no output and no notices while nothing is held. The plugin never logs prompts, diffs, check output or messages.
+- Variant order `low`, `medium`, `high`, `xhigh`, `max`; any other variant (for example `default`) or none is unranked.
+- Enabling or changing the feature applies at the plugin's next load (`/reload` or a new server).
+- No model calls, no output and no notices while nothing is held. The status tool is registered only while the gate is active. The plugin never logs prompts, diffs, check output or messages.
 - No commercial model names in policies, client contracts or messages. Tests may use fake routes.
 - Any internal error allows the action.
 - Each Python file stays at or under 1000 lines.
 
 ## Review Focus
 
-- Two subagents of one parent finishing close together: each finish is attributed to its own session, and only the stronger, edit-free one created after the hold releases.
-- Edit resources that are relative, `..`-prefixed or absolute: all normalize to one absolute key per file, so the same file is never counted twice.
-- A child session prompt containing "reset the counter" never resets anything; only root-session user prompts do.
+- Variant `default` (seen on 2.2.6 primary requests) and an empty ladder: holds still release through a different route, so nothing deadlocks.
+- A file re-edited after every review wave (a task record or plan): reviewers created before its latest edit, and failures it was not repaired between, never build rounds on it.
+- Edit resources that are relative, `..`-prefixed or absolute: all normalize to one absolute key per file.
+- A child session prompt containing "reset the counter" never resets anything; only root-session user prompts do, and only while something is held.
 - A command that merely mentions a check (`rg pytest src`, `cat scripts/validate.py`) is not a check run.
-- A feature-status child that hangs or is missing: setup finishes within its 5 s bound and the gate stays inactive.
 
 ---
 
 ### Task 1: Policy changes
 
 **Files:**
-- Modify: `policies/01-project-scope.md:40` (the "Ask only when" paragraph)
+- Modify: `policies/01-project-scope.md` (the paragraph starting "Ask only when", under "When instructions conflict")
 - Modify: `policies/03-agent-delegation.md:134-145` (stuck-pattern escalation)
 - Modify: `docs/policy-sources.md:590` and `:616` (coverage rows)
 - Modify: `docs/escalation-validation.md` (new dated section)
@@ -46,9 +47,9 @@
 **Interfaces:**
 - Produces: the policy text the gate's client contract (Task 4) points to; the anchor `policies/03-agent-delegation.md#stuck-pattern-escalation` stays unchanged.
 
-- [ ] **Step 1: Replace the first paragraph sentence in Project Scope**
+- [ ] **Step 1: Replace the "Ask only when" paragraph in Project Scope**
 
-Replace line 40 with the approved "After" text in the spec's "Project Scope: requirements as the hard gate" section, verbatim.
+Replace that paragraph with the approved "After" text in the spec's "Project Scope: requirements as the hard gate" section, verbatim.
 
 - [ ] **Step 2: Rewrite the stuck-pattern ladder in Agent Delegation**
 
@@ -101,58 +102,60 @@ Expected: all pass. A changed policy digest is expected for legacy enrollment re
 **Interfaces:**
 - Produces (all exported from `gate.ts`):
   - `type Route = { provider: string; model: string; variant: string | null }`
-  - `type GateSettings = { repairRounds: number; checkPatterns: string[]; ladder: string[] }`
+  - `type GateSettings = { checkPatterns: string[]; ladder: string[] }`
   - `type Decision = { effect: "allow" } | { effect: "deny" | "ask"; message: string }`
   - `type Stage = "escalating" | "reevaluation" | "stop"`
-  - `type GateStatus = { held: { file: string; rounds: number; stage: Stage; escalations: number; levels: Route[] }[]; resetUsed: string[]; lastError: string | null }`
-  - `type GateSnapshot` (JSON-serializable; opaque to callers)
-  - `const DEFAULT_SETTINGS: GateSettings` with `repairRounds: 2`, `ladder: []`, `checkPatterns: ["scripts/validate.py", "scripts/test_sharded.py", "pytest", "unittest", "node --test", "npm test", "pnpm test", "yarn test", "go test", "cargo test", "make test", "make check"]`
-  - `const MAX_ESCALATIONS = 3`
+  - `type GateStatus = { held: { file: string; rounds: number; stage: Stage; escalations: number; levels: Route[] }[]; lastError: string | null }`
+  - `const DEFAULT_SETTINGS: GateSettings` with `ladder: []` and `checkPatterns: ["scripts/validate.py", "scripts/test_sharded.py", "pytest", "unittest", "node --test", "npm test", "pnpm test", "yarn test", "go test", "cargo test", "make test", "make check"]`
+  - `const REPAIR_ROUNDS = 2`, `const MAX_ESCALATIONS = 3`
   - `function parseSettings(values: unknown): GateSettings | null`
   - `function compareRoutes(a: Route, b: Route, ladder: string[]): 1 | 0 | -1 | null`
+  - `function derivedSession(id: unknown): boolean` (`ses_` + 32 lowercase hex)
   - `function isCheck(command: string, patterns: string[]): boolean`
   - `function resetRequest(text: string): { files: string[] } | null` (empty `files` means every held file)
-  - `class Gate` with `constructor(settings: GateSettings, snapshot?: GateSnapshot)` and methods `created(session: string, parent: string | null): void`, `routed(session: string, route: Route): void`, `edited(session: string, files: string[]): void`, `failed(session: string): void`, `finished(session: string): void`, `editDecision(session: string, files: string[]): Decision`, `followUpDecision(caller: string, target: string): Decision`, `isRoot(session: string): boolean`, `reset(session: string, request: { files: string[] }): string[]`, `status(session: string): GateStatus`, `snapshot(): GateSnapshot`
+  - `class Gate` with `constructor(settings: GateSettings)` and methods `created(session: string, parent: string | null): void`, `knows(session: string): boolean`, `routed(session: string, route: Route): void`, `edited(session: string, files: string[]): void`, `failed(session: string): void`, `finished(session: string): void`, `editDecision(session: string, files: string[]): Decision`, `holds(session: string): boolean`, `isRoot(session: string): boolean`, `reset(session: string, request: { files: string[] }): string[]`, `status(session: string): GateStatus`
 
 Semantics the tests pin (one monotonic event sequence per gate; files are absolute paths supplied by the caller):
-- A tree is a root (parent `null`) and every session created under it. Derived-shape sessions (`ses_` + 32 lowercase hex) and their children are ignored.
-- `failed` and `finished` of an edit-free child set the tree's last failure. `finished` evaluates releases first and records the failure after, so the first repair after a release is round 1 of the new level. Finishes of roots are ignored.
-- `edited`: a re-edit of `f` after a failure newer than both `f`'s last edit and its last round adds one round and records the editing session's route as a level. First edits never count.
-- Held: rounds ≥ `repairRounds` and a failure newer than the latest round; the hold time is that failure.
-- `finished(child)` releases each held file whose hold is older than the child's creation, when the child made no edits and its route is:
-  - stage `escalating`: stronger (`compareRoutes === 1`) than every level → rounds `0`, level appended, escalations `+1`;
-  - stage `reevaluation` (escalations ≥ 3, or no ranked option above every level, and reset unused): at least as strong (`≥ 0`) as every level → escalations `0`, rounds `0`, reset used.
-- Stage `stop`: reset used and (escalations ≥ 3 or no ranked option above). `editDecision` and `followUpDecision` return `ask`; other held stages return `deny`.
-- "No ranked option above": the strongest level is at `max` and no ladder entry after its model (or its model is absent from the ladder).
-- `followUpDecision(caller, target)` refuses when `target` made a round on a held file of the caller's tree.
-- `reset` (user override) deletes the named files' entries, or every held file's when `files` is empty, and returns the cleared files.
+- A tree is a root (parent `null`) and every session created under it. Derived-shape sessions and their children are ignored. Calls about unknown sessions are no-ops and decisions for them allow.
+- Failures, per file `f`:
+  - `failed(session)` (a check run failed) is a failure for every file of the tree edited before it;
+  - `finished(child)` of a child that made no edits is a failure only for files whose latest edit is older than the child's creation (the reviewer could have seen it); finishes of roots and of children that edited are ignored;
+  - a failure for `f` when `f` already had one pending since its latest edit clears `f`'s rounds (it was not repaired in between).
+- `edited(session, files)`: a re-edit of `f` with a failure pending since its latest edit adds one round, records the editing session's route as a level and clears the pending failure. First edits never count; several edits before the next failure are one round.
+- Held: rounds ≥ `REPAIR_ROUNDS` and a failure pending; the hold starts at that failure.
+- `finished(child)` evaluates releases before recording its failure. It releases each held file whose hold is older than the child's creation, when the child made no edits and its route `r` satisfies, against every level `l`:
+  - stage `escalating`: `compareRoutes(r, l) === 1` where comparable, and `r` differs from `l` where `compareRoutes` is `null` → rounds `0`, level appended, escalations `+1`;
+  - stage `reevaluation` (escalations ≥ 3, or no ranked option above, and reset unused): no `compareRoutes(r, l) === -1` → escalations `0`, rounds `0`, reset used.
+- "No ranked option above": every level is comparable, the strongest is at `max`, and no ladder entry ranks above its model.
+- Stage `stop`: reset used and (escalations ≥ 3 or no ranked option above). `editDecision` returns `ask`; the other held stages return `deny`. A later `edited` of a stop-stage file (the user approved the ask) deletes its entry.
+- `reset` (user override) deletes the named files' entries (rounds, levels, escalations, reset flag), or every held file's when `files` is empty, and returns the cleared files.
 - Messages begin `escalation gate:` and name at most 5 files (relative display is the plugin's job), the round count, the stage, the required next step for that stage and `policies/03-agent-delegation.md#stuck-pattern-escalation`. No model names.
 - Bounds: 64 trees (oldest evicted), 512 files and 4096 sessions per gate; beyond them, untracked work is allowed.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/opencode_workflow/gate.test.ts`, with `R = (model, variant) => ({ provider: "p", model, variant })` and a root `ses_root`, child sessions `ses_a`, `ses_b`, `ses_d`, files `/w/a.ts`, `/w/b.ts`:
+In `tests/opencode_workflow/gate.test.ts`, with `R = (model, variant) => ({ provider: "p", model, variant })`, a root `ses_root`, children `ses_a`, `ses_b`, `ses_d` and files `/w/a.ts`, `/w/b.ts`:
 
 ```ts
 test("first edits and one fail-fix-pass loop never hold", ...)        // edited, failed, edited → editDecision allow
 test("holds after two rounds and a new failure", ...)                 // edit, fail, edit, fail, edit, fail → deny, message matches /^escalation gate:/ and /a\.ts/
-test("passing checks never clear rounds", ...)                        // no event clears rounds except release or reset
-test("holds edits in children of the same tree", ...)                 // editDecision("ses_a", ["/w/a.ts"]).effect === "deny"
-test("refuses a follow-up to a session that made a round", ...)       // followUpDecision("ses_root", "ses_a").effect === "deny"
-test("a same-level reviewer never releases", ...)                     // child on the same route finishes → still deny
+test("passing checks never clear rounds", ...)
+test("a failure without a repair in between clears rounds", ...)
+test("a reviewer created before the latest edit is not a failure", ...) // Review Focus: task-record file
+test("holds edits in children of the same tree", ...)
+test("a same-level reviewer never releases", ...)
 test("a stronger edit-free child created after the hold releases", ...)
-test("a stronger child created before the hold does not release", ...)
-test("a child that edited does not release", ...)
-test("concurrent children: only the stronger one releases", ...)      // Review Focus
-test("three escalations lead to re-evaluation, accepted at equal rank", ...)
-test("re-evaluation resets once; the next exhaustion asks", ...)      // effect === "ask"
+test("a child created before the hold, or that edited, does not release", ...)
+test("concurrent children: only the stronger one releases", ...)
+test("default variant and empty ladder release through a different route", ...) // Review Focus
+test("three escalations lead to re-evaluation, accepted when not weaker", ...)
+test("re-evaluation resets once; the next exhaustion asks; an approved edit clears", ...)
 test("no ranked option above goes to re-evaluation, then asks", ...)  // R("m", "max") with ladder []
-test("ranking: ladder order, then variants; unranked never counts", ...) // compareRoutes cases, incl. null
+test("ranking: ladder order, then variants; unranked is null", ...)
 test("user reset clears named files or every held file", ...)
 test("resetRequest: phrases, files and negation", ...)                // "reset the counter for a.ts" → {files:["a.ts"]}; "don't reset the gate" → null; "reset" alone → null
 test("isCheck: segments, flags and viewers", ...)                     // "cd x && python3 -B scripts/validate.py" true; "rg pytest src" false; "cat scripts/validate.py" false
-test("derived-shape sessions are ignored", ...)
-test("snapshot round-trips a hold", ...)
+test("derived-shape and unknown sessions are ignored", ...)
 test("parseSettings: defaults, valid values, invalid returns null", ...)
 ```
 
@@ -165,7 +168,7 @@ Expected: FAIL, module `runtime/adapters/opencode_workflow/gate.ts` not found.
 
 - [ ] **Step 3: Implement `gate.ts`**
 
-Plain classes and `Map`s; no Node imports beyond types. `isCheck` splits on `&&`, `||`, `;`, `|`, drops leading `NAME=value` tokens, rejects segments whose first token is one of `grep`, `rg`, `cat`, `echo`, `sed`, `head`, `tail`, `less`, `git`, and matches when the pattern's whitespace-split tokens appear as a contiguous run of the segment's tokens. `resetRequest` requires the word `reset` and one of `gate`, `counter`, `counters`, `hold`, `holds`, `escalation`; it returns `null` when `don't`, `do not`, `never` or `no` precedes `reset` in the same sentence; files are tokens matching `[\w./-]+\.[A-Za-z0-9]+`.
+Plain classes and `Map`s; no Node imports. `isCheck` splits on `&&`, `||`, `;`, `|`, drops leading `NAME=value` tokens, rejects segments whose first token is one of `grep`, `rg`, `cat`, `echo`, `sed`, `head`, `tail`, `less`, `git`, and matches when the pattern's whitespace-split tokens appear as a contiguous run of the segment's tokens. `resetRequest` requires the word `reset` and one of `gate`, `counter`, `counters`, `hold`, `holds`, `escalation`; it returns `null` when `don't`, `do not`, `never` or `no` precedes `reset` in the same sentence; files are tokens matching `[\w./-]+\.[A-Za-z0-9]+`.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -188,44 +191,43 @@ git commit -m "feat(opencode): escalation gate state machine"
 - Test: `tests/opencode_workflow/plugin.test.ts`
 
 **Interfaces:**
-- Consumes: everything Task 2 exports; `routeFacts(model: unknown)` and `derivedSession(id: unknown)` from `../opencode_plugin.ts`.
+- Consumes: everything Task 2 exports.
 - Produces:
   - `function createWorkflowPlugin(config?: { featureStatus?: (directory: string) => Promise<unknown> }): { id: "vibe-workflow"; setup(ctx: any): Promise<() => void> }`
   - `export default createWorkflowPlugin()`
-  - tool `escalation_gate_status` (no input; returns `JSON.stringify(gate.status(sessionID))`)
-  - storage key `escalation-gate/state`
+  - `function routeOf(model: unknown): Route | null` (`providerID`, `id`, `variant` as plain names)
   - `function exitStatus(event: unknown): number | null`
+  - tool `escalation_gate_status` (no input; returns `JSON.stringify(gate.status(sessionID))`), registered only while active
 
 Behavior:
-- Setup reads the feature through `featureStatus`; the default runs `python3 -I -B <package>/scripts/workflow.py features status escalation_gate --cwd <ctx.location.directory>` with a 5 s timeout, where `<package>` is two directories above this file. Active only when `features.escalation_gate.effective === true` and `parseSettings(values)` succeeds. It re-reads on `config.updated`. Inactive hooks return immediately.
-- Restores `Gate` from `ctx.storage.get("escalation-gate/state")`; writes the snapshot after each state change.
-- Events `session.created` → `created`; `session.execution.succeeded|failed|interrupted` → `finished`; `config.updated` → re-read feature.
-- `session.hook("model.request")` → `routed` with `routeFacts(event.model)` (provider, model, variant).
-- `permission.evaluate`, actions `edit`, `write`, `patch`: resolve `event.resources` against `ctx.location.directory` to absolute paths; `editDecision`; on `deny`/`ask` set `event.effect` and `event.message` (only tightening: never change an existing `deny`); on allow, remember the files under `event.source.id`.
-- `tool.execute.after`: for `edit`, `write`, `patch` with `status === "completed"` → `edited(session, files remembered for event.id)`; for `shell` (and `bash`) when `isCheck(input.command)` and `exitStatus(event)` is non-zero, or `status === "error"` → `failed(session)`. `exitStatus` reads `result.metadata.exit`, then `result.metadata.exitCode`; anything else is `null` (not a failure).
-- `tool.execute.before` for `subagent` with `input.sessionID`: `followUpDecision`; a refusal throws `Error(message)`; `ask` calls `ctx.permission.assert` with action `escalation_gate`.
-- `session.hook("prompt")`: only when `gate.isRoot(sessionID)` (or `ctx.session.get` reports `parentID == null`); `resetRequest(event.prompt.text)` → `reset` → append `\n\n[escalation gate: counter reset by user for <files or "all held files">]` (or `[escalation gate: nothing to reset]`) to `event.prompt.text`. This replaces the spec's instruction-entry confirmation, which is an experimental API.
+- Setup registers hooks and returns at once. In the background it reads the feature through `featureStatus`; the default runs `python3 -I -B <package>/scripts/workflow.py features status escalation_gate --cwd <ctx.location.directory>` with a 5 s timeout, where `<package>` is three directories above `index.ts`. The gate becomes active only when `features.escalation_gate.effective === true` and `parseSettings(values)` succeeds; then the status tool is registered. Until then every hook returns immediately.
+- Lineage: `session.created` events → `created`. When a hook names a session the gate does not know, walk `ctx.session.get` parents (at most 8 lookups, 300 ms each, results cached, failures remembered for 5 s) and replay `created` from the root down; an undetermined chain leaves the session unknown (allowed).
+- `session.execution.succeeded` → `finished`. `failed` and `interrupted` are ignored.
+- `session.hook("model.request")`: only `kind === "primary"` → `routed(session, routeOf(event.model))`.
+- `permission.evaluate`, actions `edit`, `write`, `patch`: resolve `event.resources` against `ctx.location.directory` to absolute paths; `editDecision`; on `deny`/`ask` set `event.effect` and `event.message`, never changing an existing `deny`; on allow, remember the files under `event.source.id` (at most 256 entries, oldest dropped).
+- `tool.execute.after`: any `status === "completed"` call whose `id` has remembered files → `edited(session, files)`, then forget the id. For `shell` (and `bash`) when `isCheck(input.command)` and (`exitStatus(event)` is non-zero, or `status === "error"`) → `failed(session)`. `exitStatus` reads `result.metadata.exit`, then `result.metadata.exitCode`; anything else is `null`.
+- `session.hook("prompt")`: only when `gate.isRoot(sessionID)` and `gate.holds(sessionID)`; `resetRequest(event.prompt.text)` → `reset`; when it cleared files, append `\n\n[escalation gate: counter reset by user for <files>]` to `event.prompt.text`.
 - Every hook body is wrapped: an exception records `lastError` (a fixed reason, never payload) and allows.
 
 - [ ] **Step 1: Write the failing tests**
 
-Reuse the shape of `fakeCtx` in `tests/opencode_plugin/plugin.test.ts:67-130`, adding `storage` (in-memory), `tool.transform`, and `permission.assert`. `featureStatus` is injected.
+Reuse the shape of `fakeCtx` in `tests/opencode_plugin/plugin.test.ts:67-130`, adding `tool.transform`. `featureStatus` is injected.
 
 ```ts
-test("inactive when the feature is off, missing or unreadable", ...)
-test("setup finishes within the bound when feature status hangs", ...)   // Review Focus; injected never-resolving promise, setup resolves ≤ 5.5 s
-test("trip and hold end to end through hooks", ...)                     // permission + execute.after + shell failures → evaluate sets effect "deny"
+test("inactive when the feature is off, missing, unreadable or still loading", ...)
+test("setup returns before feature status resolves", ...)              // injected never-resolving promise
+test("status tool is registered only once active", ...)
+test("trip and hold end to end through hooks", ...)                   // permission + execute.after + shell failures → evaluate sets effect "deny"
 test("a configured deny is never changed", ...)
-test("denied edits are not counted", ...)
-test("resources normalize to one absolute file", ...)                   // Review Focus: "a.ts", "./a.ts", "../w/a.ts" from /w/sub, "/w/a.ts"
-test("subagent follow-up refusal throws the gate message", ...)
-test("execution events release on a stronger child", ...)
-test("root prompt resets and appends the note; child prompt does not", ...) // Review Focus
-test("status tool reports held files and lastError", ...)
-test("state survives a reload through storage", ...)
+test("denied edits are not counted; any completed call with remembered files is", ...)
+test("resources normalize to one absolute file", ...)                 // Review Focus: "a.ts", "./a.ts", "../w/a.ts" from /w/sub, "/w/a.ts"
+test("unknown sessions resolve through session.get lineage", ...)
+test("only succeeded executions release; failed and interrupted do not", ...)
+test("only primary model requests set levels", ...)
+test("root prompt resets and appends the note only while held; child prompt does not", ...) // Review Focus
 test("hook errors allow and record lastError", ...)
 test("exitStatus reads metadata.exit and metadata.exitCode only", ...)
-test("nothing is written to the prompt or messages while nothing is held", ...)
+test("nothing is written to prompts or messages while nothing is held", ...)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -235,7 +237,7 @@ Expected: FAIL, module `runtime/adapters/opencode_workflow/index.ts` not found.
 
 - [ ] **Step 3: Implement `index.ts`**
 
-Use `node:child_process` `execFile` for the default `featureStatus`, `node:path` for resolution. Register hooks with the `domain.hook(name, callback)` calls the shim uses.
+Use `node:child_process` `execFile` for the default `featureStatus` and `node:path` for resolution. Register hooks with the `domain.hook(name, callback)` calls the shim uses.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -260,7 +262,7 @@ git commit -m "feat(opencode): escalation gate plugin wiring"
 - Modify: `clients/index.md` (one table row)
 - Modify: `policies/03-agent-delegation.md` (one pointer line at the end of stuck-pattern escalation)
 - Modify: `docs/policy-sources.md` (one row for the gate)
-- Modify: `tests/test_features.py:468-471` (`ShippedManifestTests`)
+- Modify: `tests/test_features.py` (`ShippedManifestTests`)
 - Regenerate: the prepared instruction map
 
 **Interfaces:**
@@ -275,21 +277,22 @@ In `tests/test_features.py` `ShippedManifestTests`:
 def test_escalation_gate_manifest(self):
     gate = features.manifests()["escalation_gate"]
     self.assertEqual((gate["default"], gate["control"], gate["consent"]), ({"enabled": False}, "settings", "none"))
-    self.assertEqual(gate["settings"]["repair_rounds"], {"type": "integer", "default": 2})
+    self.assertEqual(sorted(gate["settings"]), ["check_patterns", "ladder"])
+    self.assertEqual(gate["settings"]["ladder"], {"type": "array", "default": []})
     self.assertEqual(gate["procedure"], "clients/opencode-escalation-gate.md")
 ```
 
-`tests/test_opencode_workflow.py` runs `node --test --test-reporter=tap` on both suites like `tests/test_opencode_plugin.py:118-137` (skip without `node`; assert `# fail 0` and `# skipped 0`).
+`tests/test_opencode_workflow.py` runs `node --test --test-reporter=tap` on both suites like `tests/test_opencode_plugin.py:118-137` (skip without `node`; assert `# fail 0` and `# skipped 0`), and checks that `DEFAULT_SETTINGS.checkPatterns` in `gate.ts` equals the manifest's `check_patterns` default.
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `python3 -B scripts/test_sharded.py test_features test_opencode_workflow`
-Expected: `test_escalation_gate_manifest` fails with `KeyError: 'escalation_gate'`; the node wrapper passes.
+Expected: `test_escalation_gate_manifest` fails with `KeyError: 'escalation_gate'`.
 
 - [ ] **Step 3: Add the manifest, contract and pointers**
 
-- `features/escalation_gate.json`: fields per `clients/features.md`, `summary` "Holds repeated same-level repairs on OpenCode until a stronger diagnosis runs.", `skills: []`, `scopes: ["project"]`, `requires: []`, settings `repair_rounds` `{"type": "integer", "default": 2}`, `check_patterns` `{"type": "array", "default": <DEFAULT_SETTINGS.checkPatterns>}`, `ladder` `{"type": "array", "default": []}`.
-- `clients/opencode-escalation-gate.md`: what it observes, what it holds and releases, stages, reset by the user's message, troubleshooting (status tool, hold messages), install entry, limits (shell writes, `!cmd`, other plugins, server API, fail-open), and "Package-tested only; live probes pending" until Task 5. No model names.
+- `features/escalation_gate.json`: fields per `clients/features.md`, `summary` "Holds repeated same-level repairs on OpenCode until a stronger diagnosis runs.", `skills: []`, `scopes: ["project"]`, `requires: []`, settings `check_patterns` `{"type": "array", "default": <DEFAULT_SETTINGS.checkPatterns>}` and `ladder` `{"type": "array", "default": []}`.
+- `clients/opencode-escalation-gate.md`: what it observes, what it holds and releases, stages, reset by the user's message, troubleshooting (status tool, hold messages), install entry, "applies at next load", and limits: shell writes, `!cmd`, other plugins, the server API, fail-open, state lost on reload, and loops that move to new files (each repair touches files never repaired before) are not detected. "Package-tested only; live probes pending" until Task 5. No model names.
 - `clients/index.md`: `| [OpenCode escalation gate](opencode-escalation-gate.md) | You install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. |`
 - `policies/03-agent-delegation.md`: after step 6, "On OpenCode, the optional [escalation gate](../clients/opencode-escalation-gate.md) holds repeated same-level repairs; it supports this procedure and does not replace it."
 - `docs/policy-sources.md`: a row for the gate contract, sourced from the design doc and enforced by `runtime/adapters/opencode_workflow/` with its tests.
@@ -318,29 +321,28 @@ git commit -m "feat(opencode): escalation gate feature, contract and package wir
 - Modify: `runtime/adapters/opencode_workflow/index.ts` only where a probe contradicts an assumed field
 - Modify: `clients/opencode-escalation-gate.md` (qualification status)
 
-**Interfaces:**
-- Consumes: the installed plugin from Task 4, loaded in a disposable project outside the repository.
+The user chose to build before probing. Hook shapes are confined to `index.ts`, so a contradicted assumption is a local fix.
 
 - [ ] **Step 1: Ask the user for the budget** (number of requests, route, time limit); proceed only after approval.
 - [ ] **Step 2: Observe on OpenCode 2.2.6, recording key sets, never content:**
-  - `tool.execute.after` for `shell`: where the exit status is;
-  - `permission.evaluate` for `edit` from a child carries the child's `sessionID` and a `source.id` matching `tool.execute.after`'s `id`;
+  - `tool.execute.after`: `id`, `input`, and where a shell call's exit status is;
+  - `permission.evaluate` `source.id` equals the matching `tool.execute.after` `id`, and a child's evaluate carries the child's `sessionID`;
   - a `deny` message reaches the model and the file is unchanged;
-  - a `subagent` follow-up carries `input.sessionID`;
-  - `model.request` reports each child's route;
-  - the `prompt` hook fires for root prompts and whether it fires for subagent prompts;
-  - `session.execution.*` events carry the child `sessionID`;
-  - `ctx.storage` survives a plugin reload.
+  - `model.request` reports each child's primary route;
+  - the `prompt` hook fires for root prompts, and whether it fires for subagent prompts;
+  - `session.execution.succeeded` carries child `sessionID`s;
+  - a resumed session's hooks resolve through `session.get` lineage.
 - [ ] **Step 3: Fix contradicted assumptions** with a failing unit test first, then rerun `test_opencode_workflow`.
 - [ ] **Step 4: Record results** in `probes.json` and the client contract; commit.
 
 ### Task 6: Behavior evaluation (needs separate approval)
 
-Run the spec's "Behavior evaluation" cases (recurrence, persistence through re-evaluation, unrelated failures in other and the same files) under a user-approved budget; record outcomes and false-trip cost in the client contract. Report it separately from package checks and probes.
+Run the spec's "Behavior evaluation" cases (recurrence, persistence through re-evaluation, unrelated failures in other and the same files), plus a task-record file re-edited after each review wave and a loop that moves to new files (expected: not detected, a stated limit), under a user-approved budget. Record outcomes and false-trip cost in the client contract, separately from package checks and probes.
 
 ---
 
 ## Not in this plan
 
 - The routed judge and its `unrelated` auto-clear: a separate plan once Smart Routing can prepare, dispatch and settle an interactive routed task.
+- Persisting gate state across plugin reloads.
 - Primary-checkout guard, merge-readiness gate, review-independence verification.

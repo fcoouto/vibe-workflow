@@ -381,6 +381,42 @@ one judge dispatch. Routing later replaces `rank`, chooses and admits the
 diagnosis and re-evaluation models through the same handler, and already routes
 the judge. None of this changes the trip, hold or release rules.
 
+## Plan review changes
+
+An independent review of the implementation plan (12 November 2026) checked it
+for unnecessary controls and robustness gaps. These changes take precedence over
+the sections above where they differ:
+
+- **Unrankable routes.** Variant `default` appears on OpenCode 2.2.6 primary
+  requests, and the ladder may be empty, so many comparisons are unranked. Where
+  a comparison is unranked, release needs a route different from that level
+  instead of a stronger one; re-evaluation needs no level to rank above it. "No
+  ranked option above" applies only when every level is comparable. Holds can no
+  longer deadlock.
+- **Which failures count.** A reviewer's finish counts as a failure only for files
+  whose latest edit is older than the reviewer's creation. A second failure on a
+  file that was not repaired in between clears its rounds. Only
+  `session.execution.succeeded` counts as a finish; failed and interrupted runs
+  neither release nor count.
+- **Levels.** Only `primary` model requests set a session's route; title and
+  compaction requests use other variants.
+- **Edits.** Any completed tool call whose permission request carried edit
+  resources counts, whatever the tool's name.
+- **Lineage.** A session the gate has not seen (a hook arriving before its
+  creation event, or a resumed session) is resolved through bounded
+  `session.get` parent lookups, as the shim does.
+- **Stop stage.** An edit the user approves at the stop stage clears that file's
+  entry, so it is not asked again.
+- **Reset.** Reset phrases are read only while the tree holds a file, and the note
+  is appended only when something was cleared.
+- **Cut:** the follow-up refusal (the edit hold already stops a resumed owner's
+  repair), the `config.updated` re-read (feature changes apply at the next plugin
+  load), the `ctx.storage` mirror (a reload loses holds and fails open), the
+  `repair_rounds` setting (constant `2`), importing helpers from the shim, and
+  registering the status tool while the gate is inactive.
+- **Known limit.** Loops whose repairs move to files never repaired before are not
+  detected; the behavior evaluation includes this case.
+
 ## Delivery order
 
 1. Policy changes (Project Scope, Agent Delegation) and the mechanical gate:
