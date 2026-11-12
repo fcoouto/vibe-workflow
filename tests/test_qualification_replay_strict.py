@@ -232,6 +232,23 @@ class StrictReplayTests(Temp):
         del candidates_gone["pressure"]["candidates"]  # never replayed by the legacy rule instead
         self.assertEqual(replay_strict.replay_records([candidates_gone])["missing_detail"], 1)
 
+    def test_malformed_ranked_decision_inputs_fail_closed(self):
+        records = []
+        for index, (field, value) in enumerate((("epoch", "SECRET"), ("epoch", None), ("minimum_horizon", None),
+                                                ("minimum_horizon", 0), ("settings_revision", "SECRET"))):
+            record = ranked("m-%d" % index, NOW + index)
+            target = record if field == "settings_revision" else record["pressure"]
+            if value is None:
+                del target[field]
+            else:
+                target[field] = value
+            records.append(record)
+        report = replay_strict.replay_records(records)
+        self.assertEqual(report["missing_detail"], 5)  # counted, never defaulted
+        self.assertFalse(report["passed"])
+        self.assertNotIn("SECRET", json.dumps(report))
+        self.assertTrue(replay_strict.replay_records([pilot("p-1", NOW)])["passed"])  # worker-choice unchanged
+
     def test_an_empty_or_unreadable_export_does_not_pass(self):
         self.assertFalse(replay_strict.run(self.export)["passed"])
         (self.export / replay_export.RECORDS).write_text("not json\n")

@@ -19,7 +19,7 @@ from runtime import (codex_rate_limits, opencode_launcher, routing_observations 
                      routing_settings, subscription_billing, subscription_reconcile)
 from runtime.usage_budget import Ledger
 from scripts import routing as command
-from tests.qualification import canary, canary_ranked, safety
+from tests.qualification import canary, canary_ranked, canary_ranked_state, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import FakeOpenCode, Temp, qual_run
 
@@ -28,7 +28,7 @@ CLAUDE, CHATGPT = "claude-agent-sdk via opencode", "opencode provider openai"
 CLAUDE_PATH, CLAUDE_POOL = "opencode-claude-subscription", "claude-subscription"
 CHATGPT_PATH, CHATGPT_POOL = "opencode-chatgpt-subscription", "chatgpt-subscription"
 ROWS = ("implementation", "review", "investigation")
-APPROVAL = dict(by="the user", at="2026-11-12", scope="ranked canary, low-coverage acknowledged")
+APPROVAL = dict(by="the user", at="2026-11-12", scope="ranked canary")
 LABEL = "canary-ranked-synthetic"
 PRODUCTION_BILLING = collector.LocalSource.billing  # the unpatched production source: no billing producer
 CHILD = ("import sys; sys.path.insert(0, %r); from unittest import mock; "
@@ -181,7 +181,8 @@ class RankedStores(Temp):
 
     def make_run(self):
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
-        ledger.set_cap("pilot", 28, "test")
+        # A disposable ledger only: the ranked purpose opened by a recorded test approval, never the pilot's calls.
+        ledger.set_cap(canary.RANKED_PURPOSE, 83, "test", approval=dict(by="test", at="test", scope="test ledger"))
         base = self.private(self.tmp / "iso")
         run = qual_run(base, ledger, canary_project=str(self.project), canary_state=self.state)
         run.routing.stop()
@@ -193,9 +194,22 @@ class RankedStores(Temp):
         run.server.native = rate_limit(self.resets, five=0.12)
         return run, ledger
 
-    def controller(self, run=None, clock=None, **options):
+    def digest(self, run, acknowledge=8):
+        record = dict(canary_ranked.preflight(self.settings, run.routing.harnesses, now(), acknowledge),
+                      project=str(run.canary_project), ledger=str(self.state["ledger"]))
+        return canary_ranked_state.digest(record)
+
+    def controller(self, run=None, clock=None, state_dir=None, **options):
+        """An explicitly approved start: the operator approves the preflight's digest, then the run starts."""
         run = run or self.make_run()[0]
-        run.ranked = canary_ranked.setup(run, clock=clock, **options)
+        pins = canary_ranked.approval_inputs(self.settings, run.routing.harnesses)
+        options.setdefault("acknowledge", canary_ranked.coverage(pins)["minimum"])
+        state_dir = state_dir or self.private(self.tmp / "ranked-state")
+        if getattr(run, "ranked", None) is not None:
+            canary_ranked.close(run.ranked)
+        run.ranked = canary_ranked.setup(run, clock=clock, approved=self.digest(run, options["acknowledge"]),
+                                         state_dir=state_dir, **options)
+        self.addCleanup(lambda controller=run.ranked: controller.lock.__exit__(None, None, None))
         return run.ranked
 
     def drive(self, run, ledger, n=2, tag=None):
@@ -217,7 +231,7 @@ class RankedPreflightTests(RankedStores):
         self.assertEqual(len(pins["table_digest"]), 64)
         self.assertEqual(pins["routes_version"], collector.LocalSource(self.settings).routes_version(
             routing_paths._table(self.settings)))
-        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
         self.assertNotIn("previews", json.dumps(record))
         self.assertEqual(sorted(record["coverage"]["profiles"]), sorted(
             "%s/%s" % (kind, band) for kind in canary_ranked.SPECIALISTS for band in canary.BANDS))
@@ -230,16 +244,16 @@ class RankedPreflightTests(RankedStores):
     def test_canary_refuses_to_start_without_generated_routes(self):
         self.table(strategy("s-x", "invented-x", provider="openai", harness=CHATGPT))
         with self.assertRaisesRegex(safety.Refused, "no_generated_route"):
-            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
         (self.settings.parent / routing_paths.TABLE_FILE).unlink()
         with self.assertRaisesRegex(safety.Refused, "table_empty"):
-            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
         routing_paths.unqualify(self.settings, CLAUDE_PATH)
         with self.assertRaisesRegex(safety.Refused, "no_qualified_path"):
-            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
 
     def test_cap_preflight_reports_reservation_coverage_not_a_usage_forecast(self):
-        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
         coverage = record["coverage"]
         self.assertEqual(coverage["windows"][CLAUDE_POOL + "/5h"], dict(demand=10, reservation=12, full_reservations=8))
         self.assertEqual((coverage["minimum"], coverage["sample_minimum"]), (8, 60))
@@ -251,24 +265,25 @@ class RankedPreflightTests(RankedStores):
         reserve.assert_any_call(10, None, 5000)
 
     def test_low_coverage_requires_explicit_start_approval(self):
-        with self.assertRaisesRegex(safety.Refused, "coverage"):
-            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=False)
-        self.assertTrue(canary_ranked.acknowledged(APPROVAL))
-        self.assertFalse(canary_ranked.acknowledged(dict(APPROVAL, scope="ranked canary")))
+        for wrong in (None, 7, 9, -8, "8", True, 8.0):
+            with self.assertRaisesRegex(safety.Refused, "acknowledge-low-coverage 8"):
+                canary_ranked.preflight(self.settings, [CLAUDE], now(), wrong)
+        self.assertEqual(canary_ranked.preflight(self.settings, [CLAUDE], now(), 8)["acknowledged"], 8)
+        self.assertFalse(hasattr(canary_ranked, "acknowledged"))  # no prose convention: SCOPE grants nothing
 
     def test_preflight_reports_earliest_demanded_reset(self):
         early = now() + 1800
         collector.store_window(self.settings, CLAUDE_POOL, window("5h", early, observed=now() + 1))
-        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+        record = canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
         self.assertEqual(record["earliest_reset"], early)
         self.assertLessEqual(record["remaining_s"], 1800)
         with self.assertRaisesRegex(safety.Refused, "reset"):
-            canary_ranked.preflight(self.settings, [CLAUDE], early, acknowledged=True)
+            canary_ranked.preflight(self.settings, [CLAUDE], early, acknowledge=8)
 
     def test_missing_reset_metadata_blocks_start(self):
         os.unlink(collector.window_path(self.settings))
         with self.assertRaisesRegex(safety.Refused, "reset"):
-            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledged=True)
+            canary_ranked.preflight(self.settings, [CLAUDE], now(), acknowledge=8)
 
 
 class FakeEnv:
@@ -319,7 +334,7 @@ class RankedGateTests(RankedStores):
         env = FakeEnv(dict(mode="choice", billing_class="included_subscription"))
         ranked.before_prepare = lambda body: None
         calls = safety.CallLedger.initialize(self.private(self.tmp / "c2") / "l.jsonl")
-        calls.set_cap("pilot", 28, "test")
+        calls.set_cap(canary.RANKED_PURPOSE, 83, "test", approval=dict(by="test", at="test", scope="test ledger"))
         result = canary.PilotDriver(env, calls, n=1, ranked=ranked).run()
         self.assertEqual((result["abort"]["reason"], result["abort"]["recovery"]), ("non_ranked_admission", "not_dispatched"))
         self.assertNotIn("dispatch", env.calls)
@@ -394,7 +409,7 @@ class RankedGateTests(RankedStores):
                    (lambda: routing_settings.update(self.settings, dict(margin_bp=2500),
                                                     routing_settings._load(self.settings)[0]), lambda: None))
         for index, (change, revert) in enumerate(changes):
-            ranked = self.controller(run, acknowledged=True)
+            ranked = self.controller(run, state_dir=self.private(self.tmp / ("state-%d" % index)))
             ranked.before_prepare(self.body(index))
             admission = self.admitted(run, index)
             change()
@@ -649,6 +664,8 @@ class RankedChatGPTRefreshTests(RankedStores):
 class RankedEntryPointTests(RankedStores):
     def test_canary_run_builds_the_ranked_controller_before_the_server_starts(self):
         run, _ = self.make_run()
+        run.ranked_options = dict(approved=self.digest(run), acknowledge=8,
+                                  state_dir=self.private(self.tmp / "ranked-state"))
         order = []
         run.snapshot_user_dirs = run.report_only_home = lambda: {}
         run.compare_user_dirs = lambda before, home: None

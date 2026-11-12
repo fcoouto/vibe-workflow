@@ -35,7 +35,7 @@ import time
 from runtime import opencode_launcher, routing, routing_observations as collector, routing_paths, routing_settings
 from runtime import task_profile
 from runtime.usage_budget import Ledger
-from tests.qualification import canary
+from tests.qualification import canary, canary_ranked_state
 from tests.qualification.safety import Refused, harness_for
 
 ALLOWANCE = 100  # thousandths of each approved pool/window over the whole run (call 36)
@@ -43,16 +43,10 @@ SAMPLE_MINIMUM = 60
 SPECIALISTS = tuple(label for label, _, _ in canary.ROLES)
 RISK_BAND = "medium"  # the canary plan's profile risk band
 REFUSED = ("table_outdated", "table_empty", "no_generated_route", "no_qualified_path")
-ACKNOWLEDGEMENT = "low-coverage acknowledged"  # the approval SCOPE text that accepts a coverage below the minimum
 DEBIT_ADVICE = ("An abandoned-window debit blocks the canary; the harness never drops it. The operator reconciles it "
                 "with the existing one-shot procedure, then a new run starts with a renewed preflight.")
 
 
-def acknowledged(approval):
-    return ACKNOWLEDGEMENT in str((approval or {}).get("scope") or "")
-
-
-_acknowledged = acknowledged  # `setup`'s parameter of the same name overrides it
 
 
 def _approved_paths(rules, qualified, harnesses):
@@ -149,33 +143,50 @@ def baseline(settings_path, pins, at):
     return found
 
 
-def preflight(settings_path, harnesses, at, acknowledged=False):
+def preflight(settings_path, harnesses, at, acknowledge=None):
     """The approval record of the run: pins, coverage, earliest demanded reset and time remaining. `Refused` on
-    missing demand, profile coverage or reset metadata, and on coverage below the sample minimum unless the start
-    approval acknowledges the incomplete-sample risk. Local store reads only, outside preview and any timer."""
+    missing demand, profile coverage or reset metadata, and on coverage below the sample minimum unless `acknowledge`
+    is exactly that computed minimum (`--acknowledge-low-coverage N`, an integer, never prose). The acknowledgement is
+    part of the digest the approval names; it is an interface, not anyone's consent to start. Local store reads
+    only, outside preview and any timer."""
     pins = approval_inputs(settings_path, harnesses)
     report = coverage(pins, routing_paths._table(settings_path))
     if not report["windows"] or not all(report["profiles"].values()):
         raise Refused("ranked canary refused: demand or profile coverage is missing")
     windows = baseline(settings_path, pins, at)
     earliest = min(item["reset_at"] for item in windows.values())
-    if report["minimum"] < SAMPLE_MINIMUM and not acknowledged:
+    low = report["minimum"] < SAMPLE_MINIMUM
+    if low and (type(acknowledge) is not int or acknowledge != report["minimum"]):
         raise Refused("ranked canary refused: reservation coverage %d is below the %d-admission minimum; the start "
-                      "approval must acknowledge the incomplete-sample risk" % (report["minimum"], SAMPLE_MINIMUM))
+                      "needs --acknowledge-low-coverage %d" % (report["minimum"], SAMPLE_MINIMUM, report["minimum"]))
     return dict(pins=pins, coverage=report, baseline=windows, earliest_reset=earliest, remaining_s=earliest - at,
-                low_coverage_acknowledged=report["minimum"] < SAMPLE_MINIMUM)
+                acknowledged=report["minimum"] if low else None)
 
 
 class Allowance:
     """Each approved pool/window's cumulative positive observed increase from the seeded baseline, and this run's
     unsettled reservations. Never replenished: a reset or an ambiguous decrease stops it for good."""
 
-    def __init__(self, base):
+    def __init__(self, base, state=None):
         self.baseline = {key: dict(value) for key, value in base.items()}
         self.last = {key: value["used"] for key, value in base.items()}
         self.seen = {key: value.get("observed_at") or 0 for key, value in base.items()}  # newest reading counted
         self.cumulative = dict.fromkeys(base, 0)
         self.holds, self.stopped = {}, None
+        if state is not None:  # a resumed run: the durable record, never a recomputed baseline
+            self.last, self.seen, self.cumulative = dict(state["last"]), dict(state["seen"]), dict(state["cumulative"])
+            self.holds = {attempt: dict(vector) for attempt, vector in state["holds"].items()}
+            stopped = state["stopped"]
+            if stopped is not None:
+                kind = canary.Abort if stopped["kind"] == "abort" else canary.Incomplete
+                self.stopped = kind(stopped["reason"], stopped["detail"])
+
+    def state(self):
+        stopped = None if self.stopped is None else dict(
+            kind="abort" if isinstance(self.stopped, canary.Abort) else "incomplete", reason=self.stopped.reason,
+            detail=self.stopped.detail)
+        return dict(last=dict(self.last), seen=dict(self.seen), cumulative=dict(self.cumulative),
+                    holds={attempt: dict(vector) for attempt, vector in self.holds.items()}, stopped=stopped)
 
     def _stop(self, error):
         self.stopped = error
@@ -223,11 +234,17 @@ class Allowance:
 class Controller:
     """The ranked canary's per-request steps for `canary.PilotDriver` (see the module docstring)."""
 
-    def __init__(self, env, settings_path, ledger_path, project, harnesses, record, clock=None):
+    def __init__(self, env, settings_path, ledger_path, project, harnesses, record, clock=None, path=None):
         self.env, self.settings, self.ledger_path, self.project = env, settings_path, ledger_path, project
         self.harnesses, self.record, self.clock = list(harnesses), record, clock or (lambda: int(time.time()))
-        self.pins, self.earliest_reset = record["pins"], record["earliest_reset"]
-        self.allowance, self.timings, self.kept = Allowance(record["baseline"]), [], None
+        self.pins, self.earliest_reset, self.path = record["pins"], record["earliest_reset"], path
+        self.allowance = Allowance(record["baseline"], record if "cumulative" in record else None)
+        self.timings, self.kept, self.completed = [], None, record.get("completed", 0)
+
+    def persist(self):
+        """Save the whole-run record (before any send; after every change). A failed save aborts."""
+        if self.path is not None:
+            canary_ranked_state.save(self.path, dict(self.record, **self.allowance.state(), completed=self.completed))
 
     def identity(self, admission):
         """The admitted `(provider, model, variant)` from the pinned strategy route the admission names."""
@@ -246,7 +263,7 @@ class Controller:
         except Refused:
             current = None
         if current != self.pins:
-            raise canary.Incomplete("approval_inputs_changed", ["renewed preflight and approval required"])
+            self.allowance._stop(canary.Incomplete("approval_inputs_changed", ["renewed preflight and approval required"]))
 
     def request_body(self, body):
         """The exact `prepare` body the served child receives (`server.Routing._body`): the preview reads it."""
@@ -260,6 +277,17 @@ class Controller:
         finally:
             service.close()
 
+    def _persisted(step):
+        """Run one boundary step, then save the whole-run record whatever happened (a failed save aborts)."""
+        def run(self, *args):
+            try:
+                return step(self, *args)
+            finally:
+                self.persist()
+        run.__name__, run.__doc__ = step.__name__, step.__doc__
+        return run
+
+    @_persisted
     def before_prepare(self, body):
         self._deadline()
         self._unchanged()
@@ -304,7 +332,9 @@ class Controller:
             missing.update(stale)
         raise canary.Incomplete("seed_required", sorted(missing), resumable=True)
 
+    @_persisted
     def before_dispatch(self, admission):
+        """The exact-admission gate; the hold is saved before the driver may send."""
         if admission.get("mode") != "ranked":
             raise canary.Abort("non_ranked_admission", admission.get("mode"))
         route = self.pins["routes"].get(admission.get("route"))
@@ -319,10 +349,16 @@ class Controller:
         self.allowance.check(admission.get("reserved"), admission.get("attempt_id"))
         self.allowance.hold(admission.get("attempt_id"), admission.get("reserved"))
 
+    @_persisted
     def after_settlement(self, admission, accounting):
+        """A sent, settled and already recorded launch: it counts toward the sample; every reported window is
+        stored before any reading is counted, so a stop never omits a later window."""
         self.allowance.release(admission.get("attempt_id"))
-        for window in opencode_launcher.windows((accounting or {}).get("rate_limit")):
+        self.completed += 1
+        windows = opencode_launcher.windows((accounting or {}).get("rate_limit"))
+        for window in windows:
             collector.store_window(self.settings, admission["pool"], window)
+        for window in windows:
             self.allowance.observe(admission["pool"], window["id"], window["used"], window["reset_at"],
                                    window["observed_at"])
         self._sync()
@@ -346,27 +382,61 @@ class Controller:
                 for variant in [v if isinstance(v, str) else (v or {}).get("id") for v in item.get("variants") or []]]
 
 
-def setup(run, clock=None, acknowledged=None):
-    """The production-ledger canary's controller, before any server starts: the preflight, recorded in the run's
-    existing approval record. `Refused` stops the run before anything is written to the project."""
+def setup(run, clock=None, approved=None, acknowledge=None, state_dir=None):
+    """The production-ledger ranked canary's controller, before any server starts.
+
+    With no run record for this ledger, the current preflight's digest must equal `approved` (the digest the
+    operator approved from `--ranked-preflight`); the record is then created. With one, it is resumed: `approved`
+    must be its digest and the current pins its pins (a change needs a renewed approval, which the existing record
+    refuses: nothing is erased), and its baseline, cumulative use, holds, original earliest reset, stop state and
+    sample count carry over unchanged. The run holds the record's lock until the process ends."""
     clock = clock or (lambda: int(time.time()))
     state = run.canary_state
-    approval = state.get("approval") or {}
-    ack = _acknowledged(approval) if acknowledged is None else acknowledged
     harnesses = run.routing.harnesses
-    record = preflight(state["settings"], harnesses, clock(), acknowledged=ack)
-    ranked = dict({key: value for key, value in record.items() if key not in ("pins", "baseline")},
+    project, ledger = str(run.canary_project), str(state["ledger"])
+    path = canary_ranked_state.path_for(state_dir or canary_ranked_state.default_dir(), ledger)
+    lock = canary_ranked_state.held(path)
+    lock.__enter__()
+    try:
+        if path.exists() or path.is_symlink():
+            record = canary_ranked_state.load(path, approved, project, ledger)
+            try:
+                current = approval_inputs(state["settings"], harnesses)
+            except Refused:
+                current = None
+            if current != record["pins"]:
+                raise Refused("ranked canary refused: approval_inputs_changed since the approved run record; it "
+                              "stays as recorded and needs a renewed approval by hand")
+        else:
+            fresh = dict(preflight(state["settings"], harnesses, clock(), acknowledge), project=project, ledger=ledger)
+            if approved != canary_ranked_state.digest(fresh):
+                raise Refused("ranked canary refused: --approve-digest does not match this preflight (%s)"
+                              % canary_ranked_state.digest(fresh))
+            record = canary_ranked_state.create(path, fresh)
+    except BaseException:
+        lock.__exit__(None, None, None)
+        raise
+    ranked = dict(digest=record["digest"], coverage=record["coverage"], earliest_reset=record["earliest_reset"],
+                  acknowledged=record["acknowledged"], completed=record["completed"],
                   pins={key: value for key, value in record["pins"].items() if key != "routes"},
                   strategies=sorted(record["pins"]["routes"]))
-    run.results["production_ledger"] = dict(approval=dict(approval, ranked=ranked))  # the state's own stays as given
+    run.results["production_ledger"] = dict(approval=dict(state.get("approval") or {}, ranked=ranked))
     from tests.qualification.pilot_env import CanaryEnv
-    return Controller(CanaryEnv(run), state["settings"], state["ledger"], run.canary_project, harnesses, record,
-                      clock)
+    controller = Controller(CanaryEnv(run), state["settings"], state["ledger"], run.canary_project, harnesses,
+                            record, clock, path)
+    controller.lock = lock
+    return controller
 
 
-def summary(results):
-    """`results['incomplete']` for a ranked run that ended without a stop: fewer than SAMPLE_MINIMUM admissions is
-    incomplete, never a pass; strict replay and the latency budgets still gate a pass."""
-    if results.get("abort") or results.get("incomplete") or results.get("completed", 0) >= SAMPLE_MINIMUM:
+def close(controller):
+    """Release a controller's run-record lock (tests; a live run holds it until the process ends)."""
+    controller.lock.__exit__(None, None, None)
+
+
+def summary(results, completed):
+    """`results['incomplete']` for a ranked run that ended without a stop: fewer than SAMPLE_MINIMUM admissions over
+    the whole run (`completed`, from the run record) is incomplete, never a pass; strict replay and the latency
+    budgets still gate a pass."""
+    if results.get("abort") or results.get("incomplete") or completed >= SAMPLE_MINIMUM:
         return results.get("incomplete")
-    return dict(reason="sample_below_minimum", detail=[results.get("completed", 0), SAMPLE_MINIMUM])
+    return dict(reason="sample_below_minimum", detail=[completed, SAMPLE_MINIMUM])

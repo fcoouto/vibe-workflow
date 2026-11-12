@@ -31,6 +31,8 @@ from tests.qualification.safety import (APPROVAL_FIELDS, BudgetExceeded, HARNESS
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
 RANKED_MAX = 80  # the ranked canary's stop: the 60-admission minimum plus 20 (validation Canary table)
+RANKED_MIN = 60
+RANKED_PURPOSE = "ranked-canary"  # its own call purpose: cap 0 in code; never funded by the pilot's calls
 MAX_DURATION_S = 24 * 3600
 REPO_CHECK_EVERY = 5
 # Distinct ids for the pilot, so nothing it admits can be mistaken for another route's or another ledger's holds.
@@ -410,6 +412,7 @@ class PilotDriver:
                  tag=None, now=None, route=None, ranked=None):
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
         self.ranked = ranked  # canary_ranked.Controller for the production-ledger canary, else None
+        self.purpose = "pilot" if ranked is None else RANKED_PURPOSE  # the durable call purpose it reserves
         self.plan = plan_assignments(n, tag or run, now, route=route, ranked=ranked is not None)
         self.current = None
         self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[], deviations=[],
@@ -435,8 +438,11 @@ class PilotDriver:
                 recovery = self.recover()
             except BaseException as error:  # noqa: BLE001
                 recovery = "error:%s" % type(error).__name__
-            self.results["incomplete"] = dict(reason=stop.reason, detail=stop.detail, resumable=stop.resumable,
-                                              admission=(self.current or {}).get("index"), recovery=recovery)
+            if recovery not in ("none", "not_dispatched"):  # only a proven-safe recovery may stay incomplete
+                self.abort("recovery_error", dict(incomplete=stop.reason, recovery=recovery), exception_origin(stop))
+            else:
+                self.results["incomplete"] = dict(reason=stop.reason, detail=stop.detail, resumable=stop.resumable,
+                                                  admission=(self.current or {}).get("index"), recovery=recovery)
         except Abort as stop:
             self.quiesce()  # first: no signal may skip the recovery
             self.abort(stop.reason, stop.detail, stop.origin or exception_origin(stop))
@@ -446,7 +452,8 @@ class PilotDriver:
             self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__, exception_origin(error))
         if self.ranked is not None:
             from tests.qualification import canary_ranked
-            self.results["incomplete"] = canary_ranked.summary(self.results)
+            self.results["incomplete"] = canary_ranked.summary(self.results, self.ranked.completed)
+            self.results["run_completed"] = self.ranked.completed  # the whole run's sample, across resumes
             self.results["preparation_reads"] = list(self.ranked.timings)  # preview and refresh, outside `prepare`
         latency = self.results["latency"]
         self.results["latency_summary"] = {key: summarize_ms(values) for key, values in latency.items()}
@@ -537,7 +544,7 @@ class PilotDriver:
             self.ranked.before_prepare(item["body"])  # outside the preparation timer
         allowed = 2 if first else 1  # the first admission may carry the one observed title request
         try:
-            current["ref"] = self.ledger.reserve("pilot", "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
+            current["ref"] = self.ledger.reserve(self.purpose, "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
                                                  allowed, run=self.run_id)
         except BudgetExceeded:
             raise Abort("cap_breach") from None
@@ -597,8 +604,6 @@ class PilotDriver:
             raise Abort("funding_violation", settlement.get("kind"))
         if not env.detach(session, attempt, token):
             raise Abort("recovery_error", "detach")
-        if self.ranked is not None:  # the launch's own telemetry, at its observation time
-            self.ranked.after_settlement(env.admissions[attempt], accounting)
         after = anomalies(env.status())
         if after:
             raise Abort("status_anomaly", after)
@@ -616,3 +621,5 @@ class PilotDriver:
                                                settlement=settlement.get("kind"), outcome=launched.get("outcome"),
                                                released=sorted(settlement.get("released") or {}),
                                                charged=settlement.get("charged") or 0, timings=dict(timings)))
+        if self.ranked is not None:  # after the sent launch is fully recorded: its telemetry, then any stop
+            self.ranked.after_settlement(env.admissions[attempt], accounting)

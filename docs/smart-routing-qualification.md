@@ -187,15 +187,22 @@ The user approved the canary, and nothing else, on the production routing settin
 The production-ledger form of step 8 runs ranked: `plan_assignments` sends no explicit choice and no observation. It rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands, and the routing service ranks and collects. The pilot and isolation modes keep their single explicit `--route`. Rules: [validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) point 9 (call 36). Code: `tests/qualification/canary_ranked.py`.
 
 **Preflight, before the server starts (local reads only, 0 calls).**
+- **Two steps:**
+  1. `python3 -B tests/qualification/opencode_live.py --ranked-preflight --project <checkout> --approval BY AT SCOPE [--acknowledge-low-coverage N]` reads saved local data only (0 calls, no server, no write). It prints the pins, coverage, baseline, earliest reset and a `digest`.
+  2. The run is `--canary --production-ledger --ranked --approve-digest <digest> --probe-route PROVIDER/MODEL#VARIANT [--admissions 60..80]`. It starts only when the current preflight has exactly the approved digest. BY/AT/SCOPE stays human provenance only.
+
+  `--probe-route` is used for the plugin-chain probes only, never for an admission, and `--route` or `--pilot-max` with `--ranked` is refused.
+- **Call purpose:** the run reserves the `ranked-canary` call purpose. Its cap is 0 in code, and its recorded maximum is 83, which is the 80-admission stop's write-ahead exposure. Until a future recorded, approved cap line opens enough of it, the run is refused before anything starts. The pilot's calls never fund it.
 - **Approval pins:** the approval pins these inputs:
   - the qualified OpenCode subscription path ids of the signed-in providers, and their generated strategy routes;
   - the table content digest and version, and the existing `routes_version`;
   - the effective host harnesses, the settings revision and the margin.
 
-  They are written into the run's existing `production_ledger.approval` record under `ranked`, with no per-profile route lists.
+  The digest and these inputs are written into the run's existing `production_ledger.approval` record under `ranked`, with no per-profile route lists.
+- **Run record:** an approved start creates one owner-only run record per routing ledger (`~/.local/state/vibe-workflow-qualification/ranked-canary/`, or `--ranked-state-dir`). It holds the approved digest and pins, the original baseline and earliest reset, cumulative use, unsettled reservations, the stop state and the whole-run admission count. It is saved before every send, and a failed save aborts. A concurrent, missing, corrupt or mismatched record is refused. The harness never replaces or deletes it, so a new approval for the same ledger is refused while the record exists.
 - **Refusals:** `no_qualified_path`, `table_empty` and `no_generated_route` refuse before anything is written. Missing demand, missing profile coverage, or a reset that is unknown or already passed also refuses.
 - **Coverage:** per approved pool/window, `d_w` is the largest qualified demand. `r_w = Ledger._reserve(d_w, None, margin_bp)`, and coverage is `floor(100 / r_w)`. For example, demand 10 with margin 2000 reserves 12, so coverage is 8. The report shows the minimum across windows beside the 60-admission minimum, the six profiles' structural coverage, the enabled funding classes (`subscription`), the earliest demanded reset and the time remaining.
-- **Low coverage:** coverage below 60 needs the start approval's SCOPE to say `low-coverage acknowledged`. That acknowledges that completion before the reset is not guaranteed. Coverage is not a usage forecast.
+- **Low coverage:** coverage below 60 needs `--acknowledge-low-coverage N`, where N is exactly the computed minimum. N is part of the digest, and no prose in SCOPE counts. It records that completion before the reset is not guaranteed; it is an interface, not anyone's start approval. Coverage is not a usage forecast.
 
 **Per admission (outside the preparation timer).** Each admission goes through these steps:
 1. The deadline and the pinned inputs are rechecked.
@@ -209,11 +216,12 @@ The production-ledger form of step 8 runs ranked: `plan_assignments` sends no ex
 **Stops.**
 - **`seed_required` (resumable):** no kept pool is fresh. The stop names the pool/windows that need a seed.
   1. Seed only those windows with the one-shot `seed_window` (`scripts/routing.py`). Use the provider's current reading and the same `reset_at`.
-  2. Run again. The allowance and deadline carry over from the same approval; a new approval needs a new preflight.
+  2. Run again with the same `--approve-digest`. The new process resumes from the run record: the original baseline, cumulative use, holds, earliest reset and admission count carry over, and nothing is recomputed. A changed input, or a stop other than `seed_required`, cannot resume.
 - **`allowance_exhausted`:** the reservation plus this run's other unsettled reservations would pass 100 thousandths. The undispatched admission is released (`not_dispatched`).
 - **`window_usage_unknown`:** any reset or ambiguous decrease of a demanded window, or `now >= earliest_reset` at preflight, before preparation, before dispatch or after settlement. This applies even when no launch crossed the reset.
 - **`approval_inputs_changed`:** any pinned input changed after the preview. The unsent admission is released, and a renewed preflight and approval are needed.
 - **Abort (`window_overrun`):** an observed overrun. Actual cost can exceed the reservation, so this is not a provider-side hard stop.
+- **Recovery on an incomplete stop:** a stop stays incomplete only when its recovery is proven safe (`none` or `not_dispatched`). A refused release, an error, an uncertain or left-dispatched launch aborts with the kill switch. A launch that was sent keeps its status check, admission entry and sample count, and every reported window is stored before any stop.
 - **Never undone:** nothing replenishes the allowance, restarts the deadline or erases unknown usage by reseeding.
 - **Debits:** the harness never drops an abandoned-window debit. One that blocks progress is reconciled with the existing one-shot operator procedure.
 
@@ -230,7 +238,7 @@ The production-ledger form of step 8 runs ranked: `plan_assignments` sends no ex
 | Aborts | funding violation, unresolved launch, recovery error, non-ranked admission, overrun | `abort.reason`, `recovery`, `kill_switch_ok` |
 | Kill switch | `CanaryEnv.kill_switch` on every abort | `abort.kill_switch` |
 
-- **Limit:** a live ranked run still needs formal registration and its own call purpose and cap. The CLI still bounds admissions by `--pilot-max` (20 at most) and the `pilot` purpose, and the plugin-chain probes still use the run's `--route`. No production billing producer exists, so `admitted_check` refuses with `billing_unverified` until one is qualified.
+- **Limit:** a live ranked run still needs formal registration and an approved `ranked-canary` cap. Neither exists, so the run is refused. No production billing producer exists either, so `admitted_check` refuses with `billing_unverified` until one is qualified.
 
 ### After the session
 

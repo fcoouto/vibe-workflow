@@ -140,7 +140,9 @@ def _ranked(record, earlier, report):
     pressure = record.get("pressure")
     ranking = record.get("ranking") if isinstance(record.get("ranking"), dict) else {}
     if not (all(key in record for key in replay_export.DETAIL) and isinstance(pressure, dict)
-            and isinstance(pressure.get("candidates"), list) and isinstance(ranking.get("shortlist"), list)):
+            and isinstance(pressure.get("candidates"), list) and isinstance(ranking.get("shortlist"), list)
+            and type(record.get("settings_revision")) is int and _number(pressure.get("epoch"))
+            and _number(pressure.get("minimum_horizon")) and pressure["minimum_horizon"] > 0):  # never defaulted
         report["missing_detail"] += 1
         return
     if record.get("billing_class") != routing_funding.SUBSCRIPTION or record.get("shares") != SUBSCRIPTION_SHARES \
@@ -150,10 +152,10 @@ def _ranked(record, earlier, report):
     try:
         candidates = [dict(item, constraints=[dict(c, pool=item["pool"]) for c in item["constraints"]])
                       for item in pressure["candidates"]]
-        rows = routing.decision_rows(dict(admissions=earlier), record.get("settings_revision", 0), record["at"])
+        rows = routing.decision_rows(dict(admissions=earlier), record["settings_revision"], record["at"])
         route, cls = routing_funding.choose(candidates, record["shares"], rows, record["bucket"],
-                                            pressure.get("epoch", 0), pressure["feasible"], record["at"],
-                                            pressure.get("minimum_horizon", routing.DEFAULT_MINIMUM_HORIZON))
+                                            pressure["epoch"], pressure["feasible"], record["at"],
+                                            pressure["minimum_horizon"])
     except ValueError as error:
         if str(error) == "billing_class_excluded":
             report["ranked_paid"] += 1
