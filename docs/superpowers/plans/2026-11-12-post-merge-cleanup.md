@@ -123,3 +123,16 @@ the promised unchanged/unoccupied-branch check otherwise permits disruption.
 Add real Git regressions before fixing either. The reviewer did not read tests or
 the spec body, so a bounded completion of that missing coverage is required.
 No additional architecture or recovery mechanism is warranted.
+
+Both review gaps reproduced on `828aaef`: detached rebase and bisect wrongly
+returned eligible; URL-named aliases (including a two-URL alias whose first URL
+looked correct) were accepted. Fix F1 by rejecting URL-named remote sections and
+checking Git's network-free literal URL resolution. Fix F2 by reading bounded
+rebase/bisect branch markers across registered worktrees before declaring a ref
+unused. No new mutation owner, state store or recovery logic was added.
+
+Review dispositions for explicitly unjudged areas: existing TLS/authentication
+configuration remains trusted as specified; no new credentials or TLS policy.
+Push options do not redirect the destination and remain subject to provider
+authorization. Native ownership/race limits remain explicit. Missing test/spec
+review coverage will be completed before readiness, not silently waived.

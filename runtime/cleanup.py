@@ -9,6 +9,7 @@ import re
 import subprocess
 
 from runtime import features
+from runtime.settings_store import read_bytes
 from runtime.startup import read_git
 
 
@@ -104,6 +105,12 @@ def inspect(primary, primary_branch, worktree, branch, head, merge, removed=Fals
         _require(code == 1, "symbolic-or-unavailable-task-ref")
         _require(_git(primary, "rev-parse", "--verify", ref).decode().strip() == head, "task-ref-changed")
         _require(not os.path.lexists(common / (ref + ".lock")), "task-ref-locked")
+        for row in rows:
+            other_git, _ = _identity(row["path"])
+            for marker in ("rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"):
+                value = read_bytes(other_git / marker, limit=4096)
+                _require(value is None or value.strip() not in {ref.encode(), branch.encode()},
+                         "branch-still-in-use")
         attachments = [row for row in rows if row.get("branch") == ref]
         matching = [row for row in rows if row["path"] == worktree]
         if removed:
@@ -149,6 +156,11 @@ Reject custom transports instead of trying to emulate Git's configuration engine
     urls = _git(primary, "config", "--get-all", f"remote.{remote}.url").decode().splitlines()
     destination = f"https://github.com/{repository}.git"
     _require(len(urls) == 1 and urls[0] in (destination, destination[:-4]), "remote-repository-mismatch")
+    # A URL can itself name a configured remote, including one with multiple push targets.
+    _require(not _git(primary, "config", "--get-all", f"remote.{urls[0]}.url", allowed=(0, 1)),
+             "remote-destination-mismatch")
+    _require(_git(primary, "ls-remote", "--get-url", urls[0]).decode().strip() == urls[0],
+             "remote-destination-mismatch")
     for flag in ((), ("--push",)):
         effective = _git(primary, "remote", "get-url", *flag, "--all", remote).decode().splitlines()
         _require(effective == urls, "remote-destination-mismatch")
