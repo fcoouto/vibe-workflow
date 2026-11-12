@@ -153,7 +153,7 @@ python3 -B -m tests.qualification.replay_strict --dir <export dir>
 ```
 
 - **Proves:** each exported admission record replays from its stored detail alone ([validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) points 2, 3 and 6). For a ranked record, `routing_funding.choose` (admission's own decision) recomputes the class and route from the stored subscription candidates, and the earlier records count as `routing.decision_rows` counts them (same settings revision, at most 14 days older). Worker-choice records, old and new, are checked by point 3 and counted apart. Every record is checked for funding violations, resurrected capacity and stray records. A ranked paid record or a ranked record without its snapshot detail fails and is counted.
-- **Expect:** 0 calls, no server, no network; it opens only the owner-only export directory. It prints counts, work kinds and bands only (no id, title or timestamp) and exits 1 unless `passed`. A record stores its specialist's work kind, not the specialist's name, so `specialists` counts work kinds.
+- **Expect:** 0 calls, no server, no network; it opens only the owner-only export directory and the package's own task-profile template. It prints counts, work kinds and bands only (no id, title or timestamp); a bucket label that is not a shipped work kind or complexity band fails and is counted, never printed and exits 1 unless `passed`. A record stores its specialist's work kind, not the specialist's name, so `specialists` counts work kinds.
 - **Limit:** the replay over the exported pilot ledger runs only after F7 and F8 have both merged, by the coordinator, in a separate Results PR. Until then it runs only on disposable synthetic exports. Headroom that rises without a reset counts as resurrected capacity even in a rolling window without `resets_at`. This is conservative: it can flag a legitimate roll-off, or another open hold that settled below its reservation between two records.
 
 ### 8. Canary on the production routing ledger (user approval, canary only)
@@ -181,6 +181,56 @@ The user approved the canary, and nothing else, on the production routing settin
 4. **Export read-only.** The canary exports its admissions at the end of the run and every 12 hours by key, and on demand with step 7 in its production form; each export is one read-only connection to the production ledger.
 5. **Reset never applies.** `--reset-canary-state` refuses the production state.
 6. **On an abort** the harness turns Smart Routing OFF in the production settings through `scripts/routing.py set` (the kill switch). When the canary ends, the user removes the project from `managed_projects` with the one-shot `set`.
+
+### 8a. Ranked canary rules on the production ledger (F7.2; not yet authorized to run)
+
+The production-ledger form of step 8 runs ranked: `plan_assignments` sends no explicit choice and no observation. It rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands, and the routing service ranks and collects. The pilot and isolation modes keep their single explicit `--route`. Rules: [validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) point 9 (call 36). Code: `tests/qualification/canary_ranked.py`.
+
+**Preflight, before the server starts (local reads only, 0 calls).**
+- **Approval pins:** the approval pins these inputs:
+  - the qualified OpenCode subscription path ids of the signed-in providers, and their generated strategy routes;
+  - the table content digest and version, and the existing `routes_version`;
+  - the effective host harnesses, the settings revision and the margin.
+
+  They are written into the run's existing `production_ledger.approval` record under `ranked`, with no per-profile route lists.
+- **Refusals:** `no_qualified_path`, `table_empty` and `no_generated_route` refuse before anything is written. Missing demand, missing profile coverage, or a reset that is unknown or already passed also refuses.
+- **Coverage:** per approved pool/window, `d_w` is the largest qualified demand. `r_w = Ledger._reserve(d_w, None, margin_bp)`, and coverage is `floor(100 / r_w)`. For example, demand 10 with margin 2000 reserves 12, so coverage is 8. The report shows the minimum across windows beside the 60-admission minimum, the six profiles' structural coverage, the enabled funding classes (`subscription`), the earliest demanded reset and the time remaining.
+- **Low coverage:** coverage below 60 needs the start approval's SCOPE to say `low-coverage acknowledged`. That acknowledges that completion before the reset is not guaranteed. Coverage is not a usage forecast.
+
+**Per admission (outside the preparation timer).** Each admission goes through these steps:
+1. The deadline and the pinned inputs are rechecked.
+2. One shared `Service.preview` runs for the exact `prepare` body the served child receives. A refused ranking reason or a changed `routes_version` stops the run.
+3. Only the kept subscription routes go to `refresh_needed`. The existing bounded reader runs only for a stale ChatGPT pool that is needed, and served preparation never starts it.
+4. `window_status` plus one stored-window read per kept pool decide whether any kept pool is fresh with a future reset.
+5. After admission, a non-ranked admission aborts. The admission must exactly match its pinned strategy route: the route, the pool, the route identity digest and an approved path. Being a member of the approval is not enough.
+6. Dispatch uses the facts from `routing_launch.admitted_check` against the server's model list. Attach, the session model and `qual-post`'s guard use that attempt's identity and pool.
+7. After each settled launch, only the reported windows are stored, at their observation time.
+
+**Stops.**
+- **`seed_required` (resumable):** no kept pool is fresh. The stop names the pool/windows that need a seed.
+  1. Seed only those windows with the one-shot `seed_window` (`scripts/routing.py`). Use the provider's current reading and the same `reset_at`.
+  2. Run again. The allowance and deadline carry over from the same approval; a new approval needs a new preflight.
+- **`allowance_exhausted`:** the reservation plus this run's other unsettled reservations would pass 100 thousandths. The undispatched admission is released (`not_dispatched`).
+- **`window_usage_unknown`:** any reset or ambiguous decrease of a demanded window, or `now >= earliest_reset` at preflight, before preparation, before dispatch or after settlement. This applies even when no launch crossed the reset.
+- **`approval_inputs_changed`:** any pinned input changed after the preview. The unsent admission is released, and a renewed preflight and approval are needed.
+- **Abort (`window_overrun`):** an observed overrun. Actual cost can exceed the reservation, so this is not a provider-side hard stop.
+- **Never undone:** nothing replenishes the allowance, restarts the deadline or erases unknown usage by reseeding.
+- **Debits:** the harness never drops an abandoned-window debit. One that blocks progress is reconciled with the existing one-shot operator procedure.
+
+**Per-bound evidence (validation [Canary](smart-routing-validation.md#canary) table).** Fewer than 60 usable admissions is reported as incomplete (`sample_below_minimum`), never a pass. Strict replay (step 7a) and the latency budgets still gate a pass.
+
+| Bound | Check | Reported evidence |
+|---|---|---|
+| One project | `check_project` with `managed_projects` | `production_ledger.approval`, refusal before start |
+| 60 admissions, three specialists, two bands | `plan_assignments(ranked=True)`, `canary_ranked.summary` | `admissions[]` role, band, mode, route, pool; `incomplete` |
+| Each enabled funding class | ranked mode is subscription-only | `coverage.funding_classes`; every admission `mode: ranked`, settlement `window` |
+| Window cap (10% per pool/window) | `Allowance.check` before dispatch, `Allowance.observe` after settlement | `incomplete.reason` / `abort.reason`; cumulative per window |
+| Seven days / 80-admission stop | `MAX_DURATION_S` (24 h pilot driver limit stays stricter), `RANKED_MAX = 80`; the earliest reset is stricter | `abort: max_duration`; `incomplete: window_usage_unknown` |
+| Concurrency | retired by Edit 8; the driver's one-at-a-time rule is the qualification protocol | `abort: concurrency` if an attempt is open |
+| Aborts | funding violation, unresolved launch, recovery error, non-ranked admission, overrun | `abort.reason`, `recovery`, `kill_switch_ok` |
+| Kill switch | `CanaryEnv.kill_switch` on every abort | `abort.kill_switch` |
+
+- **Limit:** a live ranked run still needs formal registration and its own call purpose and cap. The CLI still bounds admissions by `--pilot-max` (20 at most) and the `pilot` purpose, and the plugin-chain probes still use the run's `--route`. No production billing producer exists, so `admitted_check` refuses with `billing_unverified` until one is qualified.
 
 ### After the session
 

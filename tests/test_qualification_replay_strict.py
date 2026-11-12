@@ -252,6 +252,24 @@ class StrictReplayTests(Temp):
                            "identity-", "snapshot-", "digest-", "table-invented", "strategy-", str(NOW)[:6]):
                 self.assertNotIn(secret, text)
 
+    def test_an_unknown_bucket_label_fails_and_is_never_echoed(self):
+        record = ranked("a-1", NOW, bucket=("label-secret-kind", "medium"))
+        band = ranked("a-2", NOW + 60, bucket=("review", "band-secret"))
+        report = self.run_replay([record, band])
+        self.assertEqual(report["invalid_labels"], 2)
+        self.assertFalse(report["passed"])
+        self.assertNotIn("secret", json.dumps(report))
+        self.assertEqual((report["specialists"], report["bands"]), ({}, {}))
+
+    def test_malformed_constraints_fail_as_aggregate_evidence(self):
+        missing = ranked("a-1", NOW)
+        del missing["pressure"]["constraints"][0]["headroom"]
+        text = ranked("a-2", NOW + 60)
+        text["pressure"]["candidates"][0]["constraints"][0]["cost"] = "ten"
+        report = self.run_replay([ranked("a-0", NOW - 60), missing, text])
+        self.assertEqual(report["funding_violations"], 2)
+        self.assertFalse(report["passed"])
+
     def test_the_command_exits_one_unless_passed(self):
         record = ranked("a-1", NOW)
         record["class"] = "api"

@@ -53,7 +53,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402
+from tests.qualification import canary, canary_ranked, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, PROMPT_TEXT, QUALIFIED_OPENCODE,
                                         Redactor, Refused, check_isolated_dir, check_real_home,
@@ -224,8 +224,8 @@ class Run:
                 self.last_pages = pages
                 return found
 
-    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None):
-        provider, model, default = self.route
+    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None, route=None):
+        provider, model, default = route or self.route  # the ranked canary's admitted identity, else the run's route
         body = {"model": {"id": model, "providerID": provider, "variant": variant or default},
                 "location": {"directory": self.server.directory}, "permissions": permissions or DENY_ALL}
         if session_id:
@@ -735,6 +735,7 @@ class Run:
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
         canary.check_ancestor_configs(self.canary_project)
+        self.ranked = canary_ranked.setup(self) if self.canary_state.get("production") else None  # F7.2, before start
         if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
         self.repo_start = repo_snapshot(self.canary_project)
@@ -748,7 +749,7 @@ class Run:
         if refusals:
             raise Refused("canary refused: %s" % ", ".join(refusals))
         driver = canary.PilotDriver(CanaryEnv(self), self.ledger, n=self.admissions, run=self.run_id, tag=self.run_id,
-                                     route=self.route_choice())
+                                     route=None if self.ranked else self.route_choice(), ranked=self.ranked)
         result = driver.run()
         self.note(s, "pilot", result)
         self.note(s, "status_at_end", status_view(self.routing.served("status")[0]))

@@ -22,7 +22,9 @@ Per ledger identity it walks the records in `at` order (file order breaks ties):
   later `resets_at` than the one seen, or a record at or after the seen `resets_at`. A second record of one attempt
   (or a repeated export key) is a stray record.
 
-The report holds counts, work kinds and bands only: no id, title, name or timestamp. A record stores its specialist's
+The report holds counts, work kinds and bands only: no id, title, name or timestamp. A label is reported only when
+it is a work kind of the shipped task-profile template (the one package file read besides the export) and a routing
+complexity band; any other bucket text is counted under `invalid_labels` and fails the replay, never echoed. A record stores its specialist's
 work kind (`bucket[0]`), not the specialist's name, so `specialists` counts work kinds; the three canary specialists
 have three distinct ones. `python3 -B -m tests.qualification.replay_strict --dir <directory>` prints it and exits 1
 unless `passed`.
@@ -33,13 +35,15 @@ import os
 from pathlib import Path
 import sys
 
-from runtime import routing, routing_funding
+from runtime import routing, routing_funding, task_profile
 from tests.qualification import replay_export
 from tests.qualification.safety import Refused
 
 SUBSCRIPTION_SHARES = dict(api=0.0, subscription=1.0)
 COUNTERS = ("records", "ranked", "legacy_records", "class_reproduced", "route_reproduced", "funding_violations",
-            "resurrected_capacity", "stray_records", "ranked_paid", "missing_detail", "unknown_mode", "unreadable")
+            "resurrected_capacity", "stray_records", "ranked_paid", "missing_detail", "unknown_mode", "unreadable",
+            "invalid_labels")
+FAILURES = COUNTERS[5:]
 
 
 def read(directory):
@@ -115,6 +119,8 @@ def _resurrected(record, seen):
     raised = False
     current = {}
     for item in _constraints(record):
+        if not _number(item.get("headroom")):
+            continue  # already a funding violation; no headroom to compare
         place = (item.get("pool"), item.get("window"))
         if place not in current or item["headroom"] < current[place]["headroom"]:
             current[place] = item
@@ -185,6 +191,7 @@ def _report(triples, unreadable):
     """`triples` are `(ledger identity, export key or None, record)`."""
     report = {name: 0 for name in COUNTERS}
     report.update(unreadable=unreadable, worker_choice=dict(old=0, new=0, failed=0), specialists={}, bands={})
+    kinds = set(task_profile.load()["work_kinds"])  # the shipped template's work kinds, never export text
     ledgers, keys = {}, set()
     for position, (identity, key, record) in enumerate(triples):
         ledgers.setdefault(identity, []).append((record["at"], position, key, record))
@@ -193,9 +200,11 @@ def _report(triples, unreadable):
         for _, _, key, record in sorted(items, key=lambda item: item[:2]):
             report["records"] += 1
             bucket = record.get("bucket") if isinstance(record.get("bucket"), list) else []
-            if len(bucket) == 2 and all(type(part) is str for part in bucket):
+            if len(bucket) == 2 and bucket[0] in kinds and bucket[1] in routing.COMPLEXITY_BANDS:
                 report["specialists"][bucket[0]] = report["specialists"].get(bucket[0], 0) + 1
                 report["bands"][bucket[1]] = report["bands"].get(bucket[1], 0) + 1
+            else:
+                report["invalid_labels"] += 1  # counted, never echoed: export text is untrusted
             attempt = record.get("attempt_id")
             report["stray_records"] += attempt in attempts or (key is not None and key in keys)
             attempts.add(attempt)
@@ -217,8 +226,7 @@ def _report(triples, unreadable):
     report["bands"] = dict(sorted(report["bands"].items()))
     report["passed"] = bool(
         report["records"] and report["class_reproduced"] == report["ranked"] == report["route_reproduced"]
-        and not any(report[name] for name in ("funding_violations", "resurrected_capacity", "stray_records",
-                                              "ranked_paid", "missing_detail", "unknown_mode", "unreadable"))
+        and not any(report[name] for name in FAILURES)
         and not report["worker_choice"]["failed"])
     return report
 
