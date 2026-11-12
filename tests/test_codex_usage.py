@@ -165,6 +165,21 @@ class CodexUsageTests(unittest.TestCase):
         self.write([meta(), token(at(9, 30), 100), token(at(10, 30), 100), token(at(11), 100)])
         self.assertEqual(self.read()["usage"], totals(0))
 
+    def test_model_settings_pivot_on_task_start(self):
+        cases = ([meta(), token(at(9, 10), 5), context(at(9, 20), model="model-a"), context(at(9, 40), model="model-b"),
+                  token(at(9, 50), 5), token(at(10, 30), 9)],
+                 [meta(), context(at(9, 20), model="model-a"), context(at(9, 40), model="model-b"),
+                  token(at(10, 30), 9)],
+                 [meta(), context(at(9, 20), model="model-b"), context(at(10, 0), model="model-b"),
+                  context(at(10, 20), model="model-a"), token(at(10, 30), 9), context(at(10, 40), model="model-b"),
+                  context(at(12, 30), model="model-c")])
+        expected = (["model-b"], ["model-b"], ["model-b", "model-a"])
+        for rows, models in zip(cases, expected):
+            with self.subTest(models=models):
+                path = self.write(rows)
+                self.assertEqual([item["model"] for item in self.read()["model_settings"]], models)
+                path.unlink()
+
     def test_missing_model_or_effort_is_none(self):
         self.write([meta(), context(at(10, 10), model=None), context(at(10, 20), effort=None), token(at(10, 30), 5)])
         self.assertEqual(self.read()["model_settings"], [
@@ -242,7 +257,7 @@ class CodexUsageTests(unittest.TestCase):
         self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
 
     def test_missing_or_invalid_version_is_unqualified(self):
-        for version in (None, 167, "", "x" * 200):
+        for version in (None, 167, "", "x" * 65, "path/x", "1.0:evil", "v@1", "0.167.0 beta"):
             with self.subTest(version=version):
                 path = self.write([meta(version=version), token(at(10, 30), 1)])
                 result = self.read()
@@ -251,14 +266,30 @@ class CodexUsageTests(unittest.TestCase):
                 path.unlink()
 
     def test_token_info_missing(self):
-        cases = ([meta(), token(at(10, 30), info=None)],
+        cases = ([meta(), token(at(9, 30), 1), token(at(10, 30), info=None)],
                  [meta(), token(at(9, 30), 1), token(at(10, 30), info={"last_token_usage": totals(1)})],
-                 [meta(), token(at(9, 30), info=None)],
-                 [meta(), token(at(10, 30), 1, window="large")])
+                 [meta(), token(at(9, 10), 1), token(at(9, 30), info=None)],
+                 [meta(), token(at(10, 30), 1, window="large")],
+                 [meta(at(10, 30)), token(at(10, 35), info=None), token(at(10, 40), 4), token(at(10, 50), info=None)],
+                 [meta(at(10, 30)), token(at(10, 35), info={"last_token_usage": totals(1)}), token(at(10, 40), 4)])
         for rows in cases:
             with self.subTest(rows=rows[-1]["payload"]["info"]):
                 path = self.write(rows)
                 self.assertGap(self.read(), "token_info_missing")
+                path.unlink()
+
+    def test_leading_null_info_with_zero_baseline_is_zero_usage(self):
+        cases = (([meta(at(10, 30)), token(at(10, 31), info=None), token(at(10, 40), 40)], 40),
+                 ([meta(at(10, 30)), token(at(10, 31), info=None), token(at(10, 32), info=None)], 0),
+                 ([meta(), token(at(10, 20), info=None), token(at(10, 30), 40)], 40),
+                 ([meta(), token(at(9, 10), info=None), token(at(10, 30), 40)], 40),
+                 ([meta(), token(at(9, 10), info=None)], 0))
+        for rows, expected in cases:
+            with self.subTest(case=expected, rows=len(rows)):
+                path = self.write(rows)
+                result = self.read()
+                self.assertEqual((result["gaps"], result["baseline"], result["usage"]),
+                                 ([], totals(0), totals(expected)))
                 path.unlink()
 
     def test_null_info_before_baseline_is_ignored(self):
@@ -317,6 +348,17 @@ class CodexUsageTests(unittest.TestCase):
         with patch.object(codex_usage.time, "monotonic", side_effect=lambda: next(clock)):
             self.assertGap(self.read(deadline=50.0), "deadline_exceeded")
 
+    def test_deadline_stops_the_scan_at_the_next_line(self):
+        self.standard()
+        parsed, original = [], codex_usage.json_object
+        def parse(raw, **kwargs):
+            parsed.append(None)
+            return original(raw, **kwargs)
+        with (patch.object(codex_usage, "json_object", side_effect=parse),
+              patch.object(codex_usage.time, "monotonic", side_effect=lambda: 100.0 if len(parsed) >= 2 else 0.0)):
+            self.assertGap(self.read(deadline=50.0), "deadline_exceeded")
+        self.assertEqual(len(parsed), 2)
+
     # Lookup
 
     def test_lookup_lists_only_window_folders_and_opens_only_the_thread_file(self):
@@ -357,6 +399,45 @@ class CodexUsageTests(unittest.TestCase):
         self.standard(folder=self.folder(day=11), mode=0o000)
         self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF,
                                                       deadline=time.monotonic() + 30), newest)
+
+    def test_lookup_matches_only_the_full_name_form(self):
+        self.standard()
+        self.standard(thread=OTHER, name=f"rollout-x-{OTHER}.jsonl")
+        self.standard(thread=OTHER, name=f"rollout-2026-11-12T09-00-00-{OTHER}.jsonl.bak")
+        self.standard(thread=OTHER, name=f"rollout-2026-11-12T9-00-00-{OTHER}.jsonl")
+        opened, real_open = [], os.open
+        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(p) or real_open(p, *a, **k)):
+            for short in ("000000000001", "8000-000000000001", "0000-7000-8000-000000000001"):
+                with self.subTest(short=short):
+                    self.assertIsNone(codex_usage.find_thread_file(
+                        short, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30))
+                    self.assertGap(self.read(short), "thread_file_not_found")
+            self.assertGap(self.read(OTHER), "thread_file_not_found")
+        self.assertEqual(opened, [])
+
+    def test_gaps_carry_no_exception_context(self):
+        folder = self.folder()
+        self.standard()
+        os.chmod(folder, 0o000)
+        self.addCleanup(os.chmod, folder, 0o755)
+        with self.assertRaises(codex_usage.UsageGap) as raised:
+            codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
+        os.chmod(folder, 0o755)
+        gaps = [raised.exception]
+        bad_json = self.write([meta(), b'{"type": "turn_context", "x": "' + SECRET.encode()])
+        reading = codex_usage._Reading(THREAD, START, CUTOFF, QUALIFIED)
+        unreadable = self.root / "absent.jsonl"
+        for call in (lambda: codex_usage._scan(bad_json, reading, time.monotonic() + 30),
+                     lambda: codex_usage._scan(unreadable, reading, time.monotonic() + 30),
+                     lambda: codex_usage._time(SECRET)):
+            with self.assertRaises(codex_usage.UsageGap) as raised:
+                call()
+            gaps.append(raised.exception)
+        self.assertEqual([gap.code for gap in gaps],
+                         ["file_unreadable", "file_unreadable", "file_unreadable", "timestamp_unusable"])
+        for gap in gaps:
+            self.assertIsNone(gap.__context__)
+            self.assertIsNone(gap.__cause__)
 
     def test_lookup_ambiguity_is_a_typed_gap(self):
         self.standard()
@@ -483,6 +564,11 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual([(item["role"], item["thread_id"], item["usage"]) for item in result["threads"]],
                          [("coordinator", THREAD, totals(250)), ("worker", OTHER, totals(7))])
 
+    def test_task_without_threads_is_incomplete(self):
+        result = self.acquire([])
+        self.assertEqual(result, {"threads": [], "expected_threads": 0, "coverage": "incomplete",
+                                  "gaps": [{"thread_id": None, "code": "no_threads"}]})
+
     def test_task_observations_incomplete_on_any_gap(self):
         self.standard()
         result = self.acquire([{"thread_id": THREAD, "role": "coordinator"}, {"thread_id": OTHER, "role": "reviewer"}])
@@ -544,7 +630,7 @@ class CodexUsageTests(unittest.TestCase):
             "thread_file_not_found", "thread_file_ambiguous", "file_unreadable", "file_too_large",
             "line_too_large", "session_meta_mismatch", "source_version_unqualified", "token_info_missing",
             "counter_missing", "counter_decreased", "context_window_saturated", "timestamp_unusable",
-            "deadline_exceeded"}))
+            "deadline_exceeded", "no_threads"}))
         with self.assertRaises(ValueError):
             codex_usage.UsageGap("other")
 

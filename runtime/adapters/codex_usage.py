@@ -13,10 +13,15 @@ line is ``{"timestamp": "<RFC 3339 UTC>", "type": ..., "payload": {...}}``. ``se
 ``total_token_usage``, ``last_token_usage`` and ``model_context_window``. ``QUALIFIED_VERSIONS`` stays empty
 until real-file qualification, so real use reports ``source_version_unqualified`` and no counts.
 
+When a thread's baseline is zero, ``token_count`` rows with ``info: null`` that come before its first
+non-null row are read as zero usage (upstream appears to emit them before the first response); a null after
+any non-null row is ``token_info_missing``. This is also unconfirmed on real files.
+
 Limitations: resumed or forked threads are not detected; only a second ``session_meta`` row is rejected.
 Usage after the cutoff is not counted. Identical consecutive token rows are compared on the kept numbers.
 Directories on the path must belong to the current user and not be writable by others; the thread file must
-be private, regular and not linked.
+be private, regular and not linked. Gaps are raised without exception context, so no path or line text is
+reachable from them.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -36,7 +41,7 @@ COUNTERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
 GAP_CODES = frozenset({
     "thread_file_not_found", "thread_file_ambiguous", "file_unreadable", "file_too_large", "line_too_large",
     "session_meta_mismatch", "source_version_unqualified", "token_info_missing", "counter_missing",
-    "counter_decreased", "context_window_saturated", "timestamp_unusable", "deadline_exceeded"})
+    "counter_decreased", "context_window_saturated", "timestamp_unusable", "deadline_exceeded", "no_threads"})
 MAX_FILE = 64 * 1024 * 1024
 MAX_LINE = 1024 * 1024
 LOOKBACK_DAYS = 30
@@ -45,6 +50,8 @@ MARKERS = (b'"token_count"', b'"session_meta"', b'"turn_context"')
 _MARKER_TAIL = max(len(marker) for marker in MARKERS) - 1
 _THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+_VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
+_NAME = r"rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-%s\.jsonl"
 _STOP = object()
 
 
@@ -62,17 +69,19 @@ def find_thread_file(thread_id, *, started_at, cutoff_at, deadline):
     """Return the thread's session file, or None when no date folder in the window names it.
 
     Lists date folders backward from the UTC cutoff date plus one day, for at most ``LOOKBACK_DAYS`` days,
-    and stops at the first folder with a match. Opens no file. Raises ``UsageGap`` for ambiguity, unsafe
+    and stops at the first folder with a match. Matches only the full name form
+    ``rollout-YYYY-MM-DDTHH-MM-SS-<thread-id>.jsonl``. Opens no file. Raises ``UsageGap`` for ambiguity, unsafe
     paths and an exceeded deadline.
     """
     thread_id = _thread_id(thread_id)
     _window(started_at, cutoff_at, deadline)
     try:
         return _find(thread_id, cutoff_at, deadline)
-    except UsageGap:
-        raise
+    except UsageGap as gap:
+        code = gap.code
     except (OSError, ValueError, RuntimeError):
-        raise UsageGap("file_unreadable") from None
+        code = "file_unreadable"
+    raise UsageGap(code)
 
 
 def read_thread_usage(thread_id, *, started_at, cutoff_at, deadline, qualified_versions=QUALIFIED_VERSIONS):
@@ -117,6 +126,8 @@ def acquire_task_observations(threads, *, started_at, cutoff_at, deadline, quali
         item["thread_id"], started_at=started_at, cutoff_at=cutoff_at, deadline=deadline,
         qualified_versions=qualified_versions)) for item in threads]
     gaps = [{"thread_id": item["thread_id"], "code": code} for item in results for code in item["gaps"]]
+    if not threads:
+        gaps.append({"thread_id": None, "code": "no_threads"})
     return {"threads": results, "expected_threads": len(threads),
             "coverage": "incomplete" if gaps else "complete", "gaps": gaps}
 
@@ -171,7 +182,7 @@ def _find(thread_id, cutoff_at, deadline):
     if not os.path.lexists(sessions):
         return None
     _directory(sessions)
-    prefix, suffix = "rollout-", f"-{thread_id}.jsonl"
+    pattern = re.compile(_NAME % re.escape(thread_id))
     newest = cutoff_at.astimezone(timezone.utc).date() + timedelta(days=1)
     for offset in range(LOOKBACK_DAYS + 1):
         _deadline(deadline)
@@ -183,8 +194,7 @@ def _find(thread_id, cutoff_at, deadline):
                 break
             _directory(folder)
         else:
-            names = [name for name in os.listdir(folder) if name.startswith(prefix)
-                     and name.endswith(suffix) and len(name) > len(prefix) + len(suffix)]
+            names = [name for name in os.listdir(folder) if pattern.fullmatch(name)]
             if len(names) > 1:
                 raise UsageGap("thread_file_ambiguous")
             if names:
@@ -198,61 +208,64 @@ def _find(thread_id, cutoff_at, deadline):
 def _scan(path, reading, deadline):
     """Stream the file once; pass only marker lines to ``reading``. Unterminated last lines are ignored."""
     try:
-        before = os.lstat(path)
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    except OSError:
-        raise UsageGap("file_unreadable") from None
+        _stream(path, reading, deadline)
+        return
+    except UsageGap as gap:
+        code = gap.code
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, StartupError, RecursionError):
+        code = "file_unreadable"
+    raise UsageGap(code)
+
+
+def _stream(path, reading, deadline):
+    before = os.lstat(path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         stream = os.fdopen(descriptor, "rb")
-    except OSError:
+    except BaseException:
         os.close(descriptor)
-        raise UsageGap("file_unreadable") from None
-    try:
-        with stream:
-            info = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
-                    or info.st_nlink != 1 or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)):
-                raise UsageGap("file_unreadable")
-            if info.st_size > MAX_FILE:
-                raise UsageGap("file_too_large")
-            remaining, first = info.st_size, True
-            while remaining > 0:
-                _deadline(deadline)
-                line = stream.readline(min(MAX_LINE + 1, remaining))
-                if not line:
-                    break
-                remaining -= len(line)
-                if not line.endswith(b"\n"):
-                    if len(line) <= MAX_LINE:
-                        break
-                    marked, terminated, tail = _marked(line), False, line[-_MARKER_TAIL:]
-                    while remaining > 0 and not terminated:
-                        _deadline(deadline)
-                        chunk = stream.readline(min(MAX_LINE, remaining))
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        marked = marked or _marked(tail + chunk)
-                        terminated, tail = chunk.endswith(b"\n"), chunk[-_MARKER_TAIL:]
-                    if not terminated:
-                        break
-                    if marked:
-                        raise UsageGap("line_too_large")
-                    line = None
-                elif not _marked(line):
-                    line = None
-                if line is None:
-                    if first:
-                        raise UsageGap("session_meta_mismatch")
-                elif reading.row(line, first=first) is _STOP:
-                    return
-                line, first = None, False
-            if first:
-                raise UsageGap("session_meta_mismatch")
-    except UsageGap:
         raise
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, StartupError, RecursionError):
-        raise UsageGap("file_unreadable") from None
+    with stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
+                or info.st_nlink != 1 or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)):
+            raise UsageGap("file_unreadable")
+        if info.st_size > MAX_FILE:
+            raise UsageGap("file_too_large")
+        remaining, first = info.st_size, True
+        while remaining > 0:
+            _deadline(deadline)
+            line = stream.readline(min(MAX_LINE + 1, remaining))
+            if not line:
+                break
+            remaining -= len(line)
+            if not line.endswith(b"\n"):
+                if len(line) <= MAX_LINE:
+                    break
+                marked, terminated, tail = _marked(line), False, line[-_MARKER_TAIL:]
+                while remaining > 0 and not terminated:
+                    _deadline(deadline)
+                    chunk = stream.readline(min(MAX_LINE, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    marked = marked or _marked(tail + chunk)
+                    terminated, tail = chunk.endswith(b"\n"), chunk[-_MARKER_TAIL:]
+                if not terminated:
+                    break
+                if marked:
+                    raise UsageGap("line_too_large")
+                line = None
+            elif not _marked(line):
+                line = None
+            if line is None:
+                if first:
+                    raise UsageGap("session_meta_mismatch")
+            elif reading.row(line, first=first) is _STOP:
+                return
+            line, first = None, False
+        if first:
+            raise UsageGap("session_meta_mismatch")
 
 
 def _marked(data):
@@ -260,19 +273,21 @@ def _marked(data):
 
 
 def _time(value):
-    if not isinstance(value, str) or len(value) > 64:
-        raise UsageGap("timestamp_unusable")
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        raise UsageGap("timestamp_unusable") from None
-    if moment.utcoffset() is None:
+    moment = None
+    if isinstance(value, str) and len(value) <= 64:
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    if moment is None or moment.utcoffset() is None:
         raise UsageGap("timestamp_unusable")
     return moment
 
 
 def _token(info):
-    """Reduce ``info`` to ``(totals, context window)`` or the gap code its window check would report."""
+    """Reduce ``info`` to ``(totals, context window)``, None for a null ``info``, or the gap code it reports."""
+    if info is None:
+        return None
     if not isinstance(info, dict) or not isinstance(info.get("total_token_usage"), dict):
         return "token_info_missing"
     window = info.get("model_context_window")
@@ -308,7 +323,8 @@ class _Reading:
         if first:
             if kind != "session_meta" or not isinstance(payload, dict) or payload.get("id") != self.thread_id:
                 raise UsageGap("session_meta_mismatch")
-            self.cli_version = _label(payload.get("cli_version"))
+            version = payload.get("cli_version")
+            self.cli_version = version if isinstance(version, str) and _VERSION.fullmatch(version) else None
             if self.cli_version is None or self.cli_version not in self.qualified:
                 raise UsageGap("source_version_unqualified")
             self.created = _time(payload.get("timestamp"))
@@ -337,10 +353,19 @@ class _Reading:
         base = None
         if self.created <= self.started_at:
             before = [index for index, (moment, _) in enumerate(tokens) if moment <= self.started_at]
-            base = before[-1] if before else None
-        window = tokens if base is None else tokens[base:]
+            if any(tokens[index][1] is not None for index in before):
+                base = before[-1]
+        if base is None:
+            # With a zero baseline, null rows before the first non-null row mean no usage yet.
+            first = next((index for index, (_, observation) in enumerate(tokens) if observation is not None),
+                         len(tokens))
+            window = tokens[first:]
+        else:
+            window = tokens[base:]
         previous = None if base is not None else (0,) * len(COUNTERS)
         for _, observation in window:
+            if observation is None:
+                raise UsageGap("token_info_missing")
             if isinstance(observation, str):
                 raise UsageGap(observation)
             counts, context_window = observation
@@ -352,15 +377,11 @@ class _Reading:
         zero = (0,) * len(COUNTERS)
         baseline = zero if base is None else window[0][1][0]
         final = window[-1][1][0] if window else baseline
-        return dict(zip(COUNTERS, baseline)), dict(zip(COUNTERS, final)), self._settings(
-            None if base is None else window[0][0])
+        return dict(zip(COUNTERS, baseline)), dict(zip(COUNTERS, final)), self._settings()
 
-    def _settings(self, baseline_at):
-        """Configured ``(model, effort)`` pairs in effect at the baseline row or set after it, first seen first."""
-        if baseline_at is None:
-            contexts = self.contexts
-        else:
-            earlier = [item for item in self.contexts if item[0] <= baseline_at]
-            contexts = earlier[-1:] + [item for item in self.contexts if item[0] > baseline_at]
+    def _settings(self):
+        """Configured ``(model, effort)`` pairs in effect at task start or set after it, first seen first."""
+        earlier = [item for item in self.contexts if item[0] <= self.started_at]
+        contexts = earlier[-1:] + [item for item in self.contexts if item[0] > self.started_at]
         pairs = list(dict.fromkeys(pair for _, pair in contexts))
         return [{"model": model, "effort": effort, "basis": "configured"} for model, effort in pairs]
