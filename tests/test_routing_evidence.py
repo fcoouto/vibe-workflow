@@ -64,7 +64,7 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(table['display_names'], {model: 'Display ' + model for model in sorted(listed)})
         self.assertEqual(table['version'], self.table['version'])  # display only: the ranking version is unchanged
         self.assertEqual(self.table['display_names'], {})
-        for bad in ('', ' padded', 7, 'x' * 129):
+        for bad in ('', ' padded', 7, 'x' * 129, 'bell\x07name', 'tab\tname', 'line\u2028name'):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'Invalid catalog display name'):
                 evidence.compile_table(guidance, [dict(catalog[0], display_name=bad)], benchmarks)
         twice = [dict(catalog[0], harnesses=['h1']), dict(catalog[0], harnesses=['h2'], display_name='Other')]
@@ -81,6 +81,10 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(model_names.display_name(model, settings), 'Display ' + model)
         for absent in ('vendor-unlisted', None, 7):
             self.assertIsNone(model_names.display_name(absent, settings))
+        broken = dict(table, display_names={model: 'bell\x07name'})  # a hand-edited table: the vendor's spelling stays
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(broken))
+        self.assertIsNone(model_names.display_name(model, settings))
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(table))
 
         def request(method, params):
             return dict(data=[dict(model=model, displayName='Vendor-Spelling')])

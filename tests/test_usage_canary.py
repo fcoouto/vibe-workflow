@@ -19,6 +19,7 @@ PROFILE = dict(model=MODEL, reasoning='medium', tier='default', input_rate=2_000
                cached_input_rate=100_000, cache_write_rate=5_000_000, output_rate=10_000_000,
                max_input_tokens=10_000, max_output_tokens=64, verified_at=100, valid_until=1000,
                count_maximum=0)
+CARD = {key: PROFILE[key] for key in ('model', 'input_rate', 'cached_input_rate', 'cache_write_rate', 'output_rate')}
 
 
 class UsageCanaryTests(unittest.TestCase):
@@ -27,7 +28,7 @@ class UsageCanaryTests(unittest.TestCase):
         self.canary = usage_canary
         self.native = native()
         self.native.pop('task')
-        self.task = usage_canary.task_for('approved-canary', BINDING, self.native, MODEL)
+        self.task = usage_canary.task_for('approved-canary', BINDING, self.native, CARD)
         self.proof = usage_admission.Admission(
             scope='checkout', config_revision=2, org_revision=1, policy_digest='0' * 64,
             binding_digest=usage_admission.digest(BINDING), profile_digest=usage_admission.digest(PROFILE),
@@ -52,9 +53,9 @@ class UsageCanaryTests(unittest.TestCase):
         self.assertEqual(self.task['native']['task'], self.task['task_id'])
         self.assertNotIn('task', self.native)
         rotated = dict(BINDING, credential_ref='vcw_' + '1' * 32)
-        self.assertEqual(self.canary.task_for('approved-canary', rotated, self.native, MODEL), self.task)
+        self.assertEqual(self.canary.task_for('approved-canary', rotated, self.native, CARD), self.task)
         for approval, binding in (('new-approval', BINDING), ('approved-canary', dict(BINDING, project='proj_other'))):
-            other = self.canary.task_for(approval, binding, self.native, MODEL)
+            other = self.canary.task_for(approval, binding, self.native, CARD)
             self.assertNotEqual(self.task['run_id'], other['run_id'])
 
     def test_source_or_payload_changes_are_rejected_even_if_repinned(self):
@@ -83,48 +84,71 @@ class UsageCanaryTests(unittest.TestCase):
                 self.validate(replace(self.proof, profile_digest=usage_admission.digest(profile)), profile=profile)
 
     def test_profile_for_keeps_the_verified_rate_card_and_observation_window(self):
-        self.assertEqual(self.canary.profile_for(101, 999, MODEL), dict(PROFILE, verified_at=101, valid_until=999))
+        self.assertEqual(self.canary.profile_for(101, 999, CARD), dict(PROFILE, verified_at=101, valid_until=999))
         with self.assertRaises(BudgetError):
-            self.canary.profile_for(101, 101, MODEL)
+            self.canary.profile_for(101, 101, CARD)
 
-    def table_home(self, rows):
-        """A private HOME whose routing state holds a compiled table with `rows`."""
+    def table_home(self, table):
+        """A private HOME whose routing state holds `table` beside the settings."""
         home = Path(tempfile.mkdtemp())
         self.addCleanup(__import__('shutil').rmtree, home, True)
         state = home / '.local/state/vibe-workflow/routing'
         state.mkdir(parents=True, mode=0o700)
         for parent in (home / '.local/state/vibe-workflow', home / '.local/state', home / '.local'):
             parent.chmod(0o700)
-        table = state / 'strategy-table.json'
-        table.write_text(json.dumps(dict(schema=2, version='t', rows=rows, display_names={})))
-        table.chmod(0o600)
+        path = state / 'strategy-table.json'
+        path.write_text(json.dumps(table))
+        path.chmod(0o600)
         return patch.dict(os.environ, HOME=str(home.resolve()))
 
+    @staticmethod
+    def compiled(*entries):
+        """A table compiled from compiler-shaped catalog entries (one guidance row cites each)."""
+        from runtime import routing_evidence
+        catalog = [dict(model=model, harnesses=[harness], supported_efforts=['medium'], provider=provider,
+                        **({} if price is None else dict(list_price=price))) for model, provider, harness, price in entries]
+        guidance = [dict(id='g', sha256='1' * 64, checked_at='2026-11-08T00:00:00Z', rows=[dict(
+            work_kind='implementation', complexity_band='low', risk_band='low', strategies=[
+                dict(model=model, effort='medium', harness=harness, evidence_refs=['g'])
+                for model, _, harness, _ in entries])])]
+        return routing_evidence.compile_table(guidance, catalog, [], now='2026-11-08T00:00:00Z')
+
     def test_canary_takes_the_cheapest_priced_model_for_its_provider(self):
-        def strategy(model, provider, price):
-            return dict(strategy_id=model, model=model, effort=None, harness='h', provider=provider,
-                        evidence_refs=['g'], list_price_micros=price)
-        rows = {'a|low|low': [strategy('vendor-free', 'other-api', 1), strategy('vendor-unpriced', 'openai-api', None),
-                              strategy('vendor-heavy', 'openai-api', 9_000_000)],
-                'b|low|low': [strategy('vendor-light', 'openai-api', 400_000), strategy('vendor-mid', 'openai-api', 2_000_000)]}
-        with self.table_home(rows):
-            self.assertEqual(self.canary.model_for(), 'vendor-light')
-            self.assertEqual(self.canary.profile_for(101, 999), dict(PROFILE, verified_at=101, valid_until=999))
-            self.assertEqual(self.canary.task_for('approved-canary', BINDING, self.native), self.task)
+        table = self.compiled(('vendor-free', 'other', 'api', dict(input=0.01, output=0.01)),
+                              ('vendor-native', 'openai', 'codex-native', dict(input=0.02, output=0.02)),
+                              ('vendor-unpriced', 'openai', 'api', None),
+                              ('vendor-heavy', 'openai', 'api', dict(input=9, output=30)),
+                              ('vendor-light', 'openai', 'api', dict(input=0.4, output=1.6)))
+        with self.table_home(table):
+            # The API host identity (provider openai, harness api), never the service selector or a native row.
+            self.assertEqual(self.canary.candidate(), dict(model='vendor-light', list_input_rate=400_000,
+                                                           list_output_rate=1_600_000))
+        self.assertEqual(self.canary.SERVICE, 'openai-api')  # the task's service selector is unchanged
+        self.assertEqual(self.task['provider'], 'openai-api')
         self.assertFalse(hasattr(self.canary, '_MODEL'))
+        self.assertFalse(hasattr(self.canary, 'model_for'))  # execution never re-selects from the table
 
     def test_canary_refuses_without_a_priced_model(self):
-        unpriced = dict(strategy_id='u', model='vendor-unpriced', effort=None, harness='h', provider='openai-api',
-                        evidence_refs=['g'], list_price_micros=None)
-        other = dict(unpriced, model='vendor-other', provider='other-api', list_price_micros=1)
         empty = Path(tempfile.mkdtemp())
         self.addCleanup(__import__('shutil').rmtree, empty, True)
-        for home in (self.table_home({'a|low|low': [unpriced, other]}), self.table_home({}),
-                     patch.dict(os.environ, HOME=str(empty))):
+        unpriced = self.compiled(('vendor-unpriced', 'openai', 'api', None),
+                                 ('vendor-native', 'openai', 'codex-native', dict(input=0.1, output=0.1)))
+        for home in (self.table_home(unpriced), self.table_home({}), patch.dict(os.environ, HOME=str(empty))):
             with home, self.assertRaisesRegex(BudgetError, '^canary_model_unavailable$'):
-                self.canary.profile_for(101, 999)
-            with home, self.assertRaisesRegex(BudgetError, '^canary_model_unavailable$'):
-                self.canary.task_for('approved-canary', BINDING, self.native)
+                self.canary.candidate()
+        blended = self.compiled(('vendor-light', 'openai', 'api', dict(input=0.4, output=1.6)))
+        blended.pop('list_prices')  # a blended 3:1 price alone is no per-side evidence
+        with self.table_home(blended), self.assertRaisesRegex(BudgetError, '^canary_price_evidence_missing$'):
+            self.canary.candidate()
+
+    def test_profile_comes_only_from_the_approved_card(self):
+        card = dict(model=MODEL, input_rate=2_000_000, cached_input_rate=100_000, cache_write_rate=5_000_000,
+                    output_rate=10_000_000)
+        self.assertEqual(self.canary.profile_for(101, 999, card), dict(PROFILE, verified_at=101, valid_until=999))
+        for bad in (dict(card, input_rate=0), dict(card, output_rate=-1), dict(card, model=''), dict(card, extra=1),
+                    {k: v for k, v in card.items() if k != 'cache_write_rate'}, None):
+            with self.subTest(bad=bad), self.assertRaises(BudgetError):
+                self.canary.profile_for(101, 999, bad)
 
     def test_run_uses_one_admitted_attempt_and_never_retries_a_failure(self):
         with patch('runtime.usage_canary.time.time', return_value=101), patch(

@@ -61,7 +61,7 @@ from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_M
                                         latency_pairs, on_route, repo_snapshot,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
-from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
+from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener, off_route_spawn,  # noqa: E402
                                         processes, server_environment, status_view)
 
 POOL = "sub"
@@ -577,6 +577,8 @@ class Run:
         if any(r["phase"] == "post" and r["probe_present"] for r in shells):
             raise Blocker("the shell kept a credential-like variable while a session was attached")
         mark, began = len(self.server.hooks()), int(time.time() * 1000)
+        if not off_route_spawn(self.route):  # never an unknown model passed off as the guard's refusal
+            raise Refused("no pre-registered off-route spawn identity for %s" % self.route_ref())
         self.server.write_control(hold=[session])  # the parent's follow-up turn after the child's failure is held
         token = self.expect(s, "subagent command on another model", 0, exposure=1)
         self.server.request("POST", "/api/session/%s/command" % session, {"name": "qualspawn", "text": ""})

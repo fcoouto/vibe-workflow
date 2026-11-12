@@ -24,17 +24,27 @@ def display_name(model, settings_path=None):
     """The catalog's display name for `model` from the table's `display_names`, or None (show the vendor's)."""
     names = table(settings_path).get('display_names')
     name = names.get(model) if type(names) is dict and type(model) is str else None
-    return name if type(name) is str and name else None
+    return name if type(name) is str and name and name.isprintable() else None
 
 
-def cheapest(provider, settings_path=None):
-    """The model of the cheapest priced strategy for `provider` in the table, or None. Ties go to the model id."""
-    rows = table(settings_path).get('rows')
+def cheapest(provider, harness, effort, settings_path=None):
+    """`(model, price)` for the cheapest priced strategy of exactly this provider, harness and effort in the table
+    (ties go to the model id), where `price` is that entry's own `{input, output}` from `list_prices` or None when the
+    table carries none; None when no strategy matches. A provider alone never crosses hosts."""
+    value = table(settings_path)
+    rows = value.get('rows')
     priced = sorted((item['list_price_micros'], item['model'])
                     for strategies in (rows.values() if type(rows) is dict else ()) if type(strategies) is list
                     for item in strategies if type(item) is dict and item.get('provider') == provider
+                    and item.get('harness') == harness and item.get('effort') == effort
                     and type(item.get('list_price_micros')) is int and type(item.get('model')) is str and item['model'])
-    return priced[0][1] if priced else None
+    if not priced:
+        return None
+    model = priced[0][1]
+    prices = value.get('list_prices')
+    price = prices.get(harness) if type(prices) is dict else None
+    price = price.get(model) if type(price) is dict else None
+    return model, price if type(price) is dict else None
 
 
 # The areas that must name no model (design 5.14): docs/, tests/ and assets/ are outside, with invented names in tests.
@@ -54,8 +64,15 @@ def names(settings_path=None):
 
 
 def _covered(root):
-    from runtime.package_manifest import excluded
-    for path in sorted(root.rglob('*')):
+    """Package members only: a checkout's tracked paths minus the packaging exclusions (never ignored, untracked or
+    private files), or every file of an export without Git, as `package_manifest.export_members` defines them."""
+    from runtime.package_manifest import PackageManifestError, excluded, export_members
+    try:
+        members = export_members(root)
+    except PackageManifestError as error:
+        raise ValueError('Model name check: %s' % error) from None
+    paths = (root / name for name in sorted(members)) if members is not None else sorted(root.rglob('*'))
+    for path in paths:
         relative = path.relative_to(root)
         if not path.is_file() or path.is_symlink() or SKIPPED & set(relative.parts) or excluded(relative.as_posix()):
             continue

@@ -190,6 +190,9 @@ class FakeOpenCode:
     def write_control(self, **change):
         self.control.update(change)
 
+    def set_route(self, route):  # as server.Server.set_route: the double holds no table, only the control
+        self.write_control(route=list(route))
+
     def hooks(self):
         return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
 

@@ -22,8 +22,10 @@ The entry's optional ``list_price`` ``{input, output}`` is in dollars per millio
 strategy carries ``list_price_micros`` (``round((3 * input + output) / 4 * 1_000_000)``, None when unpriced), and each
 row is ordered priced first, by that price, then by the effort's index in the model's ``supported_efforts`` (listed
 lowest first; no effort counts as 0), then in guidance order.
-An entry's optional ``display_name`` is the catalog's spelling for people; the table's ``display_names`` maps each
-model in its rows to it (one name per model; display only, so it is outside the table ``version``).
+An entry's optional ``display_name`` (printable) is the catalog's spelling for people; the table's ``display_names``
+maps each model in its rows to it (one name per model). The table's ``list_prices`` carries each listed priced
+``(harness, model)`` entry's own ``{input, output}`` as ``{harness: {model: price}}``; both are outside the table
+``version`` (ranking uses only ``list_price_micros``), so a consumer binds them by its own digest.
 OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
 An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
 """
@@ -103,13 +105,14 @@ def _catalog(items):
             for side in ('input', 'output')), 'Invalid catalog list price')
         micros = None if price is None else _micros(price['input'], price['output'])
         display = item.get('display_name')
-        _require(display is None or isinstance(display, str) and 0 < len(display) <= 128 and display == display.strip()
+        _require(display is None or isinstance(display, str) and 0 < len(display) <= 128 and display == display.strip() and display.isprintable()
                  and names.get(model, display) == display, 'Invalid catalog display name')
         if display is not None:
             names[model] = display
         for harness in harnesses:
             _require((model, harness) not in live, 'Duplicate catalog model and harness')
-            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit, list_price=micros)
+            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit, list_price=micros,
+                                          price=None if price is None else dict(price))
     return live, names
 
 
@@ -203,9 +206,16 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
             for name, value in rows.items() if value}
     checks = [source['checked_at'] for source in sources]
     listed = {item['model'] for value in rows.values() for item in value}
+    prices = {}
+    for value in rows.values():
+        for item in value:
+            price = live[(item['model'], item['harness'])]['price']
+            if price is not None:
+                prices.setdefault(item['harness'], {})[item['model']] = price
     return dict(schema=SCHEMA, version=_digest([SCHEMA, rows, sources]), compiled_at=now or _now(),
                 checked_at=min(checks) if checks else None, sources=sources, rows=rows, dropped=dropped,
-                display_names={model: name for model, name in sorted(names.items()) if model in listed})
+                display_names={model: name for model, name in sorted(names.items()) if model in listed},
+                list_prices=prices)
 
 
 def refresh_table(previous, load, *, now=None):

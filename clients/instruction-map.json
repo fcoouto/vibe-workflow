@@ -630,11 +630,11 @@
       ]
     },
     "skills/manage-usage-routing/references/first-canary.md": {
-      "sha256": "0255d3e90067e05e6db3bec968ca7e012274329ac5745be9b40b18d77d29d4ee",
+      "sha256": "27540daa3f8a891ee8977cb4411b0e59b5faaa8169a5056d6220c81ec18f81ea",
       "ranges": [
         [
           1,
-          48
+          54
         ]
       ]
     },

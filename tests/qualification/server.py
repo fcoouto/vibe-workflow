@@ -93,6 +93,15 @@ class ProjectConfig:
         return not self.directory.exists() and gone
 
 
+# The stage-2 off-route spawn identity pre-registered per qualified route (the live qualification record's stage 2).
+OFF_ROUTE_SPAWNS = {("claude-agent", "haiku", "low"): "claude-agent/sonnet#low"}
+
+
+def off_route_spawn(route):
+    """The pre-registered off-route spawn identity for `route`, or None (the probe is then refused)."""
+    return OFF_ROUTE_SPAWNS.get(tuple(route)) if route else None
+
+
 class Server:
     """One `opencode serve` on a random localhost port with its own XDG dirs."""
 
@@ -136,9 +145,11 @@ class Server:
         if self.route:
             provider, model, variant = self.route
             config["model"] = "%s/%s" % (provider, model)
-            # A background child session on another model: the spawn test of stage 2 (blocked before sending).
-            config["commands"]["qualspawn"] = {"template": PROMPT_TEXT, "model": "%s/sonnet#%s" % (provider, variant),
-                                               "subagent": True, "agent": "general"}
+            # A background child session on another model: the spawn test of stage 2 (blocked before sending), only
+            # on the identity pre-registered for this route; none is guessed.
+            if off_route_spawn(self.route):
+                config["commands"]["qualspawn"] = {"template": PROMPT_TEXT, "model": off_route_spawn(self.route),
+                                                   "subagent": True, "agent": "general"}
             # descendants stage: a `subagent: true` command child on the approved route.
             config["commands"]["qualchild"] = {"template": PROMPT_TEXT, "model": "%s/%s#%s" % self.route,
                                                "subagent": True, "agent": "general"}
@@ -158,13 +169,29 @@ class Server:
             return
         for name in ("project", "routing", "usage"):
             (self.base / name).mkdir(mode=0o700, exist_ok=True)
-        table = self.settings.parent / "strategy-table.json"
-        table.write_text(json.dumps({"schema": 1, "version": "qual-1", "rows": {"worker|code|medium|medium": [
-            {"strategy_id": "s-sub", "model": self.route[1], "effort": self.route[2], "harness": harness_for(self.route[0]),
-             "evidence_refs": ["qual"]}]}}))
-        table.chmod(0o600)
+        if self.route:
+            self.write_table()  # a route-free (chatgpt) run writes it in `set_route`, once the route is known
         self.project = self.base / "project"
         (self.project / "opencode.json").write_text(json.dumps(self.config(), indent=2))
+
+    def write_table(self):
+        """The qualification table for the run's one route (never a guessed one)."""
+        provider, model, variant = self.route
+        table = self.settings.parent / "strategy-table.json"
+        table.write_text(json.dumps({"schema": 1, "version": "qual-1", "rows": {"worker|code|medium|medium": [
+            {"strategy_id": "s-sub", "model": model, "effort": variant, "harness": harness_for(provider),
+             "evidence_refs": ["qual"]}]}}))
+        table.chmod(0o600)
+
+    def set_route(self, route):
+        """Bind a route-free run to its route once known: the route-bound table, then `qual-post`'s control."""
+        route = tuple(route)
+        if self.route is not None and self.route != route:
+            raise Refused("a run has one route")
+        self.route = route
+        if not self.canary:
+            self.write_table()
+        self.write_control(route=list(route))
 
     def start(self):
         self.prepare_files()

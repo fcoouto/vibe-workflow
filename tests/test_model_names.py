@@ -94,6 +94,39 @@ class ModelNameCheckTests(unittest.TestCase):
             self.check()
 
 
+class PackageMembershipTests(ModelNameCheckTests):
+    def git(self, *args):
+        import subprocess
+        subprocess.run(['git', '-C', str(self.root), *args], check=True, capture_output=True,
+                       env=dict(GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@invalid', GIT_COMMITTER_NAME='t',
+                                GIT_COMMITTER_EMAIL='t@invalid', GIT_CONFIG_GLOBAL='/dev/null', HOME=str(self.tmp),
+                                PATH='/usr/bin:/bin'))
+
+    def test_only_package_members_are_read(self):
+        (self.root / 'runtime' / 'kept.py').write_text('x = 1\n')
+        (self.root / '.gitignore').write_text('scratch/\n')
+        self.git('init', '-q')
+        self.git('add', '-A')
+        self.git('commit', '-qm', 'base')
+        for relative in ('scratch/cache.json', 'local.json', 'runtime/untracked.py', '.vibe-workflow/x.json'):
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"m": "light"}\n')  # private, ignored or untracked: never read
+        self.assertEqual(self.check(), 'passed')
+        (self.root / 'runtime' / 'kept.py').write_text('x = "light"\n')  # a tracked member is read from disk
+        with self.assertRaisesRegex(ValueError, r'runtime/kept\.py:1'):
+            self.check()
+        (self.root / 'runtime' / 'kept.py').write_text('x = 1\n')
+        self.git('add', 'local.json')
+        with self.assertRaisesRegex(ValueError, r'local\.json:1'):
+            self.check()
+
+    def test_unusable_membership_fails_closed(self):
+        (self.root / '.git').write_text('gitdir: /nonexistent\n')
+        with self.assertRaisesRegex(ValueError, 'membership'):
+            self.check()
+
+
 class ValidateReportTests(unittest.TestCase):
     def test_validate_reports_the_model_name_check(self):
         from scripts import validate

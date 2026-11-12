@@ -68,6 +68,36 @@ class ModelTests(unittest.TestCase):
                                                             harness="opencode provider vendor-q", funding="subscription"))
 
 
+class RouteBoundServerTests(Temp):
+    def test_a_route_free_server_starts_and_binds_the_route_once_known(self):
+        from tests.qualification import server
+        srv = server.Server(self.private(self.tmp / "iso"))  # the chatgpt run: no route before the login's list
+        srv.prepare_files()  # the real file preparation, not a stand-in
+        table = srv.settings.parent / "strategy-table.json"
+        self.assertFalse(table.exists())
+        self.assertIsNone(json.loads(srv.control_path.read_text())["route"])
+        self.assertNotIn("model", srv.config())
+        self.assertEqual(set(srv.config()["commands"]), {"qualenv"})
+        route = safety.parse_route(APPROVED)
+        srv.set_route(route)
+        self.assertEqual(json.loads(srv.control_path.read_text())["route"], list(route))
+        rows = json.loads(table.read_text())["rows"]
+        self.assertEqual([(item["model"], item["effort"], item["harness"]) for item in rows["worker|code|medium|medium"]],
+                         [("model-q", "tiny", "opencode provider vendor-q")])
+        with self.assertRaises(safety.Refused):
+            srv.set_route(("vendor-q", "model-r", "tiny"))  # one route per run
+
+    def test_the_off_route_spawn_is_only_a_pre_registered_identity(self):
+        from tests.qualification import server
+        unknown = server.Server(self.tmp, route=safety.parse_route(APPROVED)).config()["commands"]
+        self.assertNotIn("qualspawn", unknown)  # no guessed alternate model for an unregistered route
+        self.assertIsNone(server.off_route_spawn(safety.parse_route(APPROVED)))
+        registered = safety.parse_route(QUAL_ROUTE)
+        spawn = server.Server(self.tmp, route=registered).config()["commands"]["qualspawn"]["model"]
+        self.assertEqual(spawn, server.off_route_spawn(registered))
+        self.assertNotEqual(spawn, QUAL_ROUTE)
+
+
 class IsolatedDirTests(Temp):
     def test_accepts_an_empty_private_directory(self):
         target = self.private(self.tmp / "q")

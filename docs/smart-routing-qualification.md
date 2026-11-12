@@ -165,7 +165,7 @@ The user approved the canary, and nothing else, on the production routing settin
    ```
 
    `--route` is the one route the approval names. It is a parameter, never a default: every `opencode_live.py` run that sends (all but `--chatgpt`) refuses
-   without `--route`, and its guard refuses any other model or variant before a send. A kept run's re-read takes the
+   without `--route`, and its guard refuses any other model or variant before a send. The stage-2 off-route spawn runs only on the identity pre-registered for that route (`server.OFF_ROUTE_SPAWNS`); any other route refuses that probe instead of guessing a model. A `--chatgpt` run starts route-free and writes its route-bound table and guard control once the login's model list fixes the route. A kept run's re-read takes the
    same route: `python3 -B tests/qualification/opencode_inspect.py <kept dir> <PROVIDER>/<MODEL>#<VARIANT>`.
    Every canary write goes through `scripts/routing.py` under its one-shot and operator rules. The approval is recorded verbatim in the results (`production_ledger.approval`).
 4. **Export read-only.** The canary exports its admissions at the end of the run and every 12 hours by key, and on demand with step 7 in its production form; each export is one read-only connection to the production ledger.
