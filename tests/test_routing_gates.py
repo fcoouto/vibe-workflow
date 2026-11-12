@@ -17,7 +17,7 @@ from unittest import mock
 from runtime import routing, routing_gates, routing_settings, state, usage_budget as budget
 from scripts import routing as command
 from tests.test_routing_command import (API, KEY_REF, SCOPE, SECRET, Base, api_observations, facts, job, now,
-                                        observations, prepare, table)
+                                        observations, prepare, prepare_legacy_paid, table)
 from tests.test_routing_dispatch import DispatchBase, dispatch
 
 M = 1_000_000
@@ -407,7 +407,7 @@ class FundingGateTests(GateBase):
                 organization='org', project='proj', credential_ref=KEY_REF, storage_kind='macos_keychain'))}
 
     def admit(self, attempt, **extra):
-        request = prepare(attempt, observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']),
+        request = prepare_legacy_paid(attempt, observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']),
                           **extra)
         response = self.call(request)
         self.assertEqual((response['state'], response['admission']['class']), ('admitted', 'api'), response)

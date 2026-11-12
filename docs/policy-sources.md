@@ -1,5 +1,17 @@
 # Policy source map
 
+## Smart Routing: ordered refusal and replay corrections (F5.A3) — 12 November 2026
+
+Checkpoint A3 of plan task F5 closes the original review's test-masking findings and proves ordered route-local refusal
+through the real routing command. It changes no runtime behaviour. The F5R-1 capacity proof is open: the measured
+blockers are recorded in the F5 report and await a storage decision; no limit changed.
+
+| Contract | Source |
+| --- | --- |
+| Shared admission helpers stay ranked; the legacy explicit paid choice is reached only through named helpers (`admit_legacy_paid`, `prepare_legacy_paid`); a paid-only ranked request stays pending | Review finding F5R-2; `tests/test_routing_admission.py` (`PaidHelperSplitTests`), `tests/fixture_routing_funding.py`, `tests/test_routing_command.py` and their callers |
+| The admission replay completes a never-admitted attempt only after its own refusal; unknown, lost and repeated completions fail; one explicit paid arrival charges and releases dollars once across a refresh | Review finding F5R-3; `tests/test_routing_replay.py` (`ReplayCompletionTests`, `ExplicitPaidReplayTests`) |
+| A refused paid route (API Usage off, no funded organization, insufficient headroom, stale balance, missing credential, not permitted, funding unverified) leaves the eligible subscription admitted in ranked order; an explicit paid choice is never substituted; worker choices keep their order; an uncertain attempt's replay and repeated dispatch issue no new permit while alternatives have budget | `scripts/routing.py` (`Service` prepare, dispatch, record, check) and `runtime/routing.py` (`admit`, `dispatch`); `tests/test_routing_ordered_fallback.py` |
+
 ## Smart Routing: API-money reservation and reconciliation (F5.A2) — 12 November 2026
 
 Checkpoint A2 of plan task F5 implements the user's whole-task 20% API-money reservation and reconciliation in the

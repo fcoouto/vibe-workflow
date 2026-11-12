@@ -119,15 +119,19 @@ class Funded:
         return revision
 
     def admit(self, attempt, routes, pools, ids=None, task=None, cfg=None):
-        """A ranked admission; a set of only paid routes goes through the legacy explicit choice of the first instead
-        (F5.3: a ranked decision never funds a paid route; the synthetic API arithmetic keeps its coverage there)."""
-        if routes and all(item['billing_class'] in routing.FUNDED for item in routes):
-            choice = dict({key: routes[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
-            return routing.admit(dict(assignment(attempt, task), choice=choice), ranking(), cfg or settings(),
-                                 observations(routes, pools), ledger=self.ledger)
+        """A ranked admission, always (F5R-2): a ranked decision never funds a paid route."""
         ids = ids or [item['strategy_id'] for item in routes]
         return routing.admit(assignment(attempt, task), ranking(*ids), cfg or settings(), observations(routes, pools),
                              ledger=self.ledger)
+
+    def admit_legacy_paid(self, attempt, routes, pools, route=None, task=None, cfg=None):
+        """The legacy explicit paid choice (F5.3), the synthetic way to exercise the dollar gates: the route named by
+        `route`, or the only route given. Nothing is inferred from billing classes."""
+        named = [item for item in routes if route is None or item['route'] == route]
+        assert len(named) == 1 and named[0]['billing_class'] in routing.FUNDED, (route, named)
+        choice = dict({key: named[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
+        return routing.admit(dict(assignment(attempt, task), choice=choice), ranking(), cfg or settings(),
+                             observations(routes, pools), ledger=self.ledger)
 
     def begin(self, run, estimate, organization='org', task=None, now=NOW, revision=1):
         return self.ledger.begin(organization, task or run, run, 'packet', estimate, revision, now, native(task or run))

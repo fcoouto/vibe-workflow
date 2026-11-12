@@ -10,7 +10,7 @@ from unittest import mock
 import urllib.request
 from runtime import routing, usage_budget as budget
 from scripts import routing as command
-from tests.test_routing_command import API, API_CHOICE, M, api_observations, facts, now, prepare
+from tests.test_routing_command import API, API_CHOICE, M, api_observations, facts, now, prepare, prepare_legacy_paid
 from tests.test_routing_dispatch import dispatch, record
 from tests import fixture_routing_accounting as fixture
 from tests.fixture_routing_accounting import DAY, complete, settle, usage, where
@@ -248,7 +248,7 @@ class RetentionTests(fixture.Accounting):
             request = api_observations()
             request['pools']['api']['windows'][0]['organization_revision'] = revision
             request['routes'][-1]['account'] = 'acct-' + attempt
-            response = self.call(prepare(attempt, observations=request, constraints=dict(allowed_strategy_ids=['s-api'])))
+            response = self.call(prepare_legacy_paid(attempt, observations=request, constraints=dict(allowed_strategy_ids=['s-api'])))
             self.assertEqual(response['state'], 'admitted', response)
             self.send(attempt)
         self.call(complete('a1', 'c1', usage=usage(4 * M)))

@@ -179,7 +179,7 @@ class SoftLimitTests(Funded, unittest.TestCase):
         self.routes = [route('r', 'g', 'api_grant', 'acct', {'credit': M})]
         self.pools = pools
         for attempt in ('h1', 'h2', 'h3', 'h4'):
-            self.assertEqual(self.admit(attempt, self.routes, pools)['status'], 'admitted')
+            self.assertEqual(self.admit_legacy_paid(attempt, self.routes, pools)['status'], 'admitted')
         self.ledger.mark_dispatched('h2')
         for run in ('r1', 'r2', 'r3'):
             self.begin(run, M)
@@ -202,7 +202,7 @@ class SoftLimitTests(Funded, unittest.TestCase):
 
     def test_nothing_that_adds_exposure_commits(self):
         before = self.ledger.snapshot()
-        result = self.admit('new', self.routes, self.pools)
+        result = self.admit_legacy_paid('new', self.routes, self.pools)
         self.assertEqual((result['status'], result['reason_code']), ('pending', 'ledger_capacity_reached'))
         refused = dict(begin=lambda: self.begin('r9', M), top_up=lambda: self.ledger.top_up('r1', 1, 1, NOW),
                        configure=lambda: self.ledger.configure('new-org', policy(), 0),

@@ -94,16 +94,47 @@ class Base(unittest.TestCase):
         self.temp.cleanup()
 
     def admit(self, attempt, ids, routes, pools, cfg=None, **kwargs):
-        """A ranked admission over `ids`; when every route they select is paid, the legacy explicit choice of the
-        first instead (F5.3: a ranked decision never funds a paid route; its dollar gates keep their coverage)."""
+        """A ranked admission over `ids`, always (F5R-2): a ranked decision never funds a paid route."""
         extra = {key: kwargs.pop(key) for key in ('epoch_at',) if key in kwargs}
-        selected = [route for route in routes if route.get('strategy_id') in ids]
-        if selected and 'choice' not in kwargs and all(route['billing_class'] in routing.FUNDED for route in selected):
-            kwargs['choice'] = dict({key: selected[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
-            ids = []
         return routing.admit(assignment(attempt, **kwargs), ranking(*ids), cfg or settings(),
                              observations(routes, pools, **extra), ledger=self.ledger)
 
+    def admit_legacy_paid(self, attempt, strategy, routes, pools, cfg=None, **kwargs):
+        """The legacy explicit paid choice of the one route with `strategy` (F5.3): the synthetic way to exercise the
+        dollar gates. The caller names the route; nothing is inferred from billing classes."""
+        named = [route for route in routes if route.get('strategy_id') == strategy]
+        assert len(named) == 1 and named[0]['billing_class'] in routing.FUNDED, (strategy, named)
+        choice = dict({key: named[0][key] for key in routing.ROUTE_IDENTITY}, funding='api')
+        return self.admit(attempt, [], routes, pools, cfg, choice=choice, **kwargs)
+
+
+
+class PaidHelperSplitTests(Base):
+    """F5R-2: the shared `admit` helper stays ranked; only the named legacy helper reaches the dollar gates."""
+
+    def test_a_paid_only_ranked_request_stays_pending_and_reserves_nothing(self):
+        routes = [api_route('api', demand={'credit': M}), api_route('api2', strategy='s-api2', demand={'credit': M})]
+        pools = dict(api=api_pool())
+        result = self.admit('ranked', ['s-api', 's-api2'], routes, pools)
+        self.assertEqual(result['status'], 'pending')
+        self.assertEqual(self.ledger.snapshot()['holds'], {})
+
+    def test_the_explicit_legacy_choice_exercises_the_dollar_gates(self):
+        routes = [api_route('api', demand={'credit': 40 * M})]
+        refused = self.admit_legacy_paid('big', 's-api', routes, dict(api=api_pool(grant=False)))
+        self.assertEqual(refused['status'], 'pending')
+        self.assertIn('insufficient_headroom', refused['reason_codes'])
+        routes = [api_route('api', demand={'credit': M})]
+        self.assertEqual(self.admit_legacy_paid('ok', 's-api', routes, dict(api=api_pool()))['reserved'],
+                         {'org:api-org': 1_200_000})
+
+    def test_with_several_paid_routes_the_named_one_is_used_never_the_first(self):
+        routes = [api_route('first', demand={'credit': 2 * M}), api_route('second', strategy='s-second', model='m2',
+                                                                          demand={'credit': M})]
+        result = self.admit_legacy_paid('pick', 's-second', routes, dict(api=api_pool()))
+        self.assertEqual((result['status'], result['route']), ('admitted', 'second'))
+        with self.assertRaises(AssertionError):  # an ambiguous or unpaid name is a test error, not a silent pick
+            self.admit_legacy_paid('none', 's-missing', routes, dict(api=api_pool()))
 
 class EligibilityTests(Base):
     def both(self, **api):
@@ -125,7 +156,7 @@ class EligibilityTests(Base):
         routes, pools = self.both()
         cfg = routing_settings.resolve({})
         self.assertTrue(cfg['smart_routing'] and not cfg['api_usage_enabled'])
-        result = self.admit('a', ['s-api'], routes, pools, cfg=dict(cfg, revision=1))
+        result = self.admit_legacy_paid('a', 's-api', routes, pools, cfg=dict(cfg, revision=1))
         self.assertEqual(result['status'], 'pending')
 
     def test_unavailable_credentials_exclude_the_route_only(self):
@@ -138,19 +169,19 @@ class EligibilityTests(Base):
                 routes[1].update(change)
                 result = self.admit(label, ['s-sub', 's-api'], routes, pools)
                 self.assertEqual((result['status'], result['route']), ('admitted', 'sub'))
-                self.assertEqual(self.admit(label + '2', ['s-api'], routes, pools)['status'], 'pending')
+                self.assertEqual(self.admit_legacy_paid(label + '2', 's-api', routes, pools)['status'], 'pending')
 
     def test_openrouter_uses_only_its_own_gate(self):
         gateway = api_route('gw', kind='gateway', pool='gw', strategy='s-gw', integration_enabled=True)
         pools = dict(gw=api_pool(kind='gateway', grant=False))
         off = settings(api_usage_enabled=False)
-        self.assertEqual(self.admit('a', ['s-gw'], [gateway], pools, cfg=off)['route'], 'gw')
+        self.assertEqual(self.admit_legacy_paid('a', 's-gw', [gateway], pools, cfg=off)['route'], 'gw')
         gateway['integration_enabled'] = False
-        self.assertEqual(self.admit('b', ['s-gw'], [gateway], pools)['status'], 'pending')
+        self.assertEqual(self.admit_legacy_paid('b', 's-gw', [gateway], pools)['status'], 'pending')
 
     def test_a_direct_grant_never_funds_a_gateway(self):
         gateway = api_route('gw', kind='gateway', pool='api', strategy='s-gw', integration_enabled=True)
-        self.assertEqual(self.admit('a', ['s-gw'], [gateway], dict(api=api_pool()))['status'], 'pending')
+        self.assertEqual(self.admit_legacy_paid('a', 's-gw', [gateway], dict(api=api_pool()))['status'], 'pending')
 
     def test_gateway_pools_do_not_create_expiry_pressure(self):
         routes = [sub_route('sub'), api_route('gw', kind='gateway', pool='gw', strategy='s-gw', integration_enabled=True)]
@@ -202,7 +233,7 @@ class EligibilityTests(Base):
         routes, pools = self.both()
         routes[1]['credential']['secret'] = 'sk-live-should-never-persist'
         routes[1]['secret'] = 'sk-live-should-never-persist'
-        self.admit('a', ['s-api'], routes, pools)
+        self.admit_legacy_paid('a', 's-api', routes, pools)
         self.assertNotIn('sk-live', str(self.ledger.snapshot()))
         self.assertEqual(self.ledger.snapshot()['admissions'][0]['credential_ref'], 'keychain:opaque-ref')
 
@@ -331,21 +362,21 @@ class ReservationTests(Base):
         routes = lambda cost: [api_route('api', demand={'credit': cost})]
         pools = dict(api=api_pool(grant=False))
         for task, cost, expected in (('t5', 5 * M, 6 * M), ('t10', 10 * M, 12 * M), ('t8', 8 * M, 9_600_000)):
-            result = self.admit(task, ['s-api'], routes(cost), pools)
+            result = self.admit_legacy_paid(task, 's-api', routes(cost), pools)
             # Dollar claims are keyed by the funding organization, not by the collector's pool/window.
             self.assertEqual((result['status'], result['reserved']['org:api-org']), ('admitted', expected))
-        fourth = self.admit('t3', ['s-api'], routes(3 * M), pools)
+        fourth = self.admit_legacy_paid('t3', 's-api', routes(3 * M), pools)
         self.assertEqual(fourth['status'], 'pending')
         self.assertIn('insufficient_headroom', fourth['reason_codes'])  # F5.3: the legacy explicit choice's cause
         self.ledger.close_attempt('t5', 'not_dispatched')
-        self.assertEqual(self.admit('t3', ['s-api'], routes(3 * M), pools)['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('t3', 's-api', routes(3 * M), pools)['status'], 'admitted')
         self.assertEqual(sum(self.ledger.held(self.ledger.snapshot()).values()), 12 * M + 9_600_000 + 3_600_000)
 
     def test_duplicate_attempt_neither_reserves_nor_records_twice(self):
         routes, pools = [api_route('api')], dict(api=api_pool(grant=False))
-        first = self.admit('a', ['s-api'], routes, pools)
+        first = self.admit_legacy_paid('a', 's-api', routes, pools)
         before = copy.deepcopy(self.ledger.snapshot())
-        again = self.admit('a', ['s-api'], routes, pools)
+        again = self.admit_legacy_paid('a', 's-api', routes, pools)
         self.assertTrue(again['duplicate'])
         self.assertEqual({k: v for k, v in again.items() if k not in ('duplicate', 'status')},
                          {k: v for k, v in first.items() if k != 'status'})
@@ -353,7 +384,7 @@ class ReservationTests(Base):
 
     def test_rejected_decisions_leave_no_hold_or_record(self):
         before = copy.deepcopy(self.ledger.snapshot())
-        result = self.admit('a', ['s-api'], [api_route('api', demand={'credit': 40 * M})], dict(api=api_pool(grant=False)))
+        result = self.admit_legacy_paid('a', 's-api', [api_route('api', demand={'credit': 40 * M})], dict(api=api_pool(grant=False)))
         self.assertEqual(result['status'], 'pending')
         self.assertEqual(self.ledger.snapshot(), before)
 
@@ -380,9 +411,9 @@ class ReservationTests(Base):
         self.ledger.observe('org', 10 * M, NOW, issued=10 * M)  # 98% leaves 9.8M
         pool = api_pool(grant=False)
         pool['windows'][0].update(organization='org', organization_revision=1)
-        fits = self.admit('a', ['s-api'], [api_route('api', demand={'credit': 8 * M})], dict(api=pool))  # 9.6M
+        fits = self.admit_legacy_paid('a', 's-api', [api_route('api', demand={'credit': 8 * M})], dict(api=pool))  # 9.6M
         self.assertEqual(fits['status'], 'admitted')
-        self.assertEqual(self.admit('b', ['s-api'], [api_route('api', demand={'credit': 1 * M})], dict(api=pool))['status'], 'pending')
+        self.assertEqual(self.admit_legacy_paid('b', 's-api', [api_route('api', demand={'credit': 1 * M})], dict(api=pool))['status'], 'pending')
 
     def test_subscription_windows_hold_atomically_across_pools(self):
         pools = dict(sub=sub_pool(used=0, extra=[dict(id='wk', limit=20, used=0, length=604800, reset_at=None, rolling=True, fresh=True)]))
@@ -445,7 +476,7 @@ class OrganizationGateTests(Base):
         pool['windows'][0].update(organization=organization, organization_revision=revision)
         routes = [sub_route('sub'), api_route('api', demand={'credit': 1 * M})]
         pools = dict(sub=sub_pool(), api=pool)
-        self.assertIn(reason, self.admit(label + 'x', ['s-api'], routes, pools)['reason_codes'])
+        self.assertIn(reason, self.admit_legacy_paid(label + 'x', 's-api', routes, pools)['reason_codes'])
         both = self.admit(label, ['s-sub', 's-api'], routes, pools)
         self.assertEqual((both['status'], both['route']), ('admitted', 'sub'))
         self.assertEqual(len(self.ledger.snapshot()['holds']), 1)
@@ -453,7 +484,7 @@ class OrganizationGateTests(Base):
     def test_a_fresh_configured_organization_admits(self):
         pool = api_pool(grant=False)
         pool['windows'][0].update(organization='org', organization_revision=1)
-        self.assertEqual(self.admit('a', ['s-api'], [api_route('api', demand={'credit': M})], dict(api=pool))['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('a', 's-api', [api_route('api', demand={'credit': M})], dict(api=pool))['status'], 'admitted')
 
     def test_blocked_organization_is_excluded(self):
         with self.ledger.transaction() as data:
@@ -482,7 +513,8 @@ class RequiredObservationTests(Base):
     """Unknown is never healthy: a missing or non-boolean health key excludes the route."""
     def check(self, label, mutate, routes, pools, ids):
         mutate(routes, pools)
-        result = self.admit(label, ids, routes, pools)
+        paid = label.startswith(('api-', 'cred-'))  # the paid cases exercise the explicit legacy choice's gates
+        result = self.admit_legacy_paid(label, ids[0], routes, pools) if paid else self.admit(label, ids, routes, pools)
         self.assertEqual(result['status'], 'pending', label)
         self.assertIn('observation_incomplete', result['reason_codes'], label)
 
@@ -512,7 +544,7 @@ class RequiredObservationTests(Base):
     def test_gateway_needs_its_integration_flag_as_a_boolean(self):
         gateway = api_route('gw', kind='gateway', pool='gw', strategy='s-gw')
         pools = dict(gw=api_pool(kind='gateway', grant=False))
-        result = self.admit('a', ['s-gw'], [gateway], pools)
+        result = self.admit_legacy_paid('a', 's-gw', [gateway], pools)
         self.assertIn('observation_incomplete', result['reason_codes'])
 
     def test_zero_limit_and_bad_numbers_are_invalid_not_exceptions(self):
@@ -569,15 +601,15 @@ class CapAndReuseTests(Base):
 class UncertainHoldTests(Base):
     def test_an_uncertain_hold_keeps_headroom_reduced_and_its_account_open(self):
         routes, pools = [api_route('api', demand={'credit': 8 * M})], dict(api=api_pool(limit=10 * M, grant=False))
-        self.assertEqual(self.admit('a', ['s-api'], routes, pools)['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('a', 's-api', routes, pools)['status'], 'admitted')
         self.ledger.mark_dispatched('a'); self.ledger.mark_uncertain('a')
         self.ledger.close_attempt('a', 'uncertain')
-        self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'pending')
+        self.assertEqual(self.admit_legacy_paid('b', 's-api', routes, pools)['status'], 'pending')
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['anthropic:org'])
         # S3.6a: a dollar hold never closes without settlement; an uncertain one waits for S3.6b reconciliation.
         with self.assertRaisesRegex(budget.BudgetError, 'settlement_required'):
             self.ledger.close_attempt('a', 'complete')
-        self.assertEqual(self.admit('b', ['s-api'], routes, pools)['status'], 'pending')
+        self.assertEqual(self.admit_legacy_paid('b', 's-api', routes, pools)['status'], 'pending')
 
 
 

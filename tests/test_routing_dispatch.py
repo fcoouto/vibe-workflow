@@ -15,7 +15,7 @@ from runtime import routing, routing_settings, usage_budget as budget
 from runtime.adapters import opencode
 from scripts import routing as command
 from tests.test_routing_command import (API, Base, SCRIPT, api_observations, check, facts, now, observations,
-                                        prepare)
+                                        prepare, prepare_legacy_paid)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONSERVATIVE_SESSION = re.compile(r'ses_[0-9a-f]{32}')
@@ -268,7 +268,7 @@ class FundedDispatchTests(DispatchBase):
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(api_usage_enabled=True)))
         budget.initialize(self.ledger)
         self.fund()
-        request = prepare('api1', observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid('api1', observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']))
         self.assertEqual(self.call(request)['admission']['class'], 'api')
 
     def test_disabled_organization_blocks_dispatch_and_consumes_nothing(self):
@@ -303,8 +303,8 @@ class ConversionTests(DispatchBase):
         budget.initialize(self.ledger)
         self.fund()
         for attempt in ('c1', 'c2'):
-            request = prepare(attempt, observations=api_observations(),
-                              constraints=dict(allowed_strategy_ids=['s-api']))
+            request = prepare_legacy_paid(attempt, observations=api_observations(),
+                                          constraints=dict(allowed_strategy_ids=['s-api']))
             self.assertEqual(self.call(request)['state'], 'admitted')
 
     def convert(self, attempt):

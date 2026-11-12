@@ -68,8 +68,8 @@ def observations(at=None, **route):
     return dict(now=now() if at is None else at, routes=[spec], pools=dict(sub=dict(windows=[window])))
 
 
-# F5.3: a ranked decision never funds a paid route. A request narrowed to the paid `s-api` strategy is sent as the
-# legacy explicit choice of that route instead, so the dollar-gate and accounting tests keep their synthetic coverage.
+# F5.3: a ranked decision never funds a paid route. The dollar-gate and accounting tests reach the paid `s-api` route
+# only through `prepare_legacy_paid`, the legacy explicit choice they name (F5R-2: `prepare` itself never converts).
 API_CHOICE = dict(provider='anthropic', model='m', effort='high', harness='api', funding='api')
 
 
@@ -78,8 +78,13 @@ def prepare(attempt, **extra):
                                                       scope=SCOPE),
                    job=job(), observations=observations())
     request.update(extra)
-    if (extra.get('constraints') or {}).get('allowed_strategy_ids') == ['s-api']:
-        request['assignment']['choice'] = dict(API_CHOICE)
+    return request
+
+
+def prepare_legacy_paid(attempt, **extra):
+    """The legacy explicit choice of the paid `s-api` route (F5.3), named by the caller."""
+    request = prepare(attempt, **extra)
+    request['assignment']['choice'] = dict(API_CHOICE)
     return request
 
 
@@ -632,8 +637,8 @@ class FundingCheckTests(Base):
         self.fund()
 
     def admit(self, attempt, strategy='s-api', service=None):
-        request = prepare(attempt, observations=api_observations(),
-                          constraints=dict(allowed_strategy_ids=[strategy]))
+        build = prepare_legacy_paid if strategy == 's-api' else prepare  # the caller names the paid route
+        request = build(attempt, observations=api_observations(), constraints=dict(allowed_strategy_ids=[strategy]))
         response = (service or self.service).handle(json.dumps(request).encode())
         self.assertEqual(response['state'], 'admitted', response)
         return response
@@ -679,8 +684,8 @@ class FundingCheckTests(Base):
         with self.open_ledger() as ledger:
             ledger.enable_organization('small', dict(POLICY, allowance_bp=10000), 0)
             ledger.observe('small', 10 * M, now(), issued=10 * M)
-        request = prepare('api1', observations=api_observations(organization='small'),
-                          constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid('api1', observations=api_observations(organization='small'),
+                                      constraints=dict(allowed_strategy_ids=['s-api']))
         self.assertEqual(self.call(request)['admission']['reserved'], {'org:small': 6 * M})
         self.dispatch('api1')
         self.assertEqual(self.call(check('api1', request=facts(**API)))['state'], 'allow')

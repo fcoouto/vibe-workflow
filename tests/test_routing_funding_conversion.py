@@ -12,7 +12,7 @@ class ConversionTests(Funded, unittest.TestCase):
         self.fund('org2', balance=10 * M)
         pools = dict(g=funded_pool('org'), s=sub_pool())
         routes = [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})]
-        self.assertEqual(self.admit('a', routes, pools)['reserved'], {'org:org': 1_200_000})
+        self.assertEqual(self.admit_legacy_paid('a', routes, pools)['reserved'], {'org:org': 1_200_000})
         authorize(self.ledger, 'a')
 
     def convert(self, estimate, organization='org', **options):
@@ -52,7 +52,7 @@ class ConversionTests(Funded, unittest.TestCase):
 
     def test_a_mixed_hold_keeps_its_window_claim_until_the_run_closes(self):
         pools = dict(g=funded_pool('org'), s=sub_pool())
-        mixed = self.admit('m', [route('r', 'g', 'api_grant', 'acct-M', {'credit': M})], pools)
+        mixed = self.admit_legacy_paid('m', [route('r', 'g', 'api_grant', 'acct-M', {'credit': M})], pools)
         self.assertEqual(mixed['status'], 'admitted')
         with self.ledger.transaction() as data:  # one attempt holding both a dollar and a window claim
             data['holds']['m']['windows'] = {'win:s/5h': 12}
@@ -93,7 +93,7 @@ class ConversionTests(Funded, unittest.TestCase):
         self.ledger.set_caps(40, 1)
         self.convert(M)
         pools = dict(g=funded_pool('org'))
-        again = self.admit('b', [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})], pools)
+        again = self.admit_legacy_paid('b', [route('r', 'g', 'api_grant', 'acct-A', {'credit': M})], pools)
         self.assertEqual(again['reserved'], {'org:org': 1_200_000})  # the legacy explicit choice, funded by headroom
         self.assertEqual(budget.Ledger.open_accounts(self.ledger.snapshot()), ['acct-A', 'acct-A'])
 

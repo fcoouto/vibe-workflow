@@ -19,14 +19,14 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
         for kind in ('api_grant', 'api_prepaid', 'gateway'):
             with self.subTest(kind):
                 pools = dict(p=dict(billing_class=kind, windows=[window()]))
-                result = self.admit('a-' + kind, [route('r', 'p', kind, 'acct', {'credit': M})], pools)
+                result = self.admit_legacy_paid('a-' + kind, [route('r', 'p', kind, 'acct', {'credit': M})], pools)
                 self.assertEqual(result['status'], 'pending')
                 self.assertIn('no_funded_organization', result['reason_codes'])  # F5.3: the legacy choice's cause
         self.assertEqual(self.ledger.snapshot()['holds'], {})
 
     def test_b1_unknown_organization_is_excluded(self):
         pools = dict(p=funded_pool('ghost'))
-        result = self.admit('a', [route('r', 'p', 'api_grant', 'acct', {'credit': M})], pools)
+        result = self.admit_legacy_paid('a', [route('r', 'p', 'api_grant', 'acct', {'credit': M})], pools)
         self.assertIn('no_funded_organization', result['reason_codes'])
         self.assertEqual(self.ledger.snapshot()['organizations'], {})  # routing never creates one
 
@@ -36,14 +36,14 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
             data['organizations']['org']['legacy_block'] = True  # derived block (S3.6a)
         pools = dict(labelled=funded_pool('org'), bare=dict(billing_class='api_grant', windows=[window()]))
         for pool in ('labelled', 'bare'):
-            result = self.admit('a-' + pool, [route('r', pool, 'api_grant', 'acct', {'credit': M})], pools)
+            result = self.admit_legacy_paid('a-' + pool, [route('r', pool, 'api_grant', 'acct', {'credit': M})], pools)
             self.assertEqual(result['status'], 'pending', pool)
 
     def test_b2_two_pools_on_one_organization_share_one_headroom(self):
         self.fund(balance=10 * M)  # 98%: 9.8M usable
         pools = dict(g1=funded_pool('org'), g2=funded_pool('org', kind='api_prepaid'))
-        first = self.admit('a', [route('r1', 'g1', 'api_grant', 'acct1', {'credit': 7 * M})], pools)
-        second = self.admit('b', [route('r2', 'g2', 'api_prepaid', 'acct2', {'credit': 7 * M})], pools)
+        first = self.admit_legacy_paid('a', [route('r1', 'g1', 'api_grant', 'acct1', {'credit': 7 * M})], pools)
+        second = self.admit_legacy_paid('b', [route('r2', 'g2', 'api_prepaid', 'acct2', {'credit': 7 * M})], pools)
         self.assertEqual((first['status'], first['reserved']), ('admitted', {'org:org': 8_400_000}))
         self.assertEqual(second['status'], 'pending')
         self.assertEqual(self.ledger.headroom('org'), 9_800_000 - 8_400_000)
@@ -53,25 +53,25 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
         self.fund(balance=10 * M)
         pools = dict(g=dict(billing_class='api_grant', windows=[window('a', organization='org'),
                                                                 window('b', organization='org', limit=6 * M)]))
-        ok = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 3 * M})], pools)
+        ok = self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'a': 4_500_000, 'b': 3 * M})], pools)
         self.assertEqual(ok['reserved'], {'org:org': 5_400_000})
         self.assertEqual(self.ledger.headroom('org'), 9_800_000 - 5_400_000)
-        strict = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'a': M, 'b': 4 * M})], pools)
+        strict = self.admit_legacy_paid('b', [route('r', 'g', 'api_grant', 'acct', {'a': M, 'b': 4 * M})], pools)
         self.assertEqual(strict['status'], 'pending')  # window b: 4.8M > 6M - 5.4M already held
 
     def test_collector_numbers_only_add_a_stricter_minimum(self):
         self.fund(balance=10 * M)
         generous = dict(g=funded_pool('org', limit=10**12, used=0))
-        self.assertEqual(self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 9 * M})], generous)['status'],
+        self.assertEqual(self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 9 * M})], generous)['status'],
                          'pending')  # 10.8M > 9.8M despite a collector limit of 10**12
         strict = dict(g=funded_pool('org', limit=2 * M, used=0))
-        self.assertEqual(self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'credit': 2 * M})], strict)['status'],
+        self.assertEqual(self.admit_legacy_paid('b', [route('r', 'g', 'api_grant', 'acct', {'credit': 2 * M})], strict)['status'],
                          'pending')  # 2.4M > the collector's 2M
 
     def test_b3_hold_then_begin_sees_the_hold(self):
         self.fund(balance=10 * M)
         pools = dict(g=funded_pool('org'))
-        self.assertEqual(self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 7 * M})], pools)['status'],
+        self.assertEqual(self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 7 * M})], pools)['status'],
                          'admitted')
         with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
             self.begin('run', 8 * M)
@@ -81,7 +81,7 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
     def test_hold_counts_toward_task_pilot_and_cycle_limits(self):
         self.fund(balance=100 * M, task_limit=5 * M, pilot_limit=8 * M, ceiling='custom', amount=7 * M)
         pools = dict(g=funded_pool('org'))
-        self.assertEqual(self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 3 * M})], pools, task='t')['status'],
+        self.assertEqual(self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 3 * M})], pools, task='t')['status'],
                          'admitted')  # 3.6M held for task t
         with self.assertRaisesRegex(budget.BudgetError, 'insufficient_headroom'):
             self.begin('run', 2 * M, task='t')  # task limit 5M: 3.6M + 2M
@@ -92,7 +92,7 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
     def test_closed_hold_contributes_nothing_and_uncertain_hold_everything(self):
         self.fund(balance=10 * M)
         pools = dict(g=funded_pool('org'))
-        self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 5 * M})], pools)
+        self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'credit': 5 * M})], pools)
         self.ledger.mark_dispatched('a')
         self.ledger.close_attempt('a', 'uncertain')
         self.assertEqual(self.ledger.credit_headroom('org'), 3_800_000)
@@ -108,7 +108,7 @@ class SharedOrganizationTests(Funded, unittest.TestCase):
         self.fund('gw-org', balance=2 * M)
         gw = route('gw', 'gw', 'gateway', 'gw', {'credit': M})
         pools = dict(gw=funded_pool('gw-org', kind='gateway'))
-        self.assertEqual(self.admit('a', [gw], pools)['reserved'], {'org:gw-org': 1_200_000})
+        self.assertEqual(self.admit_legacy_paid('a', [gw], pools)['reserved'], {'org:gw-org': 1_200_000})
         self.assertEqual(self.ledger.headroom('grant-org'), 9_800_000)  # a gateway never draws on the grant
 
 
@@ -129,7 +129,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
 
     def test_no_organization_leaves_subscription_and_worker_choices_working(self):
         routes, pools = self.routes()
-        only_api = self.admit('a', routes[:1], pools)
+        only_api = self.admit_legacy_paid('a', routes[:1], pools)
         self.assertEqual(only_api['status'], 'pending')
         self.assertIn('no_funded_organization', only_api['reason_codes'])
         both = self.admit('b', routes, pools)
@@ -149,7 +149,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
     def test_enabled_personal_with_a_ready_key_funds_its_route(self):
         self.enable()
         routes, pools = self.routes()
-        result = self.admit('a', routes[:1], pools)
+        result = self.admit_legacy_paid('a', routes[:1], pools)
         self.assertEqual((result['status'], result['reserved']), ('admitted', {'org:personal': 1_200_000}))
         self.assertNotIn('sk-', json.dumps(self.ledger.snapshot()))
 
@@ -157,7 +157,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         self.enable()
         for state in ('pending', 'locked', 'revoked'):
             routes, pools = self.routes(state=state)
-            result = self.admit('a-' + state, routes[:1], pools)
+            result = self.admit_legacy_paid('a-' + state, routes[:1], pools)
             self.assertEqual(result['status'], 'pending')
             self.assertIn('credential_unavailable', result['reason_codes'])
 
@@ -169,10 +169,10 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         team, team_pools = self.routes('team', account='team-acct')
         team[0].update(route='team-api', strategy_id='s-team', pool='team')
         pools = dict(my_pools, team=team_pools['api'])
-        self.assertEqual(self.admit('a', mine[:1], pools)['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('a', mine[:1], pools)['status'], 'admitted')
         # F5.A1: a saved per-account cap of one is not enforced; the second personal attempt draws on its own money
-        self.assertEqual(self.admit('b', mine[:1], pools)['status'], 'admitted')
-        self.assertEqual(self.admit('c', team[:1], pools)['reserved'], {'org:team': 1_200_000})
+        self.assertEqual(self.admit_legacy_paid('b', mine[:1], pools)['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('c', team[:1], pools)['reserved'], {'org:team': 1_200_000})
         self.assertEqual((self.ledger.headroom(budget.PERSONAL), self.ledger.headroom('team')),
                          (9_800_000 - 2 * 1_200_000, 9_800_000 - 1_200_000))
         data = self.ledger.snapshot()
@@ -182,7 +182,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         self.enable()
         routes, pools = self.routes()
         pools['api']['grant'] = dict(remaining=5 * M, expected_spend=0, expires_at=NOW + 3600)
-        self.admit('a', routes[:1], pools)
+        self.admit_legacy_paid('a', routes[:1], pools)
         self.ledger.mark_dispatched('a')
         self.ledger.disable_organization(budget.PERSONAL)
         data = self.ledger.snapshot()
@@ -199,7 +199,7 @@ class OptionalOrganizationTests(Funded, unittest.TestCase):
         self.assertEqual(routing.record_event(self.ledger, dict(event_id='c', attempt_id='a', kind='complete',
                                                                 usage=usage), NOW)['outcome'], 'complete')
         self.ledger.enable_organization(budget.PERSONAL, policy(), 1)
-        self.assertEqual(self.admit('c', routes[:1], pools)['status'], 'admitted')
+        self.assertEqual(self.admit_legacy_paid('c', routes[:1], pools)['status'], 'admitted')
 
 
 class MultiWindowFundingTests(Funded, unittest.TestCase):
@@ -208,10 +208,10 @@ class MultiWindowFundingTests(Funded, unittest.TestCase):
         self.fund(balance=100 * M)
         pools = dict(g=dict(billing_class='api_grant', windows=[window('A', organization='org', limit=2 * M),
                                                                 window('B', organization='org')]))
-        result = self.admit('a', [route('r', 'g', 'api_grant', 'acct', {'A': M, 'B': 6 * M})], pools)
+        result = self.admit_legacy_paid('a', [route('r', 'g', 'api_grant', 'acct', {'A': M, 'B': 6 * M})], pools)
         self.assertEqual((result['status'], result['reason_codes'][1:]), ('pending', ['insufficient_headroom']))
         self.assertEqual(self.ledger.snapshot()['holds'], {})
-        fits = self.admit('b', [route('r', 'g', 'api_grant', 'acct', {'A': M, 'B': M})], pools)
+        fits = self.admit_legacy_paid('b', [route('r', 'g', 'api_grant', 'acct', {'A': M, 'B': M})], pools)
         self.assertEqual(fits['reserved'], {'org:org': 1_200_000})
 
 
@@ -238,7 +238,7 @@ class ObservationNitTests(Funded, unittest.TestCase):
         self.fund()
         api = route('r', 'g', 'api_grant', 'acct', {'credit': M})
         api['credential']['state'] = 'locked'
-        result = self.admit('a', [api], dict(g=funded_pool('org')))
+        result = self.admit_legacy_paid('a', [api], dict(g=funded_pool('org')))
         self.assertEqual(result['status'], 'pending')
         self.assertIn('credential_unavailable', result['reason_codes'])
 

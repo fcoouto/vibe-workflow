@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from runtime import usage_budget as budget
 from scripts import routing as command
-from tests.test_routing_command import API, M, POLICY, api_observations, facts, now, observations, prepare
+from tests.test_routing_command import API, M, POLICY, api_observations, facts, now, observations, prepare, prepare_legacy_paid
 from tests.test_routing_dispatch import DispatchBase, dispatch, record
 from tests.test_routing_gates import FakeWorkflow, entry
 
@@ -95,7 +95,7 @@ class Accounting(DispatchBase):
         obs = api_observations()
         obs['routes'][-1].update(demand={'credit': demand}, account='acct-' + attempt)
         obs['pools']['api']['windows'][0]['limit'] = 10**12
-        request = prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
         if root is not None:
             request.update(workflow=bound(root, session))
             return self.call_bound(request)
