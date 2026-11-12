@@ -919,6 +919,22 @@ class SettingsLimitTests(HookFixture):
         self.assertFalse(self.exports.exists())
         self.assertEqual(FakeConnection.posts, [])
 
+    def test_settings_changes_still_refuse_a_changed_scope(self):
+        from dataclasses import replace
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        directory = self.scope.runtime.state_dir / "observability"
+        before = sorted((path.name, path.read_bytes()) for path in directory.iterdir())
+        changed = replace(self.scope, accepted_scope_digest="0" * 64)
+        with patch.object(startup, "_entry_scope", return_value=changed), \
+                patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
+            for name, operation in (("enable", lambda: settings.enable(self.scope, dict(expected_revision=1))),
+                                    ("configure_project", lambda: settings.configure_project(self.scope, dict(
+                                        expected_revision=0, repository_ids=[self.scope.repository_id],
+                                        desired_collection=True)))):
+                with self.subTest(name), self.assertRaisesRegex(settings.SettingsError, r"\Aobservability_scope_changed\Z"):
+                    operation()
+        self.assertEqual(sorted((path.name, path.read_bytes()) for path in directory.iterdir()), before)
+
     def test_busy_upload_lock_records_nothing(self):
         self.session()
         self.enable()
