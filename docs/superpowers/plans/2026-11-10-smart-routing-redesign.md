@@ -757,6 +757,76 @@ When F4 merges, the coordinator marks #227 `[SUPERSEDED]` and closes it.
 
 ## Slice F5: Value order, funding order and replay fields
 
+### F5.S: approved generous storage amendment (12 November)
+
+**Spec:** [approved storage design](../specs/2026-11-10-smart-routing-redesign-design.md#storage-amendment-12-november-2026-approved-implementation-design).
+The user's "Approve and implement" authorizes this exact storage-only amendment.
+It supersedes the older two-cap approval only for the five limits below. Keep the
+same F5 owner, existing worktree, Git authority and combined final review. Do not
+restart completed A1/A2/A3 work or their time/review allowances.
+
+**Files and ownership:** create `runtime/usage_budget_storage.py` for UTF-8 body
+serialization, byte measurement and future-growth accounting. Modify
+`runtime/usage_budget.py` at the existing read/write/admission/lot-observation
+owners; `runtime/routing_gates.py` at binding-size validation; directly affected
+capacity/admission/funding/dispatch tests and owning current guidance/source map.
+New tests go in `tests/test_routing_storage.py` or another focused <=1000-line
+module. Lower legacy line ceilings/pins if needed; never raise them. Preserve
+public signatures, identity/digest algorithms and transaction boundaries.
+
+**Interfaces:** `usage_budget_storage.encoded_size(value) -> int` measures compact
+lossless UTF-8 JSON; `remaining_growth(data) -> int` computes the approved reserve;
+`body_for_write(data, *, grows: bool) -> str` returns the encoded-body text after
+the applicable size check. Existing Ledger methods delegate without changing
+their signatures. An internal `require_growth(data)` may enforce the same growth
+check inside the already-open lot-observation transaction; no nested write or
+separate reservation registry.
+
+**Fixed constraints:** admission262144, hold32768, binding16384, soft201326592,
+hard/read268435456, all encoded UTF-8 bytes. Other limits, event/root character
+semantics, retention, money, subscription margins, 20% API-money buffering and
+API-off boundaries remain unchanged. Growing writes require `body_bytes + R <=
+SOFT_RECORD`. Ordinary settlement/recovery keeps its prepaid non-growing path.
+
+`R = 4096*runs + 1024*holds + 65536*convertible_holds + 24576*organizations +
+8192*native + 4096*routing_configurations + 262144`. A convertible hold is open,
+has positive money and is not already converted. Use existing table ownership,
+not a worker policy count. Serialized lot growth, including same-length replacement,
+must use the growing check; scalar refresh and lot shrink must not acquire it.
+
+**Review focus:** a maximal record can still fail the separate hold/binding guard;
+post-soft conversion creates owners not yet in table counts; same-length lot
+replacement can grow bytes; old UTF-8 event/root rows must not get narrower
+limits; legacy ledgers have no proof they prepaid future growth.
+
+- [ ] Write failing tests using public admission/dispatch for shipped and
+  caller-maximal ASCII/BMP/non-BMP shapes. Assert record/hold/binding sizes at most
+  75% of their new bounds, exact retained values and unchanged replay/digests.
+- [ ] Observe intended failures under old guards. Implement the UTF-8 helper,
+  five constants and read/write/admission/binding byte checks in one compatible
+  change. Do not alter native-key text or any hash input.
+- [ ] Add failing near-soft tests for metadata growth and a funded hold's
+  conversion, settlement, uncertainty, coverage and native release. Implement R
+  and serialized-lot-growth admission. Prove every non-growing writer and every
+  newly created owner is covered; stop on a missing source-backed bound.
+- [ ] Verify old escaped-ledger readback, exact value/digest/nonce preservation,
+  old-reader fail-closed dispatch/large-body behavior, unchanged event/root
+  character boundaries and atomic oversize refusal before holds. Preserve state
+  when a legacy ledger lacks sufficient future-growth headroom; never silently
+  weaken new admission or promise retroactive reservations.
+- [ ] Update rather than delete legacy capacity controls. Separate actual
+  default-limit size proof from smaller isolated functional simulations; never
+  claim a scaled test filled the real 192 MiB threshold. Pin source growth bounds
+  to observed reserve maxima so future contract changes fail tests before release.
+- [ ] Update owning current guidance and dated registration, source coverage and
+  instruction map. Run focused affected/direct/transitive modules with private
+  HOME and fake transports; report exact terminal results and stable hashes.
+- [ ] Parent verifies the diff/proofs and commits the complete storage checkpoint.
+  Then run amended acceptance/full suite on the frozen committed candidate and
+  obtain the single combined independent spec/funding/security review, including
+  the reserved original F5R-1/2/3 correction check. No merge or downstream release
+  before those gates pass; no review-budget reset.
+
 ### Authorized F5 amendment: counts and inactive API accounting (11 November)
 
 **Spec:** the [requirements amendment](../specs/2026-11-10-smart-routing-redesign-design.md#requirements-amendment-11-november-2026)

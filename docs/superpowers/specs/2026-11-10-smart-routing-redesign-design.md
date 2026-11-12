@@ -64,6 +64,77 @@ no-alternative refusal; and explicit identity with no duplicate uncertain send.
 Run these checks and obtain independent review on the final amended candidate
 before any merge. The old-scope F5 suite and review do not establish this proof.
 
+## Storage amendment, 12 November 2026 (approved implementation design)
+
+The user requested generous storage allowances that avoid recurring request-size
+tuning, preserve Unicode and retain existing data. The following exact values
+were the coordinator's recommendation. The user subsequently selected
+"Approve and implement" for this exact design, including the limits below,
+worst-case regression tests and independent review.
+
+### Approach and limits
+
+Keep the existing SQLite ledger and transactions. Store the main ledger body as
+lossless UTF-8 JSON and count its admission, hold, binding and body sizes in
+encoded bytes. Do not preallocate or pad records.
+
+| Limit | Proposed value |
+| --- | --- |
+| Admission record | 262,144 bytes (256 KiB) |
+| Initial hold | 32,768 bytes (32 KiB) |
+| Workflow binding | 16,384 bytes (16 KiB) |
+| New-data allowance, including future settlement reservations | 201,326,592 bytes (192 MiB) |
+| Main ledger read/write ceiling | 268,435,456 bytes (256 MiB) |
+
+The measured prospective maximum record is 192,682 bytes, initial hold about
+19,625 bytes and binding 7,357 bytes. Tests must validate actual public admission
+and dispatch, not only the internal record builder. The larger shared allowance
+also leaves room above the estimated 143.6 MB body-plus-reserve case with all
+bounded tables at caller-maximal Unicode shapes. Unbounded organization/config
+growth and physical disk exhaustion can still exhaust finite storage.
+
+A smaller 64/96 MiB pair is viable for ordinary use but rejects new work before
+some pathological full-table combinations fit. The larger pair is recommended
+because the user explicitly preferred spare room over recurring storage tuning.
+Restricting Unicode, truncating replay data or changing retention is rejected.
+
+### Reserve completion space before admission
+
+Existing growing writes require encoded body size plus remaining growth reserve
+to fit the new-data allowance. Use the existing table ownership, not a separate
+budget registry: 4 KiB per run, 1 KiB per hold, another 64 KiB per still-convertible
+dollar hold, 24 KiB per organization, 8 KiB per native entry, 4 KiB per routing
+configuration and 256 KiB fixed reserve. The bounded convertible-hold scan covers
+conversion that creates a run and native entry after admission.
+
+Lot metadata increases use growing-write admission even when list length stays
+unchanged. Scalar balance refreshes and prepaid settlement/recovery retain their
+safe paths. Tests must prove every non-growing writer's full future growth is
+covered; a missed writer or exceeded reserve blocks implementation acceptance.
+
+### Compatibility, cost and completion
+
+Preserve JSON values, exact identifiers, digests, nonces, money limits, retention,
+the API-money 20% buffer, subscription margins and API-off boundaries. Existing
+ASCII-escaped ledgers remain readable. Separate event/root rows retain their
+existing character limits and serialization; do not silently narrow them to bytes.
+Old packages may refuse larger ledgers or new Unicode bindings. Preserve those
+ledgers and reconcile with compatible code; never automatically downgrade data.
+
+Memory and serialization cost follow actual file size, not the ceiling. The
+measured 30.26 MB synthetic transaction peaked at 162 MiB of Python allocations;
+larger-file cost is not yet measured. No new store, scheduler, polling or model
+calls are added. Future input-contract growth must fail worst-case regression
+tests before release, not discover the limit during a user request.
+
+Acceptance requires maximal ASCII/BMP/non-BMP records, holds and bindings through
+real entry points with at least 25% capacity spare; atomic oversize refusal;
+near-soft admission followed by maximal settlement and Unicode hold conversion;
+same-length lot growth checks; old-ledger/value/digest readback; unchanged event/
+root boundaries; the final committed full suite and combined independent
+funding/security review. Generous ceilings do not promise unlimited storage or
+waive provider, funding, authority or physical-resource refusals.
+
 This design changes parts of two earlier documents and leaves the rest of them in force:
 
 - [Smart Routing design, 8 November](2026-11-08-usage-routing-opencode-subscriptions-design.md): it replaces sections 5.1 (Jev), 5.3 (optional model ranker) and 11 ("later learning"), and adds one rule to section 7.2 (when OpenRouter may be chosen).
