@@ -84,6 +84,10 @@ class CleanupTests(unittest.TestCase):
                 self.assertEqual(self.inspect()["status"], "retained")
                 self.assertTrue(self.worktree.exists())
 
+    def test_git_environment_cannot_redirect_settings_or_later_native_effects(self):
+        with patch.dict(os.environ, GIT_WORK_TREE=str(self.worktree)):
+            self.assertEqual(self.inspect()["status"], "retained")
+
     def test_remote_override_does_not_disable_local_cleanup(self):
         self.settings(remote=False)
         self.git(self.primary, "commit", "-am", "Disable remote deletion")
