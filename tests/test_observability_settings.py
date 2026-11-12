@@ -582,8 +582,9 @@ class ObservabilitySettingsTests(unittest.TestCase):
                              ("project", self.scope.project_id, 1))
             self.assertEqual(report["repository_ids"], [self.scope.repository_id])
             self.assertTrue(report["desired_collection"])
-            self.assertEqual(report["collection"], "unavailable")
-            self.assertFalse(report["native_collection_qualified"])
+            self.assertEqual(report["collection"], "connection_not_enabled")
+            self.assertTrue(report["native_collection_qualified"])
+            self.assertEqual(report["collection_sources"], ["codex 0.167.0"])
             self.assertEqual(self.settings.project_status(self.scope), report | dict(
                 checkout_connection=dict(configured=False, desired_opt_in=False)))
             before = self.project_path().read_bytes()
@@ -647,7 +648,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                 self.settings.disable_project(self.scope, dict(expected_revision=1))
         self.assertEqual((report["configured"], report["revision"], report["desired_collection"]), (False, 0, False))
         self.assertEqual((report["project_id"], report["repository_ids"]), (self.scope.project_id, []))
-        self.assertEqual((report["collection"], report["checkout_connection"]), ("unavailable", None))
+        self.assertEqual((report["collection"], report["checkout_connection"]), ("off", None))
         self.assertFalse(self.directory.exists())
         self.assertEqual(database.read_bytes(), before)
 

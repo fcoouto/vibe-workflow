@@ -647,5 +647,125 @@ class CallerTests(HookFixture):
         self.assertEqual(self.invoke(report, hook_patch=patch("builtins.__import__", side_effect=missing)), expected)
 
 
+class CollectionStatusTests(HookFixture):
+    """`collection` in Project reports says what the upload hook would do in this checkout now."""
+
+    def checkout_path(self):
+        return self.scope.runtime.state_dir / "observability" / (state._scope_id(self.scope) + ".json")
+
+    def assert_collection(self, expected, *scopes):
+        """Status gives `expected`; `enabled` exactly when `export_destination` returns a connection and the hook sends."""
+        reports = [settings.project_status(scope) for scope in (scopes or (self.scope, self.scope.repository_root))]
+        for report in reports:
+            self.assertEqual(report["collection"], expected)
+        try:
+            connection = settings.export_destination(self.scope)
+        except settings.SettingsError:
+            connection = None
+        self.assertEqual(expected == "enabled", connection is not None)
+        self.session()
+        self.run_hook()
+        self.assertEqual(expected == "enabled", bool(FakeConnection.posts))
+        return reports[0]
+
+    def test_off_without_record_or_with_the_choice_off(self):
+        self.assertIsNone(self.assert_collection("off")["checkout_connection"])
+        self.enable(collection=False)
+        self.assertIsNone(self.assert_collection("off")["checkout_connection"])
+
+    def test_repository_not_selected(self):
+        self.enable(repositories=["other-repository"])
+        self.assertIsNone(self.assert_collection("repository_not_selected")["checkout_connection"])
+
+    def test_connection_unavailable_keeps_the_fixed_error_report(self):
+        self.enable()
+        self.checkout_path().chmod(0o644)
+        report = self.assert_collection("connection_unavailable")
+        self.assertEqual(report["checkout_connection"], dict(status="unavailable", error="unsafe_observability_storage"))
+
+    def test_connection_not_enabled_without_record_or_opt_in(self):
+        self.project()
+        report = self.assert_collection("connection_not_enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=False, desired_opt_in=False))
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        report = self.assert_collection("connection_not_enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=False))
+
+    def test_runtime_unavailable_without_current_qualified_scope(self):
+        self.enable()
+        broken = patch.object(startup, "acquire_project_entry", side_effect=startup.StartupError("qualification unavailable"))
+        with broken:
+            report = self.assert_collection("runtime_unavailable")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=True))
+        (self.scope.runtime.state_dir / "runtime.sqlite3").write_bytes(b"broken runtime database")
+        self.assert_collection("runtime_unavailable", self.scope.repository_root)
+
+    def test_enabled_and_operation_reports_use_the_same_computation(self):
+        self.enable(collection=False)
+        configured = settings.configure_project(self.scope, dict(expected_revision=1,
+            repository_ids=[self.scope.repository_id], desired_collection=True))
+        self.assertEqual(configured["collection"], "enabled")
+        report = self.assert_collection("enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=True))
+        self.assertEqual(settings.disable_project(self.scope, dict(expected_revision=2))["collection"], "off")
+
+    def test_qualified_sources_follow_the_adapter(self):
+        for versions, sources in ((frozenset({"0.168.0", "0.167.0"}), ["codex 0.167.0", "codex 0.168.0"]),
+                                  (frozenset(), [])):
+            with self.subTest(versions=versions), patch.object(codex_usage, "QUALIFIED_VERSIONS", versions):
+                report = settings.project_status(self.scope)
+                self.assertEqual((report["native_collection_qualified"], report["collection_sources"]),
+                                 (bool(versions), sources))
+
+    def test_gates_stop_before_later_records(self):
+        loaded, acquired = [], []
+        original_load, original_acquire = settings._Store.load, startup.acquire_project_entry
+        def load(store):
+            loaded.append(store.name)
+            return original_load(store)
+        def acquire(*args, **kwargs):
+            acquired.append(True)
+            return original_acquire(*args, **kwargs)
+        checkout = state._scope_id(self.scope) + ".json"
+        def observe(*operations):
+            loaded.clear(), acquired.clear()
+            with patch.object(settings._Store, "load", load), patch.object(startup, "acquire_project_entry", acquire):
+                for operation in operations:
+                    operation()
+            return list(loaded), bool(acquired)
+        status, export = (lambda: settings.project_status(self.scope.repository_root),
+                          lambda: settings.export_destination(self.scope))
+        self.assertEqual(observe(status), ([], False))
+        self.enable(repositories=["other-repository"], opt_in=False)
+        names, runtime = observe(status)
+        self.assertEqual((checkout in names, runtime), (False, False))
+        self.assertNotIn(checkout, observe(export)[0])
+        settings.disable_project(self.scope, dict(expected_revision=1))
+        self.assertNotIn(checkout, observe(status)[0])
+        project = json.loads((self.scope.runtime.state_dir / "observability" /
+                              ("project-" + self.scope.project_id + ".json")).read_text())
+        settings.configure_project(self.scope, dict(expected_revision=project["revision"],
+            repository_ids=[self.scope.repository_id], desired_collection=True))
+        names, runtime = observe(status)
+        self.assertIn(checkout, names)
+        self.assertFalse(runtime)
+
+    def test_status_reads_no_credentials_network_or_creates_files(self):
+        self.enable()
+        def snapshot():
+            return {str(path): (path.lstat().st_mode, path.read_bytes() if path.is_file() else None)
+                    for root in (self.scope.runtime.state_dir, self.scope.repository_root, self.codex_home)
+                    for path in root.rglob("*")}
+        before = snapshot()
+        with ExitStack() as stack:
+            for target in ("runtime.langfuse.verify_project", "runtime.langfuse.synthetic_probe",
+                           "runtime.langfuse._Connection", "runtime.observability_credentials.load",
+                           "runtime.observability_credentials.check_available"):
+                stack.enter_context(patch(target, side_effect=AssertionError("external access")))
+            for scope in (self.scope, self.scope.repository_root):
+                self.assertEqual(settings.project_status(scope)["collection"], "enabled")
+        self.assertEqual(snapshot(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
