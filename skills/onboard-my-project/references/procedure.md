@@ -13,7 +13,7 @@ Read the [policy index](../../../policies/00-index.md), [Project Scope](../../..
 2. **Sources and inspection.** Resolve the canonical [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit) revision once for this setup or update; resume an interrupted setup at its recorded revision; a trusted versioned copy may serve offline setup with freshness marked unverified. Read the component guidance and linked sources needed for the selected work; keep provenance in authoring records, not routine task loading. Inspect relevant instructions, configuration, commands, paths and baseline checks. A runtime or tool the project itself declares is a project need, reported and checked with the project's own commands. Separate observed facts from assumptions; preserve user changes, data, permissions, model/provider choices and existing protections.
    *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. Record primary-checkout stability and any branch-only/standing-opt-out conflict in the existing setup assessment; apply [adoption and update](../../../clients/delivery.md#adopt-and-update-the-rule), preserving historical choices, active pins and later user edits. *On failure* (source unavailable): block only the work that depends on it.
 3. **Preferences.** Resolve missing [project preferences](#project-preference-questions), one at a time, before preparing changes.
-   *Done when* each question is answered, reused, defaulted (4 and 5 only) or reported pending or inapplicable with its reason.
+   *Done when* each question is answered, reused, defaulted (Graphify and memory only) or reported pending or inapplicable with its reason.
 4. **Plan.** Assess every component in the complete Toolkit catalog for relevance, current adoption or an equivalent, and any useful action; [adapt the nine project documents](#adapt-project-documents) and [author the policy entry point](#author-the-policy-entry-point). Each component ends planned, reused with evidence, inapplicable with its reason, or blocked with its prerequisite and resume condition. An applicable component is omitted only through a recorded user decision linked from its row; a mandatory one never is.
    *Done when* every catalog component has one of those four outcomes and all nine documents map to a path or a reason. A plan-only request ends here.
 5. **Apply.** Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes, then use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations and each selected client's startup membership. Undo restores only content that still matches. Load detailed procedures only for a selected capability. Before enrollment, verify tracked/untracked/ignored status of its exact paths. Prepare tracked enrollment and guidance in the task worktree, then integrate them through the project's authorized delivery path before claiming setup complete in the selected target checkout. If enrollment itself is tracked, defer client membership registration until its integrated postimage is available there. Ignored enrollment may be written earlier under explicit target-only authority when delivery preparation's disjoint-path conditions hold; report that registration separately from pending target guidance. A keep-local publication choice grants no commit/merge permission: retain the worktree and report target setup pending integration, rather than move files into the primary or silently change the enrollment target.
@@ -27,7 +27,7 @@ When using packaged file tools for standalone basic setup, select `project_scope
 
 Use [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish) to assess completion, including startup integration and the local procedures reached through generated project guidance. This does not establish AcceptedScope, task readiness, managed runtime activation, qualification, merge readiness or external authority.
 
-Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup, except questions 4 and 5, which apply their default as described there.
+Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup, except Graphify and memory, which apply their default as described there.
 
 ## Adapt project documents
 
@@ -144,7 +144,26 @@ affected choice as inapplicable or pending, respectively.
    the named target.
    - No. I will merge `[READY]` PRs myself. (default)
    - Yes. Agents merge their PRs once they are `[READY]`.
-3. **Enable Workstreams for `<project_name>`?**
+3. **Automatically clean up task worktrees and their local and remote branches after their PRs merge in `<project_name>`?**
+   Explain that agents first refresh the designated primary branch and complete
+   required maintenance. Only eligible task resources are deleted; unfinished
+   work, active dependencies and uncertain ownership are retained. A Yes grants
+   standing cleanup permission within this repository. Remote deletion can be
+   disabled separately. Partial cleanup stops for a later explicit attempt.
+   - No. Keep task worktrees and branches. (default)
+   - Yes. Automatically clean up eligible task worktrees and branches.
+   Ask regardless of whether agents or the user merge PRs. Reuse explicit scoped
+   decisions and preserve refusals. An unanswered question leaves permission
+   pending and cleanup disabled; it does not authorize writing a new choice over
+   an existing one. Record the submitted answer, scope and provenance in the setup
+   record. Apply Yes/No with `workflow.py features enable|disable cleanup --cwd
+   <task-checkout>` under [feature settings](../../../clients/features.md), then
+   verify readback and integrate tracked settings through normal delivery.
+   `delete_remote_branch` defaults to `true`; use `features set cleanup
+   delete_remote_branch false` for an explicitly requested local-only choice.
+   Follow [post-merge cleanup](../../../clients/delivery.md#post-merge-cleanup)
+   for runtime behavior; a feature status of on is not itself deletion authority.
+4. **Enable Workstreams for `<project_name>`?**
    Explain that Enabled automatically uses suitable native child work; small
    tasks can stay with the coordinator. Show one choice:
    - Disabled. (default)
@@ -153,7 +172,7 @@ affected choice as inapplicable or pending, respectively.
    through the shared [Workstreams project preference](../../workstreams/references/procedure.md)
    during this setup. Verify readback before reporting it enabled or disabled.
    Ordinary coordination needs no runtime activation or qualification campaign.
-4. **Set up Graphify for `<project_name>`?**
+5. **Set up Graphify for `<project_name>`?**
    Explain that a local code map lets agents answer "what depends on this?"
    without reading many files. Setup adds `.graphifyignore` (secrets, `.env*`,
    caches, tool state) and a Git ignore for `graphify-out/`, then builds a
@@ -167,7 +186,7 @@ affected choice as inapplicable or pending, respectively.
    and uncommitted task-worktree edits. Skip the question when the project has no code.
    - Yes, set it up now. (default, recommended)
    - Not now.
-5. **Connect `<project_name>` to a long-term memory vault?**
+6. **Connect `<project_name>` to a long-term memory vault?**
    Explain that lasting facts stay outside the always-loaded instructions so
    those stay short. With an existing vault, add a pointer to the shared and
    client instructions; agents read it when relevant, write only when asked, and
@@ -177,7 +196,7 @@ affected choice as inapplicable or pending, respectively.
    - Yes, connect or set it up now. (default, recommended)
    - Not now.
 
-Apply questions 4 and 5 from the Toolkit revision resolved for this setup. Yes
+Apply the Graphify and memory questions from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable
 pointer). If a question is unanswered, apply its default and report it as
 "default applied, not answered"; the reviewed plan names any location outside the

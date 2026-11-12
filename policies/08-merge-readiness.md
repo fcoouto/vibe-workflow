@@ -54,3 +54,6 @@ after confirming the merge, and when synchronizing merges made elsewhere. Run it
 as part of the operation without another user request. A successful remote merge
 does not establish successful local synchronization or graph refresh; report
 pending maintenance separately and do not claim the overall operation complete.
+
+After synchronization and required maintenance, follow [post-merge cleanup](../clients/delivery.md#post-merge-cleanup)
+when confirming the coordinator's task PR merged, including a manually merged PR observed later.
