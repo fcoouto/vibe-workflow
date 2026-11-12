@@ -1,6 +1,7 @@
 """Checkout connection consent and Project collection choice, separate from task evidence and collection."""
 
 from contextlib import ExitStack, contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,14 @@ FIELDS = {"version", "revision", "binding", "destination", "langfuse_project_id"
 PROJECT_FIELDS = {"version", "revision", "binding", "repository_ids", "desired_collection"}
 MAX_REPOSITORIES = 64
 IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]{1,128}")
+# Upload state for one task and destination: `<state_dir>/observability/exports/<name>.json`.
+MAX_EXPORT = 64 * 1024
+EXPORT_FIELDS = {"version", "revision", "binding", "task_ref", "destination_key", "export_state", "last_result"}
+EXPORT_RESULTS = frozenset({"not_exportable", "totals_unknown", "usage_inconsistent", "uncertain_pending",
+    "stale_reconciliation", "negative_delta", "nothing_to_send", "accepted", "rejected", "uncertain",
+    "participants_unresolved", "credentials_unavailable", "hook_failed"})
+DESTINATION_KEY = re.compile(r"[0-9a-f]{32}")
+TASK_REF = ("client", "session_id", "task_id")
 
 
 class SettingsError(startup.StartupError):
@@ -78,12 +87,30 @@ def _project_id(scope):
     return value
 
 
-def _binding(scope, project=False):
+def _binding(scope, project=False, export=False):
     # A Project record is shared by the Project's checkouts, so it binds no checkout identity.
     authority = _authority(scope)
+    if export:
+        # Upload state outlives qualification changes, so it binds the checkout and folder, not consent.
+        return dict(scope_id=authority["scope_id"], project_id=_project_id(scope),
+                    authority_directory=authority["authority_directory"])
     if not project:
         return authority
     return dict(project_id=_project_id(scope), authority_directory=authority["authority_directory"])
+
+
+def destination_key(destination, langfuse_project_id):
+    """First 32 hex of SHA-256 over the destination and Langfuse project; names no credential."""
+    return hashlib.sha256((destination + "\n" + langfuse_project_id).encode()).hexdigest()[:32]
+
+
+def export_name(scope_id, task_ref, key):
+    if (not isinstance(task_ref, dict) or set(task_ref) != set(TASK_REF)
+            or not all(type(task_ref[name]) is str and task_ref[name] for name in TASK_REF)
+            or type(key) is not str or not DESTINATION_KEY.fullmatch(key)):
+        raise SettingsError("invalid_observability_request")
+    raw = json.dumps([scope_id, *(task_ref[name] for name in TASK_REF), key], separators=(",", ":"))
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _integer(value):
@@ -125,11 +152,12 @@ def _project_request(action, request):
 
 
 class _Store:
-    def __init__(self, scope, binding, root, directory, lock, record=None):
+    def __init__(self, scope, binding, root, directory, lock, record=None, export=None, parent=None):
         self.scope, self.binding, self.root, self.directory = scope, binding, root, directory
-        self.lock = lock
-        self.project = record is not None
+        self.lock, self.export, self.parent = lock, export, parent
+        self.project = record is not None and export is None
         self.name = (binding["scope_id"] if record is None else record) + ".json"
+        self.limit = MAX_EXPORT if export is not None else MAX_CONFIG
         self.snapshot = None
 
     def _target(self):
@@ -148,11 +176,11 @@ class _Store:
         try:
             before = os.fstat(descriptor)
             _private(before)
-            if before.st_size > MAX_CONFIG:
+            if before.st_size > self.limit:
                 raise SettingsError("invalid_observability_configuration")
             raw = bytearray()
-            while len(raw) <= MAX_CONFIG:
-                chunk = os.read(descriptor, MAX_CONFIG + 1 - len(raw))
+            while len(raw) <= self.limit:
+                chunk = os.read(descriptor, self.limit + 1 - len(raw))
                 if not chunk:
                     break
                 raw.extend(chunk)
@@ -163,7 +191,20 @@ class _Store:
         finally:
             os.close(descriptor)
         try:
-            record = startup.json_object(bytes(raw), limit=MAX_CONFIG)
+            record = startup.json_object(bytes(raw), limit=self.limit)
+            if self.export is not None:
+                result = record.get("last_result")
+                if (set(record) != EXPORT_FIELDS or type(record["version"]) is not int or record["version"] != 1
+                        or not _integer(record["revision"]) or record["revision"] < 1
+                        or record["export_state"] is not None and type(record["export_state"]) is not dict
+                        or result is not None and (type(result) is not dict or set(result) != {"at", "code"}
+                            or not _integer(result["at"]) or result["code"] not in EXPORT_RESULTS)):
+                    raise SettingsError("invalid_observability_configuration")
+                if not persisted_binding.record_matches(record["binding"], self.binding):
+                    raise SettingsError("observability_scope_changed")
+                if record["task_ref"] != self.export["task_ref"] or record["destination_key"] != self.export["destination_key"]:
+                    raise SettingsError("observability_export_mismatch")
+                return record
             if self.project:
                 if (set(record) != PROJECT_FIELDS or type(record["version"]) is not int or record["version"] != 1
                         or not _integer(record["revision"]) or record["revision"] < 1
@@ -204,20 +245,26 @@ class _Store:
             raise SettingsError("invalid_observability_configuration") from None
 
     def check(self):
-        if _binding(self.scope, self.project) != self.binding or _identity(os.fstat(self.root)) != self.binding["authority_directory"]:
+        if _binding(self.scope, self.project, self.export is not None) != self.binding or _identity(os.fstat(self.root)) != self.binding["authority_directory"]:
             raise SettingsError("observability_authority_changed")
         _private(os.fstat(self.root), directory=True)
-        try:
-            named = os.stat("observability", dir_fd=self.root, follow_symlinks=False)
-        except FileNotFoundError:
-            if self.directory is None:
+        chain = [(self.root, "observability", self.directory)]
+        if self.export is not None:
+            chain = [(self.root, "observability", self.parent), (self.parent, "exports", self.directory)]
+        for container, part, opened in chain:
+            if container is None:
                 return
-            raise SettingsError("observability_directory_changed") from None
-        if self.directory is None:
-            raise SettingsError("observability_directory_changed")
-        _private(named, directory=True)
-        if _identity(named) != _identity(os.fstat(self.directory)):
-            raise SettingsError("observability_directory_changed")
+            try:
+                named = os.stat(part, dir_fd=container, follow_symlinks=False)
+            except FileNotFoundError:
+                if opened is None:
+                    return
+                raise SettingsError("observability_directory_changed") from None
+            if opened is None:
+                raise SettingsError("observability_directory_changed")
+            _private(named, directory=True)
+            if _identity(named) != _identity(os.fstat(opened)):
+                raise SettingsError("observability_directory_changed")
         if self.lock is not None:
             locked = os.fstat(self.lock)
             _private(locked)
@@ -231,7 +278,7 @@ class _Store:
         if record["revision"] > MAX_REVISION:
             raise SettingsError("observability_revision_exhausted")
         raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
-        if len(raw) > MAX_CONFIG:
+        if len(raw) > self.limit:
             raise SettingsError("invalid_observability_configuration")
         temporary = "." + self.name + "." + uuid.uuid4().hex + ".tmp"
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -274,9 +321,11 @@ class _Store:
 
 
 @contextmanager
-def _guard(scope, *, write=False, create=False, recovery=False, project=None):
-    """`project`, when a dict, selects the shared Project record and receives its `id`."""
-    root = directory = lock = record = None
+def _guard(scope, *, write=False, create=False, recovery=False, project=None, export=None):
+    """`project`, when a dict, selects the shared Project record and receives its `id`.
+
+    `export`, when `{task_ref, destination_key}`, selects that task's upload state in `exports/`."""
+    root = parent = directory = lock = record = None
     guards = ExitStack()
     try:
         if recovery:
@@ -286,10 +335,14 @@ def _guard(scope, *, write=False, create=False, recovery=False, project=None):
         if project is not None:
             project["id"] = _project_id(scope)
             record = "project-" + project["id"]
+        if export is not None:
+            scope_id = scope.scope_id if type(scope) is local_ownership.LocalOwnership else state._scope_id(scope)
+            record = export_name(scope_id, export["task_ref"], export["destination_key"])
         if recovery:
-            if local_ownership.settings_absent(scope, 'observability', record):
+            named = record if export is None else "exports/" + record
+            if local_ownership.settings_absent(scope, 'observability', named):
                 yield None
-                if not local_ownership.settings_absent(scope, 'observability', record):
+                if not local_ownership.settings_absent(scope, 'observability', named):
                     raise SettingsError('observability_configuration_changed')
                 return
             if type(original) is startup.AcceptedScope and (state._physical_identity(state._accepted_identity(original.accepted_identity))
@@ -297,19 +350,25 @@ def _guard(scope, *, write=False, create=False, recovery=False, project=None):
                     or original.runtime != scope.runtime):
                 raise SettingsError('observability_scope_changed')
             if write: guards.enter_context(changes._authority_guards([scope.state_dir]))
-        binding = _binding(scope, record is not None)
+        binding = _binding(scope, record is not None, export is not None)
         root = onboarding._open_path(scope.runtime.state_dir, os.O_RDONLY | os.O_DIRECTORY)
-        if create:
+        for part in ("observability", "exports") if export is not None else ("observability",):
+            container = root if part == "observability" else parent
+            if container is None:
+                break
+            if create:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=container)
+                    os.fsync(container)
+                except FileExistsError:
+                    pass
             try:
-                os.mkdir("observability", mode=0o700, dir_fd=root)
-                os.fsync(root)
-            except FileExistsError:
-                pass
-        try:
-            directory = os.open("observability", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
-            _private(os.fstat(directory), directory=True)
-        except FileNotFoundError:
-            pass
+                directory = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=container)
+                _private(os.fstat(directory), directory=True)
+            except FileNotFoundError:
+                directory = None
+            if export is not None and part == "observability":
+                parent, directory = directory, None
         if write and directory is not None:
             import fcntl
             name = (binding["scope_id"] if record is None else record) + ".lock"
@@ -321,14 +380,14 @@ def _guard(scope, *, write=False, create=False, recovery=False, project=None):
                 raise SettingsError("observability_operation_busy") from None
             if _signature(os.fstat(lock)) != _signature(os.stat(name, dir_fd=directory, follow_symlinks=False)):
                 raise SettingsError("observability_lock_changed")
-        owner = _Store(scope, binding, root, directory, lock, record)
+        owner = _Store(scope, binding, root, directory, lock, record, export, parent)
         yield owner
     except (SettingsError, langfuse.LangfuseError, credentials.CredentialError):
         raise
     except (OSError, startup.StartupError, ImportError, TypeError, ValueError, KeyError, RecursionError):
         raise SettingsError("observability_storage_unavailable") from None
     finally:
-        for descriptor in (lock, directory, root):
+        for descriptor in (lock, directory, parent, root):
             if descriptor is not None:
                 os.close(descriptor)
         guards.close()
@@ -517,3 +576,29 @@ def configure_project(scope, request):
 def disable_project(scope, request):
     """Turn the Project collection choice off and keep the record; works through local-ownership recovery."""
     return _project_operate(scope, "disable", request)
+
+
+def export_destination(scope):
+    """Return this checkout's enabled connection only when its own state folder's Project record selects collection
+    for its repository; otherwise None. Reads stop at the first unmet condition and never touch credentials."""
+    if type(scope) is not startup.AcceptedScope or scope.runtime is None:
+        return None
+    project = {}
+    with _guard(scope, project=project) as owner:
+        record = owner.load()
+        owner.check()
+    if record is None or not record["desired_collection"] or scope.repository_id not in record["repository_ids"]:
+        return None
+    with _guard(scope) as owner:
+        checkout = owner.load()
+        owner.check()
+    if checkout is None or not checkout["desired_opt_in"]:
+        return None
+    return dict(destination=checkout["destination"], langfuse_project_id=checkout["langfuse_project_id"],
+                credential_source=checkout.get("credential_source", "environment"))
+
+
+def export_store(scope, task_ref, key, *, write=False, create=False, recovery=False):
+    """Locked private upload-state file for one task and destination; `load`, `check` and `save` as for settings."""
+    return _guard(scope, write=write, create=create, recovery=recovery,
+                  export=dict(task_ref=task_ref, destination_key=key))
