@@ -1585,14 +1585,14 @@ function realStores(admit: boolean) {
   const ledger = join(dir, "usage", "organizations.sqlite3")
   mkdirSync(dirname(settings), { recursive: true, mode: 0o700 })
   const table = join(dirname(settings), "strategy-table.json")
-  writeFileSync(table, JSON.stringify({ schema: 1, version: "t1", rows: { "worker|code|medium|medium": [
+  writeFileSync(table, JSON.stringify({ schema: 2, version: "t1", rows: { "implementation|medium|medium": [
     { strategy_id: "s-sub", model: ADMITTED.model, effort: ADMITTED.effort, harness: ADMITTED.harness, evidence_refs: ["g1"] }] } }))
   chmodSync(table, 0o600)
   if (admit) {
     const request = {
-      v: 1, op: "prepare", assignment: { attempt_id: "real-a1", task: "task-real", role: "implementer", scope: "scope1" },
-      job: { id: "job-1", role: "worker", scope_ref: "scope1", objective: "o", context: "c", profile: {
-        task_family: "code", complexity_band: "medium", risk_band: "medium", review_policy: "independent",
+      v: 1, op: "prepare", assignment: { attempt_id: "real-a1", task: "task-real", role: "software-engineer", scope: "scope1" },
+      job: { id: "job-1", role: "software-engineer", scope_ref: "scope1", objective: "o", context: "c", profile: {
+        complexity_band: "medium", risk_band: "medium", review_policy: "independent",
         context_tokens: 100, tools: ["edit"], uncertainty: "low" } },
       observations: { now: Math.floor(Date.now() / 1000), routes: [{ route: "sub", strategy_id: "s-sub", ...ADMITTED,
         account: "anthropic:acct", billing_class: "included_subscription", pool: "sub", demand: { "5h": 10 },
@@ -1638,8 +1638,8 @@ test("the real child: prepare, health, dispatch, attach with the token, then che
     await assert.rejects(t.hooks["session.model.request"](modelRequest(session)), refused("attach_required"))
     // A token-less check and a wrong token are refused by the command itself.
     const raw = (extra: Record<string, unknown>) => stores.command("check", { attempt_id: "real-a1", session_id: session, request: REAL_REQUEST, ...extra })
-    assert.deepEqual(raw({}), { v: 1, state: "blocked", reason: "authority_required" })
-    assert.deepEqual(raw({ authority: "x".repeat(43) }), { v: 1, state: "blocked", reason: "authority_invalid" })
+    assert.deepEqual(raw({}), { v: 1, state: "blocked", reason: "authority_required", settings_warnings: [] })
+    assert.deepEqual(raw({ authority: "x".repeat(43) }), { v: 1, state: "blocked", reason: "authority_invalid", settings_warnings: [] })
     assert.equal(raw({ authority }).authority, "verified")
     const input = { session_id: session, attempt_id: "real-a1", authority, funding_pool: "sub", model: "claude-agent/haiku#low" }
     for (const bad of [{ authority: "x".repeat(43) }, { authority: authority.slice(0, -1) + (authority.endsWith("A") ? "B" : "A") },

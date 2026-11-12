@@ -17,7 +17,7 @@ import tomllib
 from types import SimpleNamespace
 
 from runtime import package_manifest
-from runtime import onboarding as d3, persisted_binding, startup
+from runtime import onboarding as d3, persisted_binding, startup, task_profile
 from runtime.codex_layout import installation_versions, system_layer_path as _system_layer_path
 
 
@@ -1219,10 +1219,10 @@ def _managed_source(scope,task_ref,attempt_ref,case_id):
             and task.get('qualification_attempt')==startup._canonical_plain(attempt_ref),'Original managed task or qualification purpose changed')
         record=next((row for row in delegation._ledger(scope,db,assignment_id=task_ref['attempt_id'])
             if row['id']==task_ref['attempt_id']),None)
-        d3._require(record is not None and record['data']['role'] in ('worker','review')
+        d3._require(record is not None and task_profile.native(record['data']['role'])
             and all(record['owner'][key]==task[key] for key in ('client','session_id','task_id')),
             'Original native assignment belongs to another task')
-        operation='native-review' if record['data']['role']=='review' else 'native-worker'
+        operation='native-review' if task_profile.reviews(record['data']['role']) else 'native-worker'
         admission=require_capability(scope,OPERATION_CAPABILITIES[operation],task=task,operation=operation,attempt_ref=attempt_ref)
         d3._require(admission.mode=='qualification' and case_id in admission.capability_keys,'Original native capability is not admitted')
         reference=record['body'].get('qualification_before')
@@ -1237,7 +1237,7 @@ def _managed_source(scope,task_ref,attempt_ref,case_id):
             and receipt['parent_session_id']==record['data']['binding']['parent_session_id']==task['session_id'],
             'Native selector differs from the original assignment observation')
         if stream=='child':
-            d3._require(record['data']['role']=='worker' and receipt['worker_id']!=task['session_id']
+            d3._require(task_profile.native_worker(record['data']['role']) and receipt['worker_id']!=task['session_id']
                 and receipt['worker_turn_id'] is not None and task_ref['turn_id']==receipt['worker_turn_id'],
                 'Child selector differs from the observed worker turn')
         else:

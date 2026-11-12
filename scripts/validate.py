@@ -20,12 +20,12 @@ MAX_PYTHON_LINES = 1000
 SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
     "runtime/adapters/codex.py": 1579,
-    "runtime/changes.py": 6074,
+    "runtime/changes.py": 6073,
     "runtime/delegation.py": 3369,
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1506,
+    "runtime/routing.py": 1486,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
@@ -149,6 +149,10 @@ def validate(root=ROOT):
         if not instruction_name(name):
             raise ValueError(f"Invalid instruction source name: {name}")
         source_entry(source_path(root, name).read_bytes(), name)
+    from runtime import task_profile
+    drift = task_profile.brief_drift(root)  # the worker brief's generated Task Profile section
+    if drift:
+        raise ValueError("; ".join(drift))
     validate_codex_hooks(root, manifest)
     validate_startup_hook(root, claude, "claude-code", "CLAUDE_PLUGIN_ROOT")
     receiver = read_json(local_file(root, "./assets/habblaud/receiver.json"))

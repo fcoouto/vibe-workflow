@@ -31,9 +31,9 @@ def collector(result=None, error=None):
     """Install a stub collector module; it records each call and returns `result` (or raises `error`)."""
     calls = []
 
-    def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False):
+    def collect(project, assignment, *, settings_path, ledger_path, source=None, refresh_windows=False, **request):
         calls.append(dict(project=project, assignment=assignment, source=source, settings_path=settings_path,
-                          ledger_path=ledger_path, refresh_windows=refresh_windows))
+                          ledger_path=ledger_path, refresh_windows=refresh_windows, **request))
         if error is not None:
             raise error
         return result
@@ -45,6 +45,11 @@ def collector(result=None, error=None):
 
 def without(request, key):
     return {name: value for name, value in request.items() if name != key}
+
+
+def collected(request, harnesses=('h',)):
+    """A collector-mode body: no observations, and the launching host's harnesses (F4.4)."""
+    return dict(without(request, 'observations'), constraints=dict(allowed_harnesses=list(harnesses)))
 
 
 class ManagedBase(Base):
@@ -67,7 +72,7 @@ class ProjectPinTests(gate_tests.GateBase):
         self.unpinned()
         views = self.workflow.views
         response = self.call(prepare('p1', workflow=gate_tests.locator()))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='project_required'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='project_required', missing_fields=[]))
         self.assertEqual(self.workflow.views, views)
         self.assertFalse(self.ledger.exists())
 
@@ -96,8 +101,9 @@ class ObservationTests(ManagedBase):
 
     def test_without_a_collector_a_managed_prepare_is_observations_unavailable(self):
         with mock.patch.dict(sys.modules, {COLLECTOR: None}):
-            response = self.call(without(prepare('m2'), 'observations'))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable'))
+            response = self.call(collected(prepare('m2')))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable',
+                                        missing_fields=[]))
         self.assertFalse(self.ledger.exists())
 
     def test_a_failing_or_malformed_collector_is_observations_unavailable(self):
@@ -105,21 +111,23 @@ class ObservationTests(ManagedBase):
                               (dict(observations=observations()), None), (dict(observations=observations(), seen=[]),
                                                                           None)):
             with self.subTest(result=result, error=error), collector(result, error):
-                response = self.call(without(prepare('m3'), 'observations'))
-                self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable'))
+                response = self.call(collected(prepare('m3')))
+                self.assertEqual(response, dict(v=1, state='blocked', reason='observations_unavailable',
+                                                missing_fields=[]))
 
     def test_the_collector_is_called_with_the_pinned_project_and_seen_is_echoed_when_admitted(self):
         with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:
-            response = self.call(without(prepare('m4'), 'observations'))
+            response = self.call(collected(prepare('m4')))
         self.assertEqual(response['state'], 'admitted', response)
         self.assertEqual(response['seen'], SEEN)
         self.assertEqual([call['project'] for call in calls], [str(self.project)])
         self.assertEqual(calls[0]['assignment']['attempt_id'], 'm4')
         self.assertIsNone(calls[0]['source'])
+        self.assertEqual(calls[0]['harnesses'], ['h'])  # the host's harnesses reach the collector
 
     def test_the_collector_reads_the_services_own_stores(self):
         with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:
-            self.call(without(prepare('s1'), 'observations'))
+            self.call(collected(prepare('s1')))
         self.assertEqual((calls[0]['settings_path'], calls[0]['ledger_path']),
                          (self.service.settings_path, self.service.ledger_path))
 
@@ -130,7 +138,7 @@ class ObservationTests(ManagedBase):
         with collector(dict(observations=observations(), seen=dict(SEEN))) as calls:
             code = command.main(['prepare', '--settings', str(self.settings), '--ledger', str(self.ledger),
                                  '--project', str(self.project)],
-                                stdin=io.BytesIO(json.dumps(without(prepare('s2'), 'observations')).encode()),
+                                stdin=io.BytesIO(json.dumps(collected(prepare('s2'))).encode()),
                                 stdout=stdout)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(stdout.getvalue())['seen'], SEEN)
@@ -141,14 +149,14 @@ class ObservationTests(ManagedBase):
         spent = observations()
         spent['pools']['sub']['windows'][0]['used'] = 1000
         with collector(dict(observations=spent, seen=dict(SEEN))):
-            response = self.call(without(prepare('m5'), 'observations'))
+            response = self.call(collected(prepare('m5')))
         self.assertEqual(response['state'], 'pending', response)
         self.assertEqual(response['seen'], SEEN)
 
     def test_seen_is_opaque(self):
         opaque = {'openrouter_revision': None, 'later_revision': 3}
         with collector(dict(observations=observations(), seen=opaque)):
-            response = self.call(without(prepare('m6'), 'observations'))
+            response = self.call(collected(prepare('m6')))
         self.assertEqual(response['seen'], opaque)
 
     def test_an_unmanaged_project_keeps_caller_observations_and_gets_no_seen(self):
@@ -197,11 +205,12 @@ def managed_self_check(workdir):
         problems.append('import_path')
     return problems
 ''')
+    # `paths` checks receive the service's settings path, never the sandbox workdir (F4.3).
+    (folder / 'gate_paths.py').write_text("import os\ndef check(settings_path):\n"
+                                          "    ok = os.path.isabs(settings_path) and settings_path.endswith('settings.json')\n"
+                                          "    return [] if ok else ['settings_path_missing']\n")
+    (folder / 'gate_paths_fail.py').write_text("def check(settings_path):\n    return ['no_qualified_path']\n")
     (folder / 'data').mkdir(exist_ok=True)
-    (folder / 'data' / 'routes.json').write_text(json.dumps(dict(version=1, routes=[dict(id='r', status='qualified')])))
-    (folder / 'data' / 'empty.json').write_text(json.dumps(dict(version=1, routes=[dict(id='r', status='unverified')])))
-    (folder / 'data' / 'bare.json').write_text(json.dumps([dict(id='r', status='qualified')]))
-    (folder / 'data' / 'unversioned.json').write_text(json.dumps(dict(routes=[dict(id='r', status='qualified')])))
     (folder / 'data' / 'policy.md').write_text('# Policy\n\n## Managed projects\n\nText.\n')
     (folder / 'data' / 'other.md').write_text('# Policy\n\nManaged projects are mentioned, not a heading.\n')
     script = folder / 'scripts'
@@ -234,8 +243,9 @@ class ActivationGateTests(Base):
 
     def test_the_gate_lists_every_phase_w_capability(self):
         self.assertEqual([name for name, _, _ in command.CAPABILITIES],
-                         ['collector_and_launcher', 'route_manifest', 'native_delegation', 'opencode_launcher',
-                          'openrouter_proposals', 'openrouter_workers', 'api_usage', 'instructions'])
+                         ['collector_and_launcher', 'route_manifest', 'subscription_sources', 'native_delegation',
+                          'opencode_launcher', 'openrouter_proposals', 'openrouter_workers', 'api_usage',
+                          'instructions'])
         self.assertEqual(command._package(), state.PACKAGE)
 
     def test_an_in_process_service_refuses_add_and_remove(self):
@@ -276,7 +286,7 @@ class ActivationGateTests(Base):
 
     def test_the_real_gate_refuses_while_capabilities_are_missing(self):
         """The real checks run in children against the real package, whichever phase W slices are merged. One
-        capability is made missing through the gate's own list; `route_manifest` fails until user decision 5."""
+        capability is made missing through the gate's own list; `route_manifest` fails while no path is qualified."""
         spawned = []
         real = subprocess.Popen
 
@@ -290,7 +300,7 @@ class ActivationGateTests(Base):
         self.assertEqual((response['state'], response['reason']), ('blocked', 'managed_path_incomplete'), response)
         self.assertEqual(response['codes']['simulated_missing'], ['self_check_missing'])
         self.assertIn('route_manifest', response['failing'])
-        self.assertEqual(len(spawned), len(capabilities))
+        self.assertEqual(len(spawned), len(capabilities) - 1)  # `subscription_sources` runs in process (F4R-03)
         self.assertEqual(sorted(response['failing']), sorted(response['codes']))
         self.assertEqual(routing_settings.revision(self.service.settings_path), 0)
         for argv, kwargs in spawned:
@@ -304,7 +314,7 @@ class ActivationGateTests(Base):
         link = Path(self.temp.name).resolve() / 'link'
         link.symlink_to(self.project)
         with self.gate(('module', 'module', 'gate_pass:managed_self_check'), ('script', 'script', 'scripts/gate_script.py'),
-                       ('manifest', 'manifest', 'data/routes.json'), ('heading', 'heading', 'data/policy.md'),
+                       ('paths', 'paths', 'gate_paths:check'), ('heading', 'heading', 'data/policy.md'),
                        ('env', 'module', 'gate_env:managed_self_check')):
             response = self.add([str(link)])
         self.assertEqual(response['state'], 'updated', response)
@@ -316,9 +326,8 @@ class ActivationGateTests(Base):
                  (('gone', 'module', 'gate_absent:managed_self_check'), ['self_check_missing']),
                  (('gone', 'script', 'scripts/absent.py'), ['self_check_missing']),
                  (('noisy', 'module', 'gate_noisy:managed_self_check'), ['self_check_invalid']),
-                 (('manifest', 'manifest', 'data/empty.json'), ['no_qualified_route']),
-                 (('manifest', 'manifest', 'data/bare.json'), ['manifest_invalid']),
-                 (('manifest', 'manifest', 'data/unversioned.json'), ['manifest_invalid']),
+                 (('paths', 'paths', 'gate_paths_fail:check'), ['no_qualified_path']),
+                 (('paths', 'paths', 'gate_absent:check'), ['self_check_missing']),
                  (('heading', 'heading', 'data/other.md'), ['heading_missing'])]
         for capability, codes in cases:
             with self.subTest(capability), self.gate(('ok', 'module', 'gate_pass:managed_self_check'), capability):
@@ -408,11 +417,17 @@ class ActivationHostTests(Base):
                                                            change=change)).encode())
         return response, gate.call_count
 
-    def test_the_managed_hosts_are_codex_and_opencode(self):
-        self.assertEqual(command.MANAGED_HOSTS, ('codex', 'opencode'))
+    def test_the_managed_hosts_are_codex_opencode_and_claude_code(self):
+        self.assertEqual(command.MANAGED_HOSTS, ('codex', 'opencode', 'claude-code'))  # F4.6: the native bridge
 
-    def test_a_claude_code_only_project_is_refused_before_the_gate(self):
+    def test_a_claude_code_only_project_passes_this_check_through_the_native_bridge(self):
         response, gate = self.add(['claude-code'])
+        self.assertEqual((response['state'], gate), ('updated', 1), response)  # the activation gate still runs
+        removal, _ = self.add(['claude-code'], projects=[], revision=response['revision'])
+        self.assertEqual(removal['state'], 'updated', removal)  # disable stays available
+
+    def test_a_project_of_an_unmanaged_client_only_is_refused_before_the_gate(self):
+        response, gate = self.add(['another-client'])
         self.assertEqual(response, dict(v=1, state='blocked', reason='advisory_host_unmanaged',
                                         projects=[str(self.project)]))
         self.assertEqual(gate, 0)
@@ -455,11 +470,11 @@ class ActivationHostTests(Base):
 
         def hosts(checkout):
             seen.append(str(checkout))
-            return ['claude-code']
+            return ['another-client']
         response, _ = self.add(hosts, projects=[str(other), str(self.project)], revision=1)
         self.assertEqual((response['reason'], response['projects']), ('advisory_host_unmanaged', [str(self.project)]))
         self.assertEqual(seen, [str(self.project)])
-        response, _ = self.add(hosts, projects=[], revision=1)  # a Claude Code project can always be removed
+        response, _ = self.add(hosts, projects=[], revision=1)  # a project can always be removed
         self.assertEqual(response['state'], 'updated', response)
 
 
@@ -547,6 +562,123 @@ class ManagedServiceTests(unittest.TestCase):
         self.addCleanup(elsewhere.close)
         with self.assertRaises(routing_gates.ProjectMismatch):
             elsewhere.workflow.view(gate_tests.locator(cwd=str(self.checkout)))
+
+
+def write_table(settings, *strategies):
+    """A private strategy table beside `settings` (where the routing service and the gate read it)."""
+    target = Path(settings).parent / 'strategy-table.json'
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target.write_text(json.dumps(dict(schema=2, version='t1', rows={'implementation|medium|medium': list(strategies)})))
+    target.chmod(0o600)
+
+
+CODEX_STRATEGY = dict(strategy_id='s1', model='invented-model', effort='high', harness='codex-native', provider='openai')
+
+
+class SourceReadinessTests(Base):
+    """F4R-03: a project joins only when each of its managed hosts has at least one usable subscription path with
+    locally verifiable current sources (billing; for the ordinary native bridge also a bound native catalog). It reads
+    the projects' enrolment and local source state in process: no quota read, reader, client process or provider."""
+
+    def setUp(self):
+        super().setUp()
+        from runtime import routing_paths
+        self.project = Path(self.temp.name).resolve() / 'checkout'
+        self.project.mkdir()
+        routing_paths.qualify(self.settings, 'claude-native-subscription', demand={'5h': 5, '7d': 5}, evidence='e',
+                              now=1)
+        routing_paths.qualify(self.settings, 'codex-chatgpt-subscription', demand={'7d': 5}, evidence='e', now=1)
+
+    def ready(self, hosts, runtime=()):
+        from runtime import delegation_routing, native_routing
+        with mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=list(hosts)), \
+                mock.patch.object(native_routing, '_runtime_delegation',
+                                  lambda project, client: 'managed_delegation_required' if client in runtime else None):
+            return native_routing.activation_readiness([str(self.project)], self.settings)
+
+    def doubles(self, billing=True, native=True):
+        from runtime import routing_observations, subscription_billing
+        from runtime.adapters import native_catalog
+        stack = []
+        if billing:
+            stack.append(mock.patch.object(routing_observations.LocalSource, 'billing', lambda source, route, now:
+                                           subscription_billing.double('activation')(route, now)))
+        if native:
+            binding = dict(client_version='v', connection='c', controls='x')
+            for client in ('claude-code', 'codex'):
+                native_catalog.store_snapshot(self.settings, client, dict(binding=binding, models=[
+                    dict(alias='invented-alias', resolved=None, efforts=['high'])]))
+            stack.append(mock.patch.object(native_catalog, 'current_binding', lambda client: binding))
+        return stack
+
+    def test_the_real_sources_refuse_each_managed_host_with_its_reason(self):
+        self.assertEqual(self.ready(['claude-code']), ['claude_code_billing_unverified'])
+        self.assertEqual(self.ready(['codex'], runtime=['codex']), ['codex_billing_unverified'])
+        self.assertEqual(self.ready(['opencode']), ['opencode_no_qualified_path'])
+
+    def test_a_usable_path_per_host_is_enough_and_native_hosts_need_their_catalog(self):
+        patches = self.doubles(native=False)
+        with patches[0]:
+            self.assertEqual(self.ready(['claude-code']), ['claude_code_native_binding_unverified'])
+            self.assertEqual(self.ready(['codex'], runtime=['codex']), [])  # managed Codex: its own path, billing only
+        with self.doubles()[0], self.doubles()[1]:
+            self.assertEqual(self.ready(['claude-code']), [])
+            self.assertEqual(self.ready(['claude-code', 'codex']), [])  # mixed: each host has a usable path
+            self.assertEqual(self.ready(['claude-code', 'opencode']), ['opencode_no_qualified_path'])
+
+    def test_an_unreadable_enrolment_fails_closed(self):
+        from runtime import delegation_routing, native_routing
+        with mock.patch.object(delegation_routing, 'enrolled_hosts', side_effect=OSError('unreadable')):
+            self.assertEqual(native_routing.activation_readiness([str(self.project)], self.settings),
+                             ['enrolment_unavailable'])
+
+
+class PathActivationTests(unittest.TestCase):
+    """F4.3: the activation data check reads the packaged rules and the qualification and table files beside the
+    service's settings path; a `test_only` path never counts."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.settings = Path(temp.name).resolve() / 'routing' / 'settings.json'
+        self.settings.parent.mkdir(mode=0o700)
+
+    def qualify(self, path='codex-chatgpt-subscription', **options):
+        from runtime import routing_paths
+        options.setdefault('demand', {'7d': 5})
+        return routing_paths.qualify(self.settings, path, evidence='live-1', now=1, **options)
+
+    def test_activation_reports_no_qualified_path(self):
+        from runtime import routing_paths
+        write_table(self.settings, CODEX_STRATEGY)
+        self.assertEqual(routing_paths.gate(self.settings), ['no_qualified_path'])
+        self.qualify('test-only-subscription', demand={'5h': 1}, allow_test_only=True)  # test inputs only
+        self.assertEqual(routing_paths.gate(self.settings), ['no_qualified_path'])
+
+    def test_activation_reports_no_generated_route(self):
+        from runtime import routing_paths
+        self.qualify()
+        self.assertEqual(routing_paths.gate(self.settings), ['no_generated_route'])  # no table at all
+        write_table(self.settings, dict(CODEX_STRATEGY, harness='opencode provider openai'),
+                    dict(CODEX_STRATEGY, strategy_id='s2', provider='anthropic'))
+        self.assertEqual(routing_paths.gate(self.settings), ['no_generated_route'])
+
+    def test_activation_reports_an_invalid_rules_file(self):
+        from runtime import routing_paths
+        self.qualify()
+        write_table(self.settings, CODEX_STRATEGY)
+        with mock.patch.object(routing_paths, 'load_rules', side_effect=ValueError('route_manifest_invalid')):
+            self.assertEqual(routing_paths.gate(self.settings), ['route_manifest_invalid'])
+        target = self.settings.parent / routing_paths.QUALIFICATIONS_FILE
+        target.write_text('{broken')
+        self.assertEqual(routing_paths.gate(self.settings), ['path_qualifications_invalid'])
+
+    def test_activation_passes_with_one_generated_route(self):
+        from runtime import routing_paths
+        self.qualify()
+        write_table(self.settings, CODEX_STRATEGY)
+        self.assertEqual(routing_paths.gate(self.settings), [])
+        self.assertIn(('route_manifest', 'paths', 'runtime.routing_paths:gate'), command.CAPABILITIES)
 
 
 if __name__ == '__main__':

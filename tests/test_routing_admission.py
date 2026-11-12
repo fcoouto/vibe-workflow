@@ -58,8 +58,9 @@ def settings(**updates):
     return dict(routing_settings.resolve(base), revision=3)
 
 
-def assignment(attempt, role='implementer', band='medium', **extra):
-    return dict(attempt_id=attempt, task=attempt, role=role, complexity_band=band, scope=SCOPE, **extra)
+def assignment(attempt, role='software-engineer', band='medium', work_kind='implementation', **extra):
+    return dict(attempt_id=attempt, task=attempt, role=role, work_kind=work_kind, complexity_band=band, scope=SCOPE,
+                **extra)
 
 
 def observations(routes, pools, **extra):
@@ -199,13 +200,13 @@ class ModeAndFallbackTests(Base):
 
     def test_off_mode_admits_first_feasible_worker_choice(self):
         missing = dict(self.CHOICE, model='absent')
-        cfg = settings(smart_routing=False, worker_choices=dict(implementer=[missing, self.CHOICE]))
+        cfg = settings(smart_routing=False, worker_choices={'software-engineer': [missing, self.CHOICE]})
         result = self.admit('a', ['s-api'], [sub_route('sub')], dict(sub=sub_pool()), cfg=cfg)
         self.assertEqual((result['route'], result['mode'], result['class']), ('sub', 'worker_choice', 'subscription'))
 
     def test_off_mode_without_a_feasible_choice_is_pending(self):
         for choices in ([], [dict(self.CHOICE, model='absent')]):
-            cfg = settings(smart_routing=False, worker_choices=dict(implementer=choices))
+            cfg = settings(smart_routing=False, worker_choices={'software-engineer': choices})
             result = self.admit('a', ['s-sub'], [sub_route('sub')], dict(sub=sub_pool()), cfg=cfg)
             self.assertEqual((result['status'], result['reason_code']), ('pending', 'worker_choice_unavailable'))
         self.assertEqual(self.ledger.snapshot()['admissions'], [])
@@ -213,12 +214,12 @@ class ModeAndFallbackTests(Base):
     def test_off_mode_api_choice_needs_api_usage(self):
         entry = dict(self.CHOICE, harness='api', funding='api')
         for enabled, expected in ((True, 'admitted'), (False, 'pending')):
-            cfg = settings(smart_routing=False, api_usage_enabled=enabled, worker_choices=dict(implementer=[entry]))
+            cfg = settings(smart_routing=False, api_usage_enabled=enabled, worker_choices={'software-engineer': [entry]})
             result = self.admit('a%s' % enabled, [], [api_route('api')], dict(api=api_pool()), cfg=cfg)
             self.assertEqual(result['status'], expected)
 
     def test_no_recommendation_falls_back_instead_of_blocking(self):
-        cfg = settings(worker_choices=dict(implementer=[self.CHOICE]))
+        cfg = settings(worker_choices={'software-engineer': [self.CHOICE]})
         result = self.admit('a', [], [sub_route('sub')], dict(sub=sub_pool()), cfg=cfg)
         self.assertEqual((result['status'], result['mode'], result['route']), ('admitted', 'worker_choice', 'sub'))
         none = self.admit('b', [], [sub_route('sub')], dict(sub=sub_pool()))
@@ -235,7 +236,7 @@ class ModeAndFallbackTests(Base):
         self.assertEqual(bad['reason_code'], 'explicit_choice_unavailable')
 
     def test_empty_ranking_still_obeys_headroom(self):
-        cfg = settings(worker_choices=dict(implementer=[self.CHOICE]))
+        cfg = settings(worker_choices={'software-engineer': [self.CHOICE]})
         result = self.admit('a', [], [sub_route('sub', demand={'5h': 2000})], dict(sub=sub_pool()), cfg=cfg)
         self.assertEqual(result['reason_code'], 'worker_choice_unavailable')
 
@@ -254,7 +255,7 @@ class AllocationTests(Base):
         records = self.ledger.snapshot()['admissions']
         self.assertEqual(len(records), 20)
         self.assertAlmostEqual(records[0]['shares']['api'], 0.45)
-        self.assertEqual(records[0]['bucket'], ['implementer', 'medium'])
+        self.assertEqual(records[0]['bucket'], ['implementation', 'medium'])
 
     def test_new_settings_revision_starts_a_new_epoch(self):
         routes = [sub_route('sub', demand={'5h': 0}), api_route('api', demand={'credit': 1})]
@@ -400,6 +401,9 @@ class ConcurrencyTests(Base):
 class InputTests(Base):
     def test_invalid_assignment_is_pending_not_an_exception(self):
         result = routing.admit({}, ranking(), settings(), observations([], {}), ledger=self.ledger)
+        self.assertEqual(result['reason_code'], 'invalid_assignment')
+        without_kind = {k: v for k, v in assignment('a1').items() if k != 'work_kind'}
+        result = routing.admit(without_kind, ranking(), settings(), observations([], {}), ledger=self.ledger)
         self.assertEqual(result['reason_code'], 'invalid_assignment')
 
 

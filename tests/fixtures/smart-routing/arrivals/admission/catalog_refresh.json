@@ -31,8 +31,7 @@
     "checked_at": "2026-11-01T00:00:00Z",
     "rows": [
      {
-      "role": "worker",
-      "task_family": "implementation",
+      "work_kind": "implementation",
       "complexity_band": "medium",
       "risk_band": "medium",
       "strategies": [
@@ -223,6 +222,7 @@
  "catalog": [
   {
    "model": "alpha-large",
+   "harnesses": ["native", "api"],
    "supported_efforts": [
     "low",
     "high",
@@ -232,6 +232,7 @@
   },
   {
    "model": "alpha-small",
+   "harnesses": ["native"],
    "supported_efforts": [
     "low",
     "high"
@@ -245,11 +246,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-1",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 1",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -262,11 +262,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-2",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 2",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -279,11 +278,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-3",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 3",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -296,11 +294,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-4",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 4",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -319,6 +316,7 @@
    "catalog": [
     {
      "model": "alpha-large",
+     "harnesses": ["native", "api"],
      "supported_efforts": [
       "low",
       "max"
@@ -327,6 +325,7 @@
     },
     {
      "model": "gamma-new",
+     "harnesses": ["native"],
      "supported_efforts": [
       "low"
      ],
@@ -339,11 +338,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-5",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 5",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -356,11 +354,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-6",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 6",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -373,11 +370,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-7",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 7",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -390,11 +386,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-8",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 8",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -442,11 +437,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-9",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 9",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -459,11 +453,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-10",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 10",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -476,11 +469,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-11",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 11",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",
@@ -493,11 +485,10 @@
    "kind": "arrive",
    "job": {
     "id": "job-12",
-    "role": "worker",
+    "role": "software-engineer",
     "scope_ref": "scope1",
     "objective": "replay job 12",
     "profile": {
-     "task_family": "implementation",
      "complexity_band": "medium",
      "risk_band": "medium",
      "review_policy": "independent",

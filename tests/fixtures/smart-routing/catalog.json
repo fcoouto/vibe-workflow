@@ -1,6 +1,9 @@
 [
  {
   "model": "alpha-large",
+  "harnesses": [
+   "native"
+  ],
   "supported_efforts": [
    "low",
    "high",
@@ -10,6 +13,9 @@
  },
  {
   "model": "alpha-small",
+  "harnesses": [
+   "native"
+  ],
   "supported_efforts": [
    "low",
    "high"
@@ -18,6 +24,9 @@
  },
  {
   "model": "beta-new",
+  "harnesses": [
+   "native"
+  ],
   "supported_efforts": [
    "low"
   ],
@@ -25,12 +34,18 @@
  },
  {
   "model": "free-open",
+  "harnesses": [
+   "native"
+  ],
   "supported_efforts": [
    "low"
   ]
  },
  {
   "model": "free-private",
+  "harnesses": [
+   "native"
+  ],
   "supported_efforts": [
    "low"
   ]

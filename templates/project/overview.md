@@ -12,4 +12,4 @@ Shape for an existing README or equivalent, adapted through [onboarding](../../s
 
 ## Next delivery
 
-[Smallest task advancing the product, observable criterion and external dependencies.]
+[Smallest task advancing the product, proposed or accepted status, observable criterion and external dependencies.]

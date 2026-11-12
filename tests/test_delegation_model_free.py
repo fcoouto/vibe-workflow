@@ -23,8 +23,8 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
         request = self.operation_request(identity)
         with patch.object(evidence, 'capture_candidate', side_effect=AssertionError('invented candidate')):
             with patch.object(self.api, 'guidance_status', side_effect=AssertionError('invented model guidance')):
-                result = self.api._reserve_operation(self.scope, request, role='coordinator')
-                replay = self.api._reserve_operation(self.scope, request, role='coordinator')
+                result = self.api._reserve_operation(self.scope, request, role='orchestrator')
+                replay = self.api._reserve_operation(self.scope, request, role='orchestrator')
         self.assertTrue(result['reservation_admitted'])
         self.assertFalse(replay['reservation_admitted'])
         self.assertNotIn('launch_admitted', result)
@@ -40,7 +40,7 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
     def test_model_free_rows_do_not_consume_or_reset_native_counters(self):
         self.plan()
         request = self.operation_request()
-        result = self.api._reserve_operation(self.scope, request, role='coordinator')
+        result = self.api._reserve_operation(self.scope, request, role='orchestrator')
         report = self.api.delegation_status(self.scope, 'codex', 'parent')
         self.assertEqual(report['budgets']['attempts_consumed'], 0)
         self.assertEqual(report['capacity']['unresolved_managed_workers'], 0)
@@ -57,7 +57,7 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
         from runtime import evidence
         identity = self.identity | dict(session_id='proof-coordinator', task_id='proof-coordinator')
         state.start_task(self.scope, identity | dict(mode='editable', decision_ref='user:accepted'))
-        result = self.api._reserve_operation(self.scope, self.operation_request(identity), role='coordinator')
+        result = self.api._reserve_operation(self.scope, self.operation_request(identity), role='orchestrator')
         with state._database(self.scope) as db:
             record = next(r for r in self.api._ledger(self.scope, db) if r['id'] == result['attempt_id'])
             task = state._task(db, state._scope_id(self.scope), identity['client'], identity['session_id'], identity['task_id'])
@@ -84,7 +84,7 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
     def test_coordinator_retains_actual_plan_context_and_requires_matching_proof(self):
         from runtime import evidence
         self.plan()
-        result = self.api._reserve_operation(self.scope, self.operation_request(), role='coordinator')
+        result = self.api._reserve_operation(self.scope, self.operation_request(), role='orchestrator')
         with state._database(self.scope) as db:
             record = next(r for r in self.api._ledger(self.scope, db) if r['id'] == result['attempt_id'])
             task = state._task(db, state._scope_id(self.scope), 'codex', 'parent', 'task')
@@ -157,11 +157,11 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
         first = self.prepare()
         request = self.operation_request(claims=[self.path_claim()])
         with self.assertRaises(state.StateError):
-            self.api._reserve_operation(self.scope, request, role='coordinator')
+            self.api._reserve_operation(self.scope, request, role='orchestrator')
         other = self.operation_request(claims=[self.path_claim('independent.txt')])
-        reserved = self.api._reserve_operation(self.scope, other, role='coordinator')
+        reserved = self.api._reserve_operation(self.scope, other, role='orchestrator')
         with self.assertRaises(state.StateError):
-            self.api._reserve_operation(self.scope, other | dict(reason='changed payload'), role='coordinator')
+            self.api._reserve_operation(self.scope, other | dict(reason='changed payload'), role='orchestrator')
         self.assertEqual(self.raw_assignment(first['attempt_id'])['status'], 'prepared')
         self.assertEqual(self.raw_assignment(reserved['attempt_id'])['status'], 'prepared')
 
@@ -197,20 +197,20 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
         self.plan()
         with patch.object(self.api, 'MAX_ASSIGNMENTS', 1):
             request = self.operation_request(claims=[self.path_claim(mode='read')])
-            first = self.api._reserve_operation(self.scope, request, role='coordinator')
+            first = self.api._reserve_operation(self.scope, request, role='orchestrator')
             with state._database(self.scope) as db:
                 before = state._task(db, state._scope_id(self.scope), 'codex', 'parent', 'task')
                 original = db.execute('select * from assignments').fetchall()
             other = self.operation_request(dispatch_id='operation-2', claims=[self.path_claim(mode='read')],
                 operation=dict(id='operation-2', kind='coordinator-work'))
             with self.assertRaisesRegex(state.StateError, 'history.*bound'):
-                self.api._reserve_operation(self.scope, other, role='coordinator')
-            replay = self.api._reserve_operation(self.scope, request | dict(expected_revision=before['revision']), role='coordinator')
+                self.api._reserve_operation(self.scope, other, role='orchestrator')
+            replay = self.api._reserve_operation(self.scope, request | dict(expected_revision=before['revision']), role='orchestrator')
             self.assertEqual(replay['attempt_id'], first['attempt_id'])
             self.assertTrue(replay['replayed'])
             self.assertFalse(replay['reservation_admitted'])
             with self.assertRaises(state.StateError):
-                self.api._reserve_operation(self.scope, request | dict(reason='changed'), role='coordinator')
+                self.api._reserve_operation(self.scope, request | dict(reason='changed'), role='orchestrator')
             with state._database(self.scope) as db:
                 self.assertEqual(state._task(db, state._scope_id(self.scope), 'codex', 'parent', 'task'), before)
                 self.assertEqual(db.execute('select * from assignments').fetchall(), original)
@@ -246,7 +246,7 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
 
     def test_check_with_same_name_cannot_satisfy_a_planned_native_dependency(self):
         value = self.plan_value()
-        value['jobs'].append(dict(id='unit', role='worker', claims=[self.path_claim(mode='read')],
+        value['jobs'].append(dict(id='unit', role='software-engineer', claims=[self.path_claim(mode='read')],
             dependencies=[], max_attempts=1))
         value['jobs'][0]['dependencies'] = ['unit']
         self.plan(value)
@@ -262,7 +262,7 @@ class ModelFreeKernelAdmissionTests(AdmissionFixture, unittest.TestCase):
     def test_role_records_reject_invented_fields_and_mismatched_original_bindings(self):
         from copy import deepcopy
         from runtime import evidence
-        reserved = self.api._reserve_operation(self.scope, self.operation_request(), role='coordinator')
+        reserved = self.api._reserve_operation(self.scope, self.operation_request(), role='orchestrator')
         with state._database(self.scope) as db:
             original = next(r for r in self.api._ledger(self.scope, db) if r['id'] == reserved['attempt_id'])
         for mutation in ('native-fact', 'owner', 'schema-type'):
@@ -533,7 +533,7 @@ class Stage3ModelFreeTests(unittest.TestCase):
     def test_matching_coordinator_job_retains_original_attempt_limit_without_native_consumption(self):
         self.check_plan()
         request = self.operation_request(operation=dict(id='scoped-operation', kind='coordinator-work'))
-        plan = self.fixture.coordinator_resource_plan([dict(id='scoped-operation', role='coordinator', claims=request['claims'],
+        plan = self.fixture.coordinator_resource_plan([dict(id='scoped-operation', role='orchestrator', claims=request['claims'],
             dependencies=[], max_attempts=1)])
         delegation.plan_delegation(self.scope, self.request(plan=plan))
         request = self.operation_request(operation=dict(id='scoped-operation', kind='coordinator-work'))
@@ -546,12 +546,32 @@ class Stage3ModelFreeTests(unittest.TestCase):
         self.assertEqual(self.task()['delegation']['attempts_consumed'], 0)
         self.assertEqual(self.task()['delegation']['resource_units_consumed'], 0)
 
+    def test_stored_coordinator_attempts_still_count(self):
+        """F2.3: a stored `coordinator` record counts against the orchestrator job's original attempt limit."""
+        from runtime import task_profile
+        self.check_plan()
+        request = self.operation_request(operation=dict(id='scoped-operation', kind='coordinator-work'))
+        plan = self.fixture.coordinator_resource_plan([dict(id='scoped-operation', role='orchestrator',
+            claims=request['claims'], dependencies=[], max_attempts=1)])
+        delegation.plan_delegation(self.scope, self.request(plan=plan))
+        request = self.operation_request(operation=dict(id='scoped-operation', kind='coordinator-work'))
+        from types import SimpleNamespace
+        before_roster = SimpleNamespace(**dict(vars(task_profile), ORCHESTRATOR='coordinator'))
+        with patch.object(delegation, 'task_profile', before_roster):  # writes the record a pre-roster writer wrote
+            first = self.reserve_coordinator(request)
+        self.assertEqual(self.record(first['attempt_id'])['data']['role'], 'coordinator')
+        self.reconcile_operation(self.coordinator_proof(first['attempt_id']))
+        with self.assertRaisesRegex(state.StateError, 'attempt budget is exhausted'):  # new records write orchestrator
+            self.reserve_coordinator(self.operation_request(dispatch_id='second', operation=request['operation']))
+        with self.assertRaisesRegex(state.StateError, 'Unsupported model-free role'):  # an old name is not new input
+            delegation._reserve_operation(self.scope, self.operation_request(dispatch_id='third'), role='coordinator')
+
     def test_uncertain_verifier_barrier_recovers_without_inventing_ready_or_native_facts(self):
         self.fixture.ready_proof_fixture()
         with patch.object(evidence, 'capture_candidate', side_effect=RuntimeError('fixture verifier crash')):
             with self.assertRaises(RuntimeError):
                 self.fixture.verify()
-        barrier = next(r for r in self.records() if r['data']['role'] == 'coordinator')
+        barrier = next(r for r in self.records() if r['data']['role'] == 'orchestrator')
         proof = self.coordinator_proof(barrier['id'], write_output=False)
         with self.assertRaises(state.StateError):
             self.reconcile_operation(proof | dict(operation_descendants_stopped=False))

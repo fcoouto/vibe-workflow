@@ -102,7 +102,7 @@ class ReconcileUncertainTests(Reconcile):
         self.assert_identity()
         # A closed attempt can never send again: the shim's every check is refused.
         checked = self.call(dict(v=1, op='check', attempt_id='a1', request=facts(**API), authority=self.tokens['a1']))
-        self.assertEqual(checked, dict(v=1, state='blocked', reason='attempt_closed'))
+        self.assertEqual(checked, dict(v=1, settings_warnings=[], state='blocked', reason='attempt_closed'))
 
     def test_receipt_arithmetic_is_exact_at_every_boundary(self):
         for i, cost in enumerate((1, 6 * M - 1, 6 * M, 6 * M + 1, budget.MAX_INTEGER)):
@@ -824,7 +824,10 @@ class ProtocolTests(Reconcile):
                   dict(v=1, op='drop_debit', key='win:sub/5h', marker='dd_' + '0' * 32, event_id='o2'),
                   dict(v=1, op='settle_legacy_call', run_id='s1', phase='count', evidence=CHARGE, event_id='o3'),
                   dict(v=1, op='seed_window', pool='sub', window='5h', used=0, limit=1000, length=18000,
-                       reset_at=int(time.time()) + 60, event_id='o4')]
+                       reset_at=int(time.time()) + 60, event_id='o4'),
+                  dict(v=1, op='qualify_path', path='claude-native-subscription', demand={'5h': 5, '7d': 5},
+                       evidence='e'),  # F4 path qualification
+                  dict(v=1, op='unqualify_path', path='claude-native-subscription')]
         requests = {request['op']: request for request in operator + others}
         self.assertEqual(set(requests), set(command.OPERATOR_OPS))
         before, stored = self.snapshot(), self.ledger_bytes()

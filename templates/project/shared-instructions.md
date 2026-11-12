@@ -29,11 +29,11 @@ nor readiness. Ordinary work needs no managed runtime; preserve selected control
 
 ## Where to look
 
-[Task-specific triggers and destination-relative links to canonical architecture, design, quality, preparation and setup/undo. Client-specific instructions use their supported bridge to this owner. Keep complete workflow rules in the installed policies, not copies here.]
+[Task-specific triggers and destination-relative links to canonical architecture, design, quality, preparation and setup/undo. Keep accepted installed-package and setup-record pointers usable from task worktrees, including ones without checkout-local enrollment. Client-specific instructions use their supported bridge to this owner. Keep complete workflow rules in the installed policies, not copies here.]
 
 ## Project agreements
 
-[Existing project-specific rules, nested ownership, conventions and explicitly selected protections/publication choices. Add no Git hooks, branch/worktree requirement, stack migration, tool install or permission from a template.]
+[Existing project-specific rules, nested ownership, conventions and explicitly selected protections/publication choices. Reconcile branch-only rules and standing worktree opt-outs with the installed Task Planning contract during authorized adoption/update; preserve historical records and user sections, reporting unresolved conflicts. Add no Git hook, stack migration, tool install, permission or enforcement mechanism from a template.]
 
 ## Memory and preferences
 

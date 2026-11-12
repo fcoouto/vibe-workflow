@@ -17,7 +17,7 @@ class DelegationScaleTests(unittest.TestCase):
     def plan(self, count, *, chain=False):
         plan = self.fixture.plan_value()
         plan['limits'].update(max_attempts=count + 2, max_resource_units=count + 2)
-        plan['jobs'] = [dict(id='job' + str(i), role='worker',
+        plan['jobs'] = [dict(id='job' + str(i), role='software-engineer',
             claims=[self.fixture.path_claim()], dependencies=['job' + str(i - 1)] if chain and i else [],
             max_attempts=2) for i in range(count)]
         return plan
@@ -78,8 +78,8 @@ class DelegationScaleTests(unittest.TestCase):
         last, previous = 'job' + str(count - 1), 'job' + str(count - 2)
         plan = self.plan(count, chain=True)
         plan['limits'].update(max_attempts=count + 2, max_resource_units=count + 3)
-        plan['jobs'].append(dict(id='scale-review',role='review',claims=[self.fixture.path_claim(mode='read')],dependencies=[last],max_attempts=1))
-        plan['jobs'].append(dict(id='spare', role='worker', claims=[self.fixture.path_claim()], dependencies=[], max_attempts=2))
+        plan['jobs'].append(dict(id='scale-review',role='code-reviewer',claims=[self.fixture.path_claim(mode='read')],dependencies=[last],max_attempts=1))
+        plan['jobs'].append(dict(id='spare', role='software-engineer', claims=[self.fixture.path_claim()], dependencies=[], max_attempts=2))
         self.fixture.plan(plan)
         pins = state.task_status(self.scope, 'codex', self.fixture.identity['session_id'])['task']['pins']
         for i in range(count):

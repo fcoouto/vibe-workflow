@@ -1,9 +1,10 @@
-"""Checkout-scoped connection consent, separate from task evidence and collection."""
+"""Checkout connection consent and Project collection choice, separate from task evidence and collection."""
 
 from contextlib import ExitStack, contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import time
 from types import SimpleNamespace
@@ -17,6 +18,9 @@ MAX_CONFIG = 8 * 1024
 MAX_REVISION = 2 ** 53 - 1
 FIELDS = {"version", "revision", "binding", "destination", "langfuse_project_id",
           "desired_opt_in", "connection_verified_at"}
+PROJECT_FIELDS = {"version", "revision", "binding", "repository_ids", "desired_collection"}
+MAX_REPOSITORIES = 64
+IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]{1,128}")
 
 
 class SettingsError(startup.StartupError):
@@ -62,6 +66,26 @@ def _authority(scope):
     return binding
 
 
+def _project_id(scope):
+    if type(scope) is startup.AcceptedScope:
+        value = scope.project_id
+    elif type(scope) is local_ownership.LocalOwnership:
+        value = startup._canonical_plain(scope.acquisition.record.data)["project_id"]
+    else:
+        raise SettingsError("unsupported_observability_scope")
+    if not isinstance(value, str) or not IDENTIFIER.fullmatch(value):
+        raise SettingsError("invalid_observability_project")
+    return value
+
+
+def _binding(scope, project=False):
+    # A Project record is shared by the Project's checkouts, so it binds no checkout identity.
+    authority = _authority(scope)
+    if not project:
+        return authority
+    return dict(project_id=_project_id(scope), authority_directory=authority["authority_directory"])
+
+
 def _integer(value):
     return type(value) is int and 0 <= value <= MAX_REVISION
 
@@ -80,11 +104,32 @@ def _request(action, request):
     return request
 
 
+def _repositories(value):
+    if (type(value) is not list or not 0 < len(value) <= MAX_REPOSITORIES
+            or not all(type(item) is str and IDENTIFIER.fullmatch(item) for item in value)
+            or len(set(value)) != len(value)):
+        return None
+    return sorted(value)
+
+
+def _project_request(action, request):
+    fields = {"expected_revision", "repository_ids", "desired_collection"} if action == "configure" else {"expected_revision"}
+    if not isinstance(request, dict) or set(request) != fields or not _integer(request["expected_revision"]):
+        raise SettingsError("invalid_observability_request")
+    if action == "configure":
+        repositories = _repositories(request["repository_ids"])
+        if repositories is None or type(request["desired_collection"]) is not bool:
+            raise SettingsError("invalid_observability_request")
+        return dict(request, repository_ids=repositories)
+    return request
+
+
 class _Store:
-    def __init__(self, scope, binding, root, directory, lock):
+    def __init__(self, scope, binding, root, directory, lock, record=None):
         self.scope, self.binding, self.root, self.directory = scope, binding, root, directory
         self.lock = lock
-        self.name = binding["scope_id"] + ".json"
+        self.project = record is not None
+        self.name = (binding["scope_id"] if record is None else record) + ".json"
         self.snapshot = None
 
     def _target(self):
@@ -119,6 +164,15 @@ class _Store:
             os.close(descriptor)
         try:
             record = startup.json_object(bytes(raw), limit=MAX_CONFIG)
+            if self.project:
+                if (set(record) != PROJECT_FIELDS or type(record["version"]) is not int or record["version"] != 1
+                        or not _integer(record["revision"]) or record["revision"] < 1
+                        or type(record["desired_collection"]) is not bool
+                        or _repositories(record["repository_ids"]) != record["repository_ids"]):
+                    raise SettingsError("invalid_observability_configuration")
+                if not persisted_binding.record_matches(record["binding"], self.binding):
+                    raise SettingsError("observability_scope_changed")
+                return record
             schema = record.get("version")
             if type(schema) is not int or schema not in (1, 2):
                 raise SettingsError("invalid_observability_configuration")
@@ -150,7 +204,7 @@ class _Store:
             raise SettingsError("invalid_observability_configuration") from None
 
     def check(self):
-        if _authority(self.scope) != self.binding or _identity(os.fstat(self.root)) != self.binding["authority_directory"]:
+        if _binding(self.scope, self.project) != self.binding or _identity(os.fstat(self.root)) != self.binding["authority_directory"]:
             raise SettingsError("observability_authority_changed")
         _private(os.fstat(self.root), directory=True)
         try:
@@ -220,17 +274,22 @@ class _Store:
 
 
 @contextmanager
-def _guard(scope, *, write=False, create=False, recovery=False):
-    root = directory = lock = None
+def _guard(scope, *, write=False, create=False, recovery=False, project=None):
+    """`project`, when a dict, selects the shared Project record and receives its `id`."""
+    root = directory = lock = record = None
     guards = ExitStack()
     try:
         if recovery:
             original = scope
             if type(original) is startup.AcceptedScope: state._scope_version(original)
             scope = local_ownership.settings_scope(original.repository_root if type(original) is startup.AcceptedScope else original)
-            if local_ownership.settings_absent(scope, 'observability'):
+        if project is not None:
+            project["id"] = _project_id(scope)
+            record = "project-" + project["id"]
+        if recovery:
+            if local_ownership.settings_absent(scope, 'observability', record):
                 yield None
-                if not local_ownership.settings_absent(scope, 'observability'):
+                if not local_ownership.settings_absent(scope, 'observability', record):
                     raise SettingsError('observability_configuration_changed')
                 return
             if type(original) is startup.AcceptedScope and (state._physical_identity(state._accepted_identity(original.accepted_identity))
@@ -238,7 +297,7 @@ def _guard(scope, *, write=False, create=False, recovery=False):
                     or original.runtime != scope.runtime):
                 raise SettingsError('observability_scope_changed')
             if write: guards.enter_context(changes._authority_guards([scope.state_dir]))
-        binding = _authority(scope)
+        binding = _binding(scope, record is not None)
         root = onboarding._open_path(scope.runtime.state_dir, os.O_RDONLY | os.O_DIRECTORY)
         if create:
             try:
@@ -253,7 +312,7 @@ def _guard(scope, *, write=False, create=False, recovery=False):
             pass
         if write and directory is not None:
             import fcntl
-            name = binding["scope_id"] + ".lock"
+            name = (binding["scope_id"] if record is None else record) + ".lock"
             lock = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
             _private(os.fstat(lock))
             try:
@@ -262,7 +321,7 @@ def _guard(scope, *, write=False, create=False, recovery=False):
                 raise SettingsError("observability_operation_busy") from None
             if _signature(os.fstat(lock)) != _signature(os.stat(name, dir_fd=directory, follow_symlinks=False)):
                 raise SettingsError("observability_lock_changed")
-        owner = _Store(scope, binding, root, directory, lock)
+        owner = _Store(scope, binding, root, directory, lock, record)
         yield owner
     except (SettingsError, langfuse.LangfuseError, credentials.CredentialError):
         raise
@@ -390,3 +449,71 @@ def store_credentials(scope, request, read_pair):
 
 def forget_credentials(scope, request):
     return _credential_change(scope, request, "forget-credentials")
+
+
+def _project_report(project_id, record):
+    return dict(ok=True, control_scope="project", project_id=project_id, configured=record is not None,
+        revision=record["revision"] if record else 0, repository_ids=list(record["repository_ids"]) if record else [],
+        desired_collection=record["desired_collection"] if record else False,
+        collection="unavailable", native_collection_qualified=False, checkout_connection=None)
+
+
+def _with_checkout(scope, report):
+    # Only an on Project choice reads this checkout's own connection record; it never becomes Project consent.
+    if not report["desired_collection"]:
+        return report
+    try:
+        checkout = status(scope)
+    except SettingsError as error:
+        # Report-only: an unreadable checkout record must not hide or misreport the saved Project choice.
+        return dict(report, checkout_connection=dict(status="unavailable", error=str(error)))
+    return dict(report, checkout_connection=dict(configured=checkout["configured"], desired_opt_in=checkout["desired_opt_in"]))
+
+
+def project_status(scope):
+    """Read the local Project collection choice; no usage, credentials, network or file creation."""
+    project = {}
+    with _guard(scope, recovery=True, project=project) as owner:
+        record = None
+        if owner is not None:
+            record = owner.load()
+            owner.check()
+    return _with_checkout(scope, _project_report(project["id"], record))
+
+
+def _project_operate(scope, action, request):
+    request = _project_request(action, request)
+    configure = action == "configure"
+    if configure:
+        if type(scope) is not startup.AcceptedScope:
+            raise SettingsError("unsupported_observability_scope")
+        if scope.repository_id not in request["repository_ids"]:
+            raise SettingsError("observability_repository_not_selected")
+    project = {}
+    with _guard(scope, write=True, create=configure, recovery=not configure, project=project) as owner:
+        if owner is None:
+            if request["expected_revision"] != 0: raise SettingsError("observability_revision_conflict")
+            return _project_report(project["id"], None)
+        record = owner.load()
+        owner.check()
+        if request["expected_revision"] != (record["revision"] if record else 0):
+            raise SettingsError("observability_revision_conflict")
+        if configure:
+            updated = dict(version=1, revision=request["expected_revision"] + 1, binding=owner.binding,
+                repository_ids=request["repository_ids"], desired_collection=request["desired_collection"])
+        elif not record or not record["desired_collection"]:
+            return _project_report(project["id"], record)
+        else:
+            updated = dict(record, revision=record["revision"] + 1, desired_collection=False)
+        owner.save(updated)
+    return _with_checkout(scope, _project_report(project["id"], updated))
+
+
+def configure_project(scope, request):
+    """Store the explicit Project collection choice; requires the current qualified canonical Codex scope."""
+    return _project_operate(scope, "configure", request)
+
+
+def disable_project(scope, request):
+    """Turn the Project collection choice off and keep the record; works through local-ownership recovery."""
+    return _project_operate(scope, "disable", request)

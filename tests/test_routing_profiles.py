@@ -1,12 +1,13 @@
-"""Task profiles: coordinator-supplied, floored, reusable and never lowered by Jev."""
+"""Task profiles: coordinator-supplied, floored and reusable; no enrichment call exists."""
 import copy
 import unittest
+from unittest import mock
 
-from runtime import routing
+from runtime import routing, task_profile
 
 
 def complete_profile(**changes):
-    profile = dict(task_family='implementation', complexity_band='medium', risk_band='medium',
+    profile = dict(complexity_band='medium', risk_band='medium',
                    context_tokens=4000, tools=['edit', 'shell'], review_policy='independent',
                    uncertainty='low')
     profile.update(changes)
@@ -14,30 +15,20 @@ def complete_profile(**changes):
 
 
 def job(**changes):
-    value = dict(id='edit', role='worker', scope_ref='scope-a', objective='Implement the bounded edit',
+    value = dict(id='edit', role='software-engineer', scope_ref='scope-a', objective='Implement the bounded edit',
                  context='Inspect callers first', claims=[dict(kind='path', key='/repo/app.py', mode='write')],
                  tools=['edit', 'shell'], profile=complete_profile())
     value.update(changes)
     return value
 
 
-class Counter:
-    def __init__(self, answer=None):
-        self.calls, self.answer = [], answer or {}
-
-    def __call__(self, view, fields):
-        self.calls.append((view, tuple(fields)))
-        return dict(self.answer)
-
-
 class ProfileTests(unittest.TestCase):
-    def test_complete_coordinator_profile_makes_no_jev_call(self):
-        jev = Counter()
-        profile = routing.ensure_profile(job(), jev=jev)
-        self.assertEqual(jev.calls, [])
-        self.assertEqual(profile['task_family'], 'implementation')
+    def test_complete_coordinator_profile_is_used_as_supplied(self):
+        profile = routing.ensure_profile(job())
+        self.assertEqual((profile['role'], profile['work_kind']), ('software-engineer', 'implementation'))
+        self.assertNotIn('task_family', profile)
         self.assertEqual(profile['provenance']['complexity_band'], 'coordinator')
-        self.assertEqual(profile['provenance']['task_family'], 'coordinator')
+        self.assertNotIn('task_family', profile['provenance'])
         self.assertEqual(profile['contract_version'], routing.CONTRACT_VERSION)
         self.assertRegex(profile['semantic_digest'], r'^[0-9a-f]{64}$')
 
@@ -49,7 +40,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_digest_changes_with_role_scope_tools_objective_and_requirements(self):
         base = routing.ensure_profile(job())['semantic_digest']
-        variants = [job(role='review', claims=[dict(kind='path', key='/repo/app.py', mode='read')]),
+        variants = [job(role='code-reviewer', claims=[dict(kind='path', key='/repo/app.py', mode='read')]),
                     job(claims=[dict(kind='path', key='/repo/other.py', mode='write')]),
                     job(tools=['edit']), job(objective='Something else'),
                     job(requirement_floors=dict(risk_band='high'))]
@@ -62,8 +53,7 @@ class ProfileTests(unittest.TestCase):
         foreign = job(scope_ref='scope-b', profile=dict(complete_profile(complexity_band='low', risk_band='low'),
                                                         scope_ref='scope-a',
                                                         semantic_digest=original['semantic_digest']))
-        jev = Counter()
-        profile = routing.ensure_profile(foreign, jev=jev)
+        profile = routing.ensure_profile(foreign)
         self.assertNotEqual(profile['provenance']['complexity_band'], 'coordinator')
         self.assertIn('profile_scope_mismatch', profile['reasons'])
         self.assertEqual(profile['complexity_band'], routing.FLOORS['complexity_band'])
@@ -77,11 +67,11 @@ class ProfileTests(unittest.TestCase):
         first = routing.ensure_profile(job())
         again = routing.ensure_profile(job(profile=dict(complete_profile(), semantic_digest=first['semantic_digest'],
                                                         scope_ref='scope-a')))
-        self.assertEqual(again['provenance']['task_family'], 'coordinator')
+        self.assertEqual(again['provenance']['complexity_band'], 'coordinator')
 
-    def test_missing_fields_take_conservative_floors_without_jev(self):
+    def test_missing_fields_take_conservative_floors(self):
         profile = routing.ensure_profile(job(profile={}))
-        for field in ('task_family', 'complexity_band', 'risk_band', 'review_policy'):
+        for field in ('complexity_band', 'risk_band', 'review_policy'):
             self.assertEqual(profile['provenance'][field], 'floor', field)
         self.assertEqual(profile['complexity_band'], routing.FLOORS['complexity_band'])
         self.assertEqual(profile['risk_band'], routing.FLOORS['risk_band'])
@@ -92,43 +82,17 @@ class ProfileTests(unittest.TestCase):
         profile = routing.ensure_profile(job(profile=complete_profile(complexity_band='enormous', risk_band=7)))
         self.assertEqual(profile['provenance']['complexity_band'], 'floor')
         self.assertEqual(profile['provenance']['risk_band'], 'floor')
-        self.assertEqual(profile['provenance']['task_family'], 'coordinator')
+        self.assertEqual(profile['provenance']['review_policy'], 'coordinator')
 
-    def test_jev_runs_once_only_for_unresolved_semantic_fields(self):
-        jev = Counter(dict(complexity_band='high', risk_band='high'))
-        profile = routing.ensure_profile(job(profile=complete_profile(complexity_band=None, risk_band=None)), jev=jev)
-        self.assertEqual(len(jev.calls), 1)
-        self.assertEqual(set(jev.calls[0][1]), {'complexity_band', 'risk_band'})
-        self.assertEqual(profile['provenance']['complexity_band'], 'jev')
-        self.assertEqual(profile['provenance']['task_family'], 'coordinator')
-
-    def test_jev_view_is_bounded_and_carries_no_funding_state(self):
-        jev = Counter(dict(complexity_band='high'))
-        routing.ensure_profile(job(profile=complete_profile(complexity_band=None), balance=9, token='secret'), jev=jev)
-        view = jev.calls[0][0]
-        self.assertNotIn('balance', view)
-        self.assertNotIn('token', view)
-
-    def test_jev_failure_and_garbage_fall_back_to_floors(self):
-        def broken(view, fields):
-            raise RuntimeError('down')
-        value = job(profile=complete_profile(complexity_band=None))
-        self.assertEqual(routing.ensure_profile(value, jev=broken)['provenance']['complexity_band'], 'floor')
-        garbage = Counter(dict(complexity_band='bogus', unknown_field='x'))
-        profile = routing.ensure_profile(value, jev=garbage)
-        self.assertEqual(profile['provenance']['complexity_band'], 'floor')
-        self.assertNotIn('unknown_field', profile)
-
-    def test_supplied_and_jev_values_cannot_lower_requirement_floors(self):
+    def test_supplied_values_and_gaps_cannot_lower_requirement_floors(self):
         floors = dict(complexity_band='high', risk_band='critical', review_policy='strict')
         low = complete_profile(complexity_band='low', risk_band='low', review_policy='none')
         profile = routing.ensure_profile(job(profile=low, requirement_floors=floors))
         self.assertEqual((profile['complexity_band'], profile['risk_band'], profile['review_policy']),
                          ('high', 'critical', 'strict'))
         self.assertEqual(profile['provenance']['risk_band'], 'floor')
-        jev = Counter(dict(risk_band='low'))
         gap = job(profile=complete_profile(risk_band=None), requirement_floors=floors)
-        self.assertEqual(routing.ensure_profile(gap, jev=jev)['risk_band'], 'critical')
+        self.assertEqual(routing.ensure_profile(gap)['risk_band'], 'critical')
 
     def test_higher_supplied_value_is_kept(self):
         profile = routing.ensure_profile(job(profile=complete_profile(risk_band='critical'),
@@ -139,7 +103,7 @@ class ProfileTests(unittest.TestCase):
     def test_write_scope_sets_a_floor_a_read_only_role_does_not(self):
         written = routing.ensure_profile(job(profile=complete_profile(risk_band='low', complexity_band='low')))
         self.assertNotEqual(written['risk_band'], 'low')
-        reader = routing.ensure_profile(job(role='review', claims=[dict(kind='path', key='/repo/app.py', mode='read')],
+        reader = routing.ensure_profile(job(role='code-reviewer', claims=[dict(kind='path', key='/repo/app.py', mode='read')],
                                             profile=complete_profile(risk_band='low', complexity_band='low')))
         self.assertEqual(reader['risk_band'], 'low')
 
@@ -200,11 +164,39 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(routing.ProfileUnavailable):
             routing.ensure_profile('not a job')
 
-    def test_pipe_in_a_key_component_is_rejected(self):
+    def test_row_key_has_three_parts(self):
+        self.assertEqual(routing.row_key('implementation', 'low', 'high'), 'implementation|low|high')
+        for bad in (('a|b', 'low', 'low'), ('', 'low', 'low'), (None, 'low', 'low')):
+            with self.assertRaises(ValueError):
+                routing.row_key(*bad)
+        with self.assertRaises(TypeError):
+            routing.row_key('software-engineer', 'implementation', 'low', 'low')
+
+    def test_profile_needs_a_roster_specialist(self):
+        for role in ('worker', 'review', 'coordinator', 'check', 'oracle', None):
+            with self.subTest(role), self.assertRaises(routing.ProfileUnavailable):
+                routing.ensure_profile(job(role=role))
+        self.assertEqual(routing.ensure_profile(job(role='debugger', claims=[]))['work_kind'], 'investigation')
+
+    def test_template_unavailable_makes_the_profile_unavailable(self):
+        with mock.patch.object(task_profile, 'load', side_effect=task_profile.TemplateUnavailable('gone')):
+            with self.assertRaises(routing.ProfileUnavailable):
+                routing.ensure_profile(job())
+
+    def test_supplied_task_family_is_ignored(self):
         profile = routing.ensure_profile(job(profile=complete_profile(task_family='a|b')))
-        self.assertEqual(profile['provenance']['task_family'], 'floor')
-        self.assertNotIn('|', profile['task_family'])
-        self.assertEqual(routing.row_key(profile['role'], profile['task_family'], 'low', 'low').count('|'), 3)
+        self.assertNotIn('profile_invalid', profile['reasons'])
+        self.assertNotIn('task_family', profile)
+        self.assertEqual(profile['provenance']['complexity_band'], 'coordinator')
+        routing.validate_supplied_profile(complete_profile(task_family='implementation'))
+
+    def test_complete_template_profile_has_no_gap(self):
+        # F1-R1: the retired task_family is no longer a field, so omitting it is not a gap.
+        profile = routing.ensure_profile(job())
+        self.assertEqual((profile['uncertain_fields'], profile['uncertainty']), ([], 'low'))
+        self.assertEqual(routing.FLOORS, dict(complexity_band='high', risk_band='high', review_policy='independent'))
+        self.assertEqual(routing.SEMANTIC_FIELDS, ('complexity_band', 'risk_band'))
+        self.assertFalse(hasattr(routing, 'ROLES'))
 
     def test_non_dict_profile_is_reported_invalid(self):
         for bad in ('text', 5, ['x']):
@@ -216,8 +208,19 @@ class ProfileTests(unittest.TestCase):
     def test_input_is_not_mutated(self):
         value = job()
         before = copy.deepcopy(value)
-        routing.ensure_profile(value, jev=Counter())
+        routing.ensure_profile(value)
         self.assertEqual(value, before)
+
+    def test_ensure_profile_takes_no_jev(self):
+        with self.assertRaises(TypeError):
+            routing.ensure_profile(job(), jev=lambda *a: {})
+        self.assertFalse(hasattr(routing, '_jev_view'))
+
+    def test_provenance_has_no_jev(self):
+        self.assertEqual(routing.PROVENANCE, ('coordinator', 'metadata', 'floor'))
+        gap = routing.ensure_profile(job(profile=complete_profile(complexity_band=None)))
+        self.assertEqual(gap['provenance']['complexity_band'], 'floor')
+        self.assertLessEqual(set(gap['provenance'].values()), set(routing.PROVENANCE))
 
 
 class PlanContractTests(unittest.TestCase):

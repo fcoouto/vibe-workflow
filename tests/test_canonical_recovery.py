@@ -676,7 +676,7 @@ class CanonicalTwoStoreSetupTests(unittest.TestCase):
             with state._database(scope) as db:
                 task = state._task(db, state._scope_id(scope), identity['client'], identity['session_id'], identity['task_id'])
                 record = next(row for row in delegation._ledger(scope, db) if row['id'] == reservation['attempt_id'])
-            self.assertEqual(record['data']['role'], 'coordinator')
+            self.assertEqual(record['data']['role'], 'orchestrator')
             self.assertEqual(task['lifecycle']['created_at'], task_created_at)
             facts = dict(operation_id='member-b-observation', operation_digest=record['body']['operation']['digest'],
                 claims_digest=evidence._digest(record['data']['claims']))

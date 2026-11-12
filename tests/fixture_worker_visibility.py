@@ -94,4 +94,4 @@ class NativeVisibilityFixture:
 
     def native_request(self):
         return dict(parent_session_id=self.parent, checkout=str(self.root), task_name='review_original',
-                    visibility=dict(version=1, role='Reviewer', specialty='Read only', custom_role_name='Audit lead'))
+                    visibility=dict(version=2, role='code-reviewer', specialty='Read only', custom_role_name='Audit lead'))

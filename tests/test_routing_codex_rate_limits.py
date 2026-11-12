@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-from runtime import codex_rate_limits as reader, routing_observations as collector
+from runtime import codex_rate_limits as reader, routing_observations as collector, routing_paths, subscription_billing
 
 ROOT = Path(__file__).resolve().parents[1]
 DOUBLE = ROOT / 'tests' / 'codex_app_server_double.py'
@@ -35,12 +35,26 @@ def result(primary=None, secondary=None, allowed=None, limit_id='codex', by_limi
     return value
 
 
-def manifest(windows=('5h', '7d')):
-    route = dict(route='opencode-openai', status='qualified', provider='openai', model='m', effort='none',
-                 harness='opencode provider openai', billing_class='included_subscription', pool=POOL,
-                 account='chatgpt-plan', demand={'7d': 1}, binding_enforceable=True)
-    return dict(version=1, window_unit=collector.WINDOW_UNIT, routes=[route],
-                pools={POOL: dict(account='chatgpt-plan', windows=[dict(id=key) for key in windows])})
+def path_rule(path, harness, provider, pool, account, windows):
+    return dict(path=path, harness=harness, provider=provider, sign_in='subscription',
+                billing_class='included_subscription', pool=pool, account=account, binding_enforceable=True,
+                windows=list(windows), window_unit=collector.WINDOW_UNIT)
+
+
+def rules(windows=('5h', '7d')):
+    """Path rules declaring `windows` for the ChatGPT pool, plus a Claude path on another pool."""
+    return dict(version=2, paths=[
+        path_rule('chatgpt-sub', 'opencode provider openai', 'openai', POOL, 'chatgpt-plan', windows),
+        path_rule('claude-sub', 'claude-agent-sdk via opencode', 'claude-agent', 'claude-subscription', 'claude-plan',
+                  ('5h',))])
+
+
+# The ranked request the collector tests send: two ChatGPT strategies and one Claude strategy (F4.2 generation).
+TABLE = dict(schema=2, version='t1', rows={'implementation|medium|medium': [
+    dict(strategy_id='s1', model='m', effort=None, harness='opencode provider openai', provider='openai'),
+    dict(strategy_id='s2', model='m2', effort=None, harness='opencode provider openai', provider='openai'),
+    dict(strategy_id='s3', model='c', effort=None, harness='claude-agent-sdk via opencode', provider='claude-agent')]})
+FIRST, SECOND, CLAUDE = 'chatgpt-sub:s1', 'chatgpt-sub:s2', 'claude-sub:s3'
 
 
 class Sandbox(unittest.TestCase):
@@ -61,7 +75,7 @@ class Sandbox(unittest.TestCase):
         fake_bin.mkdir()
         self.environ = dict(PATH=str(fake_bin), HOME=str(self.home), LANG='C', OPENAI_API_KEY='sk-secret',
                             CODEX_API_KEY='secret', GITHUB_TOKEN='gh-secret', AWS_SECRET_ACCESS_KEY='aws')
-        self.manifest = manifest()
+        self.rules = rules()
         self.assertIsNone(shutil.which('codex', path=self.environ['PATH']))
 
     def command(self, scenario='ok', value=None):
@@ -82,12 +96,12 @@ class Sandbox(unittest.TestCase):
     def read(self, scenario='ok', value=None, **options):
         options.setdefault('timeout', 5.0)
         return reader.read_windows(command=self.command(scenario, value), environ=self.environ,
-                                   manifest=self.manifest, **options)
+                                   rules=self.rules, **options)
 
     def refresh(self, scenario='ok', value=None, **options):
         options.setdefault('timeout', 5.0)
         return reader.refresh(self.settings, need=options.pop('need', ('7d',)), command=self.command(scenario, value),
-                              environ=self.environ, manifest=self.manifest, **options)
+                              environ=self.environ, rules=self.rules, **options)
 
     def stored(self):
         return {item['id']: item for item in collector.LocalSource(self.settings).windows(POOL, int(time.time()))}
@@ -184,13 +198,13 @@ class ParseTests(unittest.TestCase):
             self.parse(value, now, declared=())
         self.assertEqual(str(caught.exception), 'codex_pool_undeclared')
 
-    def test_declared_windows_come_from_the_manifest_pool_or_its_routes(self):
-        self.assertEqual(reader.declared_windows(manifest(('7d',))), {'7d'})
-        bare = manifest()
-        del bare['pools']
-        self.assertEqual(reader.declared_windows(bare), {'7d'})  # the routes' demand
-        bare['routes'][0]['pool'] = 'other'
-        self.assertEqual(reader.declared_windows(bare), set())
+    def test_declared_windows_come_from_the_path_rules(self):
+        self.assertEqual(reader.declared_windows(rules(('7d',))), {'7d'})
+        self.assertEqual(reader.declared_windows(rules()), {'5h', '7d'})
+        other = rules()
+        other['paths'][0]['pool'] = 'other'
+        self.assertEqual(reader.declared_windows(other), set())
+        self.assertEqual(reader.declared_windows(routing_paths.load_rules()), {'7d'})  # the shipped ChatGPT paths
 
 
 class ExchangeTests(Sandbox):
@@ -232,7 +246,7 @@ class ExchangeTests(Sandbox):
             self.assertEqual(str(caught.exception), 'codex_home_invalid')
         with self.assertRaises(reader.ReadError):
             reader.read_windows(command=self.command(), environ=dict(self.environ, CODEX_HOME='relative'),
-                                manifest=self.manifest)
+                                rules=self.rules)
         self.assertEqual(self.spawns(), 0)
 
     def test_a_changed_symlinked_auth_file_fails_closed(self):
@@ -547,7 +561,7 @@ class RefreshTests(Sandbox):
         self.assertEqual(self.spawns(), 0)
 
     def test_applies_only_to_the_chatgpt_subscription_pool(self):
-        route = copy.deepcopy(manifest()['routes'][0])
+        route = dict(route=FIRST, pool=POOL, billing_class='included_subscription')
         self.assertTrue(reader.applies(route))
         self.assertFalse(reader.applies(dict(route, pool='claude-subscription')))
         self.assertFalse(reader.applies(dict(route, billing_class='gateway')))
@@ -558,23 +572,31 @@ class CollectorTests(Sandbox):
 
     def setUp(self):
         super().setUp()
-        claude = dict(copy.deepcopy(self.manifest['routes'][0]), route='claude', pool='claude-subscription',
-                      account='claude-plan')
-        second = dict(copy.deepcopy(self.manifest['routes'][0]), route='opencode-openai-2', model='m2')
-        self.manifest['routes'] += [claude, second]
+        # No production billing producer exists: a labelled code-level double stands in for this module's flows.
+        billing = mock.patch.object(collector.LocalSource, 'billing', lambda source, route, now:
+                                     subscription_billing.double('codex-collector')(route, now))
+        billing.start()
+        self.addCleanup(billing.stop)
+        self.rules = rules(('7d',))
+        for path, demand in (('chatgpt-sub', {'7d': 1}), ('claude-sub', {'5h': 1})):
+            routing_paths.qualify(self.settings, path, demand=demand, evidence='e', now=int(time.time()),
+                                  rules=self.rules)
         self.calls, self.extra = [], {}
         original = reader.refresh
 
         def refresh(settings, **options):
             self.calls.append(options)
-            return original(settings, command=self.command(), environ=self.environ, manifest=self.manifest,
+            return original(settings, command=self.command(), environ=self.environ, rules=self.rules,
                             **options, **self.extra)
         for patch in (mock.patch.object(reader, 'refresh', side_effect=refresh),
-                      mock.patch.object(collector, 'load_manifest', return_value=copy.deepcopy(self.manifest))):
+                      mock.patch.object(routing_paths, 'load_rules', return_value=copy.deepcopy(self.rules))):
             patch.start()
             self.addCleanup(patch.stop)
 
     def collect(self, **options):
+        options.setdefault('table', TABLE)
+        options.setdefault('strategy_ids', ['s1', 's2', 's3'])
+        options.setdefault('harnesses', ['claude-agent-sdk via opencode', 'opencode provider openai'])
         return collector.collect(self.temp.name, dict(scope='s'), settings_path=self.settings,
                                  ledger_path=Path(self.temp.name) / 'ledger.sqlite3', **options)
 
@@ -583,10 +605,10 @@ class CollectorTests(Sandbox):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.calls[0]['need'], ('7d',))
         self.assertEqual(sorted(route['route'] for route in observations['routes']),
-                         ['opencode-openai', 'opencode-openai-2'])
+                         [FIRST, SECOND])
         self.assertEqual([(item['id'], item['used'], item['fresh']) for item in observations['pools'][POOL]['windows']],
                          [('7d', 420, True)])
-        self.assertIn(dict(route='claude', reason='window_unobserved'), observations['excluded'])
+        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
 
     def test_a_fresh_reading_spawns_nothing(self):
         self.collect(refresh_windows=True)
@@ -594,34 +616,35 @@ class CollectorTests(Sandbox):
         self.assertEqual(self.spawns(), 1)
 
     def test_entitlement_marked_routes_are_not_read_for(self):
-        for route in ('opencode-openai', 'opencode-openai-2'):
+        for route in (FIRST, SECOND):
             collector.mark_not_entitled(self.settings, route, 'chatgpt-plan', int(time.time()))
         observations = self.collect(refresh_windows=True)['observations']
         self.assertEqual((self.calls, self.spawns()), ([], 0))
-        self.assertIn(dict(route='opencode-openai', reason='not_entitled'), observations['excluded'])
-        collector.clear_not_entitled(self.settings, 'opencode-openai', 'chatgpt-plan')
+        self.assertIn(dict(route=FIRST, reason='not_entitled'), observations['excluded'])
+        collector.clear_not_entitled(self.settings, FIRST, 'chatgpt-plan')
         self.collect(refresh_windows=True)
         self.assertEqual(self.spawns(), 1)
 
     def test_without_refresh_windows_nothing_is_read(self):
         observations = self.collect()['observations']
         self.assertEqual((self.calls, self.spawns()), ([], 0))
-        self.assertIn(dict(route='opencode-openai', reason='window_unobserved'), observations['excluded'])
+        self.assertIn(dict(route=FIRST, reason='window_unobserved'), observations['excluded'])
 
     def test_a_static_source_never_reads(self):
-        source = collector.StaticSource(self.manifest['routes'])
+        source = collector.StaticSource(collector.LocalSource(self.settings).manifest(TABLE))
+        self.assertEqual(len(source.routes), 3)
         self.collect(refresh_windows=True, source=source)
         self.assertEqual((self.calls, self.spawns()), ([], 0))
 
     def test_a_failed_read_leaves_the_route_out_with_the_readers_reason(self):
         with mock.patch.object(self, 'command', return_value=self.command('exit_at_once')):
             observations = self.collect(refresh_windows=True)['observations']
-        for route in ('opencode-openai', 'opencode-openai-2'):
+        for route in (FIRST, SECOND):
             self.assertIn(dict(route=route, reason='codex_exited'), observations['excluded'])
-        self.assertIn(dict(route='claude', reason='window_unobserved'), observations['excluded'])
+        self.assertIn(dict(route=CLAUDE, reason='window_unobserved'), observations['excluded'])
         self.assertEqual(observations['routes'], [])
         again = self.collect(refresh_windows=True)['observations']  # the backoff: no process, same reason
-        self.assertIn(dict(route='opencode-openai', reason='codex_exited'), again['excluded'])
+        self.assertIn(dict(route=FIRST, reason='codex_exited'), again['excluded'])
         self.assertEqual(self.spawns(), 1)
 
     def test_a_stale_reading_with_a_failed_read_is_left_out_with_the_reason(self):
@@ -631,14 +654,14 @@ class CollectorTests(Sandbox):
                                                          observed_at=old))
         with mock.patch.object(self, 'command', return_value=self.command('read_error')):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route='opencode-openai', reason='codex_protocol_error'), observations['excluded'])
+        self.assertIn(dict(route=FIRST, reason='codex_protocol_error'), observations['excluded'])
         self.assertEqual(observations['routes'], [])
 
     def test_a_busy_reader_is_the_excluded_reason(self):
         self.extra['timeout'] = 0.1  # the lock wait is the timeout plus 1 s
         with reader._pool_lock(self.settings, POOL):
             observations = self.collect(refresh_windows=True)['observations']
-        self.assertIn(dict(route='opencode-openai', reason='reader_busy'), observations['excluded'])
+        self.assertIn(dict(route=FIRST, reason='reader_busy'), observations['excluded'])
 
     def test_the_service_reads_only_outside_serve(self):
         from scripts import routing as command
@@ -647,7 +670,8 @@ class CollectorTests(Sandbox):
                                       one_shot=one_shot, project=self.temp.name)
             with self.subTest(serving=serving, one_shot=one_shot), \
                     mock.patch.object(collector, 'collect', return_value=dict(observations={}, seen={})) as collect:
-                service._collect(dict(scope='s'))
+                service._collect(dict(assignment=dict(scope='s'), table=None, strategy_ids=None, choices=[],
+                                      harnesses=[]))
                 self.assertIs(collect.call_args.kwargs['refresh_windows'], expected)
             service.close()
 
@@ -663,7 +687,7 @@ class CommandTests(Sandbox):
         def refresh(settings, **options):
             self.assertEqual((settings, options['force']), (self.settings, True))
             return original(settings, force=True, command=self.command(), environ=self.environ,
-                            manifest=self.manifest, timing=options['timing'])
+                            rules=self.rules, timing=options['timing'])
         with mock.patch.object(script.reader, 'refresh', side_effect=refresh), \
                 mock.patch('builtins.print', side_effect=lambda text: output.append(text)):
             code = script.main(['--settings', str(self.settings)])

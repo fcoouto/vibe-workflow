@@ -176,7 +176,7 @@ def managed_project_fixture(test, checkout, routes=()):
                                     for _, host, fields, billing, *_ in mapped if billing == 'included_subscription']
         precondition(call(dict(v=1, op='set', authority_required=True)).get('state') == 'updated',
                      'managed_project_fixture: authority_required was not set')
-        choices = dict(implementer=subscriptions, reviewer=subscriptions)
+        choices = {'software-engineer': subscriptions, 'code-reviewer': subscriptions}
         precondition(call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=choices))).get('state')
                      == 'updated', 'managed_project_fixture: worker_choices were not set')
         revision = None
@@ -211,7 +211,9 @@ def managed_project_fixture(test, checkout, routes=()):
         return dict(state='ready', scope=scope, ref='fixture-openrouter') if route['billing_class'] == 'gateway' \
             else None
 
-    source = observations.StaticSource(manifest, windows, credential)
+    from runtime import subscription_billing  # a labelled code-level double: no production billing producer exists
+    source = observations.StaticSource(manifest, windows, credential,
+                                       billing=subscription_billing.double('managed-project-fixture'))
     patch(routing_settings, 'managed_project', lambda path, *args, **kwargs: Path(path).resolve() == root)
     patch(observations, 'default_source', lambda *args, **kwargs: source)
     yield dict(routes=manifest, settings=settings, ledger=ledger)
@@ -414,7 +416,7 @@ class C2aStartupStatusNamingDiagnostics(command_tests.Base):
         self.assertEqual(response['state'], 'pending', response)
         self.assertIn(response['reason'], READINESS_REASONS)
         self.assertNoOutwardCalls(counters)
-        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[CHOICE]))))
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'software-engineer': [CHOICE]})))
         self.store_table({'rows': 'not-a-table'})
         degraded = self.call(prepare('r2'))
         self.assertEqual(degraded['state'], 'admitted', degraded)
@@ -498,16 +500,14 @@ class PinnedGates(gate_tests.GateBase):
 class C2bWorkstreamsDelegationResources(PinnedGates):
     """F03 Workstreams, F11 planning/native delegation/continuation, F12 resource admission, F16 context."""
 
-    def test_a_supplied_profile_needs_no_jev_and_only_semantic_changes_reprofile(self):
-        """F03/F16: a valid profile takes zero Jev calls; progress or unrelated metadata does not reprofile."""
-        jev = Counter(lambda view, fields: {}, name='jev')
-        base = routing.ensure_profile(job(), jev=jev)
-        self.assertEqual(jev.count, 0)
-        progress = routing.ensure_profile(job(progress=dict(done=3, total=5), status='running', attempt=2), jev=jev)
+    def test_a_supplied_profile_is_reused_and_only_semantic_changes_reprofile(self):
+        """F03/F16: a valid profile is used as supplied; progress or unrelated metadata does not reprofile."""
+        base = routing.ensure_profile(job())
+        self.assertEqual(base['uncertain_fields'], [])
+        progress = routing.ensure_profile(job(progress=dict(done=3, total=5), status='running', attempt=2))
         self.assertEqual(progress['semantic_digest'], base['semantic_digest'])
-        changed = routing.ensure_profile(job(objective='A different objective'), jev=jev)
+        changed = routing.ensure_profile(job(objective='A different objective'))
         self.assertNotEqual(changed['semantic_digest'], base['semantic_digest'])
-        self.assertEqual(jev.count, 0)
 
     def test_one_task_graph_ready_jobs_admit_dependent_and_conflicting_jobs_wait(self):
         """F03: the workflow is the only graph; distinct ready jobs admit, dependent and conflicting ones wait."""
@@ -547,7 +547,7 @@ class C2bWorkstreamsDelegationResources(PinnedGates):
     def test_changed_scope_or_brief_invalidates_the_prepared_selection(self):
         """F11/F16: a changed brief, role or write scope makes the prepared route stale before anything is sent."""
         changes = dict(brief=dict(semantic=gate_tests.semantic(objective='Rewritten objective')),
-                       role=dict(semantic=gate_tests.semantic(role='review')),
+                       role=dict(semantic=gate_tests.semantic(role='code-reviewer')),
                        scope=dict(claims=[['/work/repo/other.py', 'write']]))
         for name, change in changes.items():
             with self.subTest(change=name):
@@ -885,9 +885,9 @@ class C2dCouncilAndProjectReview(command_tests.Base):
 
     def test_a_review_assignment_cannot_be_admitted_as_an_implementer(self):
         """F09/F13: a delegated reviewer keeps its own role; routing cannot relabel it to borrow worker routes."""
-        response = self.call(prepare('rv1', job=job(role='review')) | dict(
-            assignment=dict(attempt_id='rv1', task='task-rv1', role='implementer', scope=SCOPE)))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='role_mismatch'))
+        response = self.call(prepare('rv1', job=job(role='code-reviewer')) | dict(
+            assignment=dict(attempt_id='rv1', task='task-rv1', role='software-engineer', scope=SCOPE)))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='role_mismatch', missing_fields=[]))
 
     def test_the_review_instruction_check_accepts_only_a_positive_instruction(self):
         """The C3-6 marker cannot be satisfied by a prohibition or a sentence that routes something else."""
@@ -959,8 +959,8 @@ class C2eObservabilityReviewDelivery(Funded):
         with self.assertRaisesRegex(ValueError, 'external_independent_review_required'):
             external_delegation.native_review(dict(integration_available=True, coordinator='same', reviewer='same'))
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(
-            smart_routing=False, worker_choices=dict(implementer=[CHOICE]))))
-        review = self.call(prepare('rv2', job=job(role='review')) | dict(
+            smart_routing=False, worker_choices={'software-engineer': [CHOICE]})))
+        review = self.call(prepare('rv2', job=job(role='code-reviewer')) | dict(
             assignment=dict(attempt_id='rv2', task='task-rv2', scope=SCOPE)))
         self.assertEqual((review['state'], review['reason']), ('pending', 'worker_choice_unavailable'), review)
         worker = self.call(prepare('w2'))

@@ -32,7 +32,9 @@ When using managed planning, present the [Reviewed Configuration](../skills/onbo
 3. Assess every Toolkit catalog component for relevance, adoption or a reason it does not apply. Load detailed setup or qualification procedures only when that component or an explicitly selected advanced capability requires them.
 4. Use [Task Planning](02-task-planning.md) for material design choices. Reuse prior decisions; ask only for missing choices that change scope, behavior, cost, access or enforcement.
 
-If the user selects managed delivery or merge enforcement, load its procedure and record only its own prerequisites and authority. Otherwise ordinary onboarding does not establish merge, publication, worktree or external-route policy. Preserve existing repository protections and any explicitly selected enforcement. Local worktree cleanup remains client-owned.
+Every onboarding and authorized update adopts [checkout stability](02-task-planning.md#planning-and-verification), including its [delivery preparation and adoption procedure](../clients/delivery.md#prepare-the-destination). Record the primary checkout, designated branch and source in the existing setup record; reconcile older branch-only instructions and standing worktree opt-outs through the accepted conflict/update procedure. Preserve historical records and active-task pins; do not silently migrate checkouts or other projects. Missing designation or an unresolved conflict blocks only dependent changes, not safe inspection or independent setup work.
+
+If the user selects managed delivery or merge enforcement, load only that capability's additional procedure, prerequisites and authority. Basic checkout stability grants no merge, publication, external-route or runtime permission and adds no enforcement prerequisite. Preserve existing repository protections and explicitly selected enforcement. Local worktree cleanup remains client-owned.
 
 ## Client startup integration
 

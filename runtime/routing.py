@@ -3,10 +3,9 @@
 An empty ranking (``no_recommendation``) is never a refusal: callers fall through to the
 deterministic admission path or the user's explicit worker choices. Only admission can block.
 
-Profiling and ranking are pure: no network, subprocess or model call happens here except through
-the caller-supplied, optional ``jev`` enrichment callable. ``admit`` and ``dispatch`` are the
-exceptions: each writes the local ledger in one short transaction of pure arithmetic. ``dispatch``
-issues the single-use dispatch authority (S3.4).
+Profiling and ranking are pure: no network, subprocess or model call happens here. ``admit`` and
+``dispatch`` are the exceptions: each writes the local ledger in one short transaction of pure
+arithmetic. ``dispatch`` issues the single-use dispatch authority (S3.4).
 """
 import copy
 import functools
@@ -17,26 +16,24 @@ import math
 import re
 import secrets
 
-from runtime import routing_allocator as allocator, routing_gates, routing_settings
+from runtime import routing_allocator as allocator, routing_gates, routing_settings, task_profile
 from runtime import subscription_reconcile as sub_reconcile
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
-CONTRACT_VERSION = 1
-ROLES = ('worker', 'review', 'coordinator', 'check')
+CONTRACT_VERSION = 2  # the template's contract_version; tests/test_task_profile.py pins the constants below to it
 COMPLEXITY_BANDS = ('low', 'medium', 'high', 'critical')
 RISK_BANDS = ('low', 'medium', 'high', 'critical')
 REVIEW_POLICIES = ('none', 'self', 'independent', 'strict')
 UNCERTAINTY = ('low', 'medium', 'high')
-PROVENANCE = ('coordinator', 'metadata', 'floor', 'jev')
+PROVENANCE = ('coordinator', 'metadata', 'floor')
 # Conservative values for fields nobody supplied: higher bands, stricter review.
-FLOORS = dict(task_family='general', complexity_band='high', risk_band='high', review_policy='independent')
+FLOORS = dict(complexity_band='high', risk_band='high', review_policy='independent')
 # Requirement floors implied by a write claim, independent of any supplied value.
 WRITE_FLOORS = dict(complexity_band='medium', risk_band='medium')
-SEMANTIC_FIELDS = ('task_family', 'complexity_band', 'risk_band')
-SUPPLIED_FIELDS = ('task_family', 'complexity_band', 'risk_band', 'context_tokens', 'tools', 'review_policy',
-                   'uncertainty')
-SUPPLIED_REFERENCES = ('scope_ref', 'contract_version', 'semantic_digest')
+SEMANTIC_FIELDS = ('complexity_band', 'risk_band')
+SUPPLIED_FIELDS = ('complexity_band', 'risk_band', 'context_tokens', 'tools', 'review_policy', 'uncertainty')
+SUPPLIED_REFERENCES = ('scope_ref', 'contract_version', 'semantic_digest', 'task_family')  # task_family: retired, ignored
 _ORDERS = dict(complexity_band=COMPLEXITY_BANDS, risk_band=RISK_BANDS, review_policy=REVIEW_POLICIES)
 MAX_TOKENS = 10**9
 # Same bounds as the worker brief and claim limits in runtime/delegation.py.
@@ -45,7 +42,7 @@ MAX_CLAIMS = 64
 
 
 class ProfileUnavailable(ValueError):
-    """Floors cannot be established, for example an unknown role or missing scope."""
+    """Floors cannot be established, for example a role that is no roster specialist or a missing scope."""
 
 
 def _name(value):
@@ -53,8 +50,6 @@ def _name(value):
 
 
 def _valid(field, value):
-    if field == 'task_family':
-        return _name(value)
     if field in _ORDERS:
         return value in _ORDERS[field]
     if field == 'context_tokens':
@@ -138,9 +133,9 @@ def semantic_digest(job):
                         tools=_tools(job), floors=_floors(job)))
 
 
-def row_key(role, task_family, complexity_band, risk_band):
+def row_key(work_kind, complexity_band, risk_band):
     """Stable string key for a strategy-table row."""
-    parts = (role, task_family, complexity_band, risk_band)
+    parts = (work_kind, complexity_band, risk_band)
     if not all(isinstance(part, str) and part and '|' not in part for part in parts):
         raise ValueError('Invalid strategy row key')
     return '|'.join(parts)
@@ -175,42 +170,28 @@ def _usable_supplied(job, digest, reasons):
     return supplied
 
 
-def _jev_view(job, fields):
-    return dict(job_id=job.get('id'), role=job.get('role'), objective=job.get('objective'),
-                context=job.get('context'), scope=_claims(job), tools=_tools(job), unresolved=list(fields))
-
-
-def ensure_profile(job, *, jev=None):
+def ensure_profile(job):
     """Return a TaskProfile for ``job`` without mutating it.
 
-    Complete coordinator-supplied profiles never call ``jev``. Gaps take
-    deterministic floors; ``jev`` (optional) is asked once for unresolved
-    semantic fields. No supplied or enriched value can lower a requirement floor.
+    Complete coordinator-supplied profiles are used as supplied. Gaps take
+    deterministic floors. No supplied value can lower a requirement floor.
     """
-    if not isinstance(job, dict) or not isinstance(job.get('role'), str) or job.get('role') not in ROLES:
-        raise ProfileUnavailable('profile_unavailable: unknown role')
+    try:
+        specialist = task_profile.specialist(job.get('role')) if isinstance(job, dict) else None
+    except task_profile.TemplateUnavailable:
+        raise ProfileUnavailable('profile_unavailable: task profile template unavailable') from None
+    if specialist is None:
+        raise ProfileUnavailable('profile_unavailable: not a roster specialist')
     if not isinstance(job.get('scope_ref'), str) or not job['scope_ref']:
         raise ProfileUnavailable('profile_unavailable: no scope')
     digest = semantic_digest(job)
     reasons = []
     supplied = _usable_supplied(job, digest, reasons)
     values, provenance = {}, {}
-    for field in ('task_family', *_ORDERS):
+    for field in _ORDERS:
         if _valid(field, supplied.get(field)):
             values[field], provenance[field] = supplied[field], 'coordinator'
-    unresolved = [field for field in SEMANTIC_FIELDS if field not in values]
-    enriched = False
-    if unresolved and callable(jev):
-        try:
-            answer = jev(_jev_view(job, unresolved), tuple(unresolved))
-        except Exception:
-            answer = None
-        if isinstance(answer, dict):
-            for field in unresolved:
-                if _valid(field, answer.get(field)):
-                    values[field], provenance[field] = answer[field], 'jev'
-                    enriched = True
-    gaps = [field for field in ('task_family', *_ORDERS) if field not in values]
+    gaps = [field for field in _ORDERS if field not in values]
     for field in gaps:
         values[field], provenance[field] = FLOORS[field], 'floor'
     for field, floor in _floors(job).items():
@@ -227,49 +208,45 @@ def ensure_profile(job, *, jev=None):
         context, context_source = dict(tokens=supplied['context_tokens'], kind='estimated'), 'coordinator'
     else:
         context, context_source = dict(tokens=_estimate_tokens(job), kind='estimated'), 'floor'
-    uncertainty = 'high' if gaps else 'medium' if enriched else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
+    uncertainty = 'high' if gaps else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
     return dict(contract_version=CONTRACT_VERSION, job_id=job.get('id'), role=job['role'], scope_ref=job['scope_ref'],
-                task_family=values['task_family'], complexity_band=values['complexity_band'],
+                work_kind=specialist['work_kind'], complexity_band=values['complexity_band'],
                 risk_band=values['risk_band'], review_policy=values['review_policy'], context=context,
                 tools=tools, uncertainty=uncertainty, uncertain_fields=gaps, reasons=reasons,
                 provenance=dict(provenance, context=context_source, tools=tools_source),
                 semantic_digest=digest)
 
 
+TABLE_SCHEMA = 2  # rows keyed `work_kind|complexity_band|risk_band`; routing_evidence compiles this schema
 CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'allowed_harnesses',
                      'allowed_strategy_ids')
 
 
 def resolve_row(table, profile):
-    """Pick the table row for a profile: exact, then the nearest stricter band, then the strongest row.
+    """Pick the table row for a profile: the exact row, then the nearest stricter band for the same work kind.
 
-    Returns ``(strategies, reason)``. An empty list (``no_recommendation``, never a refusal) means no
-    qualified row at or above the profile's bands exists for the role. Bands only rise: a weaker row is never used, even as the conservative fallback.
+    Returns ``(strategies, reason)``. An empty list (``no_recommendation``, never a refusal) means no qualified row
+    at or above the profile's bands exists for its work kind. A weaker row or another work kind's is never used.
     """
     rows = table.get('rows') if isinstance(table, dict) else None
     if not isinstance(rows, dict) or not rows:
         return [], 'no_recommendation'
-    role, family = profile['role'], profile['task_family']
+    kind = profile['work_kind']
     c, r = COMPLEXITY_BANDS.index(profile['complexity_band']), RISK_BANDS.index(profile['risk_band'])
-    exact = rows.get(row_key(role, family, profile['complexity_band'], profile['risk_band']))
+    exact = rows.get(row_key(kind, profile['complexity_band'], profile['risk_band']))
     if exact:
         return exact, 'ranking_exact'
-    stricter, strongest = [], []
+    stricter = []
     for name, strategies in rows.items():
         parts = name.split('|')
-        if len(parts) != 4 or parts[0] != role or not strategies or \
-                parts[2] not in COMPLEXITY_BANDS or parts[3] not in RISK_BANDS:
+        if len(parts) != 3 or parts[0] != kind or not strategies or \
+                parts[1] not in COMPLEXITY_BANDS or parts[2] not in RISK_BANDS:
             continue
-        ci, ri = COMPLEXITY_BANDS.index(parts[2]), RISK_BANDS.index(parts[3])
-        if ci < c or ri < r:
-            continue  # A cheaper row below the task's floors is never eligible.
-        strongest.append((ci + ri, name, strategies))
-        if parts[1] == family:
+        ci, ri = COMPLEXITY_BANDS.index(parts[1]), RISK_BANDS.index(parts[2])
+        if ci >= c and ri >= r:  # A cheaper row below the task's floors is never eligible.
             stricter.append((ci + ri, ci, ri, name, strategies))
     if stricter:
         return min(stricter, key=lambda item: item[:4])[4], 'ranking_stricter_band'
-    if strongest:
-        return max(strongest, key=lambda item: (item[0], [-ord(ch) for ch in item[1]]))[2], 'ranking_conservative'
     return [], 'no_recommendation'
 
 
@@ -300,7 +277,8 @@ def rank(profile, table, constraints):
         if field in constraints and not (isinstance(constraints[field], (list, tuple)) and
                                          all(isinstance(item, str) for item in constraints[field])):
             raise ValueError('Invalid ranking constraint ' + field)
-    strategies, reason = resolve_row(table, profile)
+    outdated = isinstance(table, dict) and bool(table.get('rows')) and table.get('schema') != TABLE_SCHEMA
+    strategies, reason = ([], 'no_recommendation') if outdated else resolve_row(table, profile)
     reasons = [reason]
     if strategies:
         tokens = (profile.get('context') or {}).get('tokens')
@@ -317,6 +295,8 @@ def rank(profile, table, constraints):
         reasons.append('no_recommendation')
     if not isinstance(table, dict) or not table.get('rows'):
         reasons.append('table_empty')
+    elif outdated:
+        reasons.append('table_outdated')  # another schema, e.g. role rows: no strategy until a table refresh
     return dict(strategy_ids=[item['strategy_id'] for item in strategies], reason_codes=reasons,
                 table_version=table.get('version') if isinstance(table, dict) else None,
                 profile_digest=profile.get('semantic_digest'), review_policy=profile.get('review_policy'),
@@ -557,7 +537,7 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
         if item is not None:
             candidates.append(item)
         excluded += why
-    bucket = [assignment['role'], assignment['complexity_band']]
+    bucket = [assignment['work_kind'], assignment['complexity_band']]
     explicit = assignment.get('choice')
     ranked = settings['smart_routing'] and not explicit and bool(ranking.get('strategy_ids'))
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
@@ -659,11 +639,11 @@ def _amounts(value, allow_none=False):
 
 
 def _valid_assignment(assignment):
-    if not isinstance(assignment, dict) or not all(_text(assignment.get(key)) for key in
-                                                   ('attempt_id', 'task', 'role', 'complexity_band', 'scope')):
-        return False
-    choice = assignment.get('choice')
-    return choice is None or (type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding')))
+    choice = assignment.get('choice') if isinstance(assignment, dict) else None  # with an optional pinned `endpoint`
+    return isinstance(assignment, dict) and all(_text(assignment.get(key)) for key in (
+        'attempt_id', 'task', 'role', 'work_kind', 'complexity_band', 'scope')) and (choice is None or (
+            type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding'))
+            and _optional(choice.get('endpoint'), _text)))
 
 
 def _valid_route(route):
@@ -700,9 +680,9 @@ def _valid_pool(pool):
 
 
 def _valid_observations(observations):
-    if type(observations) is not dict or not _amount(observations.get('now')):
-        return False
-    if not (_optional(observations.get('snapshot_id'), _text) and _optional(observations.get('epoch_at'), _finite)
+    if type(observations) is not dict or not _amount(observations.get('now')) or not (
+            all(_optional(observations.get(key), _text) for key in ('snapshot_id', 'routes_version'))
+            and _optional(observations.get('epoch_at'), _finite)
             and _optional(observations.get('minimum_horizon'), lambda v: _finite(v) and v > 0)):
         return False
     routes, pools = observations.get('routes'), observations.get('pools')
@@ -745,7 +725,7 @@ def _shape_error(assignment, ranking, settings, observations):
 def admit(assignment, ranking, settings, observations, *, ledger, workflow=None, clear_debits=False):
     """Choose a funding class and route, reserve the padded claim and record the decision atomically.
 
-    ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
+    ``assignment`` is ``{attempt_id, task, role, work_kind, complexity_band, scope, choice?}``; ``ranking`` the
     result of ``rank`` (empty ``strategy_ids`` falls back to worker choices, never blocks); ``settings`` a
     resolved ``routing_settings`` dict plus ``revision``.
 

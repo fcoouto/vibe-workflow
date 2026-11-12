@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from runtime import openrouter_settings as settings, routing
+from runtime import openrouter_settings as settings, routing, routing_observations
 from scripts import routing as command
 from tests.openrouter_fixtures import ManagedRouting
 from tests.test_openrouter_proposals import SCRIPT, ProposalCase
@@ -67,9 +67,9 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertIn('attempt_token', self.call('begin', self.begin_request()))
         [(assignment, result)] = calls
         self.assertEqual((result['status'], result['billing_class']), ('admitted', 'gateway'))
-        self.assertEqual(assignment['role'], 'researcher')
+        self.assertEqual(assignment['role'], 'explorer-agent')
         self.assertEqual(assignment['choice'], dict(provider='openrouter', model='model/v1', effort='none',
-                                                    harness='openrouter-proposal', funding='api'))
+                                                    harness='openrouter-proposal', funding='api', endpoint='p'))
         self.assertNotIn('workflow', bodies[0])
         self.assertNotIn('observations', bodies[0])
         self.assertEqual(self.holds(), {'admitted': 1})
@@ -90,7 +90,10 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertEqual(result['status'], 'pending')
         self.assertEqual(self.holds(), {})
 
-    def test_a_direct_api_grant_never_funds_the_gateway(self):
+    def granted(self, **funding):
+        """API Usage on and a qualified direct API grant on the gateway's pool label and account (F4: the collector
+        builds pools from the request's own routes only, so the grant can only matter if the request selects it).
+        Returns the admissions and the collector's snapshots of the next `begin`."""
         self.manage()
         self.publish()
         service = command.Service(self.stores['settings'], self.stores['ledger'])
@@ -104,12 +107,45 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         grant = dict(route='direct-grant', status='qualified', provider='openai', model='direct/model', effort='none',
                      harness='api', billing_class='api_grant', pool='fixture-openrouter', account='fixture-openrouter',
                      demand={'credit': 1_000_000})
-        self.source(extra=[grant])
-        calls = self.admissions()
-        self.assertEqual(self.call('begin', self.begin_request())['fallback'], 'explicit_choice_unavailable')
+        self.source(extra=[grant], **funding)
+        collected, real = [], routing_observations.collect
+
+        def collect(*args, **kwargs):
+            result = real(*args, **kwargs)
+            collected.append(result['observations'])
+            return result
+        self.enterContext(patch.object(routing_observations, 'collect', collect))
+        return self.admissions(), collected
+
+    def test_a_direct_api_grant_never_funds_the_gateway(self):
+        """The gateway's own funding is unverified (its credit window names an organization the ledger does not
+        fund); a funded direct API grant on the same pool label and account, with API Usage on, does not stand in."""
+        calls, collected = self.granted(organization='unfunded-organization')
+        begun = self.call('begin', self.begin_request())
+        self.assertEqual(begun['fallback'], 'explicit_choice_unavailable')
+        self.assertNotIn('packet', begun)
         [(_, result)] = calls
-        self.assertIn('pool_funding_mismatch', result['reason_codes'])
+        self.assertEqual(result['status'], 'pending')
+        [observations] = collected
+        [gateway] = [item['route'] for item in observations['excluded']]
+        self.assertTrue(gateway.startswith('openrouter:model/v1@p|'), gateway)
+        self.assertEqual(observations['excluded'], [dict(route=gateway, reason='funding_unverified')])
+        self.assertEqual((observations['routes'], observations['pools']), ([], {}))  # the grant is never a candidate
         self.assertEqual(self.holds(), {})
+
+    def test_a_direct_api_grant_does_not_block_the_gateways_own_funding(self):
+        """With the gateway's own organization funded, an unrelated grant sharing its pool label neither funds nor
+        blocks it: the admission is the gateway route, reserved on the gateway organization's credit only."""
+        calls, collected = self.granted()
+        self.assertIn('attempt_token', self.call('begin', self.begin_request()))
+        [(_, result)] = calls
+        self.assertEqual((result['status'], result['billing_class']), ('admitted', 'gateway'))
+        self.assertTrue(result['route'].startswith('openrouter:model/v1@p|'), result['route'])
+        self.assertEqual({key for key in result['reserved'] if key.startswith('org:')}, {'org:fixture-openrouter'})
+        [observations] = collected
+        self.assertEqual([route['billing_class'] for route in observations['routes']], ['gateway'])
+        self.assertEqual(observations['pools']['fixture-openrouter']['billing_class'], 'gateway')
+        self.assertEqual(self.holds(), {'admitted': 1})
 
     def test_proposals_gain_no_file_or_tool_permission(self):
         self.manage()
@@ -118,7 +154,7 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         bodies = self.prepared()
         begun = self.call('begin', request)
         [body] = bodies
-        self.assertEqual((body['job']['tools'], body['assignment']['role']), ([], 'researcher'))
+        self.assertEqual((body['job']['tools'], body['assignment']['role']), ([], 'explorer-agent'))
         result = self.call('dispatch', dict(request, attempt_token=begun['attempt_token']))
         self.assertIn('source bytes', result['packet'])
         self.assertNotIn('outside the permission', result['packet'])
@@ -138,7 +174,8 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         self.assertIn('attempt_token', self.call('begin', request))
         [body] = bodies
         self.assertEqual(body['assignment']['choice']['model'], 'model/v1')
-        self.assertEqual(body['constraints'], dict(allowed_models=['model/v1'], allowed_efforts=['none']))
+        self.assertEqual(body['constraints'], dict(allowed_models=['model/v1'], allowed_efforts=['none'],
+                                                   allowed_harnesses=['openrouter-proposal']))  # F4.4: its host's
         self.assertTrue(calls[0][1]['route'].startswith('openrouter:model/v1@p|'), calls[0][1]['route'])
         with self.assertRaisesRegex(ValueError, 'destination_denied'):
             self.call('begin', dict(request, task_id='task-2', model='model/v2'))
@@ -359,7 +396,7 @@ class ManagedProposalTests(ManagedRouting, ProposalCase):
         outside = tempfile.TemporaryDirectory()  # self.tmp holds this class's patched default routing state
         self.addCleanup(outside.cleanup)
         self.assertEqual(self.api.managed_self_check(Path(outside.name).resolve() / 'self-check'), [])
-        self.assertEqual(command._self_check('script', 'scripts/openrouter_proposals.py'), [])
+        self.assertEqual(command._self_check('script', 'scripts/openrouter_proposals.py', Path(outside.name) / 'settings.json'), [])
 
     def test_the_self_check_flag_refuses_an_unsafe_workdir(self):
         crowded = Path(self.tmp.name).resolve() / 'crowded'

@@ -234,7 +234,7 @@ class RetentionTests(fixture.Accounting):
         settings = dict(command.routing_settings.resolve({}), api_usage_enabled=True, revision=1)
         obs = api_observations(at=observed + DAY + 1)  # the balance snapshot is past its 24-hour retention
         with self.open_ledger() as ledger:
-            result = routing.admit(dict(attempt_id='x', task='t', role='implementer', complexity_band='medium',
+            result = routing.admit(dict(attempt_id='x', task='t', role='software-engineer', work_kind='implementation', complexity_band='medium',
                                         scope='scope1'), dict(strategy_ids=['s-api'], reason_codes=[]), settings,
                                    obs, ledger=ledger)
         self.assertEqual(result['status'], 'pending')  # an expired snapshot never funds a decision

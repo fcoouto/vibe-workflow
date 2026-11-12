@@ -59,7 +59,8 @@ def settings(**updates):
 
 
 def assignment(attempt, task=None):
-    return dict(attempt_id=attempt, task=task or attempt, role='implementer', complexity_band='medium', scope=SCOPE)
+    return dict(attempt_id=attempt, task=task or attempt, role='software-engineer', work_kind='implementation', complexity_band='medium',
+                scope=SCOPE)
 
 
 def ranking(*ids):

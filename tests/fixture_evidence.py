@@ -155,13 +155,13 @@ class EvidenceFixture:
         with state._database(self.scope) as db:
             task = state._task(db, state._scope_id(self.scope), 'codex', 'parent')
         if 'delegation' not in task:
-            plan = self.coordinator_resource_plan([dict(id='review', role='review', claims=[dict(kind='path',
+            plan = self.coordinator_resource_plan([dict(id='review', role='code-reviewer', claims=[dict(kind='path',
                 key=str(self.repo), mode='read')], dependencies=[], max_attempts=3)])
             plan['limits'].update(max_attempts=3, max_resource_units=3, max_parallel_workers=3, host_capacity=3)
             delegation.plan_delegation(self.scope, self.request(plan=plan))
         with state._database(self.scope) as db:
             records = [r for r in delegation._ledger(self.scope, db) if r['owner']['session_id'] == 'parent' and
-                r['owner']['task_id'] == self.identity['task_id'] and r['data']['role'] == 'review']
+                r['owner']['task_id'] == self.identity['task_id'] and r['data']['role'] == 'code-reviewer']
         guide = delegation.guidance_status(self.scope, self.native_review_cache)
         request = self.request(coverage=coverage, criteria=criteria, assignment=assignment, job_id='review',
             dispatch_id='review-' + str(len(records)), resource_units=1,

@@ -187,7 +187,7 @@ def validate_admission(scope, request):
         return
     d6._require(present == {'workstream_revision', 'workstream_limits'}, 'Workstreams requires revision and task-derived limits')
     _permission(scope, request['workstream_revision'])
-    d6._native_name('0' * 32, 'worker', request)
+    d6._native_name('0' * 32, 'software-engineer', request)  # Workstreams gates admit implementation workers
     limits = request['workstream_limits']
     state._fields(limits, ('context_id', 'rationale', 'output_tokens', 'context_tokens', 'max_steps',
         'max_seconds', 'max_continuations', 'backoff_seconds'))

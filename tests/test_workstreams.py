@@ -140,7 +140,7 @@ class WorkstreamsTests(unittest.TestCase):
     def test_continuation_keeps_original_visibility_and_rejects_overrides(self):
         enabled = self.enable()
         self.fixture.plan()
-        visibility = dict(version=1, role='Builder', specialty='Parser fixes', custom_role_name='Parser owner')
+        visibility = dict(version=2, role='software-engineer', specialty='Parser fixes', custom_role_name='Parser owner')
         try:
             prepared = self.fixture.prepare(workstream_revision=enabled['revision'], workstream_limits=self.limits,
                 visibility=visibility)
@@ -161,7 +161,7 @@ class WorkstreamsTests(unittest.TestCase):
         result = self.api.consume_continuation(self.scope, consume)
         self.assertEqual(result['visibility'], visibility)
         self.assertEqual(result['worker_id'], 'child')
-        self.assertEqual(self.fixture.raw_assignment(prepared['attempt_id'])['role'], 'worker')
+        self.assertEqual(self.fixture.raw_assignment(prepared['attempt_id'])['role'], 'software-engineer')
 
     def test_host_retry_and_unknown_failures_block_automatic_continuation(self):
         prepared = self.prepare()
@@ -373,8 +373,8 @@ print(json.dumps(result))
         enabled = self.enable()
         plan = f.plan_value()
         plan['jobs'].extend([
-            dict(id='review', role='review', claims=[f.path_claim(mode='read')], dependencies=['edit'], max_attempts=3),
-            dict(id='consumer', role='worker', claims=[f.path_claim('consumer.py')], dependencies=['review'], max_attempts=1)])
+            dict(id='review', role='code-reviewer', claims=[f.path_claim(mode='read')], dependencies=['edit'], max_attempts=3),
+            dict(id='consumer', role='software-engineer', claims=[f.path_claim('consumer.py')], dependencies=['review'], max_attempts=1)])
         f.plan(plan)
         prepared = f.prepare(workstream_revision=enabled['revision'], workstream_limits=self.limits)
         self.observe(prepared)
@@ -476,7 +476,7 @@ print(json.dumps(result))
     def test_grouped_d5_review_creation_name_and_collection_work_while_mode_is_off(self):
         helper = test_delegation_review.Stage4NativeReviewTests
         f = self.fixture
-        f.plan(f.plan_value(jobs=[dict(id='review', role='review', claims=[f.path_claim(mode='read')],
+        f.plan(f.plan_value(jobs=[dict(id='review', role='code-reviewer', claims=[f.path_claim(mode='read')],
             dependencies=[], max_attempts=2)]))
         prepared = evidence.prepare_review(self.scope, helper.review_request(f, workstream_context_id='WS42.03'))
         self.assertEqual(prepared['task_name'], 'review_ws42_03_review_' + prepared['attempt_id'])
@@ -500,7 +500,7 @@ print(json.dumps(result))
     def settled_worker_chain(self, length):
         enabled = self.enable()
         names = ['a', 'b', 'c'][:length]
-        jobs = [dict(id=name, role='worker', claims=[self.fixture.path_claim(name + '.py')],
+        jobs = [dict(id=name, role='software-engineer', claims=[self.fixture.path_claim(name + '.py')],
             dependencies=[names[index - 1]] if index else [], max_attempts=2)
             for index, name in enumerate(names)]
         self.fixture.plan(self.fixture.plan_value(jobs=jobs))
@@ -548,7 +548,7 @@ print(json.dumps(result))
         original = f.plan_value
         def plan_value(**updates):
             plan = original(**updates)
-            plan['jobs'] = [*plan['jobs'], dict(id='integrate', role='coordinator',
+            plan['jobs'] = [*plan['jobs'], dict(id='integrate', role='orchestrator',
                 claims=[f.path_claim('integration.py')], dependencies=['b'], max_attempts=1)]
             return plan
         with patch.object(f, 'plan_value', side_effect=plan_value):
@@ -614,7 +614,7 @@ print(json.dumps(result))
     def test_d5_updated_reader_collection_retains_admitted_version_and_truthful_provenance(self):
         helper = test_delegation_review.Stage4NativeReviewTests
         f = self.fixture
-        f.plan(f.plan_value(jobs=[dict(id='review', role='review', claims=[f.path_claim(mode='read')],
+        f.plan(f.plan_value(jobs=[dict(id='review', role='code-reviewer', claims=[f.path_claim(mode='read')],
             dependencies=[], max_attempts=2)]))
         prepared = evidence.prepare_review(self.scope, helper.review_request(f))
         binding = evidence.prepared_native_review(self.scope, prepared['attempt_id'])
@@ -838,10 +838,10 @@ class SeparationTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_both_off_reopened_prerequisite_stales_transitive_worker_and_coordinator(self):
-        jobs = [dict(id='a', role='worker', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
-            dict(id='b', role='worker', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1),
-            dict(id='c', role='worker', claims=[self.f.path_claim('c.py')], dependencies=['b'], max_attempts=1),
-            dict(id='integrate', role='coordinator', claims=[self.f.path_claim('integration.py')], dependencies=['b'], max_attempts=1)]
+        jobs = [dict(id='a', role='software-engineer', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
+            dict(id='b', role='software-engineer', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1),
+            dict(id='c', role='software-engineer', claims=[self.f.path_claim('c.py')], dependencies=['b'], max_attempts=1),
+            dict(id='integrate', role='orchestrator', claims=[self.f.path_claim('integration.py')], dependencies=['b'], max_attempts=1)]
         self.f.plan(self.f.plan_value(jobs=jobs))
         def prepare(name, dispatch, **updates):
             job = next(j for j in jobs if j['id'] == name)

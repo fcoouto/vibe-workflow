@@ -62,24 +62,59 @@ class RoutingSettingsTests(unittest.TestCase):
                 routing_settings.update(self.path, dict(caps=bad), 1)
 
     def test_worker_choices_validated(self):
-        routing_settings.update(self.path, dict(worker_choices=dict(implementer=[CHOICE])), 0)
-        self.assertEqual(routing_settings.read(self.path)['worker_choices'], dict(implementer=[CHOICE]))
+        routing_settings.update(self.path, dict(worker_choices={'software-engineer': [CHOICE]}), 0)
+        self.assertEqual(routing_settings.read(self.path)['worker_choices'], {'software-engineer': [CHOICE]})
         missing = {k: v for k, v in CHOICE.items() if k != 'harness'}
-        for bad in (dict(planner=[CHOICE]), dict(reviewer=[missing]), dict(reviewer=[dict(CHOICE, extra=1)]),
-                    dict(reviewer=CHOICE), dict(reviewer=[dict(CHOICE, funding='free-money')]),
-                    dict(reviewer=[dict(CHOICE, model='')])):
+        for bad in ({'code-reviewer': [missing]}, {'code-reviewer': [dict(CHOICE, extra=1)]},
+                    {'code-reviewer': CHOICE}, {'code-reviewer': [dict(CHOICE, funding='free-money')]},
+                    {'code-reviewer': [dict(CHOICE, model='')]}):
             with self.subTest(bad), self.assertRaises(routing_settings.SettingsError):
                 routing_settings.update(self.path, dict(worker_choices=bad), 1)
 
-    def test_all_roles_accepted_and_order_kept(self):
+    def test_set_refuses_a_non_roster_worker_choice_key(self):
+        for key in ('implementer', 'reviewer', 'researcher', 'repair', 'worker', 'orchestrator', 'coordinator',
+                    'check', 'planner'):
+            with self.subTest(key), self.assertRaises(routing_settings.SettingsError) as caught:
+                routing_settings.update(self.path, dict(worker_choices={key: [CHOICE]}), 0)
+            self.assertEqual(str(caught.exception), 'invalid_worker_choices')
+        for name in ('ROLES', 'PROFILE_ROLES', 'EXPLICIT_ROLES'):
+            self.assertFalse(hasattr(routing_settings, name), name)
+
+    def test_legacy_worker_choice_key_is_reported_not_fatal(self):
         second = dict(CHOICE, model='n')
-        choices = {role: [CHOICE, second] for role in ('implementer', 'reviewer', 'researcher', 'repair')}
+        routing_settings.update(self.path, dict(smart_routing=False), 0)
+        stored = dict(version=1, revision=1, values=dict(smart_routing=False, worker_choices={
+            'implementer': [CHOICE], 'software-engineer': [second]}))
+        self.path.write_text(json.dumps(stored))
+        self.assertEqual(routing_settings.read(self.path)['worker_choices'], {'software-engineer': [second]})
+        values = routing_settings._load(self.path)[1]
+        self.assertEqual(routing_settings.warnings(values),
+                         [dict(code='worker_choice_key_unknown', key='implementer')])
+        routing_settings.update(self.path, dict(smart_routing=True), 1)
+        kept = json.loads(self.path.read_text())['values']['worker_choices']
+        self.assertEqual(kept['implementer'], [CHOICE])  # left in the file, never rewritten or used
+        self.assertEqual(routing_settings.warnings({}), [])
+
+    def test_all_routed_specialists_accepted_and_order_kept(self):
+        second = dict(CHOICE, model='n')
+        choices = {role: [CHOICE, second] for role in ('software-engineer', 'code-reviewer', 'explorer-agent',
+                                                       'debugger')}
         routing_settings.update(self.path, dict(worker_choices=choices), 0)
         self.assertEqual(routing_settings.read(self.path)['worker_choices'], choices)
 
+    def test_assignment_role_is_the_profile_role(self):
+        self.assertEqual(routing_settings.assignment_role('software-engineer'), 'software-engineer')
+        self.assertEqual(routing_settings.assignment_role('code-reviewer', 'code-reviewer'), 'code-reviewer')
+        for args, reason in ((('orchestrator',), 'coordinator_not_routed'),
+                             (('software-engineer', 'code-reviewer'), 'role_mismatch'),
+                             (('software-engineer', 'implementer'), 'role_mismatch')):
+            with self.subTest(args), self.assertRaises(routing_settings.SettingsError) as caught:
+                routing_settings.assignment_role(*args)
+            self.assertEqual(str(caught.exception), reason)
+
     def test_duplicate_worker_choices_rejected(self):
         with self.assertRaises(routing_settings.SettingsError):
-            routing_settings.update(self.path, dict(worker_choices=dict(reviewer=[CHOICE, dict(CHOICE)])), 0)
+            routing_settings.update(self.path, dict(worker_choices={'code-reviewer': [CHOICE, dict(CHOICE)]}), 0)
 
     def test_intermediate_directories_are_private(self):
         deep = Path(self.tmp.name).resolve() / 'a' / 'b' / 'settings.json'
@@ -192,6 +227,83 @@ class RoutingSettingsTests(unittest.TestCase):
         self.assertEqual(calls, [scope])
         routing_settings.update(self.path, dict(smart_routing=False), 0)
         self.assertNotIn('workstreams', json.loads(self.path.read_text()).get('values', {}))
+
+
+class WorkerChoiceInstructionTests(unittest.TestCase):
+    """The worker-choice instructions state the validator's contract and load nothing for API setup."""
+    SKILL = Path(__file__).resolve().parents[1] / 'skills' / 'manage-usage-routing'
+
+    def test_worker_choice_requests_find_a_complete_selective_contract(self):
+        entry = (self.SKILL / 'SKILL.md').read_text()
+        description = next(line for line in entry.splitlines() if line.startswith('description:'))
+        self.assertIn('worker choice', description)
+        self.assertIn('(references/worker-choices.md)', entry)
+        text = (self.SKILL / 'references' / 'worker-choices.md').read_text()
+        for field in sorted(routing_settings.CHOICE_FIELDS):
+            self.assertIn('`%s`' % field, text)
+        for value in (*routing_settings.FUNDING, str(routing_settings.MAX_CHOICES), '256', 'routing.py status',
+                      'routing.py set', 'expected_revision', 'invalid_worker_choices', 'invalid_worker_choice',
+                      'duplicate_worker_choice', 'worker_choice_key_unknown', 'stale_revision', 'orchestrator'):
+            self.assertIn(value, text)
+        for unloaded in ('keychain-setup.md', 'first-canary.md', 'delegation.md', 'procedure.md'):
+            self.assertNotIn(unloaded, text)  # a worker-choice request loads no API setup, canary or delegation
+
+    def test_identity_fields_come_from_sources_that_carry_them(self):
+        """F2-N1: native admission replies name no provider or harness, so the guide names the path rules and the
+        compiled table, whose fields routing compares, and asks for anything they do not show."""
+        from runtime import routing_launch, routing_paths
+        text = ' '.join((self.SKILL / 'references' / 'worker-choices.md').read_text().split())
+        self.assertNotIn('earlier admission or launch reply', text)
+        for source in ('runtime/routing_routes.json', 'strategy-table.json', 'ask the user'):
+            self.assertIn(source, text)
+        rules = routing_paths.load_rules()  # the named rules carry both fields on every path
+        self.assertTrue(all(rule['provider'] and rule['harness'] for rule in rules['paths']))
+        codex = routing_launch.route_identity('codex_native', model='m')
+        self.assertIn('`%s` and provider `%s`' % (codex['harness'], codex['provider']), text)
+        self.assertIn('`%s`' % codex['effort'], text)  # a model without an effort control
+        self.assertTrue(any(rule['harness'] == codex['harness'] and rule['provider'] == codex['provider']
+                            for rule in rules['paths']))
+
+    def test_a_compiled_null_effort_becomes_none_only_in_the_choice(self):
+        """F2-N1 correction: the compiled table keeps `effort: null` (test_routing_evidence
+        `test_same_model_on_two_harnesses_has_independent_efforts`); the generated route identity uses the text
+        `none`, which a settings choice must name, and the launch sends no effort."""
+        from runtime import routing_paths
+        text = ' '.join((self.SKILL / 'references' / 'worker-choices.md').read_text().split())
+        self.assertNotIn('is written as effort `none`', text)
+        for phrase in ('`effort` is `null`', 'write the text `none` in the choice', 'sends no effort'):
+            self.assertIn(phrase, text)
+        path = dict(next(rule for rule in routing_paths.load_rules()['paths'] if rule['harness'] == 'codex-native'),
+                    demand={'7d': 1})
+        route = routing_paths.strategy_route(path, dict(strategy_id='s1', model='m', effort=None))
+        self.assertEqual(route['effort'], 'none')  # the identity a choice with effort `none` matches
+
+
+    def test_documented_commands_run_against_disposable_stores(self):
+        import re, subprocess
+        text = (self.SKILL / 'references' / 'worker-choices.md').read_text()
+        blocks = [' '.join(block.replace('\\\n', ' ').split()) for block in re.findall(r'```sh\n(.*?)```', text, re.S)]
+        status, update = (next(block for block in blocks if 'routing.py ' + op in block) for op in ('status', 'set'))
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp).resolve()
+            (temp / 'project').mkdir()
+            (temp / 'home').mkdir(mode=0o700)
+            stores = '--settings %s --ledger %s' % (temp / 'routing' / 'settings.json', temp / 'usage' / 'ledger.sqlite3')
+
+            def run(command):
+                command = command.replace('/absolute/project/path', '%s %s' % (temp / 'project', stores))
+                done = subprocess.run(['sh', '-c', command], cwd=root, stdin=subprocess.DEVNULL, capture_output=True,
+                                      timeout=60, env=dict(os.environ, HOME=str(temp / 'home')))
+                return json.loads(done.stdout)
+
+            before = run(status)
+            self.assertEqual((before['state'], before['settings_revision'], before['settings_warnings']), ('ok', 0, []))
+            choice = {'software-engineer': [CHOICE]}
+            written = run(update.replace('<revision>', str(before['settings_revision']))
+                          .replace('<map>', json.dumps(choice, separators=(',', ':'))))
+            self.assertEqual((written['state'], written['revision']), ('updated', 1), written)
+            self.assertEqual(run(status)['settings']['worker_choices'], choice)
 
 
 if __name__ == '__main__':

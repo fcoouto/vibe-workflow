@@ -10,8 +10,76 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from runtime import evidence, state
+from runtime import delegation, evidence, state, task_profile
 from tests.fixture_delegation import AdmissionFixture
+
+
+class RosterRoleTests(AdmissionFixture, unittest.TestCase):
+    """F2.3: new plans name roster specialists or `check`; stored plans and records keep their old role names."""
+    def legacy_writer(self):
+        """A pre-F2 writer: the old plan role names were accepted as new input then."""
+        original = delegation._delegation_plan
+        return patch.object(delegation, '_delegation_plan', lambda scope, plan, new=False: original(scope, plan))
+
+    def test_plan_accepts_roster_specialists_and_check_jobs(self):
+        value = self.plan_value()
+        value['jobs'][0]['role'] = 'backend-specialist'
+        value['jobs'] += [dict(id='look', role='debugger', claims=[self.path_claim('look.py', mode='read')],
+                               dependencies=[], max_attempts=1),
+                          dict(id='review', role='code-reviewer', claims=[self.path_claim(mode='read')],
+                               dependencies=['edit'], max_attempts=1),
+                          dict(id='unit', role='check', claims=[self.path_claim(mode='read')], dependencies=['edit'],
+                               max_attempts=1)]
+        self.assertTrue(self.plan(value)['ok'])
+
+    def test_new_plan_refuses_an_old_role_name(self):
+        for old in ('worker', 'review', 'coordinator', 'implementer', 'researcher', 'wizard'):
+            value = self.plan_value()
+            value['jobs'][0]['role'] = old
+            with self.subTest(old), self.assertRaisesRegex(state.StateError, 'Invalid job identity or role'):
+                self.plan(value)
+
+    def test_stored_plan_with_legacy_roles_still_reads(self):
+        value = self.plan_value()
+        value['jobs'][0]['role'] = 'worker'
+        value['jobs'] += [dict(id='review', role='review', claims=[self.path_claim(mode='read')],
+                               dependencies=['edit'], max_attempts=1),
+                          dict(id='own', role='coordinator', claims=[self.path_claim('own.py')], dependencies=[],
+                               max_attempts=1),
+                          dict(id='unit', role='check', claims=[self.path_claim(mode='read')], dependencies=['edit'],
+                               max_attempts=1)]
+        with self.legacy_writer():
+            self.plan(value)
+        with state._database(self.scope) as db:
+            task = evidence._task(db, self.scope, self.request())
+        self.assertEqual([job['role'] for job in delegation._task_plan(self.scope, task)['jobs']],
+                         ['worker', 'review', 'coordinator', 'check'])
+        prepared = self.prepare()  # the stored worker job dispatches as before
+        self.assertTrue(prepared['launch_admitted'])
+        record = self.api.prepared_native_assignment(self.scope, prepared['attempt_id'])
+        self.assertEqual(record['task_name'], 'worker_' + prepared['attempt_id'])
+        self.assertEqual(self.api.delegation_status(self.scope, 'codex', 'parent')['budgets']['attempts_consumed'], 1)
+
+    def test_non_writing_specialist_needs_read_only_claims(self):
+        for role in ('debugger', 'code-reviewer', 'product-manager'):
+            value = self.plan_value()
+            value['jobs'][0]['role'] = role
+            with self.subTest(role), self.assertRaises(state.StateError):
+                self.plan(value)
+        value = self.plan_value()
+        value['jobs'][0]['role'] = 'orchestrator'  # the coordinator's own job keeps write ownership
+        self.assertTrue(self.plan(value)['ok'])
+
+    def test_new_records_carry_the_job_specialist(self):
+        value = self.plan_value()
+        value['jobs'][0]['role'] = 'backend-specialist'
+        self.plan(value)
+        prepared = self.prepare()
+        body = json.loads(prepared['prompt'])['assignment']
+        self.assertEqual(body['role'], 'backend-specialist')
+        self.assertEqual(self.api.prepared_native_assignment(self.scope, prepared['attempt_id'])['task_name'],
+                         'worker_' + prepared['attempt_id'])
+        self.assertFalse(hasattr(delegation, 'NATIVE_ROLES'))
 
 
 class AdmissionTests(AdmissionFixture, unittest.TestCase):
@@ -23,7 +91,7 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
 
     def test_visibility_is_bound_to_worker_replay_without_granting_authority(self):
         self.plan()
-        visibility = dict(version=1, role='Builder', specialty='Parser fixes', custom_role_name='Parser owner')
+        visibility = dict(version=2, role='software-engineer', specialty='Parser fixes', custom_role_name='Parser owner')
         request = self.prepare_request(visibility=visibility)
         try:
             prepared = self.api.prepare_assignment(self.scope, request)
@@ -34,13 +102,13 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         self.assertEqual(binding['visibility'], visibility)
         self.assertEqual(binding['task_name'], 'worker_' + prepared['attempt_id'])
         body = json.loads(prepared['prompt'])['assignment']
-        self.assertEqual(body['role'], 'worker')
+        self.assertEqual(body['role'], 'software-engineer')
         self.assertEqual(body['request']['visibility'], visibility)
         replay = self.api.prepare_assignment(self.scope, request)
         self.assertFalse(replay['launch_admitted'])
         self.assertEqual(replay['attempt_id'], prepared['attempt_id'])
         self.assertEqual(replay['visibility'], visibility)
-        for changed in (dict(role='Reviewer'), dict(specialty='Other work'), dict(custom_role_name='Other owner')):
+        for changed in (dict(role='code-reviewer'), dict(specialty='Other work'), dict(custom_role_name='Other owner')):
             with self.subTest(changed=changed), self.assertRaisesRegex(state.StateError, 'changed payload'):
                 self.api.prepare_assignment(self.scope, request | dict(visibility=visibility | changed))
         status = self.api.delegation_status(self.scope, 'codex', 'parent')
@@ -224,7 +292,7 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
 
     def test_dependency_cycles_unknowns_and_unsettled_predecessors_block(self):
         value = self.plan_value()
-        value['jobs'].append(dict(id='after', role='worker', claims=[self.path_claim('after.py')],
+        value['jobs'].append(dict(id='after', role='software-engineer', claims=[self.path_claim('after.py')],
             dependencies=['edit'], max_attempts=1))
         cycle = deepcopy(value)
         cycle['jobs'][0]['dependencies'] = ['after']

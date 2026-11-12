@@ -270,7 +270,7 @@ class DelegationLifecycleDispatcherTests(unittest.TestCase):
     def test_worker_and_linked_review_dispatch_once_through_all_native_cli_leaves(self):
         f=self.fixture
         plan=f.plan_value()
-        plan['jobs'].append(dict(id='review',role='review',claims=[f.path_claim(mode='read')],dependencies=['edit'],max_attempts=3))
+        plan['jobs'].append(dict(id='review',role='code-reviewer',claims=[f.path_claim(mode='read')],dependencies=['edit'],max_attempts=3))
         code,result=self.cli(['plan'],f.request(plan=plan));self.assertEqual(code,0,result)
         worker_request=f.prepare_request()
         code,worker=self.cli(['prepare'],worker_request,native=dict(discover_native_workers=f.catalog))

@@ -6,8 +6,7 @@ holds the API grant. Admission records live in the harness until the admission l
 Network, clocks and models are never touched: time comes from each fixture event.
 
 `AdmissionReplay` (fixtures in `arrivals/admission/`) drives the merged part-B path instead: the strategy table
-compiled and refreshed by `runtime.routing_evidence`, `routing.ensure_profile` with a counting Jev double,
-`routing.rank`, `routing.admit` and `routing.record_event`, over one temporary ledger per run.
+compiled and refreshed by `runtime.routing_evidence`, `routing.ensure_profile`, `routing.rank`, `routing.admit` and `routing.record_event`, over one temporary ledger per run.
 """
 import copy
 import hashlib
@@ -104,7 +103,7 @@ class Replay:
         self.refresh(now)
         if not self.smart:
             return self.arrive_off(event, now)
-        bucket = (event['role'], event['complexity'])
+        bucket = (event['work_kind'], event['complexity'])
         cost = event['sub_cost']
         padded, headroom, api_ok, policy = self.api_state(event, now)
         sub_pools = self.sub_feasible(cost)
@@ -146,7 +145,7 @@ class Replay:
             kind, _, name = route.partition(':')
             if kind == 'sub' and name in self.sub_feasible(event['sub_cost']):
                 if self.reserve(route, event, now):
-                    return self.admit(event, now, mode='off', bucket=(event['role'], event['complexity']),
+                    return self.admit(event, now, mode='off', bucket=(event['work_kind'], event['complexity']),
                                       shares=None, feasible=None, klass='subscription', route=route, candidates=None)
                 return
         self.log.append(dict(id=event['id'], at=now, outcome='pending', reason='worker_choice_unavailable'))
@@ -269,7 +268,7 @@ class ReplayTests(unittest.TestCase):
         base = load('mixed_load')
         events = []
         for i in range(jobs):
-            events += [dict(t=100000 + 100 * i, kind='arrive', id='h-%d' % i, role='implementer',
+            events += [dict(t=100000 + 100 * i, kind='arrive', id='h-%d' % i, work_kind='implementation',
                             complexity='medium', api_cost=2_000_000, sub_cost=0.005),
                        dict(t=100000 + 100 * i + 30, kind='complete', id='h-%d' % i, api_actual=1_000_000,
                             sub_actual=0.004)]
@@ -431,16 +430,6 @@ def strategy_id(model, effort, harness):
     return hashlib.sha256(json.dumps([model, effort, harness], separators=(',', ':')).encode()).hexdigest()[:16]
 
 
-class CountingJev:
-    """Jev double: counts every enrichment request and answers nothing, so floors would apply if it were asked."""
-    def __init__(self):
-        self.calls = []
-
-    def __call__(self, view, fields):
-        self.calls.append((view.get('job_id'), tuple(fields)))
-        return {}
-
-
 class AdmissionReplay:
     """Replay arrivals through compile/refresh, profile, rank, admit and settle over one isolated ledger."""
     def __init__(self, scenario, folder):
@@ -457,7 +446,6 @@ class AdmissionReplay:
         self.observed_at = None
         self.pools = self.scenario['pools']
         self.deployments = {d['route']: d for d in self.scenario['deployments']}
-        self.jev = CountingJev()
         self.table = None
         self.tables = []
         self.refresh(self.scenario['catalog'], None)
@@ -469,7 +457,7 @@ class AdmissionReplay:
     # -- inputs ----------------------------------------------------------------------------------------
     def refresh(self, catalog, now):
         evidence = self.scenario['evidence']
-        inputs = (evidence['guidance'], catalog, evidence['benchmarks'], evidence['terms'])
+        inputs = (evidence['guidance'], catalog, evidence['benchmarks'])
         self.table = routing_evidence.refresh_table(self.table, lambda: inputs, now=COMPILED_AT)
         self.catalog = {item['model']: item for item in catalog}
         self.tables.append(dict(at=now, table=self.table, catalog=self.catalog))
@@ -503,9 +491,9 @@ class AdmissionReplay:
     # -- lifecycle -------------------------------------------------------------------------------------
     def arrive(self, job, now):
         self.observe(now)
-        profile = routing.ensure_profile(job, jev=self.jev)
+        profile = routing.ensure_profile(job)
         ranking = routing.rank(profile, self.table, None)
-        assignment = dict(attempt_id=job['id'], task=job['id'], role=routing_settings.PROFILE_ROLES[job['role']],
+        assignment = dict(attempt_id=job['id'], task=job['id'], role=profile['role'], work_kind=profile['work_kind'],
                           complexity_band=profile['complexity_band'], scope='scope1')
         outcome = routing.admit(assignment, ranking, self.settings, self.observations(now), ledger=self.ledger)
         entry = dict(id=job['id'], at=now, outcome=outcome['status'], ranked=list(ranking['strategy_ids']),
@@ -709,9 +697,6 @@ class CatalogRefreshReplayTests(unittest.TestCase):
             self.assertEqual(record['route_identity'],
                              routing.route_identity(d['provider'], d['model'], d['effort'], d['harness']))
 
-    def test_no_jev_calls(self):
-        self.assertEqual(self.run_.jev.calls, [])
-
 
 class DependencyPlanReplayTests(unittest.TestCase):
     """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. Caps hold two at once."""
@@ -773,22 +758,16 @@ class DependencyPlanReplayTests(unittest.TestCase):
         self.assertTrue(all(hold['closed'] for hold in self.snapshot['holds'].values()))
         self.assertEqual(len(self.snapshot['holds']), 6)
 
-    def test_zero_jev_calls_and_coordinator_profiles(self):
-        self.assertEqual(self.run_.jev.calls, [])
+    def test_coordinator_profiles(self):
         for job in self.scenario['jobs']:
-            profile = routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')},
-                                             jev=self.run_.jev)
+            profile = routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')})
             self.assertEqual(profile['uncertain_fields'], [])
             self.assertEqual({profile['provenance'][f] for f in routing.SEMANTIC_FIELDS}, {'coordinator'})
-        self.assertEqual(self.run_.jev.calls, [])
 
-    def test_the_counting_double_would_see_a_gap(self):
-        # The same CountingJev class the replay uses; a fresh instance keeps the run's own (empty) record untouched.
-        jev = CountingJev()
-        self.assertEqual((type(jev), jev.calls), (type(self.run_.jev), []))
-        job = dict(self.scenario['jobs'][0], profile=dict(task_family='implementation'))
-        routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')}, jev=jev)
-        self.assertEqual(jev.calls, [('job-1', ('complexity_band', 'risk_band'))])
+    def test_a_profile_gap_takes_floors(self):
+        job = dict(self.scenario['jobs'][0], profile=dict(review_policy='independent'))
+        profile = routing.ensure_profile({k: v for k, v in job.items() if k not in ('depends_on', 'duration')})
+        self.assertEqual({profile['provenance'][f] for f in ('complexity_band', 'risk_band')}, {'floor'})
 
     def test_exact_replay(self):
         first = (self.run_.log, self.trace)

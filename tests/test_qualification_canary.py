@@ -57,7 +57,7 @@ class CanaryPreconditionTests(Temp):
     def test_the_plan_covers_three_roles_and_two_bands_with_valid_jobs(self):
         plan = canary.plan_assignments(20, "pilot-x", now=1_800_000_000)
         self.assertEqual(len(plan), 20)
-        self.assertEqual({p["label"]["role"] for p in plan}, {"implementer", "reviewer", "researcher"})
+        self.assertEqual({p["label"]["role"] for p in plan}, {"software-engineer", "code-reviewer", "explorer-agent"})
         self.assertEqual({p["label"]["band"] for p in plan}, {"low", "medium"})
         for item in plan:
             body = item["body"]
@@ -455,7 +455,7 @@ class PilotEndToEndTests(PilotHarness):
         self.assertEqual([a["kinds"] for a in result["admissions"]], [["primary", "title"]] + [["primary"]] * 19)
         self.assertEqual([a["title_state"] for a in result["admissions"]], ["known"] + ["zero"] * 19)
         self.assertEqual({a["rereads"] for a in result["admissions"]}, {0})
-        self.assertEqual({a["role"] for a in result["admissions"]}, {"implementer", "reviewer", "researcher"})
+        self.assertEqual({a["role"] for a in result["admissions"]}, {"software-engineer", "code-reviewer", "explorer-agent"})
         self.assertEqual({a["band"] for a in result["admissions"]}, {"low", "medium"})
         self.assertTrue(all(a["released"] and not a["charged"] for a in result["admissions"]))
         self.assertEqual([r["at"] for r in result["repo"]], [5, 10, 15, 20, "end"])

@@ -139,7 +139,7 @@ class AdmissionNonceTests(DispatchBase):
         self.assertFalse(set(old.values()) & set(new.values()))
         self.assertEqual(self.call(dispatch('a1'))['session_id'], new['session_id'])
         self.assertEqual(self.call(dict(v=1, op='check', session_id=old['session_id'], request=facts())),
-                         dict(v=1, state='unmanaged'))
+                         dict(v=1, settings_warnings=[], state='unmanaged'))
 
     def test_admissions_without_a_nonce_still_dispatch(self):
         """Admissions recorded before nonces existed derive with no nonce."""
@@ -402,13 +402,13 @@ class CheckAuthorityTests(DispatchBase):
                  (check('a1', authority=digest(self.token)), 'authority_invalid')]
         for request, reason in cases:
             with self.subTest(reason=reason, request=sorted(request)):
-                self.assertEqual(self.call(request), dict(v=1, state='blocked', reason=reason))
+                self.assertEqual(self.call(request), dict(v=1, settings_warnings=[], state='blocked', reason=reason))
 
     def test_the_envelope_and_route_still_apply_with_a_token(self):
         self.assertEqual(self.call(check('a1', authority=self.token, request=facts(bound={'win:sub/5h': 13}))),
-                         dict(v=1, state='blocked', reason='envelope_exhausted'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='envelope_exhausted'))
         self.assertEqual(self.call(check('a1', authority=self.token, request=facts(model='other'))),
-                         dict(v=1, state='blocked', reason='route_mismatch'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='route_mismatch'))
 
     def test_unknown_sessions_are_unmanaged(self):
         nonce = budget.Ledger.admission(self.snapshot(), 'a1')['nonce']
@@ -417,13 +417,13 @@ class CheckAuthorityTests(DispatchBase):
                         self.derived['message_id']):  # a message id is never a session id
             with self.subTest(session=session):
                 self.assertEqual(self.call(dict(v=1, op='check', session_id=session, request=facts(), id='q')),
-                                 dict(v=1, state='unmanaged', id='q'))
+                                 dict(v=1, settings_warnings=[], state='unmanaged', id='q'))
 
     def test_another_attempts_session_is_a_mismatch(self):
         self.call(prepare('a2'))
         other = self.ids('a2')['session_id']
         self.assertEqual(self.call(check('a1', authority=self.token, session_id=other)),
-                         dict(v=1, state='blocked', reason='session_mismatch'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='session_mismatch'))
 
     def test_strict_checks_need_a_dispatched_attempt(self):
         self.call(prepare('a2'))
@@ -431,26 +431,26 @@ class CheckAuthorityTests(DispatchBase):
         for request in (dict(v=1, op='check', session_id=session, request=facts()),
                         check('a2', session_id=session), check('a2', authority=self.token)):
             with self.subTest(request=sorted(request)):
-                self.assertEqual(self.call(request), dict(v=1, state='blocked', reason='dispatch_required'))
+                self.assertEqual(self.call(request), dict(v=1, settings_warnings=[], state='blocked', reason='dispatch_required'))
         self.assertEqual(self.call(check('a2'))['state'], 'allow')  # the S3.1 attempt-only check is unchanged
         self.call(record('a2', 'dispatched'))  # an S3.1 recorded dispatch carries no authority
         self.assertEqual(self.call(check('a2', session_id=session)),
-                         dict(v=1, state='blocked', reason='dispatch_required'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='dispatch_required'))
 
     def test_closed_uncertain_and_forgotten_sessions(self):
         session = self.derived['session_id']
         self.call(record('a1', 'uncertain'))
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
-                         dict(v=1, state='blocked', reason='attempt_uncertain'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='attempt_uncertain'))
         with self.open_ledger() as ledger, ledger.transaction() as data:  # the record ages out; the hold remains
             data['admissions'] = [r for r in data['admissions'] if r['attempt_id'] != 'a1']
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
-                         dict(v=1, state='blocked', reason='attempt_closed'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='attempt_closed'))
         with self.open_ledger() as ledger, ledger.transaction() as data:  # then the hold is pruned too
             del data['holds']['a1']
         # Without its nonce the session no longer resolves; the shim blocks `unmanaged` for an attached session.
         self.assertEqual(self.call(dict(v=1, op='check', session_id=session, authority=self.token, request=facts())),
-                         dict(v=1, state='unmanaged'))
+                         dict(v=1, settings_warnings=[], state='unmanaged'))
 
     def test_check_stays_read_only(self):
         before = self.snapshot()
@@ -506,14 +506,14 @@ class AuthorityRequiredTests(DispatchBase):
         self.assertNotIn('authority_required', budget.Ledger.admission(data, 'old'))
         self.assertIs(budget.Ledger.admission(data, 'new')['authority_required'], True)
         self.assertEqual(self.call(check('old'))['state'], 'allow')
-        self.assertEqual(self.call(check('new')), dict(v=1, state='blocked', reason='dispatch_required'))
+        self.assertEqual(self.call(check('new')), dict(v=1, settings_warnings=[], state='blocked', reason='dispatch_required'))
         self.assertEqual(self.call(record('new', 'dispatched')), dict(v=1, state='blocked', reason='dispatch_required'))
         self.assertEqual(self.snapshot()['holds']['new']['state'], 'admitted')
         self.assertEqual(self.call(record('old', 'dispatched'))['state'], 'recorded')
         self.assertEqual(self.call(check('old'))['state'], 'allow')
         token = self.call(dispatch('new'))['authority']
         self.assertEqual(self.call(check('new', authority=token))['authority'], 'verified')
-        self.assertEqual(self.call(check('new')), dict(v=1, state='blocked', reason='authority_required'))
+        self.assertEqual(self.call(check('new')), dict(v=1, settings_warnings=[], state='blocked', reason='authority_required'))
         self.assertEqual(self.call(record('new', 'dispatched'))['duplicate'], True)
 
 
@@ -532,14 +532,14 @@ class LostAcknowledgmentTests(DispatchBase):
         self.assertIs(again['reconcile_hint']['authoritative'], False)
         self.assertEqual(self.snapshot()['holds']['a1']['state'], 'dispatched')
         self.assertEqual(self.call(dict(v=1, op='check', session_id=self.derived['session_id'], request=facts())),
-                         dict(v=1, state='blocked', reason='authority_required'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='authority_required'))
 
     def test_uncertain_keeps_exposure_the_concurrency_place_and_blocks_checks(self):
         token = self.call(dispatch('a1'))['authority']
         held = budget.Ledger.held(self.snapshot())
         self.assertEqual(self.call(record('a1', 'uncertain'))['state'], 'recorded')
         self.assertEqual(budget.Ledger.held(self.snapshot()), held)
-        self.assertEqual(self.call(check('a1', authority=token)), dict(v=1, state='blocked', reason='attempt_uncertain'))
+        self.assertEqual(self.call(check('a1', authority=token)), dict(v=1, settings_warnings=[], state='blocked', reason='attempt_uncertain'))
         self.assertEqual(self.call(prepare('a2'))['state'], 'admitted')
         third = self.call(prepare('a3'))
         self.assertEqual((third['state'], third['reason']), ('pending', 'concurrency_cap'))
@@ -750,7 +750,7 @@ class ServeDispatchTests(DispatchBase):
         self.assertEqual((first['id'], first['state']), ('r1', 'dispatched'))
         self.assertEqual((second['id'], second['state']), (2, 'already_dispatched'))
         self.assertEqual((allowed['id'], allowed['state'], allowed['authority']), ('r3', 'allow', 'verified'))
-        self.assertEqual(unmanaged, dict(v=1, id='r4', state='unmanaged'))
+        self.assertEqual(unmanaged, dict(v=1, settings_warnings=[], id='r4', state='unmanaged'))
 
 
 class HostileInputTests(DispatchBase):
@@ -794,7 +794,7 @@ class SettingsFallbackTests(DispatchBase):
 
     def assertRefused(self):
         self.assertEqual(self.call(dispatch('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
-        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, settings_warnings=[], state='blocked', reason='settings_revision_changed'))
         self.assertEqual(self.snapshot()['holds']['a1']['state'], 'admitted')
 
     def test_the_healthy_path_is_unchanged(self):

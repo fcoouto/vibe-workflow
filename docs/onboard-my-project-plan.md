@@ -29,7 +29,7 @@ The user authorized the same startup layer for the next clients. Claude Code now
 ## 1. Authority and scope
 
 1. **Vibe Coding Toolkit defines the workflow.** [Prompt 12][setup] governs existing-project onboarding. Follow its complete applicable procedure and current catalog, including native harness evaluation. New-project creation and machine setup retain their separate entry points.
-2. **The user's decisions define project-specific choices and extensions.** Automatic workflow controls, shared coordination and required merge review are our requested extensions. The toolkit itself excludes Git hooks, branch/worktree requirements and commit/push protections from ordinary setup. Do not introduce those as toolkit requirements.
+2. **The user's decisions define project-specific choices and extensions.** Automatic workflow controls, shared coordination and required merge review are our requested extensions. The Toolkit itself excludes Git hooks, branch/worktree requirements and commit/push protections from ordinary setup. The user's 12 November 2026 decision adds [checkout stability](../policies/02-task-planning.md#planning-and-verification) for every onboarded repository, with task worktrees and no automatic primary-branch switching. This is a documented plugin extension, not an upstream Toolkit requirement or mechanical enforcement permission.
 3. **Official client documentation defines adapter behavior.** An unsupported capability remains unsupported.
 4. **`vibe-setup` supplies implementation lessons only.** Reuse concepts after evaluation; implement small modules against the new contracts.
 

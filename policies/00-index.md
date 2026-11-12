@@ -14,6 +14,8 @@ During Runtime, read this index and every applicable contract or guide below in 
 
 Keep policy adoption, action applicability and action satisfaction distinct. Missing capabilities or unknown applicability cannot count as inapplicable or satisfied. Ordinary native editing, tests and review need no managed task state or runtime activation. Block only work that depends on a missing prerequisite; never silently skip an applicable mandatory requirement. Optional enforcement and advanced execution acquire only their own prerequisites when selected.
 
+Judge each trigger from the task's actual state and the request, whoever did the earlier work. When a trigger does not apply, leaving its contract unread is correct. When applicability is unknown, resolve it from current state or one question before the dependent action, or report it as unresolved.
+
 Direct work still follows planning, verification and applicable review requirements.
 
 Policy contracts retain their adopted project scope. Rows labelled "Repository" apply only to work on this toolkit repository; other enrolled projects keep their own guides, commands and project rules.
@@ -21,7 +23,7 @@ Policy contracts retain their adopted project scope. Rows labelled "Repository" 
 | Contract or guide | Load when |
 | --- | --- |
 | [Project Scope](01-project-scope.md) | During onboarding or updates; at task startup or resume; after changes to repository/client scope, instructions, permissions or accepted policy. |
-| [Task Planning](02-task-planning.md) | Before implementation; when resuming work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
+| [Task Planning](02-task-planning.md) | At task entry or resume; before implementation or any checkout-affecting operation, including review-only work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
 | [Agent Delegation](03-agent-delegation.md) | When considering a worker and before every subagent or worker call, including a read-only check or a worker the user asks for by name; after failed attempts, stalled repair/validation progress, or scope/capacity changes affecting delegated work. |
 | [Security Review](04-security-review.md) | After implementing a deliverable (a task or wave), before completion or merge; reassess after changes affecting review coverage or evidence. |
 | [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting a completed step, deliverable or merge; after changes affecting the candidate, check definitions, policy, execution environment or evidence. |

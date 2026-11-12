@@ -5,6 +5,7 @@ The project's record of its workflow setup, kept in its setup document or an equ
 ## Project
 
 - Project: [name, repository, remote, primary branch and verification date]
+- Checkout stability: [verified primary-worktree identity, designated branch, decision source and adoption date; portable discovery in shared guidance, machine paths in private evidence; unresolved legacy opt-outs or deployment steps, never guessed values]
 - Clients: [selected clients and versions, runtime, actual model/effort and observable authentication mode; no credentials or invented usage/cost]
 - Package: [installed package identity; exact machine and cache paths stay in private evidence]
 - Source: [Toolkit revision used for this setup]

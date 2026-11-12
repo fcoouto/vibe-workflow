@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 import urllib.request
 
-from runtime import usage_budget as budget, usage_credentials
+from runtime import routing, usage_budget as budget, usage_credentials
 from scripts import routing as command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,9 +29,9 @@ def now():
 
 
 def job(**extra):
-    profile = dict(task_family='code', complexity_band='medium', risk_band='medium', review_policy='independent',
+    profile = dict(complexity_band='medium', risk_band='medium', review_policy='independent',
                    context_tokens=100, tools=['edit'], uncertainty='low')
-    value = dict(id='job-1', role='worker', scope_ref=SCOPE, objective=SECRET, context=SECRET, profile=profile)
+    value = dict(id='job-1', role='software-engineer', scope_ref=SCOPE, objective=SECRET, context=SECRET, profile=profile)
     value.update(extra)
     return value
 
@@ -44,7 +44,7 @@ POLICY = dict(cycle='c', start=0, end=2 * 10**10, expiry=2 * 10**10, stop_at=10*
 def table():
     sub = dict(strategy_id='s-sub', model='m', effort='high', harness='h', evidence_refs=['g1'])
     api = dict(strategy_id='s-api', model='m', effort='high', harness='api', evidence_refs=['g1'])
-    return dict(schema=1, version='t1', rows={'worker|code|medium|medium': [sub, api]})
+    return dict(schema=routing.TABLE_SCHEMA, version='t1', rows={'implementation|medium|medium': [sub, api]})
 
 
 def api_observations(at=None, organization='personal'):
@@ -69,7 +69,7 @@ def observations(at=None, **route):
 
 
 def prepare(attempt, **extra):
-    request = dict(v=1, op='prepare', assignment=dict(attempt_id=attempt, task='task-' + attempt, role='implementer',
+    request = dict(v=1, op='prepare', assignment=dict(attempt_id=attempt, task='task-' + attempt, role='software-engineer',
                                                       scope=SCOPE),
                    job=job(), observations=observations())
     request.update(extra)
@@ -157,12 +157,14 @@ class MalformedInputTests(Base):
                  (json.dumps(dict(v=1, op='launch')).encode(), 'unknown_op'),
                  (json.dumps(dict(v=1, op='status', extra=1)).encode(), 'invalid_request'),
                  (json.dumps(dict(v=1, op='check', attempt_id=7, request=facts())).encode(), 'invalid_request'),
-                 (json.dumps(prepare('t', table=table())).encode(), 'invalid_request'),
                  (json.dumps(check('a', request=facts(kind='tool'))).encode(), 'unsupported_kind'),
                  (b'{"v": 1, "op": "status", "pad": "' + b'x' * command.MAX_INPUT + b'"}', 'request_too_large')]
         for raw, reason in cases:
             with self.subTest(reason=reason, raw=raw[:40]):
                 self.assertBlocked(self.call(raw), reason)
+        # Refused after its profile exists, so the answer also names the fields that took floors (none here).
+        self.assertEqual(self.call(prepare('t', table=table())),
+                         dict(v=1, state='blocked', reason='invalid_request', missing_fields=[]))
         # Deep nesting either exceeds the parser's recursion limit or parses to a non-object: both fixed refusals.
         self.assertIn(self.call(b'[' * 100000 + b']' * 100000)['reason'], ('invalid_json', 'invalid_request'))
 
@@ -243,7 +245,7 @@ class SettingsTests(Base):
 
     def test_settings_changes_validate(self):
         ok = self.call(dict(v=1, op='set', expected_revision=0,
-                            change=dict(api_usage_enabled=True, worker_choices=dict(implementer=[CHOICE]),
+                            change=dict(api_usage_enabled=True, worker_choices={'software-engineer': [CHOICE]},
                                         caps=dict(total=3, per_account=1))))
         self.assertEqual((ok['state'], ok['revision']), ('updated', 1))
         self.assertEqual(ok['settings']['caps'], dict(total=3, per_account=1))
@@ -288,7 +290,7 @@ class PrepareTests(Base):
         self.assertEqual(self.snapshot()['organizations'], {})
 
     def test_no_recommendation_falls_back_to_worker_choices(self):
-        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[CHOICE]))))
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'software-engineer': [CHOICE]})))
         for label, stored in (('empty', dict(schema=1, version='t0', rows={})), ('absent', None),
                               ('unreadable', 'not a table')):
             with self.subTest(label):
@@ -306,7 +308,55 @@ class PrepareTests(Base):
         bad = self.call(prepare('a-bad', job=job(role='oracle')))
         self.assertEqual(bad, dict(v=1, state='blocked', reason='profile_unavailable'))
         shape = self.call(prepare('a-shape', observations=dict(now='soon', routes=[], pools={})))
-        self.assertEqual(shape, dict(v=1, state='blocked', reason='invalid_observation'))
+        self.assertEqual(shape, dict(v=1, state='blocked', reason='invalid_observation', missing_fields=[]))
+
+    def test_prepare_reports_missing_profile_fields(self):
+        bare = job()
+        del bare['profile']
+        response = self.call(prepare('mf1', job=bare))
+        self.assertNotEqual(response['state'], 'blocked', response)
+        for field in ('complexity_band', 'risk_band', 'review_policy'):
+            self.assertIn(field, response['missing_fields'])
+
+    def test_prepare_reports_no_missing_fields_for_a_complete_profile(self):
+        response = self.call(prepare('mf2'))
+        self.assertEqual(response['state'], 'admitted')
+        self.assertEqual(response['missing_fields'], [])
+
+    def test_workflow_binding_answers_report_missing_fields(self):
+        bare = job()
+        del bare['profile']
+        for state, reason in (('pending', 'job_not_ready'), ('blocked', 'job_not_found')):
+            with self.subTest(state), mock.patch.object(command.Service, '_workflow_binding',
+                                                        return_value=(state, reason)):
+                response = self.call(prepare('mf-' + state, job=bare))
+                self.assertEqual((response['state'], response['reason']), (state, reason))
+                self.assertIn('complexity_band', response['missing_fields'])
+
+    def test_refusals_after_the_profile_report_missing_fields(self):
+        bare = job()
+        del bare['profile']
+        floors = ['complexity_band', 'risk_band', 'review_policy']
+        shape = self.call(prepare('mf-shape', job=bare, observations=dict(now='soon', routes=[], pools={})))
+        self.assertEqual(shape, dict(v=1, state='blocked', reason='invalid_observation', missing_fields=floors))
+        role = self.call(prepare('mf-role', job=dict(bare, role='code-reviewer')))
+        self.assertEqual(role, dict(v=1, state='blocked', reason='role_mismatch', missing_fields=floors))
+        with mock.patch.object(command.routing, 'admit', side_effect=RuntimeError('boom')):
+            failed = self.call(prepare('mf-error', job=bare))
+        self.assertEqual(failed, dict(v=1, state='blocked', reason='internal_error', missing_fields=floors))
+
+    def test_answers_without_a_profile_never_carry_missing_fields(self):
+        bare = job()
+        del bare['profile']
+        self.assertIn('missing_fields', self.call(prepare('mf-first', job=bare)))
+        follow = [prepare('mf-unknown', job=job(role='oracle')),
+                  dict(prepare('mf-extra'), assignment=dict(attempt_id='mf-extra', task='t', scope=SCOPE, extra=1)),
+                  dict(v=1, op='status'), check('mf-first'), b'{not json']
+        for request in follow:
+            with self.subTest(request=request if isinstance(request, bytes) else request.get('op')):
+                self.assertNotIn('missing_fields', self.call(request))
+        self.assertEqual(self.call(prepare('mf-unknown', job=job(role='oracle'))),
+                         dict(v=1, state='blocked', reason='profile_unavailable'))
 
     def test_repeated_prepare_returns_the_existing_decision(self):
         first = self.call(prepare('a1'))
@@ -354,17 +404,20 @@ class CheckTests(Base):
                  (check('a1', request=facts(bound={'win:other/5h': 1})), 'envelope_exhausted')]
         for request, reason in cases:
             with self.subTest(reason=reason):
-                self.assertEqual(self.call(request), dict(v=1, state='blocked', reason=reason))
+                expected = dict(v=1, state='blocked', reason=reason)
+                if reason != 'unsupported_kind':  # refused before settings are read, so no settings_warnings
+                    expected['settings_warnings'] = []
+                self.assertEqual(self.call(request), expected)
         self.assertEqual(self.call(check('a1', request=facts(bound={'win:sub/5h': 12})))['state'], 'allow')
 
     def test_closed_attempt_is_blocked(self):
         recorded = self.call(dict(v=1, op='record', event=dict(event_id='e1', attempt_id='a1', kind='not_dispatched')))
         self.assertEqual(recorded['state'], 'recorded')
-        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='attempt_closed'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, settings_warnings=[], state='blocked', reason='attempt_closed'))
 
     def test_uncertain_attempt_is_blocked(self):
         self.call(dict(v=1, op='record', event=dict(event_id='e1', attempt_id='a1', kind='uncertain')))
-        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='attempt_uncertain'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, settings_warnings=[], state='blocked', reason='attempt_uncertain'))
 
     def test_turning_smart_routing_off_invalidates_unsent_admissions_and_keeps_running_claims(self):
         self.assertEqual(self.call(prepare('run'))['state'], 'admitted')
@@ -377,7 +430,7 @@ class CheckTests(Base):
         changed = self.call(dict(v=1, op='set', expected_revision=0, change=dict(smart_routing=False)))
         self.assertEqual((changed['state'], changed['revision']), ('updated', 1))
         self.assertEqual(changed['invalidated_attempts'], ['a1'])
-        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, settings_warnings=[], state='blocked', reason='settings_revision_changed'))
         self.assertEqual(self.call(check('run'))['state'], 'allow')  # started workers finish within budget
         data = self.snapshot()
         self.assertEqual(budget.Ledger.held(data), held)  # nothing released without established non-dispatch
@@ -385,7 +438,7 @@ class CheckTests(Base):
                          dict(a1='admitted', run='dispatched', lost='uncertain'))
         # Re-enabling never revives the stale decision.
         self.call(dict(v=1, op='set', expected_revision=1, change=dict(smart_routing=True)))
-        self.assertEqual(self.call(check('a1')), dict(v=1, state='blocked', reason='settings_revision_changed'))
+        self.assertEqual(self.call(check('a1')), dict(v=1, settings_warnings=[], state='blocked', reason='settings_revision_changed'))
 
 
 class RecordTests(Base):
@@ -509,7 +562,7 @@ class ClockTests(Base):
         for label, at in (('future', now() + 10**9), ('milliseconds', now() * 1000), ('old', now() - 10**6)):
             with self.subTest(label):
                 self.assertEqual(self.call(prepare(label, observations=observations(at))),
-                                 dict(v=1, state='blocked', reason='observation_stale'))
+                                 dict(v=1, state='blocked', reason='observation_stale', missing_fields=[]))
 
     def test_admission_time_is_the_command_clock(self):
         before = now()
@@ -594,7 +647,7 @@ class FundingCheckTests(Base):
         self.call(dict(v=1, op='set', organization=dict(id='personal', enabled=False)))
         for attempt in ('api1', 'api2'):
             self.assertEqual(self.call(check(attempt, request=facts(**API))),
-                             dict(v=1, state='blocked', reason='organization_unavailable'))
+                             dict(v=1, settings_warnings=[], state='blocked', reason='organization_unavailable'))
         self.assertEqual(self.call(check('sub1'))['state'], 'allow')  # subscription holds are unaffected
 
     def test_api_usage_off_blocks_dispatched_api_holds_but_not_subscription_ones(self):
@@ -604,7 +657,7 @@ class FundingCheckTests(Base):
         self.dispatch('sub1')
         self.call(dict(v=1, op='set', expected_revision=1, change=dict(api_usage_enabled=False)))
         self.assertEqual(self.call(check('api1', request=facts(**API))),
-                         dict(v=1, state='blocked', reason='api_usage_disabled'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='api_usage_disabled'))
         self.assertEqual(self.call(check('sub1'))['state'], 'allow')
 
     def test_smart_routing_off_keeps_a_funded_dispatched_api_worker(self):
@@ -627,7 +680,7 @@ class FundingCheckTests(Base):
         with self.open_ledger() as ledger:
             ledger.observe('small', 5 * M, now() + 1)
         self.assertEqual(self.call(check('api1', request=facts(**API))),
-                         dict(v=1, state='blocked', reason='funding_unverified'))
+                         dict(v=1, settings_warnings=[], state='blocked', reason='funding_unverified'))
 
     def test_blocked_stale_short_or_expired_funding_blocks_dispatched_api_work(self):
         service = command.Service(self.settings, self.ledger, test_inputs=True)
@@ -654,7 +707,7 @@ class TableTests(Base):
     """A bad stored table falls back to worker choices exactly like a missing one; it never blocks."""
     def setUp(self):
         super().setUp()
-        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(implementer=[CHOICE]))))
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'software-engineer': [CHOICE]})))
 
     def raw_table(self, raw, mode=0o600):
         path = self.settings.parent / 'strategy-table.json'
@@ -671,11 +724,11 @@ class TableTests(Base):
 
     def test_corrupt_strategy_ids_or_version_fall_back(self):
         good = dict(strategy_id='s-sub', model='m', effort='high', harness='h')
-        for label, value in (('numeric id', dict(version='t', rows={'worker|code|medium|medium': [dict(good, strategy_id=5)]})),
-                             ('object version', dict(version={}, rows={'worker|code|medium|medium': [good]})),
-                             ('reviewer table', dict(version={}, rows={'worker|code|medium|medium': [dict(good, strategy_id=5)]})),
-                             ('empty id', dict(version='t', rows={'worker|code|medium|medium': [dict(good, strategy_id='')]})),
-                             ('rows not lists', dict(version='t', rows={'worker|code|medium|medium': 'x'}))):
+        for label, value in (('numeric id', dict(version='t', rows={'implementation|medium|medium': [dict(good, strategy_id=5)]})),
+                             ('object version', dict(version={}, rows={'implementation|medium|medium': [good]})),
+                             ('reviewer table', dict(version={}, rows={'implementation|medium|medium': [dict(good, strategy_id=5)]})),
+                             ('empty id', dict(version='t', rows={'implementation|medium|medium': [dict(good, strategy_id='')]})),
+                             ('rows not lists', dict(version='t', rows={'implementation|medium|medium': 'x'}))):
             with self.subTest(label):
                 self.raw_table(json.dumps(value).encode())
                 self.assertFallsBack('t-' + label.replace(' ', '-'))
@@ -703,30 +756,74 @@ class TableTests(Base):
         self.assertEqual((response['state'], response['admission']['mode']), ('admitted', 'worker_choice'))
 
 class RoleTests(Base):
-    def test_profile_roles_map_to_worker_choice_roles_once(self):
-        from runtime import routing_settings
-        self.assertEqual(routing_settings.PROFILE_ROLES, dict(worker='implementer', review='reviewer', check='reviewer'))
-        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices=dict(reviewer=[CHOICE]))))
-        for role in ('review', 'check'):
-            with self.subTest(role):
-                request = prepare('r-' + role, job=job(role=role))
-                del request['assignment']['role']
-                self.assertEqual(self.call(request)['admission']['bucket'][0], 'reviewer')
-                self.release('r-' + role)
+    def test_bucket_is_work_kind_and_complexity(self):
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'code-reviewer': [CHOICE]})))
+        self.store_table(None)
+        request = prepare('r-review', job=job(role='code-reviewer'))
+        del request['assignment']['role']
+        self.assertEqual(self.call(request)['admission']['bucket'], ['review', 'medium'])
+        self.release('r-review')
+        self.store_table(table())
         request = prepare('w')
         del request['assignment']['role']
-        self.assertEqual(self.call(request)['admission']['bucket'][0], 'implementer')
+        response = self.call(request)
+        self.assertEqual(response['admission']['bucket'], ['implementation', 'medium'])
+        self.assertEqual(response['profile']['work_kind'], 'implementation')
+        self.assertNotIn('task_family', response['profile'])
 
     def test_explicit_roles_coordinator_and_mismatch(self):
-        repair = prepare('rep')
-        repair['assignment']['role'] = 'repair'
-        self.assertEqual(self.call(repair)['admission']['bucket'][0], 'repair')
-        mismatch = prepare('mis')
-        mismatch['assignment']['role'] = 'reviewer'
-        self.assertEqual(self.call(mismatch), dict(v=1, state='blocked', reason='role_mismatch'))
-        coordinator = prepare('coord', job=job(role='coordinator'))
+        for explicit in ('repair', 'implementer', 'code-reviewer'):
+            mismatch = prepare('mis-' + explicit)
+            mismatch['assignment']['role'] = explicit
+            self.assertEqual(self.call(mismatch), dict(v=1, state='blocked', reason='role_mismatch', missing_fields=[]))
+        coordinator = prepare('coord', job=job(role='orchestrator'))
         del coordinator['assignment']['role']
-        self.assertEqual(self.call(coordinator), dict(v=1, state='blocked', reason='coordinator_not_routed'))
+        self.assertEqual(self.call(coordinator),
+                         dict(v=1, state='blocked', reason='coordinator_not_routed', missing_fields=[]))
+        for old in ('coordinator', 'worker', 'check'):
+            request = prepare('old-' + old, job=job(role=old))
+            del request['assignment']['role']
+            self.assertEqual(self.call(request), dict(v=1, state='blocked', reason='profile_unavailable'))
+
+    def test_legacy_worker_choice_key_is_reported_not_fatal(self):
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(smart_routing=True)))
+        stored = dict(version=1, revision=1, values=dict(worker_choices={'implementer': [CHOICE]}))
+        self.settings.write_text(json.dumps(stored))
+        warning = [dict(code='worker_choice_key_unknown', key='implementer')]
+        status = self.call(dict(v=1, op='status'))
+        self.assertEqual((status['settings']['worker_choices'], status['settings_warnings']), ({}, warning))
+        self.store_table(None)
+        response = self.call(prepare('legacy-key'))
+        self.assertEqual((response['state'], response['reason']), ('pending', 'worker_choice_unavailable'))
+        self.assertEqual(self.call(check('legacy-key'))['settings_warnings'], warning)
+        self.assertEqual(json.loads(self.settings.read_text()), stored)
+        self.assertEqual(self.call(dict(v=1, op='set', expected_revision=1, change=dict(
+            worker_choices={'software-engineer': [CHOICE]})))['state'], 'updated')
+        self.assertEqual(self.call(check('legacy-key'))['settings_warnings'], [])  # present even when empty
+        self.assertEqual(self.call(dict(v=1, op='status'))['settings_warnings'], [])
+
+    def test_prepare_blocks_when_the_template_is_unavailable(self):
+        from runtime import task_profile
+        with mock.patch.object(task_profile, 'load', side_effect=task_profile.TemplateUnavailable('gone')):
+            response = self.call(prepare('no-template'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='profile_unavailable'))
+        self.assertFalse(self.ledger.exists())
+
+    def test_refilled_profile_returns_the_stored_admission_with_current_metadata(self):
+        # F1-R2: a decision is immutable. A refilled duplicate gets the stored admission back, while the
+        # response's profile and missing_fields describe the request just sent.
+        self.call(dict(v=1, op='set', expected_revision=0, change=dict(worker_choices={'software-engineer': [CHOICE]})))
+        bare = job()
+        del bare['profile']
+        first = self.call(prepare('refill', job=bare))
+        self.assertEqual((first['state'], first['admission']['bucket']), ('admitted', ['implementation', 'high']))
+        self.assertIn('complexity_band', first['missing_fields'])
+        again = self.call(prepare('refill'))
+        self.assertIs(again['duplicate'], True)
+        self.assertEqual(again['admission'], first['admission'])
+        self.assertEqual((again['missing_fields'], again['profile']['complexity_band']), ([], 'medium'))
+        self.assertEqual(len(self.snapshot()['admissions']), 1)
+        self.assertEqual(len(self.snapshot()['holds']), 1)
 
 
 class RobustnessTests(Base):
@@ -773,6 +870,7 @@ class RobustnessTests(Base):
         self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=3, per_account=1))
         self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=10, per_account=1))))
         self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=4, per_account=1))
+
 
 if __name__ == '__main__':
     unittest.main()

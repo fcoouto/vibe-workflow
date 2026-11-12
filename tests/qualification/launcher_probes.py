@@ -332,7 +332,7 @@ class LauncherProbes:
                 reservation.settle_unknown()
             facts["sent"] = reservation.settled  # kept when the ledger raised on an overrun
         after = self.env.codex_window() if "windows" in (before or {}) else None  # no second read after a failed one
-        facts["demand"] = self.record_demand("chatgpt", "A5", [before, after])
+        facts["demand"] = self.record_demand("chatgpt", "A5", [before, after], route)
         reply = assistant_text(host, prompted)
         effects = [facts["evaluated"][key]["effect"] for key in ("read_decoy", "read_auth")]
         facts["decoy_in_reply"] = word in (reply or "")
@@ -354,7 +354,12 @@ class LauncherProbes:
         opencode_launcher._wait_idle(host, session, began, 900)
         return session
 
-    def record_demand(self, pool, label, readings):
+    def binding(self, route, account=None):
+        """A reading's launch binding (F4.3): the launched route's path, this run, the account and the model/effort."""
+        return dict(path=demand.path_for(route[0]), run=self.run_id, account=account, model=route[1],
+                    effort=route[2] if len(route) > 2 else None)
+
+    def record_demand(self, pool, label, readings, route):
         """Codex readings around A5 (`env.codex_window()`: `{windows}` or `{reason}`); a failed read is reported with
         the reader's fixed reason, never guessed, and never fails the probe."""
         for value in readings:
@@ -362,7 +367,7 @@ class LauncherProbes:
                 return dict(measured=False, reason=(value or {}).get("reason") or "codex_reading_missing")
         declared = all(value.get("declared", True) for value in readings)
         for name, value in zip(("before", "after"), readings):
-            reading = demand.from_windows(value["windows"], "%s:%s" % (label, name), pool)
+            reading = demand.from_windows(value["windows"], "%s:%s" % (label, name), pool, **self.binding(route))
             if reading is not None and not declared:
                 reading["declared"] = False  # windows the manifest does not declare yet: a measurement, not a contract
             self.log_reading(reading)
@@ -440,7 +445,8 @@ class LauncherProbes:
                                not_entitled=result.get("not_entitled"))
         facts["reply"] = reply_shape(host, new[0]) if len(new) == 1 else dict(sessions=len(new))
         facts["status_after"] = status_summary(state)
-        facts["demand_reading"] = self.log_reading(demand.from_store(state.settings, state.pool, probe))
+        facts["demand_reading"] = self.log_reading(demand.from_store(state.settings, state.pool, probe,
+                                                                     **self.binding(route, state.account)))
         return facts
 
     def a6(self, host, state):

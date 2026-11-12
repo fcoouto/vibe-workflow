@@ -12,7 +12,8 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from runtime import worker_visibility as visibility
 from runtime.worker_visibility import (
-    LABEL_LIMIT, LIMIT, context_path, declaration, hook_context_path, locked, private_path, read, read_context, save, text,
+    LABEL_LIMIT, LIMIT, context_path, declaration, display_role, hook_context_path, locked, private_path, read,
+    read_context, save, stored_declaration, text,
 )
 from runtime.adapters import codex
 from runtime.startup import StartupError, json_object
@@ -25,11 +26,10 @@ TERMINAL = frozenset({'accepted', 'rejected', 'failed', 'unresolved', 'completed
 def display_label(value, model_display_name):
     if value is None:
         return 'Subagente (Codex)'
-    value = declaration(value)
-    # Retain the existing model-display normalization; custom names remain exact.
+    # Retain the existing model-display normalization; custom names remain exact. Stored version 1 shows as written.
     model = (' '.join(''.join(c for c in model_display_name if c.isprintable()).split())
              if isinstance(model_display_name, str) else '')
-    return text(value.get('custom_role_name', value['role']) + ' · ' + text(model or 'Model unknown'), LABEL_LIMIT)
+    return text(display_role(value) + ' · ' + text(model or 'Model unknown'), LABEL_LIMIT)
 
 
 def transport(plugin_root):
@@ -47,7 +47,7 @@ def transport(plugin_root):
 
 def publisher(module, endpoint, account, binding, visibility, receipt, *, managed_native_label=False):
     """Freeze before delivery; reuse actual native or explicitly external identity."""
-    visibility = declaration(visibility) if visibility is not None else None
+    visibility = stored_declaration(visibility) if visibility is not None else None  # frozen before delivery
     binding = dict(binding)
     if set(binding) != {'parent', 'agent_id', 'label', 'cwd'}:
         raise ValueError('invalid_visibility_binding')
@@ -265,7 +265,7 @@ def publish_native(path, worker_id, phase, plugin_root, endpoint, account, *, pa
         path = context_path(path, plugin_root=plugin_root)
         context = read_context(path)
         context_path(path, context['checkout'], plugin_root)
-        metadata = visibility.declaration(context['visibility'])
+        metadata = visibility.stored_declaration(context['visibility'])
         spawn_binding = _original_spawn_binding(context, parent_turn_id, spawn_item_id)
         with visibility.locked(path.with_name(path.name + '.lock')):
             if visibility.read(path) != context:
@@ -319,7 +319,7 @@ def prepare_reuse(request, *, context=None, context_directory=None):
             existing = read_context(path) if path.exists() else None
             if existing is not None and any(existing[key] != value for key, value in identity.items()):
                 raise ValueError('native_visibility_context_changed')
-            metadata = declaration(existing['visibility'] if existing else request.get('visibility'))
+            metadata = stored_declaration(existing['visibility']) if existing else declaration(request.get('visibility'))
             if request.get('visibility') is not None and declaration(request['visibility']) != metadata:
                 raise ValueError('native_visibility_context_changed')
             spawn_binding = _original_spawn_binding(existing, request.get('parent_turn_id'), request.get('spawn_item_id'))
@@ -349,9 +349,9 @@ def restore_badge(path, plugin_root, endpoint, account):
         context = read_context(path)
         context_path(path, context['checkout'], plugin_root)
         observed = _saved_native_binding(context)
-        metadata = declaration(context['visibility'])
+        metadata = stored_declaration(context['visibility'])
         label, _ = native_label(metadata, observed)
-        prefix = metadata.get('custom_role_name', metadata['role']) + ' · '
+        prefix = display_role(metadata) + ' · '
         if (not label.startswith(prefix) or not label[len(prefix):].strip()
                 or 'guardian' in label.casefold()):
             return dict(delivered=False, reason='unsupported_display_label')
@@ -367,10 +367,14 @@ def openrouter_publisher(plugin_root, run, endpoint, account, declaration_for_br
     receipt = run / 'visibility.json'
     try:
         brief = json.loads((run / 'brief.json').read_text())
-        metadata = declaration_for_brief(brief)
+        previous = read(receipt)
+        if previous and 'binding' in previous:
+            # A published run keeps the declaration its receipt froze, version 1 included; a new run reads the brief.
+            metadata = None if previous.get('visibility') is None else stored_declaration(previous['visibility'])
+        else:
+            metadata = declaration_for_brief(brief)
         display_role = {key: value for key, value in metadata.items() if key != 'custom_role_name'} if metadata else None
         model = brief.get('model_display_name') or brief['model']
-        previous = read(receipt)
         if previous and 'binding' in previous:
             # A published run keeps its original label when verification resumes.
             legacy_label = display_label(metadata, model)

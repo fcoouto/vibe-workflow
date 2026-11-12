@@ -35,7 +35,7 @@ def locator(job_id='build', **extra):
 
 def semantic(**extra):
     """The canonical job's semantic fields; `job()` from the command tests describes the same job."""
-    value = dict(role='worker', scope_ref=SCOPE, objective=SECRET, context=SECRET)
+    value = dict(role='software-engineer', scope_ref=SCOPE, objective=SECRET, context=SECRET)
     value.update(extra)
     return value
 
@@ -234,7 +234,7 @@ class FreshGateTests(GateBase):
                 self.assertRefused('a1', 'resource_authority_lost')
 
     def test_a_changed_brief_scope_role_or_tools_is_binding_stale(self):
-        for change in (dict(objective='new brief'), dict(scope_ref='scope2'), dict(role='review'),
+        for change in (dict(objective='new brief'), dict(scope_ref='scope2'), dict(role='code-reviewer'),
                        dict(tools=['shell'])):
             with self.subTest(change=change):
                 self.workflow.update('build', semantic=semantic(**change))
@@ -363,7 +363,7 @@ class HostileInputTests(GateBase):
         for value in cases:
             with self.subTest(value=str(value)[:60]):
                 self.assertEqual(self.call(prepare('h1', workflow=value)),
-                                 dict(v=1, state='blocked', reason='invalid_request'))
+                                 dict(v=1, state='blocked', reason='invalid_request', missing_fields=[]))
         self.assertEqual(self.workflow.views, 0)
 
     def test_malformed_or_oversized_views_are_refused_at_prepare(self):
@@ -374,10 +374,10 @@ class HostileInputTests(GateBase):
         for value in bad:
             with self.subTest(value=str(value)[:60]), mock.patch.object(self.workflow, 'view', return_value=value):
                 self.assertEqual(self.call(prepare('h1', workflow=locator())),
-                                 dict(v=1, state='blocked', reason='workflow_unavailable'))
+                                 dict(v=1, state='blocked', reason='workflow_unavailable', missing_fields=[]))
         with mock.patch.object(self.workflow, 'view', side_effect=RuntimeError('boom')):
             self.assertEqual(self.call(prepare('h1', workflow=locator())),
-                             dict(v=1, state='blocked', reason='workflow_unavailable'))
+                             dict(v=1, state='blocked', reason='workflow_unavailable', missing_fields=[]))
 
     def test_the_largest_binding_fits_its_bound_and_the_admission_cap(self):
         hexa = 'f' * 64
@@ -533,8 +533,8 @@ class CanonicalWorkflowTests(unittest.TestCase):
         self.service = command.Service(self.settings, self.ledger, workflow=self.reader,
                                        project=str(self.scope.repository_root))
         self.addCleanup(self.service.close)
-        self.jobs = [dict(id='a', role='worker', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
-                     dict(id='b', role='worker', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1)]
+        self.jobs = [dict(id='a', role='software-engineer', claims=[self.f.path_claim('a.py')], dependencies=[], max_attempts=2),
+                     dict(id='b', role='software-engineer', claims=[self.f.path_claim('b.py')], dependencies=['a'], max_attempts=1)]
         self.f.plan(self.f.plan_value(jobs=self.jobs))
 
     def call(self, request):
@@ -681,7 +681,8 @@ class CanonicalWorkflowTests(unittest.TestCase):
                                           project=root)
         self.service.close()
         self.service = command.Service(self.settings, self.ledger, workflow=reader, project=root)
-        self.assertEqual(self.admit('r-a', 'a'), dict(v=1, state='blocked', reason='project_mismatch'))
+        self.assertEqual(self.admit('r-a', 'a'),
+                         dict(v=1, state='blocked', reason='project_mismatch', missing_fields=[]))
 
     def test_routing_job_is_the_exact_canonical_semantic_job(self):
         from runtime import delegation
@@ -885,7 +886,7 @@ class ReviewFollowUpTests(GateBase):
         for cwd in ('/work/elsewhere', str(root) + '-other', str(root / '..' / 'project-other')):
             with self.subTest(cwd=cwd):
                 self.assertEqual(self.call(prepare('p1', workflow=locator(cwd=cwd))),
-                                 dict(v=1, state='blocked', reason='project_mismatch'))
+                                 dict(v=1, state='blocked', reason='project_mismatch', missing_fields=[]))
         self.assertEqual(self.workflow.views, 0)
         for attempt, cwd in (('p2', str(root)), ('p3', str(root / 'sub'))):
             with self.subTest(cwd=cwd):
@@ -905,10 +906,10 @@ class ReviewFollowUpTests(GateBase):
     def test_an_oversized_serialized_binding_is_refused_at_prepare(self):
         wide = '/work/repo/' + '\u00e9' * 500  # within the character bound, but escapes to six bytes per character
         response = self.call(prepare('big', workflow=locator(cwd=wide)))
-        self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large'))
+        self.assertEqual(response, dict(v=1, state='blocked', reason='binding_too_large', missing_fields=[]))
         self.assertFalse(self.ledger.exists() and budget.Ledger.open_holds(self.snapshot()))
         oversized = routing_gates.job_binding(locator(cwd=wide), self.workflow.view(locator()))
-        self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='implementer', complexity_band='medium',
+        self.assertEqual(routing.admit(dict(attempt_id='x', task='t', role='software-engineer', work_kind='implementation', complexity_band='medium',
                                             scope=SCOPE), dict(strategy_ids=[], reason_codes=[]),
                                        dict(routing_settings.resolve({}), revision=0), observations(),
                                        ledger=None, workflow=oversized)['reason_code'], 'invalid_binding')
