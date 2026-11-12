@@ -95,11 +95,6 @@ class ReconcileTaskTests(unittest.TestCase):
         self.assertEqual(result["counted_threads"], [{"thread_id": THREAD_A, "role": "coordinator"}])
         self.assertEqual(result["source_versions"], ["0.167.0"])
 
-    def test_one_unknown_counter_makes_only_that_total_unknown(self):
-        partial = counts(4) | {"cached_input_tokens": None}
-        result = self.reconcile(observations(thread(THREAD_A, usage=counts(10)), thread(THREAD_B, usage=partial)))
-        self.assertEqual(result["totals"], counts(14) | {"cached_input_tokens": None})
-        self.assertEqual(result["coverage"], "incomplete")
 
     def test_zero_threads_are_unknown_and_incomplete(self):
         result = self.reconcile(observations())
@@ -135,6 +130,14 @@ class ReconcileTaskTests(unittest.TestCase):
                                 thread("t7", version="0.169.0-beta"), thread("t8", version="0.150.0"))
         self.assertEqual(self.reconcile(observed)["source_versions"],
                          ["0.100.0", "0.150.0", "0.167.0", "0.168.0", "0.169.0-beta", "0.170.1"])
+
+    def test_source_versions_come_only_from_counted_threads(self):
+        observed = observations(thread("t1", version="0.167.0"),
+                                thread("t2", version="0.166.0", gaps=["source_version_unqualified"]),
+                                thread("t3", version="0.168.0", gaps=["history_incomplete"]))
+        self.assertEqual(self.reconcile(observed)["source_versions"], ["0.167.0"])
+        uncounted = observations(thread("t2", version="0.166.0", gaps=["source_version_unqualified"]))
+        self.assertEqual(self.reconcile(uncounted)["source_versions"], [])
 
     def test_model_settings_are_listed_per_thread_in_input_order(self):
         observed = observations(thread(THREAD_B, "worker", model_settings=settings("model-b", None)),
@@ -223,6 +226,19 @@ class ReconcileTaskTests(unittest.TestCase):
 
     def test_known_usage_on_a_gapped_thread_is_refused(self):
         self.assertRefused(observations(thread(gaps=["file_unreadable"], usage=counts(3))))
+
+    def test_unknown_usage_on_a_gap_free_thread_is_refused(self):
+        for key in KEYS:
+            with self.subTest(key=key):
+                self.assertRefused(observations(thread(THREAD_A), thread(THREAD_B, usage=counts(4) | {key: None})))
+        self.assertRefused(observations(thread(usage=dict(UNKNOWN))))
+
+    def test_empty_text_and_non_dict_gap_entries_are_refused(self):
+        self.assertRefused(observations(thread(version="")))
+        self.assertRefused(observations(thread(), gaps=[{"thread_id": "", "code": "file_unreadable"}]))
+        for entry in ("file_unreadable", ["thread-a", "file_unreadable"], None, 3, ("thread_id", "code")):
+            with self.subTest(entry=entry):
+                self.assertRefused(observations(thread(), gaps=[entry]))
 
     def test_gap_codes_must_be_known(self):
         self.assertRefused(observations(thread(gaps=[SECRET])))
