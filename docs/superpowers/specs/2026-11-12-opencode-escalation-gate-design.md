@@ -109,6 +109,8 @@ The user chose approach 4 on 12 November 2026, with these decisions:
 - The judge is a Smart Routing task from the beginning, not a fallback. If routing
   cannot route it yet, the judge waits for that implementation.
 - The mechanical gate ships first; the judge is added when routing can route it.
+- The `escalation_gate` feature keeps consent `none`; the judge's cost is
+  authorized and bounded by Smart Routing, not by the gate.
 - The judge is the main reset path; the user's plain message is the override. No
   command, tool or `question`-tool offer.
 - Escalation stops at three, followed by an architecture re-evaluation that resets
@@ -346,10 +348,18 @@ escalation means "raise the task profile floor", as policy 03 already states.
 ### Activation
 
 - Feature `escalation_gate`: manifest `features/escalation_gate.json`, default
-  `{"enabled": false}`, control `settings`, settings `repair_rounds`,
-  `check_patterns`, `ladder`. Consent `none` for the mechanical gate. The judge
-  sends evidence to a model and uses subscription quota, so adding it raises the
-  feature's consent to `spends`, settled when the judge is added.
+  `{"enabled": false}`, control `settings`, consent `none`, settings
+  `repair_rounds`, `check_patterns`, `ladder`. The consent stays `none` when the
+  judge is added: the gate itself sends nothing and spends nothing. A feature with
+  any other consent can never be enabled through `features enable` and is never
+  effective in the current `runtime/features.py`, which would switch off the whole
+  gate, not only the judge.
+- The judge's cost belongs to Smart Routing. The judge is a routed task, so it runs
+  only where the user has activated Smart Routing for the project; that activation
+  authorizes its routes within their saved scope and limits
+  ([Agent Delegation](../../../policies/03-agent-delegation.md#select-capability-and-dispatch)),
+  and routing's caps and usage windows bound what the judge uses. Without Smart
+  Routing the judge does not run and the gate stays mechanical.
 - The plugin reads the resolved value at setup through
   `python3 -I -B scripts/workflow.py features status escalation_gate --cwd <dir>`
   and again on `config.updated`. Disabled, missing or unreadable means the plugin
