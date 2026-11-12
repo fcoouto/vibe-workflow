@@ -166,7 +166,8 @@ export function createWorkflowPlugin(config: Config = {}) {
 
       // Lineage and finished runs from the live event stream.
       const events = new AbortController()
-      if (typeof ctx?.event?.subscribe === "function") {
+      let eventChannelAvailable = typeof ctx?.event?.subscribe === "function"
+      if (eventChannelAvailable) {
         void (async () => {
           try {
             for await (const event of ctx.event.subscribe({ types: ["session.created", FINISHED], signal: events.signal })) {
@@ -182,12 +183,13 @@ export function createWorkflowPlugin(config: Config = {}) {
             }
           } catch { /* handled below */ }
           // Releases depend on finished-run events: without them a hold could never end, so fail open.
+          eventChannelAvailable = false
+          gate = null
           if (!events.signal.aborted) {
-            gate = null
             lastError = "event_stream_lost"
           }
         })()
-      }
+      } else lastError = "event_stream_lost"
 
       await ctx.session.hook("model.request", guard("model_request", async (event) => {
         if (event?.kind !== "primary") return
@@ -246,8 +248,8 @@ export function createWorkflowPlugin(config: Config = {}) {
       // The feature is read in the background; until it resolves as effective, every hook returns at once.
       void Promise.resolve().then(() => featureStatus(directory)).then(async (report) => {
         settings = activeSettings(report)
-        if (!settings) return
-        gate = new Gate(settings)
+        if (!settings || events.signal.aborted) return
+        if (eventChannelAvailable) gate = new Gate(settings)
         await ctx.tool.transform((editor: any) => {
           editor.add({
             name: "escalation_gate_status",
@@ -263,7 +265,11 @@ export function createWorkflowPlugin(config: Config = {}) {
         })
       }).catch(() => { gate = null })
 
-      return () => events.abort()
+      return () => {
+        eventChannelAvailable = false
+        gate = null
+        events.abort()
+      }
     },
   }
 }

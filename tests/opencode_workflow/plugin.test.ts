@@ -139,6 +139,100 @@ test("setup returns before feature status resolves", async () => {
   t.cleanup()
 })
 
+for (const mode of ["throws", "ends", "missing"] as const) {
+  test(`event-channel lifecycle: ${mode} before feature resolution stays fail-open`, async () => {
+    const fake = fakeCtx("/w", { [ROOT]: {} })
+    const ctx: any = fake.ctx
+    let subscriptions = 0
+    if (mode === "missing") delete ctx.event.subscribe
+    else ctx.event.subscribe = () => {
+      subscriptions++
+      return { async *[Symbol.asyncIterator]() {
+        if (mode === "throws") throw new Error("synthetic event stream failure")
+      } }
+    }
+    let resolveFeature!: (value: unknown) => void
+    const pending = new Promise<unknown>((resolve) => { resolveFeature = resolve })
+    const instance = createWorkflowPlugin({ featureStatus: () => pending })
+    const cleanup = await instance.setup(ctx)
+    const t = { ...fake, cleanup }
+    try {
+      await settle()
+      assert.equal(t.tools.length, 0)
+      resolveFeature(report(true))
+      await settle()
+      await trip(t)
+      assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+      assert.deepEqual(await status(t), { held: [], lastError: "event_stream_lost" })
+      assert.equal(subscriptions, mode === "missing" ? 0 : 1)
+    } finally { cleanup() }
+  })
+}
+
+test("event-channel lifecycle: cleanup before feature resolution prevents late activation", async () => {
+  const fake = fakeCtx("/w", { [ROOT]: {} })
+  let resolveFeature!: (value: unknown) => void
+  const pending = new Promise<unknown>((resolve) => { resolveFeature = resolve })
+  const instance = createWorkflowPlugin({ featureStatus: () => pending })
+  const cleanup = await instance.setup(fake.ctx)
+  const t = { ...fake, cleanup }
+  try {
+    await settle()
+    cleanup()
+    resolveFeature(report(true))
+    await settle()
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.equal(t.tools.length, 0)
+  } finally { cleanup() }
+})
+
+test("event-channel lifecycle: cleanup disables an active hold without reporting stream loss", async () => {
+  const t = await start()
+  try {
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+    t.cleanup()
+    await settle()
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.deepEqual(await status(t), { held: [], lastError: null })
+  } finally { t.cleanup() }
+})
+
+test("event-channel lifecycle: a healthy channel permits deferred activation and normal release", async () => {
+  let resolveFeature!: (value: unknown) => void
+  const pending = new Promise<unknown>((resolve) => { resolveFeature = resolve })
+  const t = await start({ featureStatus: () => pending })
+  try {
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.equal(t.tools.length, 0)
+    resolveFeature(report(true))
+    await settle()
+    await t.emit({ type: "session.created", data: { sessionID: ROOT } })
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+    await diagnose(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.deepEqual(await status(t), { held: [], lastError: null })
+  } finally { t.cleanup() }
+})
+
+test("event-channel lifecycle: stream loss keeps a disabled feature quiet", async () => {
+  let resolveFeature!: (value: unknown) => void
+  const pending = new Promise<unknown>((resolve) => { resolveFeature = resolve })
+  const t = await start({ featureStatus: () => pending })
+  try {
+    await t.emit(STREAM_LOST)
+    resolveFeature(report(false))
+    await settle()
+    await trip(t)
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.equal(t.tools.length, 0)
+  } finally { t.cleanup() }
+})
+
 test("status tool is registered only once active", async () => {
   const t = await start()
   assert.equal(t.tools.length, 1)

@@ -103,6 +103,14 @@ independently reviewed `f1bcb6c` repair. Earlier failed full runs remain histori
 evidence; checks on the integrated committed candidate are recorded in PR #264.
 No new live qualification is claimed for this integration.
 
+Final integration review also found a startup lifecycle race: feature loading
+could reactivate enforcement after its release-event stream had already failed.
+The local repair retains event-channel availability independently from gate
+state, prevents late activation after loss or cleanup, and keeps disabled
+features quiet. Seven lifecycle tests ran test-first: two passed and five failed
+before the repair, then all seven passed. Both Node suites passed 70 tests after
+the repair. This is synthetic lifecycle evidence, not a new host observation.
+
 ### Historical checks on the live-evaluated candidate
 
 - Gate Node suites: 43 passed, including the masked-exit regression.

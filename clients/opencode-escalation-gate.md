@@ -39,6 +39,7 @@ The feature is off by default, needs no consent and changes a tracked file, so c
 
 - Not a security boundary: writes through the shell, `` !`cmd` `` command templates, other plugins and the server API are not seen. A plugin that fails to load enforces nothing, and any internal error allows the action.
 - State lives in memory; a plugin reload starts afresh.
+- An unavailable or lost session-event stream disables enforcement for that plugin instance, including loss before feature loading completes. Reload to start a fresh instance; the plugin does not reconnect. Cleanup also prevents late activation.
 - Loops whose repairs move to files never repaired before are not detected.
 - A shell pipeline can hide a runner's failure exit. Output-only detection requires complete unittest footers, one per recognized literal check invocation, with the last footer ending captured output. Positive failures, errors or unexpected successes count; expected failures and zero-only counts do not. Multiple runs count at most once per shell event.
 - Output attribution supports literal check sequences, option-free wrapper prefixes, environment assignments, optional `2>&1` and a single stdin-only `tail -N` or `tail -n N`. Mixed viewer/check commands, wrapper options, quoted or substituted syntax, unsupported filters, malformed footers and mismatched run counts remain unknown. Non-zero exits and tool errors still count through the ordinary check classifier.
