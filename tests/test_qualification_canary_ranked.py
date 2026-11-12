@@ -153,11 +153,18 @@ class RankedStores(Temp):
         self.project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(self.project), "init", "-q"], check=True)
         self.build(self.tmp)
+        for patcher in (mock.patch.object(safety, "check_real_home", side_effect=lambda: self.home),
+                        mock.patch.object(canary, "_production_paths", side_effect=lambda:
+                                          (self.settings, self.state["ledger"]))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def build(self, root):
-        """A ledger and its settings under `root`; its run record derives from the ledger (`root` itself here)."""
-        directory = self.private(self.private(root / "q") / "canary")
-        self.state = dict(dir=directory, settings=directory / "settings.json", ledger=directory / "ledger.sqlite3",
+        """A separate synthetic account with the production default store layout, never an authority override."""
+        self.home = self.private(root / "home")
+        directory = self.private(self.home / ".local/state/vibe-workflow/routing")
+        usage = self.private(self.home / ".local/state/vibe-workflow/usage")
+        self.state = dict(dir=directory, settings=directory / "settings.json", ledger=usage / "organizations.sqlite3",
                           production=True, approval=dict(APPROVAL))
         self.settings = self.state["settings"]
         self.routing = self.served_routing()
@@ -209,6 +216,7 @@ class RankedStores(Temp):
         run = run or self.make_run()[0]
         pins = canary_ranked.approval_inputs(self.settings, run.routing.harnesses)
         options.setdefault("acknowledge", canary_ranked.coverage(pins)["minimum"])
+        options.setdefault("start", "synthetic-history-decision")
         if getattr(run, "ranked", None) is not None:
             canary_ranked.close(run.ranked)
         run.ranked = canary_ranked.setup(run, clock=clock, approved=self.digest(run, options["acknowledge"]), **options)
@@ -670,7 +678,7 @@ class RankedChatGPTRefreshTests(RankedStores):
 class RankedEntryPointTests(RankedStores):
     def test_canary_run_builds_the_ranked_controller_before_the_server_starts(self):
         run, _ = self.make_run()
-        run.ranked_options = dict(approved=self.digest(run), acknowledge=8)
+        run.ranked_options = dict(approved=self.digest(run), acknowledge=8, start="synthetic-history-decision")
         order = []
         run.snapshot_user_dirs = run.report_only_home = lambda: {}
         run.compare_user_dirs = lambda before, home: None

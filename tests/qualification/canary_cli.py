@@ -27,6 +27,8 @@ def add_arguments(parser):
     parser.add_argument("--ranked", action="store_true", help="canary on the production ledger: ranked admissions")
     parser.add_argument("--ranked-preflight", action="store_true", help="0 calls: the ranked pins and digest")
     parser.add_argument("--approve-digest", help="ranked: the approved --ranked-preflight digest")
+    parser.add_argument("--ranked-start", metavar="HISTORY_DECISION_REF",
+                        help="ranked first start only: operator attestation to a separately approved history decision")
     parser.add_argument("--acknowledge-low-coverage", type=int, metavar="N",
                         help="ranked: the computed minimum full-reservation coverage, when below 60")
     parser.add_argument("--probe-route", help="ranked: the fixed approved route of the plugin-chain probes only")
@@ -45,6 +47,9 @@ def check_options(args):
         raise safety.Refused(PRODUCTION_RANKED_ONLY)
     if args.ranked and not (args.canary and args.production_ledger):
         raise safety.Refused("--ranked belongs to --canary --production-ledger")
+    if args.ranked_start is not None and (not args.ranked or args.ranked_preflight or args.export_canary_admissions
+                                         or not args.ranked_start.strip()):
+        raise safety.Refused("--ranked-start needs a nonblank history reference and belongs only to the ranked run")
 
 
 def exposure(n):
@@ -56,9 +61,10 @@ def exposure(n):
 def preflight(args):
     """`--ranked-preflight`: the record to approve and its digest. Reads the production settings' saved local data
     only; no server, provider read, model call or write."""
-    state = canary.resolve_state(None, True, args.approval)
+    state = canary_ranked_state.resolve()
+    canary.check_approval(args.approval)
     project = canary.check_project(args.project, args.canary_allow, state["settings"], managed=True)
-    ledger = str(canary_ranked_state.canonical(state["ledger"]))  # the exact ledger string setup binds
+    ledger = str(state["ledger"])  # the default spelling setup binds, independent of accepted aliases
     record = dict(canary_ranked.preflight(state["settings"], [safety.HARNESS_NAME], int(time.time()),
                                           args.acknowledge_low_coverage), project=project, ledger=ledger)
     return dict(record, digest=canary_ranked_state.digest(record))

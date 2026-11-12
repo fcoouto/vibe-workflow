@@ -30,6 +30,7 @@ existing one-shot operator procedure. No timer, poll, retry loop, model call or 
 """
 import hashlib
 import json
+import os
 import time
 
 from runtime import opencode_launcher, routing, routing_observations as collector, routing_paths, routing_settings
@@ -149,6 +150,7 @@ def preflight(settings_path, harnesses, at, acknowledge=None):
     is exactly that computed minimum (`--acknowledge-low-coverage N`, an integer, never prose). The acknowledgement is
     part of the digest the approval names; it is an interface, not anyone's consent to start. Local store reads
     only, outside preview and any timer."""
+    settings_path = canary_ranked_state.resolve(settings=settings_path)["settings"]
     pins = approval_inputs(settings_path, harnesses)
     report = coverage(pins, routing_paths._table(settings_path))
     if not report["windows"] or not all(report["profiles"].values()):
@@ -382,37 +384,42 @@ class Controller:
                 for variant in [v if isinstance(v, str) else (v or {}).get("id") for v in item.get("variants") or []]]
 
 
-def setup(run, clock=None, approved=None, acknowledge=None):
+def setup(run, clock=None, approved=None, acknowledge=None, start=None):
     """The production-ledger ranked canary's controller, before any server starts.
 
-    With no run record for this ledger, the current preflight's digest must equal `approved` (the digest the
-    operator approved from `--ranked-preflight`); the record is then created. With one, it is resumed: `approved`
-    must be its digest and the current pins its pins (a change needs a renewed approval, which the existing record
-    refuses: nothing is erased), and its baseline, cumulative use, holds, original earliest reset, stop state and
-    sample count carry over unchanged. The record and lock derive from the canonical ledger path alone
-    (`canary_ranked_state.path_for`). The run holds the record's lock until the process ends."""
+    Default resume requires the retained account campaign and original approval. Explicit `start` names the
+    operator's separately approved history decision; it is an attestation, not machine-verified discovery.
+    A start additionally needs the existing BY/AT/SCOPE approval and matching current preflight digest. It cannot
+    replace an existing campaign. One fixed lock spans selection and the run; all accounting fields carry over."""
     clock = clock or (lambda: int(time.time()))
     state = run.canary_state
     harnesses = run.routing.harnesses
-    project, ledger = str(run.canary_project), str(canary_ranked_state.canonical(state["ledger"]))
-    path = canary_ranked_state.path_for(ledger)
-    lock = canary_ranked_state.held(path)
+    scope = canary_ranked_state.resolve(state["ledger"], state["settings"])
+    if not state.get("production"):
+        raise Refused("ranked canary requires the production default stores")
+    project, ledger, path = str(run.canary_project), str(scope["ledger"]), scope["path"]
+    if start is not None:
+        if type(start) is not str or not start.strip():
+            raise Refused("--ranked-start needs a nonblank HISTORY_DECISION_REF")
+        canary.check_approval([(state.get("approval") or {}).get(key) for key in ("by", "at", "scope")])
+        if not os.path.lexists(path):  # validate intent before creating even the first lock
+            fresh = dict(preflight(scope["settings"], harnesses, clock(), acknowledge), project=project, ledger=ledger)
+            if approved != canary_ranked_state.digest(fresh):
+                raise Refused("ranked canary refused: --approve-digest does not match this preflight (%s)"
+                              % canary_ranked_state.digest(fresh))
+    lock = canary_ranked_state.held(path, start=start is not None)
     lock.__enter__()
     try:
-        if path.exists() or path.is_symlink():
+        if start is None:
             record = canary_ranked_state.load(path, approved, project, ledger)
             try:
-                current = approval_inputs(state["settings"], harnesses)
+                current = approval_inputs(scope["settings"], harnesses)
             except Refused:
                 current = None
             if current != record["pins"]:
                 raise Refused("ranked canary refused: approval_inputs_changed since the approved run record; it "
                               "stays as recorded and needs a renewed approval by hand")
         else:
-            fresh = dict(preflight(state["settings"], harnesses, clock(), acknowledge), project=project, ledger=ledger)
-            if approved != canary_ranked_state.digest(fresh):
-                raise Refused("ranked canary refused: --approve-digest does not match this preflight (%s)"
-                              % canary_ranked_state.digest(fresh))
             record = canary_ranked_state.create(path, fresh)
     except BaseException:
         lock.__exit__(None, None, None)
@@ -421,9 +428,11 @@ def setup(run, clock=None, approved=None, acknowledge=None):
                   acknowledged=record["acknowledged"], completed=record["completed"],
                   pins={key: value for key, value in record["pins"].items() if key != "routes"},
                   strategies=sorted(record["pins"]["routes"]))
+    if start is not None:
+        ranked["history_decision_ref"] = start
     run.results["production_ledger"] = dict(approval=dict(state.get("approval") or {}, ranked=ranked))
     from tests.qualification.pilot_env import CanaryEnv
-    controller = Controller(CanaryEnv(run), state["settings"], state["ledger"], run.canary_project, harnesses,
+    controller = Controller(CanaryEnv(run), scope["settings"], scope["ledger"], run.canary_project, harnesses,
                             record, clock, path)
     controller.lock = lock
     return controller

@@ -53,7 +53,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, canary_cli, canary_ranked, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
+from tests.qualification import canary, canary_cli, canary_ranked, canary_ranked_state, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, PROMPT_TEXT, QUALIFIED_OPENCODE,
                                         Redactor, Refused, check_isolated_dir, check_real_home,
@@ -729,13 +729,15 @@ class Run:
         checked before anything is written to the project or a server starts; health and the probes follow the
         start, and no admission begins unless they pass."""
         s = "pilot"
+        options = getattr(self, "ranked_options", None)  # F7.2: only `--ranked`, before start
+        if options:
+            canary_ranked_state.resolve(self.canary_state["ledger"], self.canary_state["settings"])
         self.note(s, "canary_state", canary.initialize_state(self.routing, self.canary_state.get("production")))
         before = self.routing("status")[0]
         self.note(s, "status_at_start", status_view(before))
         refusals = canary.preflight(before)
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
-        options = getattr(self, "ranked_options", None)  # F7.2: only `--ranked`, before start
         if bool(options) != bool(self.canary_state.get("production")):  # N1: a direct entry is never converted
             raise Refused(canary_cli.PRODUCTION_RANKED_ONLY)
         canary.check_ancestor_configs(self.canary_project)
@@ -969,7 +971,8 @@ def main(argv=None):
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=canary.RANKED_PURPOSE if args.ranked else purpose, stages=stages,
               chatgpt_model=args.chatgpt_model, route=args.route)
-    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage) if args.ranked else None
+    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage,
+                              start=args.ranked_start) if args.ranked else None
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     if args.replay_dir:
         run.replay_dir = Path(args.replay_dir)

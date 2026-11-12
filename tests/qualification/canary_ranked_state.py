@@ -1,18 +1,12 @@
-"""The ranked canary's durable whole-run record (F7 correction F1/F2): one owner-only JSON file per routing ledger,
-outside every repository and the isolated run directory, holding the approved preflight digest and everything a new
-process needs to resume the same run: the approved pins, the original seeded baseline and earliest demanded reset,
-the cumulative/last/seen window accounting, unsettled reservations, the stop state and the admission count.
+"""One retained ranked campaign and lifetime lock per verified local account, outside repositories.
 
-It is created only by an explicit approved start (`create`), never on resume; `load` refuses a missing, corrupt,
-mismatched or concurrently held record. A record is never replaced or deleted by the harness: a new approval for the
-same ledger is refused while it exists, so no approval can silently erase a whole-run allowance. Completed and
-aborted records stay retained; no archive or reset procedure exists. The record and its lock are a pure function of
-the canonical ledger path (`path_for`): no flag, argument, HOME or working directory selects another, so every
-supported caller of one ledger reaches one record and one lock. Its spelling must be the filesystem's exact entry
-spelling: a case or Unicode alias is refused, never folded. A record retained under a spelling that is no longer exact
-stays untouched and that spelling stays refused; no migration or historical reconciliation is claimed. This is a harness rule, not OS enforcement: the local
-owner can still move or edit the file, the ledger or the code by hand. Writes are atomic (temporary file, fsync,
-`os.replace`) and the caller saves before every send; a failed save fails closed.
+The default ledger and settings are validated metadata, never a namespace. Resume never creates; explicit first
+start requires an approved digest and the operator's separate history-decision reference in the run report.
+Only this account's fixed directory is inspected: legacy, orphaned or ambiguous evidence refuses unchanged, with
+no adoption, migration or deletion. Unknown historical directories require a manual decision, not discovery here.
+The original pins, baseline/reset, cumulative/last/seen, holds, stop and sample survive process restarts.
+Writes are atomic and saved before sends; failures abort. Old writers must be quiescent before deployment.
+This is a harness contract, not enforcement against owner tampering or hostile filesystem races.
 """
 import contextlib
 import fcntl
@@ -22,7 +16,7 @@ import os
 from pathlib import Path
 import stat
 
-from tests.qualification import replay_export
+from tests.qualification import canary, replay_export, safety
 from tests.qualification.safety import Refused
 
 VERSION = 1
@@ -30,53 +24,34 @@ FIELDS = {"version", "digest", "project", "ledger", "pins", "coverage", "acknowl
           "earliest_reset", "cumulative", "last", "seen", "holds", "stopped", "completed"}
 
 
-ANCHOR = Path("vibe-workflow-qualification/ranked-canary")
-
-
-def _exact(found):
-    """Every component of `found`, parents and final name, must be an existing directory entry spelled exactly as
-    its parent directory lists it: a case or Unicode-normalization alias of the same file (which `resolve` keeps as
-    given) would otherwise derive a second record and lock. Metadata only; nothing is opened, renamed or folded."""
-    current = Path(found.anchor)
-    for part in found.parts[1:]:
-        try:
-            names = os.listdir(current)
-        except OSError:
-            raise Refused("the routing ledger path cannot be verified (a directory is not listable)") from None
-        if part not in names:
-            if os.path.lexists(current / part):
-                raise Refused("the routing ledger path must use the exact filesystem spelling of every component")
-            raise Refused("the routing ledger path does not exist")
-        current = current / part
-
-
 def canonical(ledger):
-    """The ledger path with its parent directories resolved: absolute, never itself a symlink, deep enough for the
-    anchor, an existing regular file whose every component has its exact directory-entry spelling (`_exact`).
-    `Refused` otherwise; nothing is opened or created. The returned path, and so every retained key, is the accepted
-    spelling unchanged: a non-exact spelling is refused, never normalized into another record."""
+    """An absolute existing regular store, resolving parents but refusing a final symlink. Metadata reads only."""
     ledger = Path(ledger)
     if not ledger.is_absolute():
         raise Refused("the routing ledger path must be absolute")
     if ledger.is_symlink():
         raise Refused("the routing ledger must not be a symlink")
     found = ledger.parent.resolve() / ledger.name
-    if len(found.parents) < 4:
-        raise Refused("the routing ledger path is too shallow for its run record anchor")
-    _exact(found)
-    if not stat.S_ISREG(os.lstat(found).st_mode):
+    try:
+        info = os.lstat(found)
+    except OSError:
+        raise Refused("the routing store path cannot be verified") from None
+    if not stat.S_ISREG(info.st_mode):
         raise Refused("the routing ledger must be a regular file")
     return found
 
 
-def path_for(ledger):
-    """The one record of a routing ledger, derived from the canonical ledger path alone: the directory is
-    `parents[2]/vibe-workflow-qualification/ranked-canary` (for the production ledger
-    `~/.local/state/vibe-workflow/usage/organizations.sqlite3`, the existing `~/.local/state/vibe-workflow-qualification/
-    ranked-canary/`) and the name is keyed by the canonical path."""
-    found = canonical(ledger)
-    key = hashlib.sha256(str(found).encode()).hexdigest()[:16]
-    return found.parents[2] / ANCHOR / ("run-%s.json" % key)
+def resolve(ledger=None, settings=None):
+    """The verified account's fixed campaign and default stores. Aliases validate by file identity, never key it.
+    Returned store spellings come from production defaults, so setup and preflight bind identical metadata."""
+    home = safety.check_real_home()
+    defaults = dict(zip(("settings", "ledger"), canary._production_paths()))
+    supplied = dict(settings=settings, ledger=ledger)
+    for name, default in defaults.items():
+        defaults[name] = canonical(default)
+        if supplied[name] is not None and not os.path.samefile(canonical(supplied[name]), defaults[name]):
+            raise Refused("ranked canary requires the account's default %s store" % name)
+    return dict(defaults, path=home / ".local/state/vibe-workflow-qualification/ranked-canary/campaign.json")
 
 
 def digest(record):
@@ -109,16 +84,48 @@ def _read(path):
     return value
 
 
+def _entries(path):
+    """Inspect only the fixed directory; never open legacy entries or follow recorded paths."""
+    entries = set(os.listdir(path.parent))
+    if entries - {path.name, path.name + ".lock"}:
+        raise Refused("ranked campaign has legacy or unexplained state; history reconciliation is required")
+    for name in entries:
+        info = os.lstat(path.parent / name)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise Refused("ranked campaign state must be regular files, never symlinks or linked evidence")
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+            raise Refused("ranked campaign files must be owner-only (0600)")
+    return entries
+
+
 @contextlib.contextmanager
-def held(path):
-    """An exclusive, non-blocking lock beside the record for the whole run: a concurrent run is refused."""
-    replay_export.check_dir(path.parent)
-    descriptor = os.open(path.with_name(path.name + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+def held(path, start=False):
+    """Hold the one account lock through selection and the entire run. Never remove a lock, even after failure."""
+    if not start and not os.path.lexists(path.parent):
+        raise Refused("the ranked campaign is missing; resume never creates it")
+    replay_export.check_dir(path.parent, create=start)
+    entries = _entries(path)
+    lock = path.with_name(path.name + ".lock")
+    if entries and entries != {path.name, lock.name}:
+        raise Refused("ranked campaign has unfinished creation or missing lock evidence; refusing unchanged")
+    if not start and not entries:
+        raise Refused("the ranked campaign is missing; resume never creates it")
+    created = False
+    try:
+        descriptor = replay_export._private_file(lock, os.O_RDWR | os.O_CREAT | os.O_EXCL)
+        created = True
+    except FileExistsError:
+        descriptor = replay_export._private_file(lock, os.O_RDWR)
     try:
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise Refused("another ranked canary run holds this ledger's run record") from None
+            raise Refused("another ranked canary run holds this account's campaign") from None
+        entries = _entries(path)
+        if path.name not in entries and not created:
+            raise Refused("ranked campaign has prior lock-only evidence; refusing unchanged")
+        if start and path.name in entries:
+            raise Refused("a ranked campaign already exists for this account; only resume is allowed")
         yield
     finally:
         os.close(descriptor)
@@ -128,9 +135,8 @@ def create(path, record):
     """The new run's record from an approved preflight record; refused when one already exists."""
     replay_export.check_dir(path.parent)
     if path.exists() or path.is_symlink():
-        raise Refused("a ranked canary run record already exists for this ledger; it is never replaced, moved or "
-                      "deleted to start or resume a run. Resume it with its approved digest; another approval on this "
-                      "ledger stays refused pending an explicit lifecycle decision")
+        raise Refused("a ranked campaign already exists for this account; it is never replaced, moved or deleted "
+                      "to start or resume a run. Resume it with its original approved digest")
     value = dict({key: record[key] for key in ("project", "ledger", "pins", "coverage", "acknowledged", "baseline",
                                                "earliest_reset")}, version=VERSION, digest=digest(record),
                  cumulative={key: 0 for key in record["baseline"]},
