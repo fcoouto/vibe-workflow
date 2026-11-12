@@ -16,6 +16,8 @@ from runtime.adapters import codex_usage
 
 THREAD = "019a6f00-0000-7000-8000-000000000001"
 OTHER = "019a6f00-0000-7000-8000-000000000002"
+PAGE = "019a6f00-0000-7000-8000-0000000000a1"
+PAGE2 = "019a6f00-0000-7000-8000-0000000000a2"
 SECRET = "sk-live-7f3a9cSECRET user said: my password is hunter2-zebra"
 START = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
 CUTOFF = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
@@ -445,11 +447,10 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=local,
                                                       deadline=time.monotonic() + 30), path)
 
-    def test_lookup_stops_at_first_matching_folder(self):
-        newest = self.standard(folder=self.folder(day=12))
+    def test_plain_files_in_two_window_folders_are_ambiguous(self):
+        self.standard(folder=self.folder(day=12))
         self.standard(folder=self.folder(day=11), mode=0o000)
-        self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF,
-                                                      deadline=time.monotonic() + 30), newest)
+        self.assertGap(self.read(), "thread_file_ambiguous")
 
     def test_lookup_matches_only_the_full_name_form(self):
         self.standard()
@@ -500,6 +501,143 @@ class CodexUsageTests(unittest.TestCase):
     def test_missing_codex_home_is_not_found(self):
         with patch.dict(os.environ, {"CODEX_HOME": str(self.root / "absent")}):
             self.assertGap(self.read(), "thread_file_not_found")
+            self.assertEqual(codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                           deadline=time.monotonic() + 30), [])
+        self.assertEqual(codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                       deadline=time.monotonic() + 30), [])
+
+    # Paginated history
+
+    def page(self, rows, stamp_text="11-00-00", page=PAGE, **kwargs):
+        name = f"rollout-2026-11-12T{stamp_text}-{kwargs.pop('thread', THREAD)}_{page}.jsonl"
+        return self.write(rows, name=name, **kwargs)
+
+    def plain(self, **kwargs):
+        return self.write([meta(), context(at(9, 2)), token(at(9, 30), 100), token(at(10, 30), 200)], **kwargs)
+
+    def test_paginated_thread_sums_across_files(self):
+        self.plain()
+        self.page([meta(at(11), version="0.167.1"), token(at(11, 10), 201), token(at(11, 30), 350)])
+        result = self.read(qualified=frozenset({VERSION, "0.167.1"}))
+        self.assertEqual((result["gaps"], result["cli_version"]), ([], "0.167.1"))
+        self.assertEqual((result["baseline"], result["final"], result["usage"]),
+                         (totals(100), totals(350), totals(250)))
+
+    def test_pages_in_different_date_folders_are_read_in_name_order(self):
+        self.plain(folder=self.folder(day=10))
+        self.page([meta(at(11)), token(at(11, 10), info=None), token(at(11, 20), 201)], folder=self.folder(day=11))
+        self.page([meta(at(11, 40)), token(at(11, 45), 251), token(at(11, 50), 300)], "11-40-00", PAGE2)
+        paths = codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                              deadline=time.monotonic() + 30)
+        self.assertEqual([path.parent.name for path in paths], ["10", "11", "12"])
+        self.assertEqual([path.name.endswith(".jsonl") and "_" in path.name for path in paths], [False, True, True])
+        # 201 continues 200; 251 does not continue 201 + 1, so the second page breaks continuity.
+        self.assertGap(self.read(), "history_incomplete")
+        self.page([meta(at(11, 40)), token(at(11, 45), 202), token(at(11, 50), 300)], "11-40-00", PAGE2)
+        self.assertEqual(self.read()["usage"], totals(200))
+
+    def test_discontinuous_page_is_history_incomplete(self):
+        no_last = token(at(11, 10), 201)
+        del no_last["payload"]["info"]["last_token_usage"]
+        for first in (token(at(11, 10), 260), token(at(11, 10), 200), no_last,
+                      token(at(11, 10), info={"total_token_usage": totals(201)})):
+            with self.subTest(first=first["payload"]["info"]):
+                self.plain()
+                path = self.page([meta(at(11)), first, token(at(11, 30), 400)])
+                self.assertGap(self.read(), "history_incomplete")
+                path.unlink()
+
+    def test_page_only_history_before_task_start_is_incomplete(self):
+        path = self.page([meta(at(11)), token(at(11, 10), 500), token(at(11, 30), 600)])
+        self.assertGap(self.read(), "history_incomplete")
+        path.unlink()
+        # The header time decides even when a token row is placed before the task start.
+        self.page([meta(at(9), created=at(10, 30)), token(at(9, 30), 500), token(at(10, 40), 600)], "09-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_page_only_history_from_before_task_start_counts(self):
+        self.page([meta(at(9)), context(at(9, 1)), token(at(9, 30), 500), token(at(10, 30), 600)], "09-00-00")
+        result = self.read()
+        self.assertEqual((result["gaps"], result["baseline"], result["usage"]), ([], totals(500), totals(100)))
+
+    def test_page_only_without_token_row_before_start_is_incomplete(self):
+        self.page([meta(at(9)), token(at(10, 30), 600)], "09-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_page_before_plain_file_is_history_incomplete(self):
+        self.plain()
+        # 99 + 1 = 100 would pass continuity, so only the order rule rejects it.
+        self.page([meta(at(8)), token(at(8, 10), 99)], "08-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_equal_name_timestamps_are_ambiguous(self):
+        self.plain()
+        self.page([meta(at(11)), token(at(11, 10), 201)], "09-00-00")
+        self.assertGap(self.read(), "thread_file_ambiguous")
+        with self.assertRaises(codex_usage.UsageGap) as raised:
+            codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
+        self.assertEqual(raised.exception.code, "thread_file_ambiguous")
+
+    def test_find_thread_file_rejects_a_multi_file_thread(self):
+        plain = self.plain()
+        self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                      deadline=time.monotonic() + 30), plain)
+        self.page([meta(at(11)), token(at(11, 10), 201)])
+        with self.assertRaises(codex_usage.UsageGap) as raised:
+            codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
+        self.assertEqual(raised.exception.code, "thread_file_ambiguous")
+
+    def test_pages_for_other_threads_and_malformed_page_names_are_never_opened(self):
+        plain = self.plain()
+        self.page([meta(at(11), thread=OTHER)], thread=OTHER, mode=0o000)
+        self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_notauuid.jsonl", mode=0o000)
+        self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_{PAGE}_{PAGE2}.jsonl", mode=0o000)
+        opened, real_open = [], os.open
+        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
+                          or real_open(p, *a, **k)):
+            result = self.read()
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
+        self.assertEqual(opened, [plain])
+
+    def test_page_rows_must_follow_earlier_files_in_time(self):
+        self.plain()
+        self.page([meta(at(10, 20)), token(at(10, 40), 201)])
+        self.assertGap(self.read(), "timestamp_unusable")
+
+    def test_each_page_must_pass_its_own_header_and_version_checks(self):
+        cases = (([meta(at(11), thread=PAGE), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
+                 ([message(at(11)), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
+                 ([meta(at(11), version="0.168.0"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
+                 ([meta(at(11)), token(at(11, 10), 201), meta(at(11, 20), thread=OTHER)], "session_meta_mismatch",
+                  QUALIFIED))
+        for rows, code, qualified in cases:
+            with self.subTest(code=code, rows=len(rows)):
+                self.plain()
+                path = self.page(rows)
+                self.assertGap(self.read(qualified=qualified), code)
+                path.unlink()
+        self.page([meta(at(11)), meta(at(11, 1), thread=OTHER), token(at(11, 10), 201)])
+        self.assertEqual(self.read()["usage"], totals(101))
+
+    def test_page_after_cutoff_is_not_opened(self):
+        self.write([meta(), token(at(9, 30), 100), token(at(10, 30), 200), token(at(12, 30), 300)])
+        page = self.page([meta(at(13)), token(at(13, 10), 301)], "13-00-00", mode=0o000)
+        opened, real_open = [], os.open
+        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
+                          or real_open(p, *a, **k)):
+            result = self.read()
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
+        self.assertNotIn(page, opened)
+
+    def test_thread_byte_limit_spans_files(self):
+        self.plain()
+        self.page([meta(at(11)), token(at(11, 10), 201)])
+        sizes = sum(path.stat().st_size for path in self.folder().iterdir())
+        self.assertEqual(codex_usage.MAX_THREAD_BYTES, 256 * 1024 * 1024)
+        with patch.object(codex_usage, "MAX_THREAD_BYTES", sizes - 1):
+            self.assertGap(self.read(), "file_too_large")
+        with patch.object(codex_usage, "MAX_THREAD_BYTES", sizes):
+            self.assertEqual(self.read()["usage"], totals(101))
 
     # Streaming
 
@@ -687,7 +825,7 @@ class CodexUsageTests(unittest.TestCase):
             "thread_file_not_found", "thread_file_ambiguous", "file_unreadable", "file_too_large",
             "line_too_large", "session_meta_mismatch", "source_version_unqualified", "token_info_missing",
             "counter_missing", "counter_decreased", "context_window_saturated", "timestamp_unusable",
-            "deadline_exceeded", "no_threads"}))
+            "deadline_exceeded", "no_threads", "history_incomplete"}))
         with self.assertRaises(ValueError):
             codex_usage.UsageGap("other")
 

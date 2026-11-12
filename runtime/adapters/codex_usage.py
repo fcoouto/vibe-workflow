@@ -1,7 +1,7 @@
 """Read Codex token counts from local session files without keeping conversation content (D9 O3).
 
-Codex writes one file per thread at ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl``.
-Those files also hold message text and tool data, so the reader parses only lines that carry one of three
+Codex writes each thread to ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl`` and, for
+paginated history, continues it in page files ``rollout-<timestamp>-<thread-id>_<page-uuid>.jsonl``. Those files also hold message text and tool data, so the reader parses only lines that carry one of three
 marker byte strings, keeps the row time and the numbers below, and drops each parsed row and its bytes at once.
 Results and errors use fixed gap codes or fixed messages; they never carry line content, message text, tool
 data or file paths.
@@ -15,8 +15,16 @@ When a thread's baseline is zero, ``token_count`` rows with ``info: null`` that 
 non-null row are read as zero usage; a null after any non-null row is ``token_info_missing``.
 
 A forked file repeats its parent's ``session_meta`` header after its own, before its first token row, and its
-totals start fresh. The first row must be the thread's own header and is the only source of ``cli_version``
-and the creation time; later headers are ignored until the first token row and are a mismatch after it.
+totals start fresh. The first row of every file must be the thread's own header with a qualified version; later
+headers in a file are ignored until its first token row and are a mismatch after it.
+
+Paginated history: every plain and page file of the thread found in the window is read in name-timestamp order
+as one row stream, with rows in time order across files, within ``MAX_THREAD_BYTES`` in total. Totals are
+cumulative across files, so each later file's first non-null total must equal the previous last non-null total
+plus that row's ``last_token_usage``; null rows before it add nothing. ``cli_version`` comes from the newest file
+read and the creation time from the earliest. When the earliest file found is a page, the history before it is
+missing: the reader then needs a token row at or before task start in the files found, and reports
+``history_incomplete`` otherwise, or when a page comes before the plain file or does not continue it.
 
 A line over ``MAX_LINE`` is judged by its first ``PREFIX_BYTES`` bytes only: it is ``line_too_large`` when
 that prefix shows a ``session_meta`` or ``turn_context`` row, or an ``event_msg`` row whose payload type is
@@ -51,8 +59,10 @@ COUNTERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
 GAP_CODES = frozenset({
     "thread_file_not_found", "thread_file_ambiguous", "file_unreadable", "file_too_large", "line_too_large",
     "session_meta_mismatch", "source_version_unqualified", "token_info_missing", "counter_missing",
-    "counter_decreased", "context_window_saturated", "timestamp_unusable", "deadline_exceeded", "no_threads"})
+    "counter_decreased", "context_window_saturated", "timestamp_unusable", "deadline_exceeded", "no_threads",
+    "history_incomplete"})
 MAX_FILE = 64 * 1024 * 1024
+MAX_THREAD_BYTES = 256 * 1024 * 1024
 MAX_LINE = 1024 * 1024
 LOOKBACK_DAYS = 30
 MAX_THREADS = 256
@@ -62,7 +72,8 @@ _PREFIX_TYPE = re.compile(rb'"type"\s*:\s*"([A-Za-z0-9_]{1,64})"')
 _THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
-_NAME = r"rollout-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-%s\.jsonl"
+_NAME = (r"rollout-([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2})-%s"
+         r"(_[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})?\.jsonl")
 _STOP = object()
 
 
@@ -76,14 +87,30 @@ class UsageGap(Exception):
         self.code = code
 
 
-def find_thread_file(thread_id, *, started_at, cutoff_at, deadline):
-    """Return the thread's session file, or None when no date folder in the window names it.
+def find_thread_files(thread_id, *, started_at, cutoff_at, deadline):
+    """Return the thread's session files in name-timestamp order; empty when no date folder in the window names one.
 
-    Lists date folders backward from the UTC cutoff date plus one day, for at most ``LOOKBACK_DAYS`` days,
-    and stops at the first folder with a match. Matches only the full name form
-    ``rollout-YYYY-MM-DDTHH-MM-SS-<thread-id>.jsonl``. Opens no file. Raises ``UsageGap`` for ambiguity, unsafe
-    paths and an exceeded deadline.
+    Lists every date folder from the UTC cutoff date plus one day back for ``LOOKBACK_DAYS`` days and collects
+    the plain file ``rollout-YYYY-MM-DDTHH-MM-SS-<thread-id>.jsonl`` and the page files
+    ``rollout-YYYY-MM-DDTHH-MM-SS-<thread-id>_<page-uuid>.jsonl``. Opens no file. Raises ``UsageGap`` for more
+    than one plain file or two equal name timestamps (``thread_file_ambiguous``), unsafe paths and an exceeded
+    deadline.
     """
+    return [path for path, _ in _located(thread_id, started_at, cutoff_at, deadline)]
+
+
+def find_thread_file(thread_id, *, started_at, cutoff_at, deadline):
+    """Return a one-file thread's session file, or None; a thread with page files is ``thread_file_ambiguous``.
+
+    Use ``find_thread_files`` for threads with paginated history.
+    """
+    files = find_thread_files(thread_id, started_at=started_at, cutoff_at=cutoff_at, deadline=deadline)
+    if len(files) > 1:
+        raise UsageGap("thread_file_ambiguous")
+    return files[0] if files else None
+
+
+def _located(thread_id, started_at, cutoff_at, deadline):
     thread_id = _thread_id(thread_id)
     _window(started_at, cutoff_at, deadline)
     try:
@@ -105,10 +132,15 @@ def read_thread_usage(thread_id, *, started_at, cutoff_at, deadline, qualified_v
                   usage=_unknown(), model_settings=[], gaps=[])
     try:
         _deadline(deadline)
-        path = find_thread_file(thread_id, started_at=started_at, cutoff_at=cutoff_at, deadline=deadline)
-        if path is None:
+        files = _located(thread_id, started_at, cutoff_at, deadline)
+        if not files:
             raise UsageGap("thread_file_not_found")
-        _scan(path, reading, deadline)
+        if files[0][1] and not all(page for _, page in files):
+            raise UsageGap("history_incomplete")
+        for path, page in files:
+            reading.begin(page=page)
+            if _scan(path, reading, deadline):
+                break
         baseline, final, settings = reading.settle()
         _deadline(deadline)
     except UsageGap as gap:
@@ -188,12 +220,13 @@ def _find(thread_id, cutoff_at, deadline):
     try:
         home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").resolve(strict=True)
     except FileNotFoundError:
-        return None
+        return []
     sessions = home / "sessions"
     if not os.path.lexists(sessions):
-        return None
+        return []
     _directory(sessions)
     pattern = re.compile(_NAME % re.escape(thread_id))
+    found = []
     newest = cutoff_at.astimezone(timezone.utc).date() + timedelta(days=1)
     for offset in range(LOOKBACK_DAYS + 1):
         _deadline(deadline)
@@ -205,22 +238,23 @@ def _find(thread_id, cutoff_at, deadline):
                 break
             _directory(folder)
         else:
-            names = [name for name in os.listdir(folder) if pattern.fullmatch(name)]
-            if len(names) > 1:
-                raise UsageGap("thread_file_ambiguous")
-            if names:
-                path = folder / names[0]
-                if path.resolve(strict=True) != path or not path.is_relative_to(sessions):
-                    raise UsageGap("file_unreadable")
-                return path
-    return None
+            for name in os.listdir(folder):
+                match = pattern.fullmatch(name)
+                if match:
+                    path = folder / name
+                    if path.resolve(strict=True) != path or not path.is_relative_to(sessions):
+                        raise UsageGap("file_unreadable")
+                    found.append((match[1], match[2] is not None, path))
+    stamps = {stamp for stamp, _, _ in found}
+    if sum(not page for _, page, _ in found) > 1 or len(stamps) != len(found):
+        raise UsageGap("thread_file_ambiguous")
+    return [(path, page) for _, page, path in sorted(found)]
 
 
 def _scan(path, reading, deadline):
-    """Stream the file once; pass only marker lines to ``reading``. Unterminated last lines are ignored."""
+    """Stream one file once; pass only marker lines to ``reading``. True when a row after the cutoff stopped it."""
     try:
-        _stream(path, reading, deadline)
-        return
+        return _stream(path, reading, deadline)
     except UsageGap as gap:
         code = gap.code
     except (OSError, ValueError, TypeError, KeyError, AttributeError, StartupError, RecursionError):
@@ -243,6 +277,7 @@ def _stream(path, reading, deadline):
             raise UsageGap("file_unreadable")
         if info.st_size > MAX_FILE:
             raise UsageGap("file_too_large")
+        reading.reserve(info.st_size)
         remaining, first = info.st_size, True
         while remaining > 0:
             _deadline(deadline)
@@ -272,10 +307,11 @@ def _stream(path, reading, deadline):
                 if first:
                     raise UsageGap("session_meta_mismatch")
             elif reading.row(line, first=first) is _STOP:
-                return
+                return True
             line, first = None, False
         if first:
             raise UsageGap("session_meta_mismatch")
+        return False
 
 
 def _marked(data):
@@ -321,6 +357,12 @@ def _token(info):
     return counts, window
 
 
+def _last(info):
+    usage = info.get("last_token_usage") if isinstance(info, dict) else None
+    counts = tuple(usage.get(key) for key in COUNTERS) if isinstance(usage, dict) else ()
+    return counts if counts and all(type(value) is int and value >= 0 for value in counts) else None
+
+
 def _dedupe(rows):
     """Keep one of each run of identical consecutive token observations."""
     kept = []
@@ -331,12 +373,26 @@ def _dedupe(rows):
 
 
 class _Reading:
-    """Numbers kept from one thread file; nothing else survives a row."""
+    """Numbers kept from one thread's files, read in order; nothing else survives a row."""
 
     def __init__(self, thread_id, started_at, cutoff_at, qualified):
         self.thread_id, self.started_at, self.cutoff_at, self.qualified = thread_id, started_at, cutoff_at, qualified
-        self.cli_version = self.created = self.last = None
+        self.cli_version = self.created = self.last = self.carried = None
         self.tokens, self.contexts, self.token_seen = [], [], False
+        self.files = self.bytes = 0
+        self.page_first, self.continued = False, True
+
+    def begin(self, *, page):
+        """Start the next file. Totals carry across files; a later file must continue the last known total."""
+        if not self.files:
+            self.page_first, self.carried = page, None if page else (0,) * len(COUNTERS)
+        self.files += 1
+        self.token_seen, self.continued = False, self.files == 1
+
+    def reserve(self, size):
+        self.bytes += size
+        if self.bytes > MAX_THREAD_BYTES:
+            raise UsageGap("file_too_large")
 
     def row(self, raw, *, first):
         row = json_object(raw, limit=MAX_LINE + 1)
@@ -348,8 +404,14 @@ class _Reading:
             self.cli_version = version if isinstance(version, str) and _VERSION.fullmatch(version) else None
             if self.cli_version is None or self.cli_version not in self.qualified:
                 raise UsageGap("source_version_unqualified")
-            self.created = _time(payload.get("timestamp"))
-            self.last = _time(row.get("timestamp"))
+            moment = _time(row.get("timestamp"))
+            if self.files == 1:
+                self.created = _time(payload.get("timestamp"))
+                if self.page_first and self.started_at < self.created:
+                    raise UsageGap("history_incomplete")
+            elif moment < self.last:
+                raise UsageGap("timestamp_unusable")
+            self.last = moment
             return None
         if kind == "session_meta":
             if self.token_seen:
@@ -368,6 +430,17 @@ class _Reading:
         self.last = moment
         if moment > self.cutoff_at:
             return _STOP
+        if target is self.tokens:
+            if not self.continued:
+                if kept is None:
+                    return None  # Null rows before a later file's first total add nothing.
+                last = _last(payload.get("info"))
+                if (not isinstance(kept, tuple) or self.carried is None or last is None
+                        or kept[0] != tuple(then + now for then, now in zip(self.carried, last))):
+                    raise UsageGap("history_incomplete")
+                self.continued = True
+            if isinstance(kept, tuple):
+                self.carried = kept[0]
         target.append((moment, kept))
         return None
 
@@ -378,6 +451,8 @@ class _Reading:
             before = [index for index, (moment, _) in enumerate(tokens) if moment <= self.started_at]
             if any(tokens[index][1] is not None for index in before):
                 base = before[-1]
+        if base is None and self.page_first:
+            raise UsageGap("history_incomplete")  # Earlier totals live in files outside the window.
         if base is None:
             # With a zero baseline, null rows before the first non-null row mean no usage yet.
             first = next((index for index, (_, observation) in enumerate(tokens) if observation is not None),
