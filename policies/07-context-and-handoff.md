@@ -27,6 +27,15 @@ Apply with the [shared contract rules](00-index.md).
 
 Use the existing task context or plan for starts, meaningful checkpoints, completion and unfinished work. Keep standing context once and update only changes, in short prose or the optional [task record template](../templates/task-record.md). Keep planned, observed, reviewable and accepted results distinct, and stopped, running and unknown workers or processes; claim background work only when active execution is verified.
 
+At each meaningful checkpoint, the coordinator executes the next required,
+authorized action whose prerequisites are satisfied, without waiting for
+another user prompt. Pending review, verification or delivery is unfinished
+work, not a stopping reason. A blocker holds only dependent actions. Before
+stopping with unfinished scope, establish why no remaining authorized action
+can proceed and record the blocker, next owner and resumption condition in
+the existing task context. Preserve user pauses, permissions, ownership and
+existing limits.
+
 A child report sends this record's changed result, snapshot-bound candidate/proof references when output changes, material exceptions and necessary next action/owner. Reuse known assignment context, saved role declarations and native sender identity; supply compact context when the receiver cannot resolve it after resume or reassignment. Reports grant no authority and replace neither independent verification nor required decision-time observations of readiness, permissions, liveness and ownership.
 
 Report reviewable output, material blockers/decisions and changed dependency/ownership conditions. Start normally updates local state without acknowledgment. Omit unchanged progress, heartbeat/acknowledgment loops, repeated roles/instructions, routine title receipts, reasoning and raw logs. Retrieve detail for acceptance, recovery or diagnosis; brevity must not hide material risk. The coordinator records receipt during existing handling without a required reply turn, then applies [delivery, supervision and acceptance](03-agent-delegation.md#progress-and-result-retrieval).
