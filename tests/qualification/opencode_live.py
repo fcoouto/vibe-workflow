@@ -969,8 +969,7 @@ def main(argv=None):
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=canary.RANKED_PURPOSE if args.ranked else purpose, stages=stages,
               chatgpt_model=args.chatgpt_model, route=args.route)
-    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage,
-                              state_dir=args.ranked_state_dir) if args.ranked else None
+    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage) if args.ranked else None
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     if args.replay_dir:
         run.replay_dir = Path(args.replay_dir)

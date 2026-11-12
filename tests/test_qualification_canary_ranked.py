@@ -152,7 +152,11 @@ class RankedStores(Temp):
         self.addCleanup(billing.stop)
         self.project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(self.project), "init", "-q"], check=True)
-        directory = self.private(self.private(self.tmp / "q") / "canary")
+        self.build(self.tmp)
+
+    def build(self, root):
+        """A ledger and its settings under `root`; its run record derives from the ledger (`root` itself here)."""
+        directory = self.private(self.private(root / "q") / "canary")
         self.state = dict(dir=directory, settings=directory / "settings.json", ledger=directory / "ledger.sqlite3",
                           production=True, approval=dict(APPROVAL))
         self.settings = self.state["settings"]
@@ -179,15 +183,16 @@ class RankedStores(Temp):
         target.write_text(json.dumps(dict(schema=2, version=version, rows=rows)))
         target.chmod(0o600)
 
-    def make_run(self):
-        ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
+    def make_run(self, root=None):
+        root = root or self.tmp
+        ledger = safety.CallLedger.initialize(self.private(root / "calls") / "calls.jsonl")
         # A disposable ledger only: the ranked purpose opened by a recorded test approval, never the pilot's calls.
         ledger.set_cap(canary.RANKED_PURPOSE, 83, "test", approval=dict(by="test", at="test", scope="test ledger"))
-        base = self.private(self.tmp / "iso")
+        base = self.private(root / "iso")
         run = qual_run(base, ledger, canary_project=str(self.project), canary_state=self.state)
         run.routing.stop()
         run.routing = self.routing
-        run.replay_dir = self.tmp / "replay"
+        run.replay_dir = root / "replay"
         run.server = RankedOpenCode(self.routing, base / "hooks.jsonl")
         run.repo_start = safety.repo_snapshot(self.project)
         run.reread_wait = 0
@@ -199,16 +204,14 @@ class RankedStores(Temp):
                       project=str(run.canary_project), ledger=str(self.state["ledger"]))
         return canary_ranked_state.digest(record)
 
-    def controller(self, run=None, clock=None, state_dir=None, **options):
+    def controller(self, run=None, clock=None, **options):
         """An explicitly approved start: the operator approves the preflight's digest, then the run starts."""
         run = run or self.make_run()[0]
         pins = canary_ranked.approval_inputs(self.settings, run.routing.harnesses)
         options.setdefault("acknowledge", canary_ranked.coverage(pins)["minimum"])
-        state_dir = state_dir or self.private(self.tmp / "ranked-state")
         if getattr(run, "ranked", None) is not None:
             canary_ranked.close(run.ranked)
-        run.ranked = canary_ranked.setup(run, clock=clock, approved=self.digest(run, options["acknowledge"]),
-                                         state_dir=state_dir, **options)
+        run.ranked = canary_ranked.setup(run, clock=clock, approved=self.digest(run, options["acknowledge"]), **options)
         self.addCleanup(lambda controller=run.ranked: controller.lock.__exit__(None, None, None))
         return run.ranked
 
@@ -398,8 +401,8 @@ class RankedGateTests(RankedStores):
     def test_changed_approval_inputs_require_new_approval(self):
         """Table content, rules, host constraints, qualification or settings revision: each change after the preview
         releases the unsent admission (the driver's `not_dispatched`) and needs a renewed preflight and approval."""
-        run, _ = self.make_run()
         rules = mock.patch.object(routing_paths, "load_rules", return_value=dict(routing_paths.load_rules(), version=99))
+        run = None
         changes = ((lambda: self.table(strategy("s-a", "invented-a"), version="tv-2"),
                     lambda: self.table(strategy("s-a", "invented-a"), strategy("s-b", "invented-b"))),
                    (rules.start, rules.stop),
@@ -408,8 +411,11 @@ class RankedGateTests(RankedStores):
                                                   evidence="again", now=now()), lambda: None),
                    (lambda: routing_settings.update(self.settings, dict(margin_bp=2500),
                                                     routing_settings._load(self.settings)[0]), lambda: None))
-        for index, (change, revert) in enumerate(changes):
-            ranked = self.controller(run, state_dir=self.private(self.tmp / ("state-%d" % index)))
+        for index, (change, revert) in enumerate(changes):  # one real ledger, and so one run record, per change
+            root = self.private(self.tmp / ("ledger-%d" % index))
+            self.build(root)
+            run, _ = self.make_run(root)
+            ranked = self.controller(run)
             ranked.before_prepare(self.body(index))
             admission = self.admitted(run, index)
             change()
@@ -664,8 +670,7 @@ class RankedChatGPTRefreshTests(RankedStores):
 class RankedEntryPointTests(RankedStores):
     def test_canary_run_builds_the_ranked_controller_before_the_server_starts(self):
         run, _ = self.make_run()
-        run.ranked_options = dict(approved=self.digest(run), acknowledge=8,
-                                  state_dir=self.private(self.tmp / "ranked-state"))
+        run.ranked_options = dict(approved=self.digest(run), acknowledge=8)
         order = []
         run.snapshot_user_dirs = run.report_only_home = lambda: {}
         run.compare_user_dirs = lambda before, home: None

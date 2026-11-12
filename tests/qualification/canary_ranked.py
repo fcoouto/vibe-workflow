@@ -382,19 +382,20 @@ class Controller:
                 for variant in [v if isinstance(v, str) else (v or {}).get("id") for v in item.get("variants") or []]]
 
 
-def setup(run, clock=None, approved=None, acknowledge=None, state_dir=None):
+def setup(run, clock=None, approved=None, acknowledge=None):
     """The production-ledger ranked canary's controller, before any server starts.
 
     With no run record for this ledger, the current preflight's digest must equal `approved` (the digest the
     operator approved from `--ranked-preflight`); the record is then created. With one, it is resumed: `approved`
     must be its digest and the current pins its pins (a change needs a renewed approval, which the existing record
     refuses: nothing is erased), and its baseline, cumulative use, holds, original earliest reset, stop state and
-    sample count carry over unchanged. The run holds the record's lock until the process ends."""
+    sample count carry over unchanged. The record and lock derive from the canonical ledger path alone
+    (`canary_ranked_state.path_for`). The run holds the record's lock until the process ends."""
     clock = clock or (lambda: int(time.time()))
     state = run.canary_state
     harnesses = run.routing.harnesses
-    project, ledger = str(run.canary_project), str(state["ledger"])
-    path = canary_ranked_state.path_for(state_dir or canary_ranked_state.default_dir(), ledger)
+    project, ledger = str(run.canary_project), str(canary_ranked_state.canonical(state["ledger"]))
+    path = canary_ranked_state.path_for(ledger)
     lock = canary_ranked_state.held(path)
     lock.__enter__()
     try:

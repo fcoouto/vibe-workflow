@@ -6,9 +6,11 @@ the cumulative/last/seen window accounting, unsettled reservations, the stop sta
 It is created only by an explicit approved start (`create`), never on resume; `load` refuses a missing, corrupt,
 mismatched or concurrently held record. A record is never replaced or deleted by the harness: a new approval for the
 same ledger is refused while it exists, so no approval can silently erase a whole-run allowance. Completed and
-aborted records stay retained; no archive or reset procedure exists, and choosing another record directory is not a
-supported reset. This is a harness rule, not OS enforcement: the local owner can still move the file by hand. Writes are atomic
-(temporary file, fsync, `os.replace`) and the caller saves before every send; a failed save fails closed.
+aborted records stay retained; no archive or reset procedure exists. The record and its lock are a pure function of
+the canonical ledger path (`path_for`): no flag, argument, HOME or working directory selects another, so every
+supported caller of one ledger reaches one record and one lock. This is a harness rule, not OS enforcement: the local
+owner can still move or edit the file, the ledger or the code by hand. Writes are atomic (temporary file, fsync,
+`os.replace`) and the caller saves before every send; a failed save fails closed.
 """
 import contextlib
 import fcntl
@@ -25,14 +27,31 @@ FIELDS = {"version", "digest", "project", "ledger", "pins", "coverage", "acknowl
           "earliest_reset", "cumulative", "last", "seen", "holds", "stopped", "completed"}
 
 
-def default_dir():
-    return Path.home() / ".local/state/vibe-workflow-qualification/ranked-canary"
+ANCHOR = Path("vibe-workflow-qualification/ranked-canary")
 
 
-def path_for(directory, ledger):
-    """The one record of a routing ledger: keyed by the ledger's resolved path."""
-    key = hashlib.sha256(str(Path(ledger).resolve()).encode()).hexdigest()[:16]
-    return Path(directory) / ("run-%s.json" % key)
+def canonical(ledger):
+    """The ledger path with its parent directories resolved: absolute, never itself a symlink, deep enough for the
+    anchor. `Refused` otherwise; nothing is opened or created."""
+    ledger = Path(ledger)
+    if not ledger.is_absolute():
+        raise Refused("the routing ledger path must be absolute")
+    if ledger.is_symlink():
+        raise Refused("the routing ledger must not be a symlink")
+    found = ledger.parent.resolve() / ledger.name
+    if len(found.parents) < 4:
+        raise Refused("the routing ledger path is too shallow for its run record anchor")
+    return found
+
+
+def path_for(ledger):
+    """The one record of a routing ledger, derived from the canonical ledger path alone: the directory is
+    `parents[2]/vibe-workflow-qualification/ranked-canary` (for the production ledger
+    `~/.local/state/vibe-workflow/usage/organizations.sqlite3`, the existing `~/.local/state/vibe-workflow-qualification/
+    ranked-canary/`) and the name is keyed by the canonical path."""
+    found = canonical(ledger)
+    key = hashlib.sha256(str(found).encode()).hexdigest()[:16]
+    return found.parents[2] / ANCHOR / ("run-%s.json" % key)
 
 
 def digest(record):

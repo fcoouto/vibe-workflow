@@ -26,11 +26,12 @@ run = types.SimpleNamespace(canary_state=dict(settings=Path(a["settings"]), ledg
                                               approval={}), canary_project=a["project"], results={},
                             routing=types.SimpleNamespace(harnesses=a["harnesses"]))
 try:
-    c = canary_ranked.setup(run, approved=a["digest"], state_dir=a["state_dir"])
+    c = canary_ranked.setup(run, approved=a["digest"])
 except Exception as error:
     print(json.dumps(dict(refused=str(error))))
     raise SystemExit(0)
-out = dict(state=c.allowance.state(), earliest_reset=c.earliest_reset, completed=c.completed)
+out = dict(state=c.allowance.state(), earliest_reset=c.earliest_reset, completed=c.completed,
+           baseline=c.allowance.baseline, path=str(c.path))
 try:
     if a.get("sync"):
         c._sync()
@@ -47,32 +48,117 @@ print(json.dumps(out))
 class LifecycleTests(RankedStores):
     def started(self):
         run, ledger = self.make_run()
-        self.state_dir = self.private(self.tmp / "ranked-state")
-        ranked = self.controller(run, state_dir=self.state_dir)
+        ranked = self.controller(run)
         return run, ledger, ranked
 
-    def resume(self, digest, **extra):
-        """A new process: `setup` with the approved digest on the same stores and record directory."""
-        body = dict(settings=str(self.settings), ledger=str(self.state["ledger"]), project=str(self.project),
-                    harnesses=[CLAUDE], digest=digest, state_dir=str(self.state_dir), **extra)
+    def resume(self, digest, home=None, cwd=None, ledger=None, **extra):
+        """A new process: `setup` with the approved digest on the same stores; HOME and cwd as given."""
+        body = dict(settings=str(self.settings), ledger=str(ledger or self.state["ledger"]), project=str(self.project),
+                    harnesses=[CLAUDE], digest=digest, **extra)
         done = subprocess.run([sys.executable, "-I", "-B", "-c", RESUME, json.dumps(body)], capture_output=True,
-                              text=True, timeout=60, env=dict(os.environ, HOME=str(self.home)))
+                              text=True, timeout=60, env=dict(os.environ, HOME=str(home or self.home)),
+                              cwd=str(cwd or self.tmp))
         self.assertEqual(done.returncode, 0, done.stderr)
         return json.loads(done.stdout)
 
     def record_path(self):
-        return canary_ranked_state.path_for(self.state_dir, self.state["ledger"])
+        return canary_ranked_state.path_for(self.state["ledger"])
+
+    def records(self):
+        """Every run record anywhere under this test's temporary root."""
+        return sorted(self.tmp.rglob("run-*.json"))
 
     def test_approval_binds_the_preflight_digest_before_execution(self):
         run, _ = self.make_run()
-        state_dir = self.private(self.tmp / "ranked-state")
         with self.assertRaisesRegex(safety.Refused, "--approve-digest does not match"):
-            canary_ranked.setup(run, approved="0" * 64, acknowledge=8, state_dir=state_dir)
+            canary_ranked.setup(run, approved="0" * 64, acknowledge=8)
         approved = self.digest(run)
         self.table(strategy("s-a", "invented-a"), version="tv-2")  # changed after the operator approved
         with self.assertRaisesRegex(safety.Refused, "--approve-digest does not match"):
-            canary_ranked.setup(run, approved=approved, acknowledge=8, state_dir=state_dir)
-        self.assertEqual(list(state_dir.iterdir()) and [p.name for p in state_dir.iterdir() if p.suffix == ".json"], [])
+            canary_ranked.setup(run, approved=approved, acknowledge=8)
+        self.assertEqual(self.records(), [])
+
+    def test_the_record_location_has_no_override(self):
+        import argparse
+        import inspect
+        parser = argparse.ArgumentParser()
+        canary_cli.add_arguments(parser)
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            parser.parse_args(["--ranked-state-dir", str(self.tmp)])
+        self.assertNotIn("state_dir", inspect.signature(canary_ranked.setup).parameters)
+        self.assertEqual(list(inspect.signature(canary_ranked_state.path_for).parameters), ["ledger"])
+
+    def test_another_home_and_cwd_with_a_fresh_digest_cannot_start_a_new_run(self):
+        run, ledger, ranked = self.started()
+        self.assertIsNone(self.drive(run, ledger, n=1, tag="h1")["abort"])
+        canary_ranked.close(ranked)
+        collector.store_window(self.settings, CLAUDE_POOL, dict(id="5h", limit=1000, used=140, length=18000,
+                                                                reset_at=self.resets["5h"], rolling=False,
+                                                                observed_at=now() + 1, unit=collector.WINDOW_UNIT))
+        before, fresh = self.record_path().read_bytes(), self.digest(run)
+        self.assertNotEqual(fresh, ranked.record["digest"])  # the store moved on: a new preflight differs
+        other_home, other_cwd = self.private(self.tmp / "other-home"), self.private(self.tmp / "other-cwd")
+        self.assertIn("does not match", self.resume(fresh, home=other_home, cwd=other_cwd)["refused"])
+        self.assertEqual(self.record_path().read_bytes(), before)
+        self.assertEqual(self.records(), [self.record_path()])  # exactly one record, at the ledger's anchor
+
+    def test_another_home_resumes_the_same_record(self):
+        run, ledger, ranked = self.started()
+        self.assertIsNone(self.drive(run, ledger, n=1, tag="h2")["abort"])
+        ranked.before_prepare(self.body(3))
+        answer, _ = __import__("tests.qualification.pilot_env", fromlist=["CanaryEnv"]).CanaryEnv(run).prepare(self.body(3))
+        ranked.before_dispatch(answer["admission"])  # an outstanding hold, saved before any send
+        canary_ranked.close(ranked)
+        resumed = self.resume(ranked.record["digest"], home=self.private(self.tmp / "other-home"),
+                              cwd=self.private(self.tmp / "other-cwd"))
+        self.assertEqual(resumed["path"], str(self.record_path()))
+        self.assertEqual(resumed["state"]["cumulative"][CLAUDE_POOL + "/5h"], 20)
+        self.assertEqual(list(resumed["state"]["holds"]), [answer["admission"]["attempt_id"]])
+        self.assertEqual((resumed["earliest_reset"], resumed["completed"]), (ranked.earliest_reset, 1))
+        self.assertEqual(resumed["baseline"], ranked.record["baseline"])
+
+    def test_a_concurrent_run_from_another_home_hits_the_same_lock(self):
+        _, _, ranked = self.started()
+        refused = self.resume(ranked.record["digest"], home=self.private(self.tmp / "other-home"))
+        self.assertIn("another ranked canary run", refused["refused"])
+
+    def test_a_parent_alias_reaches_the_same_record_and_a_final_symlink_is_refused(self):
+        _, _, ranked = self.started()
+        canary_ranked.close(ranked)
+        alias = self.tmp / "alias"
+        alias.symlink_to(self.state["ledger"].parent.parent)  # .../q
+        aliased = alias / self.state["ledger"].parent.name / self.state["ledger"].name
+        self.assertEqual(canary_ranked_state.path_for(aliased), self.record_path())
+        resumed = self.resume(ranked.record["digest"], ledger=aliased)
+        self.assertEqual(resumed["path"], str(self.record_path()))
+        self.assertNotIn("refused", resumed)
+        final = self.tmp / "ledger-link.sqlite3"
+        final.symlink_to(self.state["ledger"])
+        with self.assertRaisesRegex(safety.Refused, "symlink"):
+            canary_ranked_state.path_for(final)
+        self.assertIn("symlink", self.resume(ranked.record["digest"], ledger=final)["refused"])
+        for bad in (Path("relative/usage/organizations.sqlite3"), Path("/x.sqlite3")):
+            with self.assertRaises(safety.Refused):
+                canary_ranked_state.path_for(bad)
+        self.assertEqual(self.records(), [self.record_path()])
+
+    def test_the_production_ledger_maps_to_the_present_default_record_directory(self):
+        """Pins the `parents[2]` depth to the routing command's actual default ledger layout (a private HOME)."""
+        alias = self.tmp / "home-alias"
+        alias.symlink_to(self.home)
+        # The ledger is taken before `tests` is imported: importing it redirects HOME for the suite's own safety.
+        script = ("import sys; sys.path.insert(0, %r); from scripts import routing; l = routing.default_ledger(); "
+                  "from tests.qualification import canary_ranked_state as s; "
+                  "print(s.path_for(l.parent.resolve() / l.name).parent)") % str(ROOT)
+        found = []
+        for home in (self.home, alias):
+            done = subprocess.run([sys.executable, "-I", "-B", "-c", script], capture_output=True, text=True,
+                                  timeout=60, env=dict(os.environ, HOME=str(home)), cwd=str(self.tmp))
+            self.assertEqual(done.returncode, 0, done.stderr)
+            found.append(done.stdout.strip())
+        expected = str(self.home.resolve() / ".local/state/vibe-workflow-qualification/ranked-canary")
+        self.assertEqual(found, [expected, expected])
+        self.assertFalse((self.home / ".local/state/vibe-workflow-qualification").exists())  # pure: nothing created
 
     def test_a_new_process_resumes_after_seed_required_with_the_same_allowance_and_deadline(self):
         run, ledger, ranked = self.started()

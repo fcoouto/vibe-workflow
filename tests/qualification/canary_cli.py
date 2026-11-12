@@ -29,8 +29,6 @@ def add_arguments(parser):
     parser.add_argument("--approve-digest", help="ranked: the approved --ranked-preflight digest")
     parser.add_argument("--acknowledge-low-coverage", type=int, metavar="N",
                         help="ranked: the computed minimum full-reservation coverage, when below 60")
-    parser.add_argument("--ranked-state-dir", help="ranked: the owner-only run record dir (default %s)"
-                        % canary_ranked_state.default_dir())
     parser.add_argument("--probe-route", help="ranked: the fixed approved route of the plugin-chain probes only")
 
 
