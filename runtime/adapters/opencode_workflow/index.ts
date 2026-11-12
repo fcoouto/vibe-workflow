@@ -7,7 +7,7 @@
 import { execFile } from "node:child_process"
 import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
-import { Gate, derivedSession, isCheck, parseSettings, resetRequest } from "./gate.ts"
+import { DEFAULT_SETTINGS, Gate, derivedSession, isCheck, parseSettings, resetRequest } from "./gate.ts"
 import type { GateSettings, Route } from "./gate.ts"
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
@@ -44,19 +44,47 @@ export function exitStatus(event: unknown): number | null {
   return null
 }
 
-/** A pipeline may hide the test runner's exit status; its exact unittest summary still proves failure. */
-export function checkFailed(event: any): boolean {
+/** Infer masked unittest failures from complete footers consistent with literal checks, not authenticated output. */
+export function checkFailed(event: any, patterns = DEFAULT_SETTINGS.checkPatterns): boolean {
   const status = exitStatus(event)
   if (event?.status === "error" || (status !== null && status !== 0)) return true
+  const command = event?.input?.command
+  // Unsupported shell syntax stays unknown; the splits below apply only to this literal subset.
+  if (event?.status !== "completed" || typeof command !== "string" || !/^[\w./:=+@%, \t&|;>-]+$/.test(command)) return false
+  const checks = command.split(/&&|\|\||;/)
+  for (const check of checks) {
+    const [source, ...filters] = check.split("|").map((part) => part.trim())
+    const invocation = source.replace(/[ \t]+2>&1$/, "")
+    // Only option-free wrapper prefixes are eligible; isCheck cannot assign wrapper option values to their owners.
+    const program = invocation.replace(/^(?:(?:[A-Za-z_]\w*=[^ \t]*|(?:\.\/)?(?:env|time|nice|nohup|command|exec|npx|(?:uv|poetry|pipenv|pnpm)[ \t]+(?:run|exec)))[ \t]+)+/, "")
+    if (program.startsWith("-")) return false
+    if (/[&>]/.test(invocation) || !isCheck(invocation, patterns)) return false
+    if (filters.length > 1 || filters.some((filter) => !/^tail[ \t]+(?:-[1-9]\d*|-n[ \t]+[1-9]\d*)$/.test(filter))) return false
+  }
   const content = event?.result?.content
   const texts = typeof content === "string" ? [content] : Array.isArray(content)
     ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text) : []
-  for (const text of texts) {
-    for (const summary of text.matchAll(/^FAILED \(([^)\r\n]+)\)\s*$/gm)) {
-      if (/(?:^|, )(?:failures|errors)=[1-9]\d*(?:, |$)/.test(summary[1])) return true
+  const text = texts.join("\n").replace(/\r\n/g, "\n")
+  const footers = [...text.matchAll(/^Ran (?:1 test|(?:0|[2-9]|[1-9]\d+) tests) in (?:0|[1-9]\d*)\.\d{3}s\n\n([^\n]+)/gm)]
+  if (footers.length !== checks.length) return false
+  const last = footers[footers.length - 1]
+  if (text.slice(last.index! + last[0].length).trim() !== "") return false
+  let failed = false
+  for (const footer of footers) {
+    const result = /^(OK|FAILED)(?: \((.+)\))?$/.exec(footer[1])
+    if (!result) return false
+    const seen = new Set<string>()
+    let unsuccessful = false
+    for (const count of result[2]?.split(", ") ?? []) {
+      const field = /^(failures|errors|skipped|expected failures|unexpected successes)=(0|[1-9]\d*)$/.exec(count)
+      if (!field || seen.has(field[1])) return false
+      seen.add(field[1])
+      if (field[2] !== "0" && ["failures", "errors", "unexpected successes"].includes(field[1])) unsuccessful = true
     }
+    if ((result[1] === "FAILED") !== unsuccessful) return false
+    failed ||= unsuccessful
   }
-  return false
+  return failed
 }
 
 function defaultFeatureStatus(directory: string): Promise<unknown> {
@@ -197,7 +225,7 @@ export function createWorkflowPlugin(config: Config = {}) {
         }
         if (!SHELL_TOOLS.has(event?.tool) || typeof event?.input?.command !== "string") return
         if (!isCheck(event.input.command, settings!.checkPatterns)) return
-        if (!checkFailed(event)) return
+        if (!checkFailed(event, settings!.checkPatterns)) return
         const session = await known(event.sessionID)
         if (session) gate!.failed(session)
       }))

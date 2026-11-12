@@ -399,6 +399,16 @@ verification on `b8afed0` still reports the pre-existing roster-vocabulary failu
 in untouched observability code. This is not an all-green suite or a qualification
 of the deferred judge.
 
+Post-qualification review found historical-output false holds and missing
+unexpected-success detection. A later bounded repair requires attributable
+complete unittest footers and rejects ambiguous wrapper options without changing
+the broad check classifier. Focused regressions passed 22 tests; independent
+finding verification and final committed-candidate checks follow. The user
+authorized final checks after this repair. Current `main` at `6840d533` reproduces
+the same roster-vocabulary failure, so the baseline comparison is current; the
+failure remains unresolved and is not waived. Earlier live observations remain
+bound to `b8afed0`; no new live allocation is authorized.
+
 ---
 
 ## Not in this plan

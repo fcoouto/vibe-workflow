@@ -277,6 +277,16 @@ test("exitStatus reads metadata.exit and metadata.exitCode only", () => {
   assert.equal(routeOf({ id: "m" }), null)
 })
 
+const unittestCommand = "python3 -m unittest -q"
+const pipedUnittest = `${unittestCommand} 2>&1 | tail -5`
+const unittestRun = "Ran 4 tests in 0.001s\n\n"
+const unittestFailure = `${unittestRun}FAILED (failures=1)\n`
+const unittestSuccess = `${unittestRun}OK\n`
+const unexpectedSuccess = "Ran 1 test in 0.001s\n\nFAILED (unexpected successes=1)\n"
+const historicalSample = `Captured expected runner output:\nFAILED (failures=1)\n${unittestSuccess}`
+const checkEvent = (content: unknown, command = pipedUnittest) => ({ sessionID: ROOT, id: `check_${++calls}`,
+  tool: "shell", input: { command }, status: "completed", result: { content, metadata: { exit: 0 } } })
+
 test("qualification regression: unittest failure survives a successful output pipeline", async () => {
   const t = await start()
   await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MODEL })
@@ -292,15 +302,232 @@ test("qualification regression: unittest failure survives a successful output pi
 })
 
 test("qualification regression: only an actual unittest failure footer supplements exit status", () => {
-  const event = (text: string) => ({ status: "completed", result: { content: text, metadata: { exit: 0 } } })
-  assert.equal(checkFailed(event("Ran 4 tests\n\nFAILED (failures=1)\n")), true)
-  assert.equal(checkFailed(event("FAILED (errors=2, skipped=1)\n")), true)
-  assert.equal(checkFailed(event("FAILED (failures=0, errors=1)\n")), true)
-  assert.equal(checkFailed(event("FAILED (failures=0)\n")), false)
-  assert.equal(checkFailed(event("Ran 4 tests\n\nOK\n")), false)
-  assert.equal(checkFailed(event("Expected example: FAILED (failures=1)")), false)
-  assert.equal(checkFailed(event("test_failed_detection passed")), false)
-  assert.equal(checkFailed(event("FAILED (expected failures=1)")), false)
+  assert.equal(checkFailed(checkEvent(unittestFailure)), true)
+  assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (errors=2, skipped=1)\n`)), true)
+  assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (failures=0, errors=1)\n`)), true)
+  assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (failures=0)\n`)), false)
+  assert.equal(checkFailed(checkEvent(unittestSuccess)), false)
+  assert.equal(checkFailed(checkEvent("Expected example: FAILED (failures=1)")), false)
+  assert.equal(checkFailed(checkEvent("test_failed_detection passed")), false)
+  assert.equal(checkFailed(checkEvent("FAILED (errors=1)\n")), false)
+})
+
+test("masked-exit escalation: historical and sample output is not a current failure", () => {
+  for (const text of [historicalSample, unittestFailure + unittestSuccess,
+    `Expected example: FAILED (failures=1)\n${unittestSuccess}`, "FAILED (failures=1)\n"]) {
+    assert.equal(checkFailed(checkEvent(text)), false)
+  }
+})
+
+test("masked-exit escalation: mixed and unsupported commands have no output-only attribution", () => {
+  for (const command of [`cat old-unittest.log; ${unittestCommand}`, `${unittestCommand}; cat old-unittest.log`,
+    "cat old-unittest.log", `${unittestCommand} | tail -5 old-unittest.log`, `${unittestCommand} | grep FAILED`,
+    `${unittestCommand} | tail -5 | tail -5`, `${unittestCommand}; echo done`, `${unittestCommand} || true`,
+    `${unittestCommand} &`, `${unittestCommand};`, `${unittestCommand} > output.log`,
+    `${unittestCommand} 2>&1 2>&1 | tail -5`, `${unittestCommand} 'test_a'`, `${unittestCommand} "test_a"`,
+    `${unittestCommand} $(cat args)`, `${unittestCommand} \`cat args\``, `${unittestCommand} $ARGS`,
+    `${unittestCommand} test_*`, `${unittestCommand} <<EOF\nEOF`, `${unittestCommand}\n${unittestCommand}`]) {
+    assert.equal(checkFailed(checkEvent(unittestFailure, command)), false, command)
+  }
+  assert.equal(checkFailed(checkEvent(unittestFailure + unittestSuccess, `cat old-unittest.log; ${unittestCommand}`)), false)
+  assert.equal(checkFailed(checkEvent(unittestSuccess + unittestFailure, `${unittestCommand}; cat old-unittest.log`)), false)
+})
+
+for (const command of ["env -C unittest cat old-unittest.log", "npx -p unittest cat old-unittest.log"]) {
+  test(`masked-exit escalation: wrapper option values do not identify checks: ${command}`, () => {
+    const event = checkEvent(unittestFailure, command)
+    assert.equal(checkFailed(event), false)
+    event.result.metadata.exit = 1
+    assert.equal(checkFailed(event), true)
+    assert.equal(checkFailed({ ...event, status: "error", result: null }), true)
+  })
+}
+
+test("masked-exit escalation: wrapper options remain ambiguous through literal prefixes", () => {
+  for (const command of ["CI=1 env -C unittest cat old-unittest.log", "env CI=1 -C unittest cat old-unittest.log",
+    "env CI=1 npx -p unittest cat old-unittest.log", "time env -C unittest cat old-unittest.log",
+    "uv run env -C unittest cat old-unittest.log", "./env -C unittest cat old-unittest.log",
+    "env --chdir unittest cat old-unittest.log", "command -p unittest cat old-unittest.log"]) {
+    assert.equal(checkFailed(checkEvent(unittestFailure, command)), false, command)
+  }
+  assert.equal(checkFailed(checkEvent(unittestFailure + unittestFailure,
+    `${pipedUnittest}; env -C unittest cat old-unittest.log`)), false)
+})
+
+test("masked-exit escalation: repeated wrapper log views never create a hold", async () => {
+  for (const command of ["env -C unittest cat old-unittest.log", "npx -p unittest cat old-unittest.log"]) {
+    const t = await start()
+    try {
+      await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MODEL })
+      for (let i = 0; i < 3; i++) {
+        assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+        await t.hooks["tool.execute.after"](checkEvent(unittestFailure, command))
+      }
+      assert.equal((await edit(t, ["a.ts"])).effect, "allow", command)
+      assert.deepEqual(await status(t), { held: [], lastError: null })
+    } finally { t.cleanup() }
+  }
+})
+
+test("masked-exit escalation: literal checks and stdin-only tail preserve genuine failures", () => {
+  for (const command of [unittestCommand, pipedUnittest, `${unittestCommand} | tail -n 5`,
+    `env CI=1 ${unittestCommand} 2>&1 | tail -5`, `CI=1 ${pipedUnittest}`,
+    `env CI=1 PYTHONHASHSEED=0 ${pipedUnittest}`, `time env CI=1 ${pipedUnittest}`]) {
+    assert.equal(checkFailed(checkEvent(unittestFailure, command)), true, command)
+  }
+  assert.equal(checkFailed(checkEvent(unittestFailure.replaceAll("\n", "\r\n"))), true)
+  const noExit: any = checkEvent(unittestFailure)
+  delete noExit.result.metadata
+  assert.equal(checkFailed(noExit), true)
+})
+
+test("masked-exit escalation: all complete runs must correspond to check invocations", () => {
+  for (const separator of [";", "&&", "||"]) {
+    const command = `${pipedUnittest} ${separator} ${unittestCommand} test_b`
+    for (const [text, expected] of [[unittestFailure + unittestSuccess, true], [unittestSuccess + unittestFailure, true],
+      [unittestFailure + unittestFailure, true], [unittestSuccess + unittestSuccess, false], [unittestFailure, false],
+      [unittestFailure + unittestSuccess + unittestSuccess, false],
+      [unittestFailure + `${unittestRun}FAILED (errors=-1)\n`, false]] as const) {
+      assert.equal(checkFailed(checkEvent(text, command)), expected, `${separator}: ${text}`)
+    }
+  }
+})
+
+test("masked-exit escalation: unexpected successes fail but expected failures do not", () => {
+  assert.equal(checkFailed(checkEvent(unexpectedSuccess)), true)
+  assert.equal(checkFailed(checkEvent("Ran 1 test in 0.001s\n\nOK (expected failures=1)\n")), false)
+  assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (expected failures=1)\n`)), false)
+  assert.equal(checkFailed(checkEvent(`${unittestRun}OK (unexpected successes=1)\n`)), false)
+})
+
+test("masked-exit escalation: the entire count list must be well formed", () => {
+  for (const counts of ["failures=0, errors=0, unexpected successes=0", "skipped=1", "expected failures=1",
+    "garbage, failures=1", "failures=1, unknown=1", "failures=1, failures=2", "errors=-1", "errors=1.5",
+    "failures=01", "failures=+1", "failures=1,errors=1", "failures=1, ", "", "failures=1, errors=NaN"]) {
+    assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (${counts})\n`)), false, counts)
+  }
+  for (const counts of ["errors=2, skipped=1", "failures=0, errors=1", "unexpected successes=1",
+    "failures=1, errors=2, skipped=1, expected failures=1, unexpected successes=1"]) {
+    assert.equal(checkFailed(checkEvent(`${unittestRun}FAILED (${counts})\n`)), true, counts)
+  }
+})
+
+test("masked-exit escalation: malformed and truncated footers remain unknown", () => {
+  for (const text of ["Ran 4 tests\n\nFAILED (failures=1)\n", "FAILED (errors=1)\n",
+    `${unittestRun}FAILED (failures=1`, `${unittestRun}FAILED\n`, `${unittestRun}FAILED (failures=1) extra\n`,
+    `${unittestFailure}unrelated trailing text\n`, "Ran four tests in 0.001s\n\nFAILED (failures=1)\n",
+    `${unittestRun}FAILED (errors=-1)\n${unittestFailure}`]) {
+    assert.equal(checkFailed(checkEvent(text)), false, text)
+  }
+})
+
+test("masked-exit escalation: text parts preserve boundaries and reject malformed content", () => {
+  assert.equal(checkFailed(checkEvent([{ type: "text", text: unittestFailure }])), true)
+  assert.equal(checkFailed(checkEvent([null, {}, { type: "image", text: unittestFailure },
+    { type: "text", text: 1 }, { type: "text", text: unittestFailure } ])), true)
+  assert.equal(checkFailed(checkEvent([{ type: "text", text: unittestFailure },
+    { type: "text", text: unittestSuccess }])), false)
+  assert.equal(checkFailed(checkEvent([{ type: "text", text: unittestFailure },
+    { type: "text", text: unittestSuccess }], `${unittestCommand}; ${unittestCommand}`)), true)
+  for (const content of [null, undefined, 1, {}, [null, {}, { type: "text", text: 1 }],
+    [{ type: "image", text: unittestFailure }],
+    [{ type: "text", text: `${unittestRun}FAILED (fail` }, { type: "text", text: "ures=1)\n" }],
+    [{ type: "text", text: "Ra" }, { type: "text", text: "n 4 tests in 0.001s\n\nFAILED (failures=1)\n" }]]) {
+    assert.equal(checkFailed(checkEvent(content)), false)
+  }
+})
+
+test("masked-exit escalation: status and tool errors bypass output inference unchanged", () => {
+  assert.equal(checkFailed({ status: "error" }), true)
+  assert.equal(checkFailed({ result: { metadata: { exit: 1 } } }), true)
+  assert.equal(checkFailed({ result: { metadata: { exitCode: 2 } } }), true)
+  const mixed = checkEvent({}, `cat old-unittest.log; ${unittestCommand}`)
+  mixed.result.metadata.exit = 1
+  assert.equal(checkFailed(mixed), true)
+  assert.equal(checkFailed({ ...mixed, status: "error", result: null }), true)
+  assert.equal(checkFailed({ result: { metadata: { exit: "1" } } }), false)
+  assert.equal(checkFailed(null), false)
+  assert.equal(checkFailed({ ...checkEvent(unittestFailure), input: {} }), false)
+  assert.equal(checkFailed({ ...checkEvent(unittestFailure), status: "pending" }), false)
+})
+
+for (const [name, content, command] of [
+  ["unexpected-success failures", unexpectedSuccess, pipedUnittest],
+  ["environment-assigned unexpected-success failures", unexpectedSuccess, `env CI=1 ${pipedUnittest}`],
+  ["multiple failed runs once per shell call", unittestFailure + unittestFailure, `${pipedUnittest}; ${pipedUnittest}`],
+] as const) {
+  test(`masked-exit escalation: hooks hold after ${name}`, async () => {
+    const t = await start()
+    try {
+      await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MODEL })
+      for (let i = 0; i < 3; i++) {
+        assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+        await t.hooks["tool.execute.after"](checkEvent(content, command))
+      }
+      assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+      assert.equal((await status(t)).held[0].rounds, 2)
+      assert.equal((await status(t)).lastError, null)
+    } finally { t.cleanup() }
+  })
+}
+
+test("masked-exit escalation: negative-output controls never create a hold", async () => {
+  for (const [content, command] of [[historicalSample, unittestCommand], [unittestFailure + unittestSuccess, unittestCommand],
+    [unittestFailure + unittestSuccess, `cat old-unittest.log; ${unittestCommand}`],
+    [unittestSuccess + unittestFailure, `${unittestCommand}; cat old-unittest.log`],
+    [`${unittestRun}OK (expected failures=1)\n`, pipedUnittest],
+    [`${unittestRun}FAILED (failures=0, errors=0, unexpected successes=0)\n`, pipedUnittest],
+    [`${unittestRun}FAILED (garbage, failures=1)\n`, pipedUnittest],
+    [unittestFailure, `${unittestCommand} | tail -5 old-unittest.log`]]) {
+    const t = await start()
+    try {
+      for (let i = 0; i < 3; i++) {
+        assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+        await t.hooks["tool.execute.after"](checkEvent(content, command))
+      }
+      assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+      assert.deepEqual(await status(t), { held: [], lastError: null })
+    } finally { t.cleanup() }
+  }
+})
+
+test("masked-exit escalation: successful and ambiguous output never clear an existing hold", async () => {
+  const t = await start()
+  try {
+    await trip(t)
+    const before = await status(t)
+    for (const event of [checkEvent(unittestSuccess), checkEvent(historicalSample),
+      checkEvent(unittestFailure + unittestSuccess, `cat old-unittest.log; ${unittestCommand}`)]) {
+      await t.hooks["tool.execute.after"](event)
+      assert.deepEqual(await status(t), before)
+      assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+    }
+  } finally { t.cleanup() }
+})
+
+test("masked-exit escalation: hooks use configured check patterns", async () => {
+  const t = await start({ feature: report(true, { check_patterns: ["custom-check"] }) })
+  try {
+    for (let i = 0; i < 3; i++) {
+      await edit(t, ["a.ts"])
+      await t.hooks["tool.execute.after"](checkEvent(unittestFailure, "custom-check | tail -5"))
+    }
+    assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+  } finally { t.cleanup() }
+})
+
+test("masked-exit escalation: internal output errors remain fail-open", async () => {
+  const t = await start()
+  try {
+    for (let i = 0; i < 3; i++) {
+      await edit(t, ["a.ts"])
+      const event = checkEvent(null)
+      Object.defineProperty(event.result, "content", { get() { throw new Error("synthetic output error") } })
+      await t.hooks["tool.execute.after"](event)
+    }
+    assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+    assert.deepEqual(await status(t), { held: [], lastError: "tool_execute_after_failed" })
+  } finally { t.cleanup() }
 })
 
 test("nothing is written to prompts or messages while nothing is held", async () => {

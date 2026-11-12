@@ -77,6 +77,27 @@ classification also passed a model-free self-check before the live runs.
 
 ## Checks
 
+### Later output-attribution repair
+
+Independent review found that the earlier summary scan could count historical
+failure output and missed unittest's unexpected-success failures. The later repair
+requires complete footers consistent with a supported literal check sequence,
+validates the entire result count list and rejects ambiguous wrapper options.
+It preserves status/error detection and the existing hold and release rules.
+
+The focused regression selection passed 22 tests after test-first repairs. The
+wrapper follow-up first failed four tests (18 passed), then passed all 22. These
+are synthetic predicate and plugin-hook checks, not a repeat of live qualification.
+The live results above still describe `b8afed0`, not this later candidate.
+
+The roster failure was also reproduced against freshly fetched current `main`
+`6840d5333043f73b30bd52cdd9d776194f754b9b`: three roster tests ran, one failed on
+the same two strings in `runtime/observability_hook.py`. This establishes a current
+baseline failure; it neither fixes nor waives it. Final candidate checks are
+recorded separately when executed.
+
+### Historical checks on the live-evaluated candidate
+
 - Gate Node suites: 43 passed, including the masked-exit regression.
 - Selected Python modules on `b8afed0`: 129 tests passed.
 - Full suite on `b8afed0`: 4,333 tests, two skipped, one failure:
