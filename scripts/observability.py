@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit optional connection and Project collection controls and native credential entry; no collector."""
+"""Explicit optional connection and Project collection controls, upload status and resolution, and native credential entry; no collector."""
 
 import argparse
 import json
@@ -48,7 +48,8 @@ def main():
         parser = Parser(description=__doc__)
         parser.add_argument("action", choices=("configure", "status", "enable", "disable", "probe",
                                               "store-credentials", "forget-credentials",
-                                              "project-status", "configure-project", "disable-project"))
+                                              "project-status", "configure-project", "disable-project",
+                                              "export-status", "resolve-export"))
         parser.add_argument("--cwd", required=True)
         parser.add_argument("--expected-revision", type=int)
         args = parser.parse_args()
@@ -66,7 +67,7 @@ def main():
         if status_action and request:
             raise StartupError("invalid_observability_status_request")
         scope = Path(args.cwd)
-        if args.action not in ('status', 'disable', 'project-status', 'disable-project'):
+        if args.action not in ('status', 'disable', 'project-status', 'disable-project', 'export-status', 'resolve-export'):
             scope = _entry_scope(acquire_project_entry(SimpleNamespace(client="codex", cwd=scope), PACKAGE))
             if (type(scope) is not AcceptedScope or scope.client != "codex" or scope.runtime is None
                     or scope.runtime.schema_version != 3):
@@ -75,6 +76,10 @@ def main():
             result = settings.status(scope)
         elif args.action == "project-status":
             result = settings.project_status(scope)
+        elif args.action in ("export-status", "resolve-export"):
+            from runtime import observability_hook
+            result = (observability_hook.export_status if args.action == "export-status"
+                      else observability_hook.resolve_export)(scope, request)
         elif args.action == "store-credentials":
             result = settings.store_credentials(scope, request, _read_pair)
         elif args.action == "forget-credentials":

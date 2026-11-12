@@ -564,15 +564,19 @@
       ]
     },
     "skills/manage-observability/references/procedure.md": {
-      "sha256": "c6525e6492ad039c36475ad3f8c515b48721a679f581c1984d7200b631fa470f",
+      "sha256": "21e4686d9095396c177f0f8688de0a457951f5063341c6c5097fc2df0038e633",
       "ranges": [
         [
           1,
-          46
+          45
         ],
         [
-          47,
-          78
+          46,
+          75
+        ],
+        [
+          76,
+          86
         ]
       ]
     },

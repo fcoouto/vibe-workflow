@@ -368,6 +368,23 @@ class PlanTests(unittest.TestCase):
                 self.plan(value)
             self.assertNotIn("PRIVATE", str(raised.exception))
 
+    def test_path_like_model_labels_are_refused(self):
+        for label in ("models/../PRIVATE", "a..b", "org/team/sub/model", "a/b/c/d",
+                      "models/PRIVATE.gguf", "PRIVATE.bin", "org/PRIVATE.safetensors", "org/w.SafeTensors",
+                      "org//model", "org/model/"):
+            for field in ("model", "effort"):
+                entry = {"model": "gpt-5.5", "effort": "high"} | {field: label}
+                with self.subTest(label=label, field=field), \
+                        self.assertRaisesRegex(ValueError, r"\AExport metadata refused\Z") as raised:
+                    self.plan(reconciled(settings=[entry]))
+                self.assertNotIn("PRIVATE", str(raised.exception))
+
+    def test_ordinary_model_labels_with_dots_or_two_slashes_are_kept(self):
+        for label in ("gpt-5.5", "claude-3.5-sonnet", "openai/gpt-5.5", "org/team/model-1.0", "o4-mini"):
+            with self.subTest(label=label):
+                planned = self.send(reconciled(settings=[{"model": label, "effort": "high"}]))
+                self.assertEqual(metadata(planned["body"])["configured_models"], label + "/high")
+
     # OTLP body
 
     def test_body_has_exact_shape_and_attribute_allow_list(self):
