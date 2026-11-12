@@ -499,7 +499,36 @@ class ThreadTests(HookFixture):
         self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
                                   dict(thread_id="worker-a", role="backend-specialist"),
                                   dict(thread_id="reviewer-b", role="code-reviewer"),
-                                  dict(thread_id="reviewer-c", role="reviewer")])
+                                   dict(thread_id="reviewer-c", role="unknown")])
+
+    def test_stored_specialist_and_legacy_roles_remain_verbatim(self):
+        for role in ("reviewer", "review", "repair", "worker", "code-reviewer", "security-reviewer"):
+            with self.subTest(role=role):
+                result = self.threads([self.record("stored", role, "obs")],
+                                      {"obs": self.history("stored-thread")})
+                self.assertEqual(result[-1], dict(thread_id="stored-thread", role=role))
+
+    def test_known_specialist_wins_over_duplicate_unlinked_receipt(self):
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        result = self.threads([self.record("linked", "security-reviewer", "obs")],
+                              {"obs": self.history("same-thread")},
+                              {"receipt": dict(receipt=dict(reviewer_id="same-thread"))})
+        self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
+                                  dict(thread_id="same-thread", role="security-reviewer")])
+
+    def test_unknown_specialist_keeps_usage_and_complete_thread_coverage(self):
+        from runtime import observability_accounting
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        threads = self.threads([], collected={"receipt": dict(receipt=dict(reviewer_id="legacy-thread"))})
+        self.session()
+        self.session(thread="legacy-thread")
+        observations = codex_usage.acquire_task_observations(threads,
+            started_at=datetime.fromtimestamp(self.started, timezone.utc),
+            cutoff_at=datetime.fromtimestamp(self.started + 120, timezone.utc), deadline=time.monotonic() + 5)
+        result = observability_accounting.reconcile_task(observations, verification=self.report())
+        self.assertEqual(result["coverage"], "complete")
+        self.assertEqual(result["totals"]["total_tokens"], 200)
+        self.assertIn(dict(thread_id="legacy-thread", role="unknown"), result["counted_threads"])
 
     def test_unresolvable_worker_or_reviewer_threads_return_none(self):
         cases = (([self.record("w1", "backend-specialist")], {}, []),
@@ -854,6 +883,118 @@ class CollectionStatusTests(HookFixture):
                                                     desired_collection=True))
         self.assertEqual(observe(), ("connection_not_enabled", sorted([checkout, project]), False))
 
+
+
+class SettingsLimitTests(HookFixture):
+    """Deferred O2 and integration review findings: repository IDs, record sizes, lookups and a busy lock."""
+
+    def test_repository_ids_follow_the_canonical_record_rule(self):
+        other = "Repo One.v2 (main)"
+        report = settings.configure_project(self.scope, dict(expected_revision=0, desired_collection=True,
+                                                             repository_ids=[self.scope.repository_id, other]))
+        self.assertEqual(report["repository_ids"], sorted([self.scope.repository_id, other]))
+        self.assertEqual(settings.project_status(self.scope)["repository_ids"], report["repository_ids"])
+        for bad in ("", " ", "tab\there", "bell\x07", "x" * 129, 7):
+            with self.subTest(bad=bad), self.assertRaisesRegex(settings.SettingsError, r"\Ainvalid_observability_request\Z"):
+                settings.configure_project(self.scope, dict(expected_revision=1, desired_collection=True,
+                                                            repository_ids=[self.scope.repository_id, bad]))
+
+    def test_oversized_repository_list_is_refused_before_saving(self):
+        ids = [self.scope.repository_id] + ["r%03d" % index + "x" * 124 for index in range(63)]
+        with self.assertRaisesRegex(settings.SettingsError, r"\Aobservability_request_too_large\Z"):
+            settings.configure_project(self.scope, dict(expected_revision=0, repository_ids=ids, desired_collection=True))
+        self.assertEqual(list((self.scope.runtime.state_dir / "observability").glob("project-*.json")), [])
+
+    def test_upload_state_with_250_records_saves_and_loads(self):
+        from tests.test_observability_export import NOW, reconciled, usage
+        state_ = None
+        for revision in range(1, 251):
+            planned = export.plan_export(reconciled(usage(input=60 + revision), revision=revision),
+                                         export_state=state_, now_ns=NOW)
+            state_ = export.record_outcome(planned["state"], planned["record"]["export_id"], "accepted")
+        self.enable()
+        with settings.export_store(self.scope, self.task_ref, self.key, write=True, create=True) as owner:
+            self.assertIsNone(owner.load())
+            hook._save(owner, None, self.task_ref, self.key, state_, "accepted")
+        self.assertGreater(self.envelope_path().stat().st_size, 64 * 1024)
+        with settings.export_store(self.scope, self.task_ref, self.key) as owner:
+            self.assertEqual(export._state(owner.load()["export_state"]), state_)
+        status = hook.export_status(self.scope.repository_root, self.task_ref)["destinations"][0]
+        self.assertEqual(len(status["records"]), 250)
+        self.assertEqual((settings.MAX_EXPORT, settings.MAX_CONFIG), (1024 * 1024, 8 * 1024))
+
+    def counting(self):
+        calls, current = [], startup.acquire_project_entry
+        return calls, patch.object(startup, "acquire_project_entry", side_effect=lambda *args, **kwargs:
+                                   calls.append(1) or current(*args, **kwargs))
+
+    def test_enabled_hook_run_acquires_the_project_entry_once(self):
+        self.session()
+        self.enable()
+        calls, counted = self.counting()
+        with counted:
+            self.run_hook()
+        self.assertEqual(self.envelope()["last_result"]["code"], "accepted")
+        self.assertEqual(len(FakeConnection.posts), 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_changed_scope_is_still_refused(self):
+        from dataclasses import replace
+        self.session()
+        self.enable()
+        changed = replace(self.scope, accepted_scope_digest="0" * 64)
+        with patch.object(startup, "_entry_scope", return_value=changed):
+            self.run_hook()
+        self.assertFalse(self.exports.exists())
+        self.assertEqual(FakeConnection.posts, [])
+
+    def test_settings_changes_still_refuse_a_changed_scope(self):
+        from dataclasses import replace
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        directory = self.scope.runtime.state_dir / "observability"
+        before = sorted((path.name, path.read_bytes()) for path in directory.iterdir())
+        changed = replace(self.scope, accepted_scope_digest="0" * 64)
+        with patch.object(startup, "_entry_scope", return_value=changed), \
+                patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
+            for name, operation in (("enable", lambda: settings.enable(self.scope, dict(expected_revision=1))),
+                                    ("configure_project", lambda: settings.configure_project(self.scope, dict(
+                                        expected_revision=0, repository_ids=[self.scope.repository_id],
+                                        desired_collection=True)))):
+                with self.subTest(name), self.assertRaisesRegex(settings.SettingsError, r"\Aobservability_scope_changed\Z"):
+                    operation()
+        self.assertEqual(sorted((path.name, path.read_bytes()) for path in directory.iterdir()), before)
+
+    def test_busy_upload_lock_records_nothing(self):
+        self.session()
+        self.enable()
+        self.run_hook()
+        before = self.envelope_path().read_bytes()
+        original, calls = settings.export_store, []
+
+        def busy_once(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise settings.SettingsError("observability_operation_busy")
+            return original(*args, **kwargs)
+
+        with patch.object(settings, "export_store", side_effect=busy_once):
+            self.run_hook()
+        self.assertEqual(self.envelope_path().read_bytes(), before)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(FakeConnection.posts), 1)
+
+    def test_thread_id_with_underscore_is_unresolved_before_any_read(self):
+        self.session()
+        self.enable()
+        self.task["session_id"] = "ses_opencode1"
+        self.task_ref = dict(self.task_ref, session_id="ses_opencode1")
+        with patch.object(codex_usage, "acquire_task_observations") as read, \
+                patch.object(codex_usage, "read_thread_usage") as thread:
+            self.run_hook()
+        read.assert_not_called()
+        thread.assert_not_called()
+        self.assertEqual(self.envelope()["last_result"]["code"], "participants_unresolved")
+        self.assertEqual(FakeConnection.posts, [])
 
 if __name__ == "__main__":
     unittest.main()

@@ -511,6 +511,20 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 2)
 
+    def test_forget_without_saved_entry_keeps_the_revision(self):
+        from runtime.observability_credentials import CredentialError
+        self._select_os_store()
+        before = self.path.read_bytes()
+        with patch("runtime.observability_credentials.forget",
+                   side_effect=CredentialError("saved_credentials_unavailable")) as forget:
+            with self.assertRaisesRegex(CredentialError, "^saved_credentials_unavailable$"):
+                self.settings.forget_credentials(self.scope, dict(expected_revision=1))
+        self.assertIn("before_change", forget.call_args.kwargs)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.settings.status(self.scope)["revision"], 1)
+        with patch("runtime.observability_credentials.forget", return_value=None):
+            self.assertEqual(self.settings.forget_credentials(self.scope, dict(expected_revision=1))["revision"], 2)
+
     def test_reconfiguration_cannot_silently_downgrade_the_selected_source(self):
         self._select_os_store()
         report = self.settings.configure(self.scope, dict(CONFIGURE, expected_revision=1))
@@ -618,7 +632,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                      self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
                      self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
                      self.project_request(repository_ids=[repository, repository]),
-                     self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                     self.project_request(repository_ids=[repository, "PRIVATE\npath"]),
                      self.project_request(repository_ids=[repository, 7]),
                      self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
         invalid = [(request, "invalid_observability_request") for request in malformed]

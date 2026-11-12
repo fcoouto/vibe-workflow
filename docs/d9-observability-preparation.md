@@ -12,20 +12,24 @@ O2–O5 and the integration hook are implemented, independently reviewed and mer
 - Four reader changes were required: files are mostly `0644`, so the rule became: owned by the current user and not writable by group or other users; forked headers; oversized lines decided by their prefix; long threads continue in page files `rollout-TS-<thread>_<page>.jsonl` with exactly continuous totals, read as one stream with the new gap `history_incomplete`.
 - Independent comparison after the fix: Codex `0.167.0`, 17 of 17 windows match; all observed versions (validation only), 470 of 470 windows match, including forked, subagent and paginated threads.
 
-| Slice | PR | Merge commit | Deferred minor findings |
+| Slice | PR | Merge commit | Follow-up status |
 | --- | --- | --- | --- |
-| O3 Codex session-file usage reader | #257 | `f33d8371` | Folder check-then-open race (same-user only) |
-| O2 Project collection settings | #258 | `4db00461` | Repository-ID pattern stricter than enrollment; long ID lists via the Python API; checkout connection read outside the Project lock |
-| O4 Task usage reconciliation | #259 | `a813d581` | Versions from gapped threads in `source_versions`; gap-free thread with unknown usage accepted; three refusal tests missing |
+| O3 Codex session-file usage reader | #257 | `f33d8371` | Folder check-then-open race fixed in #269 |
+| O2 Project collection settings | #258 | `4db00461` | Repository-ID rule and oversized-record errors fixed in #270; checkout connection read outside the Project lock remains an accepted limitation |
+| O4 Task usage reconciliation | #259 | `a813d581` | Counted-thread versions, unknown-usage refusal and missing refusal tests fixed in #268 |
 | O5 Export planning and delivery | #260 | `796729dd` | 3-second upload budget may often end `uncertain` (measure in O7) |
-| Integration hook after `evidence verify` | #261 | `b73b8f11` | Upload-state file limit after about 200 records; repeated project-entry checks when enabled; concurrent runs can overwrite `last_result` |
-| O3 real-file qualification | #262 | `6875651e` | `_` in thread IDs can collide with the page-name form (malformed receipts only); two page-file test gaps |
+| Integration hook after `evidence verify` | #261 | `b73b8f11` | Upload-state size limit, repeated entry lookups and busy-lock result overwrite fixed in #270 |
+| O3 real-file qualification | #262 | `6875651e` | Thread-ID collision and page-file test gaps fixed in #269; hook ID validation aligned in #270 |
 | Procedure text for the qualified source | #263 | `0fa5c4fb` | — |
 | `project-status` reports the real `collection` value through the hook's shared gate | #265 | `fd0604d0` | — |
 | Checkout `status` and its reports use the same gate (`project_unavailable` for an unreadable Project record) | #266 | `9e6e790c` | — |
 | Resumed-session evidence in the reader | #267 | `aae4e76c` | — |
+| O4 deferred minors: `source_versions` from counted threads only; unknown usage on a gap-free thread refused | #268 | `bd142baf` | — |
+| Reader deferred minors: held-descriptor folder walk, thread IDs without `_`, unreadable folders give `file_unreadable` | #269 | `7a8ed080` | — |
+| Settings and hook follow-ups: canonical Repository IDs, size errors, 1 MiB upload state, one entry lookup, busy-lock handling and thread-ID validation | #270 | `4c258406` | Settings stay at 8 KiB; a canonical membership change during one hook run is not re-detected (accepted window) |
+| Missing saved entry on forget reports `saved_credentials_unavailable`, without advancing the revision | #272 | `1d4cf32a` | Windows remains fake-tested; macOS classification is pinned to keyring 25.7.0 |
 
-The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle limit) for now; space work is deferred.
+The user accepted the existing package-size warning for now; space work is deferred. Codex's 8 MiB bundle limit is unchanged.
 
 **O6 hosted readback, 12 November 2026** (user-authorized; Langfuse Cloud EU, the user's project, keys loaded from the plugin's saved macOS Keychain entry through `observability_credentials.load`, never printed or stored): the merged O5 code planned and delivered one `total` record (1,300 tokens) and one `adjustment` (+250), with synthetic numbers and `langfuse.environment` = `d9-qualification`. Both were `accepted`. Observations API v2 readback after three attempts: both are `GENERATION` observations with exactly the six sent buckets, empty `costDetails`, no total cost, only the seven allow-listed metadata keys and empty user/session. The trace's bucket sum equals the corrected 1,550 total. A separate raw span with a negative `input` bucket (−10) was accepted but stored as `output` 5, `total` 5: Langfuse silently drops negative buckets and recomputes the total. Negative deltas therefore stay local gaps permanently, never exported. Metrics API v2 (read-only, same key, filter `environment = d9-qualification`): 3 observations, `sum_totalTokens` 1,555 (the corrected 1,550 plus the negative probe's stored 5), `sum_inputTokens` 1,200 and `sum_outputTokens` 355 (350 + 5). Langfuse's aggregates re-add the exclusive buckets, so dashboards show the original inclusive Codex input and output totals; `sum_totalCost` is 0. A `traceId` dimension is refused by the Metrics API. Not covered: built-in dashboard widgets, the full hook path from a real enrolled runtime checkout (this repository has none), and real task numbers.
 
@@ -33,9 +37,26 @@ The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle 
 
 Remaining:
 
-1. **O7 final qualification**, which also depends on D7b. It includes the full hook path from a real enrolled runtime checkout, built-in dashboard widgets and real task numbers, none of which this repository's startup-only checkout can exercise.
-2. **O6 checks the hosted readback did not cover:** installed skill discovery and selective loading; one guided management request from a fresh installation; reuse in a second worktree; actionable missing-source and credential errors; a real Keychain store and forget (only load was used); failure cases; and disable after a bounded run.
-3. The deferred minor findings in the table above, and package space work (the user accepted the size warning for now).
+1. **Finish O6 installed/live qualification:** choose an authorized, qualified, runtime-enabled Codex checkout; this repository's checkout is startup-only. Observe the real CLI `store-credentials`/`forget-credentials` path, one guided management request from a fresh installation, reuse in a second authorized worktree, disable after a bounded run, and selective skill loading during routine work (needs model turns). The existing fake-store CLI test is not live OS-store proof. Preserve the remaining failure, unit-consumption and access/retention gaps in the O6 contract; live work needs its own scoped authorization and numeric limits.
+2. **O7 final qualification**, after applicable O6 proof and prior D7b evidence: one bounded native coordinator/worker/reviewer task, independent reconciliation of actual receipts and participants with Langfuse, source-side scope/isolation and replay/failure checks, the final frozen-candidate broad regression, and independent behavior/numerical/privacy review. The full hook path, built-in dashboard views and real task numbers remain unobserved; do not provision dashboards here. Measure the 3-second upload budget during this qualification.
+3. Package space work stays deferred. The accepted limitations in the table remain explicit; the fixed findings are not open work.
+
+**O6 checks without a qualified checkout, 12 November 2026** (user-authorized; observed against `main` `67f29024`, not a rerun on the later follow-up commits):
+- **Installed skill discovery:** `scripts/package.py --output` built the package from `main` `67f29024` into a throwaway folder and installed it into a throwaway, logged-out `CODEX_HOME` (`codex plugin marketplace add`, `codex plugin add`). `codex app-server` was asked only `initialize` and `skills/list`, with no thread and no model call. Result: 9 plugin skills, all enabled from the throwaway cache, 0 errors, including `vibe-workflow:manage-observability`; the installed `procedure.md` was byte-identical to `main`. The throwaway home was deleted.
+- **Real macOS Keychain store, load and forget:** run through `runtime/observability_credentials` with the pinned keyring 25.7.0, on a throwaway target whose entry name differs from the user's real entry. Store wrote the entry, load returned the same random pair, and forget removed it; a later load gave `saved_credentials_unavailable`. The user's real entry stayed present with its modification date unchanged. Forgetting a missing entry reported `credential_store_delete_unknown`; #272 fixes that misleading code. Its rebased candidate passed both credentials/settings module orders in one process and 144 sharded tests with zero skips, including pinned-backend tests with native calls replaced and the fake-store CLI revision check. No new real Keychain check was made after the fix.
+- **Failure cases (fixed codes, no secrets printed; connection checks only, no ingestion):**
+
+  | Case | Result |
+  | --- | --- |
+  | Environment source with no keys | `credentials_unavailable` (no network) |
+  | Missing Keychain entry | `saved_credentials_unavailable` |
+  | Random wrong keys, one live `GET /api/public/projects` | `authentication_failed` |
+  | Real keys, wrong project, one live `GET` | `langfuse_project_mismatch` |
+  | Unreachable `.invalid` host | `connection_unavailable` |
+  | `http://` origin, or an origin with a path | `invalid_destination` |
+  | Real keys, right project | `ok` |
+
+These observations establish partial O6 evidence only. Installed discovery is not selective loading or guided execution; direct credential-code access is not the installed CLI path. They do not close O7, supply D7b proof or qualify additional clients/platforms.
 
 The sections below are the historical planning record. Their gate statements, unticked checkboxes, "awaiting review", "gated" and "unstarted" wording, and frozen contracts describe the state when they were written. Where they differ from the merged code, this status section and the **Superseded** notes below take precedence.
 
