@@ -48,6 +48,8 @@ A merge target is a branch the project designates for integrating completed work
 
 After the merge, observe repository state and record the resulting commit and method. If the outcome is unknown, inspect it before retrying. Preserve unrelated work and do not bypass a failed gate or force an unrelated history change to complete the request.
 
+When synchronizing merged changes locally, use [delivery preparation's synchronization procedure](../clients/delivery.md#prepare-the-destination), whether or not the project enables Graphify. Remote merge success does not establish local synchronization success.
+
 For Graphify-enabled projects, complete [Graphify post-merge maintenance](../clients/graphify-maintenance.md)
 after confirming the merge, and when synchronizing merges made elsewhere. Run it
 as part of the operation without another user request. A successful remote merge
