@@ -87,3 +87,9 @@ Ruling: retain the local ref until remote cleanup settles or is explicitly skipp
 then delete it conditionally. This lets the same helper recheck after worktree
 removal without a recovery record or a second remote-only command. A failed push
 leaves the local branch for a later explicit attempt.
+
+First combined run on `975d840`: cleanup 19/19, checkout 4/4, Graphify 6/6,
+instruction loader 41/41 passed. Feature tests 45/46: the revised summary test
+incorrectly expected all features from `status workstreams --summary`, which is
+intentionally filtered. Restore that expectation and test the unfiltered command
+separately; no production resolver change is needed.

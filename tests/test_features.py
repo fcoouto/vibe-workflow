@@ -463,6 +463,8 @@ class CommandTests(Checkout):
         self.assertEqual(json.loads(result.stdout)["features"]["workstreams"]["effective"], False)
         self.assertEqual(self.run_cli("enable", "workstreams").returncode, 0)
         result = self.run_cli("status", "workstreams", "--summary")
+        self.assertEqual(result.stdout.strip(), "Features: workstreams on (project)")
+        result = self.run_cli("status", "--summary")
         self.assertEqual(result.stdout.strip(), "Features: cleanup off · workstreams on (project)")
 
     def test_status_fails_when_settings_are_invalid(self):
