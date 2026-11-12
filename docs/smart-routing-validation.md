@@ -341,6 +341,18 @@ Registered on 12 November 2026, before any historical replay has run and before 
 
 Registration is not permission: this edit authorizes no historical run, live qualification or release, and the run still waits for the prerequisites in Edit 6's [Order](#order).
 
+### Supplement (12 November 2026): field meanings from public source
+
+Added later on 12 November 2026, before any historical replay has run. Edit 9 above stays as written; it records what the schemas alone showed. This supplement settles three of its unproved meanings from the hosts' public source code. No store was opened again and no row was read.
+
+- **Store B timestamps.** In Codex's public source (`openai/codex`, commit `77fde36ae112437a8ce23e752209099ee04a0d50` of 10 November 2026), the thread reader selects `created_at_ms` and `updated_at_ms` as the thread's start and last update (`codex-rs/state/src/runtime/threads.rs`). It reads them as epoch milliseconds, and a value below 1,577,836,800,000 is an older row in seconds, multiplied by 1,000 (`epoch_millis_to_datetime` in `codex-rs/state/src/model/thread_metadata.rs`). The replay uses the same two columns with the same rule. It does not read the second-precision `created_at` and `updated_at`, and a null value is missing.
+- **Store A `model`.** In OpenCode's public source (`anomalyco/opencode`, formerly `sst/opencode`, commit `101776024cc69bafb3f9dc90027ab4d1eab40a2a`), `session_v2.model` is JSON with `id`, `providerID` and an optional `variant` (`packages/core/src/session/sql.ts`). The replay takes the model id from `id`, the provider from `providerID` and the variant from `variant`. A value that is not such JSON or has no `id` means no model id.
+- **Store A timestamps.** The same source sets `time_created` and `time_updated` from `Date.now()`, so they are epoch milliseconds (`packages/core/src/database/schema.sql.ts`).
+
+**Still unproved.** At that OpenCode commit, `tokens_output` holds visible output and `tokens_reasoning` is counted separately (`packages/core/src/session/usage.ts`). Rows written by earlier versions, or copied from older session storage, may follow another definition, and this was not proved. Store A's token band therefore stays `unknown`, as in Edit 9. Also unchanged: the parts of store B's `tokens_used`, the values of `source` and `thread_source`, the absent auth modes and host markers, store C, and the exclusion basis.
+
+**Limits.** These are current upstream revisions, not proved to be the versions that wrote every stored row. The local schemas match the mapped columns by name and type, and the runner stops on any change to a mapped column. Until store C is mapped, an approved caller supplies the exclusion metadata and a route is qualified live, the historical replay refuses to report. This supplement authorizes no run.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
