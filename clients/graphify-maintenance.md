@@ -17,9 +17,10 @@ an accepted Graphify setup: the extraction below rebuilds it.
 ## Synchronize, refresh and verify
 
 1. Confirm the successful remote merge and its commit, or the upstream commits
-   being synchronized. Resolve the project's primary checkout and configured
-   merge-target branch from its scope and Git worktree information; do not use
-   the task worktree just because it is the current directory. Reuse existing
+   being synchronized. Use [delivery preparation](delivery.md#prepare-the-destination)
+   to resolve the primary checkout, designated branch, clean state and writer
+   ownership. Confirm the synchronization target matches that designation; an
+   unrelated merge target is not authority to switch it. Reuse existing
    synchronization authority; this procedure grants no new remote access.
 2. Check the primary checkout's branch, dirty state and writer ownership. Only
    synchronize when safe, using a fast-forward-only operation to the intended

@@ -8,10 +8,10 @@ Read the [policy index](../../../policies/00-index.md), [Project Scope](../../..
 
 0. **Readiness.** Run `python3 -I -B "$PLUGIN_ROOT/scripts/workflow.py" workspace status`. `PLUGIN_ROOT` is the installed package root (the parent of this skill's `skills` directory), never the target checkout. When the command may observe a sandbox instead of the host (for example Claude Desktop Cowork), report the affected items `unknown`. For each `missing` or `outdated` required item, say what it is and why it matters (the item's `why`), then run [prepare-my-workspace](../../prepare-my-workspace/SKILL.md) in prepare mode, scoped to those items (its steps 1–7), as its own operation under the [consent rule](../../../policies/11-tool-integrations.md#choose-and-configure), and resume here. Carry items still `needs-user` or `unknown` to the report; wait only where work depends on them, such as that client's startup verification. For an inspect-only or plan-only request, report what is missing and propose preparation without running it.
    *Done when* every required item is `ready`, `not-supported` with its reason, or carried to the report with the action that resolves it. *On failure* (status cannot run, or exit 2): report it, treat the affected items as unknown and continue.
-1. **Target and clients.** Confirm the selected checkout; never the toolkit checkout just because it is the working directory; keep new-project creation separate. Name the client running this session and the agent clients installed, and select the clients to enroll (installed clients the plugin can enroll, by default). A client the plugin cannot enroll yet, such as OpenCode until its plugin client ships, is an explicit gap: say what is unavailable (startup orientation, enrollment) and that its tools come from step 0; never skip it silently. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client.
+1. **Target and clients.** Confirm the selected checkout; never the toolkit checkout just because it is the working directory; keep new-project creation separate. Follow [delivery preparation](../../../clients/delivery.md#prepare-the-destination) to establish the primary-worktree identity, designated branch and source, and the task worktree for source/document edits. Explicit primary-only enrollment/configuration effects keep their selected destination and require the existing setup authority; do not copy enrollment into a task worktree. Name the client running this session and the agent clients installed, and select the clients to enroll (installed clients the plugin can enroll, by default). A client the plugin cannot enroll yet, such as OpenCode until its plugin client ships, is an explicit gap: say what is unavailable (startup orientation, enrollment) and that its tools come from step 0; never skip it silently. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client.
    *Done when* the checkout, the selected clients and every gap are stated. *On failure* (uncertain target): make no writes until it is confirmed.
 2. **Sources and inspection.** Resolve the canonical [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit) revision once for this setup or update; resume an interrupted setup at its recorded revision; a trusted versioned copy may serve offline setup with freshness marked unverified. Read the component guidance and linked sources needed for the selected work; keep provenance in authoring records, not routine task loading. Inspect relevant instructions, configuration, commands, paths and baseline checks. A runtime or tool the project itself declares is a project need, reported and checked with the project's own commands. Separate observed facts from assumptions; preserve user changes, data, permissions, model/provider choices and existing protections.
-   *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. *On failure* (source unavailable): block only the work that depends on it.
+   *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. Record primary-checkout stability and any branch-only/standing-opt-out conflict in the existing setup assessment; apply [adoption and update](../../../clients/delivery.md#adopt-and-update-the-rule), preserving historical choices, active pins and later user edits. *On failure* (source unavailable): block only the work that depends on it.
 3. **Preferences.** Resolve missing [project preferences](#project-preference-questions), one at a time, before preparing changes.
    *Done when* each question is answered, reused, defaulted (4 and 5 only) or reported pending or inapplicable with its reason.
 4. **Plan.** Assess every component in the complete Toolkit catalog for relevance, current adoption or an equivalent, and any useful action; [adapt the nine project documents](#adapt-project-documents) and [author the policy entry point](#author-the-policy-entry-point). Each component ends planned, reused with evidence, inapplicable with its reason, or blocked with its prerequisite and resume condition. An applicable component is omitted only through a recorded user decision linked from its row; a mandatory one never is.
@@ -84,6 +84,12 @@ the same effective guidance is a no-op. For an authorized update, reconcile owne
 stale pointers through [file configuration and undo](apply-and-recovery.md#file-configuration-and-undo),
 preserving later edits and other clients/checkouts; do not append a competing router.
 
+Make the accepted package and setup-record pointers usable from task worktrees,
+not only from the onboarding agent's current folder. Tracked instructions carry
+the policy-index route, including task entry and checkout-affecting review work.
+Verify the pointer after a move; missing checkout-local enrollment does not
+require ordinary work to activate runtime or copy another checkout's authority.
+
 ### Verify policy discovery
 
 Apply [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish)
@@ -94,10 +100,13 @@ to the generated instructions, not just the onboarding agent's loaded context:
    through existing configuration/recovery checks. File existence and a successful
    reader invocation prove neither task selection nor agent compliance.
 2. Walk representative project requests from that entry point: a small change,
-   review-only work, resume, and applicable delegation, setup-repair or merge work.
+   review-only PR checkout, resume, and applicable delegation, setup-repair or merge work.
    Use the canonical policy triggers to check that required procedures are reached
    before the affected action and unrelated procedures stay unloaded. Include a
-   missing or conflicting package pointer when changed resolution needs coverage.
+    missing or conflicting package pointer when changed resolution needs coverage.
+   Include task-worktree entry without enrollment, non-`main` designation, a dirty
+   or detached primary, safe fast-forward and a historical worktree opt-out. Check
+   that branch-only guidance does not survive as a current standing exception.
 3. For observed routing, use a fresh native context with the request, generated
    entry point and necessary raw project inputs. Do not preload the expected policy
    list or the author's conclusions. Observe actual reads and actions using
@@ -111,7 +120,12 @@ to the generated instructions, not just the onboarding agent's loaded context:
 
 ## Project preference questions
 
-After identifying the repository, remote and primary branch, and before preparing
+After identifying the repository, remote and designated primary branch, record
+that branch and its authority in the existing setup record. Do not infer it from
+the current checkout or silently adopt a remote's default; reuse settled project
+facts, and ask only for a genuinely unresolved designation. Checkout stability
+applies to every onboarded repository and is not an optional preference below.
+Before preparing
 changes, resolve missing preferences in the order below. Use the native
 single-select rule above for each question. Reuse existing decisions and keep
 answers bound to the selected repository and target. Explain the effect before

@@ -33,10 +33,10 @@
 **Interfaces:** Existing policy triggers and relative links; no schema or callable production interface changes.
 
 - [x] Inspect ownership, callers and existing instructions; baseline focused tests (58 passed).
-- [ ] Add focused regression tests for entry-point routing, complete/selective procedure delivery and executable Git observations. Demonstrate failure against the baseline before authoring the contract.
-- [ ] Amend the shared rule/procedure and reconcile every live Markdown contradiction found by targeted repository-wide search. Preserve historical evidence with supersession notes.
-- [ ] Document adoption, branch designation, legacy opt-out reconciliation and unenrolled-worktree guidance explicitly.
-- [ ] Regenerate instruction map; commit source before running package-dependent tests.
+- [x] Add focused regression tests for complete/selective procedure delivery and executable Git observations. Demonstrate failure against the baseline before authoring the contract; entry-point routing additionally receives fresh-context evaluation in Task 2.
+- [x] Amend the shared rule/procedure and reconcile every live Markdown contradiction found by targeted repository-wide search. Preserve historical evidence with supersession notes.
+- [x] Document adoption, branch designation, legacy opt-out reconciliation and unenrolled-worktree guidance explicitly.
+- [x] Regenerate instruction map; commit source before running package-dependent tests.
 - [ ] Run `python3 -B scripts/validate.py`, focused instruction/onboarding/delivery tests and `git diff --check`.
 
 ### Task 2: Evaluate routing and review the exact candidate

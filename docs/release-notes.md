@@ -1,5 +1,9 @@
 # Release notes
 
+## Unreleased
+
+- **Stable primary checkout for every onboarded repository.** Shared task entry routes edits and checkout-affecting reviews to existing delivery preparation. Task work uses separate worktrees; primary checkout keeps its recorded designated branch. Before/after native observations detect drift without hooks, runtime activation or automatic repair. Onboarding/update reconciles legacy branch-only choices and standing worktree opt-outs while preserving historical records and active-task pins. Existing installs need an authorized plugin/project update and refreshed instructions; source checks do not establish client enforcement.
+
 ## 0.1.37
 
 - **Smaller logo.** `assets/logo.png` is now 512 × 512 (259 KB, from 867 KB); the image is otherwise unchanged. The package export shrinks by about 0.6 MB; it still uses over 75% of Codex's 8 MiB bundle scan.
