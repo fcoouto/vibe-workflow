@@ -130,3 +130,43 @@ run (among them the startup, minimal-default, prepared-instruction, setup-source
 the whole branch found no defect in the ladder text. This is instruction
 validation: no live repair, dispatch, installed-plugin restart or model
 comparison ran, and detection remains the agent's responsibility.
+
+## Three escalations and re-evaluation — 12 November 2026
+
+The user shortened the ladder and added a reflection step before involving
+them ([design](superpowers/specs/2026-11-12-opencode-escalation-gate-design.md#policy-changes)).
+[Stuck-pattern escalation](../policies/03-agent-delegation.md#stuck-pattern-escalation)
+now allows at most three escalations per target, states that escalation within
+authorized options needs no user approval, and from the second escalation asks
+whether the design itself is the cause. When the third escalation does not
+converge, or no stronger option remains, one architecture re-evaluation checks
+whether a simpler solution meets every agreed requirement. An accepted
+re-evaluation resets the escalation count once per target; budgets never reset.
+[Project Scope](../policies/01-project-scope.md#when-instructions-conflict) now
+makes the agreed requirements the hard gate and lets agents decide architecture
+within them, with independent review of a material redesign.
+
+### Instruction paths
+
+Author walks. The policy index loads Agent Delegation on stalled repair or
+validation progress; the re-evaluation step links to Project Scope for the
+definition of agreed requirements, so no other contract is required.
+
+| Representative task | Expected path and outcome |
+| --- | --- |
+| First escalation on a target | Stronger diagnosis without a design question; no user approval requested. |
+| Second escalation on the same target | The brief also asks whether the design itself is the cause. |
+| Third escalation fails; a simpler design keeps every agreed requirement | Re-evaluation by the most capable authorized option, independent review of the redesign, coordinator accepts; the escalation count resets once. |
+| The simpler design would drop or weaken an agreed requirement | Question to the user; hold affected work, continue independent work. |
+| No stronger option remains before the third escalation | Re-evaluation first, then the user only if it does not converge. |
+| Three more escalations fail after the reset | Decidable request to the user, including the re-evaluation's outcome. |
+| An original limit would be exceeded at any point | Stop and ask; no budget resets. |
+| The agent is about to ask permission for a stronger diagnosis | No approval needed; escalate. |
+| One new defect while earlier criteria hold | No stuck pattern; ordinary scoped fix. |
+
+### Checks and limits
+
+`python3 -B scripts/validate.py` and the instruction-reading modules selected for
+this change cover the package. These are author walks: no independent instruction
+evaluation, live repair, dispatch or installed-plugin restart ran for this change.
+The optional OpenCode gate supports, but does not replace, these instructions.

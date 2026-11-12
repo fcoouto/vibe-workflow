@@ -1,0 +1,49 @@
+{
+  "round": 2,
+  "date": "2026-11-12",
+  "candidate": "b8afed015b970e3f8eeea4ce4736e1bfe2986370",
+  "host": "OpenCode 2.2.6",
+  "budget": {"max_requests": 60, "minutes": 30, "attempts_per_case": 1, "per_case_requests": 30},
+  "started_utc": "2026-11-12T18:07:39Z",
+  "ended_utc": "2026-11-12T18:15:23Z",
+  "requests": 51,
+  "aggregate": "selected_mechanical_paths_passed",
+  "earlier_results": "behavior-results.json retains the first round, including both failed positive cases.",
+  "changes": [
+    "The gate recognizes unittest's exact failure summary in captured check output even when a shell pipeline exits zero.",
+    "The recorder correlates permission decisions with completed or denied calls instead of relying only on an error object's string conversion."
+  ],
+  "cases": [
+    {
+      "case": "1-recurrence", "requests": 23, "share": 30, "seconds": 112,
+      "routes": ["openai/gpt-6-luna#low", "openai/gpt-6-luna#high"],
+      "by_session": {"root": 17, "initial_explorer": 3, "diagnosis": 3},
+      "expected": "Masked check failures trigger an escalating hold, followed by stronger diagnosis, release and passing original tests.",
+      "observed": "Fourth patch denied at escalating stage; a new high-effort diagnostic child completed without observed edits; the root's next patch succeeded and original tests passed.",
+      "gate_denials": 1, "denial_stage": "escalating", "permission_effect": "deny",
+      "verdict": "passed", "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "956e5aa4aa3a464cbff021fb07d7a772f08e89019cb826a2ff1d5ca6edef082f",
+      "root_usage": {"input": 19161, "output": 902, "reasoning": 276, "cache_read": 289664, "cache_write": 0}
+    },
+    {
+      "case": "2-reevaluation", "requests": 28, "share": 30, "seconds": 328,
+      "routes": ["openai/gpt-6-luna#max"],
+      "by_session": {"root": 19, "initial_explorer": 5, "architecture_assessment": 4},
+      "expected": "Re-evaluation hold, max-effort read-only architecture assessment against unchanged requirements, release and passing original tests.",
+      "observed": "Fourth patch denied at reevaluation stage. A new max-effort child compared a redesign with the smaller repair, preserved every requirement and recommended no redesign. The root's next patch succeeded and original tests passed.",
+      "gate_denials": 1, "denial_stage": "reevaluation", "permission_effect": "deny",
+      "verdict": "passed", "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "4a9460a976034447c0d852b35fdc11c23c9c315256c5373d2f3135bd55ae9926",
+      "root_usage": {"input": 53657, "output": 2092, "reasoning": 2704, "cache_read": 362496, "cache_write": 0}
+    }
+  ],
+  "usage_scope": "Root-session native step_finish fields only; child token totals unavailable. Reasoning is not added to output. No dollar cost inferred.",
+  "limits": [
+    "These runs verify selected mechanical paths, not general reliability or semantic invariant recognition.",
+    "Same-file unrelated failures and repairs moving to new files retain the first round's documented limits.",
+    "The re-evaluation used the no-stronger-ranked-option branch, not three complete live escalation cycles.",
+    "The routed judge, semantic release evaluation and automatic unrelated-failure clearing remain deferred.",
+    "No material redesign was needed, so redesign acceptance and changed-requirement user escalation were not exercised live.",
+    "Read-only means no observed edit calls; shell/API isolation is not an OS sandbox."
+  ]
+}

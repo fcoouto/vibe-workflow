@@ -465,7 +465,7 @@ class CommandTests(Checkout):
         result = self.run_cli("status", "workstreams", "--summary")
         self.assertEqual(result.stdout.strip(), "Features: workstreams on (project)")
         result = self.run_cli("status", "--summary")
-        self.assertEqual(result.stdout.strip(), "Features: cleanup off · workstreams on (project)")
+        self.assertEqual(result.stdout.strip(), "Features: cleanup off · escalation_gate off · workstreams on (project)")
 
     def test_status_fails_when_settings_are_invalid(self):
         self.settings("{not json")
@@ -485,6 +485,13 @@ class ShippedManifestTests(unittest.TestCase):
         loaded = features.manifests()
         self.assertEqual(loaded["workstreams"]["default"], {"enabled": False})
         self.assertEqual(loaded["workstreams"]["control"], "settings")
+
+    def test_escalation_gate_manifest(self):
+        gate = features.manifests()["escalation_gate"]
+        self.assertEqual((gate["default"], gate["control"], gate["consent"]), ({"enabled": False}, "settings", "none"))
+        self.assertEqual(sorted(gate["settings"]), ["check_patterns", "ladder"])
+        self.assertEqual(gate["settings"]["ladder"], {"type": "array", "default": []})
+        self.assertEqual(gate["procedure"], "clients/opencode-escalation-gate.md")
 
 
 if __name__ == "__main__":
