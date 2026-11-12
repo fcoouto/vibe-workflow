@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | When selecting implementation checks; before accepting a completed step, deliverable or merge; after changes affecting the candidate, check definitions, policy or execution environment. |
 | Decision | Select the smallest set of checks that proves the acceptance criteria and relevant failure paths. Determine which existing evidence remains valid and which must be rerun. |
 | Required action | Map criteria to actual commands or observable behavior, execute applicable checks safely, inspect their results and compare failures with the baseline. Follow the procedure below. |
 | Evidence | Record candidate/base and working-tree layers, check definitions and policy version, environment/tool versions, executor, exact commands or observations, results and limitations. Distinguish passed, failed and not run. |

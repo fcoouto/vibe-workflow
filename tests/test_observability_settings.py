@@ -49,7 +49,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 1)
         self.assertEqual(report["control_scope"], "checkout")
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.core_digest(), before)
@@ -98,7 +98,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
             report = self.settings.enable(self.scope, dict(expected_revision=1))
             verify.assert_called_once_with(CONFIGURE["destination"], CONFIGURE["langfuse_project_id"])
         self.assertTrue(report["desired_opt_in"])
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         before = self.path.read_bytes()
         with patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
             report = self.settings.status(self.scope)
@@ -511,6 +511,20 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 2)
 
+    def test_forget_without_saved_entry_keeps_the_revision(self):
+        from runtime.observability_credentials import CredentialError
+        self._select_os_store()
+        before = self.path.read_bytes()
+        with patch("runtime.observability_credentials.forget",
+                   side_effect=CredentialError("saved_credentials_unavailable")) as forget:
+            with self.assertRaisesRegex(CredentialError, "^saved_credentials_unavailable$"):
+                self.settings.forget_credentials(self.scope, dict(expected_revision=1))
+        self.assertIn("before_change", forget.call_args.kwargs)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.settings.status(self.scope)["revision"], 1)
+        with patch("runtime.observability_credentials.forget", return_value=None):
+            self.assertEqual(self.settings.forget_credentials(self.scope, dict(expected_revision=1))["revision"], 2)
+
     def test_reconfiguration_cannot_silently_downgrade_the_selected_source(self):
         self._select_os_store()
         report = self.settings.configure(self.scope, dict(CONFIGURE, expected_revision=1))
@@ -582,8 +596,9 @@ class ObservabilitySettingsTests(unittest.TestCase):
                              ("project", self.scope.project_id, 1))
             self.assertEqual(report["repository_ids"], [self.scope.repository_id])
             self.assertTrue(report["desired_collection"])
-            self.assertEqual(report["collection"], "unavailable")
-            self.assertFalse(report["native_collection_qualified"])
+            self.assertEqual(report["collection"], "connection_not_enabled")
+            self.assertTrue(report["native_collection_qualified"])
+            self.assertEqual(report["collection_sources"], ["codex 0.167.0"])
             self.assertEqual(self.settings.project_status(self.scope), report | dict(
                 checkout_connection=dict(configured=False, desired_opt_in=False)))
             before = self.project_path().read_bytes()
@@ -617,7 +632,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                      self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
                      self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
                      self.project_request(repository_ids=[repository, repository]),
-                     self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                     self.project_request(repository_ids=[repository, "PRIVATE\npath"]),
                      self.project_request(repository_ids=[repository, 7]),
                      self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
         invalid = [(request, "invalid_observability_request") for request in malformed]
@@ -647,7 +662,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                 self.settings.disable_project(self.scope, dict(expected_revision=1))
         self.assertEqual((report["configured"], report["revision"], report["desired_collection"]), (False, 0, False))
         self.assertEqual((report["project_id"], report["repository_ids"]), (self.scope.project_id, []))
-        self.assertEqual((report["collection"], report["checkout_connection"]), ("unavailable", None))
+        self.assertEqual((report["collection"], report["checkout_connection"]), ("off", None))
         self.assertFalse(self.directory.exists())
         self.assertEqual(database.read_bytes(), before)
 

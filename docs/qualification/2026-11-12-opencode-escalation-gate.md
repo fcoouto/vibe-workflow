@@ -96,6 +96,13 @@ the same two strings in `runtime/observability_hook.py`. This establishes a curr
 baseline failure; it neither fixes nor waives it. Final candidate checks are
 recorded separately when executed.
 
+PR #277 subsequently merged as `c4b2172ee010a7e847dcc1eb7ea92bbaba205c76`.
+The integration retains current `main`, including its roster fix and retirement
+of the stored instruction map. The gate runtime and tests are unchanged from the
+independently reviewed `f1bcb6c` repair. Earlier failed full runs remain historical
+evidence; checks on the integrated committed candidate are recorded in PR #264.
+No new live qualification is claimed for this integration.
+
 ### Historical checks on the live-evaluated candidate
 
 - Gate Node suites: 43 passed, including the masked-exit regression.

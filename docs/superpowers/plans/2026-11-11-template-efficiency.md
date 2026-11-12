@@ -1,5 +1,7 @@
 # Template Efficiency Implementation Plan
 
+**Reader reconciliation:** #248 removes the stored instruction map and its authoring writer. Map regeneration steps and map-dependent checks below describe the earlier pilot, not current requirements. Current template delivery uses selected source bytes and revision-bound continuation without generating a map.
+
 **Current delivery scope:** the user subsequently approved wording improvements, optional tooling and retained evidence only. Selective native reads remain the default; template hooks stay disabled. The final section records this narrowing and supersedes the earlier default-helper rollout. Historical pilot results and limits remain unchanged.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

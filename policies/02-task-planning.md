@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | At task entry or resume; before implementation or any checkout-affecting operation, including review-only work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
 | Decision | Determine the smallest sufficient change, unresolved choices, necessary design/plan depth and observable acceptance criteria. Do not invent requirements or treat assumptions as decisions. |
 | Required action | Read affected code and instructions; resolve where edits happen; state the outcome, included/excluded work and relevant constraints. Define acceptance criteria and checks before editing. Keep bounded work in the existing task context; document a plan when complexity, dependencies or multi-session work require one. Give each planned step a verification check and respect its dependencies. |
 | Evidence | Use the existing [lifecycle record](07-context-and-handoff.md#lifecycle-record-and-reports) for the request, planning decisions and proof. Retain material assumptions, check commands or observations, the plan when needed and relevant known baseline failures. A planned check is not a passing result. |

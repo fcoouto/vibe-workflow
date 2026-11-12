@@ -38,7 +38,8 @@ def reconcile_task(observations, *, verification):
                             for item in threads if not item["gaps"]],
         "coverage": "complete" if complete else "incomplete",
         "gaps": [dict(gap) for gap in observations["gaps"]],
-        "source_versions": sorted({item["cli_version"] for item in threads if item["cli_version"] is not None}),
+        "source_versions": sorted({item["cli_version"] for item in threads
+                                   if not item["gaps"] and item["cli_version"] is not None}),
         "model_settings": [{"thread_id": item["thread_id"], "role": item["role"],
                             "model_settings": deepcopy(item["model_settings"])} for item in threads],
     }
@@ -84,8 +85,8 @@ def _thread(item):
         counters = item[field]
         _require(type(counters) is dict and set(counters) == set(COUNTERS))
         _require(all(_count(counters[key]) for key in COUNTERS))
-    # O3 leaves every counter unknown on a gapped thread; known usage there would count unverified numbers.
-    _require(not item["gaps"] or all(item["usage"][key] is None for key in COUNTERS))
+    # O3 leaves every counter unknown on a gapped thread and known on a gap-free one; anything else is malformed.
+    _require(all((item["usage"][key] is None) == bool(item["gaps"]) for key in COUNTERS))
 
 
 def _verification(value):

@@ -1,6 +1,7 @@
 """Checkout connection consent and Project collection choice, separate from task evidence and collection."""
 
 from contextlib import ExitStack, contextmanager
+import contextvars
 import hashlib
 import json
 import os
@@ -22,8 +23,9 @@ FIELDS = {"version", "revision", "binding", "destination", "langfuse_project_id"
 PROJECT_FIELDS = {"version", "revision", "binding", "repository_ids", "desired_collection"}
 MAX_REPOSITORIES = 64
 IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]{1,128}")
-# Upload state for one task and destination: `<state_dir>/observability/exports/<name>.json`.
-MAX_EXPORT = 64 * 1024
+# Upload state for one task and destination: `<state_dir>/observability/exports/<name>.json`. O5 keeps every
+# record and recomputes totals from them, so records are never dropped and the file gets a larger limit.
+MAX_EXPORT = 1024 * 1024
 EXPORT_FIELDS = {"version", "revision", "binding", "task_ref", "destination_key", "export_state", "last_result"}
 EXPORT_RESULTS = frozenset({"not_exportable", "totals_unknown", "usage_inconsistent", "uncertain_pending",
     "stale_reconciliation", "negative_delta", "nothing_to_send", "accepted", "rejected", "uncertain",
@@ -52,16 +54,41 @@ def _private(info, *, directory=False):
         raise SettingsError("unsafe_observability_storage")
 
 
+# The scope `held_scope` already compared with a fresh project entry, while one operation reuses that lookup.
+_HELD = contextvars.ContextVar("observability_held_scope", default=None)
+
+
+def _current(scope):
+    current = startup._entry_scope(startup.acquire_project_entry(
+        SimpleNamespace(client="codex", cwd=scope.repository_root), PACKAGE))
+    if current != scope:
+        raise SettingsError("observability_scope_changed")
+
+
+@contextmanager
+def held_scope(scope):
+    """Acquire the project entry once for `scope` and let every authority check in this context reuse it.
+
+    Each check still verifies the private state folder, database and checkout row; only the canonical lookup is
+    shared. A scope that differs from the fresh entry is refused here, before any record is read."""
+    if type(scope) is not startup.AcceptedScope:
+        raise SettingsError("unsupported_observability_scope")
+    _current(scope)
+    token = _HELD.set(scope)
+    try:
+        yield
+    finally:
+        _HELD.reset(token)
+
+
 def _authority(scope):
     if type(scope) is local_ownership.LocalOwnership:
         return dict(scope_id=scope.scope_id, authority_directory=local_ownership.settings_directory(scope))
     if (type(scope) is not startup.AcceptedScope or scope.client != "codex"
             or scope.runtime is None or scope.runtime.schema_version != 3):
         raise SettingsError("unsupported_observability_scope")
-    current = startup._entry_scope(startup.acquire_project_entry(
-        SimpleNamespace(client="codex", cwd=scope.repository_root), PACKAGE))
-    if current != scope:
-        raise SettingsError("observability_scope_changed")
+    if _HELD.get() is not scope:
+        _current(scope)
     path = state._path(scope)
     state._private(path.parent, True)
     state._private(path)
@@ -131,10 +158,17 @@ def _request(action, request):
     return request
 
 
+def _repository(value):
+    # The canonical record's Repository ID rule; these IDs are stored in JSON only, never in file names.
+    try:
+        return type(value) is str and startup._canonical_text(value, 128) == value
+    except startup.StartupError:
+        return False
+
+
 def _repositories(value):
     if (type(value) is not list or not 0 < len(value) <= MAX_REPOSITORIES
-            or not all(type(item) is str and IDENTIFIER.fullmatch(item) for item in value)
-            or len(set(value)) != len(value)):
+            or not all(_repository(item) for item in value) or len(set(value)) != len(value)):
         return None
     return sorted(value)
 
@@ -279,7 +313,9 @@ class _Store:
             raise SettingsError("observability_revision_exhausted")
         raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
         if len(raw) > self.limit:
-            raise SettingsError("invalid_observability_configuration")
+            # Only request content can make a settings record too large; upload state grows by itself.
+            raise SettingsError("invalid_observability_configuration" if self.export is not None
+                                else "observability_request_too_large")
         temporary = "." + self.name + "." + uuid.uuid4().hex + ".tmp"
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600, dir_fd=self.directory)
@@ -322,7 +358,7 @@ class _Store:
 
 @contextmanager
 def _guard(scope, *, write=False, create=False, recovery=False, project=None, export=None):
-    """`project`, when a dict, selects the shared Project record and receives its `id`.
+    """`project`, when a dict, selects the shared Project record and receives its `id` and the resolved `scope`.
 
     `export`, when `{task_ref, destination_key}`, selects that task's upload state in `exports/`."""
     root = parent = directory = lock = record = None
@@ -331,9 +367,12 @@ def _guard(scope, *, write=False, create=False, recovery=False, project=None, ex
         if recovery:
             original = scope
             if type(original) is startup.AcceptedScope: state._scope_version(original)
-            scope = local_ownership.settings_scope(original.repository_root if type(original) is startup.AcceptedScope else original)
+            known = type(original) in (startup.AcceptedScope, local_ownership.LocalOwnership)
+            scope = local_ownership.settings_scope(original.repository_root if known else original)
+            if type(original) is local_ownership.LocalOwnership and scope != original:
+                raise SettingsError('observability_scope_changed')
         if project is not None:
-            project["id"] = _project_id(scope)
+            project.update(id=_project_id(scope), scope=scope)
             record = "project-" + project["id"]
         if export is not None:
             scope_id = scope.scope_id if type(scope) is local_ownership.LocalOwnership else state._scope_id(scope)
@@ -400,25 +439,45 @@ def _report(record):
         langfuse_project_id=record["langfuse_project_id"] if record else None,
         credential_source=record.get("credential_source", "environment") if record else None,
         connection="not_checked", connection_verified_at=record["connection_verified_at"] if record else None,
-        collection="unavailable", native_collection_qualified=False,
         independent_forwarding="unknown_unmanaged", remote_history="unchanged")
+
+
+def _checkout_report(scope, record):
+    """Checkout report with the `collection` value project-status gives for this checkout now. `record` is the
+    checkout record just read, so the gate reuses it; an unreadable Project record gives `project_unavailable`."""
+    try:
+        owner, _, project = _read_project(scope)
+    except SettingsError:
+        code = "project_unavailable"
+    else:
+        code = _collection_code(owner, project, lambda: record)
+    return dict(_report(record), **_collection_fields(code))
+
+
+def _read_checkout(scope, *, recovery=False):
+    with _guard(scope, recovery=recovery) as owner:
+        if owner is None: return None
+        record = owner.load()
+        owner.check()
+        return record
 
 
 def status(scope):
     """Read local desired consent only; never acquire keys, refresh readiness or create files."""
-    with _guard(scope, recovery=True) as owner:
-        if owner is None: return _report(None)
-        record = owner.load()
-        owner.check()
-        return _report(record)
+    return _checkout_report(scope, _read_checkout(scope, recovery=True))
 
 
 def _operate(scope, action, request):
+    record, extra = _change(scope, action, request)
+    return dict(_checkout_report(scope, record), **extra)
+
+
+def _change(scope, action, request):
     request = _request(action, request)
     with _guard(scope, write=True, create=action == "configure", recovery=action == 'disable') as owner:
         if owner is None:
             if request['expected_revision'] != 0: raise SettingsError('observability_revision_conflict')
-            return _report(None)
+            return None, {}
         record = owner.load()
         owner.check()
         if request["expected_revision"] != (record["revision"] if record else 0):
@@ -434,7 +493,7 @@ def _operate(scope, action, request):
                 updated.update(version=2, credential_source=request.get("credential_source", previous))
         elif action == "disable":
             if not record or not record["desired_opt_in"]:
-                return _report(record)
+                return record, {}
             updated = dict(record, revision=record["revision"] + 1, desired_opt_in=False)
         else:
             if record is None:
@@ -450,13 +509,13 @@ def _operate(scope, action, request):
                 result = langfuse.synthetic_probe(record["destination"], record["langfuse_project_id"],
                                                  before_ingest=owner.check, **connection)
                 owner.check()
-                return dict(_report(record), probe=result)
+                return record, dict(probe=result)
             langfuse.verify_project(record["destination"], record["langfuse_project_id"], **connection)
             owner.check()
             updated = dict(record, revision=record["revision"] + 1, desired_opt_in=True,
                            connection_verified_at=int(time.time()))
         owner.save(updated)
-        return dict(_report(updated), connection="verified_for_current_keys") if action == "enable" else _report(updated)
+        return updated, dict(connection="verified_for_current_keys") if action == "enable" else {}
 
 
 def configure(scope, request):
@@ -476,6 +535,11 @@ def probe(scope, request):
 
 
 def _credential_change(scope, request, action, read_pair=None):
+    record = _credential_save(scope, request, action, read_pair)
+    return dict(_checkout_report(scope, record), credential_operation="stored" if action == "store-credentials" else "forgotten")
+
+
+def _credential_save(scope, request, action, read_pair):
     request = _request(action, request)
     with _guard(scope, write=True) as owner:
         record = owner.load()
@@ -499,7 +563,7 @@ def _credential_change(scope, request, action, read_pair=None):
         owner.check()
         updated = dict(record, revision=record["revision"] + 1, connection_verified_at=None)
         owner.save(updated)
-        return dict(_report(updated), credential_operation="stored" if action == "store-credentials" else "forgotten")
+        return updated
 
 
 def store_credentials(scope, request, read_pair):
@@ -510,34 +574,100 @@ def forget_credentials(scope, request):
     return _credential_change(scope, request, "forget-credentials")
 
 
-def _project_report(project_id, record):
+_UNREADABLE = object()
+
+
+def collection_gate(record, repository_id, read_checkout, runtime_ready):
+    """The upload hook's settings gate, shared by `export_destination` and Project reports so they never disagree.
+
+    Checks run in order and stop at the first unmet one, so later records are never read. `read_checkout()` returns
+    the checkout record, None, or `_UNREADABLE`; `runtime_ready()` says whether the hook would run here now.
+    Returns `(code, connection)`; `connection` is set only for `enabled`."""
+    if record is None or not record["desired_collection"]:
+        return "off", None
+    if repository_id is None:
+        # Only a checkout without a configured runtime lacks a Repository ID, and the hook never runs there.
+        return "runtime_unavailable", None
+    if repository_id not in record["repository_ids"]:
+        return "repository_not_selected", None
+    checkout = read_checkout()
+    if checkout is _UNREADABLE:
+        return "connection_unavailable", None
+    if checkout is None or not checkout["desired_opt_in"]:
+        return "connection_not_enabled", None
+    if not runtime_ready():
+        return "runtime_unavailable", None
+    return "enabled", dict(destination=checkout["destination"], langfuse_project_id=checkout["langfuse_project_id"],
+                           credential_source=checkout.get("credential_source", "environment"))
+
+
+def _repository_id(scope):
+    if type(scope) is startup.AcceptedScope:
+        return scope.repository_id
+    identity = startup._canonical_plain(scope.accepted_identity)
+    return identity.get("repository_id") if isinstance(identity, dict) else None
+
+
+def _runtime_ready(scope):
+    """Whether the hook would send for this checkout now: its current qualified Codex scope gets a connection."""
+    try:
+        current = startup._entry_scope(startup.acquire_project_entry(
+            SimpleNamespace(client="codex", cwd=scope.repository_root), PACKAGE))
+        return (type(current) is startup.AcceptedScope and current.client == "codex" and current.runtime is not None
+                and current.runtime.schema_version == 3 and export_destination(current) is not None)
+    except (startup.StartupError, OSError, ValueError, TypeError, KeyError, RecursionError):
+        return False
+
+
+def _collection_fields(code):
+    from runtime.adapters import codex_usage
+    sources = sorted("codex " + version for version in codex_usage.QUALIFIED_VERSIONS)
+    return dict(collection=code, native_collection_qualified=bool(sources), collection_sources=sources)
+
+
+def _collection_code(scope, project, read_checkout):
+    """`collection` for this checkout: the shared gate with the current runtime check."""
+    return collection_gate(project, _repository_id(scope), read_checkout, lambda: _runtime_ready(scope))[0]
+
+
+def _project_report(project_id, record, collection="off", checkout=None):
     return dict(ok=True, control_scope="project", project_id=project_id, configured=record is not None,
         revision=record["revision"] if record else 0, repository_ids=list(record["repository_ids"]) if record else [],
         desired_collection=record["desired_collection"] if record else False,
-        collection="unavailable", native_collection_qualified=False, checkout_connection=None)
+        **_collection_fields(collection), checkout_connection=checkout)
 
 
-def _with_checkout(scope, report):
-    # Only an on Project choice reads this checkout's own connection record; it never becomes Project consent.
-    if not report["desired_collection"]:
-        return report
-    try:
-        checkout = status(scope)
-    except SettingsError as error:
-        # Report-only: an unreadable checkout record must not hide or misreport the saved Project choice.
-        return dict(report, checkout_connection=dict(status="unavailable", error=str(error)))
-    return dict(report, checkout_connection=dict(configured=checkout["configured"], desired_opt_in=checkout["desired_opt_in"]))
+def _project_collection(scope, project_id, record):
+    """Project report with `collection` from the shared gate; the checkout record is read only past the Project gate."""
+    seen = {}
+
+    def read_checkout():
+        try:
+            checkout = _read_checkout(scope, recovery=True)
+        except SettingsError as error:
+            # Report-only: an unreadable checkout record must not hide or misreport the saved Project choice.
+            seen["checkout"] = dict(status="unavailable", error=str(error))
+            return _UNREADABLE
+        seen["checkout"] = dict(configured=checkout is not None, desired_opt_in=checkout is not None and checkout["desired_opt_in"])
+        return checkout
+    return _project_report(project_id, record, _collection_code(scope, record, read_checkout), seen.get("checkout"))
 
 
-def project_status(scope):
-    """Read the local Project collection choice; no usage, credentials, network or file creation."""
+def _read_project(scope):
+    """The Project record through the recovery path: `(resolved scope, project_id, record or None)`."""
     project = {}
     with _guard(scope, recovery=True, project=project) as owner:
         record = None
         if owner is not None:
             record = owner.load()
             owner.check()
-    return _with_checkout(scope, _project_report(project["id"], record))
+    return project["scope"], project["id"], record
+
+
+def project_status(scope):
+    """Read the local Project collection choice and what the upload hook would do here; no usage, credentials,
+    network or file creation."""
+    return _project_collection(*_read_project(scope))
 
 
 def _project_operate(scope, action, request):
@@ -552,7 +682,7 @@ def _project_operate(scope, action, request):
     with _guard(scope, write=True, create=configure, recovery=not configure, project=project) as owner:
         if owner is None:
             if request["expected_revision"] != 0: raise SettingsError("observability_revision_conflict")
-            return _project_report(project["id"], None)
+            return _project_collection(project["scope"], project["id"], None)
         record = owner.load()
         owner.check()
         if request["expected_revision"] != (record["revision"] if record else 0):
@@ -561,11 +691,11 @@ def _project_operate(scope, action, request):
             updated = dict(version=1, revision=request["expected_revision"] + 1, binding=owner.binding,
                 repository_ids=request["repository_ids"], desired_collection=request["desired_collection"])
         elif not record or not record["desired_collection"]:
-            return _project_report(project["id"], record)
+            return _project_collection(project["scope"], project["id"], record)
         else:
             updated = dict(record, revision=record["revision"] + 1, desired_collection=False)
         owner.save(updated)
-    return _with_checkout(scope, _project_report(project["id"], updated))
+    return _project_collection(project["scope"], project["id"], updated)
 
 
 def configure_project(scope, request):
@@ -587,15 +717,7 @@ def export_destination(scope):
     with _guard(scope, project=project) as owner:
         record = owner.load()
         owner.check()
-    if record is None or not record["desired_collection"] or scope.repository_id not in record["repository_ids"]:
-        return None
-    with _guard(scope) as owner:
-        checkout = owner.load()
-        owner.check()
-    if checkout is None or not checkout["desired_opt_in"]:
-        return None
-    return dict(destination=checkout["destination"], langfuse_project_id=checkout["langfuse_project_id"],
-                credential_source=checkout.get("credential_source", "environment"))
+    return collection_gate(record, scope.repository_id, lambda: _read_checkout(scope), lambda: True)[1]
 
 
 def export_store(scope, task_ref, key, *, write=False, create=False, recovery=False):

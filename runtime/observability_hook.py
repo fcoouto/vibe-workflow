@@ -22,7 +22,8 @@ import time
 
 O3_SECONDS = 10
 _IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]{1,128}")
-_THREAD = re.compile(r"[A-Za-z0-9_-]{1,128}")
+# The session-file reader accepts letters, digits and `-` only; any other ID is unresolved, never read.
+_THREAD = re.compile(r"[A-Za-z0-9-]{1,128}")
 
 
 def after_completion(scope, request, report):
@@ -30,8 +31,8 @@ def after_completion(scope, request, report):
     context = {}
     try:
         _run(scope, request, report, context)
-    except Exception:
-        _failed(scope, context)
+    except Exception as error:
+        _failed(scope, context, error)
 
 
 def _ordinary(request, report):
@@ -52,6 +53,11 @@ def _run(scope, request, report, context):
     if not _ordinary(request, report) or not _project_present(scope):
         return
     from runtime import observability_settings as settings
+    with settings.held_scope(scope):
+        _upload(settings, scope, report, context)
+
+
+def _upload(settings, scope, report, context):
     connection = settings.export_destination(scope)
     if connection is None:
         return
@@ -124,10 +130,14 @@ def _record(scope, task_ref, key, code):
         _save(owner, envelope, task_ref, key, envelope["export_state"] if envelope else None, code)
 
 
-def _failed(scope, context):
+def _failed(scope, context, error):
     if "task_ref" not in context:
         return
     try:
+        from runtime.observability_settings import SettingsError
+        if isinstance(error, SettingsError) and str(error) == "observability_operation_busy":
+            # Another run holds the upload lock and owns this file; its last result must stand.
+            return
         _record(scope, context["task_ref"], context["destination_key"], "hook_failed")
     except Exception:
         # The failure stays local; the verification result is already final.
@@ -170,7 +180,8 @@ def task_threads(scope, task):
             thread = evidence._read(scope, attempt["collected"])["receipt"].get("reviewer_id")
         else:
             thread = _worker(scope, linked) if linked is not None else None
-        if not add(thread, linked["data"]["role"] if linked is not None else "reviewer"):
+        # A legacy receipt can identify a thread without recording its specialist.
+        if not add(thread, linked["data"]["role"] if linked is not None else "unknown"):
             return None
     return [dict(thread_id=thread_id, role=role) for thread_id, role in threads.items()]
 

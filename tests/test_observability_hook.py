@@ -150,7 +150,7 @@ class HookFixture(unittest.TestCase):
                     purpose=purpose)
 
     def run_hook(self, report=None, request=None, *, qualified=True):
-        versions = frozenset({VERSION}) if qualified else codex_usage.QUALIFIED_VERSIONS
+        versions = frozenset({VERSION}) if qualified else frozenset()
         with patch.object(codex_usage, "QUALIFIED_VERSIONS", versions), \
                 patch.object(langfuse, "_Connection", FakeConnection):
             hook.after_completion(self.scope, self.request() if request is None else request,
@@ -195,8 +195,7 @@ class HookTests(HookFixture):
         self.assertEqual(self.envelope_path().stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.exports.stat().st_mode & 0o777, 0o700)
 
-    def test_shipped_unqualified_versions_record_totals_unknown_and_send_nothing(self):
-        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset())
+    def test_unqualified_versions_record_totals_unknown_and_send_nothing(self):
         self.session()
         self.enable()
         self.run_hook(qualified=False)
@@ -500,7 +499,36 @@ class ThreadTests(HookFixture):
         self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
                                   dict(thread_id="worker-a", role="backend-specialist"),
                                   dict(thread_id="reviewer-b", role="code-reviewer"),
-                                  dict(thread_id="reviewer-c", role="reviewer")])
+                                   dict(thread_id="reviewer-c", role="unknown")])
+
+    def test_stored_specialist_and_legacy_roles_remain_verbatim(self):
+        for role in ("reviewer", "review", "repair", "worker", "code-reviewer", "security-reviewer"):
+            with self.subTest(role=role):
+                result = self.threads([self.record("stored", role, "obs")],
+                                      {"obs": self.history("stored-thread")})
+                self.assertEqual(result[-1], dict(thread_id="stored-thread", role=role))
+
+    def test_known_specialist_wins_over_duplicate_unlinked_receipt(self):
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        result = self.threads([self.record("linked", "security-reviewer", "obs")],
+                              {"obs": self.history("same-thread")},
+                              {"receipt": dict(receipt=dict(reviewer_id="same-thread"))})
+        self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
+                                  dict(thread_id="same-thread", role="security-reviewer")])
+
+    def test_unknown_specialist_keeps_usage_and_complete_thread_coverage(self):
+        from runtime import observability_accounting
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        threads = self.threads([], collected={"receipt": dict(receipt=dict(reviewer_id="legacy-thread"))})
+        self.session()
+        self.session(thread="legacy-thread")
+        observations = codex_usage.acquire_task_observations(threads,
+            started_at=datetime.fromtimestamp(self.started, timezone.utc),
+            cutoff_at=datetime.fromtimestamp(self.started + 120, timezone.utc), deadline=time.monotonic() + 5)
+        result = observability_accounting.reconcile_task(observations, verification=self.report())
+        self.assertEqual(result["coverage"], "complete")
+        self.assertEqual(result["totals"]["total_tokens"], 200)
+        self.assertIn(dict(thread_id="legacy-thread", role="unknown"), result["counted_threads"])
 
     def test_unresolvable_worker_or_reviewer_threads_return_none(self):
         cases = (([self.record("w1", "backend-specialist")], {}, []),
@@ -647,6 +675,326 @@ class CallerTests(HookFixture):
 
         self.assertEqual(self.invoke(report, hook_patch=patch("builtins.__import__", side_effect=missing)), expected)
 
+
+COLLECTION = ("collection", "native_collection_qualified", "collection_sources")
+
+
+class CollectionStatusTests(HookFixture):
+    """`collection` in Project and checkout reports says what the upload hook would do in this checkout now."""
+
+    def checkout_path(self):
+        return self.scope.runtime.state_dir / "observability" / (state._scope_id(self.scope) + ".json")
+
+    def assert_collection(self, expected, *scopes):
+        """Both statuses give `expected`; `enabled` exactly when `export_destination` returns a connection and the
+        hook sends."""
+        scopes = scopes or (self.scope, self.scope.repository_root)
+        reports = [settings.project_status(scope) for scope in scopes]
+        for report in reports:
+            self.assertEqual(report["collection"], expected)
+        for scope in scopes:
+            if expected == "connection_unavailable":
+                # The checkout record is status's own subject, so an unreadable one stays an error there.
+                with self.assertRaises(settings.SettingsError) as caught:
+                    settings.status(scope)
+                self.assertEqual(str(caught.exception), reports[0]["checkout_connection"]["error"])
+                continue
+            checkout = settings.status(scope)
+            self.assertEqual(checkout["control_scope"], "checkout")
+            self.assertEqual({key: checkout[key] for key in COLLECTION}, {key: reports[0][key] for key in COLLECTION})
+        try:
+            connection = settings.export_destination(self.scope)
+        except settings.SettingsError:
+            connection = None
+        self.assertEqual(expected == "enabled", connection is not None)
+        self.session()
+        self.run_hook()
+        self.assertEqual(expected == "enabled", bool(FakeConnection.posts))
+        return reports[0]
+
+    def test_off_without_record_or_with_the_choice_off(self):
+        self.assertIsNone(self.assert_collection("off")["checkout_connection"])
+        self.enable(collection=False)
+        self.assertIsNone(self.assert_collection("off")["checkout_connection"])
+
+    def test_repository_not_selected(self):
+        self.enable(repositories=["other-repository"])
+        self.assertIsNone(self.assert_collection("repository_not_selected")["checkout_connection"])
+
+    def test_connection_unavailable_keeps_the_fixed_error_report(self):
+        self.enable()
+        self.checkout_path().chmod(0o644)
+        report = self.assert_collection("connection_unavailable")
+        self.assertEqual(report["checkout_connection"], dict(status="unavailable", error="unsafe_observability_storage"))
+
+    def test_connection_not_enabled_without_record_or_opt_in(self):
+        self.project()
+        report = self.assert_collection("connection_not_enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=False, desired_opt_in=False))
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        report = self.assert_collection("connection_not_enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=False))
+
+    def test_runtime_unavailable_without_current_qualified_scope(self):
+        self.enable()
+        broken = patch.object(startup, "acquire_project_entry", side_effect=startup.StartupError("qualification unavailable"))
+        with broken:
+            report = self.assert_collection("runtime_unavailable")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=True))
+        (self.scope.runtime.state_dir / "runtime.sqlite3").write_bytes(b"broken runtime database")
+        self.assert_collection("runtime_unavailable", self.scope.repository_root)
+
+    def test_enabled_and_operation_reports_use_the_same_computation(self):
+        self.enable(collection=False)
+        configured = settings.configure_project(self.scope, dict(expected_revision=1,
+            repository_ids=[self.scope.repository_id], desired_collection=True))
+        self.assertEqual(configured["collection"], "enabled")
+        report = self.assert_collection("enabled")
+        self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=True))
+        self.assertEqual(settings.disable_project(self.scope, dict(expected_revision=2))["collection"], "off")
+
+    def test_qualified_sources_follow_the_adapter(self):
+        for versions, sources in ((frozenset({"0.168.0", "0.167.0"}), ["codex 0.167.0", "codex 0.168.0"]),
+                                  (frozenset(), [])):
+            with self.subTest(versions=versions), patch.object(codex_usage, "QUALIFIED_VERSIONS", versions):
+                for report in (settings.project_status(self.scope), settings.status(self.scope)):
+                    self.assertEqual((report["native_collection_qualified"], report["collection_sources"]),
+                                     (bool(versions), sources))
+
+    def test_gates_stop_before_later_records(self):
+        loaded, acquired = [], []
+        original_load, original_acquire = settings._Store.load, startup.acquire_project_entry
+        def load(store):
+            loaded.append(store.name)
+            return original_load(store)
+        def acquire(*args, **kwargs):
+            acquired.append(True)
+            return original_acquire(*args, **kwargs)
+        checkout = state._scope_id(self.scope) + ".json"
+        def observe(*operations):
+            loaded.clear(), acquired.clear()
+            with patch.object(settings._Store, "load", load), patch.object(startup, "acquire_project_entry", acquire):
+                for operation in operations:
+                    operation()
+            return list(loaded), bool(acquired)
+        status, export = (lambda: settings.project_status(self.scope.repository_root),
+                          lambda: settings.export_destination(self.scope))
+        self.assertEqual(observe(status), ([], False))
+        self.enable(repositories=["other-repository"], opt_in=False)
+        names, runtime = observe(status)
+        self.assertEqual((checkout in names, runtime), (False, False))
+        self.assertNotIn(checkout, observe(export)[0])
+        settings.disable_project(self.scope, dict(expected_revision=1))
+        self.assertNotIn(checkout, observe(status)[0])
+        project = json.loads((self.scope.runtime.state_dir / "observability" /
+                              ("project-" + self.scope.project_id + ".json")).read_text())
+        settings.configure_project(self.scope, dict(expected_revision=project["revision"],
+            repository_ids=[self.scope.repository_id], desired_collection=True))
+        names, runtime = observe(status)
+        self.assertIn(checkout, names)
+        self.assertFalse(runtime)
+
+    def test_status_reads_no_credentials_network_or_creates_files(self):
+        self.enable()
+        def snapshot():
+            return {str(path): (path.lstat().st_mode, path.read_bytes() if path.is_file() else None)
+                    for root in (self.scope.runtime.state_dir, self.scope.repository_root, self.codex_home)
+                    for path in root.rglob("*")}
+        before = snapshot()
+        with ExitStack() as stack:
+            for target in ("runtime.langfuse.verify_project", "runtime.langfuse.synthetic_probe",
+                           "runtime.langfuse._Connection", "runtime.observability_credentials.load",
+                           "runtime.observability_credentials.check_available"):
+                stack.enter_context(patch(target, side_effect=AssertionError("external access")))
+            for scope in (self.scope, self.scope.repository_root):
+                self.assertEqual(settings.project_status(scope)["collection"], "enabled")
+                self.assertEqual(settings.status(scope)["collection"], "enabled")
+        self.assertEqual(snapshot(), before)
+
+    def test_unreadable_project_record_keeps_checkout_status(self):
+        self.enable()
+        expected = settings.status(self.scope)
+        project = self.scope.runtime.state_dir / "observability" / ("project-" + self.scope.project_id + ".json")
+        original = project.read_bytes()
+        for damage, code in ((lambda: project.chmod(0o644), "unsafe_observability_storage"),
+                             (lambda: project.write_text('{"version":1,"PRIVATE":1}'), "invalid_observability_configuration")):
+            project.write_bytes(original)
+            project.chmod(0o600)
+            damage()
+            with self.subTest(code=code):
+                for scope in (self.scope, self.scope.repository_root):
+                    report = settings.status(scope)
+                    self.assertEqual(report, dict(expected, collection="project_unavailable"))
+                    self.assertNotIn("PRIVATE", json.dumps(report))
+                    with self.assertRaises(settings.SettingsError) as caught:
+                        settings.project_status(scope)
+                    self.assertEqual(str(caught.exception), code)
+                with self.assertRaises(settings.SettingsError):
+                    settings.export_destination(self.scope)
+        self.session()
+        self.run_hook()
+        self.assertEqual(FakeConnection.posts, [])
+
+    def test_checkout_operation_reports_use_the_same_computation(self):
+        def same(report, expected):
+            self.assertEqual(report["collection"], expected)
+            current = settings.status(self.scope)
+            self.assertEqual({key: report[key] for key in COLLECTION}, {key: current[key] for key in COLLECTION})
+        self.project()
+        same(settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION,
+                                                 langfuse_project_id=PROJECT)), "connection_not_enabled")
+        with patch("runtime.langfuse.verify_project", return_value=None):
+            same(settings.enable(self.scope, dict(expected_revision=1)), "enabled")
+        with patch("runtime.langfuse.synthetic_probe", return_value=dict(verified=True)):
+            same(settings.probe(self.scope, dict(expected_revision=2)), "enabled")
+        same(settings.disable(self.scope, dict(expected_revision=2)), "connection_not_enabled")
+        same(settings.configure(self.scope, dict(expected_revision=3, destination=DESTINATION, langfuse_project_id=PROJECT,
+                                                 credential_source="os-store")), "connection_not_enabled")
+        with patch("runtime.observability_credentials.forget", return_value=None):
+            same(settings.forget_credentials(self.scope, dict(expected_revision=4)), "connection_not_enabled")
+        with patch("runtime.observability_credentials.check_available", return_value=None), \
+                patch("runtime.langfuse.verify_project", return_value=None), \
+                patch("runtime.observability_credentials.store", return_value=None):
+            same(settings.store_credentials(self.scope, dict(expected_revision=5),
+                                            lambda: ("pk-lf-synthetic", "sk-lf-synthetic")), "connection_not_enabled")
+        settings.disable_project(self.scope, dict(expected_revision=1))
+        same(settings.disable(self.scope, dict(expected_revision=6)), "off")
+
+    def test_checkout_status_reads_each_record_once(self):
+        loaded, acquired = [], []
+        original_load, original_acquire = settings._Store.load, startup.acquire_project_entry
+        def load(store):
+            loaded.append(store.name)
+            return original_load(store)
+        def acquire(*args, **kwargs):
+            acquired.append(True)
+            return original_acquire(*args, **kwargs)
+        checkout, project = state._scope_id(self.scope) + ".json", "project-" + self.scope.project_id + ".json"
+        def observe():
+            loaded.clear(), acquired.clear()
+            with patch.object(settings._Store, "load", load), patch.object(startup, "acquire_project_entry", acquire):
+                report = settings.status(self.scope.repository_root)
+            return report["collection"], sorted(loaded), bool(acquired)
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        self.assertEqual(observe(), ("off", [checkout], False))
+        self.project(collection=False)
+        self.assertEqual(observe(), ("off", sorted([checkout, project]), False))
+        settings.configure_project(self.scope, dict(expected_revision=1, repository_ids=[self.scope.repository_id],
+                                                    desired_collection=True))
+        self.assertEqual(observe(), ("connection_not_enabled", sorted([checkout, project]), False))
+
+
+
+class SettingsLimitTests(HookFixture):
+    """Deferred O2 and integration review findings: repository IDs, record sizes, lookups and a busy lock."""
+
+    def test_repository_ids_follow_the_canonical_record_rule(self):
+        other = "Repo One.v2 (main)"
+        report = settings.configure_project(self.scope, dict(expected_revision=0, desired_collection=True,
+                                                             repository_ids=[self.scope.repository_id, other]))
+        self.assertEqual(report["repository_ids"], sorted([self.scope.repository_id, other]))
+        self.assertEqual(settings.project_status(self.scope)["repository_ids"], report["repository_ids"])
+        for bad in ("", " ", "tab\there", "bell\x07", "x" * 129, 7):
+            with self.subTest(bad=bad), self.assertRaisesRegex(settings.SettingsError, r"\Ainvalid_observability_request\Z"):
+                settings.configure_project(self.scope, dict(expected_revision=1, desired_collection=True,
+                                                            repository_ids=[self.scope.repository_id, bad]))
+
+    def test_oversized_repository_list_is_refused_before_saving(self):
+        ids = [self.scope.repository_id] + ["r%03d" % index + "x" * 124 for index in range(63)]
+        with self.assertRaisesRegex(settings.SettingsError, r"\Aobservability_request_too_large\Z"):
+            settings.configure_project(self.scope, dict(expected_revision=0, repository_ids=ids, desired_collection=True))
+        self.assertEqual(list((self.scope.runtime.state_dir / "observability").glob("project-*.json")), [])
+
+    def test_upload_state_with_250_records_saves_and_loads(self):
+        from tests.test_observability_export import NOW, reconciled, usage
+        state_ = None
+        for revision in range(1, 251):
+            planned = export.plan_export(reconciled(usage(input=60 + revision), revision=revision),
+                                         export_state=state_, now_ns=NOW)
+            state_ = export.record_outcome(planned["state"], planned["record"]["export_id"], "accepted")
+        self.enable()
+        with settings.export_store(self.scope, self.task_ref, self.key, write=True, create=True) as owner:
+            self.assertIsNone(owner.load())
+            hook._save(owner, None, self.task_ref, self.key, state_, "accepted")
+        self.assertGreater(self.envelope_path().stat().st_size, 64 * 1024)
+        with settings.export_store(self.scope, self.task_ref, self.key) as owner:
+            self.assertEqual(export._state(owner.load()["export_state"]), state_)
+        status = hook.export_status(self.scope.repository_root, self.task_ref)["destinations"][0]
+        self.assertEqual(len(status["records"]), 250)
+        self.assertEqual((settings.MAX_EXPORT, settings.MAX_CONFIG), (1024 * 1024, 8 * 1024))
+
+    def counting(self):
+        calls, current = [], startup.acquire_project_entry
+        return calls, patch.object(startup, "acquire_project_entry", side_effect=lambda *args, **kwargs:
+                                   calls.append(1) or current(*args, **kwargs))
+
+    def test_enabled_hook_run_acquires_the_project_entry_once(self):
+        self.session()
+        self.enable()
+        calls, counted = self.counting()
+        with counted:
+            self.run_hook()
+        self.assertEqual(self.envelope()["last_result"]["code"], "accepted")
+        self.assertEqual(len(FakeConnection.posts), 1)
+        self.assertEqual(len(calls), 1)
+
+    def test_changed_scope_is_still_refused(self):
+        from dataclasses import replace
+        self.session()
+        self.enable()
+        changed = replace(self.scope, accepted_scope_digest="0" * 64)
+        with patch.object(startup, "_entry_scope", return_value=changed):
+            self.run_hook()
+        self.assertFalse(self.exports.exists())
+        self.assertEqual(FakeConnection.posts, [])
+
+    def test_settings_changes_still_refuse_a_changed_scope(self):
+        from dataclasses import replace
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        directory = self.scope.runtime.state_dir / "observability"
+        before = sorted((path.name, path.read_bytes()) for path in directory.iterdir())
+        changed = replace(self.scope, accepted_scope_digest="0" * 64)
+        with patch.object(startup, "_entry_scope", return_value=changed), \
+                patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
+            for name, operation in (("enable", lambda: settings.enable(self.scope, dict(expected_revision=1))),
+                                    ("configure_project", lambda: settings.configure_project(self.scope, dict(
+                                        expected_revision=0, repository_ids=[self.scope.repository_id],
+                                        desired_collection=True)))):
+                with self.subTest(name), self.assertRaisesRegex(settings.SettingsError, r"\Aobservability_scope_changed\Z"):
+                    operation()
+        self.assertEqual(sorted((path.name, path.read_bytes()) for path in directory.iterdir()), before)
+
+    def test_busy_upload_lock_records_nothing(self):
+        self.session()
+        self.enable()
+        self.run_hook()
+        before = self.envelope_path().read_bytes()
+        original, calls = settings.export_store, []
+
+        def busy_once(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise settings.SettingsError("observability_operation_busy")
+            return original(*args, **kwargs)
+
+        with patch.object(settings, "export_store", side_effect=busy_once):
+            self.run_hook()
+        self.assertEqual(self.envelope_path().read_bytes(), before)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(FakeConnection.posts), 1)
+
+    def test_thread_id_with_underscore_is_unresolved_before_any_read(self):
+        self.session()
+        self.enable()
+        self.task["session_id"] = "ses_opencode1"
+        self.task_ref = dict(self.task_ref, session_id="ses_opencode1")
+        with patch.object(codex_usage, "acquire_task_observations") as read, \
+                patch.object(codex_usage, "read_thread_usage") as thread:
+            self.run_hook()
+        read.assert_not_called()
+        thread.assert_not_called()
+        self.assertEqual(self.envelope()["last_result"]["code"], "participants_unresolved")
+        self.assertEqual(FakeConnection.posts, [])
 
 if __name__ == "__main__":
     unittest.main()

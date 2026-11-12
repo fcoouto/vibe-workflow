@@ -114,23 +114,8 @@ def _entry_budget_check(budget, *, allow_full_bytes=False):
 
 
 def _budgeted_source_read(path, budget):
-    if budget is None:
-        return path.read_bytes()
-    try:
-        _entry_budget_check(budget)
-        budget["paths"] += 1
-        _entry_budget_check(budget)
-        limit = min(1024 * 1024, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])
-        with path.open("rb") as stream:
-            raw = stream.read(limit + 1)
-        budget["bytes"] += len(raw)
-        if len(raw) > limit:
-            raise StartupError("Installed source exceeds observation limit")
-        _entry_budget_check(budget)
-        return raw
-    except (OSError, StartupError):
-        budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
-        raise
+    from runtime.source_snapshots import read_source
+    return read_source(path, budget)
 
 
 def read_git(root, *args, limit=1024 * 1024, discovery=False, timeout=5, with_stderr=False, deadline=None):

@@ -1,7 +1,6 @@
 """Exercise the protected evaluator and portable, retained project inputs."""
 
 import hashlib
-import json
 from pathlib import Path
 import re
 import shutil
@@ -10,7 +9,6 @@ import sys
 import tempfile
 import unittest
 
-from scripts.read_instructions import build_manifest
 from tests.fixture_package import copy_package
 from scripts.validate import validate
 
@@ -165,8 +163,11 @@ class HarnessEvaluationTests(unittest.TestCase):
     def test_package_validation_rejects_missing_harness_assets(self):
         package = self.root / "package"
         copy_package(PACKAGE, package, ".superpowers")
-        (package / "clients/instruction-map.json").write_text(json.dumps(build_manifest(package)))
+        # A valid package carries no instruction map; validation reads every instruction source directly.
+        (package / "clients/instruction-map.json").unlink(missing_ok=True)
+        self.assertFalse((package / "clients/instruction-map.json").exists())
         self.assertEqual(validate(package)["validation"], "passed")
+        self.assertFalse((package / "clients/instruction-map.json").exists(), "validation must not write a map")
         required = ["scripts/validate-harness.mjs", "assets/harness-evaluation/LICENSE",
                     "assets/harness-evaluation/cases.md", "assets/harness-evaluation/boundary/AGENTS.md",
                     "assets/harness-evaluation/boundary/access.mjs",

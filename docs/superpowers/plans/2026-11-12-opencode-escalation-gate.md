@@ -409,6 +409,13 @@ the same roster-vocabulary failure, so the baseline comparison is current; the
 failure remains unresolved and is not waived. Earlier live observations remain
 bound to `b8afed0`; no new live allocation is authorized.
 
+Overnight integration: PR #277 merged into `main` as `c4b2172e`. Integrate that
+current base in the task branch, retain its deliberate removal of
+`clients/instruction-map.json`, and use the current on-demand instruction reader;
+the historical map-generation steps above must not resurrect the retired cache.
+Gate runtime/tests remain those independently reviewed in `f1bcb6c`. Repeat
+committed-candidate checks and review affected integration before PR readiness.
+
 ---
 
 ## Not in this plan
