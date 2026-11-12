@@ -364,6 +364,11 @@ class Controller:
         for field in ('samples','net_native_saved','uncertainty','observed_at','valid_until'):
             integer(record[field])
         require(type(record['quality_passed']) is bool, 'invalid_qualification')
+        # F5F-1: the optional fields are bounded here too; this replacement is a non-growing write that ROUTING_RESERVE
+        # prepays, so no field may be unbounded.
+        require(type(record.get('native_calibrated', False)) is bool, 'invalid_qualification')
+        if 'native_allowance_pp' in record:
+            integer(record['native_allowance_pp'])
         require(record['observed_at'] <= self.clock() < record['valid_until'], 'qualification_stale')
         name(record['unit'])
         with self.ledger.transaction() as data:

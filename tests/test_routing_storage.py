@@ -421,5 +421,99 @@ class UnicodeBindingDispatchTests(Ledger):
         case.workflow.update(job_id, revision=2)  # the canonical job changed after preparation
         case.assertRefused('u2', 'binding_stale')
 
+
+class QualificationReserveTests(unittest.TestCase):
+    """F5F-1: `Controller.record_qualification` replaces a routing configuration's qualification in a NON-growing
+    write, so every field must be bounded at its entry point and the replacement must fit ROUTING_RESERVE."""
+
+    CHAR = '\U0001F600'
+
+    def setUp(self):
+        from runtime import usage_routing
+        from tests.test_smart_balance import KEYCHAIN_BINDING, POLICY
+        from tests.test_usage_routing import PROFILE
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.path = Path(self.temp.name) / 'private' / 'ledger'
+        self.ledger = budget.Ledger(self.path, budget.initialize(self.path))
+        self.addCleanup(self.ledger.close)
+        self.controller = usage_routing.Controller(self.ledger, 'scope', clock=lambda: 101)
+        self.class_name = self.CHAR * 256  # the largest class name `configure` accepts (`name`: 256 characters)
+        self.controller.configure(dict(version=2, expected_revision=0, expected_org_revision=0, binding=KEYCHAIN_BINDING,
+                                       policy=POLICY, profile=PROFILE, class_name=self.class_name, mode='smart'))
+        self.profile_digest = usage_routing.profile_digest(PROFILE)
+
+    def record(self, **updates):
+        value = dict(class_name=self.class_name, profile_digest=self.profile_digest, samples=budget.MAX_INTEGER,
+                     quality_passed=True, net_native_saved=budget.MAX_INTEGER, uncertainty=budget.MAX_INTEGER,
+                     unit=self.CHAR * 256, native_calibrated=True, native_allowance_pp=budget.MAX_INTEGER,
+                     observed_at=100, valid_until=budget.MAX_INTEGER)
+        value.update(updates)
+        return {key: item for key, item in value.items() if item is not ...}
+
+    def body(self):
+        with closing(sqlite3.connect(self.path)) as db:
+            return db.execute('SELECT body FROM ledger WHERE id=1').fetchone()[0]
+
+    def revision(self):
+        return self.ledger.snapshot()['routing']['scope']['qualification_revision']
+
+    def test_malformed_optional_fields_are_refused_without_any_write(self):
+        cases = dict(calibrated_text=dict(native_calibrated='x' * 100_000), calibrated_int=dict(native_calibrated=1),
+                     calibrated_none=dict(native_calibrated=None), allowance_text=dict(native_allowance_pp='x' * 100_000),
+                     allowance_bool=dict(native_allowance_pp=True), allowance_negative=dict(native_allowance_pp=-1),
+                     allowance_above=dict(native_allowance_pp=budget.MAX_INTEGER + 1),
+                     allowance_float=dict(native_allowance_pp=1.5), allowance_list=dict(native_allowance_pp=[1] * 1000))
+        for label, change in cases.items():
+            with self.subTest(label):
+                before, revision = self.body(), self.revision()
+                with self.assertRaises(budget.BudgetError):
+                    self.controller.record_qualification(self.record(**change))
+                self.assertEqual((self.body(), self.revision()), (before, revision))  # exact bytes, no authority change
+
+    def test_absent_and_boundary_values_stay_valid(self):
+        for change in (dict(native_calibrated=..., native_allowance_pp=...), dict(native_calibrated=False),
+                       dict(native_allowance_pp=0), dict(native_allowance_pp=budget.MAX_INTEGER)):
+            with self.subTest(change=sorted(change)):
+                revision = self.revision()
+                self.controller.record_qualification(self.record(**change))
+                self.assertEqual(self.revision(), revision + 1)
+                stored = self.ledger.snapshot()['routing']['scope']['qualification']
+                self.assertEqual(stored, self.record(**change))
+
+    def test_the_maximal_replacement_fits_three_quarters_of_its_reserve(self):
+        from runtime import usage_budget_storage as storage
+        before = len(self.body().encode())
+        self.controller.record_qualification(self.record())  # replaces `null`, bumps the revision
+        growth = len(self.body().encode()) - before
+        self.assertLessEqual(growth, storage.ROUTING_RESERVE * 3 // 4, growth)
+        self.assertEqual(self.ledger.snapshot()['routing']['scope']['qualification']['unit'], self.CHAR * 256)
+
+    def test_post_soft_qualification_is_bounded_and_admitted_work_still_settles(self):
+        """Scaled: SOFT_RECORD is lowered to body + R + 64 so growing writes are refused."""
+        from runtime import usage_budget_storage as storage
+        self.ledger.observe('org', 800, 100)
+        self.ledger.begin('org', 'task', 'run', 'packet', 50, 1, 101, dict(account='a', task='task', windows=[]))
+        self.ledger.dispatch('run', 'count', 1, 101)
+        data = self.ledger.snapshot()
+        soft = storage.encoded_size(data) + storage.remaining_growth(data) + 64
+        with mock.patch.object(budget, 'SOFT_RECORD', soft):
+            with self.assertRaisesRegex(budget.BudgetError, 'ledger_capacity_reached'):
+                self.ledger.begin('org', 'new', 'new', 'packet', 1, 1, 101, dict(account='a', task='new', windows=[]))
+            before = self.body()
+            with self.assertRaises(budget.BudgetError):  # a malformed replacement can no longer consume reserve
+                self.controller.record_qualification(self.record(native_allowance_pp='x' * 200_000))
+            self.assertEqual(self.body(), before)
+            self.controller.record_qualification(self.record())  # a valid, bounded replacement still commits
+            replaced = len(self.body().encode()) - len(before.encode())
+            self.assertLessEqual(replaced, storage.ROUTING_RESERVE)  # its growth stays inside the prepaid reserve
+            self.controller.record_qualification(self.record(native_allowance_pp=0))  # replacements do not accumulate
+            self.assertLessEqual(len(self.body().encode()) - len(before.encode()), storage.ROUTING_RESERVE)
+            self.ledger.complete('run', 'count', 40)  # admitted settlement still commits
+            self.ledger.close_run('run')
+            after = self.ledger.snapshot()
+            self.assertEqual(budget.Ledger._total(after, 'org'), 40)  # the actual charge only; nothing released early
+            self.assertLessEqual(len(self.body().encode()), soft)  # consumed reserve keeps the body inside the budget
+
 if __name__ == '__main__':
     unittest.main()
