@@ -22,13 +22,11 @@ an accepted Graphify setup: the extraction below rebuilds it.
    ownership. Confirm the synchronization target matches that designation; an
    unrelated merge target is not authority to switch it. Reuse existing
    synchronization authority; this procedure grants no new remote access.
-2. Check the primary checkout's branch, dirty state and writer ownership. Only
-   synchronize when safe, using a fast-forward-only operation to the intended
-   target. If already synchronized, verify that instead. Confirm the merged
-   commit is included in the local target's history and record its actual HEAD.
-   Dirty files, divergence, an occupied/wrong branch, unavailable checkout or
-   uncertain writer ownership leave maintenance incomplete. Never stash, reset,
-   force, switch another writer's branch or overwrite files to make it proceed.
+2. Complete delivery preparation's synchronization checks and retain its verified
+   upstream/merge inclusion and actual local HEAD. Any unresolved synchronization
+   condition leaves maintenance incomplete. Graph refresh additionally requires
+   clean source and verified writer/output ownership; it cannot repair failed
+   synchronization or conceal source changes.
 3. Verify the project's indexing exclusions and Git exclusion of `graphify-out/`
    are in place. Reuse them; do not silently widen indexing, repair configuration,
    install a missing tool or enable a deferred project as part of maintenance.

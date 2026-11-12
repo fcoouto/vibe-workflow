@@ -45,6 +45,8 @@ read-only reviews. `clients/delivery.md` owns the selectively loaded procedure:
 - Reuse a suitable task-owned worktree or create one through the native tool;
   use Git's native fallback only if no supported client tool exists. Bind a task
   branch there before edits. Never migrate another writer's unfinished work.
+  Report the worktree path/branch for local delivery and retain uncommitted
+  results without releasing them for client cleanup absent the user's decision.
 - Keep instructions and setup-record discovery available in task worktrees.
   Missing checkout-local enrollment does not require ordinary work to acquire
   runtime state. Never copy enrollment or claim it activates managed controls.
@@ -53,9 +55,15 @@ read-only reviews. `clients/delivery.md` owns the selectively loaded procedure:
   Do not switch/detach/rename the primary branch, or use rebase/bisect there.
 - Unexpected primary branch, detached HEAD, dirty files or uncertain ownership
   require preservation and a scoped report, never automatic repair. Primary
-  mutations wait; independent safe reads or isolated work may continue.
+  HEAD/index/source mutations and synchronization wait; independent safe reads
+  or isolated work may continue. Separately authorized ignored setup outputs
+  need verified disjoint paths/ownership, preserving HEAD/index/source bytes;
+  generated maintenance retains its stricter clean-source conditions.
 - Only explicit authorization for a particular operation supplies an exception;
   record exact scope and observed outcome without automatic restoration.
+  A direct, unambiguous user request naming the primary and operation suffices;
+  a conflicting destination or broad speed request does not. Carry a surviving
+  deviation and restoration decision in the existing handoff, not a new registry.
 
 ## Adoption and compatibility
 
@@ -67,6 +75,14 @@ readable for historical records and active pinned tasks, not a standing exceptio
 under the new policy. Do not silently rewrite records, overwrite user sections,
 change live checkouts, or invalidate active tasks. Unresolved conflicts block only
 dependent changes until the accepted update or a scoped exception resolves them.
+Defer incompatible deployment until affected writers stop; old-pinned tasks
+remain governed by their accepted package until an authorized transition and
+are not represented as new-policy compliant. Serialize conflicting new work.
+
+Tracked setup guidance/enrollment is integrated through the authorized project
+delivery path before claiming complete setup in the selected target checkout.
+Verify startup at that exact checkout. A keep-local preference grants no merge
+permission; preserve the task worktree and report target integration pending.
 
 Installing this source does not update every project or running client. Use
 existing authorized plugin/project update and recovery procedures; report pending

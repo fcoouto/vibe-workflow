@@ -64,19 +64,19 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "ac1f581a1075114d8be261f2c6ee0b6f2e95f261213380d72975e323bff4a951",
+      "sha256": "b9f9ee9a6f132c412f963530524918b3a3c1dfab3d1f6249ceaf34b007c251ec",
       "ranges": [
         [
           1,
-          32
+          28
         ],
         [
-          33,
-          76
+          29,
+          62
         ],
         [
-          77,
-          87
+          63,
+          91
         ]
       ]
     },
@@ -175,11 +175,11 @@
       ]
     },
     "clients/graphify-maintenance.md": {
-      "sha256": "dd75c9b4ff163961a42ccd4f5ecac118a8e7128d70120fa143cfc8ecf415331c",
+      "sha256": "3bcbb39504068c3577ccc8c776d396550de98f360603affbf0f02eb440df54c2",
       "ranges": [
         [
           1,
-          78
+          76
         ]
       ]
     },
@@ -493,7 +493,7 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "c52eb39c200fd08e1922bdb23bf55b5a7bb3eb4b025a62bb0b1a3fe3e536abe2",
+      "sha256": "4cfd331e0042ef909d5f6540828e7dda8413f18f499d3843a09b8d1ec0e5e520",
       "ranges": [
         [
           1,
@@ -701,18 +701,22 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "532270b14e480482e09649b57fcf05e7958c9eef08ff514ed175f0b46c9c4206",
+      "sha256": "82c1500976c13e41501b7e8dcb1a029d6abcf3fece2501962b7afe3436d9222a",
       "ranges": [
         [
           1,
-          29
+          25
         ],
         [
-          30,
-          109
+          26,
+          94
         ],
         [
-          110,
+          95,
+          206
+        ],
+        [
+          207,
           207
         ]
       ]
