@@ -22,7 +22,7 @@ Shape for the existing quality owner, adapted through [onboarding](../../skills/
 
 ## Dependencies and delivery
 
-[Applicable full/production audits, investigated advisories, known risks and available fixes. Explicit check commands and authorized delivery preferences; passing lint/build is not a clean dependency audit. Git hooks and branch/worktree restrictions are not defaults.]
+[Applicable full/production audits, investigated advisories, known risks and available fixes. Explicit check commands and authorized delivery preferences; passing lint/build is not a clean dependency audit. Shared checkout stability follows the installed Task Planning and delivery contracts; hooks and mechanical enforcement require separate authorization.]
 
 ## Harness and maintenance
 

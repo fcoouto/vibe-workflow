@@ -1,5 +1,37 @@
 # Policy source map
 
+## Universal primary-checkout stability — 12 November 2026
+
+The user explicitly selected this rule for every repository onboarded to the
+`vibe-workflow` plugin, existing and future, then authorized implementation after
+a fresh Fable 5.2 architecture review. It is a local plugin extension: upstream
+Toolkit's exclusion of branch/worktree requirements is not misrepresented as an
+upstream mandate. The [design](superpowers/specs/2026-11-12-primary-checkout-stability-design.md)
+and [implementation plan](superpowers/plans/2026-11-12-primary-checkout-stability.md)
+record the approved scope and verification.
+
+| Requirement / gap | Local owner and source |
+| --- | --- |
+| Stable primary branch and task worktrees for every onboarded repository; only explicit per-operation user exceptions | [Task Planning](../policies/02-task-planning.md#planning-and-verification); user decision, 12 November 2026. Supersedes the standing opt-out/branch-only routing described in the historical 2 and 9 November entries below. |
+| Load before checkout-affecting review work, not just edits; preserve selective loading | [Policy index](../policies/00-index.md), [Project Scope](../policies/01-project-scope.md#authority-and-activation), [startup](../clients/startup.md), [client index](../clients/index.md) and [resumption](../policies/07-context-and-handoff.md#handoff-and-resumption) route to planning/delivery. Independent architecture review identified the provider-specific/managed-only placement gap; coordinator identified the review-only trigger gap. |
+| Resolve effective target, primary identity, accepted branch designation, dirty state and ownership; compare symbolic HEAD before/after; preserve work on drift | [Delivery preparation](../clients/delivery.md#prepare-the-destination), reusing `runtime/onboarding.py`'s common-Git primary-worktree discovery and `runtime.startup.read_git`'s selector-free observations. Official [Git worktrees](https://git-scm.com/docs/git-worktree), [symbolic-ref](https://git-scm.com/docs/git-symbolic-ref) and [hooks](https://git-scm.com/docs/githooks) documentation consulted through Context7 on 12 November 2026. `post-checkout` is post-effect, not a veto. |
+| No GitHub/runtime prerequisite or new enforcement claim; retain publication and source boundaries | Existing [delivery](../clients/delivery.md) owner fronts bounded `GitHubDelivery` and `GitRemote`; their remote transports are not local checkout controllers. No runtime schema/adapter change, hook, permission change, watcher or service. |
+| Explicit adoption and safe rollout; historical opt-outs remain readable without granting new-policy exemptions | [Onboarding](../policies/10-project-onboarding.md#inspect-and-plan), [adoption/update](../clients/delivery.md#adopt-and-update-the-rule), [onboarding procedure](../skills/onboard-my-project/references/procedure.md), setup-record/shared-instruction/quality templates. Preserve active pins, historical data and later user edits; do not mutate a fleet or installed clients from a source task. |
+| Task-worktree instruction discovery without copied enrollment or mandatory per-worktree onboarding | [Startup](../clients/startup.md), delivery preparation and onboarding's policy-entry authoring/verification. Ordinary source work follows carried tracked instructions and package/setup pointers; exact managed admission remains separate. |
+| Reuse safe synchronization instead of a competing checkout rule | [Graphify maintenance](../clients/graphify-maintenance.md#synchronize-refresh-and-verify) loads delivery preparation and verifies its target matches the designated branch; repository development guidance keeps only local `main`/publication/generated-output specifics. |
+| Behavioral proof rather than wording assertions alone | `tests/test_checkout_stability_instructions.py` executes the documented read-only Git commands in disposable repositories. Its observation cases first failed against the old contract. The plan retains focused package tests, fresh-context scenario evaluation, the Markdown conflict audit and independent final review separately from unobserved client enforcement. |
+
+Independent Fable source/security review found a fixture assumption about Git's
+sanitized worktree metadata names, uncommitted local-result retention and an
+ambiguous onboarding write boundary. The fixture now reads the actual `.git`
+pointer; delivery preserves and reports local work and separates source mutations
+from explicitly authorized, disjoint ignored setup writes. Two fresh-context
+11-case evaluations drove clarifications to synchronization ownership, resume,
+designation, operation exceptions, active-pin transitions and target-guidance
+integration. The [plan's execution record](superpowers/plans/2026-11-12-primary-checkout-stability.md#execution-record)
+keeps source/test/worker evidence separate from unobserved native enforcement and
+pending deployment. No historical evidence or saved runtime schema was rewritten.
+
 ## Smart Routing per-harness publication and path qualification (F4) — 11 November 2026
 
 Slice F4 of the [Smart Routing redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#slice-f4-path-rules-and-generated-routes) replaces the per-model route manifest with model-free path rules, an operator-recorded path qualification and routes generated in memory. F4, including F4.5 and F4.6, is implemented and package-tested; its initial independent review's accepted findings are corrected, and acceptance is pending. Every real source gate listed under "Still open" below remains unqualified, so production defaults fail closed. No model, network, account or provider call is part of these contracts.
@@ -632,7 +664,7 @@ The local contract tables also retain their triggers, onboarding decisions, evid
 - Optional OpenRouter helpers have separate saved controls and software coverage; execution qualification remains separate. The local-model assessment workflow remains deferred.
 - The user clarified on 26 October 2026 that only the coordinator's model/reasoning must remain their choice. Delegated workers use task-based model/effort selection from each platform's current official guidance. The earlier interpretation requiring defaults for every worker was incorrect. Store guidance locally and refresh it instead of fetching it for every task; preserve active assignment evidence. This applies to repository development as well as the plugin's planned workflow.
 - Security review runs after implementation, includes relevant delivery working-tree layers and blocks completion/merge for confirmed high/critical findings. Medium/low findings require resolution or authorized disposition. A repository baseline is performed when requested; no separate planning-time security gate is added.
-- General review before every merge and any explicitly selected trusted repository-controlled gate remain requirements. Ordinary Toolkit setup excludes branch/worktree requirements and commit/push protections; those controls are not inherited installation permissions.
+- General review before every merge and any explicitly selected trusted repository-controlled gate remain requirements. Ordinary Toolkit setup excludes branch/worktree requirements and commit/push protections; those controls are not inherited installation permissions. The [12 November plugin extension](#universal-primary-checkout-stability--12-november-2026) adds checkout stability by explicit user decision, without granting enforcement or publication permission.
 - D5 local evidence can establish current task completion and local merge evidence only. Native observation establishes execution provenance, not review quality; coordinator assessment remains necessary. Local readiness does not establish D7 repository enforcement or grant merge authority.
 - D6 targets native execution.
 - Behavioral qualification and native usage reporting are selected D9 subdeliverables, not ordinary onboarding requirements; real merge assurance remains D7 when selected. D6 owns worker controls. Evidence may be reused across them without duplicating ownership or claiming qualification from package checks.
@@ -649,6 +681,11 @@ Ruflo revision `310d78c32f28cf2c02ff9e54ffd83198485c6535` provides implementatio
 The installed Local Model Delegation `local-delegation/references/measurements.md` is a possible native-only record-format reference, not a required plugin or a qualified collector. Mixed worker bindings and actual source collection need separate D9b qualification.
 
 ## Task delivery lifecycle — 2 November 2026
+
+Historical boundary: the defaults/opt-outs described here remain provenance and
+backward-compatible library behavior. Current adoption follows the [12 November
+checkout-stability extension](#universal-primary-checkout-stability--12-november-2026);
+it does not silently rewrite this evidence or active-task pins.
 
 The [delivery lifecycle design](superpowers/specs/2026-11-02-delivery-lifecycle-design.md) records the user's approved lifecycle direction: onboarding-selected merge policy (manual by default), explicit per-task overrides, default separate worktrees, publication and manual-merge reconciliation, remote-branch cleanup, and client-owned local retention. These remain design work, not activated runtime contracts. They extend existing D3/D4 configuration, D5/D6 task/evidence ownership, D7 delivery observation, and client adapters rather than adding another registry or cleanup service. Toolkit remains the authoring authority; branch/worktree and publication defaults are user extensions.
 
@@ -863,6 +900,11 @@ A subsequent instruction-only trial still omitted host-skill text despite receiv
 The user decided that a thread is `DONE` only after every PR it opened or took over is observed merged on the remote, with an explicit no-PR decision as the exemption. The [naming contract](../clients/workstreams-naming.md#status-and-accepted-progress) owns the rule once; the [title procedure](../clients/workstreams-titles.md#record-status-and-accepted-progress) applies it to direct and runtime-bound threads, [completion evidence](../clients/evidence-completion.md) and [delivery completion](../clients/delivery.md#completion-and-retention) point to it and state the runtime boundary. Threads whose recorded scope excludes publication need no extra step. This supersedes the earlier statement in the [delivery design](superpowers/specs/2026-11-02-delivery-lifecycle-design.md) that work with no required publication reaches `DONE` through its ordinary gate. Runtime verification still enforces only required publications. As a deliberate carve-out, kept so the existing optional-PR completion test remains valid, a PR the plan marks optional under the user's recorded scope decision is exempt; marking a PR optional after opening it without that decision is not. Other opened PRs are withheld by the coordinator, not by runtime code. Package validation does not observe client behavior. [Context and Handoff](../policies/07-context-and-handoff.md) routes sessions without active naming to the gate; this adds no completion requirement.
 
 ## Edit destination and direct merges · 9 November 2026
+
+Historical boundary: the branch-only and unselected-destination behavior below
+was superseded for current onboarded projects by the [12 November contract](#universal-primary-checkout-stability--12-november-2026).
+The incident, earlier review and instruction-only enforcement limits remain valid
+historical evidence.
 
 On 9 November 2026 an agent committed a setup-record update (`75c90b6`) in the primary checkout on `main` and pushed it to `origin/main`, with no task branch, PR or review. Nothing loaded at that point required a separate checkout: the worktree default lived only in [delivery](../clients/delivery.md#prepare-the-destination), loaded for delivery operations, and `AGENTS.md` described publication only at completion. The user asked for policy improvements, excluding onboarding, and decided that sessions keep starting in the primary checkout.
 

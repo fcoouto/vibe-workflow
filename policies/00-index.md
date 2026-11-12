@@ -20,7 +20,7 @@ planning, verification and applicable review requirements.
 | Contract | Load when |
 | --- | --- |
 | [Project Scope](01-project-scope.md) | During onboarding or updates; at task startup or resume; after changes to repository/client scope, instructions, permissions or accepted policy. |
-| [Task Planning](02-task-planning.md) | Before implementation; when resuming work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
+| [Task Planning](02-task-planning.md) | At task entry or resume; before implementation or any checkout-affecting operation, including review-only work; after material changes to the goal, scope, constraints, risk or acceptance criteria. |
 | [Agent Delegation](03-agent-delegation.md) | When considering or dispatching a worker; after failed attempts, stalled repair/validation progress, or scope/capacity changes affecting delegated work. |
 | [Security Review](04-security-review.md) | After implementing a deliverable, before completion or merge; after changes affecting review coverage or evidence. |
 | [Tests and Builds](05-tests-and-builds.md) | When selecting checks; before accepting completion or merge; after changes affecting evidence. |

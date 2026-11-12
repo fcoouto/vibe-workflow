@@ -6,6 +6,12 @@
 
 Canonical adoption records an explicit version-1 delivery policy: manual merge and separate worktrees are defaults, with preserved opt-outs, task overrides, exact targets/methods and separate authorization references. Policy participates in accepted identity and existing D4 recovery. Historical records retain their meaning. References bind decisions; they do not authenticate effects.
 
+This describes the version-1 library and its historical compatibility tests, not
+a current standing exception. The 12 November 2026 [checkout-stability contract](../clients/delivery.md#adopt-and-update-the-rule)
+applies to every onboarded repository. It requires explicit reconciliation of old
+branch-only choices before new-policy work; old records and active pins are not
+silently rewritten. No runtime schema or enforcement change is implied.
+
 Managed task artifacts retain complete publication scope. Accepted extensions preserve existing obligations, record previous-plan dependencies and atomically revise accepted milestones before weighted progress. A completed task reopens to review; explicit pauses, blockers and waits remain effective.
 
 Workspace binding independently checks native attachment and physical Git identity, including checkout replacement. Exact replay preserves its binding. It creates or deletes no checkout. Production native creation/admission is not supplied by this library.
@@ -64,7 +70,7 @@ An earlier onboarding run on the older base reproduced the same 4 failures and 2
 
 | Task | Loaded contract and observed boundary |
 | --- | --- |
-| Adopt policy or preserve opt-out | Policy 10 and onboarding procedure; strict policy/D4 fixtures preserve explicit choices and recovery. No runtime activation occurred. |
+| Adopt policy or preserve historical opt-out | Policy 10 and onboarding procedure; strict policy/D4 fixtures preserve historical choices and recovery. Current adoption additionally follows the checkout-stability reconciliation above. No runtime activation occurred. |
 | Override task merge mode | Policy 02 and delivery plan; accepted decision changes effective policy, not target authority. |
 | Inspect status/pending | Delivery client contract and public read-only controls; no provider, mutation or checkout scan. |
 | Extend accepted scope | Delivery plan revision; exact previous plan and accepted decision, preserved obligations, revised weighted milestones. |

@@ -64,15 +64,19 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "8d0cba01afed241802d1850d0b87d9f2908fe9361f9b873f5739026a25b0c4e3",
+      "sha256": "035b7fa36b70c24db085a1d2025a59d36b99e8ac35e8067c8b5b735f53395b88",
       "ranges": [
         [
           1,
-          44
+          28
         ],
         [
-          45,
-          63
+          29,
+          64
+        ],
+        [
+          65,
+          97
         ]
       ]
     },
@@ -171,11 +175,11 @@
       ]
     },
     "clients/graphify-maintenance.md": {
-      "sha256": "c2bb9405a62ecb7dd9e22292c1d3ac88f35eb90e3a94471e3573cb441ae50ceb",
+      "sha256": "3bcbb39504068c3577ccc8c776d396550de98f360603affbf0f02eb440df54c2",
       "ranges": [
         [
           1,
-          77
+          76
         ]
       ]
     },
@@ -207,7 +211,7 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "b2782b65e0787938e8e6217f3f5a214e7e2749d50a33aea76f34d49b9b07304d",
+      "sha256": "69bcb727a80279cf0ac5c8ba327f86a84b309681b4dae1c45bace723fe45f3fc",
       "ranges": [
         [
           1,
@@ -304,15 +308,15 @@
       ]
     },
     "clients/startup.md": {
-      "sha256": "4d5678b2d3c1c3ce354a8da36c25db337fbd6b427f011d5e168086b53e2a338d",
+      "sha256": "1f87608a37e12094e10eaa204b535f4cc329c044bb726990374f471264b0aab4",
       "ranges": [
         [
           1,
-          40
+          38
         ],
         [
-          41,
-          41
+          39,
+          43
         ]
       ]
     },
@@ -414,7 +418,7 @@
       ]
     },
     "policies/00-index.md": {
-      "sha256": "99b6b13bff913354ed60a977606ba7d834a2962429f3ed57e8c57e8c2f50395f",
+      "sha256": "2bd4f3f96a096d9db2f635305968c00cd8459ef5b7a614378d8538d823252c49",
       "ranges": [
         [
           1,
@@ -423,16 +427,16 @@
       ]
     },
     "policies/01-project-scope.md": {
-      "sha256": "17001d4aa5a86940e593f50a9e0972fadb36b88b9a37450a255f79d81ef8465c",
+      "sha256": "c7e069508bdb515935fbe5f92b5ea34f1aade354098f0c18bfb8fbb7b67d7144",
       "ranges": [
         [
           1,
-          44
+          45
         ]
       ]
     },
     "policies/02-task-planning.md": {
-      "sha256": "2b0ad5c74674dd47dafaa378de02f549f80376012eb9680ab6cac84e0506dfe3",
+      "sha256": "f7855d8a1ea050a8e691314095ab654c8594a95cb661e6e145a16817e6da4e7d",
       "ranges": [
         [
           1,
@@ -489,7 +493,7 @@
       ]
     },
     "policies/07-context-and-handoff.md": {
-      "sha256": "07d8e1ad4269bdfd5769de06189fb47c868989ab1b2e3338d04dde1bb9fd909d",
+      "sha256": "4cfd331e0042ef909d5f6540828e7dda8413f18f499d3843a09b8d1ec0e5e520",
       "ranges": [
         [
           1,
@@ -498,11 +502,11 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "fe74e9967b3ca00b0df4e90ac682f377272c9ad55450909ac23ce54fc1c4b08c",
+      "sha256": "397912f3871496edd63964beb5be58205ae1709a98234de5d272880b924fc8a5",
       "ranges": [
         [
           1,
-          55
+          57
         ]
       ]
     },
@@ -516,7 +520,7 @@
       ]
     },
     "policies/10-project-onboarding.md": {
-      "sha256": "db4be84aa0c27702592670b463807f9727ee92502e113045decd5a6ccc6d33b4",
+      "sha256": "6f687399aafb2a6e8e40c007753be3ff7aeb99dd699bf03aae285d40fb068870",
       "ranges": [
         [
           1,
@@ -524,7 +528,7 @@
         ],
         [
           52,
-          69
+          71
         ]
       ]
     },
@@ -697,19 +701,23 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "d3308a10bc3a42372e04a4e2e1aabdbbd18a40b903ab9c1ec1bd615af5942e17",
+      "sha256": "283eb025036b2655c3bd29f2e7722b961398c4491f446e702c61643ac56b0d33",
       "ranges": [
         [
           1,
-          33
+          25
         ],
         [
-          34,
-          116
+          26,
+          94
         ],
         [
-          117,
-          193
+          95,
+          206
+        ],
+        [
+          207,
+          207
         ]
       ]
     },
@@ -937,7 +945,7 @@
       ]
     },
     "templates/project/quality.md": {
-      "sha256": "737549022eb172315cf18e282118849f31a3bef656a45f9eec97f49120b759c7",
+      "sha256": "2ab1b0095843c79f53cc7a327e20e00344bbc9b1c59355f7ff282388382d9602",
       "ranges": [
         [
           1,
@@ -946,7 +954,7 @@
       ]
     },
     "templates/project/shared-instructions.md": {
-      "sha256": "1498680bd02d8671e655a3677d0828295a3fd99be62cbfb93fd6f84d2122cf7e",
+      "sha256": "ea2ecb8370804386130f37341b4380f06ac808d9d44ed90fa475e1f6e8ab0805",
       "ranges": [
         [
           1,
@@ -973,11 +981,11 @@
       ]
     },
     "templates/setup-record.md": {
-      "sha256": "36a24f29ef3ad86885632f3992733888ee1b3e8a6a5030504f0678bdf06c6849",
+      "sha256": "d70e0c22b220135dc4c80daf914c7c3e389cc278c8d5e91ca8411f5d97aae326",
       "ranges": [
         [
           1,
-          52
+          53
         ]
       ]
     },
