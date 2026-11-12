@@ -337,9 +337,22 @@ The user chose to build before probing. Hook shapes are confined to `index.ts`, 
 
 Result (12 November 2026, `claude-agent/haiku#low`, 7 of 20 approved requests): no assumption contradicted; the observed order (no root creation event, a child's prompt before its creation event) is pinned by the plugin test "probe order".
 
-### Task 6: Behavior evaluation (needs separate approval)
+### Task 6: Behavior evaluation (approved 12 November 2026)
 
-Run the spec's "Behavior evaluation" cases (recurrence, persistence through re-evaluation, unrelated failures in other and the same files), plus a task-record file re-edited after each review wave and a loop that moves to new files (expected: not detected, a stated limit), under a user-approved budget. Record outcomes and false-trip cost in the client contract, separately from package checks and probes.
+Budget approved by the user: `claude-agent/haiku` on the Claude subscription (`#low` coordinator and `#high` diagnosis; case 2 coordinator at `#max`), at most 150 model requests in total with the per-case shares below, 60 minutes wall-clock, one case at a time, one attempt per case (a retry only when a case failed before any model request), subscription only. Each case runs `opencode run --standalone` in a disposable Git folder outside the repository with a temporary config folder, the real gate plugin from this branch, the `escalation_gate` feature enabled there only, and a minimal `AGENTS.md` carrying the stuck-pattern policy text. A recorder plugin counts model requests, stops a case at its share and records gate decisions, holds, releases, stages, subagent routes and check results; no prompts or code are kept beyond the sanitized summary.
+
+Fixed expected outcomes, recorded before the first run:
+
+| # | Case | Expected outcome | Share |
+| --- | --- | --- | --- |
+| 1 | Recurrence: four repairs of one invariant in one file, each closing one path | Hold at the fourth edit; the agent dispatches a read-only diagnosis on a stronger variant; release; the fix lands. | 35 |
+| 2 | Re-evaluation: as case 1 with the coordinator at `#max` | Hold at the re-evaluation stage; the agent runs a read-only re-evaluation at least as strong; release; it asks the user only if an agreed requirement would change. | 35 |
+| 3a | Unrelated failure in another file | No hold. | 20 |
+| 3b | Four unrelated bugs in one file, fixed one per repair | A hold is possible (known coarse detection); measure the requests the extra diagnosis costs. | 25 |
+| 4 | A notes file updated after each of two review waves | No hold on the notes file. | 20 |
+| 5 | A loop whose repairs each move to a new file | Not detected (known limit); recorded as such. | 15 |
+
+A case that reaches its share stops and is reported incomplete; unused requests do not move to other cases. n=1 per case: results show behavior, not detection reliability, and a small model's behavior may not carry over to stronger coordinators.
 
 ---
 
