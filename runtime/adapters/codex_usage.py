@@ -46,7 +46,8 @@ token rows are compared on the kept numbers. Directories on the path must belong
 be writable by others; the thread file must be a regular, unlinked file owned by the current user and not
 writable by group or others. The sessions, year, month and day folders are opened one level at a time through
 held descriptors without following links, and files are opened under the held day folder, so no checked path is
-reopened by name. Thread IDs are letters, digits and ``-`` only, because ``_`` separates a thread ID from a page
+reopened by name. A missing folder is skipped, but a folder that exists and cannot be opened (for example mode
+000 on the home, sessions, year, month or day folder) is ``file_unreadable``, not ``thread_file_not_found``. Thread IDs are letters, digits and ``-`` only, because ``_`` separates a thread ID from a page
 ID in file names. Gaps are raised without exception context, so no path or line text is reachable from them.
 """
 
@@ -272,7 +273,7 @@ def _find(thread_id, cutoff_at, deadline, stack):
     return [(path, page, name, folder) for _, page, name, folder, path in sorted(found, key=lambda item: item[0])]
 
 
-def _scan(name, reading, deadline, *, folder=None):
+def _scan(name, reading, deadline, *, folder):
     """Stream one file once; pass only marker lines to ``reading``. True when a row after the cutoff stopped it.
 
     ``name`` is opened under the held ``folder`` descriptor without following a link.

@@ -518,9 +518,10 @@ class CodexUsageTests(unittest.TestCase):
         gaps = [raised.exception]
         bad_json = self.write([meta(), b'{"type": "turn_context", "x": "' + SECRET.encode()])
         reading = codex_usage._Reading(THREAD, START, CUTOFF, QUALIFIED)
-        unreadable = self.root / "absent.jsonl"
-        for call in (lambda: codex_usage._scan(bad_json, reading, time.monotonic() + 30),
-                     lambda: codex_usage._scan(unreadable, reading, time.monotonic() + 30),
+        held = os.open(bad_json.parent, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, held)
+        for call in (lambda: codex_usage._scan(bad_json.name, reading, time.monotonic() + 30, folder=held),
+                     lambda: codex_usage._scan("absent.jsonl", reading, time.monotonic() + 30, folder=held),
                      lambda: codex_usage._time(SECRET)):
             with self.assertRaises(codex_usage.UsageGap) as raised:
                 call()
@@ -530,6 +531,25 @@ class CodexUsageTests(unittest.TestCase):
         for gap in gaps:
             self.assertIsNone(gap.__context__)
             self.assertIsNone(gap.__cause__)
+
+    def test_scan_requires_a_held_folder(self):
+        path = self.standard()
+        reading = codex_usage._Reading(THREAD, START, CUTOFF, QUALIFIED)
+        with self.assertRaises(TypeError):
+            codex_usage._scan(path, reading, time.monotonic() + 30)
+        with self.assertRaises(TypeError):
+            codex_usage._scan(path.name, reading, time.monotonic() + 30, path.parent)
+
+    def test_unreadable_folders_on_the_lookup_path_are_unreadable(self):
+        self.standard()
+        sessions = self.sessions
+        for folder in (self.home, sessions, sessions / "2026", sessions / "2026" / "11"):
+            with self.subTest(folder=folder.name):
+                os.chmod(folder, 0o000)
+                try:
+                    self.assertGap(self.read(), "file_unreadable")
+                finally:
+                    os.chmod(folder, 0o700)
 
     def test_lookup_ambiguity_is_a_typed_gap(self):
         self.standard()
