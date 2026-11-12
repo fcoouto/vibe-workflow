@@ -8,7 +8,9 @@ mismatched or concurrently held record. A record is never replaced or deleted by
 same ledger is refused while it exists, so no approval can silently erase a whole-run allowance. Completed and
 aborted records stay retained; no archive or reset procedure exists. The record and its lock are a pure function of
 the canonical ledger path (`path_for`): no flag, argument, HOME or working directory selects another, so every
-supported caller of one ledger reaches one record and one lock. This is a harness rule, not OS enforcement: the local
+supported caller of one ledger reaches one record and one lock. Its spelling must be the filesystem's exact entry
+spelling: a case or Unicode alias is refused, never folded. A record retained under a spelling that is no longer exact
+stays untouched and that spelling stays refused; no migration or historical reconciliation is claimed. This is a harness rule, not OS enforcement: the local
 owner can still move or edit the file, the ledger or the code by hand. Writes are atomic (temporary file, fsync,
 `os.replace`) and the caller saves before every send; a failed save fails closed.
 """
@@ -18,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 
 from tests.qualification import replay_export
 from tests.qualification.safety import Refused
@@ -30,9 +33,28 @@ FIELDS = {"version", "digest", "project", "ledger", "pins", "coverage", "acknowl
 ANCHOR = Path("vibe-workflow-qualification/ranked-canary")
 
 
+def _exact(found):
+    """Every component of `found`, parents and final name, must be an existing directory entry spelled exactly as
+    its parent directory lists it: a case or Unicode-normalization alias of the same file (which `resolve` keeps as
+    given) would otherwise derive a second record and lock. Metadata only; nothing is opened, renamed or folded."""
+    current = Path(found.anchor)
+    for part in found.parts[1:]:
+        try:
+            names = os.listdir(current)
+        except OSError:
+            raise Refused("the routing ledger path cannot be verified (a directory is not listable)") from None
+        if part not in names:
+            if os.path.lexists(current / part):
+                raise Refused("the routing ledger path must use the exact filesystem spelling of every component")
+            raise Refused("the routing ledger path does not exist")
+        current = current / part
+
+
 def canonical(ledger):
     """The ledger path with its parent directories resolved: absolute, never itself a symlink, deep enough for the
-    anchor. `Refused` otherwise; nothing is opened or created."""
+    anchor, an existing regular file whose every component has its exact directory-entry spelling (`_exact`).
+    `Refused` otherwise; nothing is opened or created. The returned path, and so every retained key, is the accepted
+    spelling unchanged: a non-exact spelling is refused, never normalized into another record."""
     ledger = Path(ledger)
     if not ledger.is_absolute():
         raise Refused("the routing ledger path must be absolute")
@@ -41,6 +63,9 @@ def canonical(ledger):
     found = ledger.parent.resolve() / ledger.name
     if len(found.parents) < 4:
         raise Refused("the routing ledger path is too shallow for its run record anchor")
+    _exact(found)
+    if not stat.S_ISREG(os.lstat(found).st_mode):
+        raise Refused("the routing ledger must be a regular file")
     return found
 
 

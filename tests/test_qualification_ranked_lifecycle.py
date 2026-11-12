@@ -26,7 +26,7 @@ run = types.SimpleNamespace(canary_state=dict(settings=Path(a["settings"]), ledg
                                               approval={}), canary_project=a["project"], results={},
                             routing=types.SimpleNamespace(harnesses=a["harnesses"]))
 try:
-    c = canary_ranked.setup(run, approved=a["digest"])
+    c = canary_ranked.setup(run, approved=a["digest"], acknowledge=a.get("acknowledge"))
 except Exception as error:
     print(json.dumps(dict(refused=str(error))))
     raise SystemExit(0)
@@ -143,21 +143,29 @@ class LifecycleTests(RankedStores):
         self.assertEqual(self.records(), [self.record_path()])
 
     def test_the_production_ledger_maps_to_the_present_default_record_directory(self):
-        """Pins the `parents[2]` depth to the routing command's actual default ledger layout (a private HOME)."""
+        """Pins the `parents[2]` depth and the full legacy record filename to the routing command's actual default
+        ledger layout, on a real disposable ledger under a private HOME (and a symlink alias of that HOME)."""
+        import hashlib
+        import sqlite3
+        ledger = self.home / ".local/state/vibe-workflow/usage/organizations.sqlite3"
+        ledger.parent.mkdir(parents=True, mode=0o700)
+        sqlite3.connect(ledger).close()  # a real, disposable ledger file: the spelling check needs an existing entry
         alias = self.tmp / "home-alias"
         alias.symlink_to(self.home)
         # The ledger is taken before `tests` is imported: importing it redirects HOME for the suite's own safety.
         script = ("import sys; sys.path.insert(0, %r); from scripts import routing; l = routing.default_ledger(); "
                   "from tests.qualification import canary_ranked_state as s; "
-                  "print(s.path_for(l.parent.resolve() / l.name).parent)") % str(ROOT)
+                  "print(s.path_for(l.parent.resolve() / l.name))") % str(ROOT)
         found = []
         for home in (self.home, alias):
             done = subprocess.run([sys.executable, "-I", "-B", "-c", script], capture_output=True, text=True,
                                   timeout=60, env=dict(os.environ, HOME=str(home)), cwd=str(self.tmp))
             self.assertEqual(done.returncode, 0, done.stderr)
             found.append(done.stdout.strip())
-        expected = str(self.home.resolve() / ".local/state/vibe-workflow-qualification/ranked-canary")
-        self.assertEqual(found, [expected, expected])
+        exact = self.home.resolve() / ".local/state/vibe-workflow/usage/organizations.sqlite3"
+        expected = str(self.home.resolve() / ".local/state/vibe-workflow-qualification/ranked-canary" / (
+            "run-%s.json" % hashlib.sha256(str(exact).encode()).hexdigest()[:16]))
+        self.assertEqual(found, [expected, expected])  # the old full filename: no key or anchor change
         self.assertFalse((self.home / ".local/state/vibe-workflow-qualification").exists())  # pure: nothing created
 
     def test_a_new_process_resumes_after_seed_required_with_the_same_allowance_and_deadline(self):
@@ -227,6 +235,170 @@ class LifecycleTests(RankedStores):
                 ranked.before_dispatch(dict(mode="ranked", billing_class="included_subscription",
                                             route=next(iter(ranked.pins["routes"]))))
         self.assertEqual(caught.exception.reason, "state_unsaved")
+
+
+def spellings(path):
+    """Alternative spellings of `path`'s parent component and final name: case and NFD (decomposed) forms."""
+    import unicodedata
+    parent, leaf = path.parent, path.name
+    return dict(parent_case=parent.parent / parent.name.swapcase() / leaf, leaf_case=parent / leaf.swapcase(),
+                parent_nfd=parent.parent / unicodedata.normalize("NFD", parent.name) / leaf,
+                leaf_nfd=parent / unicodedata.normalize("NFD", leaf))
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class SpellingTests(RankedStores):
+    """N2-R1: a case or Unicode alias of the ledger's directory entries never reaches a second record or lock."""
+
+    resume, record_path, records = LifecycleTests.resume, LifecycleTests.record_path, LifecycleTests.records
+
+    def alias_digest(self, run, alias):
+        """The fresh approval an operator could compute for the alias spelling (setup's own preflight inputs)."""
+        record = dict(canary_ranked.preflight(self.settings, run.routing.harnesses, now(), 8),
+                      project=str(run.canary_project), ledger=str(alias.parent.resolve() / alias.name))
+        return canary_ranked_state.digest(record)
+
+    def assert_aliases_refused(self, ledger, aliases, ranked, run):
+        tried = 0
+        before = self.record_path().read_bytes()
+        for name, alias in aliases.items():
+            if str(alias) == str(ledger) or not (alias.exists() and os.path.samefile(alias, ledger)):
+                continue  # this spelling is not the same file here: not an alias on this volume
+            tried += 1
+            for digest in (ranked.record["digest"], self.alias_digest(run, alias)):
+                with self.subTest(alias=name):
+                    answer = self.resume(digest, ledger=alias, acknowledge=8)
+                    self.assertIn("exact filesystem spelling", answer.get("refused", ""), answer)
+        self.assertEqual(self.record_path().read_bytes(), before)
+        self.assertEqual(self.records(), [self.record_path()])
+        return tried
+
+    def test_case_aliases_refuse_while_the_lock_is_held_and_after_release(self):
+        run, _ = self.make_run()
+        ranked = self.controller(run)
+        aliases = {key: value for key, value in spellings(self.state["ledger"]).items() if key.endswith("case")}
+        held = self.assert_aliases_refused(self.state["ledger"], aliases, ranked, run)
+        canary_ranked.close(ranked)
+        released = self.assert_aliases_refused(self.state["ledger"], aliases, ranked, run)
+        if not held:
+            self.skipTest("this volume is case-sensitive: case spellings are distinct files, not aliases")
+        self.assertEqual((held, released), (2, 2))
+        resumed = self.resume(ranked.record["digest"])  # the exact spelling still resumes the one record
+        self.assertEqual((resumed["path"], resumed["completed"]), (str(self.record_path()), 0))
+
+    def test_unicode_aliases_refuse_and_the_exact_unicode_spelling_keeps_its_key(self):
+        """Parent AND leaf NFD aliases of a real ledger whose directory and file names are exact NFC, through actual
+        setup in new processes, while the lock is held and after release, with the old and a fresh alias digest."""
+        import hashlib
+        import unicodedata
+        root = self.private(self.tmp / unicodedata.normalize("NFC", "ledger-caf\u00e9"))
+        self.build(root)
+        directory = self.state["ledger"].parent
+        named = directory.parent / unicodedata.normalize("NFC", "can\u00e1ry")
+        directory.rename(named)  # an exact NFC component on the ledger's own path
+        leaf = unicodedata.normalize("NFC", "l\u00e9dger.sqlite3")
+        for suffix in ("", "-wal", "-shm", "-journal"):  # the ledger and any sidecar keep matching names
+            if (named / ("ledger.sqlite3" + suffix)).exists():
+                (named / ("ledger.sqlite3" + suffix)).rename(named / (leaf + suffix))
+        self.state = dict(self.state, dir=named, settings=named / "settings.json", ledger=named / leaf)
+        self.settings = self.state["settings"]
+        self.routing = self.served_routing()
+        run, _ = self.make_run(root)
+        ranked = self.controller(run)
+        exact = self.state["ledger"]
+        self.assertEqual(self.record_path().name,
+                         "run-%s.json" % hashlib.sha256(str(exact).encode()).hexdigest()[:16])  # NFC key, as given
+        aliases = {key: value for key, value in spellings(exact).items() if key.endswith("nfd")}
+        self.assertEqual(set(aliases), {"parent_nfd", "leaf_nfd"})
+        held = self.assert_aliases_refused(exact, aliases, ranked, run)
+        canary_ranked.close(ranked)
+        released = self.assert_aliases_refused(exact, aliases, ranked, run)
+        before = self.record_path().read_bytes()
+        resumed = self.resume(ranked.record["digest"])  # the exact NFC input is still accepted, under its old key
+        self.assertEqual((resumed["path"], resumed["completed"]), (str(self.record_path()), 0))
+        self.assertNotIn("refused", resumed)
+        self.assertEqual(self.record_path().read_bytes(), before)
+        self.assertEqual(self.records(), [self.record_path()])
+        if not held:
+            self.skipTest("this volume keeps NFC and NFD names distinct: no Unicode alias exists here")
+        self.assertEqual((held, released), (2, 2))
+
+    def test_a_leaf_unicode_alias_is_refused_by_the_anchor(self):
+        import unicodedata
+        folder = self.private(self.tmp / "deep" / "a" / "b")
+        exact = folder / unicodedata.normalize("NFC", "l\u00e9dger.sqlite3")
+        exact.write_bytes(b"")
+        decomposed = folder / unicodedata.normalize("NFD", exact.name)
+        canary_ranked_state.path_for(exact)  # the exact entry is accepted
+        if not (decomposed.exists() and os.path.samefile(decomposed, exact)):
+            self.skipTest("this volume keeps NFC and NFD names distinct: no Unicode alias exists here")
+        with self.assertRaisesRegex(safety.Refused, "exact filesystem spelling"):
+            canary_ranked_state.path_for(decomposed)
+
+    def test_distinct_coexisting_entries_keep_their_own_keys(self):
+        """The directory-entry contract, deterministic on any volume: two listed spellings are never merged."""
+        folder = self.private(self.tmp / "deep" / "a" / "b")
+        upper = folder / "Name.sqlite3"
+        upper.write_bytes(b"")
+        lower = folder / "name.sqlite3"
+        listed = os.listdir
+        coexisting = lambda path: listed(path) + (["name.sqlite3"] if Path(path) == folder else [])  # noqa: E731
+        with mock.patch.object(canary_ranked_state.os, "listdir", side_effect=coexisting):
+            keys = {canary_ranked_state.path_for(upper), canary_ranked_state.path_for(lower)}
+        self.assertEqual(len(keys), 2)  # each keeps its exact-spelling key
+
+    def test_physically_coexisting_case_names_keep_their_own_keys(self):
+        """Only on a case-sensitive volume; a case-insensitive one cannot hold both names (reported, not mocked)."""
+        folder = self.private(self.tmp / "deep" / "a" / "b")
+        upper, lower = folder / "Name.sqlite3", folder / "name.sqlite3"
+        upper.write_bytes(b"")
+        try:
+            descriptor = os.open(lower, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            self.skipTest("physical case-sensitive coexistence is unavailable on this volume")
+        os.close(descriptor)
+        self.assertNotEqual(canary_ranked_state.path_for(upper), canary_ranked_state.path_for(lower))
+
+    def test_missing_unreadable_and_nonregular_ledgers_are_refused(self):
+        folder = self.private(self.tmp / "deep" / "a" / "b")
+        for bad in (folder / "missing.sqlite3", self.tmp / "deep" / "nowhere" / "b" / "x.sqlite3", folder):
+            with self.assertRaises(safety.Refused):
+                canary_ranked_state.path_for(bad)
+        dangling = folder / "dangling.sqlite3"
+        dangling.symlink_to(folder / "absent.sqlite3")
+        with self.assertRaisesRegex(safety.Refused, "symlink"):
+            canary_ranked_state.path_for(dangling)
+        hidden = self.private(self.tmp / "deep" / "hidden" / "c")
+        (hidden / "x.sqlite3").write_bytes(b"")
+        os.chmod(hidden, 0o300)  # traversable, not listable: the spelling cannot be verified
+        try:
+            with self.assertRaisesRegex(safety.Refused, "cannot be verified"):
+                canary_ranked_state.path_for(hidden / "x.sqlite3")
+        finally:
+            os.chmod(hidden, 0o700)
+        self.assertEqual(sorted(self.tmp.rglob("run-*.json")), [])
+
+    def test_a_same_path_replacement_keeps_the_record_lock_and_allowance(self):
+        run, ledger, ranked = LifecycleTests.started(self)
+        self.assertIsNone(self.drive(run, ledger, n=1, tag="r1")["abort"])
+        canary_ranked.close(ranked)
+        before = self.record_path().read_bytes()
+        copy = self.state["ledger"].with_name("replacement.sqlite3")
+        shutil.copy2(self.state["ledger"], copy)
+        os.replace(copy, self.state["ledger"])  # the same exact path, a new file
+        collector.store_window(self.settings, CLAUDE_POOL, dict(id="5h", limit=1000, used=140, length=18000,
+                                                                reset_at=self.resets["5h"], rolling=False,
+                                                                observed_at=now() + 1, unit=collector.WINDOW_UNIT))
+        fresh = self.digest(run)  # a strictly newer reading: a new preflight really differs
+        self.assertNotEqual(fresh, ranked.record["digest"])
+        resumed = self.resume(ranked.record["digest"])
+        self.assertEqual((resumed["path"], resumed["completed"]), (str(self.record_path()), 1))
+        self.assertEqual(resumed["state"]["cumulative"][CLAUDE_POOL + "/5h"], 20)
+        self.assertEqual(resumed["baseline"], ranked.record["baseline"])
+        self.assertEqual(resumed["earliest_reset"], ranked.earliest_reset)
+        self.assertIn("does not match", self.resume(fresh, acknowledge=8)["refused"])  # no fresh run after replace
+        self.assertEqual(self.record_path().read_bytes(), before)  # exact resume and refusal left it byte-identical
+        self.assertEqual(self.records(), [self.record_path()])
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
@@ -330,12 +502,12 @@ class ProductionBoundaryTests(RankedStores):
 
 
 class RankedCliTests(RankedStores):
-    def cli(self, *argv):
+    def cli(self, *argv, ledger=None):
         """`opencode_live.py` in a new process; only the production defaults point at this test's stores."""
         script = ("import sys; sys.path.insert(0, %r); from unittest import mock; from tests.qualification import "
                   "canary, opencode_live; mock.patch.object(canary, '_production_paths', return_value=(%r, %r)).start();"
                   " raise SystemExit(opencode_live.main(sys.argv[1:]))") % (
-            str(ROOT), str(self.settings), str(self.state["ledger"]))
+            str(ROOT), str(self.settings), str(ledger or self.state["ledger"]))
         return subprocess.run([sys.executable, "-I", "-B", "-c", script, *argv], capture_output=True, text=True,
                               timeout=60, env=dict(os.environ, HOME=str(self.home)))
 
@@ -347,7 +519,13 @@ class RankedCliTests(RankedStores):
         record = json.loads(done.stdout)
         self.assertEqual(record["coverage"]["minimum"], 8)
         self.assertEqual(record["digest"], canary_ranked_state.digest(record))
+        self.assertEqual(record["ledger"], str(canary_ranked_state.canonical(self.state["ledger"])))  # as setup binds it
         self.assertIn("acknowledge-low-coverage 8", self.cli("--ranked-preflight", *common).stderr)
+        alias = spellings(self.state["ledger"])["parent_case"]
+        if alias.exists() and os.path.samefile(alias, self.state["ledger"]):
+            refused = self.cli("--ranked-preflight", *common, "--acknowledge-low-coverage", "8", ledger=alias)
+            self.assertEqual(refused.returncode, 2, refused.stdout)
+            self.assertIn("exact filesystem spelling", refused.stderr)
 
     def test_the_ranked_run_needs_its_own_opened_call_purpose(self):
         self.assertEqual((safety.CAPS[canary.RANKED_PURPOSE], safety.MAX_CAPS[canary.RANKED_PURPOSE]), (0, 83))

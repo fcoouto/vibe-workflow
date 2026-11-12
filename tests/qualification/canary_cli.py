@@ -58,8 +58,9 @@ def preflight(args):
     only; no server, provider read, model call or write."""
     state = canary.resolve_state(None, True, args.approval)
     project = canary.check_project(args.project, args.canary_allow, state["settings"], managed=True)
+    ledger = str(canary_ranked_state.canonical(state["ledger"]))  # the exact ledger string setup binds
     record = dict(canary_ranked.preflight(state["settings"], [safety.HARNESS_NAME], int(time.time()),
-                                          args.acknowledge_low_coverage), project=project, ledger=str(state["ledger"]))
+                                          args.acknowledge_low_coverage), project=project, ledger=ledger)
     return dict(record, digest=canary_ranked_state.digest(record))
 
 
