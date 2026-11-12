@@ -169,7 +169,8 @@ class TemplateToolsTests(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
 
     def test_selected_paths_refuse_traversal_symlinks_and_special_files(self):
-        self.write("outside.md", "private", self.base)
+        outside_text = "outside-file-content-must-not-be-returned"
+        self.write("outside.md", outside_text, self.base)
         (self.root / "alias.md").symlink_to(self.base / "outside.md")
         (self.root / "directory").symlink_to(self.base, target_is_directory=True)
         os.mkfifo(self.root / "fifo.md")
@@ -177,7 +178,8 @@ class TemplateToolsTests(unittest.TestCase):
             with self.subTest(name=name):
                 result = self.tools.check(self.root, [name])
                 self.assertFalse(result["ok"])
-                self.assertNotIn("private", json.dumps(result))
+                self.assertEqual(self.codes(result), {"path_unsafe"})
+                self.assertNotIn(outside_text, json.dumps(result))
         with self.assertRaises(ValueError):
             self.tools.prepare(self.root, ["../policies/00-index.md"], [])
 
