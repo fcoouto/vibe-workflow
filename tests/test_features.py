@@ -39,6 +39,20 @@ class Checkout(unittest.TestCase):
         return report["features"][name]
 
 
+class ShippedCleanupFeatures(Checkout):
+    def test_cleanup_is_opt_in_with_remote_deletion_included(self):
+        report = features.resolve(self.root)
+        cleanup = report["features"]["cleanup"]
+        self.assertFalse(cleanup["effective"])
+        self.assertTrue(cleanup["values"]["delete_remote_branch"])
+        enabled = features.change(self.root, "cleanup", enabled=True)
+        self.assertTrue(enabled["features"]["cleanup"]["effective"])
+        local_only = features.change(self.root, "cleanup", values={"delete_remote_branch": False})
+        self.assertFalse(local_only["features"]["cleanup"]["values"]["delete_remote_branch"])
+        features.undo(self.root, local_only["backup"])
+        self.assertTrue(features.resolve(self.root)["features"]["cleanup"]["values"]["delete_remote_branch"])
+
+
 class PackageFeatures(Checkout):
     """A disposable package with one feature of each kind."""
 
@@ -450,6 +464,8 @@ class CommandTests(Checkout):
         self.assertEqual(self.run_cli("enable", "workstreams").returncode, 0)
         result = self.run_cli("status", "workstreams", "--summary")
         self.assertEqual(result.stdout.strip(), "Features: workstreams on (project)")
+        result = self.run_cli("status", "--summary")
+        self.assertEqual(result.stdout.strip(), "Features: cleanup off · workstreams on (project)")
 
     def test_status_fails_when_settings_are_invalid(self):
         self.settings("{not json")
