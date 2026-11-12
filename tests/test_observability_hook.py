@@ -647,17 +647,32 @@ class CallerTests(HookFixture):
         self.assertEqual(self.invoke(report, hook_patch=patch("builtins.__import__", side_effect=missing)), expected)
 
 
+COLLECTION = ("collection", "native_collection_qualified", "collection_sources")
+
+
 class CollectionStatusTests(HookFixture):
-    """`collection` in Project reports says what the upload hook would do in this checkout now."""
+    """`collection` in Project and checkout reports says what the upload hook would do in this checkout now."""
 
     def checkout_path(self):
         return self.scope.runtime.state_dir / "observability" / (state._scope_id(self.scope) + ".json")
 
     def assert_collection(self, expected, *scopes):
-        """Status gives `expected`; `enabled` exactly when `export_destination` returns a connection and the hook sends."""
-        reports = [settings.project_status(scope) for scope in (scopes or (self.scope, self.scope.repository_root))]
+        """Both statuses give `expected`; `enabled` exactly when `export_destination` returns a connection and the
+        hook sends."""
+        scopes = scopes or (self.scope, self.scope.repository_root)
+        reports = [settings.project_status(scope) for scope in scopes]
         for report in reports:
             self.assertEqual(report["collection"], expected)
+        for scope in scopes:
+            if expected == "connection_unavailable":
+                # The checkout record is status's own subject, so an unreadable one stays an error there.
+                with self.assertRaises(settings.SettingsError) as caught:
+                    settings.status(scope)
+                self.assertEqual(str(caught.exception), reports[0]["checkout_connection"]["error"])
+                continue
+            checkout = settings.status(scope)
+            self.assertEqual(checkout["control_scope"], "checkout")
+            self.assertEqual({key: checkout[key] for key in COLLECTION}, {key: reports[0][key] for key in COLLECTION})
         try:
             connection = settings.export_destination(self.scope)
         except settings.SettingsError:
@@ -713,9 +728,9 @@ class CollectionStatusTests(HookFixture):
         for versions, sources in ((frozenset({"0.168.0", "0.167.0"}), ["codex 0.167.0", "codex 0.168.0"]),
                                   (frozenset(), [])):
             with self.subTest(versions=versions), patch.object(codex_usage, "QUALIFIED_VERSIONS", versions):
-                report = settings.project_status(self.scope)
-                self.assertEqual((report["native_collection_qualified"], report["collection_sources"]),
-                                 (bool(versions), sources))
+                for report in (settings.project_status(self.scope), settings.status(self.scope)):
+                    self.assertEqual((report["native_collection_qualified"], report["collection_sources"]),
+                                     (bool(versions), sources))
 
     def test_gates_stop_before_later_records(self):
         loaded, acquired = [], []
@@ -764,7 +779,80 @@ class CollectionStatusTests(HookFixture):
                 stack.enter_context(patch(target, side_effect=AssertionError("external access")))
             for scope in (self.scope, self.scope.repository_root):
                 self.assertEqual(settings.project_status(scope)["collection"], "enabled")
+                self.assertEqual(settings.status(scope)["collection"], "enabled")
         self.assertEqual(snapshot(), before)
+
+    def test_unreadable_project_record_keeps_checkout_status(self):
+        self.enable()
+        expected = settings.status(self.scope)
+        project = self.scope.runtime.state_dir / "observability" / ("project-" + self.scope.project_id + ".json")
+        original = project.read_bytes()
+        for damage, code in ((lambda: project.chmod(0o644), "unsafe_observability_storage"),
+                             (lambda: project.write_text('{"version":1,"PRIVATE":1}'), "invalid_observability_configuration")):
+            project.write_bytes(original)
+            project.chmod(0o600)
+            damage()
+            with self.subTest(code=code):
+                for scope in (self.scope, self.scope.repository_root):
+                    report = settings.status(scope)
+                    self.assertEqual(report, dict(expected, collection="project_unavailable"))
+                    self.assertNotIn("PRIVATE", json.dumps(report))
+                    with self.assertRaises(settings.SettingsError) as caught:
+                        settings.project_status(scope)
+                    self.assertEqual(str(caught.exception), code)
+                with self.assertRaises(settings.SettingsError):
+                    settings.export_destination(self.scope)
+        self.session()
+        self.run_hook()
+        self.assertEqual(FakeConnection.posts, [])
+
+    def test_checkout_operation_reports_use_the_same_computation(self):
+        def same(report, expected):
+            self.assertEqual(report["collection"], expected)
+            current = settings.status(self.scope)
+            self.assertEqual({key: report[key] for key in COLLECTION}, {key: current[key] for key in COLLECTION})
+        self.project()
+        same(settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION,
+                                                 langfuse_project_id=PROJECT)), "connection_not_enabled")
+        with patch("runtime.langfuse.verify_project", return_value=None):
+            same(settings.enable(self.scope, dict(expected_revision=1)), "enabled")
+        with patch("runtime.langfuse.synthetic_probe", return_value=dict(verified=True)):
+            same(settings.probe(self.scope, dict(expected_revision=2)), "enabled")
+        same(settings.disable(self.scope, dict(expected_revision=2)), "connection_not_enabled")
+        same(settings.configure(self.scope, dict(expected_revision=3, destination=DESTINATION, langfuse_project_id=PROJECT,
+                                                 credential_source="os-store")), "connection_not_enabled")
+        with patch("runtime.observability_credentials.forget", return_value=None):
+            same(settings.forget_credentials(self.scope, dict(expected_revision=4)), "connection_not_enabled")
+        with patch("runtime.observability_credentials.check_available", return_value=None), \
+                patch("runtime.langfuse.verify_project", return_value=None), \
+                patch("runtime.observability_credentials.store", return_value=None):
+            same(settings.store_credentials(self.scope, dict(expected_revision=5),
+                                            lambda: ("pk-lf-synthetic", "sk-lf-synthetic")), "connection_not_enabled")
+        settings.disable_project(self.scope, dict(expected_revision=1))
+        same(settings.disable(self.scope, dict(expected_revision=6)), "off")
+
+    def test_checkout_status_reads_each_record_once(self):
+        loaded, acquired = [], []
+        original_load, original_acquire = settings._Store.load, startup.acquire_project_entry
+        def load(store):
+            loaded.append(store.name)
+            return original_load(store)
+        def acquire(*args, **kwargs):
+            acquired.append(True)
+            return original_acquire(*args, **kwargs)
+        checkout, project = state._scope_id(self.scope) + ".json", "project-" + self.scope.project_id + ".json"
+        def observe():
+            loaded.clear(), acquired.clear()
+            with patch.object(settings._Store, "load", load), patch.object(startup, "acquire_project_entry", acquire):
+                report = settings.status(self.scope.repository_root)
+            return report["collection"], sorted(loaded), bool(acquired)
+        settings.configure(self.scope, dict(expected_revision=0, destination=DESTINATION, langfuse_project_id=PROJECT))
+        self.assertEqual(observe(), ("off", [checkout], False))
+        self.project(collection=False)
+        self.assertEqual(observe(), ("off", sorted([checkout, project]), False))
+        settings.configure_project(self.scope, dict(expected_revision=1, repository_ids=[self.scope.repository_id],
+                                                    desired_collection=True))
+        self.assertEqual(observe(), ("connection_not_enabled", sorted([checkout, project]), False))
 
 
 if __name__ == "__main__":

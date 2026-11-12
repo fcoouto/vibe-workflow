@@ -49,7 +49,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 1)
         self.assertEqual(report["control_scope"], "checkout")
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.core_digest(), before)
@@ -98,7 +98,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
             report = self.settings.enable(self.scope, dict(expected_revision=1))
             verify.assert_called_once_with(CONFIGURE["destination"], CONFIGURE["langfuse_project_id"])
         self.assertTrue(report["desired_opt_in"])
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         before = self.path.read_bytes()
         with patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
             report = self.settings.status(self.scope)
