@@ -9,7 +9,6 @@ import re
 import subprocess
 
 from runtime import features
-from runtime.settings_store import read_bytes
 from runtime.startup import read_git
 
 
@@ -107,10 +106,10 @@ def inspect(primary, primary_branch, worktree, branch, head, merge, removed=Fals
         _require(not os.path.lexists(common / (ref + ".lock")), "task-ref-locked")
         for row in rows:
             other_git, _ = _identity(row["path"])
-            for marker in ("rebase-merge/head-name", "rebase-apply/head-name", "BISECT_START"):
-                value = read_bytes(other_git / marker, limit=4096)
-                _require(value is None or value.strip() not in {ref.encode(), branch.encode()},
-                         "branch-still-in-use")
+            # Rebase --update-refs can own additional branches while HEAD is detached.
+            _require(not any(os.path.lexists(other_git / name)
+                             for name in ("rebase-merge", "rebase-apply", "BISECT_START")),
+                     "branch-still-in-use")
         attachments = [row for row in rows if row.get("branch") == ref]
         matching = [row for row in rows if row["path"] == worktree]
         if removed:

@@ -89,6 +89,8 @@ the coordinator has confirmed, including a manual merge observed later.
    unchanged refs, locks, Git operations, submodules, hidden index flags, and
    staged/unstaged/untracked/**ignored** work. It observes no native ownership or
    provider facts and grants no authority. A retained result stops this attempt.
+   Any registered worktree's active rebase or bisect defers cleanup, including an
+   unrelated one: those operations can reserve additional refs while detached.
 4. **Remove locally.** Use only a native removal tool whose behavior was observed
    on disposable resources (see below). Account for any implicit branch deletion
    before invoking it; if that effect cannot preserve the expected ref, retain.
