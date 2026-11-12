@@ -6,22 +6,32 @@ marker byte strings, keeps the row time and the numbers below, and drops each pa
 Results and errors use fixed gap codes or fixed messages; they never carry line content, message text, tool
 data or file paths.
 
-The row shape comes from public upstream Codex source and is not yet confirmed on real 0.167.0 files. Each
-line is ``{"timestamp": "<RFC 3339 UTC>", "type": ..., "payload": {...}}``. ``session_meta`` carries ``id``,
-``timestamp`` and ``cli_version``; ``turn_context`` carries ``model`` and ``effort``; token rows are
+Each line is ``{"timestamp": "<RFC 3339 UTC>", "type": ..., "payload": {...}}``. ``session_meta`` carries
+``id``, ``timestamp`` and ``cli_version``; ``turn_context`` carries ``model`` and ``effort``; token rows are
 ``event_msg`` rows whose payload type is ``token_count`` and whose ``info`` is null or holds the cumulative
-``total_token_usage``, ``last_token_usage`` and ``model_context_window``. ``QUALIFIED_VERSIONS`` stays empty
-until real-file qualification, so real use reports ``source_version_unqualified`` and no counts.
+``total_token_usage``, ``last_token_usage`` and ``model_context_window`` (other ``info`` keys are ignored).
 
 When a thread's baseline is zero, ``token_count`` rows with ``info: null`` that come before its first
-non-null row are read as zero usage (upstream appears to emit them before the first response); a null after
-any non-null row is ``token_info_missing``. This is also unconfirmed on real files.
+non-null row are read as zero usage; a null after any non-null row is ``token_info_missing``.
 
-Limitations: resumed or forked threads are not detected; only a second ``session_meta`` row is rejected.
-Usage after the cutoff is not counted. Identical consecutive token rows are compared on the kept numbers.
-Directories on the path must belong to the current user and not be writable by others; the thread file must
-be private, regular and not linked. Gaps are raised without exception context, so no path or line text is
-reachable from them.
+A forked file repeats its parent's ``session_meta`` header after its own, before its first token row, and its
+totals start fresh. The first row must be the thread's own header and is the only source of ``cli_version``
+and the creation time; later headers are ignored until the first token row and are a mismatch after it.
+
+A line over ``MAX_LINE`` is judged by its first ``PREFIX_BYTES`` bytes only: it is ``line_too_large`` when
+that prefix shows a ``session_meta`` or ``turn_context`` row, or an ``event_msg`` row whose payload type is
+``token_count`` or lies beyond the prefix. Any other oversized line, such as a compacted row or a tool output
+that mentions ``"token_count"`` in its text, is skipped unparsed.
+
+The row shape, row timestamps, inclusive counters, leading null rows, separation of parent and child thread
+totals and forked headers were confirmed on real 0.167.0-era files on 12 November 2026, so
+``QUALIFIED_VERSIONS`` holds ``0.167.0``; any other version reports ``source_version_unqualified``.
+
+Limitations: resumed threads are not detected. Usage after the cutoff is not counted. Identical consecutive
+token rows are compared on the kept numbers. Directories on the path must belong to the current user and not
+be writable by others; the thread file must be a regular, unlinked file owned by the current user and not
+writable by group or others. Gaps are raised without exception context, so no path or line text is reachable
+from them.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -35,7 +45,7 @@ from runtime.startup import StartupError, json_object
 
 
 SOURCE = "codex-session-file"
-QUALIFIED_VERSIONS = frozenset()
+QUALIFIED_VERSIONS = frozenset({"0.167.0"})
 COUNTERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
             "output_tokens", "reasoning_output_tokens", "total_tokens")
 GAP_CODES = frozenset({
@@ -47,7 +57,8 @@ MAX_LINE = 1024 * 1024
 LOOKBACK_DAYS = 30
 MAX_THREADS = 256
 MARKERS = (b'"token_count"', b'"session_meta"', b'"turn_context"')
-_MARKER_TAIL = max(len(marker) for marker in MARKERS) - 1
+PREFIX_BYTES = 512
+_PREFIX_TYPE = re.compile(rb'"type"\s*:\s*"([A-Za-z0-9_]{1,64})"')
 _THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
@@ -227,7 +238,7 @@ def _stream(path, reading, deadline):
         raise
     with stream:
         info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022
                 or info.st_nlink != 1 or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)):
             raise UsageGap("file_unreadable")
         if info.st_size > MAX_FILE:
@@ -242,18 +253,17 @@ def _stream(path, reading, deadline):
             if not line.endswith(b"\n"):
                 if len(line) <= MAX_LINE:
                     break
-                marked, terminated, tail = _marked(line), False, line[-_MARKER_TAIL:]
+                kept, terminated = _kept_prefix(line[:PREFIX_BYTES]), False
                 while remaining > 0 and not terminated:
                     _deadline(deadline)
                     chunk = stream.readline(min(MAX_LINE, remaining))
                     if not chunk:
                         break
                     remaining -= len(chunk)
-                    marked = marked or _marked(tail + chunk)
-                    terminated, tail = chunk.endswith(b"\n"), chunk[-_MARKER_TAIL:]
+                    terminated = chunk.endswith(b"\n")
                 if not terminated:
                     break
-                if marked:
+                if kept:
                     raise UsageGap("line_too_large")
                 line = None
             elif not _marked(line):
@@ -270,6 +280,17 @@ def _stream(path, reading, deadline):
 
 def _marked(data):
     return any(marker in data for marker in MARKERS)
+
+
+def _kept_prefix(prefix):
+    """Whether an oversized line's prefix shows a row kind the reader would keep."""
+    kinds = _PREFIX_TYPE.findall(prefix)
+    if b"session_meta" in kinds or b"turn_context" in kinds:
+        return True
+    if b"event_msg" not in kinds:
+        return False
+    payload = kinds[kinds.index(b"event_msg") + 1:]
+    return not payload or b"token_count" in kinds
 
 
 def _time(value):
@@ -315,7 +336,7 @@ class _Reading:
     def __init__(self, thread_id, started_at, cutoff_at, qualified):
         self.thread_id, self.started_at, self.cutoff_at, self.qualified = thread_id, started_at, cutoff_at, qualified
         self.cli_version = self.created = self.last = None
-        self.tokens, self.contexts = [], []
+        self.tokens, self.contexts, self.token_seen = [], [], False
 
     def row(self, raw, *, first):
         row = json_object(raw, limit=MAX_LINE + 1)
@@ -331,12 +352,14 @@ class _Reading:
             self.last = _time(row.get("timestamp"))
             return None
         if kind == "session_meta":
-            raise UsageGap("session_meta_mismatch")
+            if self.token_seen:
+                raise UsageGap("session_meta_mismatch")
+            return None
         if kind == "turn_context" and isinstance(payload, dict):
             kept = (_label(payload.get("model")), _label(payload.get("effort")))
             target = self.contexts
         elif kind == "event_msg" and isinstance(payload, dict) and payload.get("type") == "token_count":
-            kept, target = _token(payload.get("info")), self.tokens
+            kept, target, self.token_seen = _token(payload.get("info")), self.tokens, True
         else:
             return None
         moment = _time(row.get("timestamp"))

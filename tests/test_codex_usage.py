@@ -217,23 +217,51 @@ class CodexUsageTests(unittest.TestCase):
         with patch.object(codex_usage, "MAX_LINE", 4096):
             self.assertGap(self.read(), "line_too_large")
 
-    def test_marker_after_line_limit_is_still_too_large(self):
-        row = json.dumps(message(at(10, 1), "y" * 9000))[:-1] + ', "kind": "token_count"}'
-        self.write([meta(), row.encode()])
-        with patch.object(codex_usage, "MAX_LINE", 4096):
-            self.assertGap(self.read(), "line_too_large")
+    def test_oversized_line_is_too_large_when_its_prefix_shows_a_kept_row(self):
+        pad = "x" * 5000
+        late_type = {"timestamp": stamp(at(10, 1)), "type": "event_msg",
+                     "payload": {"pad": "p" * 600, "type": "agent_message", "message": pad}}
+        big_meta = meta(at(9, 1), thread=OTHER)
+        big_meta["payload"]["pad"] = pad
+        big_context = context(at(10, 1))
+        big_context["payload"]["pad"] = pad
+        big_token = token(at(10, 1), 1, info={"total_token_usage": totals(1), "pad": pad})
+        for row in (big_meta, big_context, big_token, late_type):
+            for separators in ((", ", ": "), (",", ":")):
+                with self.subTest(kind=row["type"], payload=row["payload"].get("type"), compact=separators[1] == ":"):
+                    path = self.write([meta(), json.dumps(row, separators=separators).encode(), token(at(10, 30), 3)])
+                    with patch.object(codex_usage, "MAX_LINE", 4096):
+                        self.assertGap(self.read(), "line_too_large")
+                    path.unlink()
 
-    def test_marker_split_across_read_boundary_is_too_large(self):
-        head = json.dumps(message(at(10, 1), "y" * 5000)).encode()[:4090]
-        self.write([meta(), head + b'"token_count"' + b"w" * 6000])
-        with patch.object(codex_usage, "MAX_LINE", 4096):
-            self.assertGap(self.read(), "line_too_large")
+    def test_oversized_line_with_other_prefix_is_skipped_unparsed(self):
+        text = "y" * 9000
+        structural = b', "x": {"type": "token_count", "info": null}}'
+        agent = {"timestamp": stamp(at(10, 1)), "type": "event_msg",
+                 "payload": {"type": "agent_message", "message": text}}
+        compacted = {"timestamp": stamp(at(10, 2)), "type": "compacted",
+                     "payload": {"replacement_history": [{"type": "token_count"}], "message": text}}
+        rows = (json.dumps(agent).encode()[:-2] + structural + b"}",
+                json.dumps(message(at(10, 3), text)).encode()[:-1] + structural,
+                json.dumps(compacted, separators=(",", ":")).encode(),
+                json.dumps(message(at(10, 4), "y" * 5000)).encode()[:4090] + b'"token_count"' + b"w" * 6000)
+        for row in rows:
+            with self.subTest(row=row[:60]):
+                path = self.write([meta(), row, token(at(10, 30), 300)])
+                with (patch.object(codex_usage, "MAX_LINE", 4096),
+                      patch.object(codex_usage, "json_object", wraps=codex_usage.json_object) as parse):
+                    result = self.read()
+                self.assertEqual((result["gaps"], result["usage"]), ([], totals(300)))
+                self.assertEqual(parse.call_count, 2)
+                path.unlink()
 
     def test_session_meta_mismatch(self):
         cases = ([meta(thread=OTHER), token(at(10, 30), 1)],
                  [message(at(9)), meta(), token(at(10, 30), 1)],
                  [context(at(9)), token(at(10, 30), 1)],
-                 [meta(), meta(at(10)), token(at(10, 30), 1)],
+                 [meta(), token(at(9, 30), 1), meta(at(10)), token(at(10, 30), 1)],
+                 [meta(), token(at(9, 10), info=None), meta(at(9, 20), thread=OTHER), token(at(10, 30), 1)],
+                 [meta(), token(at(10, 30), 1), meta(at(11), thread=OTHER)],
                  [{"timestamp": stamp(at(9)), "type": "session_meta", "payload": [THREAD]}],
                  [])
         for rows in cases:
@@ -247,14 +275,37 @@ class CodexUsageTests(unittest.TestCase):
                 self.assertGap(self.read(), "session_meta_mismatch")
                 path.unlink()
 
+    def test_forked_header_before_first_token_row_is_ignored(self):
+        parent = meta(at(9, 1), thread=OTHER, version="9.9.9", created=at(10, 30))
+        same = meta(at(9, 1))
+        garbage = {"timestamp": "unusable", "type": "session_meta", "payload": [SECRET]}
+        older = meta(at(8), thread=OTHER)
+        for header in (parent, same, garbage, older):
+            with self.subTest(header=header["payload"]["id"] if isinstance(header["payload"], dict) else "list"):
+                path = self.write([meta(), header, context(at(9, 2)), token(at(9, 30), 100), token(at(10, 30), 200)])
+                result = self.read()
+                self.assertEqual((result["gaps"], result["cli_version"]), ([], VERSION))
+                self.assertEqual((result["baseline"], result["usage"]), (totals(100), totals(100)))
+                self.assertNotIn(SECRET, repr(result))
+                path.unlink()
+
     def test_source_version_unqualified(self):
+        self.standard()
+        result = self.read(qualified=frozenset())
+        self.assertGap(result, "source_version_unqualified")
+        self.assertEqual(result["cli_version"], VERSION)
+        self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
+
+    def test_shipped_qualified_versions_are_exactly_0_167_0(self):
+        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset({"0.167.0"}))
         self.standard()
         result = codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
                                                deadline=time.monotonic() + 30)
-        self.assertGap(result, "source_version_unqualified")
-        self.assertEqual(result["cli_version"], VERSION)
-        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset())
-        self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
+        path = self.write([meta(version="0.168.0"), token(at(10, 30), 1)])
+        self.assertGap(codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                     deadline=time.monotonic() + 30), "source_version_unqualified")
+        path.unlink()
 
     def test_missing_or_invalid_version_is_unqualified(self):
         for version in (None, 167, "", "x" * 65, "path/x", "1.0:evil", "v@1", "0.167.0 beta"):
@@ -504,11 +555,19 @@ class CodexUsageTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_HOME": str(link)}):
             self.assertEqual(self.read()["usage"], totals(250))
 
-    def test_non_private_file_is_unreadable(self):
-        for mode in (0o640, 0o604, 0o660):
+    def test_file_writable_by_others_is_unreadable(self):
+        for mode in (0o660, 0o606, 0o666, 0o620, 0o602, 0o664):
             with self.subTest(mode=oct(mode)):
                 path = self.standard(mode=mode)
                 self.assertGap(self.read(), "file_unreadable")
+                path.unlink()
+
+    def test_file_readable_by_others_is_accepted(self):
+        for mode in (0o644, 0o640, 0o604, 0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                path = self.standard(mode=mode)
+                result = self.read()
+                self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
                 path.unlink()
 
     def test_hard_linked_file_is_unreadable(self):
@@ -576,9 +635,7 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(result["gaps"], [{"thread_id": OTHER, "code": "thread_file_not_found"}])
         self.assertEqual(result["threads"][0]["usage"], totals(250))
         self.assertEqual(result["threads"][1]["usage"], UNKNOWN)
-        unqualified = codex_usage.acquire_task_observations(
-            [{"thread_id": THREAD, "role": "coordinator"}], started_at=START, cutoff_at=CUTOFF,
-            deadline=time.monotonic() + 30)
+        unqualified = self.acquire([{"thread_id": THREAD, "role": "coordinator"}], qualified=frozenset())
         self.assertEqual(unqualified["gaps"], [{"thread_id": THREAD, "code": "source_version_unqualified"}])
 
     def test_task_threads_are_validated(self):
