@@ -68,7 +68,7 @@ def files(root):
 def uses(root):
     """(path, line number, name, line) for every old role name written as a quoted or backticked value."""
     for path, text in files(root):
-        for number, line in enumerate(text.splitlines(), 1):
+        for number, line in enumerate(text.split('\n'), 1):
             for match in VALUE.finditer(line):
                 yield path, number, match.group(2), line
 
@@ -91,6 +91,8 @@ def role_context(node, parents):
     while child in parents:
         parent = parents[child]
         if isinstance(parent, ast.keyword) and parent.arg == 'role':
+            return True
+        if isinstance(parent, ast.Call) and field(parent, 'role') and len(parent.args) == 2 and parent.args[1] is child:
             return True
         if isinstance(parent, ast.Dict) and any(value is child and isinstance(key, ast.Constant) and key.value == 'role'
                                                for key, value in zip(parent.keys, parent.values)):
@@ -189,7 +191,8 @@ def violations(root, allowed=ALLOWED):
             except (SyntaxError, ValueError):
                 found.append('%s:1: invalid Python syntax' % path)
                 continue
-        for number, line in enumerate(text.splitlines(), 1):
+        # read_text normalizes CR/CRLF; other Unicode separators do not advance AST line numbers.
+        for number, line in enumerate(text.split('\n'), 1):
             for match in VALUE.finditer(line):
                 start, end = (number, len(line[:match.start()].encode('utf-8'))), (number, len(line[:match.end()].encode('utf-8')))
                 literals = [(contexts, blocked) for node, contexts, blocked in occurrences
@@ -203,7 +206,7 @@ def violations(root, allowed=ALLOWED):
                 found.append('%s:%d: %s as a value: %s' % (path, number, match.group(2), line.strip()))
         if path != READER:
             found += ['%s:%d: role logic on an old name: %s' % (path, number, line.strip())
-                      for number, line in enumerate(text.splitlines(), 1) if ROLE_LOGIC.search(line)]
+                      for number, line in enumerate(text.split('\n'), 1) if ROLE_LOGIC.search(line)]
             found += ['%s:%d: role logic on an old name: %s' % (path, node.lineno, node.value)
                       for node, _, blocked in occurrences if blocked]
     return found
