@@ -44,10 +44,14 @@ the continuity check (``history_incomplete``).
 Limitations: usage after the cutoff is not counted. Identical consecutive
 token rows are compared on the kept numbers. Directories on the path must belong to the current user and not
 be writable by others; the thread file must be a regular, unlinked file owned by the current user and not
-writable by group or others. Gaps are raised without exception context, so no path or line text is reachable
-from them.
+writable by group or others. The sessions, year, month and day folders are opened one level at a time through
+held descriptors without following links, and files are opened under the held day folder, so no checked path is
+reopened by name. A missing folder is skipped, but a folder that exists and cannot be opened (for example mode
+000 on the home, sessions, year, month or day folder) is ``file_unreadable``, not ``thread_file_not_found``. Thread IDs are letters, digits and ``-`` only, because ``_`` separates a thread ID from a page
+ID in file names. Gaps are raised without exception context, so no path or line text is reachable from them.
 """
 
+import contextlib
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -75,12 +79,14 @@ MAX_THREADS = 256
 MARKERS = (b'"token_count"', b'"session_meta"', b'"turn_context"')
 PREFIX_BYTES = 512
 _PREFIX_TYPE = re.compile(rb'"type"\s*:\s*"([A-Za-z0-9_]{1,64})"')
-_THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
+_THREAD_ID = re.compile(r"[A-Za-z0-9-]{1,128}")  # No "_": it separates a thread ID from a page ID.
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
 _NAME = (r"rollout-([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2})-%s"
          r"(_[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})?\.jsonl")
 _STOP = object()
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 
 class UsageGap(Exception):
@@ -102,7 +108,8 @@ def find_thread_files(thread_id, *, started_at, cutoff_at, deadline):
     than one plain file or two equal name timestamps (``thread_file_ambiguous``), unsafe paths and an exceeded
     deadline.
     """
-    return [path for path, _ in _located(thread_id, started_at, cutoff_at, deadline)]
+    with contextlib.ExitStack() as stack:
+        return [path for path, _, _, _ in _located(thread_id, started_at, cutoff_at, deadline, stack)]
 
 
 def find_thread_file(thread_id, *, started_at, cutoff_at, deadline):
@@ -116,11 +123,12 @@ def find_thread_file(thread_id, *, started_at, cutoff_at, deadline):
     return files[0] if files else None
 
 
-def _located(thread_id, started_at, cutoff_at, deadline):
+def _located(thread_id, started_at, cutoff_at, deadline, stack):
+    """Return ``(path, page, name, folder descriptor)`` per file; ``stack`` keeps the folders open for reading."""
     thread_id = _thread_id(thread_id)
     _window(started_at, cutoff_at, deadline)
     try:
-        return _find(thread_id, cutoff_at, deadline)
+        return _find(thread_id, cutoff_at, deadline, stack)
     except UsageGap as gap:
         code = gap.code
     except (OSError, ValueError, RuntimeError):
@@ -138,15 +146,16 @@ def read_thread_usage(thread_id, *, started_at, cutoff_at, deadline, qualified_v
                   usage=_unknown(), model_settings=[], gaps=[])
     try:
         _deadline(deadline)
-        files = _located(thread_id, started_at, cutoff_at, deadline)
-        if not files:
-            raise UsageGap("thread_file_not_found")
-        if files[0][1] and not all(page for _, page in files):
-            raise UsageGap("history_incomplete")
-        for path, page in files:
-            reading.begin(page=page)
-            if _scan(path, reading, deadline):
-                break
+        with contextlib.ExitStack() as stack:
+            files = _located(thread_id, started_at, cutoff_at, deadline, stack)
+            if not files:
+                raise UsageGap("thread_file_not_found")
+            if files[0][1] and not all(page for _, page, _, _ in files):
+                raise UsageGap("history_incomplete")
+            for _, page, name, folder in files:
+                reading.begin(page=page)
+                if _scan(name, reading, deadline, folder=folder):
+                    break
         baseline, final, settings = reading.settle()
         _deadline(deadline)
     except UsageGap as gap:
@@ -216,51 +225,61 @@ def _label(value):
     return value if isinstance(value, str) and _LABEL.fullmatch(value) else None
 
 
-def _directory(path):
-    info = os.lstat(path)
-    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022):
+def _directory(name, parent, stack):
+    """Open ``name`` under the held ``parent`` without following a link and check it; None when it is absent."""
+    try:
+        descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent)
+    except FileNotFoundError:
+        return None
+    stack.callback(os.close, descriptor)
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
         raise UsageGap("file_unreadable")
+    return descriptor
 
 
-def _find(thread_id, cutoff_at, deadline):
+def _find(thread_id, cutoff_at, deadline, stack):
+    """Walk sessions, year, month and day folders through held descriptors; nothing is reopened by path."""
     try:
         home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").resolve(strict=True)
-    except FileNotFoundError:
+        home_descriptor = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    except (FileNotFoundError, NotADirectoryError):
         return []
-    sessions = home / "sessions"
-    if not os.path.lexists(sessions):
+    stack.callback(os.close, home_descriptor)
+    sessions = _directory("sessions", home_descriptor, stack)
+    if sessions is None:
         return []
-    _directory(sessions)
     pattern = re.compile(_NAME % re.escape(thread_id))
-    found = []
+    found, folders = [], {(): sessions}
     newest = cutoff_at.astimezone(timezone.utc).date() + timedelta(days=1)
     for offset in range(LOOKBACK_DAYS + 1):
         _deadline(deadline)
         day = newest - timedelta(days=offset)
-        folder = sessions
-        for part in (f"{day.year:04d}", f"{day.month:02d}", f"{day.day:02d}"):
-            folder = folder / part
-            if not os.path.lexists(folder):
-                break
-            _directory(folder)
-        else:
-            for name in os.listdir(folder):
-                match = pattern.fullmatch(name)
-                if match:
-                    path = folder / name
-                    if path.resolve(strict=True) != path or not path.is_relative_to(sessions):
-                        raise UsageGap("file_unreadable")
-                    found.append((match[1], match[2] is not None, path))
-    stamps = {stamp for stamp, _, _ in found}
-    if sum(not page for _, page, _ in found) > 1 or len(stamps) != len(found):
+        parts = (f"{day.year:04d}", f"{day.month:02d}", f"{day.day:02d}")
+        for depth in range(1, 4):
+            if parts[:depth] not in folders:
+                parent = folders[parts[:depth - 1]]
+                folders[parts[:depth]] = None if parent is None else _directory(parts[depth - 1], parent, stack)
+        folder = folders[parts]
+        if folder is None:
+            continue
+        for name in os.listdir(folder):
+            match = pattern.fullmatch(name)
+            if match:
+                found.append((match[1], match[2] is not None, name, folder, home.joinpath("sessions", *parts, name)))
+    stamps = {item[0] for item in found}
+    if sum(not item[1] for item in found) > 1 or len(stamps) != len(found):
         raise UsageGap("thread_file_ambiguous")
-    return [(path, page) for _, page, path in sorted(found)]
+    return [(path, page, name, folder) for _, page, name, folder, path in sorted(found, key=lambda item: item[0])]
 
 
-def _scan(path, reading, deadline):
-    """Stream one file once; pass only marker lines to ``reading``. True when a row after the cutoff stopped it."""
+def _scan(name, reading, deadline, *, folder):
+    """Stream one file once; pass only marker lines to ``reading``. True when a row after the cutoff stopped it.
+
+    ``name`` is opened under the held ``folder`` descriptor without following a link.
+    """
     try:
-        return _stream(path, reading, deadline)
+        return _stream(name, reading, deadline, folder)
     except UsageGap as gap:
         code = gap.code
     except (OSError, ValueError, TypeError, KeyError, AttributeError, StartupError, RecursionError):
@@ -268,9 +287,8 @@ def _scan(path, reading, deadline):
     raise UsageGap(code)
 
 
-def _stream(path, reading, deadline):
-    before = os.lstat(path)
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+def _stream(name, reading, deadline, folder):
+    descriptor = os.open(name, _FILE_FLAGS, dir_fd=folder)
     try:
         stream = os.fdopen(descriptor, "rb")
     except BaseException:
@@ -279,7 +297,7 @@ def _stream(path, reading, deadline):
     with stream:
         info = os.fstat(stream.fileno())
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022
-                or info.st_nlink != 1 or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)):
+                or info.st_nlink != 1):
             raise UsageGap("file_unreadable")
         if info.st_size > MAX_FILE:
             raise UsageGap("file_too_large")
