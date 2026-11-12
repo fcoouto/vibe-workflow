@@ -4,7 +4,13 @@
 
 ## Implementation status — 12 November 2026
 
-O2–O5 and the integration hook are implemented, independently reviewed and merged into `main`. Collection is still inert: `runtime/adapters/codex_usage.QUALIFIED_VERSIONS` is empty, so an enabled Project records `totals_unknown` and sends nothing.
+O2–O5 and the integration hook are implemented, independently reviewed and merged into `main`. O3 real-file qualification (#262, `6875651e`) qualified Codex `0.167.0`, so a Project with collection on and an enabled checkout connection now uploads after an ordinary verified completion.
+
+**O3 real-file qualification, 12 November 2026** (user-authorized; structure-only probe of all 261 local session files, no text printed, saved or committed):
+- Rows: every row has an RFC 3339 `Z` timestamp and starts with `timestamp`. `info: null` rows occur only before the first real count. Input + output = total, cached + cache-write ≤ input and reasoning ≤ output in every one of 19,066 rows.
+- Totals never decrease. Outside compactions they grow by exactly the latest response, so parent totals exclude child threads. Forked files repeat the parent header before any token row and carry no copied usage.
+- Four reader changes were required: files are mostly `0644`, so the rule became no write access for others; forked headers; oversized lines decided by their prefix; long threads continue in page files `rollout-TS-<thread>_<page>.jsonl` with exactly continuous totals, read as one stream with the new gap `history_incomplete`.
+- Independent comparison after the fix: Codex `0.167.0`, 17 of 17 windows match; all observed versions (validation only), 470 of 470 windows match, including forked, subagent and paginated threads.
 
 | Slice | PR | Merge commit | Deferred minor findings |
 | --- | --- | --- | --- |
@@ -13,14 +19,14 @@ O2–O5 and the integration hook are implemented, independently reviewed and mer
 | O4 Task usage reconciliation | #259 | `a813d581` | Versions from gapped threads in `source_versions`; gap-free thread with unknown usage accepted; three refusal tests missing |
 | O5 Export planning and delivery | #260 | `796729dd` | 3-second upload budget may often end `uncertain` (measure in O7) |
 | Integration hook after `evidence verify` | #261 | `b73b8f11` | Upload-state file limit after about 200 records; repeated project-entry checks when enabled; concurrent runs can overwrite `last_result` |
+| O3 real-file qualification | #262 | `6875651e` | `_` in thread IDs can collide with the page-name form (malformed receipts only); two page-file test gaps |
 
 The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle limit) for now; space work is deferred.
 
-Remaining before collection is real, each needing separate user authorization:
+Remaining, each needing separate user authorization:
 
-1. **O3 real-file qualification:** read one local Codex 0.167.0 session file to confirm row shape, timestamps, file mode, file-name form, leading `info: null` rows, inclusive counters and parent/child separation; then add `0.167.0` to `QUALIFIED_VERSIONS`.
-2. **O6 hosted readback:** one real upload to the selected Langfuse project and readback of its buckets, including whether negative adjustments are accepted.
-3. **O7 final qualification**, which also depends on D7b.
+1. **O6 hosted readback:** one real upload to the selected Langfuse project and readback of its buckets, including whether negative adjustments are accepted.
+2. **O7 final qualification**, which also depends on D7b. Resumed sessions are not detected yet.
 
 The sections below are the historical planning record; their gate statements describe the state at the time they were written.
 
