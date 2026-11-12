@@ -344,6 +344,31 @@ class RosterVocabularyTests(unittest.TestCase):
         found = self.python_violations('attempt = dict(kind="review"', 'runtime/evidence.py', ALLOWED)
         self.assertTrue(any('invalid Python syntax' in item for item in found), found)
 
+    def test_python_line_boundaries_do_not_follow_unicode_text_separators(self):
+        for separator in ('\v', '\f', '\x85', '\u2028', '\u2029'):
+            with self.subTest(separator=repr(separator)):
+                prefix = '# comment' + separator + '\n'
+                self.assertEqual(self.python_violations(prefix + 'x = dict(kind="review")\n'), [])
+                source = prefix + 'add(thread, "review")\nx=dict(kind="review"\n                    "")\n'
+                found = self.python_violations(source)
+                self.assertTrue(any(item.startswith('runtime/fresh.py:2: review as a value:') for item in found), found)
+
+    def test_role_lookup_defaults_override_nested_non_role_contexts(self):
+        for source in (
+            'add(thread, data.get("role", dict(kind="review")["kind"]))',
+            'add(thread, data.get("role", {"kind": "review"}["kind"]))',
+            'add(thread, data.get("role", dict(kind="review") if missing else known))',
+            'add(thread, data.get("role", native_task_name(identity, "review")))',
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(self.python_violations(source, 'runtime/delegation.py', ALLOWED), source)
+        for source in (
+            'add(thread, data.get("kind", dict(kind="review")["kind"]))',
+            'add(thread, data.get("kind", {"kind": "review"}["kind"]))',
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(self.python_violations(source), [])
+
     def test_non_python_files_keep_their_lexical_coverage(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
