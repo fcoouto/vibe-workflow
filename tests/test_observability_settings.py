@@ -800,6 +800,83 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertEqual(run('configure-project', self.project_request(2))[0], 1)
 
 
+class ExportStoreTests(unittest.TestCase):
+    """Upload-state files reuse the private store: same permissions, binding, lock and recovery path."""
+
+    TASK = dict(client="codex", session_id="session-1", task_id="settings-fixture")
+
+    def setUp(self):
+        ObservabilitySettingsTests.setUp(self)
+        self.key = self.settings.destination_key(CONFIGURE["destination"], CONFIGURE["langfuse_project_id"])
+        self.settings.configure(self.scope, CONFIGURE)
+        self.exports = self.directory / "exports"
+
+    def save(self, task=None, **changes):
+        task = task or self.TASK
+        with self.settings.export_store(self.scope, task, self.key, write=True, create=True) as owner:
+            self.assertIsNone(owner.load())
+            owner.check()
+            record = dict(version=1, revision=1, binding=owner.binding, task_ref=task, destination_key=self.key,
+                          export_state=None, last_result=dict(at=1, code="nothing_to_send")) | changes
+            owner.save(record)
+            return record
+
+    def name(self, task=None):
+        return self.settings.export_name(state._scope_id(self.scope), task or self.TASK, self.key) + ".json"
+
+    def test_saved_upload_state_is_private_and_readable_through_recovery(self):
+        record = self.save()
+        path = self.exports / self.name()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.exports.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(set(record["binding"]), {"scope_id", "project_id", "authority_directory"})
+        for scope in (self.scope, self.scope.repository_root):
+            with self.subTest(recovery=type(scope).__name__), \
+                    self.settings.export_store(scope, self.TASK, self.key, recovery=True) as owner:
+                self.assertEqual(owner.load(), record)
+        self.assertNotEqual(self.name(), self.name(dict(self.TASK, task_id="other")))
+
+    def test_absent_upload_state_is_not_created_by_reads(self):
+        with self.settings.export_store(self.scope.repository_root, self.TASK, self.key, recovery=True) as owner:
+            self.assertIsNone(owner)
+        with self.settings.export_store(self.scope, self.TASK, self.key) as owner:
+            self.assertIsNone(owner.load())
+        self.assertFalse(self.exports.exists())
+
+    def test_linked_exports_directory_or_foreign_record_is_refused(self):
+        self.save()
+        path = self.exports / self.name()
+        other = dict(self.TASK, task_id="other")
+        os.link(path, self.exports / self.name(other))
+        os.unlink(path)
+        with self.assertRaisesRegex(self.settings.SettingsError, r"\Aobservability_export_mismatch\Z"), \
+                self.settings.export_store(self.scope, other, self.key) as owner:
+            owner.load()
+        moved = self.directory / "moved"
+        self.exports.rename(moved)
+        self.exports.symlink_to(moved)
+        with self.assertRaises(self.settings.SettingsError), \
+                self.settings.export_store(self.scope, self.TASK, self.key, write=True, create=True) as owner:
+            owner.load()
+
+    def test_invalid_names_or_envelopes_fail_closed(self):
+        for task, key in ((dict(self.TASK, extra="x"), self.key), (dict(self.TASK, task_id=""), self.key),
+                          (self.TASK, "PRIVATE"), (self.TASK, self.key.upper())):
+            with self.subTest(task=task, key=key), self.assertRaises(self.settings.SettingsError):
+                with self.settings.export_store(self.scope, task, key):
+                    pass
+        self.save(last_result=dict(at=1, code="PRIVATE"))
+        with self.assertRaisesRegex(self.settings.SettingsError, r"\Ainvalid_observability_configuration\Z"), \
+                self.settings.export_store(self.scope, self.TASK, self.key) as owner:
+            owner.load()
+
+    def test_busy_upload_lock_is_refused(self):
+        with self.settings.export_store(self.scope, self.TASK, self.key, write=True, create=True):
+            with self.assertRaisesRegex(self.settings.SettingsError, r"\Aobservability_operation_busy\Z"):
+                with self.settings.export_store(self.scope, self.TASK, self.key, write=True):
+                    pass
+
+
 class ProjectLinkedWorktreeTests(unittest.TestCase):
     """Two linked worktrees of one Repository in one canonical Project."""
 

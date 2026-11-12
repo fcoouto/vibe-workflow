@@ -319,6 +319,15 @@ def control_main():
                 raise StartupError(RETIRED_CONTEXT_ID)
             report = (evidence.evidence_status(scope, client, args.session) if args.action == "status" else
                       operations[args.review_action if args.action == "review" else args.action](scope, request))
+            if args.action == "verify":
+                # Any future linked-verification caller must call this hook once per member after the linked operation returns.
+                try:
+                    from runtime import observability_hook
+                except Exception:
+                    # Optional upload must preserve the verification result.
+                    observability_hook = None
+                if observability_hook is not None:
+                    observability_hook.after_completion(scope, request, report)
             if args.action == "review" and args.review_action == "prepare":
                 from runtime.worker_visibility import prepare_managed
                 report = prepare_managed(scope.repository_root, request.get("session_id"), report)

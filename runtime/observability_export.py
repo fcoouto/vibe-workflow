@@ -46,6 +46,9 @@ _TRACE_ID = re.compile(r"[0-9a-f]{32}")
 _SPAN_ID = re.compile(r"[0-9a-f]{16}")
 _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,64}")
 _LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+# A `/`-separated label that looks like a filesystem path is refused, so no local path is exported as a model.
+_FILE_SUFFIX = re.compile(r"\.(gguf|ggml|bin|safetensors|pt|pth|ckpt|onnx|h5|pb|tflite|mlmodel|json|zip|tar|gz)\Z",
+                          re.IGNORECASE)
 _MAX_ITEMS = 64
 _MAX_NS = 2 ** 63 - 2
 
@@ -250,6 +253,12 @@ def _state(value):
     return deepcopy(value)
 
 
+def _model_label(label):
+    if not _LABEL.fullmatch(label) or ".." in label or label[0] in "/~" or label.count("/") > 2:
+        return False
+    return all(segment and not _FILE_SUFFIX.search(segment) for segment in label.split("/"))
+
+
 def _metadata(reconciled):
     message = "Export metadata refused"
     versions = set(reconciled["source_versions"])
@@ -257,7 +266,7 @@ def _metadata(reconciled):
              for item in reconciled["model_settings"] for entry in item["model_settings"]}
     gaps = {gap["code"] for gap in reconciled["gaps"]}
     _require(all(_VERSION.fullmatch(item) for item in versions)
-             and all(label == "-" or _LABEL.fullmatch(label) for pair in pairs for label in pair)
+             and all(label == "-" or _model_label(label) for pair in pairs for label in pair)
              and all(re.fullmatch(r"[a-z_]{1,64}", code) for code in gaps)
              and max(len(versions), len(pairs), len(gaps)) <= _MAX_ITEMS, message)
     return {"coverage": reconciled["coverage"], "gap_codes": ",".join(sorted(gaps)),
