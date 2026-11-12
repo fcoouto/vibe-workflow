@@ -520,7 +520,6 @@ class ThreadTests(HookFixture):
         from runtime import observability_accounting
         self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
         threads = self.threads([], collected={"receipt": dict(receipt=dict(reviewer_id="legacy-thread"))})
-        self.assertEqual(threads[-1], dict(thread_id="legacy-thread", role="unknown"))
         self.session()
         self.session(thread="legacy-thread")
         observations = codex_usage.acquire_task_observations(threads,

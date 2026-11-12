@@ -6,7 +6,11 @@ the user's main session and a provenance value, the second is an operation kind.
 meaning. Role logic (a role field compared with, assigned or keyed by an old name) is refused everywhere except the
 one reader of stored names, whatever the allowances say; that check also covers `coordinator`, whose role
 logic is `task_profile.orchestrates`.
+
+Python attempt-kind occurrences use bounded AST contexts rather than per-file allowances. Overlapping review
+metadata/native-marker allowances apply only to their literal expression spans. Unknown syntax stays rejected.
 """
+import ast
 from pathlib import Path
 import re
 import tempfile
@@ -32,11 +36,11 @@ ALLOWED = (
     *(('runtime/usage_budget.py', name, _STAGES) for name in ('worker', 'review', 'repair')),
     ('runtime/adapters/codex.py', 'worker', 'the native task-name prefix and Workstreams marker'),
     ('runtime/adapters/codex.py', 'review', 'the native task-name prefix and Workstreams marker'),
-    ('runtime/delegation.py', 'worker', 'the Codex native task-name marker passed to native_task_name'),
-    ('runtime/delegation.py', 'review', 'the D5 attempt kind, the assignment body `review` metadata key and the '
-                                        'Codex native task-name marker'),
-    ('runtime/evidence.py', 'review', 'the D5 attempt kind and the assignment body `review` metadata key'),
-    ('runtime/setup_readiness.py', 'review', 'the D5 attempt kind'),
+    ('runtime/delegation.py', 'worker', 'the Codex native task-name marker passed to native_task_name',
+     ('native-marker',)),
+    ('runtime/delegation.py', 'review', 'the assignment body metadata key and Codex native task-name marker',
+     ('review-metadata', 'native-marker')),
+    ('runtime/evidence.py', 'review', 'the assignment body metadata key', ('review-metadata',)),
     ('runtime/external_delegation.py', 'worker', 'the external route mode (proposal or worker)'),
     ('runtime/external_delegation.py', 'reviewer', _ATTESTATION),
     ('runtime/openrouter_worker_managed.py', 'worker', 'the external route mode'),
@@ -69,14 +73,139 @@ def uses(root):
                 yield path, number, match.group(2), line
 
 
+def field(node, name):
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.slice, ast.Constant) and node.slice.value == name
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'get'
+            and 1 <= len(node.args) <= 2 and isinstance(node.args[0], ast.Constant) and node.args[0].value == name)
+
+
+def role(node):
+    return (isinstance(node, ast.Name) and node.id == 'role'
+            or isinstance(node, ast.Attribute) and node.attr == 'role' or field(node, 'role'))
+
+
+def role_context(node, parents):
+    """Conservative direct role sinks override even a locally valid non-role expression."""
+    child = node
+    while child in parents:
+        parent = parents[child]
+        if isinstance(parent, ast.keyword) and parent.arg == 'role':
+            return True
+        if isinstance(parent, ast.Dict) and any(value is child and isinstance(key, ast.Constant) and key.value == 'role'
+                                               for key, value in zip(parent.keys, parent.values)):
+            return True
+        if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is child:
+            targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+            if any(role(target) for target in targets):
+                return True
+        if isinstance(parent, ast.Compare) and any(role(part) for part in [parent.left, *parent.comparators]):
+            return True
+        if isinstance(parent, ast.arguments):
+            positional = [*parent.posonlyargs, *parent.args]
+            defaults = list(zip(positional[-len(parent.defaults):], parent.defaults)) if parent.defaults else []
+            if any(argument.arg == 'role' and default is child
+                   for argument, default in [*defaults, *zip(parent.kwonlyargs, parent.kw_defaults)]):
+                return True
+        child = parent
+    return False
+
+
+def kind_context(node, parents):
+    parent = parents.get(node)
+    if isinstance(parent, ast.keyword):
+        return parent.arg == 'kind'
+    if isinstance(parent, ast.Dict):
+        return any(value is node and isinstance(key, ast.Constant) and key.value == 'kind'
+                   for key, value in zip(parent.keys, parent.values))
+    if isinstance(parent, (ast.Assign, ast.AnnAssign)) and parent.value is node:
+        targets = parent.targets if isinstance(parent, ast.Assign) else [parent.target]
+        return all(field(target, 'kind') for target in targets)
+    comparison = parents.get(parent) if isinstance(parent, (ast.Tuple, ast.List, ast.Set)) else parent
+    if not isinstance(comparison, ast.Compare) or len(comparison.ops) != 1:
+        return False
+    left, right, operation = comparison.left, comparison.comparators[0], comparison.ops[0]
+    if isinstance(operation, (ast.Eq, ast.NotEq)):
+        return left is node and field(right, 'kind') or right is node and field(left, 'kind')
+    return (isinstance(operation, (ast.In, ast.NotIn)) and field(left, 'kind')
+            and isinstance(right, (ast.Tuple, ast.List, ast.Set)) and node in right.elts)
+
+
+def body(node):
+    return isinstance(node, ast.Name) and node.id == 'body' or field(node, 'body')
+
+
+def review_metadata(node, parents):
+    if node.value != 'review':
+        return False
+    parent = parents.get(node)
+    if isinstance(parent, ast.Subscript) and parent.slice is node:
+        return body(parent.value)
+    if isinstance(parent, ast.Call) and parent.args and parent.args[0] is node:
+        return isinstance(parent.func, ast.Attribute) and parent.func.attr == 'get' and body(parent.func.value)
+    if isinstance(parent, ast.Compare) and len(parent.ops) == 1:
+        return parent.left is node and isinstance(parent.ops[0], (ast.In, ast.NotIn)) and body(parent.comparators[0])
+    if isinstance(parent, (ast.Tuple, ast.List)):
+        call = parents.get(parent)
+        return (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == '_fields'
+                and call.args and body(call.args[0]) and parent in call.args[1:])
+    return False
+
+
+def native_marker(node, parents):
+    if node.value not in ('review', 'worker'):
+        return False
+    expression = node
+    while isinstance(parents.get(expression), ast.IfExp) and expression is not parents[expression].test:
+        expression = parents[expression]
+    call = parents.get(expression)
+    return (isinstance(call, ast.Call) and isinstance(call.func, (ast.Name, ast.Attribute))
+            and (call.func.id if isinstance(call.func, ast.Name) else call.func.attr) == 'native_task_name'
+            and len(call.args) >= 2 and call.args[1] is expression)
+
+
+def python_occurrences(text):
+    """Classify exact literal spans, not lines. This is syntax recognition, not dataflow analysis."""
+    tree = ast.parse(text)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    result = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or node.value not in (*NAMES, 'coordinator'):
+            continue
+        contexts = {name for name, predicate in (('kind', kind_context), ('review-metadata', review_metadata),
+                                                  ('native-marker', native_marker)) if predicate(node, parents)}
+        result.append((node, contexts, role_context(node, parents)))
+    return result
+
+
 def violations(root, allowed=ALLOWED):
-    permitted = {(path, name) for path, name, _ in allowed}
-    found = ['%s:%d: %s as a value: %s' % (path, number, name, line.strip())
-             for path, number, name, line in uses(root) if (path, name) not in permitted]
+    permitted = {(entry[0], entry[1]): entry[3] if len(entry) == 4 else None for entry in allowed}
+    found = []
     for path, text in files(root):
+        occurrences = []
+        if path.endswith('.py'):
+            try:
+                occurrences = python_occurrences(text)
+            except (SyntaxError, ValueError):
+                found.append('%s:1: invalid Python syntax' % path)
+                continue
+        for number, line in enumerate(text.splitlines(), 1):
+            for match in VALUE.finditer(line):
+                start, end = (number, len(line[:match.start()].encode('utf-8'))), (number, len(line[:match.end()].encode('utf-8')))
+                literals = [(contexts, blocked) for node, contexts, blocked in occurrences
+                            if (node.lineno, node.col_offset) <= start and end <= (node.end_lineno, node.end_col_offset)]
+                contexts = set().union(*(item[0] for item in literals))
+                blocked = path != READER and any(item[1] for item in literals)
+                key = (path, match.group(2))
+                allowance = key in permitted and (permitted[key] is None or contexts.intersection(permitted[key]))
+                if not blocked and ('kind' in contexts or allowance):
+                    continue
+                found.append('%s:%d: %s as a value: %s' % (path, number, match.group(2), line.strip()))
         if path != READER:
             found += ['%s:%d: role logic on an old name: %s' % (path, number, line.strip())
                       for number, line in enumerate(text.splitlines(), 1) if ROLE_LOGIC.search(line)]
+            found += ['%s:%d: role logic on an old name: %s' % (path, node.lineno, node.value)
+                      for node, _, blocked in occurrences if blocked]
     return found
 
 
@@ -94,12 +223,13 @@ class RosterVocabularyTests(unittest.TestCase):
 
     def test_every_allowance_is_used_and_names_its_meaning(self):
         used = {(path, name) for path, _, name, _ in uses(ROOT)}
-        for path, name, reason in ALLOWED:
+        for entry in ALLOWED:
+            path, name, reason = entry[:3]
             with self.subTest(path=path, name=name):
                 self.assertIn((path, name), used, 'remove an allowance nothing needs')
                 self.assertIn(name, NAMES)
                 self.assertGreater(len(reason.split()), 2)
-        self.assertEqual(len({(path, name) for path, name, _ in ALLOWED}), len(ALLOWED))
+        self.assertEqual(len({entry[:2] for entry in ALLOWED}), len(ALLOWED))
 
     def test_gate_rejects_role_logic_and_permits_named_non_role_values(self):
         with tempfile.TemporaryDirectory() as temp:

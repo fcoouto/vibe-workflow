@@ -180,7 +180,8 @@ def task_threads(scope, task):
             thread = evidence._read(scope, attempt["collected"])["receipt"].get("reviewer_id")
         else:
             thread = _worker(scope, linked) if linked is not None else None
-        if not add(thread, linked["data"]["role"] if linked is not None else "reviewer"):
+        # A legacy receipt can identify a thread without recording its specialist.
+        if not add(thread, linked["data"]["role"] if linked is not None else "unknown"):
             return None
     return [dict(thread_id=thread_id, role=role) for thread_id, role in threads.items()]
 
