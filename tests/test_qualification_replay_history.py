@@ -219,19 +219,46 @@ class ReplayHistoryTests(unittest.TestCase):
     def test_a_qualification_session_id_blocks_the_report(self):
         store = self.codex([child("qual-1"), child("t")], [("p", "qual-1"), ("p", "t")])
         with self.assertRaisesRegex(Refused, "qualification_session_found"):
-            replay.run([store], exclusions=BASIS, now_ms=NOW_MS)
+            replay.gather([store], {"qual-1"}, now_ms=NOW_MS)  # the authorized read `run` uses after its gates
+        self.assertEqual(replay.gather([store], {"other"}, now_ms=NOW_MS)["sessions_found"], 2)
         with self.assertRaisesRegex(Refused, "exclusion_basis_missing"):
             replay.run([store], now_ms=NOW_MS)
         with self.assertRaisesRegex(Refused, "exclusion_basis_missing"):
             replay.run([store], exclusions=dict(ids=[], sources=["x"], checked="x"), now_ms=NOW_MS)
 
-    def test_the_real_run_stays_blocked_without_store_c(self):
-        store = self.codex([child("t")], [("p", "t")])
-        with self.assertRaisesRegex(Refused, "store_c_unmapped"):
-            replay.run([store], exclusions=BASIS, now_ms=NOW_MS)
-        opus = dict(name="opus", kind="unknown", path=str(self.folder / "missing"), roots=[OPUS])
-        with self.assertRaisesRegex(Refused, "store_c_unmapped"):
-            replay.run([store, opus], exclusions=BASIS, now_ms=NOW_MS)
+    def test_registration_gates_refuse_before_any_store_is_opened(self):
+        codex = self.codex([child("t")], [("p", "t")])
+        opencode = dict(name="opencode", kind="opencode", roots=[ROOT],
+                        path=opencode_store(str(self.folder / "o.db"), [dict(id="s1", parent_id="r")]))
+        fake_opus = dict(name="opus", kind="codex", path=codex["path"], roots=[OPUS])  # a name is not a mapping
+        foreign = dict(name="other", kind="codex", path=codex["path"], roots=[ROOT])
+        forbidden = AssertionError("a store was read before the registration gates")
+        cases = (([], None, "exclusion_basis_missing"), ([codex], None, "exclusion_basis_missing"),
+                 ([], BASIS, "store_missing: opencode, codex"), ([codex], BASIS, "store_missing: opencode"),
+                 ([opencode], BASIS, "store_missing: codex"), ([opencode, codex], BASIS, "store_c_unmapped"),
+                 ([opencode, codex, fake_opus], BASIS, "store_c_unmapped"), ([fake_opus], BASIS, "store_c_unmapped"),
+                 ([opencode, codex, foreign], BASIS, "store_unregistered"))
+        for stores, basis, reason in cases:
+            with self.subTest(reason=reason, stores=[store["name"] for store in stores]), \
+                    mock.patch.object(replay, "collect", side_effect=forbidden), \
+                    mock.patch.object(replay, "gather", side_effect=forbidden), \
+                    mock.patch.object(replay.sqlite3, "connect", side_effect=forbidden), \
+                    mock.patch.object(replay, "label", side_effect=forbidden):
+                with self.assertRaisesRegex(Refused, "^" + reason):
+                    replay.run(stores, exclusions=basis, now_ms=NOW_MS)
+
+    def test_the_observed_schema_is_bound_by_digest(self):
+        first = self.codex([child("t")], [("p", "t")], "one.sqlite")
+        second = self.codex([child("u")], [("p", "u")], "two.sqlite")
+        digests = [replay.collect([store], now_ms=NOW_MS)["schemas"] for store in (first, second)]
+        self.assertEqual(digests[0], digests[1])  # the schema, not the rows or the path, is bound
+        self.assertRegex(digests[0]["codex"][0], "^[0-9a-f]{64}$")
+        with closing(sqlite3.connect(second["path"])) as db:
+            db.execute("ALTER TABLE threads ADD COLUMN later TEXT")  # an unmapped change: still readable
+            db.commit()
+        changed = replay.collect([second], now_ms=NOW_MS)["schemas"]
+        self.assertNotEqual(changed, digests[0])
+        self.assertNotIn(second["path"], repr(changed))
 
     def test_disagreement_is_aggregated_with_pending_and_unknowns(self):
         rows = [dict(store="codex", specialist="software-engineer", work_kind="implementation",
@@ -521,16 +548,18 @@ class DecisionCompositionTests(unittest.TestCase):
     def test_run_composes_only_after_every_real_gate(self):
         store = dict(name="opencode", kind="opencode", roots=[ROOT],
                      path=opencode_store(str(self.folder / "o.db"), [dict(id="s1", parent_id="r")]))
+        codex = dict(name="codex", kind="codex", roots=[ROOT],
+                     path=codex_store(str(self.folder / "c.sqlite"), [child("t")], [("p", "t")]))
         bare = self.folder / "bare2" / "routing-settings.json"
         bare.parent.mkdir(mode=0o700)
-        with self.assertRaisesRegex(Refused, "store_c_unmapped"):  # the registration gate comes first
+        with self.assertRaisesRegex(Refused, "store_missing: codex"):  # registration gates precede every read
             replay.run([store], settings_path=str(bare), exclusions=BASIS)
         opus = dict(name="opus", kind="opencode", path=store["path"], roots=[OPUS])  # a name is not a mapping
         with self.assertRaisesRegex(Refused, "store_c_unmapped"):
-            replay.run([store, opus], settings_path=self.settings, exclusions=BASIS)
+            replay.run([store, codex, opus], settings_path=self.settings, exclusions=BASIS)
         with mock.patch.object(replay, "compose", side_effect=AssertionError("composed before the gates")):
             with self.assertRaisesRegex(Refused, "store_c_unmapped"):
-                replay.run([store], settings_path=self.settings, exclusions=BASIS)  # no now_ms needed
+                replay.run([store, codex], settings_path=self.settings, exclusions=BASIS)  # no now_ms needed
 
 
 if __name__ == "__main__":

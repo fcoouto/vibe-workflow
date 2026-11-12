@@ -8,16 +8,18 @@ rows stay in memory; the only file written is a private temporary admission ledg
 
 `compose` routes the eligible sessions through the real router (`ensure_profile`, `rank`, `admit`) over the saved
 qualified paths and strategy table beside `settings_path`; `run` calls it only after every gate passes. The gates
-fail closed with a precise reason, in this order:
+fail closed with a precise reason, in this order; the first two open no store:
 
-- `exclusion_basis_missing`: no validated qualification and pilot session ids from an approved caller (Edit 9);
-- `store_c_unmapped` / `store_unregistered`: a store named `opus`, or any store outside the registered mapping
-  (a caller's name is not the mapping store C still needs);
-- `qualification_session_found`: an eligible session id is one of those ids (Edit 6);
-- `store_c_unmapped` / `store_missing`: a registered store is absent, so the registered sample is incomplete;
+- `exclusion_basis_missing`: no qualification and pilot session ids, sources and check method from an approved
+  caller (shape-checked here, not verified; Edit 9);
+- `_registered`: `store_c_unmapped` for a store named `opus` (a caller's name is not the mapping store C needs),
+  `store_unregistered` for any store outside the registered mapping, `store_missing` when store A or B is absent,
+  then `store_c_unmapped` while `STORE_C_MAPPING` is None;
+- `gather` (the first read): `qualification_session_found` when an eligible session id is one of those ids;
 - `route_unqualified: <code>`: no settings path, or `routing_paths.gate` finds no qualified path or no generated route.
 
-While store C has no registered mapping, `run` always stops at `store_c_unmapped`. Registration is not permission:
+While store C has no registered mapping, `run` always stops at `store_c_unmapped` and opens no store. Each
+authorized read binds the observed schema by SHA-256 (`schemas`, by store name). Registration is not permission:
 no historical run is authorized by this module.
 """
 from contextlib import closing
@@ -37,12 +39,12 @@ from tests.qualification.safety import Refused
 
 # Store names whose field mapping is registered (Edit 9), with their reader. Store C (`opus`) has none.
 MAPPED_STORES = dict(opencode="opencode", codex="codex")
+STORE_C_MAPPING = None  # set only by a dated edit that identifies and maps store C; until then `run` refuses
 HOSTS = dict(opencode="opencode", codex="codex_native")  # each mapped store's launching host (Edit 9 host formats)
 WINDOW_UNIT = routing_paths.WINDOW_UNIT
 WINDOW_LENGTHS = dict(routing_observations.RATE_WINDOWS.values())  # 5h and 7d, in seconds
 HOUR_MS = 3_600_000
 MINUTE_MS = 60_000
-REGISTERED_STORES = ("opencode", "codex", "opus")
 # Codex source (codex-rs/state, epoch_millis_to_datetime): values below 2020-01-01 in milliseconds are legacy
 # second-precision rows and are multiplied by 1000.
 MIN_EPOCH_MILLIS = 1_577_836_800_000
@@ -150,12 +152,21 @@ def _read(store):
         raise Refused("store_c_unmapped: %s has no registered field mapping" % store.get("name"))
     with closing(_connect(store["path"])) as db:
         _check_schema(db, store)
+        schema = _schema_digest(db)
         rows = READERS[store["kind"]](db, store)
     unique = {}  # overlapping roots can select one row twice; that is one read, not a duplicate session
     for row in rows:
         row.update(store=store["name"], kind=store["kind"], path=str(store["path"]))
         unique.setdefault(row["id"], row)
-    return list(unique.values())
+    return list(unique.values()), schema
+
+
+def _schema_digest(db):
+    """SHA-256 of the schema this read observes, on the same read-only connection and by the same rule as the
+    Step 1 fingerprints (`sqlite_schema` rows `type, name, tbl_name, sql`, ordered by type and name, as JSON). It
+    binds a report to its input schema; it reads no row and authorizes nothing."""
+    schema = db.execute("SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name").fetchall()
+    return hashlib.sha256(json.dumps([list(item) for item in schema]).encode()).hexdigest()
 
 
 def _first_copy(rows):
@@ -172,8 +183,13 @@ def _first_copy(rows):
 
 
 def collect(stores, *, now_ms):
-    """Read the mapped stores; return `sessions_found`, `excluded` by reason and the in-memory `eligible` rows."""
-    rows = [row for store in stores for row in _read(store)]
+    """Read the mapped stores; return `sessions_found`, `excluded` by reason, the in-memory `eligible` rows and
+    `schemas`, the observed schema digest of each store read, by store name (never a path or SQL)."""
+    rows, schemas = [], {}
+    for store in stores:
+        found, schema = _read(store)
+        rows.extend(found)
+        schemas.setdefault(store["name"], []).append(schema)
     unique, duplicates = _first_copy(rows)
     excluded = dict.fromkeys(EXCLUSIONS, 0)
     excluded["duplicate"] = duplicates
@@ -189,7 +205,7 @@ def collect(stores, *, now_ms):
             excluded["still_running"] += 1
         else:  # Neither store has a title, compaction or summary marker (Edit 9): that count stays 0.
             eligible.append(row)
-    return dict(sessions_found=len(unique), excluded=excluded, eligible=eligible)
+    return dict(sessions_found=len(unique), excluded=excluded, eligible=eligible, schemas=schemas)
 
 
 def _words(text):
@@ -440,24 +456,38 @@ def run(stores, *, settings_path=None, exclusions=None, now_ms=None):
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     blocked = _basis(exclusions)
     if blocked is None:
-        raise Refused("exclusion_basis_missing: an approved caller must supply validated qualification and pilot "
-                      "session ids (Edit 9)")
-    for store in stores:
-        if store.get("name") == "opus":  # naming a store `opus` is not the registered mapping store C still needs
-            raise Refused("store_c_unmapped: the opus store is not identified or mapped (Edit 9)")
-        if MAPPED_STORES.get(store.get("name")) != store.get("kind"):
-            raise Refused("store_unregistered: a store outside the registered mapping is never read or dropped")
-    mapped = list(stores)
-    found = collect(mapped, now_ms=now_ms)
-    if any(row["id"] in blocked for row in found["eligible"]):
-        raise Refused("qualification_session_found: an eligible session is a qualification or pilot session")
-    names = {store.get("name") for store in mapped}
-    if "opus" not in names:
-        raise Refused("store_c_unmapped: the opus store is not identified or mapped; the registered sample would "
-                      "be incomplete (Edit 9)")
-    missing = [name for name in REGISTERED_STORES if name not in names]
-    if missing:
-        raise Refused("store_missing: %s; the registered sample would be incomplete" % ", ".join(missing))
+        raise Refused("exclusion_basis_missing: an approved caller must supply qualification and pilot session ids "
+                      "with their sources and check method (shape-checked here, not verified; Edit 9)")
+    _registered(stores)  # every registration and completeness gate, before any store is opened
+    found = gather(stores, blocked, now_ms=now_ms)  # unreachable while store C has no registered mapping
     report = compose(found["eligible"], settings_path=settings_path)
     report.update(sessions_found=found["sessions_found"], excluded=found["excluded"])
+    report["inputs"]["store_schemas"] = found["schemas"]
     return report
+
+
+def _registered(stores):
+    """Refuse, before any read, a store outside the registered mapping, a missing store A or B, or the unregistered
+    store C. A caller naming a store `opus` is not the mapping store C needs. While `STORE_C_MAPPING` is None this
+    always refuses: no input can reach a read."""
+    for store in stores:
+        if store.get("name") == "opus":
+            raise Refused("store_c_unmapped: a store named opus is not the registered mapping store C needs (Edit 9)")
+        if MAPPED_STORES.get(store.get("name")) != store.get("kind"):
+            raise Refused("store_unregistered: a store outside the registered mapping is never read or dropped")
+    names = {store.get("name") for store in stores}
+    missing = [name for name in MAPPED_STORES if name not in names]
+    if missing:
+        raise Refused("store_missing: %s; the registered sample would be incomplete" % ", ".join(missing))
+    if STORE_C_MAPPING is None:
+        raise Refused("store_c_unmapped: store C (opus) is not identified or mapped; the registered sample would be "
+                      "incomplete (Edit 9)")
+
+
+def gather(stores, blocked, *, now_ms):
+    """The authorized read `run` performs after `_registered`: `collect`, then refuse while any eligible session id
+    is a qualification or pilot session id (Edit 6)."""
+    found = collect(stores, now_ms=now_ms)
+    if any(row["id"] in blocked for row in found["eligible"]):
+        raise Refused("qualification_session_found: an eligible session is a qualification or pilot session")
+    return found
