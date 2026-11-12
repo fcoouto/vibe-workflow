@@ -16,6 +16,8 @@ from runtime.adapters import codex_usage
 
 THREAD = "019a6f00-0000-7000-8000-000000000001"
 OTHER = "019a6f00-0000-7000-8000-000000000002"
+PAGE = "019a6f00-0000-7000-8000-0000000000a1"
+PAGE2 = "019a6f00-0000-7000-8000-0000000000a2"
 SECRET = "sk-live-7f3a9cSECRET user said: my password is hunter2-zebra"
 START = datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc)
 CUTOFF = datetime(2026, 11, 12, 12, 0, tzinfo=timezone.utc)
@@ -217,23 +219,51 @@ class CodexUsageTests(unittest.TestCase):
         with patch.object(codex_usage, "MAX_LINE", 4096):
             self.assertGap(self.read(), "line_too_large")
 
-    def test_marker_after_line_limit_is_still_too_large(self):
-        row = json.dumps(message(at(10, 1), "y" * 9000))[:-1] + ', "kind": "token_count"}'
-        self.write([meta(), row.encode()])
-        with patch.object(codex_usage, "MAX_LINE", 4096):
-            self.assertGap(self.read(), "line_too_large")
+    def test_oversized_line_is_too_large_when_its_prefix_shows_a_kept_row(self):
+        pad = "x" * 5000
+        late_type = {"timestamp": stamp(at(10, 1)), "type": "event_msg",
+                     "payload": {"pad": "p" * 600, "type": "agent_message", "message": pad}}
+        big_meta = meta(at(9, 1), thread=OTHER)
+        big_meta["payload"]["pad"] = pad
+        big_context = context(at(10, 1))
+        big_context["payload"]["pad"] = pad
+        big_token = token(at(10, 1), 1, info={"total_token_usage": totals(1), "pad": pad})
+        for row in (big_meta, big_context, big_token, late_type):
+            for separators in ((", ", ": "), (",", ":")):
+                with self.subTest(kind=row["type"], payload=row["payload"].get("type"), compact=separators[1] == ":"):
+                    path = self.write([meta(), json.dumps(row, separators=separators).encode(), token(at(10, 30), 3)])
+                    with patch.object(codex_usage, "MAX_LINE", 4096):
+                        self.assertGap(self.read(), "line_too_large")
+                    path.unlink()
 
-    def test_marker_split_across_read_boundary_is_too_large(self):
-        head = json.dumps(message(at(10, 1), "y" * 5000)).encode()[:4090]
-        self.write([meta(), head + b'"token_count"' + b"w" * 6000])
-        with patch.object(codex_usage, "MAX_LINE", 4096):
-            self.assertGap(self.read(), "line_too_large")
+    def test_oversized_line_with_other_prefix_is_skipped_unparsed(self):
+        text = "y" * 9000
+        structural = b', "x": {"type": "token_count", "info": null}}'
+        agent = {"timestamp": stamp(at(10, 1)), "type": "event_msg",
+                 "payload": {"type": "agent_message", "message": text}}
+        compacted = {"timestamp": stamp(at(10, 2)), "type": "compacted",
+                     "payload": {"replacement_history": [{"type": "token_count"}], "message": text}}
+        rows = (json.dumps(agent).encode()[:-2] + structural + b"}",
+                json.dumps(message(at(10, 3), text)).encode()[:-1] + structural,
+                json.dumps(compacted, separators=(",", ":")).encode(),
+                json.dumps(message(at(10, 4), "y" * 5000)).encode()[:4090] + b'"token_count"' + b"w" * 6000)
+        for row in rows:
+            with self.subTest(row=row[:60]):
+                path = self.write([meta(), row, token(at(10, 30), 300)])
+                with (patch.object(codex_usage, "MAX_LINE", 4096),
+                      patch.object(codex_usage, "json_object", wraps=codex_usage.json_object) as parse):
+                    result = self.read()
+                self.assertEqual((result["gaps"], result["usage"]), ([], totals(300)))
+                self.assertEqual(parse.call_count, 2)
+                path.unlink()
 
     def test_session_meta_mismatch(self):
         cases = ([meta(thread=OTHER), token(at(10, 30), 1)],
                  [message(at(9)), meta(), token(at(10, 30), 1)],
                  [context(at(9)), token(at(10, 30), 1)],
-                 [meta(), meta(at(10)), token(at(10, 30), 1)],
+                 [meta(), token(at(9, 30), 1), meta(at(10)), token(at(10, 30), 1)],
+                 [meta(), token(at(9, 10), info=None), meta(at(9, 20), thread=OTHER), token(at(10, 30), 1)],
+                 [meta(), token(at(10, 30), 1), meta(at(11), thread=OTHER)],
                  [{"timestamp": stamp(at(9)), "type": "session_meta", "payload": [THREAD]}],
                  [])
         for rows in cases:
@@ -247,14 +277,37 @@ class CodexUsageTests(unittest.TestCase):
                 self.assertGap(self.read(), "session_meta_mismatch")
                 path.unlink()
 
+    def test_forked_header_before_first_token_row_is_ignored(self):
+        parent = meta(at(9, 1), thread=OTHER, version="9.9.9", created=at(10, 30))
+        same = meta(at(9, 1))
+        garbage = {"timestamp": "unusable", "type": "session_meta", "payload": [SECRET]}
+        older = meta(at(8), thread=OTHER)
+        for header in (parent, same, garbage, older):
+            with self.subTest(header=header["payload"]["id"] if isinstance(header["payload"], dict) else "list"):
+                path = self.write([meta(), header, context(at(9, 2)), token(at(9, 30), 100), token(at(10, 30), 200)])
+                result = self.read()
+                self.assertEqual((result["gaps"], result["cli_version"]), ([], VERSION))
+                self.assertEqual((result["baseline"], result["usage"]), (totals(100), totals(100)))
+                self.assertNotIn(SECRET, repr(result))
+                path.unlink()
+
     def test_source_version_unqualified(self):
+        self.standard()
+        result = self.read(qualified=frozenset())
+        self.assertGap(result, "source_version_unqualified")
+        self.assertEqual(result["cli_version"], VERSION)
+        self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
+
+    def test_shipped_qualified_versions_are_exactly_0_167_0(self):
+        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset({"0.167.0"}))
         self.standard()
         result = codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
                                                deadline=time.monotonic() + 30)
-        self.assertGap(result, "source_version_unqualified")
-        self.assertEqual(result["cli_version"], VERSION)
-        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset())
-        self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
+        path = self.write([meta(version="0.168.0"), token(at(10, 30), 1)])
+        self.assertGap(codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                     deadline=time.monotonic() + 30), "source_version_unqualified")
+        path.unlink()
 
     def test_missing_or_invalid_version_is_unqualified(self):
         for version in (None, 167, "", "x" * 65, "path/x", "1.0:evil", "v@1", "0.167.0 beta"):
@@ -394,11 +447,10 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=local,
                                                       deadline=time.monotonic() + 30), path)
 
-    def test_lookup_stops_at_first_matching_folder(self):
-        newest = self.standard(folder=self.folder(day=12))
+    def test_plain_files_in_two_window_folders_are_ambiguous(self):
+        self.standard(folder=self.folder(day=12))
         self.standard(folder=self.folder(day=11), mode=0o000)
-        self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF,
-                                                      deadline=time.monotonic() + 30), newest)
+        self.assertGap(self.read(), "thread_file_ambiguous")
 
     def test_lookup_matches_only_the_full_name_form(self):
         self.standard()
@@ -449,6 +501,143 @@ class CodexUsageTests(unittest.TestCase):
     def test_missing_codex_home_is_not_found(self):
         with patch.dict(os.environ, {"CODEX_HOME": str(self.root / "absent")}):
             self.assertGap(self.read(), "thread_file_not_found")
+            self.assertEqual(codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                           deadline=time.monotonic() + 30), [])
+        self.assertEqual(codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                       deadline=time.monotonic() + 30), [])
+
+    # Paginated history
+
+    def page(self, rows, stamp_text="11-00-00", page=PAGE, **kwargs):
+        name = f"rollout-2026-11-12T{stamp_text}-{kwargs.pop('thread', THREAD)}_{page}.jsonl"
+        return self.write(rows, name=name, **kwargs)
+
+    def plain(self, **kwargs):
+        return self.write([meta(), context(at(9, 2)), token(at(9, 30), 100), token(at(10, 30), 200)], **kwargs)
+
+    def test_paginated_thread_sums_across_files(self):
+        self.plain()
+        self.page([meta(at(11), version="0.167.1"), token(at(11, 10), 201), token(at(11, 30), 350)])
+        result = self.read(qualified=frozenset({VERSION, "0.167.1"}))
+        self.assertEqual((result["gaps"], result["cli_version"]), ([], "0.167.1"))
+        self.assertEqual((result["baseline"], result["final"], result["usage"]),
+                         (totals(100), totals(350), totals(250)))
+
+    def test_pages_in_different_date_folders_are_read_in_name_order(self):
+        self.plain(folder=self.folder(day=10))
+        self.page([meta(at(11)), token(at(11, 10), info=None), token(at(11, 20), 201)], folder=self.folder(day=11))
+        self.page([meta(at(11, 40)), token(at(11, 45), 251), token(at(11, 50), 300)], "11-40-00", PAGE2)
+        paths = codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                              deadline=time.monotonic() + 30)
+        self.assertEqual([path.parent.name for path in paths], ["10", "11", "12"])
+        self.assertEqual([path.name.endswith(".jsonl") and "_" in path.name for path in paths], [False, True, True])
+        # 201 continues 200; 251 does not continue 201 + 1, so the second page breaks continuity.
+        self.assertGap(self.read(), "history_incomplete")
+        self.page([meta(at(11, 40)), token(at(11, 45), 202), token(at(11, 50), 300)], "11-40-00", PAGE2)
+        self.assertEqual(self.read()["usage"], totals(200))
+
+    def test_discontinuous_page_is_history_incomplete(self):
+        no_last = token(at(11, 10), 201)
+        del no_last["payload"]["info"]["last_token_usage"]
+        for first in (token(at(11, 10), 260), token(at(11, 10), 200), no_last,
+                      token(at(11, 10), info={"total_token_usage": totals(201)})):
+            with self.subTest(first=first["payload"]["info"]):
+                self.plain()
+                path = self.page([meta(at(11)), first, token(at(11, 30), 400)])
+                self.assertGap(self.read(), "history_incomplete")
+                path.unlink()
+
+    def test_page_only_history_before_task_start_is_incomplete(self):
+        path = self.page([meta(at(11)), token(at(11, 10), 500), token(at(11, 30), 600)])
+        self.assertGap(self.read(), "history_incomplete")
+        path.unlink()
+        # The header time decides even when a token row is placed before the task start.
+        self.page([meta(at(9), created=at(10, 30)), token(at(9, 30), 500), token(at(10, 40), 600)], "09-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_page_only_history_from_before_task_start_counts(self):
+        self.page([meta(at(9)), context(at(9, 1)), token(at(9, 30), 500), token(at(10, 30), 600)], "09-00-00")
+        result = self.read()
+        self.assertEqual((result["gaps"], result["baseline"], result["usage"]), ([], totals(500), totals(100)))
+
+    def test_page_only_without_token_row_before_start_is_incomplete(self):
+        self.page([meta(at(9)), token(at(10, 30), 600)], "09-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_page_before_plain_file_is_history_incomplete(self):
+        self.plain()
+        # 99 + 1 = 100 would pass continuity, so only the order rule rejects it.
+        self.page([meta(at(8)), token(at(8, 10), 99)], "08-00-00")
+        self.assertGap(self.read(), "history_incomplete")
+
+    def test_equal_name_timestamps_are_ambiguous(self):
+        self.plain()
+        self.page([meta(at(11)), token(at(11, 10), 201)], "09-00-00")
+        self.assertGap(self.read(), "thread_file_ambiguous")
+        with self.assertRaises(codex_usage.UsageGap) as raised:
+            codex_usage.find_thread_files(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
+        self.assertEqual(raised.exception.code, "thread_file_ambiguous")
+
+    def test_find_thread_file_rejects_a_multi_file_thread(self):
+        plain = self.plain()
+        self.assertEqual(codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                      deadline=time.monotonic() + 30), plain)
+        self.page([meta(at(11)), token(at(11, 10), 201)])
+        with self.assertRaises(codex_usage.UsageGap) as raised:
+            codex_usage.find_thread_file(THREAD, started_at=START, cutoff_at=CUTOFF, deadline=time.monotonic() + 30)
+        self.assertEqual(raised.exception.code, "thread_file_ambiguous")
+
+    def test_pages_for_other_threads_and_malformed_page_names_are_never_opened(self):
+        plain = self.plain()
+        self.page([meta(at(11), thread=OTHER)], thread=OTHER, mode=0o000)
+        self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_notauuid.jsonl", mode=0o000)
+        self.write([meta(at(11))], name=f"rollout-2026-11-12T11-00-00-{THREAD}_{PAGE}_{PAGE2}.jsonl", mode=0o000)
+        opened, real_open = [], os.open
+        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
+                          or real_open(p, *a, **k)):
+            result = self.read()
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
+        self.assertEqual(opened, [plain])
+
+    def test_page_rows_must_follow_earlier_files_in_time(self):
+        self.plain()
+        self.page([meta(at(10, 20)), token(at(10, 40), 201)])
+        self.assertGap(self.read(), "timestamp_unusable")
+
+    def test_each_page_must_pass_its_own_header_and_version_checks(self):
+        cases = (([meta(at(11), thread=PAGE), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
+                 ([message(at(11)), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
+                 ([meta(at(11), version="0.168.0"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
+                 ([meta(at(11)), token(at(11, 10), 201), meta(at(11, 20), thread=OTHER)], "session_meta_mismatch",
+                  QUALIFIED))
+        for rows, code, qualified in cases:
+            with self.subTest(code=code, rows=len(rows)):
+                self.plain()
+                path = self.page(rows)
+                self.assertGap(self.read(qualified=qualified), code)
+                path.unlink()
+        self.page([meta(at(11)), meta(at(11, 1), thread=OTHER), token(at(11, 10), 201)])
+        self.assertEqual(self.read()["usage"], totals(101))
+
+    def test_page_after_cutoff_is_not_opened(self):
+        self.write([meta(), token(at(9, 30), 100), token(at(10, 30), 200), token(at(12, 30), 300)])
+        page = self.page([meta(at(13)), token(at(13, 10), 301)], "13-00-00", mode=0o000)
+        opened, real_open = [], os.open
+        with patch.object(codex_usage.os, "open", side_effect=lambda p, *a, **k: opened.append(Path(p))
+                          or real_open(p, *a, **k)):
+            result = self.read()
+        self.assertEqual((result["gaps"], result["usage"]), ([], totals(100)))
+        self.assertNotIn(page, opened)
+
+    def test_thread_byte_limit_spans_files(self):
+        self.plain()
+        self.page([meta(at(11)), token(at(11, 10), 201)])
+        sizes = sum(path.stat().st_size for path in self.folder().iterdir())
+        self.assertEqual(codex_usage.MAX_THREAD_BYTES, 256 * 1024 * 1024)
+        with patch.object(codex_usage, "MAX_THREAD_BYTES", sizes - 1):
+            self.assertGap(self.read(), "file_too_large")
+        with patch.object(codex_usage, "MAX_THREAD_BYTES", sizes):
+            self.assertEqual(self.read()["usage"], totals(101))
 
     # Streaming
 
@@ -504,11 +693,19 @@ class CodexUsageTests(unittest.TestCase):
         with patch.dict(os.environ, {"CODEX_HOME": str(link)}):
             self.assertEqual(self.read()["usage"], totals(250))
 
-    def test_non_private_file_is_unreadable(self):
-        for mode in (0o640, 0o604, 0o660):
+    def test_file_writable_by_others_is_unreadable(self):
+        for mode in (0o660, 0o606, 0o666, 0o620, 0o602, 0o664):
             with self.subTest(mode=oct(mode)):
                 path = self.standard(mode=mode)
                 self.assertGap(self.read(), "file_unreadable")
+                path.unlink()
+
+    def test_file_readable_by_others_is_accepted(self):
+        for mode in (0o644, 0o640, 0o604, 0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                path = self.standard(mode=mode)
+                result = self.read()
+                self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
                 path.unlink()
 
     def test_hard_linked_file_is_unreadable(self):
@@ -576,9 +773,7 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(result["gaps"], [{"thread_id": OTHER, "code": "thread_file_not_found"}])
         self.assertEqual(result["threads"][0]["usage"], totals(250))
         self.assertEqual(result["threads"][1]["usage"], UNKNOWN)
-        unqualified = codex_usage.acquire_task_observations(
-            [{"thread_id": THREAD, "role": "coordinator"}], started_at=START, cutoff_at=CUTOFF,
-            deadline=time.monotonic() + 30)
+        unqualified = self.acquire([{"thread_id": THREAD, "role": "coordinator"}], qualified=frozenset())
         self.assertEqual(unqualified["gaps"], [{"thread_id": THREAD, "code": "source_version_unqualified"}])
 
     def test_task_threads_are_validated(self):
@@ -630,7 +825,7 @@ class CodexUsageTests(unittest.TestCase):
             "thread_file_not_found", "thread_file_ambiguous", "file_unreadable", "file_too_large",
             "line_too_large", "session_meta_mismatch", "source_version_unqualified", "token_info_missing",
             "counter_missing", "counter_decreased", "context_window_saturated", "timestamp_unusable",
-            "deadline_exceeded", "no_threads"}))
+            "deadline_exceeded", "no_threads", "history_incomplete"}))
         with self.assertRaises(ValueError):
             codex_usage.UsageGap("other")
 
