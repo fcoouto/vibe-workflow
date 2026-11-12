@@ -37,7 +37,7 @@ Inventory the conflicting rules, their sources and affected actions before propo
 
 No mode waives mandatory requirements or expands access, costs or destructive-action authority. Preserve useful content until its disposition is authorized. Uncertain compatibility remains unresolved; a scanner cannot prove the absence of semantic conflicts.
 
-Ask only when an unresolved choice materially changes scope, behavior, cost, access, architecture or enforcement. Use stated assumptions for minor reversible details. Reopen only affected decisions after material changes; never treat a recommendation or missing answer as approval. Record decision scope, provenance, affected actions and what would invalidate it. Pending decisions block only dependent work.
+Agreed requirements are the hard gate: the agreed plan and acceptance criteria, the user's explicit constraints and recorded decisions. Ask before any choice that would change, drop or weaken one of them, or that changes scope, cost, access, enforcement or user-visible behavior they do not cover. Within them, decide architecture and implementation yourself, including a simpler redesign; a material redesign needs independent review before you accept it, and its record states how each agreed requirement remains met. Use stated assumptions for minor reversible details. Reopen only affected decisions after material changes; never treat a recommendation or missing answer as approval. Record decision scope, provenance, affected actions and what would invalidate it. Pending decisions block only dependent work.
 
 ## Example
 

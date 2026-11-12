@@ -1,0 +1,15 @@
+{
+  "manifest_version": 1,
+  "id": "cleanup",
+  "summary": "Clean up eligible task worktrees and branches after their PRs merge",
+  "skills": ["onboard-my-project"],
+  "default": {"enabled": false},
+  "settings": {
+    "delete_remote_branch": {"type": "boolean", "default": true}
+  },
+  "scopes": ["project"],
+  "consent": "none",
+  "control": "settings",
+  "requires": [],
+  "procedure": "clients/delivery.md"
+}

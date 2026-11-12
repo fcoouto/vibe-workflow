@@ -1,0 +1,604 @@
+{
+ "probe": "OpenCode escalation gate live probes (plan Task 5)",
+ "date": "2026-11-12",
+ "opencode": "2.2.6",
+ "route": "claude-agent/haiku#low (subscription)",
+ "isolation": "opencode run --standalone in a disposable folder outside the repository, temporary XDG_CONFIG_HOME, only the probe plugin loaded",
+ "model_requests": 7,
+ "budget": {
+  "requests": 20,
+  "attempts": 2,
+  "minutes": 15,
+  "approved_by": "user, 12 November 2026"
+ },
+ "recorded": "key sets and fixed facts only; no prompts, file contents, commands, tool output or messages. Session roles are root, child or unknown as the probe plugin saw them; 'grandchild' means a child of a session the probe had not seen created.",
+ "observations": {
+  "shell_exit_status": "tool.execute.after result.metadata.exit (number); metadata also has status (string) and truncated",
+  "call_correlation": "permission.evaluate source.id equals tool.execute.after id for shell, write, the refused write and subagent",
+  "edit_resources": "relative paths for the write tool (action edit)",
+  "denial": "a permission.evaluate deny message reached the model verbatim; the refused file was not created; tool.execute.after status error",
+  "routes": "model.request kind primary with variant low for root and child",
+  "prompt_hook": "fires for root prompts and for subagent prompts; the subagent prompt arrives before the child's session.created",
+  "root_creation_event": "not observed in either run; the root became known only through session.get",
+  "finished_runs": "session.execution.succeeded carries the child sessionID",
+  "resumed_session": "a fresh server resuming the session: hooks name it with no creation event; session.get returns a flat record without parentID",
+  "subagent_input": "subagent tool input keys agent, description, prompt (no follow-up sessionID in a new spawn)"
+ },
+ "unobserved": [
+  "permission.evaluate from a child session (the child made no tool calls)",
+  "session.get for a child record (repo evidence: clients/opencode.md, parentID from session.get, live 9 November 2026)",
+  "the interactive TUI: whether it delivers the root's session.created"
+ ],
+ "runs": [
+  {
+   "name": "scripted session",
+   "log": [
+    {
+     "kind": "setup",
+     "directory_known": true,
+     "apis": {
+      "get": "function",
+      "subscribe": "function",
+      "transform": "function"
+     }
+    },
+    {
+     "kind": "prompt",
+     "session": "unknown",
+     "event_keys": [
+      "delivery",
+      "messageID",
+      "metadata",
+      "prompt",
+      "sessionID"
+     ],
+     "prompt_keys": [
+      "agents",
+      "files",
+      "skills",
+      "text"
+     ],
+     "text_type": "string"
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.started",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "unknown",
+     "parent": null
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "session.get",
+     "session": "unknown",
+     "shape": "flat",
+     "record_keys": [
+      "cost",
+      "id",
+      "location",
+      "model",
+      "projectID",
+      "time",
+      "title",
+      "tokens"
+     ],
+     "parent": null
+    },
+    {
+     "kind": "tool.execute.before",
+     "session": "unknown",
+     "tool": "shell",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "sessionID",
+      "tool"
+     ],
+     "input_keys": [
+      "command"
+     ],
+     "id_type": "string"
+    },
+    {
+     "kind": "permission.evaluate",
+     "session": "unknown",
+     "action": "shell",
+     "event_keys": [
+      "action",
+      "agent",
+      "effect",
+      "metadata",
+      "resources",
+      "sessionID",
+      "source"
+     ],
+     "source_keys": [
+      "id",
+      "messageID",
+      "type"
+     ],
+     "resources": 1,
+     "resources_absolute": [
+      false
+     ],
+     "effect_before": "allow",
+     "denied": false
+    },
+    {
+     "kind": "tool.execute.after",
+     "session": "unknown",
+     "tool": "shell",
+     "status": "completed",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "result",
+      "sessionID",
+      "status",
+      "tool"
+     ],
+     "input_keys": [
+      "command"
+     ],
+     "result_keys": [
+      "content",
+      "metadata",
+      "output"
+     ],
+     "metadata_keys": [
+      "exit",
+      "status",
+      "truncated"
+     ],
+     "exits": {
+      "exit": 3,
+      "status": "string"
+     },
+     "id_matches_evaluate": true
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "tool.execute.before",
+     "session": "unknown",
+     "tool": "write",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "sessionID",
+      "tool"
+     ],
+     "input_keys": [
+      "content",
+      "path"
+     ],
+     "id_type": "string"
+    },
+    {
+     "kind": "permission.evaluate",
+     "session": "unknown",
+     "action": "edit",
+     "event_keys": [
+      "action",
+      "agent",
+      "effect",
+      "metadata",
+      "resources",
+      "sessionID",
+      "source"
+     ],
+     "source_keys": [
+      "id",
+      "messageID",
+      "type"
+     ],
+     "resources": 1,
+     "resources_absolute": [
+      false
+     ],
+     "effect_before": "allow",
+     "denied": false
+    },
+    {
+     "kind": "tool.execute.after",
+     "session": "unknown",
+     "tool": "write",
+     "status": "completed",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "result",
+      "sessionID",
+      "status",
+      "tool"
+     ],
+     "input_keys": [
+      "content",
+      "path"
+     ],
+     "result_keys": [
+      "content",
+      "output"
+     ],
+     "metadata_keys": "undefined",
+     "exits": {},
+     "id_matches_evaluate": true
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "tool.execute.before",
+     "session": "unknown",
+     "tool": "write",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "sessionID",
+      "tool"
+     ],
+     "input_keys": [
+      "content",
+      "path"
+     ],
+     "id_type": "string"
+    },
+    {
+     "kind": "permission.evaluate",
+     "session": "unknown",
+     "action": "edit",
+     "event_keys": [
+      "action",
+      "agent",
+      "effect",
+      "metadata",
+      "resources",
+      "sessionID",
+      "source"
+     ],
+     "source_keys": [
+      "id",
+      "messageID",
+      "type"
+     ],
+     "resources": 1,
+     "resources_absolute": [
+      false
+     ],
+     "effect_before": "allow",
+     "denied": true
+    },
+    {
+     "kind": "tool.execute.after",
+     "session": "unknown",
+     "tool": "write",
+     "status": "error",
+     "event_keys": [
+      "agent",
+      "error",
+      "id",
+      "input",
+      "messageID",
+      "sessionID",
+      "status",
+      "tool"
+     ],
+     "input_keys": [
+      "content",
+      "path"
+     ],
+     "result_keys": "undefined",
+     "metadata_keys": "undefined",
+     "exits": {},
+     "id_matches_evaluate": true
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "tool.execute.before",
+     "session": "unknown",
+     "tool": "subagent",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "sessionID",
+      "tool"
+     ],
+     "input_keys": [
+      "agent",
+      "description",
+      "prompt"
+     ],
+     "id_type": "string"
+    },
+    {
+     "kind": "permission.evaluate",
+     "session": "unknown",
+     "action": "subagent",
+     "event_keys": [
+      "action",
+      "agent",
+      "effect",
+      "metadata",
+      "resources",
+      "sessionID",
+      "source"
+     ],
+     "source_keys": [
+      "id",
+      "messageID",
+      "type"
+     ],
+     "resources": 1,
+     "resources_absolute": [
+      false
+     ],
+     "effect_before": "allow",
+     "denied": false
+    },
+    {
+     "kind": "prompt",
+     "session": "unknown",
+     "event_keys": [
+      "delivery",
+      "messageID",
+      "metadata",
+      "prompt",
+      "sessionID"
+     ],
+     "prompt_keys": [
+      "agents",
+      "files",
+      "skills",
+      "text"
+     ],
+     "text_type": "string"
+    },
+    {
+     "kind": "event",
+     "type": "session.created",
+     "data_keys": [
+      "agent",
+      "location",
+      "model",
+      "parentID",
+      "projectID",
+      "sessionID",
+      "slug",
+      "subpath",
+      "title",
+      "version"
+     ],
+     "session": "grandchild",
+     "parent": "unknown"
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.started",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "grandchild",
+     "parent": null
+    },
+    {
+     "kind": "model.request",
+     "session": "grandchild",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "tool.execute.after",
+     "session": "unknown",
+     "tool": "subagent",
+     "status": "completed",
+     "event_keys": [
+      "agent",
+      "id",
+      "input",
+      "messageID",
+      "result",
+      "sessionID",
+      "status",
+      "tool"
+     ],
+     "input_keys": [
+      "agent",
+      "description",
+      "prompt"
+     ],
+     "result_keys": [
+      "content",
+      "metadata",
+      "output"
+     ],
+     "metadata_keys": [
+      "sessionID",
+      "status"
+     ],
+     "exits": {
+      "status": "string"
+     },
+     "id_matches_evaluate": true
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.succeeded",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "grandchild",
+     "parent": null
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.succeeded",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "unknown",
+     "parent": null
+    },
+    {
+     "kind": "event_stream_ended",
+     "aborted": true
+    }
+   ]
+  },
+  {
+   "name": "resume on a fresh server",
+   "log": [
+    {
+     "kind": "setup",
+     "directory_known": true,
+     "apis": {
+      "get": "function",
+      "subscribe": "function",
+      "transform": "function"
+     }
+    },
+    {
+     "kind": "prompt",
+     "session": "unknown",
+     "event_keys": [
+      "delivery",
+      "messageID",
+      "metadata",
+      "prompt",
+      "sessionID"
+     ],
+     "prompt_keys": [
+      "agents",
+      "files",
+      "skills",
+      "text"
+     ],
+     "text_type": "string"
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.started",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "unknown",
+     "parent": null
+    },
+    {
+     "kind": "model.request",
+     "session": "unknown",
+     "request_kind": "primary",
+     "model_keys": [
+      "id",
+      "providerID",
+      "variant"
+     ],
+     "variant_type": "string",
+     "variant": "low"
+    },
+    {
+     "kind": "session.get",
+     "session": "unknown",
+     "shape": "flat",
+     "record_keys": [
+      "cost",
+      "id",
+      "location",
+      "model",
+      "outcome",
+      "projectID",
+      "time",
+      "title",
+      "tokens"
+     ],
+     "parent": null
+    },
+    {
+     "kind": "event",
+     "type": "session.execution.succeeded",
+     "data_keys": [
+      "sessionID"
+     ],
+     "session": "unknown",
+     "parent": null
+    },
+    {
+     "kind": "event_stream_ended",
+     "aborted": true
+    }
+   ]
+  }
+ ]
+}
