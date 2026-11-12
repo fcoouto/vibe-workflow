@@ -20,16 +20,21 @@ O2–O5 and the integration hook are implemented, independently reviewed and mer
 | O5 Export planning and delivery | #260 | `796729dd` | 3-second upload budget may often end `uncertain` (measure in O7) |
 | Integration hook after `evidence verify` | #261 | `b73b8f11` | Upload-state file limit after about 200 records; repeated project-entry checks when enabled; concurrent runs can overwrite `last_result` |
 | O3 real-file qualification | #262 | `6875651e` | `_` in thread IDs can collide with the page-name form (malformed receipts only); two page-file test gaps |
+| Procedure text for the qualified source | #263 | `0fa5c4fb` | — |
+| `project-status` reports the real `collection` value through the hook's shared gate | #265 | `fd0604d0` | — |
+| Checkout `status` and its reports use the same gate (`project_unavailable` for an unreadable Project record) | #266 | `9e6e790c` | — |
+| Resumed-session evidence in the reader | #267 | `aae4e76c` | — |
 
 The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle limit) for now; space work is deferred.
 
 **O6 hosted readback, 12 November 2026** (user-authorized; Langfuse Cloud EU, the user's project, keys loaded from the plugin's saved macOS Keychain entry through `observability_credentials.load`, never printed or stored): the merged O5 code planned and delivered one `total` record (1,300 tokens) and one `adjustment` (+250), with synthetic numbers and `langfuse.environment` = `d9-qualification`. Both were `accepted`. Observations API v2 readback after three attempts: both are `GENERATION` observations with exactly the six sent buckets, empty `costDetails`, no total cost, only the seven allow-listed metadata keys and empty user/session. The trace's bucket sum equals the corrected 1,550 total. A separate raw span with a negative `input` bucket (−10) was accepted but stored as `output` 5, `total` 5: Langfuse silently drops negative buckets and recomputes the total. Negative deltas therefore stay local gaps permanently, never exported. Metrics API v2 (read-only, same key, filter `environment = d9-qualification`): 3 observations, `sum_totalTokens` 1,555 (the corrected 1,550 plus the negative probe's stored 5), `sum_inputTokens` 1,200 and `sum_outputTokens` 355 (350 + 5). Langfuse's aggregates re-add the exclusive buckets, so dashboards show the original inclusive Codex input and output totals; `sum_totalCost` is 0. A `traceId` dimension is refused by the Metrics API. Not covered: built-in dashboard widgets, the full hook path from a real enrolled runtime checkout (this repository has none), and real task numbers.
 
-**Resumed sessions, 12 November 2026** (same structure-only method over all local session files): no resume-specific row or event types and no file repeating its own header. After each of 94 idle gaps over an hour that are followed by token rows, the next total equals the previous total plus that row's `last_token_usage`. A resumed session continues in the same file with cumulative totals, so the reader needs no resume detection; a reset would surface as `counter_decreased`.
+**Resumed sessions, 12 November 2026** (same structure-only method over all local session files): no resume-specific row or event types and no file repeating its own header. After each of 94 idle gaps over an hour that are followed by token rows, the next total equals the previous total plus that row's `last_token_usage`. A resumed session continues in the same file with cumulative totals, so the reader needs no resume detection (#267). A total that drops within the task window fails as `counter_decreased`; a restart in another file fails the continuity check (`history_incomplete`).
 
 Remaining:
 
-1. **O7 final qualification**, which also depends on D7b.
+1. **O7 final qualification**, which also depends on D7b. It includes the full hook path from a real enrolled runtime checkout, built-in dashboard widgets and real task numbers, none of which this repository's startup-only checkout can exercise.
+2. The deferred minor findings in the table above, and package space work (the user accepted the size warning for now).
 
 The sections below are the historical planning record; their gate statements describe the state at the time they were written.
 
