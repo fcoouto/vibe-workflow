@@ -169,12 +169,48 @@ class CleanupTests(unittest.TestCase):
         self.git(self.primary, "symbolic-ref", "refs/heads/task", "refs/heads/trunk")
         self.assertEqual(self.inspect(removed=True)["status"], "retained")
 
+    def test_detached_rebase_in_another_worktree_still_owns_task_branch(self):
+        self.git(self.primary, "worktree", "remove", str(self.worktree))
+        other = self.base / "rebase"
+        self.git(self.primary, "worktree", "add", str(other), "task")
+        result = self.git(other, "-c", "sequence.editor=true", "rebase", "-i",
+                          "--exec", "false", "HEAD~1", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(self.git(other, "symbolic-ref", "-q", "HEAD", check=False).returncode, 0)
+        self.assertEqual(self.git(self.primary, "rev-parse", "refs/heads/task").strip(), self.head)
+        self.assertEqual(self.inspect(removed=True), {"status": "retained", "reason": "branch-still-in-use"})
+
+    def test_detached_bisect_in_another_worktree_still_owns_task_branch(self):
+        (self.worktree / "file.txt").write_text("third commit\n")
+        self.git(self.worktree, "commit", "-am", "Third")
+        self.head = self.merge = self.git(self.worktree, "rev-parse", "HEAD").strip()
+        self.git(self.primary, "merge", "--ff-only", "task")
+        self.git(self.primary, "worktree", "remove", str(self.worktree))
+        other = self.base / "bisect"
+        self.git(self.primary, "worktree", "add", str(other), "task")
+        self.git(other, "bisect", "start", "HEAD", "HEAD~2")
+        self.assertNotEqual(self.git(other, "symbolic-ref", "-q", "HEAD", check=False).returncode, 0)
+        self.assertEqual(self.inspect(removed=True), {"status": "retained", "reason": "branch-still-in-use"})
+
     def test_simple_https_remote_must_match_exact_repository(self):
         self.git(self.primary, "remote", "add", "origin", "https://github.com/example/project.git")
         self.assertEqual(cleanup.remote_destination(self.primary, "origin", "example/project"),
                          "https://github.com/example/project.git")
         with self.assertRaises(ValueError):
             cleanup.remote_destination(self.primary, "origin", "other/project")
+
+    def test_literal_destination_cannot_be_a_url_named_remote_alias(self):
+        destination = "https://github.com/example/project.git"
+        self.git(self.primary, "remote", "add", "origin", destination)
+        mirror = str(self.base / "mirror.git")
+        key = f"remote.{destination}.url"
+        for values in ((mirror,), (destination, mirror)):
+            with self.subTest(values=values):
+                for value in values:
+                    self.git(self.primary, "config", "--add", key, value)
+                with self.assertRaises(ValueError):
+                    cleanup.remote_destination(self.primary, "origin", "example/project")
+                self.git(self.primary, "config", "--unset-all", key)
 
     def test_push_rewrites_pushurls_and_http_redirect_configuration_are_unsupported(self):
         self.git(self.primary, "remote", "add", "origin", "https://github.com/example/project.git")

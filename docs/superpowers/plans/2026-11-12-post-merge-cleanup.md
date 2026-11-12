@@ -114,3 +114,12 @@ Next: independent whole-change behavior/security review, publish the draft PR,
 resolve findings, then the normal readiness and merge steps. Native client probes
 cover OpenCode only; full installed Codex/Claude cleanup and onboarding UI delivery
 remain unobserved. Full suite and installed-package refresh are outside this change.
+
+Independent review on `26f9029` by native Opus 5.5 (`#high` requested) returned
+two confirmed findings: F1 URL-named remote aliases can redirect the literal
+push destination; F2 detached rebase/bisect in another worktree hides branch use.
+Both are in scope. Treat F2 as a correctness fix despite its low severity because
+the promised unchanged/unoccupied-branch check otherwise permits disruption.
+Add real Git regressions before fixing either. The reviewer did not read tests or
+the spec body, so a bounded completion of that missing coverage is required.
+No additional architecture or recovery mechanism is warranted.
