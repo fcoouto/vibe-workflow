@@ -176,12 +176,23 @@ def task_threads(scope, task):
 
 
 def _worker(scope, record):
-    from runtime import delegation
+    from runtime import delegation, evidence
     reference = record["data"].get("observation")
     if reference is None:
         return None
-    workers = {value["receipt"].get("worker_id") for _, value in delegation._worker_history(scope, reference)
-               if isinstance(value.get("receipt"), dict)}
+    workers = set()
+    for _, value in delegation._worker_history(scope, reference):
+        receipt = value.get("receipt")
+        if receipt is not None:
+            if not isinstance(receipt, dict):
+                return None
+            workers.add(receipt.get("worker_id"))
+        if value.get("conflict") is not None:
+            # D6 keeps the earlier receipt and stores a contradicting one only behind `conflict`.
+            conflicting = evidence._read(scope, value["conflict"]).get("receipt")
+            if not isinstance(conflicting, dict):
+                return None
+            workers.add(conflicting.get("worker_id"))
     return workers.pop() if len(workers) == 1 else None
 
 

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import sys
 import tempfile
 import time
@@ -238,6 +239,29 @@ class HookTests(HookFixture):
         self.assertEqual(FakeConnection.posts[0][1]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["spanId"],
                          records[1]["export_id"])
 
+    def test_deliver_failure_after_pending_keeps_it_and_never_resends(self):
+        self.session()
+        self.enable()
+
+        def failing(planned, *, connection):
+            self.assertEqual(self.envelope()["export_state"]["records"][-1]["outcome"], "pending")
+            raise RuntimeError("PRIVATE delivery failure")
+
+        with patch.object(export, "deliver", side_effect=failing) as deliver:
+            self.run_hook()
+        deliver.assert_called_once()
+        envelope = self.envelope()
+        self.assertEqual(envelope["last_result"]["code"], "hook_failed")
+        self.assertEqual([record["outcome"] for record in envelope["export_state"]["records"]], ["pending"])
+        self.assertNotIn("PRIVATE", self.envelope_path().read_text())
+        with patch.object(export, "deliver", side_effect=AssertionError("resent")) as deliver:
+            self.run_hook()
+        deliver.assert_not_called()
+        again = self.envelope()
+        self.assertEqual(again["last_result"]["code"], "uncertain_pending")
+        self.assertEqual([record["outcome"] for record in again["export_state"]["records"]], ["uncertain"])
+        self.assertEqual((FakeConnection.posts, len(FakeConnection.created)), ([], 1))
+
     def test_deliver_sees_pending_on_disk_and_outcome_is_saved_after(self):
         self.session()
         self.enable()
@@ -416,6 +440,24 @@ class GateTests(HookFixture):
         self.enable(source="os-store", repositories=["other-repository"])
         self.assertNoEffect()
 
+    def test_project_gate_runs_before_the_checkout_record_is_read(self):
+        self.session()
+        for name, arguments in (("collection off", dict(collection=False)),
+                                ("repository missing", dict(repositories=["other-repository"]))):
+            with self.subTest(name):
+                shutil.rmtree(self.scope.runtime.state_dir / "observability", ignore_errors=True)
+                self.enable(source="os-store", **arguments)
+                original, opened = settings._guard, []
+
+                def spy(scope, **kwargs):
+                    opened.append("project" if kwargs.get("project") is not None else
+                                  "export" if kwargs.get("export") is not None else "checkout")
+                    return original(scope, **kwargs)
+
+                with patch.object(settings, "_guard", side_effect=spy):
+                    self.assertNoEffect()
+                self.assertEqual(opened, ["project"])
+
     def test_checkout_connection_absent_or_off_does_nothing(self):
         self.session()
         self.project()
@@ -470,6 +512,70 @@ class ThreadTests(HookFixture):
             self.task["evidence"] = dict(attempts=attempts)
             with self.subTest(records=[r["id"] for r in records], attempts=attempts):
                 self.assertIsNone(self.threads(records, histories, {}))
+
+
+class ProducedHistoryTests(HookFixture):
+    """Worker histories stored as real artifacts in the shape `delegation.observe_assignment` writes, read through
+    the real `delegation._worker_history` and `evidence._read`; only the task's ledger query is replaced."""
+
+    def receipt(self, worker, turn="turn-1"):
+        # Field set of `delegation._worker_receipt`.
+        return dict(version=2, mechanism="codex-native-collab-call", attempt_id="w1", task_name="w1-task",
+            agent_path=None, native_version="0.167.0", client_surface="codex-cli", originator="codex_exec",
+            parent_model_provider="openai", worker_model_provider="openai", parent_session_id=SESSION,
+            parent_turn_id="parent-turn", spawn_item_id="spawn-1", worker_id=worker, worker_turn_id=turn,
+            turn_status="completed", result_item_id="item-1", checkout=str(self.scope.repository_root),
+            assignment_digest="a" * 64, candidate_digest="c" * 64, requested_model="gpt-5.5", requested_effort="high",
+            configured_model="gpt-5.5", configured_effort="high", spawn_observed_model="gpt-5.5",
+            spawn_observed_effort="high", execution_model="gpt-5.5", execution_effort="high",
+            descendants_stopped=False, prompt_delivery="unverified", result_digest="d" * 64)
+
+    def observe(self, receipt, previous=None):
+        """One observation as `observe_assignment` stores it, including its conflict rule for `worker_id`."""
+        from runtime import evidence
+        owner = evidence._artifact_owner(self.scope, self.task)
+        request = dict(parent_turn_id="parent-turn", spawn_item_id="spawn-1")
+        incoming = evidence._artifact(self.scope, dict(receipt=receipt, result=None, report=None, error=None,
+            request=request, raw=dict(receipt=receipt, result=None)), owner=owner)
+        prior = evidence._read(self.scope, previous) if previous is not None else None
+        stored, conflict, error = receipt, prior["conflict"] if prior else None, None
+        if prior is not None and prior["receipt"]["worker_id"] != receipt["worker_id"]:
+            stored, conflict = prior["receipt"], incoming
+            error = "Contradictory native identity/result retained for independent reconciliation"
+        value = dict(version=1, receipt=stored, result=None, report=None, error=error, request=request,
+            incoming=incoming, previous=previous, conflict=conflict, revision=2 if prior is None else prior["revision"] + 1,
+            status="uncertain" if error or conflict else "observed")
+        return evidence._artifact(self.scope, value, owner=owner)
+
+    def worker(self, observation):
+        return dict(id="w1", owner=dict(scope_id=state._scope_id(self.scope), **self.task_ref),
+                    data=dict(role="backend-specialist", observation=observation))
+
+    def test_observed_worker_history_resolves_its_thread(self):
+        first = self.observe(self.receipt("worker-a"))
+        later = self.observe(self.receipt("worker-a", "turn-2"), first)
+        with ledger([self.worker(later)]):
+            self.assertEqual(hook.task_threads(self.scope, self.task), [
+                dict(thread_id=SESSION, role="coordinator"), dict(thread_id="worker-a", role="backend-specialist")])
+
+    def test_conflicting_worker_identity_is_unresolved(self):
+        first = self.observe(self.receipt("worker-a"))
+        conflicted = self.observe(self.receipt("worker-b"), first)
+        carried = self.observe(self.receipt("worker-a", "turn-2"), conflicted)
+        for reference in (conflicted, carried):
+            with self.subTest(newest=reference is carried), ledger([self.worker(reference)]):
+                self.assertIsNone(hook.task_threads(self.scope, self.task))
+
+    def test_conflicting_worker_identity_blocks_upload(self):
+        self.session()
+        self.enable()
+        conflicted = self.observe(self.receipt("worker-b"), self.observe(self.receipt("worker-a")))
+        with ledger([self.worker(conflicted)]), \
+                patch.object(codex_usage, "acquire_task_observations", side_effect=AssertionError("read")):
+            self.run_hook()
+        self.assertEqual(self.envelope()["last_result"]["code"], "participants_unresolved")
+        self.assertIsNone(self.envelope()["export_state"])
+        self.assertEqual((FakeConnection.created, FakeConnection.posts), ([], []))
 
 
 class CallerTests(HookFixture):
