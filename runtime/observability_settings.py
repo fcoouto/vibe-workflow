@@ -1,6 +1,7 @@
 """Checkout connection consent and Project collection choice, separate from task evidence and collection."""
 
 from contextlib import ExitStack, contextmanager
+import contextvars
 import hashlib
 import json
 import os
@@ -22,8 +23,9 @@ FIELDS = {"version", "revision", "binding", "destination", "langfuse_project_id"
 PROJECT_FIELDS = {"version", "revision", "binding", "repository_ids", "desired_collection"}
 MAX_REPOSITORIES = 64
 IDENTIFIER = re.compile(r"[a-zA-Z0-9_-]{1,128}")
-# Upload state for one task and destination: `<state_dir>/observability/exports/<name>.json`.
-MAX_EXPORT = 64 * 1024
+# Upload state for one task and destination: `<state_dir>/observability/exports/<name>.json`. O5 keeps every
+# record and recomputes totals from them, so records are never dropped and the file gets a larger limit.
+MAX_EXPORT = 1024 * 1024
 EXPORT_FIELDS = {"version", "revision", "binding", "task_ref", "destination_key", "export_state", "last_result"}
 EXPORT_RESULTS = frozenset({"not_exportable", "totals_unknown", "usage_inconsistent", "uncertain_pending",
     "stale_reconciliation", "negative_delta", "nothing_to_send", "accepted", "rejected", "uncertain",
@@ -52,16 +54,41 @@ def _private(info, *, directory=False):
         raise SettingsError("unsafe_observability_storage")
 
 
+# The scope `held_scope` already compared with a fresh project entry, while one operation reuses that lookup.
+_HELD = contextvars.ContextVar("observability_held_scope", default=None)
+
+
+def _current(scope):
+    current = startup._entry_scope(startup.acquire_project_entry(
+        SimpleNamespace(client="codex", cwd=scope.repository_root), PACKAGE))
+    if current != scope:
+        raise SettingsError("observability_scope_changed")
+
+
+@contextmanager
+def held_scope(scope):
+    """Acquire the project entry once for `scope` and let every authority check in this context reuse it.
+
+    Each check still verifies the private state folder, database and checkout row; only the canonical lookup is
+    shared. A scope that differs from the fresh entry is refused here, before any record is read."""
+    if type(scope) is not startup.AcceptedScope:
+        raise SettingsError("unsupported_observability_scope")
+    _current(scope)
+    token = _HELD.set(scope)
+    try:
+        yield
+    finally:
+        _HELD.reset(token)
+
+
 def _authority(scope):
     if type(scope) is local_ownership.LocalOwnership:
         return dict(scope_id=scope.scope_id, authority_directory=local_ownership.settings_directory(scope))
     if (type(scope) is not startup.AcceptedScope or scope.client != "codex"
             or scope.runtime is None or scope.runtime.schema_version != 3):
         raise SettingsError("unsupported_observability_scope")
-    current = startup._entry_scope(startup.acquire_project_entry(
-        SimpleNamespace(client="codex", cwd=scope.repository_root), PACKAGE))
-    if current != scope:
-        raise SettingsError("observability_scope_changed")
+    if _HELD.get() is not scope:
+        _current(scope)
     path = state._path(scope)
     state._private(path.parent, True)
     state._private(path)
@@ -131,10 +158,17 @@ def _request(action, request):
     return request
 
 
+def _repository(value):
+    # The canonical record's Repository ID rule; these IDs are stored in JSON only, never in file names.
+    try:
+        return type(value) is str and startup._canonical_text(value, 128) == value
+    except startup.StartupError:
+        return False
+
+
 def _repositories(value):
     if (type(value) is not list or not 0 < len(value) <= MAX_REPOSITORIES
-            or not all(type(item) is str and IDENTIFIER.fullmatch(item) for item in value)
-            or len(set(value)) != len(value)):
+            or not all(_repository(item) for item in value) or len(set(value)) != len(value)):
         return None
     return sorted(value)
 
@@ -279,7 +313,9 @@ class _Store:
             raise SettingsError("observability_revision_exhausted")
         raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
         if len(raw) > self.limit:
-            raise SettingsError("invalid_observability_configuration")
+            # Only request content can make a settings record too large; upload state grows by itself.
+            raise SettingsError("invalid_observability_configuration" if self.export is not None
+                                else "observability_request_too_large")
         temporary = "." + self.name + "." + uuid.uuid4().hex + ".tmp"
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600, dir_fd=self.directory)
