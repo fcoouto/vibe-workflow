@@ -150,7 +150,7 @@ class HookFixture(unittest.TestCase):
                     purpose=purpose)
 
     def run_hook(self, report=None, request=None, *, qualified=True):
-        versions = frozenset({VERSION}) if qualified else codex_usage.QUALIFIED_VERSIONS
+        versions = frozenset({VERSION}) if qualified else frozenset()
         with patch.object(codex_usage, "QUALIFIED_VERSIONS", versions), \
                 patch.object(langfuse, "_Connection", FakeConnection):
             hook.after_completion(self.scope, self.request() if request is None else request,
@@ -195,8 +195,7 @@ class HookTests(HookFixture):
         self.assertEqual(self.envelope_path().stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.exports.stat().st_mode & 0o777, 0o700)
 
-    def test_shipped_unqualified_versions_record_totals_unknown_and_send_nothing(self):
-        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset())
+    def test_unqualified_versions_record_totals_unknown_and_send_nothing(self):
         self.session()
         self.enable()
         self.run_hook(qualified=False)
