@@ -2,7 +2,7 @@
 
 Load this file when you install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. It supports [stuck-pattern escalation](../policies/03-agent-delegation.md#stuck-pattern-escalation); it does not replace that procedure, and the agent still owns detection the gate cannot see. The design is in [the escalation gate design](../docs/superpowers/specs/2026-11-12-opencode-escalation-gate-design.md).
 
-**Status: package-tested only; live probes on OpenCode pending.** Nothing here establishes observed OpenCode execution.
+**Status: hook shapes live-probed on OpenCode 2.2.6 (12 November 2026, one scripted run and one resume, [results](../tests/fixtures/opencode_workflow/probes.json)); the gate itself has not run in a live session and its behavior evaluation is pending.**
 
 ## What it does
 
@@ -40,4 +40,4 @@ The feature is off by default, needs no consent and changes a tracked file, so c
 - Not a security boundary: writes through the shell, `` !`cmd` `` command templates, other plugins and the server API are not seen. A plugin that fails to load enforces nothing, and any internal error allows the action.
 - State lives in memory; a plugin reload starts afresh.
 - Loops whose repairs move to files never repaired before are not detected.
-- The shell exit-status field, call-id correlation, child-session events and prompt-hook scope are assumed from the documentation and earlier probes; the live probes must confirm them before the gate is described as working.
+- Observed on 2.2.6: the shell exit status is `result.metadata.exit`; `permission.evaluate` `source.id` matches the completed call's `id`; a denial message reaches the model; `session.execution.succeeded` carries child sessions; the prompt hook also fires for subagent prompts, before the child's creation event; the root's own creation event did not arrive, so the root is learned through `session.get`. Not observed: a child's own permission requests and the interactive TUI's event order.

@@ -323,8 +323,8 @@ git commit -m "feat(opencode): escalation gate feature, contract and package wir
 
 The user chose to build before probing. Hook shapes are confined to `index.ts`, so a contradicted assumption is a local fix.
 
-- [ ] **Step 1: Ask the user for the budget** (number of requests, route, time limit); proceed only after approval.
-- [ ] **Step 2: Observe on OpenCode 2.2.6, recording key sets, never content:**
+- [x] **Step 1: Ask the user for the budget** (number of requests, route, time limit); proceed only after approval.
+- [x] **Step 2: Observe on OpenCode 2.2.6, recording key sets, never content:**
   - `tool.execute.after`: `id`, `input`, and where a shell call's exit status is;
   - `permission.evaluate` `source.id` equals the matching `tool.execute.after` `id`, and a child's evaluate carries the child's `sessionID`;
   - a `deny` message reaches the model and the file is unchanged;
@@ -332,8 +332,10 @@ The user chose to build before probing. Hook shapes are confined to `index.ts`, 
   - the `prompt` hook fires for root prompts, and whether it fires for subagent prompts;
   - `session.execution.succeeded` carries child `sessionID`s;
   - a resumed session's hooks resolve through `session.get` lineage.
-- [ ] **Step 3: Fix contradicted assumptions** with a failing unit test first, then rerun `test_opencode_workflow`.
-- [ ] **Step 4: Record results** in `probes.json` and the client contract; commit.
+- [x] **Step 3: Fix contradicted assumptions** with a failing unit test first, then rerun `test_opencode_workflow`.
+- [x] **Step 4: Record results** in `probes.json` and the client contract; commit.
+
+Result (12 November 2026, `claude-agent/haiku#low`, 7 of 20 approved requests): no assumption contradicted; the observed order (no root creation event, a child's prompt before its creation event) is pinned by the plugin test "probe order".
 
 ### Task 6: Behavior evaluation (needs separate approval)
 

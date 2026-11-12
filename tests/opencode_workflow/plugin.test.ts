@@ -320,6 +320,31 @@ test("final review: a follow-up to a child first seen through a lookup does not 
   t.cleanup()
 })
 
+test("probe order: no root creation event, child prompt before its creation event, then release", async () => {
+  // Observed on OpenCode 2.2.6 (tests/fixtures/opencode_workflow/probes.json): the root's `session.created` never
+  // arrives, and a subagent's prompt hook fires before the child's creation event.
+  const fake = fakeCtx("/w", { ses_run: {}, ses_kid2: { parentID: "ses_run" } })
+  const instance = createWorkflowPlugin({ featureStatus: async () => report(true) })
+  const cleanup = await instance.setup(fake.ctx)
+  await settle()
+  const t = { ...fake, cleanup }
+  await t.hooks["session.prompt"]({ sessionID: "ses_run", prompt: { text: "work" } })
+  await t.hooks["session.model.request"]({ sessionID: "ses_run", kind: "primary", model: MODEL })
+  for (let i = 0; i < 3; i++) {
+    await edit(t as any, ["a.ts"], "ses_run")
+    await failCheck(t as any, "ses_run")
+  }
+  assert.equal((await edit(t as any, ["a.ts"], "ses_run")).effect, "deny")
+  const prompt = { sessionID: "ses_kid2", prompt: { text: "reset the counter for a.ts" } }
+  await t.hooks["session.prompt"](prompt)
+  assert.equal(prompt.prompt.text, "reset the counter for a.ts")
+  await t.emit({ type: "session.created", data: { sessionID: "ses_kid2", parentID: "ses_run" } })
+  await t.hooks["session.model.request"]({ sessionID: "ses_kid2", kind: "primary", model: STRONG })
+  await t.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_kid2" } })
+  assert.equal((await edit(t as any, ["a.ts"], "ses_run")).effect, "allow")
+  cleanup()
+})
+
 test("final review: a lost event stream fails open and is reported", async () => {
   const t = await start()
   await trip(t)
