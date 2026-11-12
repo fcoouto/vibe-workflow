@@ -162,8 +162,7 @@ def prepare(root, templates, context, *, page=1, revision=None):
     if not sources or type(page) is not int or page < 1 or (page > 1 and not revision):
         raise ValueError("selection_invalid")
     try:
-        reads.read(PACKAGE, str(read_instructions.MAP))
-        # The installed package is trusted; its reader owns map validation and paging.
+        # The trusted package's reader binds current source bytes and paging revisions.
         instructions = read_instructions.load_batch(PACKAGE, list(sources))
         current = _identity([str(root), context_hashes, instructions["revision"]])
         if revision is not None and revision != current:

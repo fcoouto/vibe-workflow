@@ -70,7 +70,7 @@ Then use an authorized D4 enrollment update to select a fresh private state dire
 
 ## 5. Guidance, review and validation
 
-**Owner: Luna, medium effort.** Write `clients/evidence.md` with controls, loading triggers and honest limits; link it from the task runtime only when checks/reviews/completion apply. Update relevant client guidance, README, validator paths and [coverage map](policy-sources.md). Keep full policies authoritative; no new skill or repeated policy text is needed. Runtime guidance loads no Toolkit checkout or onboarding procedure.
+**Owner: Luna, medium effort.** Write `clients/evidence.md` with controls, loading triggers and honest limits; link it from the task runtime only when checks/reviews/completion apply. Update relevant client guidance, README, validator paths and source-to-contract coverage. Keep full policies authoritative; no new skill or repeated policy text is needed. Runtime guidance loads no Toolkit checkout or onboarding procedure.
 
 Independently exercise instruction paths for a trivial change, nontrivial change, sensitive change, unavailable reviewer, scoped fix and stale completion. Verify applicable contracts load and unrelated material stays unloaded. Sol performs independent general and applicable security review after implementation; address findings through scoped fixes and rechecks.
 
