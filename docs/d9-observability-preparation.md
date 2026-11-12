@@ -2,6 +2,28 @@
 
 28 October 2026 · Bounded implementation slice under [D9](onboard-my-project-plan.md#d9-qualification-usage-and-pilot). Read when implementing or reviewing this preparation path. This is local supplied-data preparation, not a collector, export payload or native measurement qualification.
 
+## Implementation status — 12 November 2026
+
+O2–O5 and the integration hook are implemented, independently reviewed and merged into `main`. Collection is still inert: `runtime/adapters/codex_usage.QUALIFIED_VERSIONS` is empty, so an enabled Project records `totals_unknown` and sends nothing.
+
+| Slice | PR | Merge commit | Deferred minor findings |
+| --- | --- | --- | --- |
+| O3 Codex session-file usage reader | #257 | `f33d8371` | Folder check-then-open race (same-user only) |
+| O2 Project collection settings | #258 | `4db00461` | Repository-ID pattern stricter than enrollment; long ID lists via the Python API; checkout connection read outside the Project lock |
+| O4 Task usage reconciliation | #259 | `a813d581` | Versions from gapped threads in `source_versions`; gap-free thread with unknown usage accepted; three refusal tests missing |
+| O5 Export planning and delivery | #260 | `796729dd` | 3-second upload budget may often end `uncertain` (measure in O7) |
+| Integration hook after `evidence verify` | #261 | `b73b8f11` | Upload-state file limit after about 200 records; repeated project-entry checks when enabled; concurrent runs can overwrite `last_result` |
+
+The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle limit) for now; space work is deferred.
+
+Remaining before collection is real, each needing separate user authorization:
+
+1. **O3 real-file qualification:** read one local Codex 0.167.0 session file to confirm row shape, timestamps, file mode, file-name form, leading `info: null` rows, inclusive counters and parent/child separation; then add `0.167.0` to `QUALIFIED_VERSIONS`.
+2. **O6 hosted readback:** one real upload to the selected Langfuse project and readback of its buckets, including whether negative adjustments are accepted.
+3. **O7 final qualification**, which also depends on D7b.
+
+The sections below are the historical planning record; their gate statements describe the state at the time they were written.
+
 ## Current assessment — 12 November 2026
 
 **Plan proposal, awaiting user review.** Assessed clean source `7356f68f0a776ab901a7c57fab7b7d9514dc8b40` in the isolated OpenCode worktree, then created `docs/d9-observability-completion-plan` for this document update. Scope: assess existing implementation and propose completion tasks in this file. No implementation, workers, credentials, accounts, installed-client operations or runtime settings changes were authorized or performed by this assessment. Historical observations below retain their original source bindings; source inspection does not establish installed behavior.
