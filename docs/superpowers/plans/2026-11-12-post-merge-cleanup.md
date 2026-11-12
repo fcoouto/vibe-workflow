@@ -53,7 +53,7 @@ The CLI exposes those read-only checks and no deletion command.
 - [x] Add failing tests and commit before the repository's test runner.
 - [x] Run `python3 -B scripts/test_sharded.py test_cleanup test_features`; confirm missing feature/helper failures.
 - [x] Implement the smallest checks using `runtime.features` and `runtime.startup.read_git`.
-- [ ] Commit and run the same tests; require all pass.
+- [x] Commit and run the same tests; require all pass.
 
 ## Task 3: Procedure and integration
 
@@ -65,7 +65,7 @@ Files: `clients/delivery.md`, `policies/08-merge-readiness.md`,
 - [x] Specify merge evidence, synchronization, ownership, helper use, native removal,
   conditional deletion, and stop-on-partial outcomes in one procedure.
 - [x] Add the policy trigger and representative onboarding/cleanup cases.
-- [ ] Validate, commit, then run affected tests: `test_cleanup test_features
+- [x] Validate, commit, then run affected tests: `test_cleanup test_features
   test_checkout_stability_instructions test_graphify_maintenance_instructions
   test_prepared_instructions`.
 - [ ] Independent whole-change review; resolve findings, publish `[BLOCKED]` draft,
@@ -101,3 +101,16 @@ The new regression on `f342430` reproduced false eligibility under
 silently changing a proposed mutation's environment. Feature tests passed 46/46
 on `f1f2830`; the remaining existing modules have unchanged source since their
 passing run.
+
+Environment regression passed 20/20 cleanup tests on `6000756`. Integrated current
+main (`c4b2172`) without conflicts as `143c28c`; upstream changed startup's source
+snapshot reader but not the Git observer. On that integrated candidate,
+`python3 -B scripts/test_sharded.py test_cleanup test_features
+test_checkout_stability_instructions test_graphify_maintenance_instructions
+test_prepared_instructions test_source_snapshots` passed 128/128, no skips.
+Package validation passed before that integration; repeat on the submitted candidate.
+No live remote branch was deleted. No project cleanup preference was enabled.
+Next: independent whole-change behavior/security review, publish the draft PR,
+resolve findings, then the normal readiness and merge steps. Native client probes
+cover OpenCode only; full installed Codex/Claude cleanup and onboarding UI delivery
+remain unobserved. Full suite and installed-package refresh are outside this change.
