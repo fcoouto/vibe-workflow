@@ -68,8 +68,10 @@ Files: `clients/delivery.md`, `policies/08-merge-readiness.md`,
 - [x] Validate, commit, then run affected tests: `test_cleanup test_features
   test_checkout_stability_instructions test_graphify_maintenance_instructions
   test_prepared_instructions`.
-- [ ] Independent whole-change review; resolve findings, publish `[BLOCKED]` draft,
-  promote only with current evidence, merge and synchronize the primary.
+- [x] Independent whole-change review, resolve findings, publish `[BLOCKED]` draft.
+- Delivery status and final merge/synchronization evidence are tracked in
+  [PR #278](https://github.com/fcoouto/vibe-workflow/pull/278) and its coordinator's
+  task context; promote only with current evidence under the repository lifecycle.
 
 ## Execution record
 
@@ -146,3 +148,17 @@ lists. This is smaller and covers indirect branch ownership; the tradeoff is
 deferring cleanup even for an unrelated rebase/bisect. A later explicit attempt
 can proceed after that operation ends. No ownership or preservation guarantee
 is weakened. Reviewer found no other blocking requirement or test-coverage gap.
+
+Final correction: the real `--update-refs` regression failed on `8c56b36` and
+passed on `b35c64a`. All 132 selected tests passed on that same commit, with no
+skips; package validation and `git diff --check c4b2172..HEAD` passed. F1 and F2
+are resolved. Unchanged independent review evidence remains valid; the final
+ownership correction is verified by the targeted failing-then-passing regression
+and all affected modules, not a claim that the reviewer ran the final candidate.
+
+Non-blocking review gaps retained explicitly: no separate lock-file/stale-prunable
+registration tests and no CLI remote-option matrix. Underlying lock checks,
+unsupported destinations and feature defaults are covered; those additional
+coverage cases are deferred. No full-suite run, installed-client refresh or live
+remote deletion was performed. Existing trusted authentication/TLS settings were
+preserved. Any concurrent/uncontrolled writer remains a documented limit.
