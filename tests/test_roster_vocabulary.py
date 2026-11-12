@@ -81,6 +81,14 @@ def violations(root, allowed=ALLOWED):
 
 
 class RosterVocabularyTests(unittest.TestCase):
+    def python_violations(self, source, path='runtime/fresh.py', allowed=()):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / path
+            target.parent.mkdir(parents=True)
+            target.write_text(source, encoding='utf-8')
+            return violations(root, allowed)
+
     def test_no_old_role_name_outside_the_allowlist(self):
         self.assertEqual(violations(ROOT), [])
 
@@ -106,8 +114,7 @@ class RosterVocabularyTests(unittest.TestCase):
                 "if attempt['kind'] == 'check' and operation == 'coordinator-work':\n    pass\n")
             (root / 'templates' / 'plan.json').write_text('{"jobs": [{"role": "implementer"}]}\n')
             (root / 'clients' / 'guide.md').write_text('Use a `reviewer` job.\nA reviewer reads the diff.\n')
-            allowed = (('runtime/kinds.py', 'review', 'the D5 attempt kind'),
-                       ('runtime/roles.py', 'worker', 'pretend non-role use'),
+            allowed = (('runtime/roles.py', 'worker', 'pretend non-role use'),
                        ('runtime/roles.py', 'review', 'pretend non-role use'))
             found = violations(root, allowed)
             self.assertFalse(any(item.startswith('runtime/kinds.py') for item in found), found)
@@ -118,7 +125,109 @@ class RosterVocabularyTests(unittest.TestCase):
                 self.assertTrue(any(item.startswith(expected) for item in found), (expected, found))
             self.assertFalse(any(item.startswith('clients/guide.md:2') for item in found))  # plain prose
             self.assertFalse(any(item.startswith('runtime/roles.py:8') for item in found))  # kinds, not roles
-            self.assertTrue(any(item.startswith('runtime/kinds.py') for item in violations(root, ())))
+            self.assertFalse(any(item.startswith('runtime/kinds.py') for item in violations(root, ())))
+
+    def test_attempt_kind_syntax_needs_no_file_allowance(self):
+        cases = (
+            'attempt = dict(kind="review")',
+            'attempt = {"kind": "review"}',
+            'attempt["kind"] = "review"',
+            'attempt["kind"]: str = "review"',
+            'value = attempt["kind"] == "review"',
+            'value = attempt.get("kind") != "review"',
+            'value = "review" == attempt["kind"]',
+            'value = "review" != attempt.get("kind")',
+            'value = attempt.get("kind") in {"check", "review"}',
+            'value = attempt["kind"] not in ("review", "check")',
+            'attempt = dict(\n    kind="review",\n)',
+            'label = "ação"; attempt = dict(kind="review")',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertEqual(self.python_violations(source), [])
+
+    def test_role_values_and_unclassified_literals_remain_rejected(self):
+        cases = (
+            'job = dict(role="reviewer")',
+            'job = {"role": "reviewer"}',
+            'role = "reviewer"',
+            'role: str = "reviewer"',
+            'job["role"] = "reviewer"',
+            'value = role == "reviewer"',
+            'value = role in {"reviewer"}',
+            'def job(role="reviewer"):\n    pass',
+            'add(thread, stored_role if linked else "reviewer")',
+            'job = dict(kind="review", role="reviewer")',
+            'attempt = dict(kind="review"); add(thread, "review")',
+            'value = attempt.get("kind") == "review" and role == "reviewer"',
+            'job = dict(kind="review", role="review")',
+            'job = {"kind": "review", "role": "review"}',
+            'value = other("review")',
+            'value = "review"',
+            'role = dict(kind="review")["kind"]',
+            'job = dict(role={"kind": "review"}["kind"])',
+            'role = attempt["kind"] = "review"',
+            'value = ((attempt["kind"] == "review") == "reviewer")',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertTrue(self.python_violations(source), source)
+
+    def test_overlapping_allowances_cover_only_metadata_or_native_markers(self):
+        accepted = (
+            ('runtime/delegation.py', "review = record['body']['review']"),
+            ('runtime/delegation.py', "body['review'] = {}"),
+            ('runtime/delegation.py', "value = 'review' not in body"),
+            ('runtime/delegation.py', "state._fields(body, ('version',), ('review',))"),
+            ('runtime/delegation.py',
+             "native_task_name(identity, 'review' if reviewing else 'worker', context)"),
+            ('runtime/evidence.py', "child(body.get('review', {}).get('plan'))"),
+        )
+        for path, source in accepted:
+            with self.subTest(path=path, source=source):
+                self.assertEqual(self.python_violations(source, path, ALLOWED), [])
+        for path in ('runtime/delegation.py', 'runtime/evidence.py'):
+            for source in (
+                'add(thread, "review")',
+                'add(thread, known if linked else "worker")',
+                'attempt = dict(kind="review"); add(thread, "review")',
+                'review = body["review"]; add(thread, "review")',
+                'native_task_name(identity, "worker"); add(thread, "worker")',
+                'role = body["review"]',
+                'job = dict(role=native_task_name(identity, "review"))',
+            ):
+                with self.subTest(path=path, source=source):
+                    self.assertTrue(self.python_violations(source, path, ALLOWED), source)
+
+    def test_occurrence_spans_do_not_exempt_neighbors_or_chained_role_comparisons(self):
+        cases = (
+            'label="ação"; a=dict(kind="review"); add(thread,"review")',
+            'a = dict(\n    kind="review",\n    role="reviewer",\n)',
+            'value = attempt["kind"] == "review" == role',
+            'role = attempt["kind"] = "review"',
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertTrue(self.python_violations(source), source)
+
+    def test_parse_failures_report_a_violation_even_with_an_allowance(self):
+        found = self.python_violations('attempt = dict(kind="review"', 'runtime/evidence.py', ALLOWED)
+        self.assertTrue(any('invalid Python syntax' in item for item in found), found)
+
+    def test_non_python_files_keep_their_lexical_coverage(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, source in (
+                ('templates/job.json', '{"role": "reviewer"}'),
+                ('clients/job.md', 'Use a `reviewer` job.'),
+                ('scripts/job.js', 'add(thread, "reviewer");'),
+            ):
+                path = root / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(source)
+            found = violations(root, ())
+            for path in ('templates/job.json', 'clients/job.md', 'scripts/job.js'):
+                self.assertTrue(any(item.startswith(path + ':') for item in found), found)
 
 
 if __name__ == '__main__':

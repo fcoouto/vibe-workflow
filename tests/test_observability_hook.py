@@ -499,7 +499,37 @@ class ThreadTests(HookFixture):
         self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
                                   dict(thread_id="worker-a", role="backend-specialist"),
                                   dict(thread_id="reviewer-b", role="code-reviewer"),
-                                  dict(thread_id="reviewer-c", role="reviewer")])
+                                   dict(thread_id="reviewer-c", role="unknown")])
+
+    def test_stored_specialist_and_legacy_roles_remain_verbatim(self):
+        for role in ("reviewer", "review", "repair", "worker", "code-reviewer", "security-reviewer"):
+            with self.subTest(role=role):
+                result = self.threads([self.record("stored", role, "obs")],
+                                      {"obs": self.history("stored-thread")})
+                self.assertEqual(result[-1], dict(thread_id="stored-thread", role=role))
+
+    def test_known_specialist_wins_over_duplicate_unlinked_receipt(self):
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        result = self.threads([self.record("linked", "security-reviewer", "obs")],
+                              {"obs": self.history("same-thread")},
+                              {"receipt": dict(receipt=dict(reviewer_id="same-thread"))})
+        self.assertEqual(result, [dict(thread_id=SESSION, role="coordinator"),
+                                  dict(thread_id="same-thread", role="security-reviewer")])
+
+    def test_unknown_specialist_keeps_usage_and_complete_thread_coverage(self):
+        from runtime import observability_accounting
+        self.task["evidence"] = dict(attempts=[dict(id="unlinked", kind="review", collected="receipt")])
+        threads = self.threads([], collected={"receipt": dict(receipt=dict(reviewer_id="legacy-thread"))})
+        self.assertEqual(threads[-1], dict(thread_id="legacy-thread", role="unknown"))
+        self.session()
+        self.session(thread="legacy-thread")
+        observations = codex_usage.acquire_task_observations(threads,
+            started_at=datetime.fromtimestamp(self.started, timezone.utc),
+            cutoff_at=datetime.fromtimestamp(self.started + 120, timezone.utc), deadline=time.monotonic() + 5)
+        result = observability_accounting.reconcile_task(observations, verification=self.report())
+        self.assertEqual(result["coverage"], "complete")
+        self.assertEqual(result["totals"]["total_tokens"], 200)
+        self.assertIn(dict(thread_id="legacy-thread", role="unknown"), result["counted_threads"])
 
     def test_unresolvable_worker_or_reviewer_threads_return_none(self):
         cases = (([self.record("w1", "backend-specialist")], {}, []),
