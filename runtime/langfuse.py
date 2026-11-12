@@ -131,6 +131,70 @@ class _Connection:
             if connection is not None:
                 connection.close()
 
+    def ingest(self, path, body):
+        """POST one body once; return "rejected" (nothing stored), "accepted" or "uncertain".
+
+        Connects first, so a failure before any request byte is sent is known to have stored nothing. Never
+        retries or follows redirects, and returns only one of the three fixed words.
+        """
+        parsed = urlsplit(self.destination)
+        deadline = min(self.deadline, time.monotonic() + REQUEST_SECONDS)
+        try:
+            payload = json.dumps(body, separators=(",", ":")).encode()
+        except (TypeError, ValueError, RecursionError):
+            raise LangfuseError("invalid_request") from None
+        headers = {"Authorization": self.authorization, "Accept": "application/json",
+                   "Content-Type": "application/json", "X-Langfuse-Ingestion-Version": "4"}
+        connection = response = None
+
+        def remaining():
+            seconds = deadline - time.monotonic()
+            if seconds <= 0:
+                raise LangfuseError("connection_timeout")
+            return seconds
+
+        try:
+            try:
+                connection = http.client.HTTPSConnection(parsed.hostname, parsed.port,
+                    timeout=remaining(), context=ssl.create_default_context())
+                connection.connect()
+                connection.sock.settimeout(remaining())
+            except Exception:
+                return "rejected"
+            try:
+                connection.request("POST", path, body=payload, headers=headers)
+                wire = connection.sock
+                wire.settimeout(remaining())
+                response = connection.getresponse()
+                if 300 <= response.status < 400 or (400 <= response.status < 500
+                                                    and response.status not in (408, 429)):
+                    return "rejected"
+                if not 200 <= response.status < 300 or response.headers.get_content_type() != "application/json":
+                    return "uncertain"
+                chunks, size = [], 0
+                while not response.isclosed():
+                    wire.settimeout(remaining())
+                    chunk = response.read1(min(4096, MAX_RESPONSE + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > MAX_RESPONSE:
+                        return "uncertain"
+                partial = json_object(b"".join(chunks), limit=MAX_RESPONSE).get("partialSuccess", {})
+            except Exception:
+                return "uncertain"
+            rejected = partial.get("rejectedSpans", 0) if isinstance(partial, dict) else None
+            if (type(rejected) is int and rejected >= 0
+                    or isinstance(rejected, str) and re.fullmatch(r"[0-9]{1,20}", rejected)):
+                return "accepted" if int(rejected) == 0 else "rejected"
+            return "uncertain"
+        finally:
+            if response is not None:
+                response.close()
+            if connection is not None:
+                connection.close()
+
     def verify(self):
         projects = self.request("GET", "/api/public/projects").get("data")
         if (not isinstance(projects, list) or len(projects) != 1 or not isinstance(projects[0], dict)
