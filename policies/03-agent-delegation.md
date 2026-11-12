@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | When considering or dispatching a worker; reassess after failed attempts, stalled repair/validation progress, or scope/capacity changes affecting delegated work. |
 | Decision | Use deterministic tooling or direct execution when sufficient. Delegate for useful context isolation, specialization, required independence or genuinely independent parallel work. Select worker capability and verification by complexity, ambiguity, consequences and total effort, including retries and review. |
 | Required action | When delegating, define a bounded worker brief, select an authorized worker model/effort using applicable platform guidance (in a [managed project](#managed-projects), routing selects it), reserve writable files and mutable resources, and verify returned work before integration. Apply the procedures below. |
 | Evidence | Record the rationale, task/worker identity, guidance version/freshness, requested/configured/observed worker model and reasoning, ownership, actual checks, verified outcome and limitations. Unknown settings remain unknown; do not invent usage or savings measurements. |

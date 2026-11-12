@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare exact instruction sections at authoring time; read bounded pages locally."""
+"""Read bounded pages of the selected current instruction sources locally."""
 
 import argparse
 import hashlib
@@ -9,7 +9,6 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAP = Path("clients/instruction-map.json")
 SOURCE_BYTES = 8000
 OUTPUT_BYTES = 9500
 BATCH_OUTPUT_BYTES = 24000
@@ -27,7 +26,7 @@ def source_path(root, name):
     path = (root / name).resolve(strict=True)
     if not path.is_relative_to(root.resolve()) or not path.is_file():
         raise ValueError("Instruction source must stay inside the package")
-    if name != str(MAP) and not instruction_name(path.relative_to(root.resolve()).as_posix()):
+    if not instruction_name(path.relative_to(root.resolve()).as_posix()):
         raise ValueError("Resolved source must be a packaged instruction file")
     return path
 
@@ -46,17 +45,6 @@ def source_entry(raw, name):
     if lines:
         ranges.append([start, len(lines)])
     return {"sha256": hashlib.sha256(raw).hexdigest(), "ranges": ranges}
-
-
-def build_manifest(root):
-    files = {}
-    paths = sorted([*(root / "clients").glob("*.md"), *(root / "policies").glob("*.md"),
-                    *(root / "templates").rglob("*.md"), *(root / "skills").rglob("*.md")])
-    for path in paths:
-        name = path.relative_to(root).as_posix()
-        raw = source_path(root, name).read_bytes()
-        files[name] = source_entry(raw, name)
-    return {"version": 1, "files": files}
 
 
 def automatic_source(root, name):
@@ -81,7 +69,6 @@ def automatic_source(root, name):
 def _load_pages(root, paths, page, revision, external=False, auto=False):
     if external and auto:
         raise ValueError("Automatic and explicit external modes cannot be combined")
-    manifest = None
     if not paths or type(page) is not int or page < 1 or (page > 1 and not revision):
         raise ValueError("Select sources and bind continuation pages to their revision")
     selected = list(dict.fromkeys(paths))
@@ -98,17 +85,11 @@ def _load_pages(root, paths, page, revision, external=False, auto=False):
             raw = path.read_bytes()
             entry = dict(source_entry(raw, name), resolved=str(path))
         else:
-            if manifest is None:
-                manifest = json.loads(source_path(root, str(MAP)).read_bytes())
-                if not isinstance(manifest, dict) or manifest.get("version") != 1 or not isinstance(manifest.get("files"), dict):
-                    raise ValueError("Invalid prepared instruction map")
-            if source not in manifest["files"] or not instruction_name(source):
+            if not instruction_name(source):
                 raise ValueError("Select a packaged instruction path from the policy/client references")
-            entry = manifest["files"][source]
             path = source_path(root, source)
             raw = path.read_bytes()
-            if not isinstance(entry, dict) or hashlib.sha256(raw).hexdigest() != entry.get("sha256"):
-                raise ValueError(f"Prepared source changed: {name}; use bounded native reads or update the package")
+            entry = source_entry(raw, source)
         lines = raw.decode("utf-8").splitlines(keepends=True)
         ranges = entry.get("ranges")
         if not isinstance(ranges, list):
@@ -225,12 +206,11 @@ def main():
     mode.add_argument("--auto", action="store_true", help="validate each explicit source under its package or external authority")
     parser.add_argument("--json", action="store_true", help="return a complete native-reader envelope")
     parser.add_argument("--helper", action="store_true", help="load the fixed packaged native continuation helper")
-    parser.add_argument("--prepare", action="store_true", help="authoring only: rebuild the package map")
     args = parser.parse_args()
     try:
         if args.helper:
-            if args.paths or args.page != 1 or args.revision or args.batch or args.external or args.auto or args.prepare or args.json:
-                raise ValueError("Helper loading cannot be combined with preparation or instruction reads")
+            if args.paths or args.page != 1 or args.revision or args.batch or args.external or args.auto or args.json:
+                raise ValueError("Helper loading cannot be combined with instruction reads")
             helper = (ROOT / "scripts/drain_instructions.js").resolve(strict=True)
             if not helper.is_relative_to(ROOT.resolve()) or not helper.is_file():
                 raise ValueError("Native helper must stay inside the package")
@@ -238,11 +218,6 @@ def main():
             if len(text.encode("utf-8")) > OUTPUT_BYTES:
                 raise ValueError("Native helper exceeds its loading budget")
             print(envelope(text, "helper"))
-            return 0
-        if args.prepare:
-            if args.paths or args.page != 1 or args.revision or args.batch or args.external or args.auto or args.json:
-                raise ValueError("Preparation cannot be combined with a read")
-            (ROOT / MAP).write_text(json.dumps(build_manifest(ROOT), indent=2) + "\n", encoding="utf-8")
             return 0
         paths = BOOTSTRAP if args.paths == ["bootstrap"] and not args.external else args.paths
         read = load_batch if args.batch else load_page

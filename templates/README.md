@@ -26,4 +26,4 @@ The [onboarding procedure](../skills/onboard-my-project/references/procedure.md#
 | Quality | [Quality](project/quality.md) |
 | Setup and evidence | Existing [setup record](setup-record.md), not a second copy |
 
-Project shapes adapt Vibe Coding Toolkit content under the [MIT notice](LICENSE); retain that notice when redistributing substantial adapted content. Authoring provenance and update coverage belong in [policy sources](../docs/policy-sources.md), not in a project's routine instructions. Worked machine requests and protected evaluation fixtures remain with their existing owners.
+Project shapes adapt Vibe Coding Toolkit content under the [MIT notice](LICENSE); retain that notice when redistributing substantial adapted content. Authoring provenance and update coverage stay out of a project's routine instructions. Worked machine requests and protected evaluation fixtures remain with their existing owners.

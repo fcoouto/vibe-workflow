@@ -68,7 +68,8 @@ def settings_scope(cwd):
     return _acquire(cwd, settings=True)
 
 
-def settings_absent(owner, namespace):
+def settings_absent(owner, namespace, record=None):
+    """`record` names a shared record in the namespace; the default is this checkout's own record."""
     if settings_scope(owner.repository_root) != owner:
         raise startup.StartupError('local_ownership_changed')
     if owner.runtime is None: return True
@@ -76,7 +77,7 @@ def settings_absent(owner, namespace):
         onboarding._no_links(directory)
         try: state._private(directory, True)
         except FileNotFoundError: return True
-    target = owner.state_dir / namespace / (owner.scope_id + '.json')
+    target = owner.state_dir / namespace / ((owner.scope_id if record is None else record) + '.json')
     try: target.lstat()
     except FileNotFoundError: return True
     return False

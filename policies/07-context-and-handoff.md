@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | When starting or resuming a task; when behavior, commands, schema, boundaries, configuration or material decisions change; before handing off unfinished work. |
 | Decision | Identify the authoritative record, relevant context and evidence needed now. Separate durable knowledge from temporary progress, observations from assumptions, and current decisions from superseded ones. |
 | Required action | Retrieve applicable records, reconcile them against actual state, and update the responsible document alongside the change. Preserve enough verified context to continue without copying entire conversations or maintaining competing instructions. |
 | Evidence | Record canonical paths and loading mechanisms; durable facts include their source, scope, last verification and invalidation trigger. Task records distinguish actual checks, pending work and unavailable observations. |

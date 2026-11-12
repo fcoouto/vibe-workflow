@@ -98,7 +98,7 @@ policy readability, review-only checkout and per-operation exceptions. Audit
 tracked Markdown for contradicting live rules; label historical descriptions
 explicitly rather than rewriting their evidence.
 
-Use package validation, instruction-map checks, focused tests, fresh-context
+Use package validation of current instruction sources, focused tests, fresh-context
 scenario evaluation and independent source/security review. Distinguish static
 and disposable Git results from actual client enforcement. Uncontrolled writers,
 unloaded old instructions and read/check races remain limits. This work does not
