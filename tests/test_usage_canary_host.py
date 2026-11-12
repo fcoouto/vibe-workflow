@@ -13,6 +13,10 @@ from tests.test_openai_api import Connection, Response, completed
 
 class CanaryHostTests(unittest.TestCase):
     def setUp(self):
+        # The compiled table's cheapest priced model for the canary's provider (an invented name).
+        cheapest = patch('runtime.usage_canary.model_names.cheapest', return_value='vendor-light')
+        cheapest.start()
+        self.addCleanup(cheapest.stop)
         self.plan = host.Plan(
             thread_id='thread', host_id='desktop', checkout='/fixture/project', scope='scope',
             package_digest='a' * 64, account='account', reviewer='independent-reviewer',

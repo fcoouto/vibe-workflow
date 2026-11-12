@@ -35,6 +35,17 @@ inactive S1 ledger and dormant hosts. The registered criteria are in [usage-rout
 | Typed `Coverage`/`ChargeRef` bound to scope, configuration revision, binding digest and the exact staged `live_funding` observation; only provider headroom excludes covered charges | `runtime/usage_admission.py`, `runtime/usage_budget_money.py` (`stage_coverage`, `covered`); `tests/test_api_money.py` `CoverageTests` |
 | Handoff rows, handoff claims and reused routing configurations use the growing-write admission; handoff native metadata is bounded by `MAX_INPUT` | `runtime/usage_routing.py` (`request_handoff`, `claim_handoff`, `enable`); `tests/test_api_money.py` `MetadataGrowthTests`, `tests/test_api_money_capacity.py` |
 
+## Smart Routing: no model names (F6) — 12 November 2026
+
+Slice F6 of the [Smart Routing redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md) implements [design section 5.14](superpowers/specs/2026-11-10-smart-routing-redesign-design.md#514-no-model-names). No Toolkit source changed; the coordinator's calls in the design apply.
+
+| Contract | Source |
+| --- | --- |
+| [First canary](../skills/manage-usage-routing/references/first-canary.md) step 5: the canary uses the cheapest priced model the compiled strategy table lists for `openai-api` and refuses with `canary_model_unavailable` when there is none; the request text, reasoning, tier, token bounds and the $0.05064 maximum are unchanged | Design 5.14; coordinator's call 20 (the table stands in for the catalog until L2); `runtime/usage_canary.py` (`model_for`), `runtime/model_names.py` (`cheapest`); `tests/test_usage_canary.py` |
+| [OpenRouter worker badges](../skills/openrouter-workers/references/procedure.md) and the [OpenCode client](../clients/opencode.md) name no model; observations point to the dated [live qualification record](smart-routing-qualification.md). Display names come from the catalog's optional `display_name`, compiled into the table's `display_names` | Design 5.14; `runtime/routing_evidence.py`, `runtime/model_names.py` (`display_name`), `runtime/adapters/codex.py`; `tests/test_routing_evidence.py` |
+| `scripts/validate.py` reports `model_names: passed` or `not_checked` (no table, or one naming no model) and fails naming the file and line of a table model or display name, as a whole token ignoring case, in `runtime/`, `scripts/`, `policies/`, `clients/`, `skills/`, `templates/`, `AGENTS.md` and shipped JSON; `docs/`, `tests/` and `assets/` are outside | Design 5.14; `runtime/model_names.py` (`check`); `tests/test_model_names.py` |
+| The [live session runbook](smart-routing-qualification.md#8-canary-on-the-production-routing-ledger-user-approval-canary-only) takes the approved route as `--route PROVIDER/MODEL#VARIANT`; the harness has no built-in route | Design 5.14; `tests/qualification/safety.py`, `tests/test_qualification_harness.py` |
+
 ## Smart Routing: no worker-count admission (F5.A1) — 11 November 2026
 
 Checkpoint A1 of plan task F5 removes every count-based admission limit, on the user's decision of 11 November 2026. It is a local deviation from the Toolkit's onboarding and parallel-wave wording, which asks for concurrency limits: here only real constraints limit concurrency. The registered criteria change is [validation Edit 8](smart-routing-validation.md#edit-8-11-november-2026-no-worker-count-admission). No model, network, account or provider call is part of these contracts, and none of the pending financial or fallback work is claimed.

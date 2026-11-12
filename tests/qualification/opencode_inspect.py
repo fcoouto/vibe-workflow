@@ -8,7 +8,7 @@ It refuses a directory that is not a kept run (owner-only, holding `hooks.jsonl`
 user directories and any git worktree) or whose server is still running, and a run that has fewer than the three
 sessions it reads. Remove the directory afterwards: it holds the server password.
 
-  python3 -B tests/qualification/opencode_inspect.py <kept isolated dir>
+  python3 -B tests/qualification/opencode_inspect.py <kept isolated dir> <the run's approved PROVIDER/MODEL#VARIANT>
 """
 import json
 import os
@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from runtime import opencode_accounting as accounting  # noqa: E402
 from runtime.adapters import opencode as adapter  # noqa: E402
 from tests.qualification import opencode_live as live  # noqa: E402
-from tests.qualification.safety import (PROTECTED, Redactor, Refused, ROUTE, inside_git_worktree,  # noqa: E402
-                                        leftover_processes)
+from tests.qualification.safety import (PROTECTED, Redactor, Refused, inside_git_worktree,  # noqa: E402
+                                        leftover_processes, parse_route, route_ref)
 from tests.qualification.server import Server, processes  # noqa: E402
 
 
@@ -48,7 +48,8 @@ class Reader:
         self.server = server
 
 
-def main(path):
+def main(path, route):
+    route = parse_route(route)  # the kept run's own approved route; never a default
     base = check_kept_run(path)
     hooks = [json.loads(line) for line in (base / "hooks.jsonl").read_text().splitlines() if line.strip()]
     sessions = []
@@ -58,7 +59,7 @@ def main(path):
     if len(sessions) < 3:
         raise Refused("the run has %d sessions with model requests; the inspection reads three" % len(sessions))
     p07, managed, child = sessions[0], sessions[1], sessions[2]
-    server = Server(base)
+    server = Server(base, route=route)
     server.start()
     server.write_control(budget=0, hold=sessions)
     try:
@@ -68,7 +69,7 @@ def main(path):
         msgs = run.messages(p07)
         out["p07_types"] = [(m.get("type"), m.get("delivery"), m.get("outcome")) for m in msgs]
         status, body, _ = server.rpc("attach", dict(session_id="ses_" + "0" * 32, attempt_id="qual-a1", authority="A" * 43,
-                                                    funding_pool="sub", model=ROUTE))
+                                                    funding_pool="sub", model=route_ref(route)))
         out["rpc_refusal"] = dict(http=status, body=redact(body))
         root = run.messages(managed)
         out["managed_types"] = [(m.get("type"), m.get("outcome")) for m in root]
@@ -94,7 +95,7 @@ def main(path):
 
 if __name__ == "__main__":
     try:
-        main(sys.argv[1])
+        main(sys.argv[1], sys.argv[2])
     except (IndexError, Refused, FileNotFoundError) as error:
         print("refused: %s" % error, file=sys.stderr)
         sys.exit(2)

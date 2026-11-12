@@ -27,7 +27,9 @@ A Smart Routing managed project refuses this canary; see
    in the staged package. There is no public JSON canary command. Do not
    reconstruct authority from user or worker claims.
 5. Execute one free count and at most one generation. The fixed request is
-   `Reply with the word READY.` with GPT-6.1 Sol, medium reasoning, Standard
+   `Reply with the word READY.` with the cheapest priced model the compiled
+   strategy table lists for `openai-api` (none refuses with
+   `canary_model_unavailable`), medium reasoning, Standard
    tier, a 10,000-input-token bound and 64 total output tokens. The maximum
    generation reservation is $0.05064. The direct approval expires after
    five minutes or the plan's earlier cutoff.

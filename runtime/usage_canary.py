@@ -2,29 +2,41 @@
 from copy import deepcopy
 import time
 
-from runtime import usage_admission, usage_credentials, usage_routing
+from runtime import model_names, usage_admission, usage_credentials, usage_routing
 from runtime.usage_budget import BudgetError, integer, name, require
 
 CLASS_NAME = 'canary'
 MAXIMUM_USD_MICROS = 50_640
 MAX_WAIT = 300
-_MODEL = 'gpt-6.1-sol'
+PROVIDER = 'openai-api'
 _REASONING = 'medium'
 _INPUT_LIMIT = 10_000
 _OUTPUT_LIMIT = 64
 
 
-def profile_for(observed_at, valid_until) -> dict:
-    """Return the canary's verified short Standard rate card and limits."""
+def model_for(settings_path=None) -> str:
+    """The lightest model listed for the canary's provider: the cheapest priced strategy in the compiled table."""
+    model = model_names.cheapest(PROVIDER, settings_path)
+    require(model is not None, 'canary_model_unavailable')
+    return model
+
+
+def _model(profile):
+    require(type(profile) is dict and type(profile.get('model')) is str, 'live_profile_changed')
+    return profile['model']
+
+
+def profile_for(observed_at, valid_until, model=None) -> dict:
+    """Return the canary's verified short Standard rate card and limits (`model`: default `model_for()`)."""
     require(integer(observed_at) < integer(valid_until), 'pricing_stale')
-    return dict(model=_MODEL, reasoning=_REASONING, tier='default', input_rate=2_000_000,
+    return dict(model=model_for() if model is None else name(model), reasoning=_REASONING, tier='default', input_rate=2_000_000,
                 cached_input_rate=100_000, cache_write_rate=5_000_000, output_rate=10_000_000,
                 max_input_tokens=_INPUT_LIMIT, max_output_tokens=_OUTPUT_LIMIT,
                 verified_at=observed_at, valid_until=valid_until, count_maximum=0)
 
 
-def task_for(approval_id, binding, native) -> dict:
-    """Build the exact packet and stable ledger identifiers without opening Keychain."""
+def task_for(approval_id, binding, native, model=None) -> dict:
+    """Build the exact packet and stable ledger identifiers without opening Keychain (`model`: default `model_for()`)."""
     try:
         usage_credentials.validate_binding(binding)
     except usage_credentials.CredentialError:
@@ -36,11 +48,12 @@ def task_for(approval_id, binding, native) -> dict:
     require(type(native) is dict and set(native) in ({'account', 'windows'}, {'account', 'windows', 'task'}),
             'invalid_canary_capacity')
     require(native.get('task', task_id) == task_id, 'native_task_mismatch')
+    model = model_for() if model is None else name(model)
     return dict(
         task_id=task_id, run_id='canary-run-' + identity, class_name=CLASS_NAME,
-        packet=dict(version=1, model=_MODEL, reasoning=_REASONING, text='Reply with the word READY.',
+        packet=dict(version=1, model=model, reasoning=_REASONING, text='Reply with the word READY.',
                     input_tokens=_INPUT_LIMIT, max_output_tokens=_OUTPUT_LIMIT),
-        provider='openai-api', local_preferred=False, api_only=True, reviewer_available=True,
+        provider=PROVIDER, local_preferred=False, api_only=True, reviewer_available=True,
         native=dict(account=native['account'], windows=deepcopy(native['windows']), task=task_id), snapshots=[],
     )
 
@@ -50,12 +63,13 @@ def validate(evidence, *, binding, profile, task, now) -> None:
     require(type(evidence) is usage_admission.Admission
             and type(getattr(evidence, 'grant', None)) is usage_admission.Grant, 'trusted_live_evidence_required')
     require(type(task) is dict and 'native' in task, 'canary_task_changed')
-    fixed = task_for(evidence.approval_id, binding, task['native'])
+    model = _model(profile)
+    fixed = task_for(evidence.approval_id, binding, task['native'], model)
     fixed_digest = usage_admission.digest(fixed)
     require(usage_admission.digest(task) == fixed_digest == evidence.task_digest, 'canary_task_changed')
     require(usage_admission.digest(binding) == evidence.binding_digest, 'live_binding_changed')
-    fixed_profile = profile_for(evidence.price_observed_at, evidence.price_valid_until)
-    require(type(profile) is dict and usage_admission.digest(profile)
+    fixed_profile = profile_for(evidence.price_observed_at, evidence.price_valid_until, model)
+    require(usage_admission.digest(profile)
             == usage_admission.digest(fixed_profile) == evidence.profile_digest, 'live_profile_changed')
     bound = usage_routing.quote(fixed['packet'], profile, integer(now))
     require((evidence.grant.organization, evidence.grant.project) == (binding['organization'], binding['project']),
@@ -71,6 +85,6 @@ def run(cwd, evidence, *, binding, profile, native):
     """Delegate one approved attempt. The shared ledger rejects reuse of its run ID."""
     usage_routing.refuse_managed(cwd)
     require(type(evidence) is usage_admission.Admission, 'trusted_live_evidence_required')
-    task = task_for(evidence.approval_id, binding, native)
+    task = task_for(evidence.approval_id, binding, native, _model(profile))
     validate(evidence, binding=binding, profile=profile, task=task, now=int(time.time()))
     return usage_routing._run_live(cwd, task, evidence)

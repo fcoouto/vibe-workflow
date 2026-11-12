@@ -224,7 +224,7 @@
       ]
     },
     "clients/opencode.md": {
-      "sha256": "3899b0b2b91f97cfc1fd53677d0fbbcc17ec74bf9d99c9f45cb6db04cb612b06",
+      "sha256": "e20fdb1866105eaadf3f5ac4320f7fea9716777d9d0c71dd1b4ddca89a84722a",
       "ranges": [
         [
           1,
@@ -630,11 +630,11 @@
       ]
     },
     "skills/manage-usage-routing/references/first-canary.md": {
-      "sha256": "21f4c0f0c615237ca5306d895c1bdbeb9ff5415cf49aaaecd5e957abe499c9a5",
+      "sha256": "0255d3e90067e05e6db3bec968ca7e012274329ac5745be9b40b18d77d29d4ee",
       "ranges": [
         [
           1,
-          46
+          48
         ]
       ]
     },
@@ -783,7 +783,7 @@
       ]
     },
     "skills/openrouter-workers/references/procedure.md": {
-      "sha256": "7c57c855f987f6df8df71c9fcf0de849f8f1beca9059164ad607d9eb18daabbd",
+      "sha256": "f6e945e01ee8bcef491537bb6210cae119b892966c7130634b19960ce6fced8e",
       "ranges": [
         [
           1,

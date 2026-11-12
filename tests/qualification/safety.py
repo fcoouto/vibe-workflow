@@ -16,8 +16,7 @@ import traceback
 
 from tests.qualification import sanitize
 
-PROVIDER, MODEL, VARIANT = "claude-agent", "haiku", "low"
-ROUTE = "%s/%s#%s" % (PROVIDER, MODEL, VARIANT)
+# No route is built in: every launch is checked against the `--route PROVIDER/MODEL#VARIANT` the approval names.
 HARNESS_NAME = "claude-agent-sdk via opencode"
 
 
@@ -86,16 +85,30 @@ class Blocker(Exception):
     """A stage exposed a blocker: stop and report."""
 
 
-def check_model(ref):
-    """Accept only the qualification route, `claude-agent/haiku` with no variant or `#low`; refuse anything else."""
-    if type(ref) is not str or ref not in ("%s/%s" % (PROVIDER, MODEL), ROUTE):
-        raise Refused("only %s is allowed" % ROUTE)
-    return ROUTE
+def route_ref(route):
+    """`provider/model#variant` for an approved route tuple."""
+    return "%s/%s#%s" % tuple(route)
 
 
-def on_route(record):
-    """Whether a recorded model request is exactly the qualification route, variant included."""
-    return (record.get("provider"), record.get("model"), record.get("variant")) == (PROVIDER, MODEL, VARIANT)
+def check_model(ref, route):
+    """Accept only the approved `route` (`provider/model` with no variant or its own variant); refuse anything else,
+    and refuse outright when no route was approved."""
+    if not route or len(route) != 3 or not all(type(part) is str and part for part in route):
+        raise Refused("an approved --route PROVIDER/MODEL#VARIANT is required")
+    if type(ref) is not str or ref not in ("%s/%s" % tuple(route[:2]), route_ref(route)):
+        raise Refused("only %s is allowed" % route_ref(route))
+    return route_ref(route)
+
+
+def choice(route):
+    """The explicit worker choice `{provider, model, effort, harness}` for an approved route tuple."""
+    provider, model, variant = route
+    return dict(provider=provider, model=model, effort=variant, harness=harness_for(provider))
+
+
+def on_route(record, route):
+    """Whether a recorded model request is exactly the approved route, variant included."""
+    return bool(route) and (record.get("provider"), record.get("model"), record.get("variant")) == tuple(route)
 
 
 def inside_git_worktree(path):

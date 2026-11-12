@@ -12,29 +12,60 @@ import shutil
 import subprocess
 import threading
 import unittest
+from unittest import mock
 
 from tests.qualification import canary, safety, structure
 from tests.qualification import opencode_live as live
-from tests.qualification.doubles import FAKE_SERVE, Fake, Temp
+from tests.qualification.doubles import FAKE_SERVE, QUAL_ROUTE, Fake, Temp
+from tests.qualification.doubles import qual_driver, qual_run
 
 
 NODE = shutil.which("node")
 
 
-class ModelTests(unittest.TestCase):
-    def test_only_claude_agent_haiku_low_is_accepted(self):
-        self.assertEqual(safety.check_model("claude-agent/haiku"), "claude-agent/haiku#low")
-        self.assertEqual(safety.check_model("claude-agent/haiku#low"), "claude-agent/haiku#low")
-        for ref in ("claude-agent/sonnet", "claude-agent/haiku#high", "openai/gpt-5", "chatgpt/gpt-5", "opencode/big-pickle",
-                    "openrouter/anthropic/claude-haiku", "claude-agent/haiku ", "", None, ["claude-agent/haiku"]):
-            with self.assertRaises(safety.Refused, msg=repr(ref)):
-                safety.check_model(ref)
+APPROVED = "vendor-q/model-q#tiny"  # invented: the route an approval names
 
-    def test_route_records_need_the_low_variant(self):
-        self.assertTrue(safety.on_route(dict(provider="claude-agent", model="haiku", variant="low")))
-        for record in (dict(provider="claude-agent", model="haiku", variant="high"), dict(provider="claude-agent", model="haiku"),
-                       dict(provider="claude-agent", model="sonnet", variant="low"), dict(provider="openai", model="haiku", variant="low")):
-            self.assertFalse(safety.on_route(record), record)
+
+class ModelTests(unittest.TestCase):
+    def test_only_the_approved_route_is_accepted(self):
+        route = safety.parse_route(APPROVED)
+        self.assertEqual(safety.check_model("vendor-q/model-q", route), APPROVED)
+        self.assertEqual(safety.check_model(APPROVED, route), APPROVED)
+        for ref in ("vendor-q/model-r", "vendor-q/model-q#large", "vendor-r/model-q#tiny", "openrouter/vendor-q/model-q",
+                    "vendor-q/model-q ", "", None, ["vendor-q/model-q"]):
+            with self.assertRaises(safety.Refused, msg=repr(ref)):
+                safety.check_model(ref, route)
+
+    def test_route_records_need_the_approved_variant(self):
+        route = safety.parse_route(APPROVED)
+        self.assertTrue(safety.on_route(dict(provider="vendor-q", model="model-q", variant="tiny"), route))
+        for record in (dict(provider="vendor-q", model="model-q", variant="large"), dict(provider="vendor-q", model="model-q"),
+                       dict(provider="vendor-q", model="model-r", variant="tiny"),
+                       dict(provider="vendor-r", model="model-q", variant="tiny")):
+            self.assertFalse(safety.on_route(record, route), record)
+
+    def test_harness_refuses_a_launch_outside_the_approved_route(self):
+        for name in ("PROVIDER", "MODEL", "VARIANT", "ROUTE"):
+            self.assertFalse(hasattr(safety, name), name)  # no built-in route: the approval names it
+        for missing in (None, (), ("vendor-q", "model-q")):
+            with self.assertRaises(safety.Refused):
+                safety.check_model(APPROVED, missing)
+            self.assertFalse(safety.on_route(dict(provider="vendor-q", model="model-q", variant="tiny"), missing or None))
+        with self.assertRaises(safety.Refused):
+            live.Run(Path("/nonexistent-qual-base"), None)  # no --route: refused before anything starts
+        from tests.qualification import server
+        route = safety.parse_route(APPROVED)
+        config = server.Server(Path("/nonexistent-qual-base"), route=route).config()
+        self.assertEqual((config["model"], config["commands"]["qualchild"]["model"]), ("vendor-q/model-q", APPROVED))
+        self.assertNotIn("model", server.Server(Path("/nonexistent-qual-base")).config())  # unknown route: none named
+        self.assertEqual(canary.request(route, "pool-q"), dict(provider="vendor-q", model="model-q", variant="tiny",
+                                                               harness="opencode provider vendor-q", kind="primary",
+                                                               funding_pool="pool-q"))
+        with self.assertRaises(safety.Refused):
+            canary.plan_assignments(1, "t", now=1)  # the pilot never invents a route
+        body = canary.plan_assignments(1, "t", now=1, route=safety.choice(route))[0]["body"]
+        self.assertEqual(body["assignment"]["choice"], dict(provider="vendor-q", model="model-q", effort="tiny",
+                                                            harness="opencode provider vendor-q", funding="subscription"))
 
 
 class IsolatedDirTests(Temp):
@@ -389,6 +420,11 @@ class MainRefusalTests(Temp):
         base = ["--isolated-dir", str(target), "--call-ledger", str(ledger)]
         with self.assertRaises(SystemExit):
             live.main(["--call-ledger", str(ledger)])  # no --isolated-dir
+        self.assertEqual(live.main(base), 2)  # no --route: refused, never a default
+        base += ["--route", APPROVED]
+        with mock.patch("sys.stderr") as err:  # --stages keeps its pre-registered route, whatever --route says
+            self.assertEqual(live.main(base + ["--stages", "descendants"]), 2)
+        self.assertIn("qualification-2 allows only", "".join(str(c) for c in err.write.call_args_list))
         self.assertEqual(live.main(base[:2] + ["--call-ledger", str(self.tmp / "absent.jsonl")]), 2)
         self.assertEqual(live.main(["--isolated-dir", str(self.private(self.tmp / "loose", 0o755)), "--call-ledger", str(ledger)]), 2)
         self.assertEqual(live.main(base + ["--out", str(target / "r.json")]), 2)  # output inside the dir that is deleted
@@ -407,7 +443,7 @@ class InspectRefusalTests(Temp):
         (run / "hooks.jsonl").write_text("\n".join(json.dumps(dict(hook="model.request", session="ses_%d" % i)) for i in (1, 2)))
         self.assertEqual(inspect.check_kept_run(run), run)
         with self.assertRaises(safety.Refused):
-            inspect.main(run)  # two sessions: refused before any server starts
+            inspect.main(run, QUAL_ROUTE)  # two sessions: refused before any server starts
         run.chmod(0o755)
         with self.assertRaises(safety.Refused):
             inspect.check_kept_run(run)
@@ -577,7 +613,7 @@ class CleanupOrderTests(Temp):
         state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
         base = self.private(self.tmp / "iso")
-        run = live.Run(base, ledger, canary_project=str(project), canary_state=state)
+        run = qual_run(base, ledger, canary_project=str(project), canary_state=state)
         run.replay_dir = self.tmp / "replay"  # the cleanup's admission export stays in the test's tree
         run.server.project_config.create({"plugins": []})
         run.server.log.write_text('{"hook":"model.request","phase":"pre"}\n{"hook":"model.req' if damaged else "")
@@ -652,7 +688,7 @@ class SmallFixTests(Temp):
                 self.calls.append("quiesce")
         fake = Quiet(raises=dict(launch=KeyError("x")))
         state = self.private(self.tmp / "state")
-        driver = canary.PilotDriver(fake, safety.CallLedger.initialize(state / "c.jsonl"), n=1, run="t")
+        driver = qual_driver(fake, safety.CallLedger.initialize(state / "c.jsonl"), n=1, run="t")
         driver.run()
         after = fake.calls[fake.calls.index("launch") + 1:]
         self.assertEqual(after[0], "quiesce")
@@ -700,10 +736,10 @@ class StructureTests(Temp):
         project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
         state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
-        qualification = live.Run(self.private(self.tmp / "iso1"), ledger)
-        pilot = live.Run(self.private(self.tmp / "iso2"), ledger, canary_project=str(project), canary_state=state)
+        qualification = qual_run(self.private(self.tmp / "iso1"), ledger)
+        pilot = qual_run(self.private(self.tmp / "iso2"), ledger, canary_project=str(project), canary_state=state)
         return [qualification, pilot, live.CanaryEnv(pilot), server.Routing(), server.Server(self.private(self.tmp / "iso3")),
-                ledger, canary.PilotDriver(Fake(), ledger, n=1, run="t"), server.ProjectConfig(project)]
+                ledger, qual_driver(Fake(), ledger, n=1, run="t"), server.ProjectConfig(project)]
 
     def test_no_instance_attribute_shadows_a_method_or_property(self):
         for instance in self.instances():
