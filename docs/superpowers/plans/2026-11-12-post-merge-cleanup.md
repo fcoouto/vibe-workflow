@@ -136,3 +136,13 @@ configuration remains trusted as specified; no new credentials or TLS policy.
 Push options do not redirect the destination and remain subject to provider
 authorization. Native ownership/race limits remain explicit. Missing test/spec
 review coverage will be completed before readiness, not silently waived.
+
+Coverage completion reviewed the entire spec and both test files on `f462bde`.
+F1 was accepted fixed; F2 exposed another real case: `rebase --update-refs` owns
+additional refs not named by `head-name`. The 131-test run passed before that
+new regression. Ruling: conservatively retain cleanup while any registered
+worktree has a rebase or bisect in progress instead of parsing more internal ref
+lists. This is smaller and covers indirect branch ownership; the tradeoff is
+deferring cleanup even for an unrelated rebase/bisect. A later explicit attempt
+can proceed after that operation ends. No ownership or preservation guarantee
+is weakened. Reviewer found no other blocking requirement or test-coverage gap.

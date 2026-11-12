@@ -192,6 +192,21 @@ class CleanupTests(unittest.TestCase):
         self.assertNotEqual(self.git(other, "symbolic-ref", "-q", "HEAD", check=False).returncode, 0)
         self.assertEqual(self.inspect(removed=True), {"status": "retained", "reason": "branch-still-in-use"})
 
+    def test_rebase_updating_additional_refs_keeps_task_branch(self):
+        self.git(self.primary, "worktree", "remove", str(self.worktree))
+        other = self.base / "stacked"
+        self.git(self.primary, "worktree", "add", "-b", "feature", str(other), "task")
+        (other / "extra.txt").write_text("stacked work\n")
+        self.git(other, "add", "extra.txt")
+        self.git(other, "commit", "-m", "Stacked")
+        result = self.git(other, "-c", "sequence.editor=true", "rebase", "-i", "--update-refs",
+                          "--exec", "false", "HEAD~2", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        directory = Path(self.git(other, "rev-parse", "--absolute-git-dir").strip())
+        self.assertIn("refs/heads/task", (directory / "rebase-merge/update-refs").read_text().splitlines())
+        self.assertEqual(self.git(self.primary, "rev-parse", "refs/heads/task").strip(), self.head)
+        self.assertEqual(self.inspect(removed=True), {"status": "retained", "reason": "branch-still-in-use"})
+
     def test_simple_https_remote_must_match_exact_repository(self):
         self.git(self.primary, "remote", "add", "origin", "https://github.com/example/project.git")
         self.assertEqual(cleanup.remote_destination(self.primary, "origin", "example/project"),
