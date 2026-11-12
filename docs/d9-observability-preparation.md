@@ -23,10 +23,11 @@ O2–O5 and the integration hook are implemented, independently reviewed and mer
 
 The user accepted the package-size warning (about 75.5% of Codex's 8 MiB bundle limit) for now; space work is deferred.
 
-Remaining, each needing separate user authorization:
+**O6 hosted readback, 12 November 2026** (user-authorized; Langfuse Cloud EU, the user's project, keys loaded from the plugin's saved macOS Keychain entry through `observability_credentials.load`, never printed or stored): the merged O5 code planned and delivered one `total` record (1,300 tokens) and one `adjustment` (+250), with synthetic numbers and `langfuse.environment` = `d9-qualification`. Both were `accepted`. Observations API v2 readback after three attempts: both are `GENERATION` observations with exactly the six sent buckets, empty `costDetails`, no total cost, only the seven allow-listed metadata keys and empty user/session. The trace's bucket sum equals the corrected 1,550 total. A separate raw span with a negative `input` bucket (−10) was accepted but stored as `output` 5, `total` 5: Langfuse silently drops negative buckets and recomputes the total. Negative deltas therefore stay local gaps permanently, never exported. Not covered: Metrics API or dashboard aggregation, the full hook path from a real enrolled runtime checkout (this repository has none), and real task numbers.
 
-1. **O6 hosted readback:** one real upload to the selected Langfuse project and readback of its buckets, including whether negative adjustments are accepted.
-2. **O7 final qualification**, which also depends on D7b. Resumed sessions are not detected yet.
+Remaining:
+
+1. **O7 final qualification**, which also depends on D7b. Resumed sessions are not detected yet.
 
 The sections below are the historical planning record; their gate statements describe the state at the time they were written.
 
@@ -305,7 +306,7 @@ Rules:
 - **Uncertain blocks further export.** While any record for a task and destination is `uncertain`, plan no further upload or adjustment for that pair. Status shows it. The user resolves it explicitly with the `resolve-export` action: `landed` (seen in Langfuse) marks it accepted; `missing` marks it rejected and allows resending the same ID, with a duplicate warning.
 - **What is exported.** Only results with `verified` true and `admission_mode` `"ordinary"`. Unverified and qualification-mode results export nothing.
 - **Corrections.** `exported_totals` sums accepted records only. A later reconciliation produces one adjustment record with a new ID, the delta (new total minus `exported_totals`), `correction_of` = the first export ID and the next sequence number. The reconciliation carries `reconciled_revision`, the verified task revision (`result["task"]["revision"]`, an integer). The planner refuses one whose value is not greater than the stored one, so a stale result cannot overwrite a newer one. Example: 100 accepted, corrected to 120, adjustment `+20`, sum 120.
-- **Negative deltas.** Langfuse's acceptance of negative usage values is unqualified. Until O6 proves it, record a negative change locally as a gap and do not export it.
+- **Negative deltas.** Record a negative change locally as a gap and do not export it. O6 (12 November 2026) showed Langfuse silently drops negative buckets and recomputes the total, so this rule is permanent.
 - **Restart.** After a restart, `pending` without an outcome becomes `uncertain`. Nothing re-sends on startup.
 - **Payload allow-list.** Each span carries only: export ID, opaque task correlation ID, `kind` (`total`/`adjustment`), sequence, `correction_of`, the six counters, coverage (`complete`/`incomplete`), gap codes, Codex CLI version and configured model/effort. Nothing else.
 - No score exporter, deletion or alternate provider.
