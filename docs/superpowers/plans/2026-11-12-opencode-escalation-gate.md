@@ -384,6 +384,21 @@ Fixed expected outcomes before the follow-up starts:
   settings. Permission-hook decisions, actual child routes and completed edits
   are the sources of evidence; recorder labels alone do not establish a pass.
 
+Follow-up result: both selected positive paths passed on `b8afed0`, using
+51/60 requests in under eight minutes. The recurrence case included a successful
+shell pipeline carrying a failing unittest summary; the gate held the fourth
+edit and released it after the stronger diagnosis. The max-effort case reached
+re-evaluation, assessed a simpler alternative without weakening requirements,
+and released the final repair. Original tests and protected inputs remained
+unchanged. See the [retained report](../../qualification/2026-11-12-opencode-escalation-gate.md)
+for the earlier failures and limits. The live allocation is closed.
+
+Execution status: Tasks 1–4 completed and reviewed; Task 5 probes recorded; Task 6
+executed with the selected mechanical paths verified after the fix. Full-suite
+verification on `b8afed0` still reports the pre-existing roster-vocabulary failure
+in untouched observability code. This is not an all-green suite or a qualification
+of the deferred judge.
+
 ---
 
 ## Not in this plan

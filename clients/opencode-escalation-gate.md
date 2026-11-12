@@ -2,7 +2,7 @@
 
 Load this file when you install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. It supports [stuck-pattern escalation](../policies/03-agent-delegation.md#stuck-pattern-escalation); it does not replace that procedure, and the agent still owns detection the gate cannot see. The design is in [the escalation gate design](../docs/superpowers/specs/2026-11-12-opencode-escalation-gate-design.md).
 
-**Status: hook shapes live-probed and the mechanical hold-and-release cycle observed on OpenCode 2.2.6. Qualification remains incomplete: the first recurrence and re-evaluation cases missed masked test failures. See the [behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
+**Status: selected mechanical paths live-qualified on OpenCode 2.2.6: hold, stronger diagnosis, re-evaluation and release. After fixing masked unittest exits, both positive follow-up cases passed; earlier failures remain recorded. This does not qualify general semantic detection or the deferred judge. See the [behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
 ## What it does
 

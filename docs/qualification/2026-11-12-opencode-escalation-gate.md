@@ -1,6 +1,24 @@
 # OpenCode escalation gate behavior evaluation
 
-## Result: qualification incomplete
+## Result: selected mechanical paths passed after the masked-exit fix
+
+The follow-up ran both positive cases successfully on candidate `b8afed0`, using
+51 of 60 approved model requests between 18:07:39 and 18:15:23 UTC. The original
+failed cases remain below; the [follow-up results](../../tests/fixtures/opencode_workflow/behavior-followup-results.json)
+do not replace them. No further live retry was made or is authorized.
+
+| Follow-up case | Requests | Observed acceptance |
+| --- | ---: | --- |
+| Recurrence, including piped failing checks | 23/30 | Fourth patch denied; stronger diagnosis; successful subsequent patch; original tests pass. |
+| Re-evaluation at the top ranked effort | 28/30 | Fourth patch denied at re-evaluation; read-only assessment preserves requirements; release; original tests pass. |
+
+The architecture assessment compared a redesign with the smaller repair and
+recommended no redesign. The coordinator accepted that recommendation within the
+agreed requirements. Tests, instructions, plugin/configuration and feature
+settings remained unchanged in both cases, and the coordinator independently
+reran the original four tests after each worker stopped.
+
+### First round: qualification incomplete
 
 The first allocation used 87 of 150 approved model requests across six cases,
 between 17:46:52 and 17:54:50 UTC on 12 November 2026. No case was retried.
@@ -43,17 +61,30 @@ all passed. Git comparisons confirmed that tests, instructions, plugin
 configuration and feature settings were unchanged. Notes gained exactly two
 nonblank lines in the notes control.
 
-## Follow-up allocation
+## Follow-up allocation and fix
 
 The user approved one further round: Luna on the ChatGPT subscription,
 low/high/max as needed, at most 60 requests and 30 minutes, one recurrence case
 and one re-evaluation case with 30 requests each. Earlier failures remain
 recorded. Local regression checks must pass before this round starts.
 
-The candidate adds a narrow recognition of unittest's exact failure summary in
+The candidate added a narrow recognition of unittest's exact failure summary in
 captured check output. It does not rewrite shell commands or treat arbitrary
-mentions of failure as proof. The recorder will inspect permission decisions
-directly rather than infer them from serialized tool errors.
+mentions of failure as proof. The recorder was changed to inspect permission decisions
+directly rather than infer them from serialized tool errors. Two regression tests
+failed before the fix and passed afterward. The recorder's corrected denial
+classification also passed a model-free self-check before the live runs.
+
+## Checks
+
+- Gate Node suites: 43 passed, including the masked-exit regression.
+- Selected Python modules on `b8afed0`: 129 tests passed.
+- Full suite on `b8afed0`: 4,333 tests, two skipped, one failure:
+  `test_roster_vocabulary.RosterVocabularyTests.test_no_old_role_name_outside_the_allowlist`.
+  It flags two pre-existing role strings in `runtime/observability_hook.py`,
+  unchanged by this branch. The same failure was reproduced on base `b73b8f11`
+  before these qualification changes. The full suite is not green.
+- Package validation passed with the existing bundle-size warning.
 
 ## Limits
 
@@ -61,6 +92,11 @@ directly rather than infer them from serialized tool errors.
 - Same-file unrelated failures still need the deferred routed judge to avoid
   unnecessary diagnosis. The first mechanical version cannot classify invariants.
 - Repairs moving to new files remain outside the file-based detector.
+- The live re-evaluation exercised the no-stronger-ranked-option branch, not
+  three full escalation cycles. The one-time reset/second-exhaustion transitions
+  have unit coverage, not a live observation here.
+- No material redesign was needed, so redesign acceptance and user escalation
+  for a changed requirement were not exercised live.
 - Provider-internal retries, billing receipts and child-session token totals
   were not collected. Subscription routes are observed, not a monetary receipt.
 - The copies are synthetic and disposable; the process isolation is not an OS
