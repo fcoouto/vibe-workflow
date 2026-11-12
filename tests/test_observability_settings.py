@@ -611,22 +611,22 @@ class ObservabilitySettingsTests(unittest.TestCase):
 
     def test_project_requests_are_refused_with_fixed_codes(self):
         repository = self.scope.repository_id
-        invalid = (None, {}, dict(expected_revision=0), self.project_request(True), self.project_request(-1),
-                   self.project_request(2 ** 53), self.project_request(extra="PRIVATE"),
-                   self.project_request(destination="https://PRIVATE.example"),
-                   self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
-                   self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
-                   self.project_request(repository_ids=[repository, repository]),
-                   self.project_request(repository_ids=[repository, "PRIVATE/path"]),
-                   self.project_request(repository_ids=[repository, 7]),
-                   self.project_request(repository_ids=["PRIVATE-other-repository"]),
-                   self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
-        for request in invalid:
+        malformed = (None, {}, dict(expected_revision=0), self.project_request(True), self.project_request(-1),
+                     self.project_request(2 ** 53), self.project_request(extra="PRIVATE"),
+                     self.project_request(destination="https://PRIVATE.example"),
+                     self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
+                     self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
+                     self.project_request(repository_ids=[repository, repository]),
+                     self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                     self.project_request(repository_ids=[repository, 7]),
+                     self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
+        invalid = [(request, "invalid_observability_request") for request in malformed]
+        invalid.append((self.project_request(repository_ids=["PRIVATE-other-repository"]),
+                        "observability_repository_not_selected"))
+        for request, code in invalid:
             with self.subTest(request=request), self.assertRaises(self.settings.SettingsError) as caught:
                 self.settings.configure_project(self.scope, request)
-            self.assertIn(str(caught.exception), {"invalid_observability_request",
-                                                  "observability_repository_not_selected"})
-            self.assertNotIn("PRIVATE", str(caught.exception))
+            self.assertEqual(str(caught.exception), code)
         for request in (None, {}, dict(expected_revision=0, desired_collection=False), dict(expected_revision="0")):
             with self.subTest(request=request), self.assertRaises(self.settings.SettingsError) as caught:
                 self.settings.disable_project(self.scope, request)
@@ -660,12 +660,14 @@ class ObservabilitySettingsTests(unittest.TestCase):
                 self.no_external_access():
             self.assertTrue(self.settings.project_status(self.scope)["desired_collection"])
             self.assertTrue(self.settings.project_status(self.scope.repository_root)["desired_collection"])
-            with self.assertRaises(self.settings.SettingsError):
+            with self.assertRaises(self.settings.SettingsError) as caught:
                 self.settings.configure_project(self.scope, self.project_request(1, desired_collection=False))
+            self.assertEqual(str(caught.exception), "observability_storage_unavailable")
             report = self.settings.disable_project(self.scope.repository_root, dict(expected_revision=1))
             self.assertEqual((report["desired_collection"], report["revision"]), (False, 2))
-            with self.assertRaises(self.settings.SettingsError):
+            with self.assertRaises(self.settings.SettingsError) as caught:
                 self.settings.configure_project(self.scope, self.project_request(2))
+            self.assertEqual(str(caught.exception), "observability_storage_unavailable")
         self.assertEqual(json.loads(self.project_path().read_bytes())["binding"], binding)
         self.assertEqual(database.read_bytes(), b"broken runtime database")
 
@@ -706,17 +708,21 @@ class ObservabilitySettingsTests(unittest.TestCase):
         foreign.chmod(0o600)
         path.unlink()
         path.symlink_to(foreign)
-        with self.assertRaises(self.settings.SettingsError):
+        # O_NOFOLLOW refuses the link itself (ELOOP), which the guard maps to its storage code.
+        with self.assertRaises(self.settings.SettingsError) as caught:
             self.settings.project_status(self.scope)
+        self.assertEqual(str(caught.exception), "observability_storage_unavailable")
         path.unlink()
         os.link(foreign, path)
-        with self.assertRaises(self.settings.SettingsError):
+        with self.assertRaises(self.settings.SettingsError) as caught:
             self.settings.project_status(self.scope)
+        self.assertEqual(str(caught.exception), "unsafe_observability_storage")
         path.unlink()
         path.write_bytes(original)
         path.chmod(0o644)
-        with self.assertRaises(self.settings.SettingsError):
+        with self.assertRaises(self.settings.SettingsError) as caught:
             self.settings.project_status(self.scope)
+        self.assertEqual(str(caught.exception), "unsafe_observability_storage")
         path.chmod(0o600)
         record = json.loads(original)
         for changed in (dict(record, binding=dict(record["binding"], project_id="other-project")),
@@ -732,6 +738,29 @@ class ObservabilitySettingsTests(unittest.TestCase):
                 self.settings.project_status(self.scope)
             self.assertEqual(str(caught.exception), "invalid_observability_configuration")
         self.assertEqual(foreign.read_bytes(), original)
+
+    def test_unreadable_checkout_record_never_hides_saved_project_choice(self):
+        self.settings.configure(self.scope, CONFIGURE)
+        original = self.path.read_bytes()
+        for damage, code in ((lambda: self.path.chmod(0o644), "unsafe_observability_storage"),
+                             (lambda: self.path.write_text('{"version":1,"PRIVATE":1}'), "invalid_observability_configuration")):
+            self.path.write_bytes(original)
+            self.path.chmod(0o600)
+            revision = self.settings.project_status(self.scope)["revision"]
+            damage()
+            unavailable = dict(status="unavailable", error=code)
+            with self.subTest(code=code):
+                report = self.settings.configure_project(self.scope, self.project_request(revision))
+                self.assertTrue(report["ok"])
+                self.assertEqual((report["revision"], report["desired_collection"]), (revision + 1, True))
+                self.assertEqual(report["checkout_connection"], unavailable)
+                self.assertNotIn("PRIVATE", json.dumps(report))
+                self.assertEqual(json.loads(self.project_path().read_bytes())["revision"], revision + 1)
+                status = self.settings.project_status(self.scope)
+                self.assertEqual(status, report)
+                self.assertEqual(self.settings.project_status(self.scope.repository_root), report)
+                off = self.settings.configure_project(self.scope, self.project_request(revision + 1, desired_collection=False))
+                self.assertIsNone(off["checkout_connection"])
 
     def test_busy_project_lock_reports_busy_without_writing(self):
         import fcntl

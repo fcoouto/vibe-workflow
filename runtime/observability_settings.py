@@ -462,7 +462,11 @@ def _with_checkout(scope, report):
     # Only an on Project choice reads this checkout's own connection record; it never becomes Project consent.
     if not report["desired_collection"]:
         return report
-    checkout = status(scope)
+    try:
+        checkout = status(scope)
+    except SettingsError as error:
+        # Report-only: an unreadable checkout record must not hide or misreport the saved Project choice.
+        return dict(report, checkout_connection=dict(status="unavailable", error=str(error)))
     return dict(report, checkout_connection=dict(configured=checkout["configured"], desired_opt_in=checkout["desired_opt_in"]))
 
 
