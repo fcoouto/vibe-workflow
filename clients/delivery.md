@@ -42,6 +42,124 @@ not change old tasks' resources or switch the primary. A session still using the
 old installed guidance has not thereby adopted the new policy. Keep that
 deployment limitation explicit rather than treating it as an exception.
 
+## Post-merge cleanup
+
+Cleanup is opt-in (`cleanup.enabled: false` by default). Once enabled,
+`delete_remote_branch: true` includes eligible remote branches; users can disable
+that value separately. Missing or malformed settings never authorize deletion.
+This is a coordinator procedure using native tools, not an unattended sweep or
+mechanically enforced transaction. Use it only for the exact task PR whose merge
+the coordinator has confirmed, including a manual merge observed later.
+
+1. **Permission and merge.** Resolve feature settings at the verified primary
+   checkout using [feature settings](features.md). Check `effective` before any
+   subsetting. Establish standing repository-scoped cleanup permission from the
+   submitted onboarding choice or an explicit user decision. Settings, a caller
+   flag, or an inspection result alone grant no permission. Preserve refusals,
+   old task pins and immediate session revocation. Recheck enablement and current
+   permission before each destructive action; an upgrade never adopts old tasks
+   silently. With no permission or cleanup disabled, retain resources and stop.
+   Through the existing authenticated provider tool, observe the exact repository
+   identity, PR number, merged state, merged head, head/base repositories, branch,
+   target and merge commit. Closed or queued is not merged. Require the recorded
+   task candidate to equal the merged head. Initially support same-repository
+   GitHub PRs only; retain fork or ambiguous targets. Do not infer squash/rebase
+   merge success from head ancestry.
+2. **Synchronize.** Follow [delivery preparation](#prepare-the-destination): fetch
+   the configured upstream and designated primary branch, fast-forward without
+   switching the primary, verify the confirmed merge commit is included, and
+   complete required post-merge maintenance. Dirty, diverged, detached or uncertain
+   primary state leaves cleanup pending; never repair it by reset, stash or force.
+3. **Inspect and establish ownership.** Keep the exact repository, PR, worktree,
+   refs, expected head and merge commit in the existing surviving task context.
+   Preserve evidence needed after removal outside the task worktree; otherwise
+   retain it. Confirm known workers/processes stopped and no other session,
+   worktree, shared branch or dependent task/PR needs the resources. Check provider
+   default/protected branch status and dependent PRs with complete observations;
+   unknown means retain. A clean Git status does not prove exclusive ownership.
+   Run the installed helper from a stable package outside the worktree:
+
+   ```sh
+   python3 -I -B "$PLUGIN_ROOT/scripts/cleanup.py" --primary "$PRIMARY" --primary-branch "$PRIMARY_BRANCH" --worktree "$TASK_WORKTREE" --branch "$TASK_BRANCH" --head "$HEAD" --merge "$MERGE"
+   ```
+
+   Here `HEAD` is the exact merged task head, not a fresh guess from a branch name;
+   `MERGE` is the provider-confirmed merge commit. `eligible` means only local
+   checks passed. The helper checks primary/worktree identity, merge inclusion,
+   unchanged refs, locks, Git operations, submodules, hidden index flags, and
+   staged/unstaged/untracked/**ignored** work. It observes no native ownership or
+   provider facts and grants no authority. A retained result stops this attempt.
+4. **Remove locally.** Use only a native removal tool whose behavior was observed
+   on disposable resources (see below). Account for any implicit branch deletion
+   before invoking it; if that effect cannot preserve the expected ref, retain.
+   Relocate the coordinator to the verified primary and verify the native session
+   attachment changed. Recheck ownership and the helper immediately before removal.
+   Use no force option. After removal, verify the worktree and its Git registration
+   are absent. Keep the local branch until remote cleanup has settled or been
+   skipped, so the helper can still check the task's exact ref.
+5. **Delete the supported remote branch.** When enabled and authorized, inspect
+   remote configuration **before local deletion**, adding `--remote "$REMOTE"
+   --repository "$REPOSITORY"` to the helper. An unsupported destination skips
+   remote deletion and does not prevent independently eligible local cleanup.
+   The supported path is an ordinary `https://github.com/<owner>/<repo>[.git]`
+   URL for the provider-observed repository, with no URL rewrites, alternate push
+   URLs, custom HTTP/transport settings, transport environment overrides or active
+   push hook. Keep existing authentication; do not change config to pass inspection.
+   Immediately before the push, repeat the helper with `--removed --remote
+   "$REMOTE" --repository "$REPOSITORY"`, and recheck permission, provider
+   repository ID, branch protection/dependencies, and remote head. Bind
+   the current provider repository ID to the recorded PR repository; use the
+   checked literal destination, not a remote alias. `REF` is the helper's full
+   `refs/heads/...` ref. Use the expected-object condition:
+
+<!-- cleanup-remote-delete -->
+```sh
+git -C "$PRIMARY" -c http.followRedirects=false push --no-follow-tags --recurse-submodules=no "--force-with-lease=$REF:$HEAD" -- "$DESTINATION" ":$REF"
+```
+
+   The lease is a conditional ref deletion, not permission for forceful worktree
+   removal. Verify remote absence and repository identity afterward. Provider
+   identity reads and the Git push are not atomic; a rename/replacement or unknown
+   result is not proof of successful cleanup. Retain unsupported cases rather
+   than adding a transport fallback. Managed operations still need their selected
+   owner; this procedure does not admit a managed cleanup mutation.
+6. **Delete the local branch.** Recheck current permission and repeat the helper
+   with `--removed` immediately before deleting the local ref. This checks that
+   the exact task head remains and no worktree uses the branch. Use the native shell:
+
+<!-- cleanup-local-delete -->
+```sh
+git -C "$PRIMARY" update-ref --no-deref -d "$REF" "$HEAD"
+```
+
+   Verify absence afterward. A missing branch is already absent, not a reason to
+   recreate it. No command here excludes uncontrolled writers atomically; if
+   ownership is uncertain, retain resources. A later explicitly requested remote-
+   only attempt uses fresh native provider/transport checks and the original task
+   binding; do not recreate a deleted local branch to satisfy the helper.
+7. **Report and stop.** Record each resource as deleted, already absent, retained
+   with reason, or outcome unknown in the existing surviving task context. On any
+   failed action, interruption, changed target or uncertain result, stop remaining
+   destructive actions. Do not automatically retry or resume partial cleanup.
+   A later explicit request must establish exact remaining targets and fresh
+   checks; insufficient evidence means retain. Never replay a completed deletion
+   against a resource that reappeared. There is no recovery journal or new store.
+
+### Native removal observations
+
+On 12 November 2026, OpenCode v2.2.6 on macOS was probed through its native
+`worktree_create` and `worktree_remove` tools in a disposable task worktree.
+Removal without force refused both a modified tracked file and an untracked file.
+It **deleted an ignored synthetic file** and the worktree while preserving the
+local branch at its original commit. Therefore native refusal is not an
+ignored-file safeguard: check ignored content and stop known writers first.
+There is still a check-to-removal race with uncontrolled writers; retain the
+worktree if ownership cannot be established. This probe did not qualify active
+session exclusion, concurrent writes, locks, submodules, Codex or Claude removal.
+For an unobserved or materially changed native tool, probe these effects on
+disposable resources before relying on it; do not invent a fallback that deletes
+the directory recursively. Installed presence alone is not removal evidence.
+
 ## Bind an admitted workspace
 
 The callable `scripts.delivery_coordinator.DeliveryOperationOwner` binds an independently verified host decision to exact scope, action and request digest. It has no JSON CLI, default native source or authority to manufacture admission. Host observations and decision references bind facts; the caller must independently establish their source and meaning.
@@ -94,4 +212,4 @@ These are source consumers, not qualified host execution. Actual Gate custody, n
 
 ## Unsupported effect orchestration
 
-The GitHub and Git transport adapters are bounded primitives, not delivery authority. Their mutation sources default to unavailable. The callable owner does not orchestrate checkpoint/commit/push, agent merge or remote cleanup. Do not invoke a primitive directly to bypass that boundary or supply handcrafted readiness/cleanup receipts. Existing PR metadata uses workflow labels and append-only operation-marked comments to preserve concurrent human title/description edits. Local worktree and local branch cleanup remain client-owned.
+The GitHub and Git transport adapters are bounded primitives, not delivery authority. Their mutation sources default to unavailable. The callable owner does not orchestrate checkpoint/commit/push, agent merge or remote cleanup. Do not invoke a primitive directly to bypass that boundary or supply handcrafted readiness/cleanup receipts. Existing PR metadata uses workflow labels and append-only operation-marked comments to preserve concurrent human title/description edits. Local worktree and local branch cleanup remain client-owned. Ordinary native cleanup follows [post-merge cleanup](#post-merge-cleanup); it does not activate or impersonate the managed owner.

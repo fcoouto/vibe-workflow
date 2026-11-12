@@ -31,7 +31,7 @@
 
 - [x] Create a disposable native worktree; test tracked and untracked refusal.
 - [x] Test ignored content and observe branch side effects.
-- [ ] Record behavior and limits in the canonical delivery procedure.
+- [x] Record behavior and limits in the canonical delivery procedure.
 
 Observed on OpenCode v2.2.6/macOS: native `worktree_remove` without force refused
 modified tracked and untracked files. It removed an ignored synthetic file and
@@ -50,9 +50,9 @@ removed=False) -> dict`. Returns `status`, `reason`, and verified facts on succe
 same-repository GitHub HTTPS configuration; unsupported paths raise `ValueError`.
 The CLI exposes those read-only checks and no deletion command.
 
-- [ ] Add failing tests and commit before the repository's test runner.
-- [ ] Run `python3 -B scripts/test_sharded.py test_cleanup test_features`; confirm missing feature/helper failures.
-- [ ] Implement the smallest checks using `runtime.features` and `runtime.startup.read_git`.
+- [x] Add failing tests and commit before the repository's test runner.
+- [x] Run `python3 -B scripts/test_sharded.py test_cleanup test_features`; confirm missing feature/helper failures.
+- [x] Implement the smallest checks using `runtime.features` and `runtime.startup.read_git`.
 - [ ] Commit and run the same tests; require all pass.
 
 ## Task 3: Procedure and integration
@@ -61,10 +61,10 @@ Files: `clients/delivery.md`, `policies/08-merge-readiness.md`,
 `skills/onboard-my-project/references/procedure.md`,
 `assets/harness-evaluation/cases.md`.
 
-- [ ] Add opt-in question after merge permission; preserve Graphify/memory default rules.
-- [ ] Specify merge evidence, synchronization, ownership, helper use, native removal,
+- [x] Add opt-in question after merge permission; preserve Graphify/memory default rules.
+- [x] Specify merge evidence, synchronization, ownership, helper use, native removal,
   conditional deletion, and stop-on-partial outcomes in one procedure.
-- [ ] Add the policy trigger and representative onboarding/cleanup cases.
+- [x] Add the policy trigger and representative onboarding/cleanup cases.
 - [ ] Validate, commit, then run affected tests: `test_cleanup test_features
   test_checkout_stability_instructions test_graphify_maintenance_instructions
   test_prepared_instructions`.
@@ -80,3 +80,10 @@ Ruling: keep deterministic checks read-only and native effects in the procedure.
 This avoids a second executor while preserving native authorization boundaries;
 the cost is instruction-following rather than mechanical action enforcement.
 The user's implementation request authorizes proceeding without another plan approval.
+
+Red check on `439dd3f`: 47 tests, expected missing cleanup module/manifest and
+changed feature-summary failures; other existing feature tests passed.
+Ruling: retain the local ref until remote cleanup settles or is explicitly skipped,
+then delete it conditionally. This lets the same helper recheck after worktree
+removal without a recovery record or a second remote-only command. A failed push
+leaves the local branch for a later explicit attempt.
