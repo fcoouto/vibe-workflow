@@ -185,6 +185,64 @@ class RecoveryTests(RankedStores):
         self.assertEqual((stored["5h"]["used"], stored["7d"]["used"]), (150, 130))  # both stored before the stop
 
 
+GUARDED = r"""
+import sys
+sys.path.insert(0, %r)
+from unittest import mock
+from tests.qualification import canary, canary_ranked, opencode_live, server
+for target, name in ((canary, "_production_paths"), (canary, "resolve_state"), (canary, "initialize_state"),
+                     (opencode_live, "CallLedger"), (opencode_live, "Run"), (server.Server, "start"),
+                     (server.Routing, "served"), (canary_ranked, "preflight")):
+    mock.patch.object(target, name, side_effect=AssertionError("side effect: " + name)).start()
+raise SystemExit(opencode_live.main(sys.argv[1:]))
+""" % str(ROOT)
+
+
+@unittest.skipUnless(shutil.which("git"), "git is required")
+class ProductionBoundaryTests(RankedStores):
+    """N1: a production-ledger canary is the ranked one only; nothing implicit converts or bypasses it."""
+
+    def test_an_unranked_production_canary_refuses_before_any_side_effect(self):
+        iso = self.private(self.tmp / "iso-cli")
+        calls = self.tmp / "calls-cli.jsonl"
+        for extra in ([], ["--admissions", "20"], ["--pilot-max", "20"]):
+            done = subprocess.run([sys.executable, "-I", "-B", "-c", GUARDED, "--canary", "--production-ledger",
+                                   "--approval", "the user", "t", "canary", "--route", "claude-agent/invented-a#low",
+                                   "--project", str(self.project), "--isolated-dir", str(iso), "--call-ledger",
+                                   str(calls), *extra], capture_output=True, text=True, timeout=60,
+                                  env=dict(os.environ, HOME=str(self.home)))
+            self.assertEqual(done.returncode, 2, done.stderr)
+            self.assertIn("production-ledger canary runs only with --ranked", done.stderr)
+            self.assertNotIn("side effect", done.stderr)
+        self.assertFalse(calls.exists())
+
+    def test_a_direct_run_on_the_production_state_needs_its_ranked_options(self):
+        run, _ = self.make_run()
+        run.start = run.probes = mock.Mock(side_effect=AssertionError("started"))
+        with mock.patch.object(canary, "check_ancestor_configs", side_effect=AssertionError("project read")), \
+                mock.patch.object(canary_ranked, "setup", side_effect=AssertionError("setup")):
+            for options in (None, {}):
+                run.ranked_options = options
+                with self.assertRaisesRegex(safety.Refused, "production-ledger canary runs only"):
+                    run.canary_run()
+        self.assertEqual(run.server.transmitted(), [])
+
+    def test_a_dedicated_state_run_never_takes_ranked_options(self):
+        run, _ = self.make_run()
+        run.canary_state = dict(run.canary_state, production=False)
+        run.ranked_options = dict(approved="d" * 64)
+        with mock.patch.object(canary, "check_ancestor_configs", side_effect=AssertionError("project read")):
+            with self.assertRaisesRegex(safety.Refused, "ranked"):
+                run.canary_run()
+
+    def test_the_export_and_the_preflight_keep_their_own_contracts(self):
+        replay = self.tmp / "replay-export"
+        done = RankedCliTests.cli(self, "--export-canary-admissions", "--production-ledger", "--approval", "the user",
+                                  "t", "canary", "--replay-dir", str(replay))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["format"], 2)
+
+
 class RankedCliTests(RankedStores):
     def cli(self, *argv):
         """`opencode_live.py` in a new process; only the production defaults point at this test's stores."""

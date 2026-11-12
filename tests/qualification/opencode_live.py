@@ -735,8 +735,10 @@ class Run:
         refusals = canary.preflight(before)
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
-        canary.check_ancestor_configs(self.canary_project)
         options = getattr(self, "ranked_options", None)  # F7.2: only `--ranked`, before start
+        if bool(options) != bool(self.canary_state.get("production")):  # N1: a direct entry is never converted
+            raise Refused(canary_cli.PRODUCTION_RANKED_ONLY)
+        canary.check_ancestor_configs(self.canary_project)
         self.ranked = canary_ranked.setup(self, **options) if options else None
         if self.ledger.remaining(self.purpose) < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
@@ -889,7 +891,7 @@ def main(argv=None):
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
     try:
-        canary.check_production_options(args)
+        canary_cli.check_options(args)  # a production-ledger canary only as the ranked run, before anything is read
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))

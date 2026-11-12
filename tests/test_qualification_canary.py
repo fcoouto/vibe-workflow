@@ -854,7 +854,7 @@ class ProductionLedgerTests(Temp):
                 "--project", str(project), "--canary-allow", str(project), "--production-ledger", "--approval", *APPROVED]
         with mock.patch("sys.stderr") as err:
             self.assertEqual(live.main(argv), 2)
-        self.assertIn("managed_projects", "".join(str(c) for c in err.write.call_args_list))
+        self.assertIn(live.canary_cli.PRODUCTION_RANKED_ONLY, "".join(str(c) for c in err.write.call_args_list))
         self.assertFalse(self.ledger.exists())
 
     def test_main_requires_managed_projects_for_the_default_allowlist_too(self):
@@ -868,7 +868,7 @@ class ProductionLedgerTests(Temp):
         with mock.patch.object(canary, "ALLOWLIST", str(project)), mock.patch("sys.stderr") as err:
             self.assertEqual(live.main(argv), 2)
         written = "".join(str(c) for c in err.write.call_args_list)
-        self.assertIn("managed_projects", written)
+        self.assertIn(live.canary_cli.PRODUCTION_RANKED_ONLY, written)
         self.assertFalse(self.ledger.exists())
 
     def test_the_run_pins_the_production_paths_records_the_approval_and_writes_nothing_itself(self):

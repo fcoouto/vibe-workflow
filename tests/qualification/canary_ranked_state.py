@@ -5,7 +5,9 @@ the cumulative/last/seen window accounting, unsettled reservations, the stop sta
 
 It is created only by an explicit approved start (`create`), never on resume; `load` refuses a missing, corrupt,
 mismatched or concurrently held record. A record is never replaced or deleted by the harness: a new approval for the
-same ledger is refused while it exists, so no approval can silently erase a whole-run allowance. Writes are atomic
+same ledger is refused while it exists, so no approval can silently erase a whole-run allowance. Completed and
+aborted records stay retained; no archive or reset procedure exists, and choosing another record directory is not a
+supported reset. This is a harness rule, not OS enforcement: the local owner can still move the file by hand. Writes are atomic
 (temporary file, fsync, `os.replace`) and the caller saves before every send; a failed save fails closed.
 """
 import contextlib
@@ -82,8 +84,9 @@ def create(path, record):
     """The new run's record from an approved preflight record; refused when one already exists."""
     replay_export.check_dir(path.parent)
     if path.exists() or path.is_symlink():
-        raise Refused("a ranked canary run record already exists for this ledger; it is never replaced. Resume it "
-                      "with its approved digest, or archive it by hand after reading it")
+        raise Refused("a ranked canary run record already exists for this ledger; it is never replaced, moved or "
+                      "deleted to start or resume a run. Resume it with its approved digest; another approval on this "
+                      "ledger stays refused pending an explicit lifecycle decision")
     value = dict({key: record[key] for key in ("project", "ledger", "pins", "coverage", "acknowledged", "baseline",
                                                "earliest_reset")}, version=VERSION, digest=digest(record),
                  cumulative={key: 0 for key in record["baseline"]},

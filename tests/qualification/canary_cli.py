@@ -34,6 +34,21 @@ def add_arguments(parser):
     parser.add_argument("--probe-route", help="ranked: the fixed approved route of the plugin-chain probes only")
 
 
+PRODUCTION_RANKED_ONLY = ("a production-ledger canary runs only with --ranked and its approved digest; the "
+                          "explicit-route pilot runs on the dedicated canary state")
+
+
+def check_options(args):
+    """The first refusals, before any store, call ledger, server or provider is touched: `--production-ledger`'s
+    own rules, and a production-ledger canary only as the ranked run (never an implicit conversion; the 0-call
+    `--ranked-preflight` and `--export-canary-admissions` keep their separate contracts)."""
+    canary.check_production_options(args)
+    if args.canary and args.production_ledger and not args.ranked:
+        raise safety.Refused(PRODUCTION_RANKED_ONLY)
+    if args.ranked and not (args.canary and args.production_ledger):
+        raise safety.Refused("--ranked belongs to --canary --production-ledger")
+
+
 def exposure(n):
     """Calls a ranked run may reserve at most: the pilot driver's write-ahead rule (two probes, the first admission
     and its title, one per further admission): 83 for the 80-admission stop."""
