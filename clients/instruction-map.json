@@ -64,7 +64,7 @@
       ]
     },
     "clients/delivery.md": {
-      "sha256": "b9f9ee9a6f132c412f963530524918b3a3c1dfab3d1f6249ceaf34b007c251ec",
+      "sha256": "035b7fa36b70c24db085a1d2025a59d36b99e8ac35e8067c8b5b735f53395b88",
       "ranges": [
         [
           1,
@@ -72,11 +72,11 @@
         ],
         [
           29,
-          62
+          64
         ],
         [
-          63,
-          91
+          65,
+          97
         ]
       ]
     },
@@ -502,11 +502,11 @@
       ]
     },
     "policies/08-merge-readiness.md": {
-      "sha256": "fe74e9967b3ca00b0df4e90ac682f377272c9ad55450909ac23ce54fc1c4b08c",
+      "sha256": "397912f3871496edd63964beb5be58205ae1709a98234de5d272880b924fc8a5",
       "ranges": [
         [
           1,
-          55
+          57
         ]
       ]
     },
@@ -701,7 +701,7 @@
       ]
     },
     "skills/onboard-my-project/references/procedure.md": {
-      "sha256": "82c1500976c13e41501b7e8dcb1a029d6abcf3fece2501962b7afe3436d9222a",
+      "sha256": "283eb025036b2655c3bd29f2e7722b961398c4491f446e702c61643ac56b0d33",
       "ranges": [
         [
           1,

@@ -21,6 +21,17 @@ record the approved scope and verification.
 | Reuse safe synchronization instead of a competing checkout rule | [Graphify maintenance](../clients/graphify-maintenance.md#synchronize-refresh-and-verify) loads delivery preparation and verifies its target matches the designated branch; repository development guidance keeps only local `main`/publication/generated-output specifics. |
 | Behavioral proof rather than wording assertions alone | `tests/test_checkout_stability_instructions.py` executes the documented read-only Git commands in disposable repositories. Its observation cases first failed against the old contract. The plan retains focused package tests, fresh-context scenario evaluation, the Markdown conflict audit and independent final review separately from unobserved client enforcement. |
 
+Independent Fable source/security review found a fixture assumption about Git's
+sanitized worktree metadata names, uncommitted local-result retention and an
+ambiguous onboarding write boundary. The fixture now reads the actual `.git`
+pointer; delivery preserves and reports local work and separates source mutations
+from explicitly authorized, disjoint ignored setup writes. Two fresh-context
+11-case evaluations drove clarifications to synchronization ownership, resume,
+designation, operation exceptions, active-pin transitions and target-guidance
+integration. The [plan's execution record](superpowers/plans/2026-11-12-primary-checkout-stability.md#execution-record)
+keeps source/test/worker evidence separate from unobserved native enforcement and
+pending deployment. No historical evidence or saved runtime schema was rewritten.
+
 ## Smart Routing per-harness publication and path qualification (F4) — 11 November 2026
 
 Slice F4 of the [Smart Routing redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#slice-f4-path-rules-and-generated-routes) replaces the per-model route manifest with model-free path rules, an operator-recorded path qualification and routes generated in memory. F4, including F4.5 and F4.6, is implemented and package-tested; its initial independent review's accepted findings are corrected, and acceptance is pending. Every real source gate listed under "Still open" below remains unqualified, so production defaults fail closed. No model, network, account or provider call is part of these contracts.

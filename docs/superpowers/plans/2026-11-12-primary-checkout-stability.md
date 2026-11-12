@@ -37,7 +37,7 @@
 - [x] Amend the shared rule/procedure and reconcile every live Markdown contradiction found by targeted repository-wide search. Preserve historical evidence with supersession notes.
 - [x] Document adoption, branch designation, legacy opt-out reconciliation and unenrolled-worktree guidance explicitly.
 - [x] Regenerate instruction map; commit source before running package-dependent tests.
-- [ ] Run `python3 -B scripts/validate.py`, focused instruction/onboarding/delivery tests and `git diff --check`.
+- [x] Run `python3 -B scripts/validate.py`, focused instruction/onboarding/delivery tests and `git diff --check` (135 tests passed at `0450a09`; final clarifications require the current-candidate recheck below).
 
 ### Task 2: Evaluate routing and review the exact candidate
 
@@ -45,9 +45,9 @@
 
 **Interfaces:** Fresh native workers consume the actual project entry point and selected raw scenarios, not the author's expected policy list. Reviewer reads exact committed candidate and base.
 
-- [ ] Walk representative task-entry routes and document required/unrelated procedures.
-- [ ] Run one bounded fresh-context scenario evaluation covering the Review Focus and explicit exception/dirty-state preservation. Retain actual observations; do not claim restarted-client delivery.
-- [ ] Request fresh independent Fable source/semantic/security review, including the Markdown conflict audit. Fix substantiated findings within scope and rerun invalidated checks.
+- [x] Walk representative task-entry routes and document required/unrelated procedures.
+- [x] Run bounded fresh-context scenario evaluation covering the Review Focus and explicit exception/dirty-state preservation. Retain actual observations; do not claim restarted-client delivery.
+- [x] Request fresh independent Fable source/semantic/security review, including the Markdown conflict audit. Fix substantiated findings within scope; run current-candidate checks before publication readiness.
 - [ ] Publish a draft PR, mark ready only with current evidence, and merge under existing project permission. Verify remote merge separately from local synchronization.
 - [ ] Verify primary symbolic HEAD stayed `refs/heads/main`; synchronize by fast-forward only when clean/unoccupied. Run Graphify maintenance only if the accepted project choice enables it.
 
@@ -58,4 +58,8 @@
 - Implementation: coordinator executes the tightly coupled instruction reconciliation; independent Fable review follows. User authorized proceeding after design review; no additional implementation delegation.
 - Naming: `￻▰▱▱▱▱ Primary checkout stability`, readback confirmed before implementation; workflow-owned topic, no known manual pause.
 - Baseline: `test_graphify_maintenance_instructions`, `test_onboarding_coverage_rule`, `test_project_review_instructions`, `test_delivery`: 58 tests passed, 106.2 seconds, isolated test homes.
+- Final source/security review: independent Fable at `e904e6a`, findings fixed in `2c3859a` and `0450a09`; no runtime/enforcement change. Fixes cover metadata-pointer fixture, local uncommitted-result retention, setup/source-write boundaries and shared sync ownership.
+- Scenario evaluation: two fresh Fable contexts, 11 supplied cases each, at `e904e6a` and `0450a09`. The second reached the complete procedure for all cases and applied the corrected retention, exception, designation and onboarding decisions. Follow-ups clarified the direct non-Graphify sync pointer, non-overlapping new-task policy during deferred deployment and tracked-versus-ignored registration sequencing. The suggested completion-route ambiguity was not substantiated: policy 07 already explicitly loads the naming owner's PR gate, including no-PR scope exemptions, at completion; that evaluator had not reached/read the completion owner.
+- Checks at `0450a09`: expanded 8-module run passed 135 tests in 133.2 seconds; package validation passed without warnings; whitespace passed. Final documentation-only clarifications are rechecked before readiness. No restarted-client delivery, sandbox protection or fleet rollout is claimed.
+- Publication/integration outcomes and final candidate checks belong in the PR's verification record; the remaining delivery boxes are pending remote observations, not an assertion of completion.
 - Deployment: no installed package, other repository, hook, permission or enrollment has been changed by this task.

@@ -36,6 +36,12 @@ Reconcile branch-only instructions and historical `separate_worktrees: false` th
 
 Existing installations adopt source changes only through their authorized plugin update and project-pointer/configuration reconciliation. Do not scan or modify every enrolled repository, change hook trust or update active sessions as a side effect. Verify current instructions and fresh-session delivery where observable; report pending deployment separately from source validation. Basic onboarding and ordinary work acquire no runtime database or enforcement prerequisite.
 
+While incompatible deployment is deferred, non-overlapping new tasks that already
+use the current policy follow it in their own verified task worktrees; they may
+not change old tasks' resources or switch the primary. A session still using the
+old installed guidance has not thereby adopted the new policy. Keep that
+deployment limitation explicit rather than treating it as an exception.
+
 ## Bind an admitted workspace
 
 The callable `scripts.delivery_coordinator.DeliveryOperationOwner` binds an independently verified host decision to exact scope, action and request digest. It has no JSON CLI, default native source or authority to manufacture admission. Host observations and decision references bind facts; the caller must independently establish their source and meaning.
