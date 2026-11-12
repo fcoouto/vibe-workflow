@@ -35,7 +35,12 @@ The row shape, row timestamps, inclusive counters, leading null rows, separation
 totals and forked headers were confirmed on real 0.167.0-era files on 12 November 2026, so
 ``QUALIFIED_VERSIONS`` holds ``0.167.0``; any other version reports ``source_version_unqualified``.
 
-Limitations: resumed threads are not detected. Usage after the cutoff is not counted. Identical consecutive
+Resumed threads need no separate detection: on the same real files, a resumed session continued in the same
+file, and after each of 94 idle gaps over an hour the next total equalled the previous total plus that row's
+``last_token_usage``. The reader subtracts the baseline from the cumulative total, so resumed work is counted;
+a total that resets would surface as ``counter_decreased``.
+
+Limitations: usage after the cutoff is not counted. Identical consecutive
 token rows are compared on the kept numbers. Directories on the path must belong to the current user and not
 be writable by others; the thread file must be a regular, unlinked file owned by the current user and not
 writable by group or others. Gaps are raised without exception context, so no path or line text is reachable
