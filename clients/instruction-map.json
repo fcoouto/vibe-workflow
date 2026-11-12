@@ -211,11 +211,20 @@
       ]
     },
     "clients/index.md": {
-      "sha256": "69bcb727a80279cf0ac5c8ba327f86a84b309681b4dae1c45bace723fe45f3fc",
+      "sha256": "a0c1d432315710799812e50535b0e0caefc394763d027334819f735e6c8265d8",
       "ranges": [
         [
           1,
-          17
+          18
+        ]
+      ]
+    },
+    "clients/opencode-escalation-gate.md": {
+      "sha256": "bfa31a731e3ef6bd94535de7f0acf069080577b84c12d25c344bae840e4a95d4",
+      "ranges": [
+        [
+          1,
+          43
         ]
       ]
     },
@@ -445,7 +454,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "b32666fc469356010edfdaf572b7a91f29f0be98231530c9c36541a9bec3fd8c",
+      "sha256": "2af8a8e9dbfcfa68db2529fa6eb16d03c92efe27b243877e70934febec25ac09",
       "ranges": [
         [
           1,
@@ -461,7 +470,7 @@
         ],
         [
           150,
-          151
+          153
         ]
       ]
     },

@@ -470,6 +470,13 @@ class ShippedManifestTests(unittest.TestCase):
         self.assertEqual(loaded["workstreams"]["default"], {"enabled": False})
         self.assertEqual(loaded["workstreams"]["control"], "settings")
 
+    def test_escalation_gate_manifest(self):
+        gate = features.manifests()["escalation_gate"]
+        self.assertEqual((gate["default"], gate["control"], gate["consent"]), ({"enabled": False}, "settings", "none"))
+        self.assertEqual(sorted(gate["settings"]), ["check_patterns", "ladder"])
+        self.assertEqual(gate["settings"]["ladder"], {"type": "array", "default": []})
+        self.assertEqual(gate["procedure"], "clients/opencode-escalation-gate.md")
+
 
 if __name__ == "__main__":
     unittest.main()
