@@ -618,7 +618,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                      self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
                      self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
                      self.project_request(repository_ids=[repository, repository]),
-                     self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                     self.project_request(repository_ids=[repository, "PRIVATE\npath"]),
                      self.project_request(repository_ids=[repository, 7]),
                      self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
         invalid = [(request, "invalid_observability_request") for request in malformed]
