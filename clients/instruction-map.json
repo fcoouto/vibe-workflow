@@ -427,7 +427,7 @@
       ]
     },
     "policies/01-project-scope.md": {
-      "sha256": "c7e069508bdb515935fbe5f92b5ea34f1aade354098f0c18bfb8fbb7b67d7144",
+      "sha256": "014ad89951f7f79bbe359476c35154ec830d954742688cfea7610d8c51e3bbba",
       "ranges": [
         [
           1,
@@ -445,7 +445,7 @@
       ]
     },
     "policies/03-agent-delegation.md": {
-      "sha256": "449195828a1feeeb09242eede3caaf3a8a4c42d283dfff6ab6950add6f439201",
+      "sha256": "b32666fc469356010edfdaf572b7a91f29f0be98231530c9c36541a9bec3fd8c",
       "ranges": [
         [
           1,
@@ -457,7 +457,11 @@
         ],
         [
           92,
-          145
+          149
+        ],
+        [
+          150,
+          151
         ]
       ]
     },
