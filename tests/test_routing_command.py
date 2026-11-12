@@ -68,11 +68,23 @@ def observations(at=None, **route):
     return dict(now=now() if at is None else at, routes=[spec], pools=dict(sub=dict(windows=[window])))
 
 
+# F5.3: a ranked decision never funds a paid route. The dollar-gate and accounting tests reach the paid `s-api` route
+# only through `prepare_legacy_paid`, the legacy explicit choice they name (F5R-2: `prepare` itself never converts).
+API_CHOICE = dict(provider='anthropic', model='m', effort='high', harness='api', funding='api')
+
+
 def prepare(attempt, **extra):
     request = dict(v=1, op='prepare', assignment=dict(attempt_id=attempt, task='task-' + attempt, role='software-engineer',
                                                       scope=SCOPE),
                    job=job(), observations=observations())
     request.update(extra)
+    return request
+
+
+def prepare_legacy_paid(attempt, **extra):
+    """The legacy explicit choice of the paid `s-api` route (F5.3), named by the caller."""
+    request = prepare(attempt, **extra)
+    request['assignment']['choice'] = dict(API_CHOICE)
     return request
 
 
@@ -133,7 +145,7 @@ class Base(unittest.TestCase):
         return done
 
     def release(self, attempt):
-        """Free the attempt's concurrency place (default cap: two open attempts per account)."""
+        """Close the attempt (`not_dispatched`), releasing its claims."""
         event = dict(event_id='nd-' + attempt, attempt_id=attempt, kind='not_dispatched')
         self.assertEqual(self.call(dict(v=1, op='record', event=event))['state'], 'recorded')
 
@@ -625,8 +637,8 @@ class FundingCheckTests(Base):
         self.fund()
 
     def admit(self, attempt, strategy='s-api', service=None):
-        request = prepare(attempt, observations=api_observations(),
-                          constraints=dict(allowed_strategy_ids=[strategy]))
+        build = prepare_legacy_paid if strategy == 's-api' else prepare  # the caller names the paid route
+        request = build(attempt, observations=api_observations(), constraints=dict(allowed_strategy_ids=[strategy]))
         response = (service or self.service).handle(json.dumps(request).encode())
         self.assertEqual(response['state'], 'admitted', response)
         return response
@@ -672,8 +684,8 @@ class FundingCheckTests(Base):
         with self.open_ledger() as ledger:
             ledger.enable_organization('small', dict(POLICY, allowance_bp=10000), 0)
             ledger.observe('small', 10 * M, now(), issued=10 * M)
-        request = prepare('api1', observations=api_observations(organization='small'),
-                          constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid('api1', observations=api_observations(organization='small'),
+                                      constraints=dict(allowed_strategy_ids=['s-api']))
         self.assertEqual(self.call(request)['admission']['reserved'], {'org:small': 6 * M})
         self.dispatch('api1')
         self.assertEqual(self.call(check('api1', request=facts(**API)))['state'], 'allow')
@@ -865,11 +877,12 @@ class RobustnessTests(Base):
         _, err = child.communicate(json.dumps(dict(v=1, op='status')).encode(), timeout=60)
         self.assertEqual((child.returncode, err), (0, b''))
 
-    def test_status_reports_effective_caps(self):
+    def test_status_reports_saved_caps_as_legacy_only(self):
+        """F5.A1 (was: status reports the stricter effective caps): saved caps are history, never enforced."""
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(caps=dict(total=3, per_account=1))))
-        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=3, per_account=1))
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=10, per_account=1))))
-        self.assertEqual(self.call(dict(v=1, op='status'))['effective_caps'], dict(total=4, per_account=1))
+        status = self.call(dict(v=1, op='status'))
+        self.assertNotIn('effective_caps', status)
+        self.assertEqual(status['legacy_caps'], dict(settings=dict(total=3, per_account=1), ledger=None, enforced=False))
 
 
 if __name__ == '__main__':

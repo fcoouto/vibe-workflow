@@ -77,7 +77,7 @@ to `role` (a roster specialist id, which routing also uses; a brief without one 
 as `software-engineer`) and `specialty`; add `model_display_name` when known. Add
 `custom_role_name` only for an explicit native fallback declaration, using the shared bounds.
 New external badges display the specialist's roster label followed by the
-model display name, for example `Explorer Agent · GLM 5.3 Flash`. Existing receipts keep
+model display name, for example `Explorer Agent · <model display name>`. Existing receipts keep
 their original badge. The existing sized brief may also include `sizing`. Use the actual
 root coordinator chat UUID for the Habblaud parent; retain the genuine native
 supervisor UUID separately in evidence. This keeps both workers visible in consumers

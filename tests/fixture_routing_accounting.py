@@ -8,7 +8,7 @@ from pathlib import Path
 import sqlite3
 from runtime import usage_budget as budget
 from scripts import routing as command
-from tests.test_routing_command import API, M, POLICY, api_observations, facts, now, observations, prepare
+from tests.test_routing_command import API, M, POLICY, api_observations, facts, now, observations, prepare, prepare_legacy_paid
 from tests.test_routing_dispatch import DispatchBase, dispatch, record
 from tests.test_routing_gates import FakeWorkflow, entry
 
@@ -75,10 +75,9 @@ class Accounting(DispatchBase):
         # Operator ops run only in a one-shot command (C3-0a review S1); only `main()` sets the flag in production.
         self.service = command.Service(self.settings, self.ledger, workflow=self.reader, one_shot=True)
         self.call(dict(v=1, op='set', expected_revision=0,
-                       change=dict(api_usage_enabled=True, caps=dict(total=16, per_account=16))))
+                       change=dict(api_usage_enabled=True)))
         budget.initialize(self.ledger)
         with self.open_ledger() as ledger:
-            ledger.set_caps(16, 16)
             ledger.enable_organization('personal', self.POLICY, 0)
             ledger.observe('personal', self.BALANCE, now(), issued=self.BALANCE)
 
@@ -96,7 +95,7 @@ class Accounting(DispatchBase):
         obs = api_observations()
         obs['routes'][-1].update(demand={'credit': demand}, account='acct-' + attempt)
         obs['pools']['api']['windows'][0]['limit'] = 10**12
-        request = prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api']))
         if root is not None:
             request.update(workflow=bound(root, session))
             return self.call_bound(request)

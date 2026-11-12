@@ -58,9 +58,14 @@ OpenCode's model and provider snapshot, Codex's native `model/list` (`model`,
 `supportedReasoningEfforts`, `defaultReasoningEffort`) or Claude's initialization
 `models[]`. Every entry lists its `harnesses` explicitly, and a model may appear
 once per harness. Its `model` is the launch identifier that harness accepts, its
-`supported_efforts` are only the efforts that harness's dispatch can express, and
-its optional `provider` names the provider that path rules match; a strategy
-compiled without one matches no path and generates no route. An empty effort
+`supported_efforts` are only the efforts that harness's dispatch can express,
+listed from the lowest to the highest, and its optional `provider` names the
+provider that path rules match; a strategy compiled without one matches no path
+and generates no route. Its optional `list_price` is `{"input": number, "output":
+number}` in dollars per million tokens, both finite and not negative; the compiler
+orders each row priced first, by `(3 * input + output) / 4`, then by the effort's
+place in that list, then in guidance order, and cannot check the effort order
+itself. Omit `list_price` when the price is unknown. An empty effort
 list allows only `effort: null`, which means omit the parameter, never send a
 literal `none`. Publish such an entry only when omission and its effective default
 meet the cited guidance; exclude a candidate whose effort control or default is
@@ -69,12 +74,12 @@ benchmark qualifies only its own harness. Publication establishes supported
 candidates, not account entitlement or measured demand. A guidance strategy may
 name an `endpoint`; it defaults to its harness and is kept only when it differs.
 
-Guidance rows are keyed by `work_kind`, complexity and risk, using the work kinds in
-[the task profile template](../templates/task-profile.json). When republishing sources
-compiled before the specialist roster, drop each row's `role` and `task_family`,
-including obsolete control-role rows, and give it its work kind: the compiler
-rejects a row that still carries either field, and a failed refresh keeps the last
-verified table. A table written in the older schema is left as it is; routing ranks
+A guidance row is exactly `{work_kind, complexity_band, risk_band, strategies}`,
+using the work kinds in [the task profile template](../templates/task-profile.json).
+When republishing sources compiled before the specialist roster, drop each row's
+`role` and `task_family`, including obsolete control-role rows, and give it its
+work kind: the compiler rejects a row that still carries either field, and a failed
+refresh keeps the last verified table. A table written in the older schema is left as it is; routing ranks
 nothing from it (`table_outdated`) until a successful refresh replaces it, and that
 refresh does not keep it as the previous version. Never edit a stored table or
 evidence record by hand.

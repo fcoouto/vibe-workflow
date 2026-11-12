@@ -6,6 +6,7 @@ import subprocess
 from tests.qualification import canary, live_common, outputs, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
+from tests.qualification.doubles import qual_plan
 
 APPROVAL = dict(by="the user", at="2026-11-10T12:00Z", scope="runbook part A")
 
@@ -133,9 +134,9 @@ class CanaryConfigurableTests(Temp):
             canary.pilot_max(0, ledger)
 
     def test_plan_assignments_accepts_the_run_cap(self):
-        self.assertEqual(len(canary.plan_assignments(3, "t", now=1, limit=3)), 3)
+        self.assertEqual(len(qual_plan(3, "t", now=1, limit=3)), 3)
         with self.assertRaises(safety.Refused):
-            canary.plan_assignments(4, "t", now=1, limit=3)
+            qual_plan(4, "t", now=1, limit=3)
 
     def test_the_cli_refuses_a_canary_project_off_managed_projects_before_anything_starts(self):
         q = self.private(self.tmp / "q")

@@ -13,6 +13,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+from runtime import model_names
 from runtime.adapters import session_start
 from runtime.adapters.session_start import diagnostic, render
 from runtime.engine import HookResult, RuntimeEvent
@@ -592,9 +593,8 @@ def _visibility_model_name(request, model):
             names = [row.get("displayName") for row in rows
                      if isinstance(row, dict) and row.get("model") == model]
             if len(names) == 1:
-                name = _review_id(names[0])
-                # The bundled catalog also spells this display name GPT-6.1-Sol.
-                return "GPT-6.1 Sol" if model == "gpt-6.1-sol" and name == "GPT-6.1-Sol" else name
+                name = _review_id(names[0])  # the catalog's display name (table data) corrects the vendor's spelling
+                return _review_id(model_names.display_name(model) or name)
             cursor = page.get("nextCursor")
             if names or not isinstance(cursor, str) or not cursor or len(cursor) > 4096:
                 break

@@ -13,6 +13,7 @@ from tests.qualification import canary, safety
 from tests.qualification import server as qual_server
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Fake, FakeOpenCode, Temp, types_namespace
+from tests.qualification.doubles import QUAL, QUAL_ROUTE, qual_plan, qual_driver, qual_run
 
 
 class CanaryPreconditionTests(Temp):
@@ -41,7 +42,6 @@ class CanaryPreconditionTests(Temp):
             "uncertain_dollar": dict(ledger_change=dict(uncertain_dollar=dict(ids=["a"], more=0))),
             "blocked_organizations": dict(ledger_change=dict(blocked_organizations=[dict(id="o")])),
             "overrun_backlog": dict(ledger_change=dict(overrun_backlog=True)),
-            "concurrency_caps_raised": dict(caps=dict(total=5, per_account=2)),
             "open_attempts": dict(ledger_change=dict(open_attempts=1)),
         }
         for reason, change in cases.items():
@@ -55,7 +55,7 @@ class CanaryPreconditionTests(Temp):
         self.assertIn("status_unavailable", canary.preconditions(dict(state="blocked"), dict(state="ok"), dict(chain=[])))
 
     def test_the_plan_covers_three_roles_and_two_bands_with_valid_jobs(self):
-        plan = canary.plan_assignments(20, "pilot-x", now=1_800_000_000)
+        plan = qual_plan(20, "pilot-x", now=1_800_000_000)
         self.assertEqual(len(plan), 20)
         self.assertEqual({p["label"]["role"] for p in plan}, {"software-engineer", "code-reviewer", "explorer-agent"})
         self.assertEqual({p["label"]["band"] for p in plan}, {"low", "medium"})
@@ -68,14 +68,14 @@ class CanaryPreconditionTests(Temp):
         self.assertEqual(len({p["body"]["assignment"]["attempt_id"] for p in plan}), 20)
         for n in (0, 21, -1, 2.0):
             with self.assertRaises(safety.Refused):
-                canary.plan_assignments(n, "pilot-x", now=1)
+                qual_plan(n, "pilot-x", now=1)
 
 
 class PilotDriverTests(Temp):
     def driver(self, fake, n=3, **kwargs):
         state = self.private(self.tmp / "state")
         ledger = safety.CallLedger.initialize(state / ("calls-%d.jsonl" % len(list(state.iterdir()))))
-        return canary.PilotDriver(fake, ledger, n=n, run="pilot-test", **kwargs), ledger
+        return qual_driver(fake, ledger, n=n, run="pilot-test", **kwargs), ledger
 
     def test_a_clean_run_completes_every_admission(self):
         fake = Fake(transmit=dict(primary=1, title=None, other=0))
@@ -251,7 +251,7 @@ class CanaryStateTests(Temp):
         status = routing_cmd("status")[0]
         self.assertEqual(canary.preflight(dict(status, project_pinned=True)), [])
         self.assertEqual(canary.initialize_state(routing_cmd)["created"], False)  # never re-initialized
-        env = live.CanaryEnv(types_namespace(routing=routing_cmd))
+        env = live.CanaryEnv(types_namespace(routing=routing_cmd, route=QUAL))
         self.assertEqual(env.kill_switch()["state"], "updated")
         status = routing_cmd("status")[0]
         self.assertFalse(status["settings"]["smart_routing"])
@@ -263,7 +263,7 @@ class CanaryStateTests(Temp):
         paths = canary.check_canary_state(self.state(), home=self.home)
         routing_cmd = server.Routing(paths["settings"], paths["ledger"])
         canary.initialize_state(routing_cmd)
-        self.assertEqual(routing_cmd("prepare", **canary.plan_assignments(1, "left")[0]["body"])[0]["state"], "admitted")
+        self.assertEqual(routing_cmd("prepare", **qual_plan(1, "left")[0]["body"])[0]["state"], "admitted")
         refusals = canary.preflight(dict(routing_cmd("status")[0], project_pinned=True))
         self.assertIn("open_attempts", refusals)
         self.assertIn("deleting the canary directory", canary.RESET_ADVICE)
@@ -286,7 +286,7 @@ class CanaryEnvTests(unittest.TestCase):
 
     def run_double(self):
         server = self.Server()
-        run = types_namespace(server=server, data=live.Run.data, outcome=lambda messages, began: dict(outcome="succeeded"),
+        run = types_namespace(server=server, route=QUAL, data=live.Run.data, outcome=lambda messages, began: dict(outcome="succeeded"),
                               gate=lambda permitted: None)
 
         def create_session(session_id=None, **kwargs):
@@ -332,7 +332,7 @@ class SequencingTests(Temp):
     def test_qualification_stops_in_stage_zero_when_the_chain_is_not_proven(self):
         base = self.private(self.tmp / "q")
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
-        run = self.quiet(live.Run(base, ledger, through=4))
+        run = self.quiet(qual_run(base, ledger, through=4))
         order = []
         run.start = lambda stage: order.append("start")
         run.server.rpc = lambda method, payload: (200, dict(state="not_ready" if "set" not in order else "ok"), 1.0)
@@ -364,11 +364,11 @@ class SequencingTests(Temp):
         before = exclude.read_bytes()
         state = canary.check_canary_state(self.private(self.tmp / "q") / "canary", home=self.home)
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
-        run = self.quiet(live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state))
+        run = self.quiet(qual_run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state))
         run.replay_dir = self.tmp / "replay"  # the admission export stays in the test's tree
         if prepare_left:
             canary.initialize_state(run.routing)
-            run.routing("prepare", **canary.plan_assignments(1, "left")[0]["body"])
+            run.routing("prepare", **qual_plan(1, "left")[0]["body"])
         order = []
         real_start = run.start
         run.start = lambda stage: order.append("start")
@@ -409,7 +409,7 @@ class PilotHarness(Temp):
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
         ledger.set_cap("pilot", 28, "test")
         base = self.private(self.tmp / "iso")
-        run = live.Run(base, ledger, canary_project=str(project), canary_state=state)
+        run = qual_run(base, ledger, canary_project=str(project), canary_state=state)
         run.replay_dir = self.tmp / "replay"  # the admission export stays in the test's tree
         self.addCleanup(run.routing.stop)
         canary.initialize_state(run.routing)
@@ -425,11 +425,11 @@ class PilotEndToEndTests(PilotHarness):
     def test_the_run_object_keeps_its_account_method_in_both_modes(self):
         run, _ = self.pilot()
         self.assertTrue(callable(run.account))
-        self.assertTrue(callable(live.Run(self.private(self.tmp / "iso2"), run.ledger).account))
+        self.assertTrue(callable(qual_run(self.private(self.tmp / "iso2"), run.ledger).account))
 
     def test_one_full_admission_settles_clean(self):
         run, ledger = self.pilot()
-        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=1, run=run.run_id, tag="e2e").run()
+        result = qual_driver(live.CanaryEnv(run), ledger, n=1, run=run.run_id, tag="e2e").run()
         self.assertIsNone(result["abort"], result["abort"])
         self.assertEqual((result["completed"], result["settlements"]), (1, {"window": 1}))
         admission = result["admissions"][0]
@@ -446,7 +446,7 @@ class PilotEndToEndTests(PilotHarness):
 
     def test_twenty_admissions_end_clean_and_admission_two_onwards_carry_no_title(self):
         run, ledger = self.pilot()
-        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=20, run=run.run_id, tag="e2e20").run()
+        result = qual_driver(live.CanaryEnv(run), ledger, n=20, run=run.run_id, tag="e2e20").run()
         self.assertIsNone(result["abort"], result["abort"])
         self.assertEqual((result["completed"], result["settlements"]), (20, {"window": 20}))
         self.assertEqual([a["sent"]["title"] for a in result["admissions"]], [1] + [0] * 19)
@@ -466,7 +466,7 @@ class PilotEndToEndTests(PilotHarness):
 class AbortRecordingTests(Temp):
     def driver(self, fake, n=1):
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / ("c%d.jsonl" % id(fake)))
-        return canary.PilotDriver(fake, ledger, n=n, run="t")
+        return qual_driver(fake, ledger, n=n, run="t")
 
     def test_the_origin_is_recorded_without_payload_text(self):
         secret = "payload text sk-not-a-real-key"
@@ -560,7 +560,7 @@ class SettledAccountingTests(PilotHarness):
         run, ledger = self.pilot()
         run.reread_wait = 0
         run.server.__dict__.update(knobs)
-        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=1, run=run.run_id, tag="settle").run()
+        result = qual_driver(live.CanaryEnv(run), ledger, n=1, run=run.run_id, tag="settle").run()
         return result, run
 
     def test_a_lagging_title_total_is_reread_until_it_settles(self):
@@ -598,7 +598,7 @@ class SettledAccountingTests(PilotHarness):
     def test_an_unexpected_extra_title_is_still_blocked_at_zero(self):
         run, ledger = self.pilot()
         run.server.force_title = True
-        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=2, run=run.run_id, tag="force").run()
+        result = qual_driver(live.CanaryEnv(run), ledger, n=2, run=run.run_id, tag="force").run()
         self.assertIsNone(result["abort"], result["abort"])
         self.assertEqual(result["blocked_titles"], 1)  # admission 2's titled session still tried one: guard_title
         self.assertEqual(result["admissions"][1]["sent"], dict(primary=1, title=0, other=0))
@@ -614,7 +614,7 @@ class BudgetArithmeticTests(PilotHarness):
         self.assertLessEqual(canary.planned_exposure(20), ledger.remaining("pilot"))
         for label in ("guard probe", "pending probe"):
             ledger.settle(ledger.reserve("pilot", label, 1), 0)
-        result = canary.PilotDriver(live.CanaryEnv(run), ledger, n=20, run=run.run_id, tag="budget").run()
+        result = qual_driver(live.CanaryEnv(run), ledger, n=20, run=run.run_id, tag="budget").run()
         self.assertIsNone(result["abort"], result["abort"])
         self.assertEqual(ledger.summary()["pilot"], dict(cap=28, spent=23, remaining=5, open_reservations=0))
 
@@ -626,7 +626,7 @@ class AbortDetailTests(Temp):
                 raise error
         state = self.private(self.tmp / "state")
         ledger = safety.CallLedger.initialize(state / ("c%d.jsonl" % len(list(state.iterdir()))))
-        return canary.PilotDriver(Raising(), ledger, n=1, run="t").run()["abort"]["detail"]
+        return qual_driver(Raising(), ledger, n=1, run="t").run()["abort"]["detail"]
 
     def test_refusals_and_harness_errors_are_told_apart(self):
         from runtime.adapters.opencode import AdapterError
@@ -651,7 +651,7 @@ class ManagedCanaryTests(PilotHarness):
         routing_settings.update(settings, dict(managed_projects=[str(Path(p).resolve()) for p in projects]), revision)
 
     def body(self, run, tag):
-        return canary.plan_assignments(1, tag, pool=run.pool, account=run.route_account)[0]["body"]
+        return qual_plan(1, tag, pool=run.pool, account=run.route_account)[0]["body"]
 
     def test_an_unmanaged_pilot_still_sends_its_own_observations(self):
         run, _ = self.pilot()
@@ -686,7 +686,7 @@ class ManagedCanaryTests(PilotHarness):
 
     def test_canary_env_prepare_passes_a_body_without_observations(self):
         sent = []
-        run = types_namespace(routing=types_namespace(served=lambda op, **body: (sent.append(body), ({}, 1.0))[1]))
+        run = types_namespace(route=QUAL, routing=types_namespace(served=lambda op, **body: (sent.append(body), ({}, 1.0))[1]))
         live.CanaryEnv(run).prepare(dict(assignment={}, job={}))
         self.assertEqual(sent, [dict(assignment={}, job={})])
 
@@ -789,7 +789,7 @@ class ProductionLedgerTests(Temp):
             self.private(folder)
         routing_cmd = qual_server.Routing(self.settings, self.ledger)
         canary.initialize_state(routing_cmd)
-        answer = routing_cmd("prepare", **canary.plan_assignments(1, "prod")[0]["body"])[0]
+        answer = routing_cmd("prepare", **qual_plan(1, "prod")[0]["body"])[0]
         self.assertEqual(answer["state"], "admitted", answer)
         routing_cmd.stop()
         return self.ledger.read_bytes(), self.ledger.stat().st_mtime_ns
@@ -819,7 +819,7 @@ class ProductionLedgerTests(Temp):
         ledger = self.private(self.tmp / "state") / "calls.jsonl"
         safety.CallLedger.initialize(ledger)
         target = self.private(self.tmp / "ok")
-        base = ["--isolated-dir", str(target), "--call-ledger", str(ledger)]
+        base = ["--isolated-dir", str(target), "--call-ledger", str(ledger), "--route", QUAL_ROUTE]
         cases = [base + ["--canary", "--project", canary.ALLOWLIST, "--production-ledger"],  # no approval
                  base + ["--canary", "--project", canary.ALLOWLIST, "--approval", *APPROVED],  # no flag
                  base + ["--canary", "--project", canary.ALLOWLIST, "--production-ledger", "--approval", *APPROVED,
@@ -850,7 +850,7 @@ class ProductionLedgerTests(Temp):
         safety.CallLedger.initialize(ledger)
         project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
-        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--canary",
+        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--route", QUAL_ROUTE, "--canary",
                 "--project", str(project), "--canary-allow", str(project), "--production-ledger", "--approval", *APPROVED]
         with mock.patch("sys.stderr") as err:
             self.assertEqual(live.main(argv), 2)
@@ -863,7 +863,7 @@ class ProductionLedgerTests(Temp):
         safety.CallLedger.initialize(ledger)
         project = self.private(self.tmp / "project")
         subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
-        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--canary",
+        argv = ["--isolated-dir", str(self.private(self.tmp / "ok")), "--call-ledger", str(ledger), "--route", QUAL_ROUTE, "--canary",
                 "--project", str(project), "--production-ledger", "--approval", *APPROVED]
         with mock.patch.object(canary, "ALLOWLIST", str(project)), mock.patch("sys.stderr") as err:
             self.assertEqual(live.main(argv), 2)
@@ -877,7 +877,7 @@ class ProductionLedgerTests(Temp):
         subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
         state = canary.resolve_state(None, production=True, approval=APPROVED)
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "state") / "calls.jsonl")
-        run = live.Run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state)
+        run = qual_run(self.private(self.tmp / "iso"), ledger, canary_project=str(project), canary_state=state)
         pins = dict(zip(run.routing.argv[::2], run.routing.argv[1::2]))
         self.assertEqual((pins["--settings"], pins["--ledger"]), (str(self.settings.resolve()), str(self.ledger.resolve())))
         self.assertEqual(run.results["production_ledger"], dict(approval=dict(zip(("by", "at", "scope"), APPROVED))))

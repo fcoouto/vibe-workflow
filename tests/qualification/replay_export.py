@@ -14,7 +14,9 @@ run's first write still finds the detail.
 Read-only: one `mode=ro` SQLite connection and a single `SELECT body FROM ledger`; the live ledger is never written.
 The export directory (default ~/.local/state/vibe-workflow-replay/canary) is owner-only (0700, files 0600, no
 symlinks, outside every repository). `admissions.jsonl` is append-only and keyed by (ledger identity, attempt id,
-nonce), so repeated exports add nothing twice; `last-export.json` records when the last export ran.
+nonce), so repeated exports add nothing twice; `last-export.json` records when the last export ran. That manifest
+says `format: 2` (F5.4): records are exported exactly as stored, so a record with the replay fields
+(`ranking.shortlist`, `pressure.candidates`, ...) and an older record without them are both written unchanged.
 """
 from contextlib import closing
 import json
@@ -34,6 +36,7 @@ def default_dir():
     """~/.local/state/vibe-workflow-replay/canary, resolved from HOME when called (never at import)."""
     return Path.home() / ".local/state/vibe-workflow-replay/canary"
 RECORDS, LAST = "admissions.jsonl", "last-export.json"
+FORMAT = 2  # the export manifest's format; each line still carries its record as stored
 DETAIL = ("pressure", "snapshot_id")
 
 
@@ -119,7 +122,7 @@ def export(ledger_path, directory=None, now=None):
                                         sort_keys=True) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-    summary = dict(at=now, ledger_identity=identity, records_seen=len(records), exported=len(new),
+    summary = dict(format=FORMAT, at=now, ledger_identity=identity, records_seen=len(records), exported=len(new),
                    with_snapshot_detail=sum(1 for record in new if all(k in record for k in DETAIL)))
     temporary = directory / (".%s.tmp" % LAST)
     with os.fdopen(_private_file(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w") as handle:

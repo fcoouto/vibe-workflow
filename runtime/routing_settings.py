@@ -24,7 +24,8 @@ MAX_PROJECT_PATH = 1024
 LEGACY_ROUTE_RETIRED = 'legacy_route_retired'
 DEFAULTS = dict(smart_routing=True, api_usage_enabled=False, L=0.65, H=0.85, T_hours=72,
                 min_elapsed_fraction=0.10, lookback_hours=72, margin_bp=usage_budget.DEFAULT_MARGIN_BP,
-                caps=usage_budget.DEFAULT_CAPS, worker_choices={}, managed_projects=[])
+                worker_choices={}, managed_projects=[])
+# F5.A1: a stored `caps` value stays readable and validated but has no default and no effect on admission.
 
 
 class SettingsError(ValueError):
@@ -129,10 +130,12 @@ def resolve(stored):
 
 
 def warnings(stored):
-    """Stored settings that are kept but ignored: `worker_choices` keys that name no routed roster specialist."""
+    """Stored settings that are kept but ignored: `worker_choices` keys that name no routed roster specialist, and
+    legacy `caps` (F5.A1: never enforced)."""
     choices = stored.get('worker_choices') if type(stored) is dict else None
-    return [dict(code='worker_choice_key_unknown', key=key) for key in choices if not _routed(key)] \
+    ignored = [dict(code='worker_choice_key_unknown', key=key) for key in choices if not _routed(key)] \
         if type(choices) is dict else []
+    return ignored + ([dict(code='caps_not_enforced', key='caps')] if type(stored) is dict and 'caps' in stored else [])
 
 
 def _load(path):

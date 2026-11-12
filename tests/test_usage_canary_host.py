@@ -13,11 +13,17 @@ from tests.test_openai_api import Connection, Response, completed
 
 class CanaryHostTests(unittest.TestCase):
     def setUp(self):
+        # Execution never reads the table: the approved Plan carries the model and its verified rate card.
+        table = patch('runtime.model_names.table', side_effect=AssertionError('table read after approval'))
+        table.start()
+        self.addCleanup(table.stop)
         self.plan = host.Plan(
             thread_id='thread', host_id='desktop', checkout='/fixture/project', scope='scope',
             package_digest='a' * 64, account='account', reviewer='independent-reviewer',
             organization='org-fixture', project='proj_fixture', key_name='Codex',
             key_expiry=None, grant_expiry=10_000, grant_amount=270_000_000, created_at=100, expires_at=200,
+            model='vendor-light', input_rate=2_000_000, cached_input_rate=100_000, cache_write_rate=5_000_000,
+            output_rate=10_000_000,
         )
         self.message = dict(type='userMessage', id='user-item',
                             content=[dict(type='text', text=host.approval_text(self.plan))])
@@ -29,7 +35,7 @@ class CanaryHostTests(unittest.TestCase):
                             mode='off', binding=self.binding)
         self.config = dict(enabled=True, disabled=False, requested_mode='smart', revision=2, org_revision=1,
                            class_name='canary', binding=self.binding,
-                           profile=usage_canary.profile_for(101, 200))
+                           profile=usage_canary.profile_for(101, 200, host.card(self.plan)))
         cycle = 'canary-' + usage_admission.digest(asdict(self.plan))
         self.policy = dict(cycle=cycle, start=90, end=10_000, expiry=10_000, stop_at=900,
                            ceiling='subscription_benefit', amount=None, grant_amount=270_000_000,
@@ -50,13 +56,24 @@ class CanaryHostTests(unittest.TestCase):
 
     def test_exact_foreground_approval_binds_one_canary(self):
         evidence, native = self.issue()
-        task = usage_canary.task_for(evidence.approval_id, self.binding, native)
+        task = usage_canary.task_for(evidence.approval_id, self.binding, native, host.card(self.plan))
         usage_canary.validate(evidence, binding=self.binding, profile=self.config['profile'], task=task, now=106)
         self.assertEqual(native['windows'], [])
         self.assertEqual(evidence.approval_until, 200)
         self.message['id'] = 'another-direct-message'
         repeated, _ = self.issue()
         self.assertEqual(repeated.approval_id, evidence.approval_id)
+
+    def test_the_approval_determines_the_billed_model_and_rates(self):
+        self.assertIn('vendor-light', host.approval_text(self.plan))
+        for change in (dict(model='vendor-other'), dict(input_rate=2_000_001), dict(cached_input_rate=1),
+                       dict(cache_write_rate=5_000_001), dict(output_rate=10_000_001)):
+            with self.subTest(change=change):
+                self.assertNotEqual(host.approval_text(replace(self.plan, **change)), host.approval_text(self.plan))
+        for profile in (dict(self.config['profile'], model='vendor-other'),
+                        dict(self.config['profile'], output_rate=9_000_000)):
+            with self.subTest(profile=profile), self.assertRaisesRegex(BudgetError, '^canary_price_changed$'):
+                self.issue(config=dict(self.config, profile=profile))
 
     def test_native_approval_allows_one_terminal_line_feed(self):
         token = host.approval_text(self.plan)
@@ -163,14 +180,11 @@ class CanaryHostTests(unittest.TestCase):
                 run.assert_not_called()
             self.assertEqual(control.status()['mode'], 'off')
 
-    def test_full_foreground_rehearsal_uses_one_count_and_generation(self):
-        count = Connection(Response(dict(object='response.input_tokens', input_tokens=5)))
-        reply = completed()
-        reply['model'] = self.config['profile']['model']
-        reply['usage'].update(input_tokens=5, total_tokens=22)
-        reply['usage']['input_tokens_details'] = dict(cached_tokens=0)
-        generate = Connection(Response(reply))
-        connections = iter((count, generate))
+    def test_registered_canary_refuses_its_buffered_task_before_any_send(self):
+        """F5.A2: the registered maximum (50,640) equals the canary's unbuffered quote, so its whole-task envelope
+        (ceil(50,640 x 1.2) = 60,768) cannot fit. The approved maximum and packet stay unchanged: the canary refuses
+        offline before any transport, credential, monetary or native claim, restores off and stays consumed. The
+        earlier successful rehearsals remain historical evidence; fake success is covered by the dormant runner."""
         with self.controller() as control:
             def dispatch(cwd, task, evidence):
                 changed = dict(task, packet=dict(task['packet'], text='Different task.'))
@@ -178,19 +192,38 @@ class CanaryHostTests(unittest.TestCase):
                 with self.assertRaisesRegex(BudgetError, 'routing_budget_required'):
                     control._run_live(changed, changed_evidence, connection_factory=lambda *args: self.fail('sent'),
                                       credential_resolver=lambda binding: self.fail('credential resolved'))
-                return control._run_live(
-                    task, evidence, connection_factory=lambda *args: next(connections),
-                    credential_resolver=lambda binding: b'synthetic-key')
+                return control._run_live(task, evidence, connection_factory=lambda *args: self.fail('sent'),
+                                         credential_resolver=lambda binding: self.fail('credential resolved'))
 
-            with patch.object(usage_routing, '_run_live', side_effect=dispatch):
-                result = self.execute()
-            self.assertTrue(result['requires_native_review'])
-            self.assertEqual(control.status()['mode'], 'off')
-            self.assertEqual([c.requests[0][1] for c in (count, generate)],
-                             ['/v1/responses/input_tokens', '/v1/responses'])
+            with patch.object(usage_routing, '_run_live', side_effect=dispatch) as run:
+                with self.assertRaisesRegex(BudgetError, 'insufficient_headroom'):
+                    self.execute()
+                run.assert_called_once()
+                data = control.ledger.snapshot()
+                self.assertEqual((data['runs'], data['native'], data['holds']), ({}, {}, {}))
+                self.assertEqual(budget_total(data, self.plan.organization), 0)
+                state = control.status()
+                self.assertEqual((state['mode'], state['canary_active']), ('off', False))
+                with self.assertRaisesRegex(BudgetError, 'canary_state_already_configured'):
+                    self.execute()
+                run.assert_called_once()
+
+    def test_production_reconfiguration_after_a_canary_preserves_its_history(self):
+        """Synthetic history (not the registered canary's execution): a later production budget configure and enable
+        keep earlier runs, native tasks and the organization record, with only revision and policy replaced."""
+        with self.controller() as control:
+            refuse = lambda cwd, task, evidence: control._run_live(  # noqa: E731  stages the grant, then refuses
+                task, evidence, connection_factory=lambda *args: self.fail('sent'),
+                credential_resolver=lambda binding: self.fail('credential resolved'))
+            with patch.object(usage_routing, '_run_live', side_effect=refuse):
+                with self.assertRaisesRegex(BudgetError, 'insufficient_headroom'):
+                    self.execute()
+            native = dict(account='account', task='history', windows=[])
+            control.ledger.begin(self.plan.organization, 'history', 'history', 'packet', 100, 1, 106, native)
+            control.ledger.dispatch('history', 'count', 1, 106)
+            control.ledger.complete('history', 'count', 80)
+            control.ledger.close_run('history')
             data = control.ledger.snapshot()
-            self.assertNotIn('slot', data)
-            self.assertEqual(len(data['native']), 1)
             old_org = data['organizations'][self.plan.organization]
             request = dict(version=2, expected_revision=3, expected_org_revision=1, binding=self.binding,
                            profile=self.config['profile'], class_name='proposal', mode='smart',
@@ -207,6 +240,9 @@ class CanaryHostTests(unittest.TestCase):
             self.assertEqual(refreshed['mode'], 'off')
             self.assertTrue(control.enable(6)['live_enabled'])
 
+
+def budget_total(data, organization):
+    return usage_budget.Ledger._total(data, organization) if organization in data['organizations'] else 0
 
 if __name__ == '__main__':
     unittest.main()

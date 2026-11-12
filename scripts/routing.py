@@ -24,8 +24,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import (ledger_versions, routing, routing_gates, routing_paths, routing_settings,  # noqa: E402
-                     subscription_reconcile, usage_budget)
+from runtime import (ledger_versions, routing, routing_funding, routing_gates, routing_paths,  # noqa: E402
+                     routing_settings, subscription_reconcile, usage_budget)
 from runtime.routing_settings import SettingsError  # noqa: E402
 from runtime.usage_budget import BudgetError  # noqa: E402
 
@@ -353,20 +353,20 @@ class Service:
                     raise
                 row = None
             if row is not None:
-                require(len(row[0]) <= usage_budget.MAX_RECORD, 'invalid_ledger')
+                require(len(row[0].encode()) <= usage_budget.MAX_RECORD, 'invalid_ledger')
                 return usage_budget.name(json.loads(row[0])['identity'])
             time.sleep(0.01)
         raise Blocked('ledger_unavailable')
 
     # -- ops ---------------------------------------------------------------------------------------------------
-    def _observations(self, value):
+    def _observations(self, value, caller=False):
         """The command's clock decides: a snapshot off it by more than MAX_CLOCK_DRIFT is stale, and the admission
         is stamped with the command's time. Malformed snapshots pass through to admit's own shape check."""
         if self.test_inputs or type(value) is not dict or type(value.get('now')) is not int:
             return value
         now = self.clock()
         require(abs(value['now'] - now) <= routing.MAX_CLOCK_DRIFT, 'observation_stale')
-        return dict(value, now=now)
+        return dict(value, now=now, **(dict(routes_version=None) if caller else {}))  # F5.4: a caller's is no source's
 
     def _rank(self, profile, body):
         """(ranking, the table it ranked from)."""
@@ -443,7 +443,7 @@ class Service:
             require('table' not in body or self.test_inputs, 'invalid_request')
             ranking, table = dict(strategy_ids=[], reason_codes=['smart_routing_off'], table_version=None,
                                   profile_digest=profile['semantic_digest']), None
-        admitted = dict(assignment, role=role, work_kind=profile['work_kind'], complexity_band=profile['complexity_band'])
+        admitted = routing_funding.admitted(assignment, role, profile, harnesses)  # F5.4: bands, floor, harnesses
         mode, entries = routing_paths.selection(admitted, settings, ranking['strategy_ids'])
         return dict(assignment=admitted, settings=settings, profile=profile, ranking=ranking, table=table, mode=mode,
                     strategy_ids=entries if mode == 'ranked' else None, choices=[] if mode == 'ranked' else entries,
@@ -477,7 +477,7 @@ class Service:
         settings, profile, ranking, admitted = (selected[key] for key in ('settings', 'profile', 'ranking', 'assignment'))
         seen, boundaries = None, {}
         if 'observations' in body:  # a caller's own snapshot gets no recheck: it carries no trusted boundary
-            observations = self._observations(body['observations'])
+            observations = self._observations(body['observations'], caller=True)
         else:
             collected, seen, boundaries = self._collect(selected)
             observations = self._observations(collected)
@@ -669,7 +669,7 @@ class Service:
         except Blocked:
             settings = None
         revision = settings.pop('revision') if settings is not None else None
-        stored = usage_budget.DEFAULT_CAPS
+        stored = None  # F5.A1: the ledger's saved legacy caps, read only
         if self._open is None and not os.path.lexists(self.ledger_path):
             ledger = dict(state='absent')
         else:
@@ -678,20 +678,20 @@ class Service:
                 stale = len(routing.unsent_admissions(data, revision)) if revision is not None else None
                 ledger = dict(state='ready', stale_admissions=stale, legacy_outstanding=ledger_versions.outstanding(data),
                               **routing.ledger_summary(data))
-                stored = ledger['caps']
+                stored = data.get('caps')
             except (Blocked, BudgetError, sqlite3.Error) as error:
                 self.close()
                 reason = error.reason if isinstance(error, Blocked) else str(error) if isinstance(error, BudgetError) \
                     else 'ledger_busy' if _busy(error) else 'ledger_unavailable'
                 ledger = dict(state='unavailable', reason=reason)
-        # Admission uses the stricter of the settings caps and the ledger's stored caps; `set` can only lower them.
-        effective = None if settings is None else {key: min(settings['caps'][key], stored[key]) for key in stored}
+        # F5.A1: saved caps are history, never admission (no count limits workers); shown so nothing implies one.
+        legacy = dict(settings=(settings or {}).get('caps'), ledger=stored, enforced=False)
         try:
             windows = importlib.import_module(COLLECTOR).window_status(self.settings_path, self.clock())
         except Exception:  # noqa: BLE001 - a missing or failing store reader never fails status
             windows = dict(state='unavailable', reason='observation_store_invalid')
         return dict(state='ok', settings=settings, settings_state='ok' if settings is not None else 'unavailable',
-                    settings_revision=revision, settings_warnings=self._warnings, effective_caps=effective, ledger=ledger,
+                    settings_revision=revision, settings_warnings=self._warnings, legacy_caps=legacy, ledger=ledger,
                     test_inputs=self.test_inputs,
                     project_pinned=self.project is not None,
                     windows=windows)

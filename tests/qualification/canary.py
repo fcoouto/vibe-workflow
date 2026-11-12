@@ -25,15 +25,13 @@ import shutil
 import stat
 import time
 
-from tests.qualification.safety import (APPROVAL_FIELDS, BudgetExceeded, HARNESS_NAME, HARNESS_SCRIPTS, MODEL, PROTECTED, PROVIDER,
-                                        Refused, VARIANT,
-                                        exception_origin, inside_git_worktree, summarize_ms)
+from tests.qualification.safety import (APPROVAL_FIELDS, BudgetExceeded, HARNESS_SCRIPTS, PROTECTED, Refused,
+                                        exception_origin, harness_for, inside_git_worktree, summarize_ms)
 
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
 MAX_DURATION_S = 24 * 3600
 REPO_CHECK_EVERY = 5
-DEFAULT_CAPS = dict(total=4, per_account=2)
 # Distinct ids for the pilot, so nothing it admits can be mistaken for another route's or another ledger's holds.
 POOL = "pilot-sub"
 ACCOUNT = "anthropic:pilot-canary"
@@ -45,7 +43,6 @@ PRODUCTION_ADVICE = ("The production routing state is not clean or not ready, an
                      "initializes it. Fix the named condition through scripts/routing.py: activate the project with the "
                      "one-shot `set managed_projects`, settle or reconcile open holds with the one-shot operator ops, "
                      "then run again.")
-CHOICE = dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME, funding="subscription")
 # (label, job specialist, explicit assignment role): an explicit role must equal the job's specialist.
 ROLES = (("software-engineer", "software-engineer", None), ("code-reviewer", "code-reviewer", "code-reviewer"),
          ("explorer-agent", "explorer-agent", "explorer-agent"))
@@ -86,8 +83,11 @@ def classify(error):
     return "harness_error: %s" % type(error).__name__
 
 
-def request(pool=POOL):
-    return dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness=HARNESS_NAME, kind="primary", funding_pool=pool)
+def request(route, pool=POOL):
+    """The `check`/`dispatch` request facts for the approved route tuple."""
+    provider, model, variant = route
+    return dict(provider=provider, model=model, variant=variant, harness=harness_for(provider), kind="primary",
+                funding_pool=pool)
 
 
 def check_project(project, allow=None, settings=None, managed=False):
@@ -313,10 +313,7 @@ def anomalies(status):
         reasons.append("overrun_backlog")
     if ledger.get("reconcile_hint") is not None:
         reasons.append("reconcile_pending")
-    caps = status.get("effective_caps") or {}
-    if any(caps.get(key, 10 ** 9) > limit for key, limit in DEFAULT_CAPS.items()):
-        reasons.append("concurrency_caps_raised")
-    return reasons
+    return reasons  # F5.A1: saved caps are not a protection, so their value is no anomaly
 
 
 def preflight(status):
@@ -345,8 +342,10 @@ def preconditions(status, health, probes):
 
 def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, limit=None):
     """`n` (1 to `limit`, default PILOT_MAX) explicit subscription admissions cycling three roles and two complexity
-    bands. `route` is `{provider, model, effort, harness}` (default: the pilot's claude-agent/haiku#low)."""
-    route = dict(route or dict(provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME))
+    bands. `route` is the approved `{provider, model, effort, harness}`; there is no default route."""
+    if not route:
+        raise Refused("the pilot needs its approved --route")
+    route = dict(route)
     limit = PILOT_MAX if limit is None else min(limit, PILOT_MAX)
     if type(n) is not int or not 1 <= n <= limit:
         raise Refused("the pilot runs 1 to %d admissions" % limit)
@@ -389,9 +388,9 @@ class PilotDriver:
     OPS = ("prepare", "health", "dispatch", "attach", "check", "record")  # per-admission timings, kept even on abort
 
     def __init__(self, env, ledger, n=PILOT_MAX, run="pilot", clock=time.monotonic, max_duration=MAX_DURATION_S,
-                 tag=None, now=None):
+                 tag=None, now=None, route=None):
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
-        self.plan = plan_assignments(n, tag or run, now)
+        self.plan = plan_assignments(n, tag or run, now, route=route)
         self.current = None
         self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[], deviations=[],
                             latency={op: [] for op in self.OPS}, blocked_titles=0)
@@ -500,8 +499,6 @@ class PilotDriver:
         if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
             raise Abort("concurrency")
         problems = anomalies(status)
-        if "concurrency_caps_raised" in problems:
-            raise Abort("concurrency")
         if problems:
             raise Abort("status_anomaly", problems)
         allowed = 2 if first else 1  # the first admission may carry the one observed title request

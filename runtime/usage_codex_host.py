@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 import time
 
-from runtime import usage_admission, usage_credentials, usage_routing, usage_settings, worker_visibility
+from runtime import usage_admission, usage_budget_money, usage_credentials, usage_routing, usage_settings, worker_visibility
 from runtime.usage_budget import BudgetError, fields, integer, name, require
 from runtime.usage_canary_host import native_capacity, package_digest
 
@@ -105,7 +105,7 @@ def _proposal(control, config, policy, proposal, now):
     control._snapshots(proposal['snapshots'])
     control._external(config, proposal, policy)
     quote = usage_routing.quote(proposal['packet'], config['profile'], now)
-    return quote['maximum_usd_micros'] + quote['count_maximum_usd_micros']
+    return usage_budget_money.buffered(quote['maximum_usd_micros'] + quote['count_maximum_usd_micros'])  # V (F5.A2)
 
 
 def _funding_pool(policy, pool):
@@ -181,7 +181,7 @@ def _publish_generation(plan, task, evidence, result, habblaud, *, visibility):
     if (result.get('run_id') != run_id
             or result.get('accepted') is not False or result.get('requires_native_review') is not True
             or result.get('execution_route') != 'openai-api'
-            or type(result.get('reported_cost_usd_micros')) is not int):
+            or type(result.get('reported_cost_usd_micros')) is not int or result.get('cost_basis') != 'estimate'):
         return dict(delivered=False, reason='generation_unconfirmed')
     try:
         with usage_settings.controller(plan.checkout) as control:
@@ -193,7 +193,7 @@ def _publish_generation(plan, task, evidence, result, habblaud, *, visibility):
                     and run['consent']['scope'] == plan.scope and run['closed'] is True
                     and run['live_admission']['pin'] == usage_admission.digest(asdict(evidence))
                     and generation['state'] == 'completed'
-                    and generation['cost'] == result['reported_cost_usd_micros'], 'generation_unconfirmed')
+                    and generation['cost'] is None, 'generation_unconfirmed')  # F5.A2: unpriced until settled
             state = control.ledger.path.parent
 
         from runtime.habblaud import publish_usage_badge

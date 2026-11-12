@@ -10,6 +10,7 @@ from unittest import mock
 from tests.qualification import canary, replay_export, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
+from tests.qualification.doubles import qual_plan, qual_driver, qual_run
 from tests.qualification.server import Routing
 
 
@@ -23,10 +24,10 @@ class ExportTests(Temp):
 
     def admit(self, count, tag="t"):
         canary.initialize_state(self.routing)
-        for item in canary.plan_assignments(count, tag):
+        for item in qual_plan(count, tag):
             answer, _ = self.routing("prepare", **item["body"])
             self.assertEqual(answer.get("state"), "admitted", answer)
-            attempt = item["body"]["assignment"]["attempt_id"]  # closed, so the concurrency cap admits the next
+            attempt = item["body"]["assignment"]["attempt_id"]  # closed before the next, as the pilot runs serially
             closed, _ = self.routing("record", event=dict(event_id=attempt + "-nd", attempt_id=attempt, kind="not_dispatched"))
             self.assertEqual(closed.get("state"), "recorded", closed)
 
@@ -53,6 +54,34 @@ class ExportTests(Temp):
         self.assertEqual(oct(self.export_dir.stat().st_mode & 0o777), "0o700")
         for name in (replay_export.RECORDS, replay_export.LAST):
             self.assertEqual(oct((self.export_dir / name).stat().st_mode & 0o777), "0o600")
+
+    def test_export_keeps_the_replay_fields_and_old_records(self):
+        """F5.4: records are exported as stored, new replay fields included; an older record without
+        `ranking.shortlist` is exported unchanged, and the export's manifest says `format: 2`."""
+        import sqlite3
+        from contextlib import closing
+        self.admit(1)
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute("SELECT body FROM ledger WHERE id=1").fetchone()[0])
+            new = data["admissions"][0]
+            old = dict(new, attempt_id="old-shape", nonce="0" * 32,
+                       ranking={key: new["ranking"][key] for key in ("table_version", "profile_digest")})
+            for key in ("risk_band", "floor_filled", "strategy"):
+                old.pop(key, None)
+            data["admissions"].insert(0, old)
+            db.execute("UPDATE ledger SET body=? WHERE id=1", (json.dumps(data, separators=(",", ":")),))
+            db.commit()
+        _, records = replay_export.read_admissions(self.ledger)
+        summary = replay_export.export(self.ledger, self.export_dir, now=1000)
+        self.assertEqual(summary["format"], 2)
+        lines = [json.loads(line) for line in (self.export_dir / replay_export.RECORDS).read_text().splitlines()]
+        self.assertEqual([line["record"] for line in lines], records)  # verbatim, old and new
+        self.assertNotIn("shortlist", lines[0]["record"]["ranking"])
+        self.assertIn("shortlist", lines[1]["record"]["ranking"])
+        self.assertTrue({"risk_band", "floor_filled", "strategy"} <= set(lines[1]["record"]))
+        last = json.loads((self.export_dir / replay_export.LAST).read_text())
+        self.assertEqual(last["format"], 2)
+        self.assertNotIn("format", lines[0])  # the manifest carries the format; each line keeps its record as stored
 
     def test_unsafe_export_directories_are_refused(self):
         target = self.private(self.tmp / "elsewhere")
@@ -96,7 +125,7 @@ class ExportTests(Temp):
                 return dict(exported=2) if self.calls.count("export_if_due") == 2 else None
         env = Exporting()
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
-        results = canary.PilotDriver(env, ledger, n=3, run="t").run()
+        results = qual_driver(env, ledger, n=3, run="t").run()
         self.assertEqual(env.calls.count("export_if_due"), 3)  # once per admission, before its first routing step
         self.assertEqual(env.calls[env.calls.index("export_if_due") + 1], "status")
         self.assertEqual(results["exports"], [dict(admission=2, exported=2)])
@@ -106,7 +135,7 @@ class ExportTests(Temp):
         with mock.patch.dict(os.environ, HOME=str(self.home)):
             self.assertEqual(replay_export.default_dir(), self.home / ".local/state/vibe-workflow-replay/canary")
             ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
-            run = live.Run(self.private(self.tmp / "iso"), ledger)
+            run = qual_run(self.private(self.tmp / "iso"), ledger)
             self.assertEqual(run.replay_dir, self.home / ".local/state/vibe-workflow-replay/canary")
 
     def test_the_export_keeps_records_a_later_prune_drops(self):
@@ -139,7 +168,7 @@ class CanaryWiringTests(Temp):
         state = canary.check_canary_state(self.canary_state, home=self.home)
         routing = Routing(state["settings"], state["ledger"])
         canary.initialize_state(routing)
-        answer, _ = routing("prepare", **canary.plan_assignments(1, "seed")[0]["body"])
+        answer, _ = routing("prepare", **qual_plan(1, "seed")[0]["body"])
         self.assertEqual(answer["state"], "admitted")
         return state
 
@@ -160,7 +189,7 @@ class CanaryWiringTests(Temp):
         project = self.private(self.tmp / "project")
         os.system("git -C %s init -q" % project)
         ledger = safety.CallLedger(self.ledger_path)
-        run = live.Run(self.q, ledger, canary_project=str(project), canary_state=state)
+        run = qual_run(self.q, ledger, canary_project=str(project), canary_state=state)
         run.replay_dir = self.replay
         run.cleanup()
         self.assertEqual(run.results["replay_export"]["exported"], 1)

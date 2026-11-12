@@ -243,14 +243,13 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, 'Canonical resource ownership conflicts'):
             self.api.prepare_assignment(self.scope, other)
 
-    def test_disjoint_claims_respect_capacity(self):
+    def test_disjoint_claims_are_admitted_beyond_a_declared_count(self):
+        """F5.A1 (was: disjoint claims respect capacity): a declared count of two is not admission."""
         self.plan()
         self.prepare()
-        second = self.second_owner(1, [self.path_claim('other.py')], dict(max_parallel_workers=2, host_capacity=2))
-        self.assertTrue(self.api.prepare_assignment(self.scope, second)['launch_admitted'])
-        third = self.second_owner(2, [self.path_claim('third.py')], dict(max_parallel_workers=2, host_capacity=2))
-        with self.assertRaises(state.StateError):
-            self.api.prepare_assignment(self.scope, third)
+        for n, name in ((1, 'other.py'), (2, 'third.py')):
+            other = self.second_owner(n, [self.path_claim(name)], dict(max_parallel_workers=2, host_capacity=2))
+            self.assertTrue(self.api.prepare_assignment(self.scope, other)['launch_admitted'], name)
 
     def test_cross_scope_claims_and_explicit_shared_services_conflict(self):
         shared = dict(kind='service', host='local', key='fixture:shared-db', mode='write')
@@ -551,7 +550,7 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         self.assertEqual(report['conflicts'][0]['attempt_id'], first['attempt_id'])
         self.assertEqual(report['conflicts'][0]['owner']['session_id'], 'parent')
 
-    def test_uncertain_launch_retains_capacity_and_never_reissues_permission(self):
+    def test_uncertain_launch_retains_ownership_and_never_reissues_permission(self):
         self.plan()
         request = self.prepare_request()
         first = self.api.prepare_assignment(self.scope, request)
@@ -565,8 +564,11 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         self.assertEqual(replay['status'], 'uncertain')
         self.assertEqual(self.discover.call_count, 0)
         other = self.second_owner(1, [self.path_claim('independent.py')], dict(max_parallel_workers=1, host_capacity=1))
-        with self.assertRaisesRegex(state.StateError, 'capacity is exhausted'):
-            self.api.prepare_assignment(self.scope, other)
+        self.assertTrue(self.api.prepare_assignment(self.scope, other)['launch_admitted'])  # F5.A1: no count place
+        conflict = self.second_owner(2, [self.path_claim()])  # the uncertain worker still owns its file
+        with self.assertRaisesRegex(state.StateError, 'Canonical resource ownership conflicts'):
+            self.api.prepare_assignment(self.scope, conflict)
+        self.assertEqual(self.raw_assignment(first['attempt_id'])['status'], 'uncertain')
 
     def test_retry_needs_new_evidence_and_preserves_per_job_budget(self):
         self.plan()
@@ -654,18 +656,22 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, 'Canonical resource ownership conflicts'):
             self.api.prepare_assignment(self.scope, write)
 
-    def test_capacity_race_across_disjoint_sessions_admits_only_one(self):
-        requests = [self.second_owner(n, [self.path_claim('file-' + str(n) + '.py')],
-                    dict(max_parallel_workers=1, host_capacity=1)) for n in range(2)]
-        barrier = threading.Barrier(2)
-        def run(request):
-            barrier.wait(timeout=5)
-            try:
-                return self.api.prepare_assignment(self.scope, request)['launch_admitted']
-            except state.StateError:
-                return False
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            self.assertEqual(sum(executor.map(run, requests)), 1)
+    def test_a_race_across_sessions_admits_one_owner_per_file_and_no_count_limit(self):
+        """F5.A1 (was: a capacity race admits only one): physical ownership, not a declared count, serializes."""
+        def race(names, offset):
+            requests = [self.second_owner(offset + n, [self.path_claim(name)], dict(max_parallel_workers=1, host_capacity=1))
+                        for n, name in enumerate(names)]
+            barrier = threading.Barrier(2)
+            def run(request):
+                barrier.wait(timeout=5)
+                try:
+                    return self.api.prepare_assignment(self.scope, request)['launch_admitted']
+                except state.StateError:
+                    return False
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                return sum(executor.map(run, requests))
+        self.assertEqual(race(['shared.py', 'shared.py'], 0), 1)
+        self.assertEqual(race(['file-a.py', 'file-b.py'], 2), 2)
 
     def test_unknown_fields_brief_scope_and_coordinator_resources_are_rejected(self):
         value = self.plan_value()

@@ -21,15 +21,15 @@ SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
     "runtime/adapters/codex.py": 1579,
     "runtime/changes.py": 6073,
-    "runtime/delegation.py": 3369,
+    "runtime/delegation.py": 3358,
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1486,
+    "runtime/routing.py": 1415,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
-    "runtime/usage_budget.py": 1553,
+    "runtime/usage_budget.py": 1467,
 }
 
 
@@ -237,8 +237,10 @@ def validate(root=ROOT):
     if len(entries) != 1 or entries[0]["source"] != {"source": "local", "path": "./"}:
         raise ValueError("Local marketplace must reference this package root once")
     export = package_export(root)
+    from runtime import model_names  # the user's compiled table names the models; none there means not_checked
     return {"package": manifest["name"], "validation": "passed", "skill_words": counts,
-            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
+            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked",
+            "model_names": model_names.check(root)}
 
 
 def release_pathspecs():

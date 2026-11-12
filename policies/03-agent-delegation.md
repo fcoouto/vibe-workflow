@@ -4,7 +4,7 @@ Apply with the [shared contract rules](00-index.md).
 
 **Mandatory adoption.** Meet acceptance criteria with the least necessary model usage and coordination.
 
-**Project Onboarding:** discover configured native clients/accounts; establish task constraints, concurrency limits, finite time/attempt/resource budgets and fallback rules. Preserve the user's coordinator settings. Qualify worker model/effort controls, settings observations and ownership mechanisms; prepare the active platform's local selection guidance.
+**Project Onboarding:** discover configured native clients/accounts; establish task constraints, real concurrency constraints (native slots, provider quotas, host resources; never a fixed worker count), finite time/attempt/resource budgets and fallback rules. Preserve the user's coordinator settings. Qualify worker model/effort controls, settings observations and ownership mechanisms; prepare the active platform's local selection guidance.
 
 | Element | Contract |
 | --- | --- |
@@ -89,7 +89,7 @@ receipt and continuation.
 
 1. Reserve canonical writable files and mutable resources before dispatch, including path aliases, ancestor overlaps, ports, build directories, databases and services. Parallel tasks need disjoint files, independent or isolated mutable resources, and no direct or transitive dependencies. Unknown scope means serialize or combine the affected tasks. Different sections of one file are not independent scopes.
 2. Make conflicting reservations mutually exclusive. Describe ownership/read-only restrictions as enforced only when the qualified mechanism prevents violations; otherwise record the limitation. Uncontrolled external writers remain a limitation. Branch names and worktrees alone do not isolate shared services.
-3. Cap concurrency by actual authorized slots, host resources and the task budget. For waves, retain each task's brief, start eligible workers together, wait for their results before integration, and let the coordinator record one progress entry per wave.
+3. Limit concurrency only by real constraints: native slots the client actually provides, provider quotas and throttling, measured host resources, ownership, money and the task budget. No fixed worker count, saved cap or declared D6 count limits admission. For waves, retain each task's brief, start eligible workers together, wait for their results before integration, and let the coordinator record one progress entry per wave.
 4. Serialize authorized commits in task order, recording current HEAD immediately before each. If commits are not authorized, review recorded working-tree snapshots instead; workers must not commit or publish implicitly.
 
 ## Progress and result retrieval

@@ -1,10 +1,6 @@
 {
  "settings": {
-  "api_usage_enabled": true,
-  "caps": {
-   "total": 2,
-   "per_account": 2
-  }
+  "api_usage_enabled": true
  },
  "organization": {
   "id": "api-org",

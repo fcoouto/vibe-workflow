@@ -36,7 +36,7 @@ import re
 import tempfile
 import time
 
-from runtime import delegation, evidence, routing, routing_launch, state, task_profile
+from runtime import delegation, evidence, routing, routing_launch, routing_observations, state, task_profile
 
 HOST = 'codex_native'
 MODES = ('explicit', 'inherit', 'routed')
@@ -324,28 +324,51 @@ def _require_unlaunched(service, attempt_id):
         raise state.StateError('A dispatched routing attempt needs host reconciliation, not a routing release')
 
 
+def _close(service, data, attempt, kind, event_id):
+    """Record `kind` for one routing hold of a managed assignment: `{attempt_id, kind, state[, reason]}`. A native
+    turn reports no reading, so before a dispatched subscription hold records `complete` the pool its admission
+    holds is marked used (`mark_consumed`, once per attempt, F4 N-1): the readings that turn ran on stop counting for
+    every alias of the pool until one observed later arrives. A replay or retry never moves that mark. Unknown
+    funding, or a mark that cannot be written, records nothing: the hold keeps its capacity. A replay of the same
+    reconcile never reaches it again; a later continuation of the same child closes it (`_close_turns`), or the client
+    records `uncertain` and the one-shot operator `reconcile_subscription` abandons it into a counted window debit."""
+    if kind == 'complete':
+        admission = _admission(data, attempt) or {}
+        billing = admission.get('billing_class')
+        if billing == 'included_subscription':
+            try:
+                routing_observations.mark_consumed(service.settings_path, admission.get('pool'), int(time.time()),
+                                                   attempt)
+            except (OSError, ValueError):
+                return dict(attempt_id=attempt, kind=kind, state='blocked', reason='observation_store_unavailable')
+        elif billing not in routing.FUNDED:
+            return dict(attempt_id=attempt, kind=kind, state='blocked', reason='admission_unknown')
+    answer = _record(service, attempt, kind, event_id)
+    return dict(attempt_id=attempt, kind=kind, state=answer.get('state'))
+
+
 def settled(scope, record, reply):
     """`reconcile_assignment`: close the routing holds of a settled managed assignment and its continuations. A
-    dispatched hold records `complete` (the coordinator never spawned, or the child finished); an admitted one
-    records `not_dispatched`. It goes by the record's routing holds, not by whether the project is still managed
-    (review S3); a record with no routing hold, and so every unmanaged one, gets today's reply unchanged."""
+    dispatched hold records `complete` (the coordinator never spawned, or the child finished; `_close` marks its
+    subscription pool first); an admitted one records `not_dispatched`. It goes by the record's routing holds, not by
+    whether the project is still managed (review S3); a record with no routing hold, and so every unmanaged one, gets
+    today's reply unchanged."""
     if not task_profile.native(record['data']['role']):
         return reply
     closed = []
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         try:
-            holds = _holds(service).get('holds', {})
-        except state.StateError:  # the assignment is settled; its holds close at the next reconcile or by the operator
+            data = _holds(service)
+        except state.StateError:  # the assignment is settled; its holds stay counted and close as `_close` describes
             return dict(reply, routing=dict(state='unavailable', reason='ledger_unavailable')) if managed(scope) \
                 else reply
-        for attempt, hold in sorted(holds.items()):
+        for attempt, hold in sorted(data.get('holds', {}).items()):
             if hold['closed'] or not (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
                 continue
             kind = 'complete' if hold['state'] == 'dispatched' else 'not_dispatched' if hold['state'] == 'admitted' \
                 else None
             if kind is not None:
-                answer = _record(service, attempt, kind, '%s:%s' % (kind, attempt))
-                closed.append(dict(attempt_id=attempt, kind=kind, state=answer.get('state')))
+                closed.append(_close(service, data, attempt, kind, '%s:%s' % (kind, attempt)))
     return dict(reply, routing=dict(closed=closed)) if closed else reply
 
 
@@ -445,12 +468,15 @@ def _continuation_attempt(record, value):
 
 def _close_turns(service, record):
     """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
-    ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`."""
-    for attempt, hold in sorted(_holds(service).get('holds', {}).items()):
+    ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`. The
+    reason a turn's hold had to stay held (`_close`), or None."""
+    data, kept = _holds(service), None
+    for attempt, hold in sorted(data.get('holds', {}).items()):
         if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
             kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
             if kind is not None:
-                _record(service, attempt, kind, 'turn:%s:%s' % (kind, attempt))
+                kept = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt)).get('reason') or kept
+    return kept
 
 
 def continuation(scope, request, record, value, reply):
@@ -463,10 +489,10 @@ def continuation(scope, request, record, value, reply):
         route = _route(scope, record, _hold(service, record['id'])[1])
         choice = routing_launch.choice(HOST, 'subscription', model=route['model'], effort=route['effort']) \
             if route else _choice(original['selection'])
-        if _hold(service, attempt)[0] is None:
-            _close_turns(service, record)
-        answer = admit(service, scope, identity, attempt_id=record['id'], routing_attempt=attempt,
-                       choice=choice)
+        kept = _close_turns(service, record) if _hold(service, attempt)[0] is None else None
+        # an earlier turn still holds its capacity: no fresh permit on top of it
+        answer = dict(state='blocked', reason=kept) if kept else admit(
+            service, scope, identity, attempt_id=record['id'], routing_attempt=attempt, choice=choice)
     if answer.get('state') != 'admitted':
         return dict(reply, routing=dict(state=answer.get('state', 'blocked'), reason=answer.get('reason')))
     return dict(reply, routing=dict(state='admitted', attempt_id=attempt))

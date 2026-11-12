@@ -1,9 +1,5 @@
 {
  "balance": 100000000,
- "caps": {
-  "per_account": 2,
-  "total": 4
- },
  "events": [
   {
    "api_cost": 2000000,

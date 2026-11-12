@@ -20,8 +20,8 @@ Before an implementer, reviewer or coordinator starts a heavy local phase, check
 the current `resource_admission` preference and load
 [resource admission](workstreams-resources.md). The run request uses the current
 `resource_revision`. If resource admission is disabled, ordinary delegation
-continues without a helper-managed heavy launch. Shared task concurrency,
-dependency, continuation and ownership checks always apply. Telemetry failure
+continues without a helper-managed heavy launch. Shared task dependency,
+continuation and ownership checks always apply; no worker count limits admission. Telemetry failure
 permits admission only through the remaining gates; it never overrides ownership
 or budgets.
 

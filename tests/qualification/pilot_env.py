@@ -9,7 +9,7 @@ import signal
 import time
 
 from tests.qualification import canary
-from tests.qualification.safety import Blocker, ROUTE, latency_pairs, on_route, repo_changes, repo_snapshot, shape_of
+from tests.qualification.safety import Blocker, latency_pairs, on_route, route_ref, repo_changes, repo_snapshot, shape_of
 
 
 class CanaryEnv:
@@ -36,13 +36,13 @@ class CanaryEnv:
         return self.run.routing.served("prepare", **body)
 
     def dispatch(self, attempt):
-        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=canary.request())
+        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=canary.request(self.run.route))
         self.run.redact.add_secret(answer.get("authority"))
         return answer, ms
 
     def attach(self, session, attempt, token):
         status, body, _ = self.run.server.rpc("attach", dict(session_id=session, attempt_id=attempt, authority=token,
-                                                             funding_pool=canary.POOL, model=ROUTE))
+                                                             funding_pool=canary.POOL, model=route_ref(self.run.route)))
         return status == 200 and (body or {}).get("state") == "attached"
 
     def detach(self, session, attempt, token):
@@ -75,7 +75,7 @@ class CanaryEnv:
         transmitted["other"] = len(sent) - transmitted["primary"] - transmitted["title"]
         pairs, _ = latency_pairs([r for r in records if r.get("session") == session and r.get("kind") == "primary"])
         return dict(idle=True, transmitted=transmitted, outcome=run.outcome(messages, began)["outcome"],
-                    off_route=sum(1 for r in records if r.get("hook") == "model.request" and r.get("phase") == "pre" and not on_route(r)),
+                    off_route=sum(1 for r in records if r.get("hook") == "model.request" and r.get("phase") == "pre" and not on_route(r, self.run.route)),
                     blocked_titles=sum(1 for r in records if r.get("decision") == "guard_title"),
                     check_ms=pairs[0]["ms"] if pairs else None)
 
