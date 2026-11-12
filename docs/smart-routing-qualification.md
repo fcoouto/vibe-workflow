@@ -146,6 +146,16 @@ For the production-ledger canary (step 8), replace `--canary-state "${CS:?}"` wi
 - **Expect:** 0 calls, no server, one read-only ledger connection, under a second.
 - **Limit:** `--canary-state` refuses the production routing state; only the step-8 form reads it.
 
+### 7a. Strict replay over the export (no calls)
+
+```sh
+python3 -B -m tests.qualification.replay_strict --dir <export dir>
+```
+
+- **Proves:** each exported admission record replays from its stored detail alone ([validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) points 2, 3 and 6). For a ranked record, `routing_funding.choose` (admission's own decision) recomputes the class and route from the stored subscription candidates, and the earlier records count as `routing.decision_rows` counts them (same settings revision, at most 14 days older). Worker-choice records, old and new, are checked by point 3 and counted apart. Every record is checked for funding violations, resurrected capacity and stray records. A ranked paid record or a ranked record without its snapshot detail fails and is counted.
+- **Expect:** 0 calls, no server, no network; it opens only the owner-only export directory. It prints counts, work kinds and bands only (no id, title or timestamp) and exits 1 unless `passed`. A record stores its specialist's work kind, not the specialist's name, so `specialists` counts work kinds.
+- **Limit:** the replay over the exported pilot ledger runs only after F7 and F8 have both merged, by the coordinator, in a separate Results PR. Until then it runs only on disposable synthetic exports. Headroom that rises without a reset counts as resurrected capacity even in a rolling window without `resets_at`. This is conservative: it can flag a legitimate roll-off, or another open hold that settled below its reservation between two records.
+
 ### 8. Canary on the production routing ledger (user approval, canary only)
 
 **Blocked today:** without a qualified billing producer, activation (8.1) refuses and the canary admits nothing (`billing_unverified`). Do not schedule this step until one exists; see the [runbook entry](#live-session-runbook).
