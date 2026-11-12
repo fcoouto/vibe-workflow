@@ -220,11 +220,11 @@
       ]
     },
     "clients/opencode-escalation-gate.md": {
-      "sha256": "62c42ac293d8e32b6ef26ee3feb00d3192309a24aeec557a172e0df1f1f89dc9",
+      "sha256": "6169bfd99b3f9027f7f0e6434b71c8ac9b736a52e8e86e6d0932d65cbab053c2",
       "ranges": [
         [
           1,
-          43
+          44
         ]
       ]
     },

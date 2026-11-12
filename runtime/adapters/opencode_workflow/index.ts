@@ -44,6 +44,21 @@ export function exitStatus(event: unknown): number | null {
   return null
 }
 
+/** A pipeline may hide the test runner's exit status; its exact unittest summary still proves failure. */
+export function checkFailed(event: any): boolean {
+  const status = exitStatus(event)
+  if (event?.status === "error" || (status !== null && status !== 0)) return true
+  const content = event?.result?.content
+  const texts = typeof content === "string" ? [content] : Array.isArray(content)
+    ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text) : []
+  for (const text of texts) {
+    for (const summary of text.matchAll(/^FAILED \(([^)\r\n]+)\)\s*$/gm)) {
+      if (/(?:^|, )(?:failures|errors)=[1-9]\d*(?:, |$)/.test(summary[1])) return true
+    }
+  }
+  return false
+}
+
 function defaultFeatureStatus(directory: string): Promise<unknown> {
   const script = join(PACKAGE, "scripts", "workflow.py")
   return new Promise((done) => {
@@ -182,8 +197,7 @@ export function createWorkflowPlugin(config: Config = {}) {
         }
         if (!SHELL_TOOLS.has(event?.tool) || typeof event?.input?.command !== "string") return
         if (!isCheck(event.input.command, settings!.checkPatterns)) return
-        const status = exitStatus(event)
-        if (event.status !== "error" && (status === null || status === 0)) return
+        if (!checkFailed(event)) return
         const session = await known(event.sessionID)
         if (session) gate!.failed(session)
       }))

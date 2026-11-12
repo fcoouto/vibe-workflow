@@ -1,0 +1,84 @@
+{
+  "round": 1,
+  "date": "2026-11-12",
+  "candidate": "f2d9796096478295ad8c4edfb837ca10c010f756",
+  "host": "OpenCode 2.2.6",
+  "budget": {"max_requests": 150, "minutes": 60, "attempts_per_case": 1},
+  "started_utc": "2026-11-12T17:46:52Z",
+  "ended_utc": "2026-11-12T17:54:50Z",
+  "requests": 87,
+  "route_amendment": "The user switched remaining cases to the ChatGPT subscription before case 3a. Original allocations and earlier outcomes were retained.",
+  "aggregate": "qualification_incomplete",
+  "usage_scope": "Root-session native step_finish fields only; child token totals unavailable. Reasoning is kept separate rather than added to output. No dollar cost inferred.",
+  "root_usage": {
+    "1-recurrence": {"input": 14, "output": 2055, "reasoning": 239, "cache_read": 185695, "cache_write": 33132},
+    "2-reevaluation": {"input": 30, "output": 3894, "reasoning": 14750, "cache_read": 638150, "cache_write": 49277},
+    "3a-other-file": {"input": 19455, "output": 358, "reasoning": 0, "cache_read": 188928, "cache_write": 0},
+    "3b-same-file": {"input": 22045, "output": 802, "reasoning": 0, "cache_read": 326144, "cache_write": 0},
+    "4-notes": {"input": 38332, "output": 707, "reasoning": 0, "cache_read": 160640, "cache_write": 0},
+    "5-moving": {"input": 20874, "output": 573, "reasoning": 0, "cache_read": 230528, "cache_write": 0}
+  },
+  "cases": [
+    {
+      "case": "1-recurrence", "requests": 7, "share": 35, "seconds": 15,
+      "routes": ["claude-agent/haiku#low"],
+      "expected": "Fourth edit held, stronger diagnosis, release, final checks pass.",
+      "observed": "Four edits completed without a hold. Failing checks were piped through tail and returned shell exit zero.",
+      "verdict": "expected_enforcement_not_demonstrated",
+      "gate_denials": 0, "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "117d7162574cf827599c7524cd7f124ed8919b3c4a0416c0600404972930db46"
+    },
+    {
+      "case": "2-reevaluation", "requests": 15, "share": 35, "seconds": 89,
+      "routes": ["claude-agent/haiku#max"],
+      "expected": "Re-evaluation hold, qualifying assessment, release, final checks pass.",
+      "observed": "Four edits completed without a hold. Failing checks were piped through tail and returned shell exit zero.",
+      "verdict": "expected_reevaluation_not_demonstrated",
+      "gate_denials": 0, "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "6cc206c21aee14a67ed982fba64f4ae016c0c9e05388df40af77f6dac35a23c0"
+    },
+    {
+      "case": "3a-other-file", "requests": 12, "share": 20, "seconds": 34,
+      "routes": ["openai/gpt-6-luna#low"],
+      "expected": "No hold for repairs of separate files.",
+      "observed": "Two files repaired without a hold; direct checks reported nonzero failure exits.",
+      "verdict": "matched_control",
+      "gate_denials": 0, "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "4dbda409225ba4e4a72dfbf334213d700d9556638d42a3137fc228b213189437"
+    },
+    {
+      "case": "3b-same-file", "requests": 23, "share": 25, "seconds": 85,
+      "routes": ["openai/gpt-6-luna#low", "openai/gpt-6-luna#high"],
+      "expected": "A false hold is possible; observe the diagnostic overhead.",
+      "observed": "Fourth edit denied at escalating stage. A new high-effort child made no observed edits; after it completed, the root repaired the remaining defect.",
+      "verdict": "false_hold_and_release_observed",
+      "gate_denials": 1, "diagnostic_child_requests": 4,
+      "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "e1f18affa8c036e98138b59b8190a9acfb3bda9424b707c1f3344f1c283d788b"
+    },
+    {
+      "case": "4-notes", "requests": 16, "share": 20, "seconds": 54,
+      "routes": ["openai/gpt-6-luna#low"],
+      "expected": "No hold on notes updated after two review waves.",
+      "observed": "Two reviews completed and notes gained two nonblank lines; no hold.",
+      "verdict": "matched_control",
+      "gate_denials": 0, "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "a86ead84223caf2790a8de13fc730cb8119fbd5cfebd6b6c4954b3114af37ef2"
+    },
+    {
+      "case": "5-moving", "requests": 14, "share": 15, "seconds": 42,
+      "routes": ["openai/gpt-6-luna#low"],
+      "expected": "Repairs moving to new files are not detected, a stated limit.",
+      "observed": "Four different files repaired without a hold.",
+      "verdict": "known_limit_confirmed",
+      "gate_denials": 0, "final_checks_passed": true, "protected_inputs_unchanged": true,
+      "initial_fixture_sha256": "615e38b6d405a86fb173026334ca533f98e26c94d7c193619ec48b1af2291f53"
+    }
+  ],
+  "limits": [
+    "One run per case; no reliability or savings estimate follows.",
+    "The recorder missed the denial label in case 3b; the native CLI tool error confirms it.",
+    "Model requests count OpenCode request hooks; provider-internal retries were not observed.",
+    "The synthetic fixtures and process isolation are not an OS sandbox."
+  ]
+}

@@ -1,7 +1,7 @@
 // Run with `node --test tests/opencode_workflow/plugin.test.ts` (Node strips the types); tests/test_opencode_workflow.py wraps it.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import plugin, { createWorkflowPlugin, exitStatus, routeOf } from "../../runtime/adapters/opencode_workflow/index.ts"
+import plugin, { checkFailed, createWorkflowPlugin, exitStatus, routeOf } from "../../runtime/adapters/opencode_workflow/index.ts"
 
 type Hooks = Record<string, (event: any) => Promise<void> | void>
 const ROOT = "ses_root"
@@ -275,6 +275,32 @@ test("exitStatus reads metadata.exit and metadata.exitCode only", () => {
   assert.deepEqual(routeOf(MODEL), { provider: "p", model: "m", variant: "low" })
   assert.deepEqual(routeOf({ providerID: "p", id: "m" }), { provider: "p", model: "m", variant: null })
   assert.equal(routeOf({ id: "m" }), null)
+})
+
+test("qualification regression: unittest failure survives a successful output pipeline", async () => {
+  const t = await start()
+  await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MODEL })
+  for (let i = 0; i < 3; i++) {
+    await edit(t, ["a.ts"])
+    await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: `piped_${i}`, tool: "shell",
+      input: { command: "python3 -m unittest -q 2>&1 | tail -5" }, status: "completed",
+      result: { content: [{ type: "text", text: "Ran 4 tests in 0.001s\n\nFAILED (failures=1)\n" }],
+        metadata: { exit: 0 } } })
+  }
+  assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+  t.cleanup()
+})
+
+test("qualification regression: only an actual unittest failure footer supplements exit status", () => {
+  const event = (text: string) => ({ status: "completed", result: { content: text, metadata: { exit: 0 } } })
+  assert.equal(checkFailed(event("Ran 4 tests\n\nFAILED (failures=1)\n")), true)
+  assert.equal(checkFailed(event("FAILED (errors=2, skipped=1)\n")), true)
+  assert.equal(checkFailed(event("FAILED (failures=0, errors=1)\n")), true)
+  assert.equal(checkFailed(event("FAILED (failures=0)\n")), false)
+  assert.equal(checkFailed(event("Ran 4 tests\n\nOK\n")), false)
+  assert.equal(checkFailed(event("Expected example: FAILED (failures=1)")), false)
+  assert.equal(checkFailed(event("test_failed_detection passed")), false)
+  assert.equal(checkFailed(event("FAILED (expected failures=1)")), false)
 })
 
 test("nothing is written to prompts or messages while nothing is held", async () => {
