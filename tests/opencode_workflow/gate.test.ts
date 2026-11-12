@@ -313,3 +313,39 @@ test("parseSettings: defaults, valid values, invalid returns null", () => {
   assert.equal(parseSettings({ check_patterns: [1] }), null)
   assert.equal(parseSettings({ check_patterns: [""] }), null)
 })
+
+test("final review: mixed files deny when any held file still needs a diagnosis", () => {
+  const g = gate(R("m", "max"))
+  trip(g, [FA])
+  diagnose(g, R("m", "max"))  // re-evaluation accepted for a.ts
+  retrip(g, [FA])  // a.ts now at stop
+  trip(g, [FB])  // b.ts held at re-evaluation
+  assert.equal(effect(g, ROOT, [FA]), "ask")
+  assert.equal(effect(g, ROOT, [FA, FB]), "deny")
+})
+
+test("final review: recovered sessions are not fresh diagnoses until their creation is seen", () => {
+  const g = gate()
+  trip(g)
+  g.created("ses_old", ROOT, true)  // an existing child first seen through a lookup, after the hold
+  g.routed("ses_old", R("m", "high"))
+  g.finished("ses_old")
+  assert.equal(effect(g), "deny")
+  // A creation event for a session first seen through a lookup proves it is new.
+  g.created("ses_new", ROOT, true)
+  g.created("ses_new", ROOT)
+  g.routed("ses_new", R("m", "high"))
+  g.finished("ses_new")
+  assert.equal(effect(g), "allow")
+})
+
+test("final review: a check must be what the command runs", () => {
+  const p = DEFAULT_SETTINGS.checkPatterns
+  assert.equal(isCheck("env rg pytest src", p), false)
+  assert.equal(isCheck("test -f scripts/validate.py", p), false)
+  assert.equal(isCheck("rg 'foo && pytest bar' src", p), false)
+  assert.equal(isCheck("echo \"unbalanced && pytest", p), false)
+  assert.equal(isCheck("time npm test", p), true)
+  assert.equal(isCheck("uv run pytest -q", p), true)
+  assert.equal(isCheck("env CI=1 python3 -m unittest", p), true)
+})

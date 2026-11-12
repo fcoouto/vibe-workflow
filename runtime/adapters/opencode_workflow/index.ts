@@ -112,7 +112,7 @@ export function createWorkflowPlugin(config: Config = {}) {
           const parent = record.parentID == null ? null : String(record.parentID)
           chain.push([current, parent])
           if (parent === null || gate!.knows(parent)) {
-            for (let i = chain.length - 1; i >= 0; i--) gate!.created(chain[i][0], chain[i][1])
+            for (let i = chain.length - 1; i >= 0; i--) gate!.created(chain[i][0], chain[i][1], true)
             return gate!.knows(session) ? session : null
           }
           current = parent
@@ -137,7 +137,12 @@ export function createWorkflowPlugin(config: Config = {}) {
                 gate.finished(data.sessionID)
               }
             }
-          } catch { /* live-only stream: lookups cover what it misses */ }
+          } catch { /* handled below */ }
+          // Releases depend on finished-run events: without them a hold could never end, so fail open.
+          if (!events.signal.aborted) {
+            gate = null
+            lastError = "event_stream_lost"
+          }
         })()
       }
 
@@ -159,8 +164,9 @@ export function createWorkflowPlugin(config: Config = {}) {
         if (decision.effect !== "allow") {
           event.effect = decision.effect
           event.message = display(decision.message)
-          return
+          if (decision.effect === "deny") return
         }
+        // Remember allowed and asked edits; the completed call confirms them (an approved stop-stage edit clears).
         const call = event.source?.id
         if (typeof call !== "string") return
         if (remembered.size >= MAX_REMEMBERED) remembered.delete(remembered.keys().next().value!)
@@ -208,7 +214,7 @@ export function createWorkflowPlugin(config: Config = {}) {
             input: { type: "object", properties: {}, additionalProperties: false },
             options: { codemode: false },
             execute: async (_input: unknown, context: any) => {
-              const state = gate!.status(String(context?.sessionID ?? ""))
+              const state = gate ? gate.status(String(context?.sessionID ?? "")) : { held: [], lastError: null }
               return { content: JSON.stringify({ ...state, lastError }) }
             },
           })

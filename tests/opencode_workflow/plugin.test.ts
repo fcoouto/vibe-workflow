@@ -8,6 +8,7 @@ const ROOT = "ses_root"
 const CHILD = "ses_child"
 const MODEL = { providerID: "p", id: "m", variant: "low" }
 const STRONG = { providerID: "p", id: "m", variant: "high" }
+const STREAM_LOST = Symbol("stream lost")
 const tick = () => new Promise((resolve) => setImmediate(resolve))
 const settle = async () => { for (let i = 0; i < 5; i++) await tick() }
 
@@ -28,7 +29,9 @@ function fakeCtx(directory: string, sessions: Record<string, { parentID?: string
               if (signal?.aborted) return { done: true, value: undefined }
               await new Promise<void>((resolve) => { wake = resolve; signal?.addEventListener("abort", () => resolve(), { once: true }) })
             }
-            return { done: false, value: queue.shift() }
+            const value = queue.shift()
+            if (value === STREAM_LOST) throw new Error("event stream lost")
+            return { done: false, value }
           },
           async return() { return { done: true, value: undefined } },
         }
@@ -284,5 +287,44 @@ test("nothing is written to prompts or messages while nothing is held", async ()
   await t.hooks["tool.execute.after"](after)
   assert.deepEqual(after.result, { content: "ok", metadata: { exit: 0 } })
   assert.equal(typeof plugin.setup, "function")
+  t.cleanup()
+})
+
+test("final review: an approved stop-stage edit clears the hold; a rejected one does not", async () => {
+  const t = await start()
+  const MAX = { providerID: "p", id: "m", variant: "max" }
+  await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MAX })
+  for (let i = 0; i < 3; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+  await diagnose(t, MAX, "succeeded", "ses_reeval")  // re-evaluation accepted
+  for (let i = 0; i < 2; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
+  const rejected = permissionEvent(ROOT, ["a.ts"], "call_rejected")
+  await t.hooks["permission.evaluate"](rejected)
+  assert.equal(rejected.effect, "ask")
+  await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_rejected", tool: "edit", input: {}, status: "error",
+    error: { message: "rejected" } })
+  const approved = permissionEvent(ROOT, ["a.ts"], "call_approved")
+  await t.hooks["permission.evaluate"](approved)
+  assert.equal(approved.effect, "ask")
+  await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_approved", tool: "edit", input: {}, status: "completed",
+    result: { content: "ok" } })
+  assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+  t.cleanup()
+})
+
+test("final review: a follow-up to a child first seen through a lookup does not release", async () => {
+  const t = await start({ sessions: { ses_oldchild: { parentID: ROOT } } })
+  await trip(t)
+  await t.hooks["session.model.request"]({ sessionID: "ses_oldchild", kind: "primary", model: STRONG })
+  await t.emit({ type: "session.execution.succeeded", data: { sessionID: "ses_oldchild" } })
+  assert.equal((await edit(t, ["a.ts"])).effect, "deny")
+  t.cleanup()
+})
+
+test("final review: a lost event stream fails open and is reported", async () => {
+  const t = await start()
+  await trip(t)
+  await t.emit(STREAM_LOST)
+  assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+  assert.equal((await status(t)).lastError, "event_stream_lost")
   t.cleanup()
 })

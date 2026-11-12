@@ -27,7 +27,9 @@ const MAX_SESSIONS = 4096
 const MAX_LISTED = 5
 const DERIVED = /^ses_[0-9a-f]{32}$/
 const LADDER_ENTRY = /^[A-Za-z0-9][\w.:@+-]*\/[A-Za-z0-9][\w.:@+-]*(?:\/[A-Za-z0-9][\w.:@+-]*)?$/
-const VIEWERS = new Set(["grep", "rg", "cat", "echo", "sed", "head", "tail", "less", "git"])
+const WRAPPERS = new Set(["env", "time", "nice", "nohup", "command", "exec", "npx"])
+const RUNNERS = new Set(["uv", "poetry", "pipenv", "pnpm"])  // followed by `run` or `exec`
+const INTERPRETER = /^(?:python[0-9.]*|node|bash|sh|zsh)$/
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 const NEXT: Record<Stage, string> = {
   escalating: "Before another repair, dispatch a new read-only diagnosis on a model or effort stronger than every "
@@ -37,7 +39,9 @@ const NEXT: Record<Stage, string> = {
   stop: "Escalation and re-evaluation did not converge: the user decides how to continue",
 }
 
-type Session = { root: string; parent: string | null; created: number; route: Route | null; edited: boolean }
+type Session = {
+  root: string; parent: string | null; created: number; route: Route | null; edited: boolean; fresh: boolean
+}
 type Entry = {
   lastEdit: number; pending: boolean; rounds: number; levels: Route[]; escalations: number; resetUsed: boolean
   heldAt: number | null
@@ -73,17 +77,70 @@ export function compareRoutes(a: Route, b: Route, ladder: string[]): 1 | 0 | -1 
   return left < 0 || right < 0 ? null : sign(left - right)
 }
 
-/** True when a command segment runs one of the check patterns; viewers such as `rg` or `cat` never do. */
+/** Command segments split on unquoted `&&`, `||`, `;`, `|` and `&`; null when the quoting is unbalanced. */
+function segments(command: string): string[][] | null {
+  const result: string[][] = [[]]
+  let word = ""
+  let started = false
+  let quote: string | null = null
+  const flush = () => {
+    if (started) result[result.length - 1].push(word)
+    word = ""
+    started = false
+  }
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]
+    if (quote) {
+      if (c === quote) quote = null
+      else word += c
+    } else if (c === "'" || c === '"') {
+      quote = c
+      started = true
+    } else if (c === "\\") {
+      word += command[++i] ?? ""
+      started = true
+    } else if (/\s/.test(c)) {
+      flush()
+    } else if (c === "&" || c === "|" || c === ";") {
+      flush()
+      if ((c === "&" || c === "|") && command[i + 1] === c) i++
+      result.push([])
+    } else {
+      word += c
+      started = true
+    }
+  }
+  if (quote) return null
+  flush()
+  return result
+}
+
+/** True when a command segment runs one of the check patterns as its program, or as an interpreter's script. */
 export function isCheck(command: string, patterns: string[]): boolean {
-  for (const segment of command.split(/&&|\|\||;|\|/)) {
-    const tokens = segment.trim().split(/\s+/).filter(Boolean)
-    while (tokens.length && ASSIGNMENT.test(tokens[0])) tokens.shift()
-    if (!tokens.length || VIEWERS.has(tokens[0].split("/").pop()!)) continue
+  for (const raw of segments(command) ?? []) {
+    const tokens = raw.map((token) => token.replace(/^\.\//, ""))
+    let at = 0
+    for (;;) {
+      while (at < tokens.length && ASSIGNMENT.test(tokens[at])) at++
+      if (WRAPPERS.has(tokens[at])) {
+        at++
+        while (at < tokens.length && tokens[at].startsWith("-")) at++
+      } else if (RUNNERS.has(tokens[at]) && (tokens[at + 1] === "run" || tokens[at + 1] === "exec")) {
+        at += 2
+      } else {
+        break
+      }
+    }
+    if (at >= tokens.length) continue
+    const starts = [at]
+    if (INTERPRETER.test(tokens[at].split("/").pop()!)) {
+      let next = at + 1
+      while (next < tokens.length && tokens[next].startsWith("-")) next++
+      starts.push(next)
+    }
     for (const pattern of patterns) {
       const wanted = pattern.trim().split(/\s+/)
-      for (let start = 0; start + wanted.length <= tokens.length; start++) {
-        if (wanted.every((token, offset) => tokens[start + offset] === token)) return true
-      }
+      if (starts.some((start) => wanted.every((token, offset) => tokens[start + offset] === token))) return true
     }
   }
   return false
@@ -114,8 +171,17 @@ export class Gate {
     this.settings = settings
   }
 
-  created(session: string, parent: string | null): void {
-    if (derivedSession(session) || this.sessions.has(session) || this.sessions.size >= MAX_SESSIONS) return
+  /** `recovered`: first seen through a lineage lookup, so its creation time and earlier edits are unknown. */
+  created(session: string, parent: string | null, recovered = false): void {
+    const existing = this.sessions.get(session)
+    if (existing) {
+      if (!recovered && !existing.fresh) {
+        existing.fresh = true  // its creation event proves it is new
+        existing.created = ++this.seq
+      }
+      return
+    }
+    if (derivedSession(session) || this.sessions.size >= MAX_SESSIONS) return
     let root = session
     if (parent !== null) {
       const above = this.session(parent)
@@ -125,7 +191,7 @@ export class Gate {
       if (this.trees.size >= MAX_TREES) this.trees.delete(this.trees.keys().next().value!)
       this.trees.set(session, new Map())
     }
-    this.sessions.set(session, { root, parent, created: ++this.seq, route: null, edited: false })
+    this.sessions.set(session, { root, parent, created: ++this.seq, route: null, edited: false, fresh: !recovered })
   }
 
   knows(session: string): boolean {
@@ -174,7 +240,7 @@ export class Gate {
 
   finished(session: string): void {
     const known = this.session(session)
-    if (!known || known.parent === null || known.edited) return
+    if (!known || known.parent === null || known.edited || !known.fresh) return
     const now = ++this.seq
     const tree = this.trees.get(known.root)!
     if (known.route) {
@@ -195,7 +261,9 @@ export class Gate {
     })
     if (!held.length) return { effect: "allow" }
     const stages = held.map(([, entry]) => this.stage(entry))
-    const stage: Stage = stages.includes("stop") ? "stop" : stages.includes("reevaluation") ? "reevaluation" : "escalating"
+    // Ask only when every held file is at the stop stage; any other held file still needs its diagnosis.
+    const stage: Stage = stages.includes("reevaluation") ? "reevaluation" : stages.includes("escalating") ? "escalating"
+      : "stop"
     const names = held.slice(0, MAX_LISTED).map(([file]) => file).join(", ")
     const more = held.length > MAX_LISTED ? ` and ${held.length - MAX_LISTED} more` : ""
     const rounds = Math.max(...held.map(([, entry]) => entry.rounds))
