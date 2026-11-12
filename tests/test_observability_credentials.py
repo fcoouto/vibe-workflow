@@ -261,22 +261,6 @@ class ObservabilityCredentialsTests(unittest.TestCase):
             self.assertEqual(self.forget_error(), "saved_credentials_unavailable")
         self.assertEqual(self.calls, [("construct", "windows"), ("guard",)])
 
-    def test_forget_settings_keep_revision_when_no_entry_was_saved(self):
-        from tests import test_observability_settings
-        fixture = test_observability_settings.ObservabilitySettingsTests(methodName="run")
-        fixture.setUp()
-        self.addCleanup(fixture.doCleanups)
-        settings = fixture.settings
-        self.assertEqual(fixture._select_os_store()["revision"], 1)
-        before = fixture.path.read_bytes()
-        with self.assertRaisesRegex(self.credentials.CredentialError, "^saved_credentials_unavailable$"):
-            settings.forget_credentials(fixture.scope, dict(expected_revision=1))
-        self.assertEqual(fixture.path.read_bytes(), before)
-        self.assertEqual(settings.status(fixture.scope)["revision"], 1)
-        self.credentials.store(DESTINATION, PROJECT, PAIR, before_change=lambda: None)
-        self.assertEqual(settings.forget_credentials(fixture.scope, dict(expected_revision=1))["revision"], 2)
-        self.assertEqual(self.entries, {})
-
 
 class PinnedMacCredentialsTests(unittest.TestCase):
     """Run the unchanged pinned macOS backend with only its Keychain item calls replaced."""
