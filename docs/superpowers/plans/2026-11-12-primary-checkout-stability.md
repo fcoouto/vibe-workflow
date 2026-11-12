@@ -83,9 +83,10 @@ changes. No installed-client or other-project update is part of this task.
   current-source delivery and revision invalidation before and after the fix.
 - [x] Remove active regeneration requirements from surviving newer guidance;
   keep historical evidence explicitly historical.
-- [ ] Commit and run focused reader, template, startup, checkout, package and
+- [x] Commit and run focused reader, template, startup, checkout, package and
   managed-host checks plus package validation and whitespace checks.
-- [ ] Obtain independent review of conflict resolutions; fast-forward the
+- [x] Obtain independent review of conflict resolutions.
+- [ ] Fast-forward the
   existing PR branch only if its observed head still matches the starting head.
   Record outcomes in #248 and retain its draft/blocked status and no-merge scope.
 
@@ -99,3 +100,33 @@ three template-preparation cases. The narrow fix removes that obsolete read;
 the replacement test verifies current template text, changed-source revision
 invalidation and absence of any generated map. The earlier stale-map test was
 adapted to the intended current-source contract, not bypassed.
+
+### Reconciliation verification and review
+
+- Candidate `b52ac72ced363e3a5defda25e65c8b95dc1bfebc`: 259 tests passed,
+  none skipped, across `test_prepared_instructions`, `test_instruction_drain`,
+  `test_startup`, `test_package`, `test_harness_evaluation`,
+  `test_graphify_maintenance_instructions`, `test_project_review_instructions`,
+  `test_checkout_stability_instructions`, `test_template_tools`,
+  `test_routing_managed_projects` and `test_task_profile`, with four workers.
+  Package validation and `git diff --check` passed. Validation warned about
+  6,304,578 of 8,388,608 bundle bytes; client execution was not checked.
+- Independent native review: session `ses_e308e489cffeNGsw1WnLRikm3C`, requested
+  `claude-agent/claude-fable-5-2`, with the child's system model reported as
+  `claude-fable-5-2`. Effort and usage were not observed. One read-only combined
+  code/security review covered base `796729dd3fe89cc5e8afa9cee227231f268ef84d`
+  through `b52ac72ced363e3a5defda25e65c8b95dc1bfebc`; no blocking defect was
+  substantiated. The report was returned in chat, not saved separately.
+- F1, low: the active template guide still counted a removed map among input
+  paths. Static comparison confirmed the finding. Remove that phrase as part of
+  the user's explicit obsolete-guidance cleanup, not unrelated minor polishing.
+  No executable behavior changes; rerun the focused checks on the final commit.
+- F2, informational: reader header handling for control characters in trusted
+  package filenames is pre-existing. No correction was requested; leave it
+  unchanged. Template selections already reject those names. No security defect
+  was substantiated; broader hardening remains outside this reconciliation.
+- Review limits: static review, no installed-client execution, and no existing
+  template-helper continuation-page test. No adherence experiment, full-suite
+  run, plugin installation or deployment is part of this task.
+- The final publication comment on #248 will bind final checks and publication
+  to the exact commit, preserving this plan's historical candidate evidence.
