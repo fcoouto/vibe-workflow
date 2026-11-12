@@ -557,6 +557,265 @@ class ObservabilitySettingsTests(unittest.TestCase):
             verify.assert_not_called()
             save.assert_not_called()
 
+    # Project collection settings
+
+    def project_path(self):
+        return self.directory / ("project-" + self.scope.project_id + ".json")
+
+    def project_request(self, revision=0, **updates):
+        return dict(dict(expected_revision=revision, repository_ids=[self.scope.repository_id],
+                         desired_collection=True), **updates)
+
+    def no_external_access(self):
+        from contextlib import ExitStack
+        stack = ExitStack()
+        for target in ("runtime.langfuse.verify_project", "runtime.langfuse.synthetic_probe",
+                       "runtime.langfuse._Connection.request", "runtime.observability_credentials.load",
+                       "runtime.observability_credentials.check_available"):
+            stack.enter_context(patch(target, side_effect=AssertionError("external access")))
+        return stack
+
+    def test_project_settings_round_trip_with_compare_and_set(self):
+        with self.no_external_access():
+            report = self.settings.configure_project(self.scope, self.project_request())
+            self.assertEqual((report["control_scope"], report["project_id"], report["revision"]),
+                             ("project", self.scope.project_id, 1))
+            self.assertEqual(report["repository_ids"], [self.scope.repository_id])
+            self.assertTrue(report["desired_collection"])
+            self.assertEqual(report["collection"], "unavailable")
+            self.assertFalse(report["native_collection_qualified"])
+            self.assertEqual(self.settings.project_status(self.scope), report | dict(
+                checkout_connection=dict(configured=False, desired_opt_in=False)))
+            before = self.project_path().read_bytes()
+            for stale in (0, 2):
+                with self.subTest(stale=stale), self.assertRaises(self.settings.SettingsError) as caught:
+                    self.settings.configure_project(self.scope, self.project_request(stale, desired_collection=False))
+                self.assertEqual(str(caught.exception), "observability_revision_conflict")
+                with self.assertRaises(self.settings.SettingsError):
+                    self.settings.disable_project(self.scope, dict(expected_revision=stale))
+            self.assertEqual(self.project_path().read_bytes(), before)
+            disabled = self.settings.disable_project(self.scope, dict(expected_revision=1))
+            self.assertEqual((disabled["revision"], disabled["desired_collection"], disabled["configured"]), (2, False, True))
+            self.assertEqual(disabled["repository_ids"], [self.scope.repository_id])
+            self.assertEqual(self.settings.disable_project(self.scope, dict(expected_revision=2))["revision"], 2)
+            status = self.settings.project_status(self.scope)
+            self.assertIsNone(status["checkout_connection"])
+            self.assertFalse(status["desired_collection"])
+            enabled = self.settings.configure_project(self.scope, self.project_request(2))
+            self.assertEqual((enabled["revision"], enabled["desired_collection"]), (3, True))
+        record = json.loads(self.project_path().read_text())
+        self.assertEqual(set(record), {"version", "revision", "binding", "repository_ids", "desired_collection"})
+        self.assertEqual(record["binding"]["project_id"], self.scope.project_id)
+        self.assertEqual(self.project_path().stat().st_mode & 0o777, 0o600)
+        self.assertFalse(self.path.exists())
+
+    def test_project_requests_are_refused_with_fixed_codes(self):
+        repository = self.scope.repository_id
+        invalid = (None, {}, dict(expected_revision=0), self.project_request(True), self.project_request(-1),
+                   self.project_request(2 ** 53), self.project_request(extra="PRIVATE"),
+                   self.project_request(destination="https://PRIVATE.example"),
+                   self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
+                   self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
+                   self.project_request(repository_ids=[repository, repository]),
+                   self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                   self.project_request(repository_ids=[repository, 7]),
+                   self.project_request(repository_ids=["PRIVATE-other-repository"]),
+                   self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
+        for request in invalid:
+            with self.subTest(request=request), self.assertRaises(self.settings.SettingsError) as caught:
+                self.settings.configure_project(self.scope, request)
+            self.assertIn(str(caught.exception), {"invalid_observability_request",
+                                                  "observability_repository_not_selected"})
+            self.assertNotIn("PRIVATE", str(caught.exception))
+        for request in (None, {}, dict(expected_revision=0, desired_collection=False), dict(expected_revision="0")):
+            with self.subTest(request=request), self.assertRaises(self.settings.SettingsError) as caught:
+                self.settings.disable_project(self.scope, request)
+            self.assertEqual(str(caught.exception), "invalid_observability_request")
+        self.assertFalse(self.directory.exists())
+        many = [repository] + ["r%d" % i for i in range(63)]
+        report = self.settings.configure_project(self.scope, self.project_request(repository_ids=many))
+        self.assertEqual(report["repository_ids"], sorted(many))
+
+    def test_absent_project_status_reads_and_creates_nothing(self):
+        database = self.scope.runtime.state_dir / "runtime.sqlite3"
+        before = database.read_bytes()
+        with self.no_external_access():
+            report = self.settings.project_status(self.scope)
+            self.assertEqual(self.settings.project_status(self.scope.repository_root), report)
+            self.assertEqual(self.settings.disable_project(self.scope, dict(expected_revision=0)), report)
+            with self.assertRaises(self.settings.SettingsError):
+                self.settings.disable_project(self.scope, dict(expected_revision=1))
+        self.assertEqual((report["configured"], report["revision"], report["desired_collection"]), (False, 0, False))
+        self.assertEqual((report["project_id"], report["repository_ids"]), (self.scope.project_id, []))
+        self.assertEqual((report["collection"], report["checkout_connection"]), ("unavailable", None))
+        self.assertFalse(self.directory.exists())
+        self.assertEqual(database.read_bytes(), before)
+
+    def test_project_recovery_without_qualification_or_database_health(self):
+        self.settings.configure_project(self.scope, self.project_request())
+        binding = json.loads(self.project_path().read_bytes())["binding"]
+        database = self.scope.runtime.state_dir / "runtime.sqlite3"
+        database.write_bytes(b"broken runtime database")
+        with patch.object(startup, "acquire_project_entry", side_effect=startup.StartupError("qualification unavailable")), \
+                self.no_external_access():
+            self.assertTrue(self.settings.project_status(self.scope)["desired_collection"])
+            self.assertTrue(self.settings.project_status(self.scope.repository_root)["desired_collection"])
+            with self.assertRaises(self.settings.SettingsError):
+                self.settings.configure_project(self.scope, self.project_request(1, desired_collection=False))
+            report = self.settings.disable_project(self.scope.repository_root, dict(expected_revision=1))
+            self.assertEqual((report["desired_collection"], report["revision"]), (False, 2))
+            with self.assertRaises(self.settings.SettingsError):
+                self.settings.configure_project(self.scope, self.project_request(2))
+        self.assertEqual(json.loads(self.project_path().read_bytes())["binding"], binding)
+        self.assertEqual(database.read_bytes(), b"broken runtime database")
+
+    def test_file_only_project_status_and_disable_require_no_runtime(self):
+        authority = self.scope.authority_path
+        project = json.loads(authority.read_bytes())
+        project['repositories'][0]['checkouts'][0]['clients'][0]['configuration']['runtime'] = None
+        authority.write_text(json.dumps(project))
+        self.assertFalse(self.settings.project_status(self.scope.repository_root)['configured'])
+        self.assertFalse(self.settings.disable_project(self.scope.repository_root, dict(expected_revision=0))['configured'])
+        self.assertFalse(self.directory.exists())
+
+    def test_checkout_consent_never_becomes_project_consent(self):
+        self.settings.configure(self.scope, CONFIGURE)
+        with patch("runtime.langfuse.verify_project", return_value=None):
+            self.settings.enable(self.scope, dict(expected_revision=1))
+        checkout = self.path.read_bytes()
+        report = self.settings.project_status(self.scope)
+        self.assertEqual((report["configured"], report["desired_collection"]), (False, False))
+        self.assertFalse(self.project_path().exists())
+        on = self.settings.configure_project(self.scope, self.project_request())
+        self.assertEqual(self.settings.project_status(self.scope)["checkout_connection"],
+                         dict(configured=True, desired_opt_in=True))
+        self.settings.disable(self.scope, dict(expected_revision=2))
+        self.assertTrue(self.settings.project_status(self.scope)["desired_collection"])
+        self.settings.disable_project(self.scope, dict(expected_revision=on["revision"]))
+        checkout_status = self.settings.status(self.scope)
+        self.assertEqual((checkout_status["configured"], checkout_status["desired_opt_in"], checkout_status["revision"]),
+                         (True, False, 3))
+        self.assertEqual(json.loads(self.path.read_bytes())["binding"], json.loads(checkout)["binding"])
+
+    def test_project_record_is_private_unlinked_and_bound_to_its_project(self):
+        self.settings.configure_project(self.scope, self.project_request())
+        path = self.project_path()
+        original = path.read_bytes()
+        foreign = self.fixture.base / "foreign-project"
+        foreign.write_bytes(original)
+        foreign.chmod(0o600)
+        path.unlink()
+        path.symlink_to(foreign)
+        with self.assertRaises(self.settings.SettingsError):
+            self.settings.project_status(self.scope)
+        path.unlink()
+        os.link(foreign, path)
+        with self.assertRaises(self.settings.SettingsError):
+            self.settings.project_status(self.scope)
+        path.unlink()
+        path.write_bytes(original)
+        path.chmod(0o644)
+        with self.assertRaises(self.settings.SettingsError):
+            self.settings.project_status(self.scope)
+        path.chmod(0o600)
+        record = json.loads(original)
+        for changed in (dict(record, binding=dict(record["binding"], project_id="other-project")),
+                        dict(record, binding=dict(record["binding"], scope_id="x"))):
+            path.write_text(json.dumps(changed))
+            with self.subTest(binding=changed["binding"]), self.assertRaises(self.settings.SettingsError) as caught:
+                self.settings.project_status(self.scope)
+            self.assertEqual(str(caught.exception), "observability_scope_changed")
+        for changed in (dict(record, unknown="PRIVATE"), dict(record, desired_collection=1),
+                        dict(record, repository_ids=[]), dict(record, revision=0), dict(record, version=2)):
+            path.write_text(json.dumps(changed))
+            with self.subTest(record=changed), self.assertRaises(self.settings.SettingsError) as caught:
+                self.settings.project_status(self.scope)
+            self.assertEqual(str(caught.exception), "invalid_observability_configuration")
+        self.assertEqual(foreign.read_bytes(), original)
+
+    def test_busy_project_lock_reports_busy_without_writing(self):
+        import fcntl
+        self.settings.configure_project(self.scope, self.project_request())
+        before = self.project_path().read_bytes()
+        with self.project_path().with_suffix(".lock").open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            for operation, request in ((self.settings.disable_project, dict(expected_revision=1)),
+                                       (self.settings.configure_project, self.project_request(1))):
+                with self.subTest(operation=operation.__name__), self.assertRaises(self.settings.SettingsError) as caught:
+                    operation(self.scope, request)
+                self.assertEqual(str(caught.exception), "observability_operation_busy")
+        self.assertEqual(self.project_path().read_bytes(), before)
+        self.assertEqual({path.name for path in self.directory.iterdir()},
+                         {self.project_path().name, self.project_path().with_suffix(".lock").name})
+
+    def test_project_cli_actions(self):
+        command = self.fixture.workflow_command()
+        command[-1] = command[-1].replace(repr(str(PACKAGE / 'scripts/workflow.py')),
+                                         repr(str(PACKAGE / 'scripts/observability.py')))
+        def run(action, request, *extra):
+            result = subprocess.run(command + [action, '--cwd', str(self.scope.repository_root), *extra],
+                input=json.dumps(request).encode(), capture_output=True, timeout=30)
+            return result.returncode, json.loads(result.stdout)
+        code, report = run('project-status', {})
+        self.assertEqual((code, report['configured']), (0, False))
+        code, report = run('configure-project', self.project_request())
+        self.assertEqual((code, report['revision'], report['desired_collection']), (0, 1, True), report)
+        self.assertEqual(run('project-status', dict(expected_revision=1)), (1, dict(ok=False, error='invalid_observability_input_or_runtime')))
+        self.assertEqual(run('disable-project', {}, '--expected-revision', '1')[0], 1)
+        self.assertEqual(run('configure-project', self.project_request(0)), (1, dict(ok=False, error='observability_revision_conflict')))
+        self.assertEqual(run('disable-project', dict(expected_revision=1))[1]['desired_collection'], False)
+        (self.scope.runtime.state_dir / 'runtime.sqlite3').write_bytes(b'broken runtime database')
+        code, report = run('project-status', {})
+        self.assertEqual((code, report['revision']), (0, 2), report)
+        self.assertEqual(run('disable-project', dict(expected_revision=2))[1]['revision'], 2)
+        self.assertEqual(run('configure-project', self.project_request(2))[0], 1)
+
+
+class ProjectLinkedWorktreeTests(unittest.TestCase):
+    """Two linked worktrees of one Repository in one canonical Project."""
+
+    def setUp(self):
+        from runtime import local_ownership, observability_settings
+        from tests.fixture_canonical_birth import fresh_canonical
+        self.settings, self.local_ownership = observability_settings, local_ownership
+        self._canonical_common_git = True
+        birth, _, _ = fresh_canonical(self)
+        observations = birth.test_observations
+        original_acquire = startup.acquire_project_entry
+        def acquire(event, *args, **kwargs):
+            observation = observations[str(Path(event.cwd).resolve())]
+            return original_acquire(event, *args, **(kwargs | dict(qualifier=lambda record, facts: observation)))
+        acquisition = patch.object(startup, 'acquire_project_entry', side_effect=acquire)
+        acquisition.start()
+        self.addCleanup(acquisition.stop)
+        self.members = [startup._entry_scope(value) for value in birth.member_acquisitions.values()]
+        for index, member in enumerate(self.members):
+            state.start_task(member, dict(client="codex", session_id="session-%d" % index, task_id="settings-fixture",
+                scope_ref="user:fixture", mode="read-only", decision_ref="user:fixture"))
+
+    def test_linked_worktrees_resolve_one_project_record_location(self):
+        first, second = self.members
+        self.assertNotEqual(first.repository_root, second.repository_root)
+        self.assertNotEqual(state._scope_id(first), state._scope_id(second))
+        locations = {member.runtime.state_dir / "observability" / ("project-" + member.project_id + ".json")
+                     for member in self.members}
+        owners = [self.local_ownership.settings_scope(member.repository_root) for member in self.members]
+        locations |= {owner.state_dir / "observability" / ("project-" + (
+            startup._canonical_plain(owner.acquisition.record.data))["project_id"] + ".json") for owner in owners}
+        self.assertEqual(len(locations), 1, locations)
+
+    def test_linked_worktrees_share_project_settings(self):
+        first, second = self.members
+        self.assertEqual(first.repository_id, second.repository_id)
+        report = self.settings.configure_project(first, dict(expected_revision=0,
+            repository_ids=[first.repository_id], desired_collection=True))
+        shared = ("configured", "revision", "project_id", "repository_ids", "desired_collection")
+        status = self.settings.project_status(second)
+        self.assertEqual({key: status[key] for key in shared}, {key: report[key] for key in shared})
+        self.assertEqual(self.settings.disable_project(second.repository_root, dict(expected_revision=1))["revision"], 2)
+        self.assertFalse(self.settings.project_status(first)["desired_collection"])
+        self.assertEqual(len(list((first.runtime.state_dir / "observability").glob("project-*.json"))), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
