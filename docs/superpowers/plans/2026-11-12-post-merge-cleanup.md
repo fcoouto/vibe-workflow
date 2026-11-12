@@ -93,3 +93,11 @@ instruction loader 41/41 passed. Feature tests 45/46: the revised summary test
 incorrectly expected all features from `status workstreams --summary`, which is
 intentionally filtered. Restore that expectation and test the unfiltered command
 separately; no production resolver change is needed.
+
+Self-review found mixed environment handling: local observations strip Git
+selectors but the feature resolver and later native effects can inherit them.
+The new regression on `f342430` reproduced false eligibility under
+`GIT_WORK_TREE`. Reject custom Git environments before inspection rather than
+silently changing a proposed mutation's environment. Feature tests passed 46/46
+on `f1f2830`; the remaining existing modules have unchanged source since their
+passing run.

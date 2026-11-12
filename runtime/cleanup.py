@@ -27,6 +27,11 @@ def _git(root, *args, allowed=(0,)):
     return output
 
 
+def _plain_git_environment():
+    _require(not any(key.startswith("GIT_") and key not in {"GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"}
+                     for key in os.environ), "custom-git-environment")
+
+
 def _identity(root):
     rows = _git(root, "rev-parse", "--path-format=absolute", "--show-toplevel",
                 "--git-dir", "--git-common-dir").decode().splitlines()
@@ -72,6 +77,7 @@ def _clean(root, *, ignored=False):
 def inspect(primary, primary_branch, worktree, branch, head, merge, removed=False):
     """Inspect exact local targets; after native removal pass removed=True before deleting refs."""
     try:
+        _plain_git_environment()
         primary = Path(primary).resolve(strict=True)
         worktree = Path(worktree).resolve()
         git_dir, common = _identity(primary)
@@ -129,8 +135,8 @@ Reject custom transports instead of trying to emulate Git's configuration engine
     _require(re.fullmatch(r"[A-Za-z0-9_-]+", remote or ""), "unsupported-remote-name")
     _require(re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository or "") and
              repository.split("/")[1] not in (".", ".."), "unsupported-repository")
-    unsupported_env = any(key.startswith("GIT_") and key not in {"GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS"}
-                          or key.lower() in {"http_proxy", "https_proxy", "all_proxy"} for key in os.environ)
+    _plain_git_environment()
+    unsupported_env = any(key.lower() in {"http_proxy", "https_proxy", "all_proxy"} for key in os.environ)
     _require(not unsupported_env, "custom-transport-environment")
     pattern = (r"^(url\..*|http\..*|core\.(sshcommand|gitproxy|hookspath)|"
                r"remote\..*\.(pushurl|receivepack|uploadpack|proxy|vcs|mirror|push))$")
