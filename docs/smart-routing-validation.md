@@ -295,6 +295,52 @@ Registered on 11 November 2026 for plan Task F5, checkpoint A1, after the user d
 
 Registration is not permission: this edit authorizes no live run, budget, qualification or release.
 
+## Edit 9 (12 November 2026): store field mapping for the historical replay
+
+Registered on 12 November 2026, before any historical replay has run and before its runner exists (plan Task F8.1, step 1). This is the dated field-mapping edit that Edit 6's **Store fields** paragraph requires. It changes no rule, keyword, threshold, exclusion, assumption or result above; where a field is missing, it states how the existing rule already applies, or that the replay does not run.
+
+**How it was written.** Only the store schemas were read: each SQLite store was opened through a plain `mode=ro` URI, and only `sqlite_schema` and `PRAGMA table_info` were queried. No session, thread, message, part or token row was selected, and no session file, title, value, grouped count, model distribution, credential, qualification record or pilot record was read. No public source definition was available offline, and no network call was made, so a field's meaning is stated only where its name and type settle it. Everything else is marked unproved, and the runner treats it as missing.
+
+**The three stores.** Edit 6's count named them; the count did not record their paths, so they are identified here from the host formats:
+
+- **A. OpenCode store:** OpenCode's SQLite database in its data directory, table `session_v2`, sessions of this repository (matched through `project` and `project_directory`). No legacy JSON session directory exists beside it.
+- **B. Codex store:** Codex's thread-state SQLite database (`state_5.sqlite`) in the Codex home, table `threads`, threads whose `cwd` is in the old `vibe-coding-workflow` checkouts.
+- **C. The `opus` store:** not identified. No separate store named `opus` was found in the Codex home, the OpenCode data directory or the `opus` checkout, and the 10 November count did not record which host format it read. It may be store B's threads with an `opus` working directory, or a Claude Code project's subagent files, which are session content and have no schema to read here. The sample is every eligible session of the three stores, so the replay does not run until a dated edit names store C and maps it, or records the user's decision to leave it out.
+
+**Field mapping.** "Absent" means no column carries it, so Edit 6's rule for a missing value applies.
+
+| Edit 6 field | A. OpenCode `session_v2` | B. Codex `threads` |
+|---|---|---|
+| Session id (dedup) | `id` | `id` |
+| Parent | `parent_id`; null means no parent | `thread_spawn_edges.parent_thread_id` by `child_thread_id`; else `attached_thread_parent_id`. Without either, no parent. `source` and `thread_source` are not read: their values are unproved |
+| Agent type | `agent` | `agent_role`; `agent_nickname` and `agent_path` are not read |
+| Title (in memory only) | `title` | `title`; `name`, `preview` and `first_user_message` are never read |
+| Provider | Inside `model` (TEXT); its encoding is unproved, so provider is `unknown` until a dated edit registers it from a source definition | `model_provider` |
+| Auth mode | Absent; the account and credential tables are never read. Rule 5 applies without an auth mode: `claude-agent` gives `included_subscription`, `openai` gives `unknown` | Absent (`creator_account_id` is an identity, not an auth mode, and is never read). Rule 5: a Codex thread gives `unknown` |
+| Model | Inside `model`; same as provider: `unknown` until its encoding is registered | `model` |
+| Variant or effort | Not a column; whether `model` holds it is unproved, so `unknown` | `reasoning_effort` |
+| Start | `time_created` (INTEGER); its unit is unproved | `created_at_ms`, else `created_at` (INTEGER); their units are unproved |
+| Last update | `time_updated`, with the same unit condition | `updated_at_ms`, else `updated_at`, with the same unit condition |
+| Output count | `tokens_output` | Absent: `tokens_used` is one total whose parts are unproved, and the per-turn counts are only in rollout files, which are session content and never read |
+| Reasoning count | `tokens_reasoning` | Absent |
+| Output includes reasoning | Unproved | Not applicable |
+| Title, compaction and summary markers | No marker column. `time_compacting` marks a session that compacted, not a compaction session, so it does not exclude one. No session is excluded by this reason | No marker column; no thread is excluded by this reason |
+
+**How the rules apply where a field is unproved or absent.**
+
+- **Generated tokens in store A.** Whether `tokens_output` already includes `tokens_reasoning` is unproved, so neither "add" nor "do not add" can be chosen under rule 3. The token band of store A is `unknown` until a dated edit settles this from a source definition; the duration band applies once the timestamp unit is registered. Store B's token band is `unknown` because it has no output count.
+- **Store A's provider, model and effort.** While the encoding of `model` is unregistered, every store A session has no model id and is excluded under Edit 6 ("sessions without a model id"). The replay over store A therefore produces no labels until a dated edit registers that encoding. This is the effect of the existing rule, not a new one.
+- **Timestamps in both stores.** A timestamp is used only after a dated edit registers its unit from a source definition. Until then it is missing: the session is excluded under Edit 6 ("without either timestamp"), and the duration band and the one-hour still-running exclusion cannot be computed.
+- **Title, compaction and summary sessions.** The count by this reason is 0 in both stores, and the report states that no host marker exists rather than implying that none occurred.
+
+**Qualification and pilot exclusion.** The ids to block come from the qualification run fixtures and the exported pilot ledger, as Edit 6 says. Neither was read for this edit, so neither the ids nor the field that holds them is confirmed. The historical replay therefore stays blocked until an approved caller supplies validated exclusion metadata: the ids, their sources and how each was checked. With no exclusion basis the runner refuses to report. Synthetic test fixtures may exercise this check; they grant no authority to run over real history.
+
+**What this leaves blocked.** Before a historical run, dated edits must still register store C, the encoding of store A's `model`, the timestamp units of both stores and whether store A's output count includes reasoning, and an approved caller must supply the exclusion metadata. Until then the replay would exclude every session or refuse to report, so it does not run.
+
+**Schema identity.** The private report records a SHA-256 of each store's schema. Before a run, the runner compares the live schema with the mapped tables and columns; a missing mapped column makes that field missing, and a renamed or retyped one stops the run until a dated edit maps it again.
+
+Registration is not permission: this edit authorizes no historical run, live qualification or release, and the run still waits for the prerequisites in Edit 6's [Order](#order).
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
