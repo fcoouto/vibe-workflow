@@ -48,3 +48,20 @@
 - Coordinator title adopted/read back as `￻▰▱▱▱▱ Vocabulary checker`; previous title was `￻▰▰▰▰▱ WAITING · D9 Observability Impl.`.
 - Publication follows the existing project decision; no extra companion publication is required.
 - Baseline and final check results will be reported in the PR and conversation. No native-client or live-service qualification is claimed.
+
+## Task 2: Acquisition-local source snapshots
+
+**Authorization:** The user approved the diagnosed startup source-cache fix in PR #277, without raising the 8 MiB limit or weakening assertions.
+
+**Files:** `runtime/startup.py`, new `runtime/source_snapshots.py`, new `tests/test_source_snapshots.py`. Keep the existing native-behavior-owner test unchanged.
+
+**Interface:** Preserve `_budgeted_source_read(path, budget)` for policy/runtime callers. Put the cache in the existing observation budget, never in global state. A budget-free call retains ordinary uncached reading. Extract the reader rather than raising the legacy startup module's fixed line ceiling.
+
+- [ ] Add regression tests for repeated reads, independent budgets, source changes/replacement/deletion, expired deadlines, path/byte/file caps, no-follow source reads and read-race rejection.
+- [ ] Commit the tests, then observe intended failures alongside the unchanged native-behavior-owner regression.
+- [ ] Implement descriptor-bound snapshots with device, inode, size, mode, link count, mtime and ctime checks. Revalidate every reuse and poison failed budgets as before.
+- [ ] Validate, commit and rerun the source-cache tests plus the native-behavior-owner test.
+- [ ] Review startup/configuration mutation and scope-acquisition regressions; obtain independent behavior/security review of this added change.
+- [ ] Push the fix to PR #277 and record current proof. The previous failed full run is not passing evidence for a changed candidate; preserve the merge block until applicable proof is current.
+
+**Review focus:** No stale cache across acquisitions, same-size/restored-mtime edits, symlink/inode swaps, mutation during initial reading, expired cache hits and unchanged 8 MiB/path/file limits. Keep package bundle accounting separate and membership reobservation intact.
