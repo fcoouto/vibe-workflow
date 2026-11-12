@@ -181,12 +181,18 @@ class ObservabilityActivationTests(unittest.TestCase):
         package = self.fixture.base / 'fake-keyring'
         package.mkdir()
         keyring = package / 'keyring'
-        (keyring / 'backends').mkdir(parents=True)
+        (keyring / 'backends/macOS').mkdir(parents=True)
         (keyring / '__init__.py').write_text('def get_keyring():\n    raise AssertionError("default backend")\n')
         (keyring / 'backends/__init__.py').write_text('')
-        # This fake stores synthetic test keys only, outside every real OS store.
-        (keyring / 'backends/macOS.py').write_text('''import json, os
+        (keyring / 'errors.py').write_text('class PasswordDeleteError(Exception):\n    pass\n')
+        (keyring / 'backends/macOS/api.py').write_text(
+            'class Error(Exception):\n    pass\nclass NotFound(Error):\n    pass\n')
+        # This fake stores synthetic test keys only, outside every real OS store. A missing row on delete is
+        # reported like the pinned backend: PasswordDeleteError raised from the item-not-found status.
+        (keyring / 'backends/macOS/__init__.py').write_text('''import json, os
 from pathlib import Path
+from keyring.errors import PasswordDeleteError
+from . import api
 class Keyring:
     priority = 5
     keychain = None
@@ -198,7 +204,12 @@ class Keyring:
         with log.open('a') as stream: stream.write(action + '\\n')
         if action == 'get': return rows.get(key)
         if action == 'set': rows[key] = password
-        if action == 'delete': del rows[key]
+        if action == 'delete':
+            try:
+                if key not in rows: raise api.NotFound(-25300, 'Item not found')
+            except api.NotFound as error:
+                raise PasswordDeleteError("Can't delete password in keychain") from error
+            del rows[key]
         path.write_text(json.dumps(rows)); path.chmod(0o600)
     def get_password(self, service, username): return self._entry('get', service, username)
     def set_password(self, service, username, password): self._entry('set', service, username, password)
@@ -288,6 +299,11 @@ class Keyring:
             self.assertEqual(store.with_suffix('.calls').read_text(), calls)
             invoke('forget-credentials', None, '--expected-revision', '4')
             self.assertEqual(json.loads(store.read_text()), {})
+            missing = subprocess.run(command('forget-credentials', '--expected-revision', '5'), input=b'',
+                env=environment, capture_output=True, timeout=25)
+            self.assertEqual((missing.returncode, missing.stderr), (1, b''))
+            self.assertEqual(json.loads(missing.stdout), dict(ok=False, error='saved_credentials_unavailable'))
+            self.assertEqual(invoke('status')['revision'], 5)
 
 
 if __name__ == '__main__':
