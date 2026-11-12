@@ -53,6 +53,90 @@ class DeadlineTypeTests(unittest.TestCase):
         self.assertIn('time.monotonic() + startup.OBSERVATION_SECONDS', source)
 
 
+class SourceReadBudgetTests(unittest.TestCase):
+    def test_revalidated_source_reuse_fits_one_content_read_near_the_cap(self):
+        with tempfile.TemporaryDirectory() as base:
+            path = Path(base) / 'source.py'
+            path.write_bytes(b'first\n')
+            budget = dict(paths=0, bytes=8 * 1024 * 1024 - 7, deadline=time.monotonic() + 10)
+            self.assertEqual(startup._budgeted_source_read(path, budget), b'first\n')
+            self.assertEqual(startup._budgeted_source_read(path, budget), b'first\n')
+            self.assertEqual(budget['bytes'], 8 * 1024 * 1024 - 1)
+            self.assertEqual(budget['paths'], 2)
+
+    def test_same_size_edit_with_restored_mtime_changes_policy_digest(self):
+        with tempfile.TemporaryDirectory() as base:
+            root = Path(base)
+            (root / 'policies').mkdir()
+            path = root / 'policies/00-index.md'
+            path.write_bytes(b'first\n')
+            budget = setup_observation._budget()
+            first = startup.policy_digest(root, budget=budget)
+            before = path.stat()
+            path.write_bytes(b'other\n')
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            self.assertNotEqual(startup.policy_digest(root, budget=budget), first)
+            self.assertEqual(budget['bytes'], 12)
+
+    def test_replacement_is_reread_and_deletion_never_reuses_cached_bytes(self):
+        with tempfile.TemporaryDirectory() as base:
+            path = Path(base) / 'source.py'
+            path.write_bytes(b'first\n')
+            budget = setup_observation._budget()
+            startup._budgeted_source_read(path, budget)
+            before = path.stat()
+            replacement = path.with_name('replacement.py')
+            replacement.write_bytes(b'other\n')
+            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            replacement.replace(path)
+            self.assertEqual(startup._budgeted_source_read(path, budget), b'other\n')
+            self.assertEqual(budget['bytes'], 12)
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                startup._budgeted_source_read(path, budget)
+            self.assertGreaterEqual(budget['bytes'], 8 * 1024 * 1024)
+
+    def test_cached_sources_still_enforce_deadline_path_and_byte_limits(self):
+        for exhausted, value, error in (('deadline', time.monotonic() - 1, startup.ObservationDeadline),
+                ('paths', 4096, startup.StartupError), ('bytes', 8 * 1024 * 1024, startup.StartupError)):
+            with self.subTest(exhausted=exhausted), tempfile.TemporaryDirectory() as base:
+                path = Path(base) / 'source.py'
+                path.write_bytes(b'first\n')
+                budget = setup_observation._budget()
+                startup._budgeted_source_read(path, budget)
+                budget[exhausted] = value
+                with self.assertRaises(error):
+                    startup._budgeted_source_read(path, budget)
+
+    def test_source_changed_during_read_is_not_accepted_or_cached(self):
+        with tempfile.TemporaryDirectory() as base:
+            path = Path(base) / 'source.py'
+            path.write_bytes(b'first\n')
+            real_open = Path.open
+
+            class ChangingReader:
+                def __enter__(self):
+                    self.stream = real_open(path, 'rb')
+                    return self
+
+                def __exit__(self, *args):
+                    self.stream.close()
+
+                def fileno(self):
+                    return self.stream.fileno()
+
+                def read(self, limit):
+                    raw = self.stream.read(limit)
+                    with real_open(path, 'wb') as changed:
+                        changed.write(b'other\n')
+                    return raw
+
+            budget = setup_observation._budget()
+            with patch.object(Path, 'open', return_value=ChangingReader()), self.assertRaises(startup.StartupError):
+                startup._budgeted_source_read(path, budget)
+            self.assertGreaterEqual(budget['bytes'], 8 * 1024 * 1024)
+
+
 class AcquisitionReasonTests(unittest.TestCase):
     def test_membership_deadline_is_reported_as_a_deadline(self):
         with tempfile.TemporaryDirectory() as base:

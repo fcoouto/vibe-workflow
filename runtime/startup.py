@@ -14,6 +14,7 @@ import subprocess
 import time
 from types import MappingProxyType
 
+from runtime.entry_budget import source_read as _budgeted_source_read
 from runtime.package_manifest import PACKAGE_SCAN_MAX_BYTES, PACKAGE_SCAN_MAX_PATHS
 from runtime.persisted_binding import all_match as _same_all, matches as _same, record_matches as _same_owner
 
@@ -111,26 +112,6 @@ def _entry_budget_check(budget, *, allow_full_bytes=False):
             or not 0 <= budget["paths"] <= PACKAGE_SCAN_MAX_PATHS
             or not 0 <= budget["bytes"] <= byte_limit):
         raise StartupError("Entry observation budget exhausted")
-
-
-def _budgeted_source_read(path, budget):
-    if budget is None:
-        return path.read_bytes()
-    try:
-        _entry_budget_check(budget)
-        budget["paths"] += 1
-        _entry_budget_check(budget)
-        limit = min(1024 * 1024, PACKAGE_SCAN_MAX_BYTES - budget["bytes"])
-        with path.open("rb") as stream:
-            raw = stream.read(limit + 1)
-        budget["bytes"] += len(raw)
-        if len(raw) > limit:
-            raise StartupError("Installed source exceeds observation limit")
-        _entry_budget_check(budget)
-        return raw
-    except (OSError, StartupError):
-        budget["bytes"] = max(budget["bytes"], PACKAGE_SCAN_MAX_BYTES)
-        raise
 
 
 def read_git(root, *args, limit=1024 * 1024, discovery=False, timeout=5, with_stderr=False, deadline=None):
