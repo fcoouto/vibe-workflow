@@ -72,13 +72,13 @@ class CheckoutStabilityInstructionsTests(unittest.TestCase):
         self.git(self.primary, "worktree", "add", "-b", "task", str(task))
         alias = self.directory / "task alias"
         alias.symlink_to(task, target_is_directory=True)
+        git_dir = (task / ".git").read_text().removeprefix("gitdir: ").strip()
         for checkout in (task, alias):
             with self.subTest(checkout=checkout):
                 identity, worktrees, branch, dirty = self.observations(checkout)
                 self.assertTrue(all(result.returncode == 0 for result in (identity, worktrees, branch, dirty)))
                 self.assertEqual(identity.stdout.decode().splitlines(),
-                                 [str(task), str(self.primary / ".git/worktrees" / task.name),
-                                  str(self.primary / ".git")])
+                                 [str(task), git_dir, str(self.primary / ".git")])
                 self.assertTrue(worktrees.stdout.startswith(f"worktree {self.primary}\0".encode()))
                 self.assertIn(f"worktree {task}\0".encode(), worktrees.stdout)
                 self.assertEqual(branch.stdout, b"refs/heads/trunk\n")
