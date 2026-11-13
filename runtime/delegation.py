@@ -1569,6 +1569,7 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
     from runtime import setup_observation
     from runtime.adapters import codex
     from runtime.engine import patch_blocked
+    from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
     if event.patch_input_fingerprint is None or event.cwd != scope.repository_root:
         return None
@@ -1597,10 +1598,12 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
         if event.kind == 'PreToolUse' and event.transcript_path is not None:
             deadline = budget['deadline'] if budget is not None else time.monotonic() + startup.OBSERVATION_SECONDS
             lineage = codex.guarded_child_lineage(event, deadline=deadline)
+            if at_least(lineage['native_version'], MINIMUM_VERSIONS['codex']) is False:
+                return None
             matches = [record for record in prepared if
                 record['owner']['session_id'] == lineage['parent_session_id'] and all(
                     record['data']['binding'][key] == lineage[field] for key, field in (
-                        ('task_name', 'task_name'), ('native_version', 'native_version'),
+                        ('task_name', 'task_name'),
                         ('requested_model', 'model'), ('requested_effort', 'effort')))]
         elif event.kind == 'PostToolUse' and pre_fingerprint is not None:
             matches = [record for record in prepared if _child_patch_pre_fingerprint(
