@@ -28,7 +28,7 @@ class NativeReaderBoundsTests(unittest.TestCase):
             self.assertEqual(raw[offset:offset+len(line)], line)
             offset += len(line)
 
-    def test_long_history_keeps_first_seen_turn_order_and_late_tool_validation(self):
+    def test_long_history_keeps_first_seen_turn_order_without_widening_bootstrap_scope(self):
         rows = [session()]
         for index in range(10000):
             turn = f'turn-{index}'
@@ -38,6 +38,13 @@ class NativeReaderBoundsTests(unittest.TestCase):
         rows.extend([started(), call(), output()])
         records = self.decode(encoded(rows))
         self.assertEqual(tuple(records['turn_ids']), tuple(f'turn-{i}' for i in range(10000)) + ('native-turn',))
+        with self.assertRaises(doctor.ObservationError):
+            codex._native_policy_rejection(records, submitted_patch=PATCH, turn_id='native-turn')
+
+    def test_long_single_turn_history_still_rejects_a_late_unexpected_tool(self):
+        rows = [session(), started(), *[row('world_state', dict(state='x' * 128)) for _ in range(5000)],
+            call(), output()]
+        records = self.decode(encoded(rows))
         self.assertEqual(codex._native_policy_rejection(records, submitted_patch=PATCH,
             turn_id='native-turn')['call_id'], 'native-call')
         rows.append(row('response_item', dict(type='web_search_call', id='unexpected')))
