@@ -55,14 +55,60 @@
 ## Progress
 
 - [x] Confirm user scope and floors; inspect actual branch/settings and clean primary.
-- [ ] Shared comparator red/green.
-- [ ] Codex usage lower-bound acceptance.
-- [ ] OpenCode lower-bound acceptance.
-- [ ] Credentials, workspace and version-only freshness integration.
-- [ ] Remaining floor proposals and active documentation.
+- [x] Shared comparator red/green.
+- [x] Codex usage lower-bound acceptance.
+- [x] OpenCode lower-bound acceptance.
+- [x] Credentials, workspace and version-only freshness integration.
+- [x] Remaining floor proposals and active documentation.
 - [ ] Final validation, review and delivery.
 
 No code implementation or installed integration update has occurred at plan creation.
 Explicit execution approval supplies the instruction to continue without another
 plan-selection round. Coordinator owns shared files, Git and final acceptance;
 children get disjoint source/test scopes and no commit/publication permission.
+
+## Execution evidence
+
+The implementation children were subsequently given explicit local task-branch
+commit permission in their separate native worktrees, so tests could run on
+committed candidates without interfering with coordinator edits.
+
+- Shared helper: missing-module red on `1124540`; 4 tests passed on `b1b5fd6`.
+  A later PEP-440 `.dev1` regression failed on `60e9ccb`; `58275da` adds its
+  bounded parsing alongside stable, prerelease and postrelease cases.
+- Coordinator tests on `857cc9c` reproduced version-only rejection in credentials,
+  native catalogs, hook notes and workspace. On `4f04b22`: 188 tests run, two
+  optional pinned-native-backend classes skipped, zero failures. Source-pinned
+  tests remain historical backend evidence, not production software gates.
+- Codex child: native General `ses_e2ac3643affeNktCNR9FFcpmsD`, branch
+  `fix/minimum-codex-usage`, commits `253db9f`, `a5d339c`, `61fb039` integrated as
+  `acdaa933`, `b4f672e5`, `992d9ffc`. Test-first reader regressions failed before
+  minimum-only acceptance. Reported reader 87/87, accounting 26/26 and two changed
+  hook regressions passed. A broader child rerun had no final terminal result at
+  handoff, so it is not counted as passing evidence; parent runs its own checks.
+- OpenCode child: native General `ses_e2ac302e9ffevccpcP9IfvORxp`, branch
+  `fix/minimum-opencode`, commits `2542966` through `e991890` integrated without
+  conflicts. Child observed red version regressions, then 317 tests passed across
+  eight focused modules. Gateway isolation/server equality guards are removed;
+  actual versions are separate metadata and real isolation/budget checks remain.
+- Parent reproduced obsolete collection-status expectation with the exact
+  `ObservabilitySettingsTests.test_project_settings_round_trip_with_compare_and_set`
+  test, then aligned it with `codex >= 0.163.0`. A guessed nonexistent test name
+  failed discovery first; it is not behavioral evidence. A 120-second settings
+  module run was stopped and all its units were terminated, not claimed passed.
+- Research child: native General `ses_e2ac29914ffeGqyOX7ajCOVmGQ`, read-only at
+  `b1b5fd6`, supplied official introduction evidence. Proposed Git 2.36.0, gh
+  1.9.0 for JSON inspection / 2.13.0 for conditional merge, RTK per-client
+  0.30.1 / 0.50.0 / 0.52.0. These remain proposals, not newly imposed gates.
+  Skill plugins and remote Context7 have no justified numeric floor yet.
+- Final integrated source at `c553efe7`: package validation and diff whitespace
+  checks passed, retaining the existing package scan-size warning. No installed
+  software was updated or probed for live qualification. Keyring API guidance was
+  checked through Context7 `/jaraco/keyring`; native backend selection, priority
+  and password-method contracts remain, without fallback discovery.
+
+Current acceptance requires parent checks and independent review of the final
+integrated candidate. All review/worker settings used native configuration; no
+model override, paid route or credential access was introduced. Remaining
+software-version comparisons in receipts and upgrade recording bind historical
+facts; schema/content checks are deliberately not removed.
