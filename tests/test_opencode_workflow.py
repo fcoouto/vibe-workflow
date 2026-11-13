@@ -9,7 +9,8 @@ import unittest
 from runtime import features
 
 ROOT = Path(__file__).resolve().parents[1]
-SUITES = [ROOT / "tests/opencode_workflow/gate.test.ts", ROOT / "tests/opencode_workflow/plugin.test.ts"]
+SUITES = [ROOT / "tests/opencode_workflow/gate.test.ts", ROOT / "tests/opencode_workflow/plugin.test.ts",
+          ROOT / "tests/opencode_workflow/adversarial.test.ts"]
 DEFAULTS = ("import('./runtime/adapters/opencode_workflow/gate.ts')"
             ".then((m) => console.log(JSON.stringify(m.DEFAULT_SETTINGS)))")
 
