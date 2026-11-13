@@ -270,6 +270,103 @@ The original prefix still exactly matches the retained `883b64d7…` digest. No
 request/reply bytes changed; this appended record neither identifies the responder
 nor establishes why cleanup occurred. Both observations and raw bytes are retained.
 
+### Question-box qualification: native API answer passed; edit gating blocked
+
+The user next authorized a new disposable qualification: test whether an API
+client can answer a form and whether its form ID/session/answer can gate edits.
+This allowed API replies to the new forms, not replay of the old permission
+fixtures or a change to the released gate. One original allocation covered five
+minutes, 120 API calls, at most two idle sessions/six forms and zero model requests.
+
+**Passed: native API form submission and recorded identity.** The independent
+API-only sequence used the existing shared OpenCode 2.2.7 process:
+
+| Submitted operation | Native observation |
+| --- | --- |
+| Create an owned form, then read it | Exact form ID and owning session; pending state. |
+| Submit approve through the other owned session | HTTP 404; wrong-session reply rejected. |
+| Submit an invalid decision option through the owner | HTTP 400; form remained pending. |
+| Submit approve through the owning session's API | Accepted; a separate form GET returned the same ID/session and `answer:{decision:"approve"}` with answered state. |
+| Submit a conflicting reply afterward | HTTP 409; sequential duplicate settlement rejected. |
+
+This directly proves an authorized API client can supply the recorded answer.
+The record is therefore correlatable workflow data, **not proof of human origin**.
+No person clicked a question box in this test. Native form events were not
+observed in the API-only sequence; its identity proof is API readback, not event
+delivery or replay. A sequential duplicate test does not prove race-freedom or
+restart persistence.
+
+**Blocked: actual native pre-edit gating.** A new fixture-only plugin was prepared
+to bind form/session/target/value/pre-edit digest and consume an exact approval
+before a canary writer's native `permission.assert`. The binding predicate first
+failed its pending-state test, then passed exact approval and 16 negative
+state/identity/action checks. These are deterministic predicate checks only.
+
+Before any native form/edit case started, the controller read the plugin inventory
+and event file too early: inventory was empty, then asynchronous startup emitted
+ready. A continuation of the still-unrun cases stopped at a second guard because
+the instance had subsequently closed and reopened despite unchanged pinned bytes.
+Both failed guards are retained. No native gating case or canary write ran; the
+pending/reject/cancel, action binding, single consumption and concurrency matrix
+must not be reported as qualified from those local predicate checks.
+
+The coordinator closed one fixture instance; its close reply reported no pending
+forms or rejected model requests. This was not durable unloading: a later third
+ready record appeared. An independent API-only sequence then
+completed within the original allocation because it did not depend on fixture
+enforcement. Across the round: **17/120 API calls, two idle sessions, one form,
+zero edits and no initiated prompts/model requests**. Final API observations found
+no pending owned form or active owned session. Canary remained `VALUE = 0`; shared
+process identity and all pinned prototype/configuration sources were unchanged.
+No global/feature settings, released runtime, old case or allowance was changed.
+The unspent calls are not a renewed live allowance after the original deadline.
+
+Private receipts retain the raw commands/responses, identity mapping, guard
+failures, lifecycle observations and source pins. API-log SHA-256:
+`33df998f6a6641d62ae09da642402324759bb46d02e764c1a7368e96d3a057f1`;
+API-result SHA-256:
+`df382d5a60057710723f2216fc41ccf2428b8bbe4b475dad3e6e7856a5b60a7e`.
+The coordinator independently checked all 17 command receipts and the exact
+pending/answered identity transition, not merely the controller's pass summary.
+
+The fixture-startup/lifecycle failure was escalated to native Astra/xhigh for a
+bounded source-only diagnosis before any repair. The coordinator verified the
+decisive installed context/watcher code. Findings:
+
+- Initial inventory read was not a readiness barrier. Plugin activation is
+  asynchronous; cleanup coverage also began too late in the controller.
+- The later replacements are observed, but their triggering watcher/config event
+  is unattributed. Installed source does not establish unconditional watching of
+  the plugin's parent directory. Suspected sibling files were created after the
+  first replacement; they cannot explain that preceding event.
+- Independently, the prototype used an unsupported API surface:
+  **the installed plugin context has no `ctx.session.form`**. Its Promise setup
+  adapter at CLI bytes `152569915+8585` and underlying host session object at
+  `156374332` omit form methods. The HTTP client does expose them. The successful
+  API-only test therefore does not establish plugin-context capability. The
+  prototype would fail its first form creation even after readiness was fixed.
+- Form event logging was not a proven attachment/drain barrier. A later instance
+  also had no registered owned-session set for the API-only sequence. Do not infer
+  that an absent event record means the listener necessarily remained closed.
+
+**Recovery, not another test:** after preserving the exact original fixture
+configuration, the coordinator removed only that disposable file's plugin entry.
+Three separately recorded recovery API calls observed the subject absent from
+native inventory, its RPC unavailable and the same shared process. No global
+reload or restart was called; the reload endpoint affects every loaded location
+and was explicitly not used. This intentionally changes only the owned fixture's
+registration after testing, not global or Toolkit feature settings. Original
+configuration bytes/digest and before/after teardown receipts remain retained.
+The live test still consumed 17 calls; recovery added three, not a new test allowance.
+
+Native gating remains unrun. Before requesting another bounded live attempt,
+source-qualify a supported authoritative form-access route and design an exact
+generation/capability readiness barrier. A readiness-only repair is insufficient.
+No form-based release was added to the shipped gate. Built-in edit-tool dispatch,
+manual question UI, reload/state persistence and fresh-human authentication remain
+outside this partial result. Diagnosis and evidence review are separate bounded
+native model assignments, not zero total model usage.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on

@@ -170,3 +170,73 @@ Any future behavior change needs its own design review and qualification. Existi
 failed observations remain failed. The original isolation digest still matches its
 exact five-record prefix; one later cleanup record changes only the current
 whole-file digest, as reconciled in the report without rewriting raw evidence.
+
+## User-authorized question-box qualification
+
+User now requests testing whether an API client can answer a native form and
+whether its recorded ID/session/answer can gate edits. This authorizes a new
+disposable qualification, including API replies to its forms, not replay of the
+old permission fixture or replacement of the released gate. Existing prohibitions
+remain for old cases, global settings, shared-service restarts and production code.
+
+**Test design:** use the existing shared native service and supported API with a
+new fixture-only plugin. A fixed canary writer calls native `permission.assert`
+before writing. Its fixture `permission.evaluate` hook defaults to deny and permits
+one exact, server-bound action only after native form state records approval.
+Bind form ID, owning session, target, requested value and pre-edit content digest;
+consume approval before the write. Observe actual form events separately, not as
+the authority to write. This is a qualification prototype, not a product redesign.
+
+**Limits:** one live attempt, five minutes, at most 120 API calls, two owned idle
+sessions, six owned forms, zero model requests and no frontend/manual-click claim.
+No global/Toolkit feature settings changes, permission replies, dependencies,
+service restart, original evidence mutation, judge or Smart Routing. On failure,
+retain evidence and stop; cancel only owned pending forms and disable only this
+fixture's registrations. Do not delete retained fixture/session evidence.
+
+- [x] Test the pure binding predicate first; observe RED for absent guards, then
+  GREEN for pending/reject/cancel, wrong ID/session/action/answer, consumed and stale
+  before-image cases. Pin fixture source/configuration before native startup.
+- [x] Test native API answer validation and wrong-session ownership; verify native
+  recorded form ID/session/answer and actual canary bytes before/after.
+- [ ] Test deny-before-answer, rejection, cancellation, exact approval, tampered
+  action, stale form/generation, duplicate consumption and concurrent attempts.
+  Characterize a single pair of conflicting API replies without using ambiguity
+  to authorize a write. Do not infer general race-freedom from one observation.
+- [ ] Reconcile owned forms/registrations and unchanged service/protected bytes;
+  independently review the evidence, validate and publish scoped results in PR
+  #289. Keep original human-stop qualification BLOCKED. Distinguish native
+  permission-assert/RPC prototype from untested built-in edit-tool integration,
+  manual question UI, restart persistence and physical-human authentication.
+
+### Retained question-box execution checkpoint
+
+Pure predicate GREEN covers exact approval plus 16 denials, not native enforcement.
+Controller startup raced asynchronous plugin activation; continuation stopped
+before cases on unexpected closed/ready replacement. Both guards failed before
+sessions/forms/edits and remain retained. Current fixture registrations were closed
+and no gating case was replayed or run. Startup/lifecycle diagnosis was escalated
+read-only before repairs; no renewed live allocation exists.
+
+Dependency-independent native API test passed under the same original allocation:
+two idle sessions, one form, wrong-session404, invalid-option400, exact API approve
+and ID/session/answer readback, sequential duplicate409. Canary remained0, no owned
+pending forms/active sessions at final observation, same shared process. Total
+17/120 API calls, zero edits or initiated prompts/model requests. Actual native
+pre-edit binding/consumption/concurrency cases remain UNRUN; overall qualification
+is partial. See the report's question-box section. No human-origin claim follows.
+
+Astra source diagnosis separates the known async-readiness flaw from unattributed
+replacement. A third ready occurred after explicit instance close, so that reply
+was not durable unloading. More importantly, installed plugin setup/host contexts
+lack ctx.session.form, though the HTTP client exposes it. The prototype's assumed
+create/get/cancel surface is unsupported; no native gating case reached it.
+Do not fix readiness alone or substitute untrusted answer snapshots.
+
+Recovery retained the original config and removed only this owned fixture's plugin
+entry. Three recovery API calls observed inventory absence/RPC unavailable and
+unchanged shared PID. No global reload: that endpoint rebuilds every location.
+Original test remains17 calls; recovery adds3, no renewed live allocation. Before a
+separately authorized gating attempt, source-qualify authoritative form access and
+an exact generation/capability readiness barrier. Runtime implementation remains
+outside this qualification. Parent/sibling watching is not a proved cause.
