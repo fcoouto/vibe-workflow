@@ -12,6 +12,7 @@ Vibe Coding Toolkit `soumatheusgomes/vibe-coding-toolkit` at `21b71b68679c11184f
 | --- | --- | --- |
 | Publishing | Commit, push a task branch, open a draft PR | User, 2026-11-08 |
 | Merging into `main` | Yes, for independently reviewed `[READY]` PRs when checks pass; agents set the prefix and merge under the [PR lifecycle](../policies/08-merge-readiness.md#pr-lifecycle) | User, 2026-11-08; kept 2026-11-09 |
+| Post-merge cleanup | Enabled in `.vibe-workflow/settings.json`. Standing permission for eligible task worktrees and local and remote branches in this repository, under [post-merge cleanup](../clients/delivery.md#post-merge-cleanup); `delete_remote_branch` retains its `true` default. | User, 2026-11-13: "Enable cleanup in this project." |
 | Workstreams | Enabled, in `.vibe-workflow/settings.json` | User, 2026-11-09 |
 | Checkout stability | Primary worktree of this repository stays on designated branch `main`; task work uses separate worktrees under the shared contract | User, 2026-11-12, every onboarded repository; `main` from this repository's development guide |
 | `.vibe-workflow/project.json` in Git | Not committed; `.gitignore` lists `/.vibe-workflow/project.json`, `/.vibe-workflow/.d4-*` and `/.vibe-workflow/private/`, and `.vibe-workflow/settings.json` is committed | User, 2026-11-09 |
