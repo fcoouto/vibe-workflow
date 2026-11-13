@@ -144,6 +144,44 @@ class WithheldFileTests(Temp):
 
 
 class UserDirPolicyTests(Temp):
+    def test_large_live_snapshots_keep_all_entries_and_sensitive_change_checks(self):
+        home = self.private(self.tmp / "home")
+        roots = (".local/share/opencode", ".cache/opencode")
+        for relative in roots:
+            store = self.private(home / relative / "storage")
+            for index in range(20001):
+                (store / ("item-%d.txt" % index)).touch()
+        # The live watcher must keep metadata only, even after the old size boundary.
+        with patch.object(Path, "read_text", side_effect=AssertionError("file contents read")):
+            before = user_dirs.snapshot(home)
+        for relative in roots:
+            self.assertEqual(len(before[relative]), 20002)
+            self.assertIn("storage/item-20000.txt", before[relative])
+            touch(home / relative / "auth.json")
+            touch(home / relative / "storage/item-20000.txt")
+            (home / relative / "storage/link").symlink_to(self.tmp, target_is_directory=True)
+        with patch.object(Path, "read_text", side_effect=AssertionError("file contents read")):
+            after = user_dirs.snapshot(home)
+        blockers = []
+        result = user_dirs.compare(home, before, {}, blockers, after=after, home_after={})
+        for relative in roots:
+            entry = result["opencode"][relative]
+            self.assertEqual(entry["unexpected_count"], 2)
+            self.assertEqual(entry["unexpected"], ["auth.json", "storage/link"])
+            self.assertEqual(entry["unexpected_reasons"], {"sensitive_name": 1, "symlink_or_dot_segment": 1})
+            self.assertEqual(sum(entry["concurrent_session_churn"].values()), 1)
+            self.assertIn("the user's %s changed during the run" % relative, blockers)
+
+    def test_live_snapshot_overflow_still_refuses_instead_of_truncating(self):
+        home = self.private(self.tmp / "home")
+        root = self.private(home / ".local/share/opencode")
+        # Fake directory enumeration avoids creating 200,001 files; the snapshot and bound are real.
+        files = ["item-%d.txt" % index for index in range(200001)]
+        with patch.object(safety.os, "walk", return_value=[(str(root), [], files)]), \
+                patch.object(safety.os, "lstat", return_value=root.stat()):
+            with self.assertRaises(safety.Refused):
+                user_dirs.snapshot(home)
+
     def classify(self, policy, change, existing=()):
         root = self.private(self.tmp / ("d-%d" % len(list(self.tmp.iterdir()))))
         for name in existing:
