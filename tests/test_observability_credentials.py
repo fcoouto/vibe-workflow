@@ -131,12 +131,22 @@ class ObservabilityCredentialsTests(unittest.TestCase):
             self.credentials.check_available()
         self.assertEqual(self.calls, [])
 
-    def test_missing_or_unqualified_dependency_fails_before_backend_construction(self):
+    def test_missing_or_below_floor_dependency_fails_before_backend_construction(self):
         for effect in (PackageNotFoundError("keyring"), None):
-            with patch.object(self.credentials, "version", side_effect=effect, return_value="99.0"):
+            with patch.object(self.credentials, "version", side_effect=effect, return_value="25.6.9"):
                 with self.assertRaises(self.credentials.CredentialError):
                     self.credentials.check_available()
         self.assertEqual(self.calls, [])
+
+    def test_newer_keyring_releases_keep_the_explicit_native_backend(self):
+        for installed in ("25.7.1", "25.8.0", "26.0.0", "99.0", "unknown"):
+            with self.subTest(version=installed), patch.object(self.credentials, "version", return_value=installed):
+                self.credentials.check_available()
+        self.assertEqual(self.calls, [("construct", "macos")] * 5)
+
+    def test_actual_missing_native_backend_api_is_still_rejected(self):
+        with patch.object(self.mac, "get_password", None), self.assertRaises(self.credentials.CredentialError):
+            self.credentials.check_available()
 
     def test_backend_configuration_is_not_selected_and_property_redirection_is_rejected(self):
         with patch.dict(os.environ, PYTHON_KEYRING_BACKEND="PRIVATE.UnsafeBackend"):
