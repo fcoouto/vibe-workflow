@@ -1,5 +1,23 @@
 # Policy source map
 
+## Minimum-only software compatibility — 13 November 2026
+
+The user rejected exact software-version gates, then clarified minimum-only
+support with no upper bounds. They accepted the oldest documented working
+versions as initial floors and requested command/API research for the rest.
+[Software compatibility](software-compatibility.md) records floor evidence,
+proposed Git/GitHub CLI/RTK floors and unresolved plugin/service floors.
+`runtime/software_versions.py` owns numeric comparison; existing adapters retain
+capability, identity, schema and content checks. The policy update supersedes
+release allowlists and optional dependency exact pins, not historical evidence,
+accepted source fingerprints or immutable receipt integrity checks.
+
+Representative instruction cases: an OpenCode 2.2.6 CLI/2.2.7 server mismatch does
+not trigger requalification by release number; a newer keyring keeps the explicit
+native backend and still rejects redirection; an unchanged native catalog keeps
+its connection/control binding across software updates. Executable regression
+tests cover the corresponding decisions; no live client deployment is claimed.
+
 ## Smart Routing: approved storage amendment (F5.S) — 12 November 2026
 
 The user approved the coordinator's generous storage design. The registered result is in

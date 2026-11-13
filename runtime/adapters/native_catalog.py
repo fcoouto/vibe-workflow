@@ -1,7 +1,7 @@
 """Native client catalogs for Smart Routing's native bridge (F4.6): Codex native subagents and Claude Code Agent.
 
 A native catalog lists, for one client, the model aliases its own launch accepts and the efforts that launch can
-express, bound to the client's version, connection and effective invocation controls. It never comes from a request
+express, bound to the client's connection and effective invocation controls, with version provenance. It never comes from a request
 or another client's catalog, and no model name is parsed.
 
 Sources, all unqualified today:
@@ -11,7 +11,8 @@ Sources, all unqualified today:
 - The stored snapshot `{binding, models: [{alias, resolved, efforts}]}` beside the routing settings, written only by a
   qualified bounded acquisition outside served preparation (`store_snapshot`). None is qualified or run here: with no
   snapshot the bridge refuses (`native_catalog_unavailable`). A snapshot is reused only while its binding equals the
-  current one (`native_binding_changed` otherwise); no process starts on a `prepare`.
+  current connection and controls (`native_binding_changed` otherwise); version-only changes do not invalidate it.
+  No process starts on a `prepare`.
 - `from_claude_initialize` and `from_codex_models` map the documented payloads (Claude initialization `models[]`:
   `value`, `resolvedModel`, `supportsEffort`, `supportedEffortLevels`; the Codex catalog `{model, supported_efforts}`)
   into snapshot models, for that acquisition. Parsing a payload is not qualifying its source.

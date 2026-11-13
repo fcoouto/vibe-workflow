@@ -34,4 +34,14 @@ Verify existing output/command behavior survives wrappers and hooks without dupl
 
 An approved disposable [qualification attempt](../skills/onboard-my-project/references/qualification.md#staged-disposable-qualification) may exercise its exact pending mechanism within retained scope and budgets. Native frontend startup, API metadata and configured pass-through do not establish Toolkit task-guard enforcement. Keep actual CLI/Desktop provenance and observed effects separate; missing managed observations stay pending.
 
-Treat release numbers as provenance, not eligibility. Determine support from the required live protocol, behavior and identity checks. Reuse evidence while its relevant capabilities, client surface, configuration, permissions and environment remain compatible; a release-number change alone does not invalidate it. Preserve schema validation, accepted source/candidate digests and historical receipts. Missing or changed required capabilities invalidate only affected claims; use [Workflow Maintenance](09-workflow-maintenance.md) for requalification and continue unrelated authorized work. Retain explicit dependency pins where qualified security-sensitive behavior still requires them.
+Use only evidence-backed minimum software versions, never exact-release pins,
+tested-version allowlists or upper bounds. Record actual CLI/server versions as
+provenance; differences alone do not block operations or invalidate unchanged
+capabilities. Determine support from required live protocol, behavior and identity
+checks. Reuse evidence while relevant capabilities, client surface, configuration,
+permissions and environment remain compatible. Preserve schema validation,
+accepted source/candidate digests and historical receipts: these are not software
+release numbers. Missing or changed required capabilities invalidate only affected
+claims; use [Workflow Maintenance](09-workflow-maintenance.md) for requalification
+and continue unrelated authorized work. This repository's initial floors and
+unresolved proposals are in [software compatibility](../docs/software-compatibility.md).
