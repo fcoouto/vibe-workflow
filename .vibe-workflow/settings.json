@@ -1,8 +1,11 @@
 {
   "schema_version": 1,
-  "revision": 1,
+  "revision": 2,
   "features": {
     "workstreams": {
+      "enabled": true
+    },
+    "escalation_gate": {
       "enabled": true
     }
   }
