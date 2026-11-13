@@ -1,11 +1,14 @@
 {
   "schema_version": 1,
-  "revision": 2,
+  "revision": 3,
   "features": {
     "workstreams": {
       "enabled": true
     },
     "cleanup": {
+      "enabled": true
+    },
+    "escalation_gate": {
       "enabled": true
     }
   }
