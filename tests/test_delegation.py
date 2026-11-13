@@ -1,6 +1,7 @@
 """Private guidance-cache fixtures; no network, models or live client changes."""
 from tests.fixture_canonical_birth import fixture_artifact
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 import os
@@ -10,7 +11,8 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from runtime import delegation, evidence, state, task_profile
+from runtime import changes, delegation, evidence, state, task_profile
+from runtime.state_errors import D4_BUSY
 from tests.fixture_delegation import AdmissionFixture
 
 
@@ -658,20 +660,37 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
 
     def test_a_race_across_sessions_admits_one_owner_per_file_and_no_count_limit(self):
         """F5.A1 (was: a capacity race admits only one): physical ownership, not a declared count, serializes."""
-        def race(names, offset):
+        def race(names, offset, contended=False):
             requests = [self.second_owner(offset + n, [self.path_claim(name)], dict(max_parallel_workers=1, host_capacity=1))
                         for n, name in enumerate(names)]
             barrier = threading.Barrier(2)
+            def reserve(request):
+                try:
+                    return self.api.prepare_assignment(self.scope, request)['launch_admitted']
+                except state.StateError as error:
+                    if str(error) == 'Canonical resource ownership conflicts with an unresolved assignment':
+                        return False
+                    raise
             def run(request):
                 barrier.wait(timeout=5)
                 try:
-                    return self.api.prepare_assignment(self.scope, request)['launch_admitted']
-                except state.StateError:
-                    return False
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                return sum(executor.map(run, requests))
+                    return reserve(request)
+                except state.StateError as error:
+                    self.assertEqual(str(error), D4_BUSY)
+                    return None
+            guard = changes._authority_guards([self.scope.runtime.state_dir]) if contended else nullcontext()
+            with guard, ThreadPoolExecutor(max_workers=2) as executor:
+                admitted = list(executor.map(run, requests))
+            # Retry the same bound request once, only after contenders and the real guard have released.
+            return sum(result if result is not None else reserve(request)
+                       for request, result in zip(requests, admitted))
         self.assertEqual(race(['shared.py', 'shared.py'], 0), 1)
         self.assertEqual(race(['file-a.py', 'file-b.py'], 2), 2)
+        self.assertEqual(race(['file-c.py', 'file-d.py'], 4, contended=True), 2)
+        with state._database(self.scope) as db:
+            records = self.api._ledger(self.scope, db)
+        self.assertEqual(len(records), 5)
+        self.assertEqual(len({record['id'] for record in records}), 5)
 
     def test_unknown_fields_brief_scope_and_coordinator_resources_are_rejected(self):
         value = self.plan_value()
