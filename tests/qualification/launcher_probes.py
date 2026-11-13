@@ -97,11 +97,16 @@ def effect_of(body):
 
 
 def plugin_ids(body):
+    """Active identities, with a fixed sentinel for every unreadable or failed row; never expose load errors."""
+    listed = data(body)
+    if not isinstance(listed, list):
+        return ["<unreadable-plugin-list>"]
     found = []
-    for item in data(body) or [] if isinstance(data(body), list) else []:
-        value = item.get("id") if isinstance(item, dict) else item if isinstance(item, str) else None
-        if isinstance(value, str):
-            found.append(value)
+    for item in listed:
+        state = item.get("state") if isinstance(item, dict) else None
+        value = item.get("id") if isinstance(item, dict) else None
+        active = isinstance(state, dict) and state.get("status") == "active"
+        found.append(value if active and isinstance(value, str) and value else "<unidentified-or-inactive-plugin>")
     return found
 
 

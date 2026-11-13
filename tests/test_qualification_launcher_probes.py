@@ -28,6 +28,33 @@ class ProbeTests(Temp):
     def reservations(self):
         return [e for e in self.ledger.export()["entries"] if e["kind"] == "reservation" and e["purpose"] == "isolation"]
 
+    def test_unidentified_plugin_rows_cannot_disappear_beside_an_active_shim(self):
+        active = dict(id="vibe-workflow.routing", source=dict(type="local", path="/synthetic/shim"),
+                      features=dict(server=True), state=dict(status="active"))
+        for row in (dict(source=dict(type="local", path="/synthetic/other"), features=dict(server=True),
+                         state=dict(status="failed", error="private load error")), {}, None, "untyped"):
+            with self.subTest(row=row):
+                checks, others = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=[active, row])))
+                self.assertTrue(checks["shim_listed_once"])
+                self.assertFalse(checks["no_other_plugin"])
+                self.assertEqual(len(others), 1)
+                self.assertNotIn("private load error", json.dumps(others))
+
+    def test_failed_or_untyped_shim_never_counts_as_loaded(self):
+        for state in (dict(status="failed", error="private load error"), {}, None):
+            with self.subTest(state=state):
+                row = dict(id="vibe-workflow.routing", source=dict(type="local", path="/synthetic/shim"),
+                           features=dict(server=True), state=state)
+                checks, _ = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=[row])))
+                self.assertFalse(checks["shim_listed_once"])
+
+    def test_only_active_identified_plugins_pass_the_listing_checks(self):
+        rows = [dict(id=name, source=dict(type=source), features=dict(server=True), state=dict(status="active"))
+                for name, source in (("opencode.agent", "builtin"), ("vibe-workflow.routing", "sdk"))]
+        checks, others = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=rows)))
+        self.assertEqual(checks, dict(shim_listed_once=True, no_other_plugin=True))
+        self.assertEqual(others, [])
+
     def test_zero_call_probes_pass_on_an_isolating_server_and_send_nothing(self):
         results = self.probes().run(["A1", "A2", "A3", "A4"])
         for probe in ("A1", "A2", "A3", "A4"):
