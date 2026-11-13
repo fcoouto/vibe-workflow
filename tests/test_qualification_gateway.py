@@ -189,6 +189,30 @@ class GatewayTests(GatewayBase):
         self.assertIn("alice@example.com key", redact.secrets)
 
 
+class VersionMetadataTests(Temp):
+    def test_legacy_run_reports_observed_versions_or_unknown(self):
+        from tests.qualification import opencode_live
+        run = opencode_live.Run(self.tmp, None, route="vendor/model#low")
+        self.assertIsNone(run.output({})["_meta"]["opencode"])
+        run.cli_version, run.server_version = "2.2.6", "2.2.7"
+        meta = run.output({})["_meta"]
+        self.assertEqual((meta["opencode"], meta["opencode_cli"], meta["opencode_server"]),
+                         ("2.2.7", "2.2.6", "2.2.7"))
+
+    def test_session_reports_cli_and_existing_server_observations_separately(self):
+        from types import SimpleNamespace
+        from tests.qualification import live_modes
+        session = live_modes.Session("gateway", self.tmp, None, SimpleNamespace(),
+                                     SimpleNamespace(redact=safety.Redactor()))
+        self.assertIsNone(session.output()["_meta"]["opencode"])
+        session.args.opencode_version = "2.2.6"
+        self.assertEqual(session.output()["_meta"]["opencode"], "2.2.6")
+        session.results["gateway"] = dict(server_version="3.0.0")
+        meta = session.output()["_meta"]
+        self.assertEqual((meta["opencode"], meta["opencode_cli"], meta["opencode_server"]),
+                         ("3.0.0", "2.2.6", "3.0.0"))
+
+
 class CeilingTests(GatewayBase):
     """Review B2: the gateway's hard ceiling (launch options, abort and actual count, key limit, running cost)."""
 
@@ -244,7 +268,7 @@ class CeilingTests(GatewayBase):
                  (isolation_file(results, others=None), "isolation_probes_not_passed: A2, A3, A4"),
                  (isolation_file(results, blockers=["probes failed: A5"]), "isolation_run_blocked"),
                  (isolation_file(results, cleanup=False), "isolation_cleanup_unverified"),
-                 (isolation_file(results, version="2.3.0"), "isolation_version_differs"),
+                 (isolation_file(results, version="2.2.5"), "isolation_version_below_minimum"),
                  (isolation_file(results, date="2026-01-01"), "isolation_result_stale"),
                  (isolation_file(results, mode="drill"), "isolation_result_wrong_mode"), (old, "isolation_result_stale")]
         for path, reason in cases:
@@ -252,15 +276,35 @@ class CeilingTests(GatewayBase):
                 gateway.Gateway(self.tmp, self.ledger, "gw", Env(self.tmp), "openrouter/vendor-small",
                                 **dict(KEY, isolation_result=path))
             self.assertIn(reason if path else "required", str(refused.exception))
-        original = FakeLauncherHost.request
 
-        def other_version(host, method, path, body=None, query=None):
-            return (200, dict(version="2.2.7")) if path == "/api/info" else original(host, method, path, body=body, query=query)
+    def test_isolation_versions_have_only_a_lower_bound(self):
+        results = self.private(self.tmp / "results")
+        for version in ("2.2.7", "2.3.0", "3.0.0", "10.0.0", None, "unknown"):
+            with self.subTest(version=version):
+                proof = gateway.read_isolation(isolation_file(results, version=version))
+                self.assertEqual(proof["server_version"], version)
+
+    def test_gateway_records_current_version_without_demanding_isolation_equality(self):
+        original = FakeLauncherHost.request
+        for version in ("2.2.7", "3.0.0", None):
+            def other_version(host, method, path, body=None, query=None):
+                return (200, dict(version=version)) if path == "/api/info" else original(host, method, path, body, query)
+            with self.subTest(version=version), mock.patch.object(FakeLauncherHost, "request", other_version):
+                result = self.run_gateway(Env(self.tmp))
+                self.assertTrue(result["passed"], result)
+                self.assertEqual(result["server_version"], version)
+                self.assertEqual(result["isolation_server_version"], "2.2.6")
+
+    def test_gateway_refuses_a_known_old_current_server_before_signin(self):
+        original = FakeLauncherHost.request
+        def older(host, method, path, body=None, query=None):
+            return (200, dict(version="2.2.5")) if path == "/api/info" else original(host, method, path, body, query)
         env = Env(self.tmp)
-        with mock.patch.object(FakeLauncherHost, "request", other_version):
+        with mock.patch.object(FakeLauncherHost, "request", older):
             result = self.run_gateway(env)
-        self.assertIn("server_version_differs", result["blocker"])
-        self.assertEqual(env.hosts[0].prompts, 0)
+        self.assertIn("server_version_below_minimum", result["blocker"])
+        self.assertEqual((env.signins, env.hosts[0].prompts), (0, 0))
+        self.assertEqual(self.reservations(), [])
 
     def test_the_harness_prompt_is_checked_against_the_input_limit(self):
         self.assertLessEqual(gateway.prompt_tokens(gateway.PROMPT_TEXT), gateway.INPUT_TOKENS)
