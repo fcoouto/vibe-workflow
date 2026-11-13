@@ -15,6 +15,8 @@ from tests.qualification.safety import SYMLINK, classify_changes, compare_snapsh
 
 USER_DIR_POLICY = {".config/opencode": "strict", ".local/share/opencode": "data", ".cache/opencode": "cache",
                    ".local/state/opencode": "state"}
+# Live worktree and package caches exceed the generic snapshot bound; retain full coverage with a finite cap.
+OPENCODE_SNAPSHOT_MAX_ENTRIES = 200000
 DATA_STORES = ("log", "snapshot", "worktree", "repos", "storage", "shell", "tool-output")  # concurrent-session stores
 DATA_DB = re.compile(r"opencode\.db(?:-wal|-shm|-journal)?")
 # Credential and config words, matched against whole parts of a name split on `-`, `_` and `.` (so `author` and
@@ -141,7 +143,8 @@ REPORT_ONLY_HOME = (".claude", ".opencode")  # written by the claude CLI / OpenC
 def snapshot(home):
     """The user's OpenCode directories (names and mtimes) and the watched OpenAI/Codex login directories."""
     from tests.qualification import safety
-    return dict({name: safety.snapshot_tree(Path(home) / name) for name in safety.USER_OPENCODE_DIRS},
+    return dict({name: safety.snapshot_tree(Path(home) / name, max_entries=OPENCODE_SNAPSHOT_MAX_ENTRIES)
+                 for name in safety.USER_OPENCODE_DIRS},
                 watched=safety.watched_home(home))
 
 
