@@ -41,7 +41,6 @@ class CanaryPreconditionTests(Temp):
             "uncertain_dollar": dict(ledger_change=dict(uncertain_dollar=dict(ids=["a"], more=0))),
             "blocked_organizations": dict(ledger_change=dict(blocked_organizations=[dict(id="o")])),
             "overrun_backlog": dict(ledger_change=dict(overrun_backlog=True)),
-            "concurrency_caps_raised": dict(caps=dict(total=5, per_account=2)),
             "open_attempts": dict(ledger_change=dict(open_attempts=1)),
         }
         for reason, change in cases.items():

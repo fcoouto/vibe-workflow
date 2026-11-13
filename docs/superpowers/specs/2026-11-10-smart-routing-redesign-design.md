@@ -2,6 +2,139 @@
 
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
+## Requirements amendment, 11 November 2026
+
+The user authorized these changes after reviewing the six-requirement gap
+assessment. This amendment overrides conflicting concurrency and API accounting
+statements in this design and its inherited contracts. Historical registrations
+and results remain unchanged; current guidance and acceptance criteria receive a
+dated amendment before any governed run.
+
+1. **No artificial delegation counts.** Do not enforce 4 total, 2 per account or
+   equivalent limits on native, subscription or API Usage delegation. Do not
+   substitute counts of chats, sessions, processes or provider identities. Read
+   legacy settings, plans and records without enforcing obsolete caps. Preserve
+   actual provider throttling, subscription quotas, physical resource ownership,
+   real host-resource admission, financial protections and finite task authority.
+   Bounded storage remains an integrity limit, not a replacement worker policy.
+2. **Whole-task API-money reservation.** Before any paid dispatch, estimate the
+   whole delegated task's API monetary cost and reserve it with a **20% buffer**
+   in the existing shared funding ledger. Use integer monetary units and round
+   upward. With $50 of available authorized funds and a $10 estimate, reserve $12
+   and leave $38. The example's $50 is already available after any protected
+   allowance; it does not remove the existing protected-balance policy. Account
+   aliases, clients, concurrent tasks and worktrees share one funding authority
+   and atomic reservation. No new budget store or scheduler is permitted.
+   Subscription quota-window reservation margins remain unchanged.
+3. **Correct reconciliation.** Known completion charges actual cost and releases
+   unused reservation exactly once. A provider balance and local charge must not
+   deduct the same reflected cost twice. Reflection requires reliable evidence
+   tied to that balance and those charges, not a newer timestamp or an inferred
+   balance delta. Keep actual task/cycle spending for authority checks even when
+   a charge no longer reduces provider-balance headroom. Provably unsent work
+   releases its reservation fully. Running or uncertain attempts retain their
+   exposure until reconciled. Extra paid work must fit both available approved
+   funds and task authority; do not add unlimited automatic top-ups. Local
+   reservations are not provider-side guarantees against in-flight overspend.
+4. **Route-local refusal and ordered continuation.** Skip API routes without
+   sufficient unreserved funds, reliable funding evidence, authorization,
+   qualification or availability. Continue through other eligible routes in the
+   existing order, including native subscriptions. Preserve suitability and
+   explicit model/funding constraints. Report the actual reason when none fits.
+   Never dispatch a duplicate while a prior attempt runs or remains uncertain.
+5. **Implementation is not activation.** Implement and test these semantics with
+   disposable synthetic funds while **API Usage remains deferred this release
+   and required next release**. Keep ranked selection subscription-only,
+   `API_FUNDING_QUALIFIED=False`, and production OpenRouter deferred. No disabled
+   integration, key, account, organization, purchase, paid overflow, setting change
+   or live API call is authorized. The earlier API-change non-goal yields only to
+   this inactive reservation/reconciliation/fallback implementation.
+6. **Complete caller and guidance coverage.** Remove count-based refusals in the
+   ledger, router, native admission and continuation, launchers, coordinator
+   instructions and caller-side preflights. Retain readable history without
+   presenting obsolete caps as effective protection. Preserve the lightweight
+   rule: stale-AND-needed reads, no measurement/ranking model calls, polling,
+   timers or daemons.
+
+Acceptance requires more than four total delegations and more than two on one
+account when genuine quotas/funds permit; the $50/$10/+20% example; real racing
+monetary contenders; exact settlement, unsent cancellation, partial reflection
+and uncertain exposure; unavailable API with an eligible subscription; precise
+no-alternative refusal; and explicit identity with no duplicate uncertain send.
+Run these checks and obtain independent review on the final amended candidate
+before any merge. The old-scope F5 suite and review do not establish this proof.
+
+## Storage amendment, 12 November 2026 (approved implementation design)
+
+The user requested generous storage allowances that avoid recurring request-size
+tuning, preserve Unicode and retain existing data. The following exact values
+were the coordinator's recommendation. The user subsequently selected
+"Approve and implement" for this exact design, including the limits below,
+worst-case regression tests and independent review.
+
+### Approach and limits
+
+Keep the existing SQLite ledger and transactions. Store the main ledger body as
+lossless UTF-8 JSON and count its admission, hold, binding and body sizes in
+encoded bytes. Do not preallocate or pad records.
+
+| Limit | Proposed value |
+| --- | --- |
+| Admission record | 262,144 bytes (256 KiB) |
+| Initial hold | 32,768 bytes (32 KiB) |
+| Workflow binding | 16,384 bytes (16 KiB) |
+| New-data allowance, including future settlement reservations | 201,326,592 bytes (192 MiB) |
+| Main ledger read/write ceiling | 268,435,456 bytes (256 MiB) |
+
+The measured prospective maximum record is 192,682 bytes, initial hold about
+19,625 bytes and binding 7,357 bytes. Tests must validate actual public admission
+and dispatch, not only the internal record builder. The larger shared allowance
+also leaves room above the estimated 143.6 MB body-plus-reserve case with all
+bounded tables at caller-maximal Unicode shapes. Unbounded organization/config
+growth and physical disk exhaustion can still exhaust finite storage.
+
+A smaller 64/96 MiB pair is viable for ordinary use but rejects new work before
+some pathological full-table combinations fit. The larger pair is recommended
+because the user explicitly preferred spare room over recurring storage tuning.
+Restricting Unicode, truncating replay data or changing retention is rejected.
+
+### Reserve completion space before admission
+
+Existing growing writes require encoded body size plus remaining growth reserve
+to fit the new-data allowance. Use the existing table ownership, not a separate
+budget registry: 4 KiB per run, 1 KiB per hold, another 64 KiB per still-convertible
+dollar hold, 24 KiB per organization, 8 KiB per native entry, 4 KiB per routing
+configuration and 256 KiB fixed reserve. The bounded convertible-hold scan covers
+conversion that creates a run and native entry after admission.
+
+Lot metadata increases use growing-write admission even when list length stays
+unchanged. Scalar balance refreshes and prepaid settlement/recovery retain their
+safe paths. Tests must prove every non-growing writer's full future growth is
+covered; a missed writer or exceeded reserve blocks implementation acceptance.
+
+### Compatibility, cost and completion
+
+Preserve JSON values, exact identifiers, digests, nonces, money limits, retention,
+the API-money 20% buffer, subscription margins and API-off boundaries. Existing
+ASCII-escaped ledgers remain readable. Separate event/root rows retain their
+existing character limits and serialization; do not silently narrow them to bytes.
+Old packages may refuse larger ledgers or new Unicode bindings. Preserve those
+ledgers and reconcile with compatible code; never automatically downgrade data.
+
+Memory and serialization cost follow actual file size, not the ceiling. The
+measured 30.26 MB synthetic transaction peaked at 162 MiB of Python allocations;
+larger-file cost is not yet measured. No new store, scheduler, polling or model
+calls are added. Future input-contract growth must fail worst-case regression
+tests before release, not discover the limit during a user request.
+
+Acceptance requires maximal ASCII/BMP/non-BMP records, holds and bindings through
+real entry points with at least 25% capacity spare; atomic oversize refusal;
+near-soft admission followed by maximal settlement and Unicode hold conversion;
+same-length lot growth checks; old-ledger/value/digest readback; unchanged event/
+root boundaries; the final committed full suite and combined independent
+funding/security review. Generous ceilings do not promise unlimited storage or
+waive provider, funding, authority or physical-resource refusals.
+
 This design changes parts of two earlier documents and leaves the rest of them in force:
 
 - [Smart Routing design, 8 November](2026-11-08-usage-routing-opencode-subscriptions-design.md): it replaces sections 5.1 (Jev), 5.3 (optional model ranker) and 11 ("later learning"), and adds one rule to section 7.2 (when OpenRouter may be chosen).

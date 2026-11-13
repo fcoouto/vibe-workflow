@@ -6,7 +6,7 @@ import hashlib
 import json
 import unittest
 from runtime import routing, usage_budget as budget
-from tests.test_routing_command import API, M, SECRET, api_observations, facts, now, prepare
+from tests.test_routing_command import API, M, SECRET, api_observations, facts, now, prepare, prepare_legacy_paid
 from tests.test_routing_dispatch import record
 from tests import fixture_routing_accounting as fixture
 from tests.fixture_routing_accounting import TOKENS, complete, settle, usage, where
@@ -288,7 +288,7 @@ class OverrunTests(fixture.Accounting):
     def other_admits(self, attempt):
         obs = api_observations(organization='other')
         obs['routes'][-1]['account'] = 'acct-' + attempt
-        return self.call(prepare(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api'])))
+        return self.call(prepare_legacy_paid(attempt, observations=obs, constraints=dict(allowed_strategy_ids=['s-api'])))
 
     def test_an_inflated_report_cannot_inflate_the_books(self):
         self.funded('a1')
@@ -430,15 +430,11 @@ class ResolveCostUnknownTests(fixture.Accounting):
             with self.subTest(extra=extra):
                 self.assertEqual(self.resolve('a1', M, **extra), dict(v=1, state='blocked', reason='invalid_request'))
 
-    def test_resolving_frees_the_slot_and_settles_exactly(self):
-        with self.open_ledger() as ledger:
-            ledger.set_caps(2, 2)
-        self.call(dict(v=1, op='set', expected_revision=1, change=dict(caps=dict(total=2, per_account=2))))
+    def test_resolving_releases_the_unknown_cost_and_settles_exactly(self):
         self.funded('a1')
         self.funded('a2')
         self.call(complete('a1', 'c1'))
         self.assertEqual(self.hold('a1')['state'], 'cost_unknown')
-        self.assertEqual(self.admit('a3')['state'], 'pending')  # the unknown cost keeps its concurrency place
         before = self.credit()
         result = self.resolve('a1', 2 * M, receipts=['req-1'], source='provider_receipt')
         self.assertEqual((result['state'], result['duplicate'], result['outcome']), ('recorded', False, 'complete'))

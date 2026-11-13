@@ -33,7 +33,6 @@ ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
 MAX_DURATION_S = 24 * 3600
 REPO_CHECK_EVERY = 5
-DEFAULT_CAPS = dict(total=4, per_account=2)
 # Distinct ids for the pilot, so nothing it admits can be mistaken for another route's or another ledger's holds.
 POOL = "pilot-sub"
 ACCOUNT = "anthropic:pilot-canary"
@@ -313,10 +312,7 @@ def anomalies(status):
         reasons.append("overrun_backlog")
     if ledger.get("reconcile_hint") is not None:
         reasons.append("reconcile_pending")
-    caps = status.get("effective_caps") or {}
-    if any(caps.get(key, 10 ** 9) > limit for key, limit in DEFAULT_CAPS.items()):
-        reasons.append("concurrency_caps_raised")
-    return reasons
+    return reasons  # F5.A1: saved caps are not a protection, so their value is no anomaly
 
 
 def preflight(status):
@@ -500,8 +496,6 @@ class PilotDriver:
         if ((status.get("ledger") or {}).get("open_attempts") or 0) != 0:
             raise Abort("concurrency")
         problems = anomalies(status)
-        if "concurrency_caps_raised" in problems:
-            raise Abort("concurrency")
         if problems:
             raise Abort("status_anomaly", problems)
         allowed = 2 if first else 1  # the first admission may carry the one observed title request

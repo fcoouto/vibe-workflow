@@ -147,7 +147,7 @@ class SettleTests(Legacy):
         self.assertEqual((call['state'], call['cost']), ('rejected-before-send', 0))
         self.assertTrue(self.snapshot()['runs']['r1']['closed'])
         self.assertEqual(self.total(), total - M)
-        self.assertNotIn('r1', budget.Ledger.open_attempts(self.snapshot()))  # the concurrency place is free
+        self.assertNotIn('r1', budget.Ledger.open_attempts(self.snapshot()))  # no open attempt remains
         with self.open_ledger() as ledger, self.assertRaisesRegex(budget.BudgetError, 'dispatch_forbidden'):
             ledger.dispatch('r1', 'count', self.revision(), now())  # a released run never sends
 

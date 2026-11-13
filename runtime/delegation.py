@@ -921,14 +921,14 @@ def _delegation_plan(scope, plan, new=False):
     _strings(constraints['required_controls'], 'required dispatch controls')
     _require(set(constraints['required_controls']) <= {'spawn', 'explicit_model', 'explicit_effort', 'fork_turns_none'},
              'Required native enforcement or dispatch control is unavailable')
-    limits = plan['limits']
-    state._fields(limits, ('max_attempts', 'max_resource_units', 'deadline', 'max_parallel_workers', 'host_capacity', 'capacity_ref'))
-    for field in ('max_attempts', 'max_resource_units', 'deadline', 'max_parallel_workers', 'host_capacity'):
+    limits = plan['limits']  # F5.A1: a legacy plan's declared counts are validated, never admission
+    legacy = ('max_parallel_workers', 'host_capacity', 'capacity_ref') if type(limits) is dict and 'host_capacity' in limits else ()
+    state._fields(limits, ('max_attempts', 'max_resource_units', 'deadline') + legacy)
+    for field in ('max_attempts', 'max_resource_units', 'deadline') + legacy[:2]:
         state._integer(limits[field], 'delegation ' + field, 1)
-    _require(limits['max_resource_units'] <= 10**9 and
-             limits['deadline'] < 2**63 and 1 <= limits['max_parallel_workers'] <= limits['host_capacity'] <= 1024,
-             'Delegation limits exceed supported finite bounds')
-    state._text(limits['capacity_ref'], 'observed host capacity evidence')
+    _require(limits['max_resource_units'] <= 10**9 and limits['deadline'] < 2**63 and (not legacy or
+             1 <= limits['max_parallel_workers'] <= limits['host_capacity'] <= 1024), 'Delegation limits exceed supported finite bounds')
+    if legacy: state._text(limits['capacity_ref'], 'declared capacity reference')  # shape checked by `_fields` first
     fallback = plan['fallback']
     state._fields(fallback, ('action', 'reference'))
     _require(fallback['action'] in {'stop', 'direct-coordinator'}, 'Unsupported execution fallback')
@@ -1171,7 +1171,7 @@ def _record_data(scope, row, data, *, db=None, context=None, artifact_refs=None)
                 all(claim['mode'] == 'read' for claim in data['claims']), 'Review prompt/plan/resources binding changed')
         else:
             _require('review' not in body, 'Worker cannot carry review admission metadata')
-        for name in ('resource_units', 'host_capacity'):
+        for name in ('resource_units', 'host_capacity')[:1 if data['host_capacity'] is None else 2]:  # F5.A1: may be absent
             state._integer(data[name], 'stored native ' + name, 1)
         _reference(data['candidate'])
         binding = data['binding']
@@ -1691,11 +1691,6 @@ def _admission(scope, db, task, plan, job, claims, records, request):
         _require(set(diagnostic['evidence']) - prior_evidence, 'An unchanged retry needs new diagnostic evidence')
     else:
         _require('retry_of' not in request and 'diagnostic' not in request, 'First admission cannot invent a retry predecessor')
-    unresolved = [r for r in records if r['data']['status'] != 'settled' and not _cooperative_for(scope, r, cooperative_task)]
-    managed = [r for r in unresolved if task_profile.native(r['data']['role'])]
-    _require(sum(r in own for r in managed) < limits['max_parallel_workers'] and
-             len(managed) < min([limits['host_capacity']] + [r['data']['host_capacity'] for r in managed]),
-             'Managed worker capacity is exhausted, including uncertain historical admissions')
     _resources_available(scope, db, claims, records, cooperative_task=cooperative_task)
     return admission
 
@@ -2119,7 +2114,7 @@ def _prepare_native(scope, request, *, review):
     body = dict(version=ADMISSION_VERSION, owner=owner, pins=task['pins'], request=_semantic(request), job_id=job['id'], role=job['role'],
         claims=claims, resource_units=request['resource_units'], revision=request['expected_revision'] + 1,
         plan=task['delegation']['plan'], plan_digest=plan_digest, git_routing=git_routing,
-        host_capacity=plan['limits']['host_capacity'], binding=content_binding, candidate=candidate_ref,
+        host_capacity=plan['limits'].get('host_capacity'), binding=content_binding, candidate=candidate_ref,
         discovery=evidence._artifact(scope, observed, owner=evidence._artifact_owner(scope, task)), policy=evidence._artifact(scope, dict(
             policy_digest=task['pins']['policy_digest'], actual_policy_digest=candidate['actual_policy_digest'],
             files=[dict(path=path.name, sha256=hashlib.sha256(path.read_bytes()).hexdigest())
@@ -2138,7 +2133,7 @@ def _prepare_native(scope, request, *, review):
             required=['version', 'attempt_id', 'assignment_digest', 'candidate_digest', 'coverage', 'findings', 'limitations'])
     data = dict(version=ADMISSION_VERSION, job_id=job['id'], role=job['role'], status='prepared', request_digest=evidence._digest(_semantic(request)),
         assignment=None, candidate=candidate_ref, claims=claims, resource_units=request['resource_units'],
-        revision=request['expected_revision'] + 1, plan_digest=plan_digest, host_capacity=plan['limits']['host_capacity'],
+        revision=request['expected_revision'] + 1, plan_digest=plan_digest, host_capacity=plan['limits'].get('host_capacity'),
         binding=content_binding, retry_of=request.get('retry_of'), diagnostic=diagnostic,
         observation=None, reconciliation=None, result=None)
     if 'lifecycle' in body:
@@ -2877,8 +2872,8 @@ def delegation_status(scope, client, session_id, *, compact=False):
             plan=delegation['plan'] if delegation else None, budgets=budgets,
             assignments=[dict(attempt_id=r['id'], owner=r['owner'], **r['data']) for r in selected], conflicts=conflicts,
             capacity=dict(unresolved_managed_workers=sum(task_profile.native(r['data']['role']) for r in unresolved),
-                max_parallel_workers=plan['limits']['max_parallel_workers'] if plan else None,
-                observed_host_capacity=plan['limits']['host_capacity'] if plan else None),
+                legacy_declared=dict({k: plan['limits'][k] for k in ('max_parallel_workers', 'host_capacity')}, enforced=False)
+                if plan and 'host_capacity' in plan['limits'] else None),
             blockers=['Unreconciled assignment retains resource claims' for r in selected if r in unresolved],
             limitations=list(ADMISSION_LIMITATIONS))
 
@@ -3057,13 +3052,7 @@ def consume_continuation(scope, request):
         plan = _task_plan(scope, task)
         current_claims = _claims(next(j for j in plan['jobs'] if j['id'] == record['data']['job_id'])['claims'])
         _require(current_claims == value['current_claims'], 'Continuation physical resource aliases changed')
-        if record['data']['status'] == 'settled':
-            active = [r for r in records if task_profile.native(r['data']['role']) and r['data']['status'] != 'settled']
-            own = [r for r in active if all(r['owner'][k] == record['owner'][k]
-                for k in ('scope_id', 'client', 'session_id', 'task_id'))]
-            _require(len(own) < plan['limits']['max_parallel_workers'] and
-                len(active) < min([plan['limits']['host_capacity']] + [r['data']['host_capacity'] for r in active]),
-                'Managed worker capacity is exhausted during reacquisition')
+        if record['data']['status'] == 'settled':  # F5.A1: no worker count; ownership and receipts decide
             _invalidate_ready(db, scope, task, current_claims)
             if task['state'] == 'DONE':
                 task['state'] = 'REVIEW'

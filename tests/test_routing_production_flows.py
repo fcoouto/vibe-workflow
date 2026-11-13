@@ -142,6 +142,28 @@ class SubscriptionFlowTests(Flow):
         self.assertEqual(self.state_files(), everything)  # route lookups: every state file byte-identical
         self.assertFalse([name for name in everything if 'route' in Path(name).name and name.endswith('.json')])
 
+    def test_unmanaged_prepare_record_has_null_routes_version(self):
+        """F5.4: a caller's own snapshot (no `excluded`, no `rejected`) through an unmanaged service stores a null
+        routes version, and the exact replay recomputes class and route from the record alone, with no source."""
+        from tests.test_routing_admission import replayed
+        self.qualify()
+        self.table(codex_strategy())
+        unmanaged = command.Service(self.settings, self.ledger_path)
+        self.addCleanup(unmanaged.close)
+        route = dict(IDENTITY, route='caller-route', strategy_id='s-codex', account='caller-acct',
+                     billing_class='included_subscription', pool='caller-pool', demand={'7d': 5}, capable=True,
+                     permitted=True, binding_enforceable=True)
+        snapshot = dict(now=now(), routes=[route], pools={'caller-pool': dict(windows=[dict(
+            id='7d', limit=1000, used=100, length=604800, reset_at=now() + 3600, rolling=False, fresh=True)])})
+        answer = unmanaged.handle(json.dumps(dict(self.body('u1'), observations=snapshot)).encode())
+        self.assertEqual(answer['state'], 'admitted', answer)
+        record = unmanaged._ledger(False).snapshot()['admissions'][-1]
+        self.assertIsNone(record['ranking']['routes_version'])
+        self.assertEqual(record['ranking']['shortlist'], ['s-codex'])
+        with mock.patch.object(collector, 'default_source', side_effect=AssertionError('no live source')), \
+                mock.patch.object(collector.LocalSource, 'windows', side_effect=AssertionError('no window read')):
+            self.assertEqual(replayed(record, []), ('caller-route', 'subscription'))
+
     def test_explicit_choice_outside_the_row_still_admits(self):
         self.qualify()
         self.table(codex_strategy())
@@ -837,6 +859,46 @@ class OpenCodeLaunchFlowTests(Stores):
         self.assertGreater(collector.consumed_at(self.settings, GO_PATH), 0)  # a Go launch reports no reading
         self.assertEqual(self.launch('go-2')['state'], 'pending')  # the bound read finds the pool fresh-but-used
 
+    # -- F5.3: ranked funding never selects a paid route ---------------------------------------------------------
+    def test_opencode_ranked_admission_never_selects_a_gateway_route(self):
+        """Both path types are qualified and ranked (the gateway first), the host lists both providers and the
+        Claude subscription is full: the launch waits, with no dollar hold and no dispatch. With a ChatGPT
+        subscription that fits, the actual launcher sends exactly its admitted identity and settles once."""
+        self.doubles(demand=False, semantics=False)
+        routing_paths.qualify(self.settings, 'openrouter-workers', demand={'credit': 5}, evidence='synthetic-1',
+                              now=now())
+        routing_paths.qualify(self.settings, CLAUDE_PATH, demand={'5h': 5, '7d': 5}, evidence='synthetic-1', now=now())
+        for window, length in (('5h', 18000), ('7d', 604800)):
+            collector.store_window(self.settings, 'claude-subscription', dict(
+                id=window, limit=1000, used=1000, length=length, reset_at=now() + 3600, rolling=False,
+                observed_at=now(), unit=collector.WINDOW_UNIT))
+        self.host.models.append(dict(providerID='openrouter', id='invented-or-model', variants=['high']))
+        gateway = self.strategy('s-gw', 'invented-or-model', 'openrouter', routing_launch.shim_harness('openrouter'))
+        claude = self.strategy('s-claude', CLAUDE_MODEL, 'claude-agent', CLAUDE_HARNESS, effort='low')
+        self.table(gateway, claude)
+        waiting = self.launch('only-paid-fits')
+        self.assertEqual(waiting['state'], 'pending', waiting)
+        self.assert_sent_nothing(waiting, 'only-paid-fits')
+        self.assertEqual([hold for hold in self.holds().values() if hold.get('amount') or hold.get('organization')],
+                         [])  # no dollar hold anywhere
+        self.assertNotIn('dispatched', {hold['state'] for hold in self.holds().values()})
+        routing_paths.qualify(self.settings, 'opencode-chatgpt-subscription', demand={'7d': 5}, evidence='synthetic-1',
+                              now=now())
+        collector.store_window(self.settings, 'chatgpt-subscription', dict(
+            id='7d', limit=1000, used=100, length=604800, reset_at=now() + 3600, rolling=False, observed_at=now(),
+            unit=collector.WINDOW_UNIT))
+        chatgpt = self.strategy('s-chatgpt', 'invented-chatgpt-model', 'openai', 'opencode provider openai')
+        self.table(gateway, claude, chatgpt)
+        sent = self.launch('subscription-fits')
+        self.assertEqual(sent['state'], 'recorded', sent)
+        admission = sent['admission']
+        self.assertEqual((admission['route'], admission['class'], admission['billing_class'], admission['mode']),
+                         ('opencode-chatgpt-subscription:s-chatgpt', 'subscription', 'included_subscription', 'ranked'))
+        self.assertEqual(self.host.created['model'], dict(id='invented-chatgpt-model', providerID='openai',
+                                                          variant='high'))
+        self.assertEqual((self.order.count('create'), self.order.count('prompt')), (1, 1))
+        self.assertEqual(self.holds()['subscription-fits']['state'], 'released')  # settled once
+
     # -- P1 ------------------------------------------------------------------------------------------------------
     def test_opencode_ranked_launch_on_the_local_source(self):
         """P1 with synthetic billing: no window → pending; recovery seed → launch and settled reading; fresh
@@ -873,6 +935,8 @@ class OpenCodeLaunchFlowTests(Stores):
             seven_day=dict(utilization=0.1, resetsAt=resets + 86400, status='allowed')))
         second = self.launch('p1-b')
         self.assertEqual(second['state'], 'recorded', second)
+        self.assertEqual((admitted[-1]['class'], admitted[-1]['mode'], admitted[-1]['shares']),
+                         ('subscription', 'ranked', dict(api=0.0, subscription=1.0)))  # F5.3: subscription funding
         stored = {item['id']: item
                   for item in collector.LocalSource(self.settings).windows('claude-subscription', now())}
         self.assertEqual({key: (item['used'], item.get('source')) for key, item in stored.items()},

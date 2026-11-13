@@ -30,7 +30,8 @@ class DelegationScaleTests(unittest.TestCase):
         plan['jobs'][-1]['dependencies'] = [job['id'] for job in plan['jobs'][:-1]]
         self.assertEqual(self.validate(plan)['limits']['max_attempts'], 62)
         self.fixture.plan(plan)
-        self.assertEqual(delegation.delegation_status(self.scope, 'codex', self.fixture.identity['session_id'])['capacity']['max_parallel_workers'], 4)
+        self.assertEqual(delegation.delegation_status(self.scope, 'codex', self.fixture.identity['session_id'])['capacity']['legacy_declared'],
+                         dict(max_parallel_workers=4, host_capacity=4, enforced=False))  # F5.A1: declared, not enforced
 
     def test_deep_valid_plan_is_iterative_and_cycles_and_unknowns_reject(self):
         plan = self.plan(180, chain=True)

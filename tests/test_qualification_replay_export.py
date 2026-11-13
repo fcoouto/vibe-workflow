@@ -26,7 +26,7 @@ class ExportTests(Temp):
         for item in canary.plan_assignments(count, tag):
             answer, _ = self.routing("prepare", **item["body"])
             self.assertEqual(answer.get("state"), "admitted", answer)
-            attempt = item["body"]["assignment"]["attempt_id"]  # closed, so the concurrency cap admits the next
+            attempt = item["body"]["assignment"]["attempt_id"]  # closed before the next, as the pilot runs serially
             closed, _ = self.routing("record", event=dict(event_id=attempt + "-nd", attempt_id=attempt, kind="not_dispatched"))
             self.assertEqual(closed.get("state"), "recorded", closed)
 
@@ -53,6 +53,34 @@ class ExportTests(Temp):
         self.assertEqual(oct(self.export_dir.stat().st_mode & 0o777), "0o700")
         for name in (replay_export.RECORDS, replay_export.LAST):
             self.assertEqual(oct((self.export_dir / name).stat().st_mode & 0o777), "0o600")
+
+    def test_export_keeps_the_replay_fields_and_old_records(self):
+        """F5.4: records are exported as stored, new replay fields included; an older record without
+        `ranking.shortlist` is exported unchanged, and the export's manifest says `format: 2`."""
+        import sqlite3
+        from contextlib import closing
+        self.admit(1)
+        with closing(sqlite3.connect(self.ledger)) as db:
+            data = json.loads(db.execute("SELECT body FROM ledger WHERE id=1").fetchone()[0])
+            new = data["admissions"][0]
+            old = dict(new, attempt_id="old-shape", nonce="0" * 32,
+                       ranking={key: new["ranking"][key] for key in ("table_version", "profile_digest")})
+            for key in ("risk_band", "floor_filled", "strategy"):
+                old.pop(key, None)
+            data["admissions"].insert(0, old)
+            db.execute("UPDATE ledger SET body=? WHERE id=1", (json.dumps(data, separators=(",", ":")),))
+            db.commit()
+        _, records = replay_export.read_admissions(self.ledger)
+        summary = replay_export.export(self.ledger, self.export_dir, now=1000)
+        self.assertEqual(summary["format"], 2)
+        lines = [json.loads(line) for line in (self.export_dir / replay_export.RECORDS).read_text().splitlines()]
+        self.assertEqual([line["record"] for line in lines], records)  # verbatim, old and new
+        self.assertNotIn("shortlist", lines[0]["record"]["ranking"])
+        self.assertIn("shortlist", lines[1]["record"]["ranking"])
+        self.assertTrue({"risk_band", "floor_filled", "strategy"} <= set(lines[1]["record"]))
+        last = json.loads((self.export_dir / replay_export.LAST).read_text())
+        self.assertEqual(last["format"], 2)
+        self.assertNotIn("format", lines[0])  # the manifest carries the format; each line keeps its record as stored
 
     def test_unsafe_export_directories_are_refused(self):
         target = self.private(self.tmp / "elsewhere")

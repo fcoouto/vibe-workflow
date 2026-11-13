@@ -351,7 +351,9 @@ class NativeLaunchTests(NativeBase):
         """The inverse order: the second admission commits first (the hold still counted, so it does not fit), then
         the first completes; nothing reuses the headroom and ordinary shared reservations still count."""
         self.billing()
-        self.window('claude-subscription', '5h', 18000, used=980, later=1)  # room for two reservations
+        # Room 14 for padded reservations of 6: two fit, a third does not. F5.A1: before, used=980 (room for three)
+        # passed only because the removed per-account count of two refused the third.
+        self.window('claude-subscription', '5h', 18000, used=986, later=1)
         self.assertEqual(self.prepare('claude-code', 'a')['state'], 'dispatched')
         self.assertEqual(self.prepare('claude-code', 'b')['state'], 'dispatched')  # both reservations fit
         self.assertEqual(self.prepare('claude-code', 'c')['state'], 'pending')  # a third does not

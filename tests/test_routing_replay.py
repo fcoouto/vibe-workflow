@@ -47,7 +47,6 @@ class Replay:
         self.G = self.scenario['balance']
         self.balance = self.G
         self.ledger.observe(ORG, self.balance, 1, issued=self.G)
-        self.ledger.set_caps(**self.scenario['caps'])
         self.pools = self.scenario['pools']
         for pool in self.pools.values():
             for window in pool['windows']:
@@ -216,7 +215,8 @@ class Replay:
 
     # -- invariants ----------------------------------------------------------------------------------
     def verify(self, now):
-        """No funding violation: the protected allowance and every window stay inside their limits."""
+        """No funding violation: the protected allowance and every window stay inside their limits. F5.A1: no count
+        of open runs is an invariant; money and windows are."""
         data = self.ledger.snapshot()
         self.checks += 1
         check(budget.Ledger._credit_raw(data, ORG, now) >= 0, 'protected allowance breached')
@@ -224,9 +224,6 @@ class Replay:
             for window in pool['windows']:
                 check(window['used'] + window['reserved'] <= 1 + EPSILON, 'window over-committed')
                 check(window['reserved'] >= -EPSILON, 'negative hold')
-        open_runs = [r for r in data['runs'].values() if not r['closed']]
-        total, per_account = data['caps']['total'], data['caps']['per_account']
-        check(len(open_runs) <= total and len(open_runs) <= per_account, 'concurrency cap exceeded')
 
 
 def replay(name, settings=None):
@@ -308,15 +305,13 @@ class ReplayTests(unittest.TestCase):
         admitted = [item['id'] for item in log if item['outcome'] == 'admitted']
         self.assertEqual([r['id'] for r in records], admitted)
         refused = [item for item in log if item['outcome'] != 'admitted']
-        self.assertTrue(refused, 'the burst should hit the concurrency cap')
-        self.assertTrue(all(item['reason'] == 'concurrency_cap' for item in refused if item['outcome'] == 'rejected'))
+        self.assertFalse(any(item['reason'] == 'concurrency_cap' for item in refused))  # F5.A1: never a count reason
         self.assertFalse({item['id'] for item in refused} & set(admitted))
 
     def test_concurrent_claims_never_exceed_headroom(self):
         with tempfile.TemporaryDirectory() as folder:
             run = Replay(load('mixed_load'), folder)
             try:
-                run.ledger.set_caps(8, 8)
                 run.refresh(100000)
                 estimate = run.ledger.credit_headroom(ORG, 100000) // 2  # padded to 60% of headroom: one fits
                 revision, outcomes = run.revision(), []
@@ -438,8 +433,6 @@ class AdmissionReplay:
         self.identity = budget.initialize(path)
         self.ledger = budget.Ledger(path, self.identity)
         self.settings = dict(routing_settings.resolve(self.scenario['settings']), revision=1)
-        caps = self.settings['caps']
-        self.ledger.set_caps(caps['total'], caps['per_account'])
         org = self.scenario['organization']
         self.org, self.balance = org['id'], org['balance']
         self.ledger.configure(self.org, org['policy'], 0)
@@ -489,12 +482,15 @@ class AdmissionReplay:
         return dict(now=now, routes=routes, pools=pools, snapshot_id='snap-%d' % now)
 
     # -- lifecycle -------------------------------------------------------------------------------------
-    def arrive(self, job, now):
+    def arrive(self, job, now, choice=None):
+        """A ranked arrival, or with `choice` the legacy explicit choice (F5.3), the only way a paid route is used."""
         self.observe(now)
         profile = routing.ensure_profile(job)
         ranking = routing.rank(profile, self.table, None)
         assignment = dict(attempt_id=job['id'], task=job['id'], role=profile['role'], work_kind=profile['work_kind'],
                           complexity_band=profile['complexity_band'], scope='scope1')
+        if choice is not None:
+            assignment['choice'], ranking = choice, dict(ranking, strategy_ids=[])
         outcome = routing.admit(assignment, ranking, self.settings, self.observations(now), ledger=self.ledger)
         entry = dict(id=job['id'], at=now, outcome=outcome['status'], ranked=list(ranking['strategy_ids']),
                      table_version=ranking['table_version'])
@@ -515,6 +511,13 @@ class AdmissionReplay:
 
     def complete(self, attempt, now):
         """Settle at 80% of each reserved amount; subscription use reaches the collector's next snapshot."""
+        if attempt not in self.open:
+            # F5R-3: only an attempt whose latest record is its own refusal may complete as never admitted; an unknown
+            # id, a lost admitted attempt or a repeated completion fails the replay.
+            latest = [entry for entry in self.log if entry.get('id') == attempt][-1:]
+            check(latest and latest[0]['outcome'] == 'pending', ('completion without a refused arrival', attempt, latest))
+            self.log.append(dict(id=attempt, at=now, outcome='never_admitted'))
+            return None
         record = self.open.pop(attempt)
         self.observe(now)
         reserved = record['reserved']
@@ -567,10 +570,6 @@ class AdmissionReplay:
         check(budget.Ledger._credit_raw(data, self.org, now) >= 0, 'organization credit overdrawn')
         open_attempts = budget.Ledger.open_attempts(data)
         check(sorted(open_attempts) == sorted(self.open), 'open attempts differ from open admissions')
-        accounts = list(open_attempts.values())
-        caps = self.settings['caps']
-        check(len(accounts) <= caps['total'], 'total concurrency cap exceeded')
-        check(all(accounts.count(a) <= caps['per_account'] for a in accounts), 'per-account cap exceeded')
 
 
 def run_admission(scenario, runner=None):
@@ -640,7 +639,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
                    if self.run_.deployments[granted[e['id']]['route']]['model'] == 'alpha-small' or
                    self.run_.deployments[granted[e['id']]['route']]['effort'] == 'high']
         self.assertTrue(retired, 'an admission on a now-retired option must still be open at the refresh')
-        self.assertEqual({granted[e['id']]['class'] for e in retired}, set(CLASSES))
+        self.assertEqual({granted[e['id']]['class'] for e in retired}, {'subscription'})  # F5.3: ranked never pays
         holds = self.snapshot['holds']
         for attempt in granted:
             settlement, hold = self.run_.settlements[attempt], holds[attempt]
@@ -678,7 +677,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
         run, snapshot = run_admission(self.scenario, at_refresh)
         self.assertTrue(self.observed)
         # Settled charges stay counted: headroom never exceeds the issued balance less protection and every charge.
-        self.assertGreater(run.charged, 0)
+        self.assertEqual(run.charged, 0)  # F5.3: ranked arrivals fund only subscriptions; no dollar is charged
         self.assertGreater(run.checks, 0)
         org = snapshot['organizations'][run.org]
         self.assertLessEqual(budget.Ledger._credit(snapshot, run.org, run.observed_at),
@@ -690,7 +689,7 @@ class CatalogRefreshReplayTests(unittest.TestCase):
         records = self.snapshot['admissions']
         self.assertEqual(strip_nonce(snapshot['admissions']), strip_nonce(records))
         self.assertEqual(len(records), len([e for e in self.run_.log if e['outcome'] == 'admitted']))
-        self.assertEqual({r['class'] for r in records}, set(CLASSES))
+        self.assertEqual({r['class'] for r in records}, {'subscription'})  # F5.3: ranked never pays
         replay_classes(self, records)
         for record in records:
             d = self.run_.deployments[record['route']]
@@ -698,11 +697,98 @@ class CatalogRefreshReplayTests(unittest.TestCase):
                              routing.route_identity(d['provider'], d['model'], d['effort'], d['harness']))
 
 
+
+def choice_for(run, route):
+    deployment = run.deployments[route]
+    return dict({key: deployment[key] for key in ('provider', 'model', 'effort', 'harness')}, funding='api')
+
+
+class ReplayCompletionTests(unittest.TestCase):
+    """F5R-3: `complete` tolerates a never-admitted attempt only after that attempt's own refusal."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.scenario = load_admission('catalog_refresh')
+        self.run_ = AdmissionReplay(self.scenario, folder.name)
+        self.addCleanup(self.run_.close)
+        self.job = next(e['job'] for e in self.scenario['events'] if e['kind'] == 'arrive')
+
+    def test_a_refused_arrival_completes_once_as_never_admitted(self):
+        bogus = dict(provider='nobody', model='none', effort='high', harness='api', funding='api')
+        self.assertEqual(self.run_.arrive(dict(self.job, id='refused'), 1000010, choice=bogus)['status'], 'pending')
+        self.assertIsNone(self.run_.complete('refused', 1000020))
+        self.assertEqual(self.run_.log[-1]['outcome'], 'never_admitted')
+        with self.assertRaisesRegex(AssertionError, 'completion without a refused arrival'):
+            self.run_.complete('refused', 1000030)  # a repeated completion
+
+    def test_an_unknown_id_fails(self):
+        with self.assertRaisesRegex(AssertionError, 'completion without a refused arrival'):
+            self.run_.complete('never-seen', 1000020)
+
+    def test_a_lost_admitted_attempt_fails(self):
+        self.assertEqual(self.run_.arrive(dict(self.job, id='lost'), 1000010)['status'], 'admitted')
+        self.run_.open.pop('lost')  # a harness or product bug that drops an admitted attempt
+        with self.assertRaisesRegex(AssertionError, 'completion without a refused arrival'):
+            self.run_.complete('lost', 1000020)
+
+    def test_a_completed_attempt_cannot_complete_again(self):
+        self.run_.arrive(dict(self.job, id='twice'), 1000010)
+        self.run_.complete('twice', 1000020)
+        with self.assertRaisesRegex(AssertionError, 'completion without a refused arrival'):
+            self.run_.complete('twice', 1000030)
+
+
+class ExplicitPaidReplayTests(unittest.TestCase):
+    """A distinct explicit-paid arrival (the legacy F5.3 choice) beside the unchanged ranked subscription arrivals:
+    positive dollars are charged once, unused funds released once, and the refresh frees and resurrects nothing."""
+
+    def test_explicit_paid_arrival_charges_and_releases_once_across_a_refresh(self):
+        scenario = load_admission('catalog_refresh')
+        job = next(e['job'] for e in scenario['events'] if e['kind'] == 'arrive')
+        observed = {}
+
+        def runner(run):
+            for event in run.scenario['events']:
+                if event['kind'] == 'refresh':
+                    paid = run.arrive(dict(job, id='paid-1'), event['t'] - 50, choice=choice_for(run, 'al-high-api'))
+                    observed['paid'] = paid
+                    data = run.ledger.snapshot()
+                    held, credit = budget.Ledger.held(data), run.ledger.credit_headroom(run.org, event['t'])
+                    run.refresh(event['catalog'], event['t'])
+                    self.assertEqual(budget.Ledger.held(run.ledger.snapshot()), held)  # nothing freed
+                    self.assertEqual(run.ledger.credit_headroom(run.org, event['t']), credit)  # nothing resurrected
+                    observed['held_at_refresh'] = held
+                elif event['kind'] == 'arrive':
+                    run.arrive(event['job'], event['t'])
+                else:
+                    run.complete(event['id'], event['t'])
+            run.complete('paid-1', run.scenario['events'][-1]['t'] + 10)
+        run, snapshot = run_admission(scenario, runner)
+        paid = observed['paid']
+        self.assertEqual((paid['status'], paid['class'], paid['route']), ('admitted', 'api', 'al-high-api'))
+        reserved = paid['reserved'][budget.ORG + run.org]
+        self.assertEqual(reserved, 3_600_000)  # 3M demand with the 20% API-money buffer
+        self.assertEqual(observed['held_at_refresh'][budget.ORG + run.org], reserved)  # exact retained exposure
+        settlement = run.settlements['paid-1']
+        charged = reserved * 4 // 5
+        self.assertEqual((settlement['charged'], settlement['released'], settlement['overrun']),
+                         (charged, reserved - charged, 0))
+        self.assertGreater(run.charged, 0)
+        self.assertEqual(run.charged, charged)  # charged once
+        org = snapshot['organizations'][run.org]
+        self.assertEqual(org['settled']['total'], charged)
+        self.assertEqual(budget.Ledger.held(snapshot), {})
+        self.assertLessEqual(budget.Ledger._credit(snapshot, run.org, run.observed_at),
+                             run.balance - budget.Ledger._protected(org) - run.charged)
+        ranked = [entry for entry in run.log if entry.get('class')]
+        self.assertEqual({e['class'] for e in ranked if e['id'] != 'paid-1'}, {'subscription'})
+
 class DependencyPlanReplayTests(unittest.TestCase):
-    """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. Caps hold two at once."""
+    """Six jobs: job-1 fans out to 2, 3 and 4; 2 and 3 fan in to 5; 4 and 5 fan in to 6. No count limits the fan-out."""
 
     def schedule(self, run):
-        """Admit ready jobs in id order whenever capacity frees; finish the earliest-ending open job."""
+        """Admit ready jobs in id order whenever dependencies allow; finish the earliest-ending open job."""
         jobs = {job['id']: job for job in run.scenario['jobs']}
         done, ends, now = set(), {}, run.scenario['start']
         self.trace = []
@@ -730,7 +816,7 @@ class DependencyPlanReplayTests(unittest.TestCase):
 
     def test_jobs_are_admitted_in_dependency_order(self):
         """Checks the test's own `schedule`: the product does not order a DAG (Workstreams owns readiness). What it
-        contributes here is admitting each ready job alone, under the shared caps; see the fan-out test."""
+        contributes here is admitting each ready job alone, funded by windows and money; see the fan-out test."""
         deps = {job['id']: set(job['depends_on']) for job in self.scenario['jobs']}
         admitted = [step for step in self.trace if step[0] == 'admit']
         self.assertEqual(sorted(step[1] for step in admitted), sorted(deps))
@@ -742,18 +828,18 @@ class DependencyPlanReplayTests(unittest.TestCase):
         self.assertEqual(order[-1], 'job-6')
         self.assertLess(order.index('job-5'), order.index('job-6'))
 
-    def test_fan_out_waits_for_a_concurrency_place(self):
-        waits = [step for step in self.trace if step[0] == 'wait']
-        self.assertTrue(waits, 'three ready jobs under a cap of two must wait')
-        self.assertTrue(all(step[3] == 'concurrency_cap' for step in waits))
+    def test_a_fan_out_admits_every_ready_job_together_without_a_count_wait(self):
+        """F5.A1 (was: the fan-out waits for a concurrency place): the three ready jobs fit their windows, so all run
+        at once; nothing waits."""
+        self.assertEqual([step for step in self.trace if step[0] == 'wait'], [])
         peak, current = 0, 0
         for step in self.trace:
             current += {'admit': 1, 'done': -1}.get(step[0], 0)
             peak = max(peak, current)
-        self.assertEqual(peak, self.scenario['settings']['caps']['total'])
+        self.assertEqual(peak, 3)  # jobs 2, 3 and 4 after job-1
 
     def test_claims_are_released_on_settlement(self):
-        self.assertGreater(self.run_.checks, 12)
+        self.assertEqual(self.run_.checks, 12)  # one check per admission and per settlement; F5.A1: no waits
         self.assertEqual(budget.Ledger.held(self.snapshot), {})
         self.assertTrue(all(hold['closed'] for hold in self.snapshot['holds'].values()))
         self.assertEqual(len(self.snapshot['holds']), 6)

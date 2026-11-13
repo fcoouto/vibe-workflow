@@ -372,7 +372,7 @@ M = 1_000_000
 
 
 class ParallelLedgerTests(unittest.TestCase):
-    """Allowance policy, per-task padded claims and concurrency caps in integer micro-units."""
+    """Allowance policy and per-task padded claims in integer micro-units; saved caps are legacy only (F5.A1)."""
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / 'private' / 'organizations.sqlite3'
@@ -589,36 +589,32 @@ class ParallelLedgerTests(unittest.TestCase):
             self.begin('greedy', 1 * M, transfer_from=('parent', 2 * M))
         self.assertEqual(self.ledger.snapshot(), before)
 
-    # S1.4 concurrency caps
-    def test_default_caps_limit_open_runs_per_account_and_in_total(self):
+    # S1.4 concurrency caps; F5.A1: no count of open runs admits or refuses, saved caps are history only
+    def test_no_default_count_limits_open_runs_per_account_or_in_total(self):
         self.org('org'); self.org('other', revision=0)
-        self.begin('a', M); self.begin('b', M)
-        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-            self.begin('c', M)
-        self.begin('d', M, org='other')
-        self.ledger.close_run('a')
-        self.begin('c', M)
-        self.begin('e', M, org='other')
-        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-            self.begin('f', M, org='other')
+        for task in 'abc':
+            self.begin(task, M)
+        for task in 'def':
+            self.begin(task, M, org='other')
+        self.assertEqual(sorted(budget.Ledger.open_accounts(self.ledger.snapshot())), ['org'] * 3 + ['other'] * 3)
 
-    def test_total_cap_counts_every_account_and_caps_are_configurable(self):
+    def test_saved_caps_stay_validated_and_readable_but_are_not_enforced(self):
         for name in ('o1', 'o2', 'o3'): self.org(name)
-        self.ledger.set_caps(total=2, per_account=2)
-        self.begin('a', M, org='o1'); self.begin('b', M, org='o2')
-        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-            self.begin('c', M, org='o3')
-        self.ledger.set_caps(total=3, per_account=1)
-        self.begin('c', M, org='o3')
+        self.ledger.set_caps(total=2, per_account=1)
+        for task, org in (('a', 'o1'), ('b', 'o1'), ('c', 'o2'), ('d', 'o3')):
+            self.begin(task, M, org=org)
+        self.assertEqual(self.ledger.snapshot()['caps'], dict(total=2, per_account=1))
         with self.assertRaises(budget.BudgetError): self.ledger.set_caps(total=0, per_account=1)
 
-    def test_unresolved_runs_keep_their_place_until_closed(self):
+    def test_unresolved_runs_keep_their_exposure_until_closed(self):
         self.org()
         self.ledger.set_caps(total=1, per_account=1)
         self.begin('a', M); self.ledger.dispatch('a', 'count', 1, 102); self.ledger.uncertain('a', 'count')
-        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-            self.begin('b', M)
-        self.assertEqual(len(self.ledger.snapshot()['runs']), 1)
+        exposed = self.ledger.credit_headroom('org')
+        self.begin('b', M)  # no count refuses it; the uncertain run still holds its money
+        runs = self.ledger.snapshot()['runs']
+        self.assertFalse(runs['a']['closed'])
+        self.assertLess(self.ledger.credit_headroom('org'), exposed)
 
     def test_replay_of_an_open_run_is_not_blocked_by_the_caps(self):
         self.org()
@@ -669,15 +665,14 @@ class ParallelLedgerTests(unittest.TestCase):
             self.ledger.admit('b', boom)
         self.assertEqual(self.ledger.snapshot(), before)
 
-    def test_closing_an_attempt_releases_its_hold_and_its_concurrency_place(self):
+    def test_closing_an_attempt_releases_its_hold(self):
         self.ledger.set_caps(total=1, per_account=1)
         self.ledger.admit('a', self.decide('a', {'win:p/w': 7}, 'org'))
         self.org()
-        with self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-            self.begin('run', M)  # a hold counts against the same caps as a run
+        self.begin('run', M)  # F5.A1: an open hold on the same account is no count against a run
         self.ledger.close_attempt('a', 'not_dispatched')
         self.assertEqual(self.ledger.held(self.ledger.snapshot()), {})
-        self.begin('run', M)
+        self.assertNotIn('a', budget.Ledger.open_attempts(self.ledger.snapshot()))
         with self.assertRaisesRegex(budget.BudgetError, 'attempt_missing'):
             self.ledger.close_attempt('nope', 'complete')
 
@@ -781,14 +776,11 @@ class ParallelLedgerTests(unittest.TestCase):
         for label, (faulty, reason) in cases.items():
             with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, reason):
                 self.ledger.admit('x', faulty)
-        self.ledger.set_caps(total=2, per_account=1)
-        self.begin('run', M)  # counts under its organization
-        for label, account in (('per_account', 'org'), ('total', 'other')):
-            if label == 'total':
-                self.ledger.admit('y', lambda data: dict(record=self.record('y'), vector={}, account='third'))
-            with self.subTest(label), self.assertRaisesRegex(budget.BudgetError, 'concurrency_cap'):
-                self.ledger.admit('x', decide({}, account=account))
-        self.assertEqual(sorted(self.ledger.snapshot()['holds']), ['y'])
+        self.ledger.set_caps(total=2, per_account=1)  # F5.A1: a saved cap is not one of the ledger's checks
+        self.begin('run', M)
+        self.ledger.admit('y', lambda data: dict(record=self.record('y'), vector={}, account='third'))
+        self.ledger.admit('x', decide({}, account='org'))
+        self.assertEqual(sorted(self.ledger.snapshot()['holds']), ['x', 'y'])
 
     def test_written_ledgers_with_the_old_hold_shape_are_repaired(self):
         def old(data):

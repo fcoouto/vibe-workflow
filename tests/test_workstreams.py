@@ -437,6 +437,19 @@ print(json.dumps(result))
         self.assertEqual(task['delegation']['resource_units_consumed'], 2)
         self.assertFalse(evidence.verify_completion(self.scope, self.fixture.request(purpose='completion'))['verified'])
 
+    def test_a_declared_worker_count_never_refuses_reacquisition(self):
+        """F5.A1: another owner's active worker, declared under a legacy count of one, does not block the settled
+        child's continuation; ownership, receipts and backoff still decide."""
+        prepared, review = self.reviewed_worker()
+        other = self.fixture.second_owner(1, [self.fixture.path_claim('independent.py')],
+                                          dict(max_parallel_workers=1, host_capacity=1))
+        self.assertTrue(delegation.prepare_assignment(self.scope, other)['launch_admitted'])
+        intent = self.api.prepare_continuation(self.scope, self.continuation(prepared, reason='review-fixes'))
+        consumed = self.api.consume_continuation(self.scope, self.fixture.request(attempt_id=prepared['attempt_id'],
+            workstream_revision=self.control('status')['revision'], token=intent['token']))
+        self.assertEqual(consumed['worker_id'], 'child')
+        self.assertEqual(self.fixture.raw_assignment(prepared['attempt_id'])['status'], 'observed')
+
     def test_active_transitive_consumer_prevents_reopening_settled_implementer(self):
         prepared, review = self.reviewed_worker()
         consumer = delegation.prepare_assignment(self.scope, self.consumer_request())

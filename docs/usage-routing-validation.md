@@ -562,3 +562,55 @@ In the live OpenRouter Desktop check, the native activity showed
 with synthetic settlement evidence. Live API registration and a Claude Code
 transport remain unqualified. The unresolved API charge stayed on hold during
 this integration.
+
+## API-money reservation and reconciliation (F5.A2) · 12 November 2026
+
+Registered for plan task F5, checkpoint A2, before any live use; earlier sections and their results stay as recorded.
+API Usage stays deferred now and required next, ranked selection stays subscription-only, `API_FUNDING_QUALIFIED`
+stays false and production OpenRouter stays deferred. Nothing here authorizes a live run.
+
+- **Whole-task envelope.** An S1 task reserves V = ceil(1.2 × (generation quote + count maximum)) before its first
+  paid send (`Ledger.reserve_task`): the count call holds its maximum and a generation placeholder the rest. The
+  generation grant (`reserve_call`) only binds the counted packet; it never lowers the reservation or adds money.
+  An under-estimate refuses with `envelope_exceeded`. The 20% buffer is fixed (`API_MONEY_BUFFER_BP = 2000`) and
+  separate from subscription `margin_bp`; funded routing constraints use it too.
+- **Unknown cost stays reserved.** The count transport returns no cost and the generation figure is a conservative
+  estimate, so the dormant runner records both as completed with `cost: null`, held at their full reservation, until
+  an operator settles them with receipts or the charge reservation. Pricing one phase never closes another.
+- **Balance coverage.** A trusted in-process `Coverage` may mark known settled charges that a staged balance
+  observation already reflects, so provider headroom stops subtracting them twice; task, cycle, pilot and live limits
+  still count them. No coverage producer is qualified.
+- **Approval.** The Codex host approves V. An explicit approved maximum below V refuses the task.
+- **Registered canary (ruling, 12 November 2026).** The foreground canary's approved maximum (50,640 micro-units),
+  packet and model stay unchanged. Its unbuffered quote is exactly 50,640, so its envelope (60,768) cannot fit and
+  it refuses before any credential, transport, monetary or native claim, restores off and stays consumed
+  (`tests/test_usage_canary_host.py`). The earlier successful runs remain historical evidence. Any further live
+  canary needs its own new registration and approval; this ruling grants none.
+- **Recovery evidence.** Scoped `reconcile` lists unpriced completed work as `unpriced_attempts` beside the
+  existing uncertain `pending_attempts`.
+
+## Approved storage amendment (F5.S) · 12 November 2026
+
+The user approved the coordinator's generous storage design. These constants are the coordinator's design, not
+numbers the user specified. Nothing here authorizes a live run, changes money limits, retention, the 20% API-money
+buffer, subscription margins or the API-off boundary. Earlier capacity figures (for example F5.4's 10,752-character
+record and 13,100,000-character ledger) stay as historical results for the limits of their time.
+
+- **Byte limits.** The shared usage ledger body is stored as compact, lossless UTF-8 JSON. Its limits, and those of
+  one admission record, one hold and one workflow binding, are UTF-8 bytes: 256 KiB per admission record, 32 KiB per
+  hold, 16 KiB per binding (checked at admission and again at dispatch), a 192 MiB new-data budget and a 256 MiB
+  ledger ceiling, which is also the read limit.
+- **Reserved settlement space.** New data (admissions, runs, organizations, handoffs, routing configurations, lot
+  lists that grow) is accepted only while the body plus R fits the 192 MiB budget:
+  R = 4 KiB per run + 1 KiB per hold + 64 KiB per funded unconverted hold + 24 KiB per organization + 8 KiB per
+  native task + 4 KiB per routing configuration + 256 KiB. R prepays what settlement, uncertainty, coverage,
+  observation, native release and a hold's conversion into a run can still add, so admitted work can always settle.
+  No worker, account or organization count is added.
+- **Measured maxima** (public admission, ten-digit clock): caller-maximal record 192,682 bytes, hold about 19.6 K
+  and binding 7,357 bytes in 4-byte text; one conversion adds at most 34,975 bytes.
+- **Unchanged.** Event and root rows keep their character limits (16,384 and 98,304); dispatch, settlement and
+  `incomplete` allowances keep their numbers.
+- **Older packages.** They still read a UTF-8 body up to their own 13,100,000-character limit. They refuse larger
+  ledgers and Unicode bindings above their old escaped limit (fail-closed), with state preserved. Ledgers written
+  before this amendment never prepaid R: they stay readable and keep every exposure, and new admission waits until
+  body plus R fits.

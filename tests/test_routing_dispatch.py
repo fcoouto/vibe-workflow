@@ -15,7 +15,7 @@ from runtime import routing, routing_settings, usage_budget as budget
 from runtime.adapters import opencode
 from scripts import routing as command
 from tests.test_routing_command import (API, Base, SCRIPT, api_observations, check, facts, now, observations,
-                                        prepare)
+                                        prepare, prepare_legacy_paid)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONSERVATIVE_SESSION = re.compile(r'ses_[0-9a-f]{32}')
@@ -268,7 +268,7 @@ class FundedDispatchTests(DispatchBase):
         self.call(dict(v=1, op='set', expected_revision=0, change=dict(api_usage_enabled=True)))
         budget.initialize(self.ledger)
         self.fund()
-        request = prepare('api1', observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']))
+        request = prepare_legacy_paid('api1', observations=api_observations(), constraints=dict(allowed_strategy_ids=['s-api']))
         self.assertEqual(self.call(request)['admission']['class'], 'api')
 
     def test_disabled_organization_blocks_dispatch_and_consumes_nothing(self):
@@ -303,8 +303,8 @@ class ConversionTests(DispatchBase):
         budget.initialize(self.ledger)
         self.fund()
         for attempt in ('c1', 'c2'):
-            request = prepare(attempt, observations=api_observations(),
-                              constraints=dict(allowed_strategy_ids=['s-api']))
+            request = prepare_legacy_paid(attempt, observations=api_observations(),
+                                          constraints=dict(allowed_strategy_ids=['s-api']))
             self.assertEqual(self.call(request)['state'], 'admitted')
 
     def convert(self, attempt):
@@ -534,16 +534,15 @@ class LostAcknowledgmentTests(DispatchBase):
         self.assertEqual(self.call(dict(v=1, op='check', session_id=self.derived['session_id'], request=facts())),
                          dict(v=1, settings_warnings=[], state='blocked', reason='authority_required'))
 
-    def test_uncertain_keeps_exposure_the_concurrency_place_and_blocks_checks(self):
+    def test_uncertain_keeps_its_exposure_and_blocks_checks_without_a_count(self):
         token = self.call(dispatch('a1'))['authority']
         held = budget.Ledger.held(self.snapshot())
         self.assertEqual(self.call(record('a1', 'uncertain'))['state'], 'recorded')
         self.assertEqual(budget.Ledger.held(self.snapshot()), held)
         self.assertEqual(self.call(check('a1', authority=token)), dict(v=1, settings_warnings=[], state='blocked', reason='attempt_uncertain'))
         self.assertEqual(self.call(prepare('a2'))['state'], 'admitted')
-        third = self.call(prepare('a3'))
-        self.assertEqual((third['state'], third['reason']), ('pending', 'concurrency_cap'))
-        self.assertEqual(self.call(dict(v=1, op='status'))['ledger']['holds'], dict(uncertain=1, admitted=1))
+        self.assertEqual(self.call(prepare('a3'))['state'], 'admitted')  # F5.A1: an uncertain hold is no count place
+        self.assertEqual(self.call(dict(v=1, op='status'))['ledger']['holds'], dict(uncertain=1, admitted=2))
 
     def test_nothing_releases_a_dispatched_or_uncertain_hold_before_s36(self):
         """No proof of non-launch is accepted in S3.4: `not_dispatched` is only for never-dispatched holds."""

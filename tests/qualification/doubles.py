@@ -36,7 +36,6 @@ class Fake:
         self.ledger = dict(state="ready", holds={}, open_attempts=0, authority_required=True, unstamped_open_holds=0,
                            unbound_open_holds=0, cost_unknown=dict(ids=[], more=0), uncertain_dollar=dict(ids=[], more=0),
                            blocked_organizations=[], overrun_backlog=False, reconcile_hint=None, organizations=[])
-        self.caps = dict(total=4, per_account=2)
         self.transmit = dict(primary=1, title=0, other=0)
         self.off_route = 0
         self.settlement = dict(kind="window", released={"5h": 10}, observed_units={})
@@ -61,7 +60,7 @@ class Fake:
         if "status" in self.fail:
             return self.fail["status"]
         return dict(state="ok", settings_state="ok", settings=dict(self.settings), settings_revision=self.settings["revision"],
-                    effective_caps=dict(self.caps), ledger=json.loads(json.dumps(self.ledger)), test_inputs=False,
+                    legacy_caps=dict(settings=None, ledger=None, enforced=False), ledger=json.loads(json.dumps(self.ledger)), test_inputs=False,
                     project_pinned=True)
 
     def export_if_due(self):

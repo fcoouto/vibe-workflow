@@ -257,7 +257,8 @@ class CodexUsageHostTests(unittest.TestCase):
         self.assertEqual(generated.requests, [])
         run = next(iter(self.ledger.snapshot()['runs'].values()))
         self.assertEqual(run['calls']['count']['state'], 'completed')
-        self.assertEqual(run['calls']['count']['cost'], PROFILE['count_maximum'])
+        self.assertEqual((run['calls']['count']['cost'], run['calls']['count']['maximum']),
+                         (None, PROFILE['count_maximum']))  # F5.A2: unpriced work keeps its full bound
 
     def test_scoped_uncertain_attempt_cannot_resend(self):
         from runtime.openai_api import TransportError
@@ -380,7 +381,7 @@ class CodexUsageHostTests(unittest.TestCase):
         receipt = self.receipt('Investigate this task.')
         plan = self.host.freeze(self.root, [proposal], thread_snapshot=receipt, native_limits=self.limits,
                                 reviewer=self.reviewer, expires_at=200)
-        self.assertEqual((plan.quoted_usd_micros, plan.maximum_usd_micros), (75_008, 75_008))
+        self.assertEqual((plan.quoted_usd_micros, plan.maximum_usd_micros), (90_010, 90_010))  # ceil(75,008 x 1.2)
 
         counted = Connection(Response(dict(object='response.input_tokens', input_tokens=1200)))
         reply = completed()
@@ -397,9 +398,10 @@ class CodexUsageHostTests(unittest.TestCase):
         self.assertEqual(result['reported_cost_usd_micros'], 60_001)
         self.assertTrue(result['requires_native_review'])
         calls = self.ledger.snapshot()['runs'][result['run_id']]['calls']
-        self.assertEqual((calls['count']['cost'], calls['generation']['maximum']), (7, 75_001))
+        self.assertEqual((result['cost_basis'], calls['count']['cost'], calls['count']['maximum'],
+                          calls['generation']['cost'], calls['generation']['maximum']), ('estimate', None, 7, None, 90_003))
 
-    def test_derived_cap_includes_prior_cost_and_blocks_generation_after_exposure_race(self):
+    def test_derived_cap_includes_prior_cost_and_blocks_the_task_before_count_after_exposure_race(self):
         self.configure(policy=dict(POLICY, pilot_limit=None, task_limit=None))
         self.ledger.observe('org', 800, 100)
         other_native = dict(native('other'), account='other-account')
@@ -412,8 +414,10 @@ class CodexUsageHostTests(unittest.TestCase):
 
         settle('prior', 4)
         plan = self.freeze(maximum_usd_micros=None)
-        self.assertEqual((plan.quoted_usd_micros, plan.maximum_usd_micros), (1, 5))
+        self.assertEqual((plan.quoted_usd_micros, plan.maximum_usd_micros), (2, 6))  # V = ceil(1 x 1.2)
         self.assertEqual(self.freeze(maximum_usd_micros=12).maximum_usd_micros, 12)
+        with self.assertRaisesRegex(BudgetError, 'codex_proposals_invalid'):  # never raised to fit the buffer
+            self.freeze(maximum_usd_micros=1)
         settle('racing', 1)
         counted = Connection(Response(dict(object='response.input_tokens', input_tokens=1200)))
         connections = iter((counted,))
@@ -422,12 +426,11 @@ class CodexUsageHostTests(unittest.TestCase):
             credential_resolver=lambda _: b'synthetic-key')
         with self.assertRaisesRegex(BudgetError, 'live_cap_exceeded'):
             self.execute(plan)
-        self.assertEqual(len(counted.requests), 1)
+        self.assertEqual(counted.requests, [])  # F5.A2: the whole envelope no longer fits, so nothing is sent
         state = self.ledger.snapshot()
         run_id = self.dispatch.call_args.args[1]['run_id']
         self.assertNotIn('slot', state)
-        self.assertEqual(state['runs'][run_id]['calls']['count']['state'], 'completed')
-        self.assertNotIn('generation', state['runs'][run_id]['calls'])
+        self.assertNotIn(run_id, state['runs'])
 
     def test_finite_cumulative_cap_requires_explicit_plan_limit_within_policy(self):
         self.configure()
@@ -572,7 +575,7 @@ class CodexUsageHostTests(unittest.TestCase):
         for field, value in (
             ('run_id', 'another-run'), ('accepted', True),
             ('requires_native_review', False), ('execution_route', 'auto'),
-            ('reported_cost_usd_micros', result['reported_cost_usd_micros'] + 1),
+            ('cost_basis', 'actual'),  # F5.A2: the reported figure is an estimate, never a ledger charge
         ):
             with self.subTest(result_field=field), patch.object(habblaud, 'transport') as load_transport:
                 outcome = self.host._publish_generation(plan, task, evidence, result | {field: value}, context,

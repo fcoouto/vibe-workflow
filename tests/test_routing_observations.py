@@ -12,8 +12,8 @@ import unittest
 from unittest import mock
 import urllib.request
 
-from runtime import openrouter_settings, routing, routing_observations as collector, subscription_billing, \
-    usage_credentials
+from runtime import openrouter_settings, routing, routing_funding, routing_observations as collector, \
+    subscription_billing, usage_credentials
 from scripts import routing as command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -565,8 +565,139 @@ class LocalSourceTests(Stores):
         cut = collector.shortlist(str(self.root), dict(scope=SCOPE), settings_path=self.settings,
                                   table=table_of(*strategies), strategy_ids=[item['strategy_id'] for item in strategies],
                                   harnesses=[CLAUDE_HARNESS])
-        self.assertEqual(len(cut['routes']), routing.MAX_ROUTES)
-        self.assertEqual(cut['shortlist'], ['s%03d' % n for n in range(routing.MAX_ROUTES)])  # ranking order kept
+        self.assertEqual(len(cut['routes']), routing_funding.SHORTLIST_MAX)  # F5.2: the subscription shortlist
+        self.assertEqual(cut['shortlist'], ['s%03d' % n for n in range(routing_funding.SHORTLIST_MAX)])  # ranked order
+
+    # -- F5.2: one subscription shortlist, before any window ---------------------------------------------------------
+    def ranked(self, *sids):
+        return dict(strategy_ids=list(sids), reason_codes=['ranking_exact'], table_version='tv1', profile_digest='d')
+
+    def test_collector_keeps_only_the_subscription_shortlist(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        sids = ['s%02d' % n for n in range(15)]
+        result = self.collect(table=table_of(*map(strategy, sids)), strategy_ids=sids)
+        self.assertEqual(result['observations']['shortlist'], sids[:10])
+        self.assertEqual([route['strategy_id'] for route in result['observations']['routes']], sids[:10])
+        self.assertEqual(result['observations']['excluded'], [])  # the cut is no refusal and names nothing
+
+    def test_reader_runs_only_for_shortlisted_chatgpt_routes(self):
+        from runtime import codex_rate_limits
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        self.store('claude-subscription', '5h', '7d')
+        self.store('chatgpt-subscription', '7d', at=self.now - collector.FRESH_SECONDS - 60)  # stale
+        claude = ['c%d' % n for n in range(10)]
+        table = table_of(*map(strategy, claude), strategy('o1', harness=CHATGPT_HARNESS, provider='openai'))
+        with mock.patch.object(codex_rate_limits, 'refresh', side_effect=Refused('codex reader')):
+            late = self.collect(table=table, strategy_ids=claude + ['o1'], refresh_windows=True)
+        self.assertNotIn('o1', late['observations']['shortlist'])
+        self.assertNotIn('chatgpt-subscription', json.dumps(late['observations']))
+        reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
+        with mock.patch.object(codex_rate_limits, 'refresh', reader):
+            early = self.collect(table=table, strategy_ids=claude[:2] + ['o1'] + claude[2:], refresh_windows=True)
+        self.assertEqual(reader.call_count, 1)
+        self.assertEqual(early['observations']['shortlist'], claude[:2] + ['o1'] + claude[2:9])
+
+    def test_subscription_candidate_beyond_position_64_is_not_lost(self):
+        self.qualify()
+        self.store('claude-subscription', '5h', '7d')
+        unreachable = [strategy('o%02d' % n, harness=CHATGPT_HARNESS, provider='openai') for n in range(60)]
+        refused = [strategy('n%d' % n) for n in range(6)]
+        for item in refused:
+            collector.mark_not_entitled(self.settings, 'opencode-claude-subscription:' + item['strategy_id'],
+                                        'claude-plan', self.now)
+        order = [item['strategy_id'] for item in unreachable + refused] + ['late']
+        result = self.collect(table=table_of(*unreachable, *refused, strategy('late')), strategy_ids=order,
+                              harnesses=[CLAUDE_HARNESS])
+        self.assertEqual(order.index('late'), 66)
+        self.assertEqual(result['observations']['shortlist'], ['late'])
+        self.assertEqual([route['strategy_id'] for route in result['observations']['routes']], ['late'])
+
+    def chatgpt_first(self):
+        """Five ChatGPT routes whose pool's reader fails, ranked before ten Claude routes with fresh readings."""
+        self.qualify()
+        self.qualify(CHATGPT_PATH)
+        self.store('claude-subscription', '5h', '7d')
+        chatgpt = [strategy('o%d' % n, harness=CHATGPT_HARNESS, provider='openai') for n in range(5)]
+        claude = [strategy('c%d' % n) for n in range(10)]
+        return table_of(*chatgpt, *claude), [item['strategy_id'] for item in chatgpt + claude]
+
+    def test_post_cut_refusal_does_not_refill_the_shortlist(self):
+        from runtime import codex_rate_limits
+        table, order = self.chatgpt_first()
+        read = []
+        real = collector.LocalSource.windows
+
+        def spy(source, pool, now, **read_once):
+            read.append(pool)
+            return real(source, pool, now, **read_once)
+        reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
+        with mock.patch.object(codex_rate_limits, 'refresh', reader), \
+                mock.patch.object(collector.LocalSource, 'windows', spy):
+            result = self.collect(table=table, strategy_ids=order, refresh_windows=True)
+        self.assertEqual(result['observations']['shortlist'], order[:10])
+        self.assertEqual(set(excluded(result).values()), {'codex_unavailable'})
+        self.assertEqual([route['strategy_id'] for route in result['observations']['routes']], order[5:10])
+        self.assertEqual((reader.call_count, sorted(read)), (1, ['chatgpt-subscription', 'claude-subscription']))
+
+    def test_preview_collect_and_decision_keep_the_same_shortlist(self):
+        """The actual producers: `Service.preview` (no binding, ledger, window, reader or write), the managed
+        `prepare` (collect, the Codex reader's late refusal, then the decision) and a caller's own snapshot."""
+        from runtime import codex_rate_limits, routing_settings
+        from tests.test_routing_command import job
+        table, order = self.chatgpt_first()
+        claude = [strategy('c%d' % n) for n in (10, 11)]
+        profile = routing.ensure_profile(job())
+        row = '|'.join((profile['work_kind'], profile['complexity_band'], profile['risk_band']))
+        target = self.settings.parent / 'strategy-table.json'
+        target.write_text(json.dumps(dict(table, rows={row: table['rows']['implementation|high|high'] + claude})))
+        target.chmod(0o600)
+        routing_settings.update(self.settings, dict(managed_projects=[str(self.root)]), 0)
+        self.assertEqual(self.call(dict(v=1, op='set', authority_required=True))['state'], 'updated')
+        order += ['c10', 'c11']
+        body = dict(assignment=dict(attempt_id='late', task='task-late', role='software-engineer', scope=SCOPE),
+                    job=job(), constraints=dict(allowed_harnesses=[CLAUDE_HARNESS, CHATGPT_HARNESS]))
+        def state():
+            return {str(path): path.read_bytes() for path in sorted(self.root.rglob('*')) if path.is_file()}
+        before, managed = state(), command.Service(self.settings, self.ledger_path, project=self.root)
+        self.addCleanup(managed.close)
+        with mock.patch.object(collector.LocalSource, 'windows', side_effect=Refused('windows')), \
+                mock.patch.object(collector, '_ledger_data', side_effect=Refused('ledger')), \
+                mock.patch.object(command.Service, '_ledger', side_effect=Refused('ledger')), \
+                mock.patch.object(codex_rate_limits, 'refresh', side_effect=Refused('reader')), \
+                mock.patch.object(collector, 'store_window', side_effect=Refused('write')):
+            preview = managed.preview(dict(body))
+        self.assertEqual(state(), before)  # wrote nothing
+        self.assertEqual((preview['state'], preview['mode'], preview['ranking']['strategy_ids']),
+                         ('previewed', 'ranked', order), preview)
+        self.assertEqual(preview['shortlist'], order[:10])
+        collected, real = [], collector.collect
+
+        def collect(*args, **kwargs):
+            collected.append(real(*args, **kwargs))
+            return collected[-1]
+        reader = mock.Mock(return_value=dict(state='failed', reason='codex_unavailable'))
+        with mock.patch.object(codex_rate_limits, 'refresh', reader), mock.patch.object(collector, 'collect', collect):
+            decided = managed.handle(json.dumps(dict(body, v=1, op='prepare')).encode())
+        self.assertEqual(collected[0]['observations']['shortlist'], preview['shortlist'])
+        self.assertEqual(reader.call_count, 1)  # the late refusal: the ChatGPT routes, no refill
+        self.assertEqual(decided['state'], 'admitted', decided)
+        self.assertIn(decided['admission']['route'].rsplit(':', 1)[1], preview['shortlist'][5:])
+        # A caller's own snapshot (no `shortlist`) with twelve eligible routes is cut the same way in admission.
+        snapshot = collected[0]['observations']
+        template = next(route for route in snapshot['routes'] if route['strategy_id'] == 'c0')
+        caller = dict(snapshot, routes=[dict(template, strategy_id=sid, route='opencode-claude-subscription:' + sid)
+                                        for sid in order[5:]])
+        del caller['shortlist']
+        shared = routing_funding.subscription_shortlist
+        with mock.patch.object(routing_funding, 'subscription_shortlist', wraps=shared) as cut:
+            again = self.call(dict(body, v=1, op='prepare', assignment=dict(body['assignment'], attempt_id='caller'),
+                                   observations=caller))
+        self.assertEqual(again['state'], 'admitted', again)
+        self.assertEqual(again['ranking']['strategy_ids'], order)
+        self.assertEqual(routing_funding.subscription_shortlist(*cut.call_args.args), order[5:15])  # c10, c11 cut
+        self.assertIn(again['admission']['route'].rsplit(':', 1)[1], order[5:15])
 
     def test_static_source_answers_the_whole_interface(self):
         static = collector.StaticSource([sub_route(), gateway_route(pool='gw')], dict(sub=[sub_window(self.now)]))

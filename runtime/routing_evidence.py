@@ -8,7 +8,7 @@ never guessed. Model, effort and harness names appear only as data.
 Input shapes (all plain JSON):
   guidance:   [{id, sha256, checked_at, rows:[{work_kind, complexity_band, risk_band,
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
-  catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?}]  # one client's own catalog
+  catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?, list_price?}]  # one client's own
   benchmarks: [{id, model, harness, work_kind, sha256, checked_at}]        # harness and work_kind are required to match
 
 A row's work kind is one of the task profile template's; a row naming a `role` or `task_family` (the schema-1
@@ -18,11 +18,17 @@ the launch identifier that harness accepts, and its efforts are only those the a
 ``supported_efforts`` permits only ``effort: null`` (omit the parameter). The entry's optional ``provider`` is copied
 onto each strategy for route generation. A strategy's ``endpoint`` defaults to its harness and is kept only when
 it differs.
+The entry's optional ``list_price`` ``{input, output}`` is in dollars per million tokens (finite, not negative); each
+strategy carries ``list_price_micros`` (``round((3 * input + output) / 4 * 1_000_000)``, None when unpriced), and each
+row is ordered priced first, by that price, then by the effort's index in the model's ``supported_efforts`` (listed
+lowest first; no effort counts as 0), then in guidance order.
 OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
 An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
 """
+from fractions import Fraction
 import hashlib
 import json
+import math
 import re
 import time
 
@@ -63,6 +69,14 @@ def _sha(value, field):
     return value
 
 
+def _micros(price_in, price_out):
+    """`round((3 * input + output) / 4 * 1_000_000)`; finite prices beyond float range use exact fractions."""
+    try:
+        return round((3 * price_in + price_out) / 4 * 1_000_000)
+    except OverflowError:  # an infinite intermediate (or an int too large for a float) from finite inputs
+        return round((3 * Fraction(price_in) + Fraction(price_out)) / 4 * 1_000_000)
+
+
 def _catalog(items):
     """``{(model, harness): {efforts, provider, context_limit}}``; a duplicate pair or a missing harness list is
     invalid, while the same model on different harnesses is not."""
@@ -80,9 +94,14 @@ def _catalog(items):
         _require(provider is None or isinstance(provider, str) and 0 < len(provider) <= 64, 'Invalid catalog provider')
         limit = item.get('context_limit')
         _require(limit is None or type(limit) is int and limit >= 0, 'Invalid catalog context limit')
+        price = item.get('list_price')
+        _require(price is None or isinstance(price, dict) and set(price) == {'input', 'output'} and all(
+            (type(price[side]) is int or type(price[side]) is float and math.isfinite(price[side])) and price[side] >= 0
+            for side in ('input', 'output')), 'Invalid catalog list price')
+        micros = None if price is None else _micros(price['input'], price['output'])
         for harness in harnesses:
             _require((model, harness) not in live, 'Duplicate catalog model and harness')
-            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit)
+            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit, list_price=micros)
     return live
 
 
@@ -164,11 +183,16 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
                     strategy['provider'] = model['provider']
                 if strategy['endpoint'] == strategy['harness']:
                     del strategy['endpoint']
-                if all(existing['strategy_id'] != strategy['strategy_id'] for existing in target):
-                    target.append({k: strategy[k] for k in ('strategy_id', 'model', 'effort', 'harness', 'provider',
-                                                            'endpoint', 'evidence_refs', 'context_limit')
-                                   if k in strategy})
-    rows = {name: value for name, value in rows.items() if value}
+                strategy['list_price_micros'] = model['list_price']
+                if all(existing['strategy_id'] != strategy['strategy_id'] for _, existing in target):
+                    effort = 0 if strategy['effort'] is None else model['efforts'].index(strategy['effort'])
+                    order = (strategy['list_price_micros'] is None, strategy['list_price_micros'] or 0, effort)
+                    target.append((order, {k: strategy[k] for k in (
+                        'strategy_id', 'model', 'effort', 'harness', 'provider', 'endpoint', 'evidence_refs',
+                        'context_limit', 'list_price_micros') if k in strategy}))
+    # a stable sort keeps the guidance order among equal prices and effort indexes
+    rows = {name: [item for _, item in sorted(value, key=lambda pair: pair[0])]
+            for name, value in rows.items() if value}
     checks = [source['checked_at'] for source in sources]
     return dict(schema=SCHEMA, version=_digest([SCHEMA, rows, sources]), compiled_at=now or _now(),
                 checked_at=min(checks) if checks else None, sources=sources, rows=rows, dropped=dropped)
