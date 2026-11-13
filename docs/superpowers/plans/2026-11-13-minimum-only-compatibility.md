@@ -60,7 +60,8 @@
 - [x] OpenCode lower-bound acceptance.
 - [x] Credentials, workspace and version-only freshness integration.
 - [x] Remaining floor proposals and active documentation.
-- [ ] Final validation, review and delivery.
+- [x] Final validation and review.
+- Delivery and synchronization: actual remote outcome belongs to [PR #288](https://github.com/fcoouto/vibe-workflow/pull/288) and its coordinator's task context; completion requires observed merge and local inclusion.
 
 No code implementation or installed integration update has occurred at plan creation.
 Explicit execution approval supplies the instruction to continue without another
@@ -150,3 +151,14 @@ interrupted run. Kept the same minimum condition in the existing assignment
 filter and reused the module import list, preserving the ceiling without raising
 it or dropping any safety check. Package validation then passed. The guard and
 integration checks run again on that final committed correction.
+
+Final affected run on `f6b753c644b69aa6a2432a2b34224fc77c864700`: 12 modules,
+268 tests, no skips or failures in 264.5 seconds. This covers evidence/delegation,
+native guard/discovery/review, Workstreams, staged admission, setup observation,
+escalation workflow, instruction delivery, source snapshots and the comparator.
+Together with preserved 35-module evidence for unchanged consumers, applicable
+checks pass. Package validation and diff whitespace checks also passed on that
+candidate; only this evidence update follows it. F1 is resolved, not deferred.
+No additional review finding or declined behavior remains. Full suite, installed
+client refresh and live qualification were not run. Git/gh/RTK proposals remain
+explicit proposals, and no numeric floor was invented for plugin/MCP integrations.
