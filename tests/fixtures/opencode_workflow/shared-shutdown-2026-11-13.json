@@ -81,6 +81,18 @@
       "failure": "Native once reply allowed VALUE = 6 before intended Reject input; controller's preserved-bytes assertion failed."
     }
   ],
+  "read_only_followup": {
+    "desktop_version": "2.2.7",
+    "matching_enabled_mechanism": "Desktop server-wide permission listener can submit once independently of terminal prompt mode",
+    "historical_reply_actor": "not conclusively attributed",
+    "installed_listener_sha256": "11fbcb799856bcddeacc3b8c46c4164e5189bb03fcd25214202a2fdeb37282fc",
+    "installed_machine_sha256": "394e66c46a2c3638c9efd4b848c9b130f04740ceb1acd517f53b5fa886a0c0ec",
+    "actual_pure_machine_check": "passed; approve yields reply, cancel yields no new reply",
+    "new_live_model_requests": 0,
+    "settings_changed": false,
+    "fixture_only_approval_isolation": "not established",
+    "blocker": "Supported/manual Desktop approval isolation requires explicit authorization; native settings must not be edited directly"
+  },
   "limits": [
     "No semantic judge or Smart Routing work",
     "No productivity comparison",

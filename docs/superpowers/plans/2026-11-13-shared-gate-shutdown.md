@@ -91,3 +91,22 @@ qualification or authorize merge. A further live attempt needs approval-source
 investigation/isolation and a separately bounded decision. Smart Routing, semantic
 judging and productivity remain deferred. Automatic title synchronization is paused
 after native `manual_title`; preserve the user's current title.
+
+## Continuation investigation
+
+The user requested continuing dependency-ready implementation-plan work. Read-only
+inspection found an enabled matching Desktop approver: its installed server-wide
+permission listener sends `once` independently of terminal prompt mode. The
+installed pure state-machine check passed without inference/network/settings
+effects. Historical actor attribution remains incomplete. See the report's
+read-only continuation section and retained private investigation receipt.
+
+Approval isolation remains a real dependency: existing fixtures use native
+project `global`, and the Desktop listener can apply its default before resolving
+an unknown session's project. A fixture override alone is not proved safe.
+No supported GUI control is installed/discovered. Preserve settings; do not edit
+native databases, silently disable Desktop approval, close the app, install a
+driver or restart the shared service. An explicit supported/manual isolation
+decision is needed before a separately bounded approval-only follow-up. No prior
+case or allowance was replayed/reset. Remaining original mechanical implementation
+tasks are already complete; judge implementation still waits for Smart Routing.

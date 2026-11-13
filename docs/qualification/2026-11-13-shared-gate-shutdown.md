@@ -74,6 +74,36 @@ The later Allow-once test and Case B's clean completed-work exit were not run.
 The unexpected reply precedes the controller click; wrong click coordinates are
 not an established cause. Approval-source attribution remains unresolved.
 
+### Read-only continuation: matching Desktop approver found
+
+A subsequent user-authorized investigation inspected the installed Desktop 2.2.7
+bundle and only its relevant native settings record, without changing either.
+`app/src/session/requests/auto-approve.ts` subscribes to `permission.asked` across
+the server connection and submits `once` for projects covered by Desktop's
+client-local approval preference. The observed Desktop setting covered the
+fixture. The terminal's `session.permissions=prompt` does not disable this
+separate approver. This is a matching enabled mechanism, not conclusive actor
+attribution for the historical reply.
+
+An offline check executed the installed pure auto-approval state machine: an
+approve event produced a reply effect; cancellation produced no new reply. It
+made no model/network calls or native settings changes. Node's type-stripping
+helper emitted its experimental-feature warning; no product API changed.
+
+Fixture-only isolation is not established. Original fixtures belong to native
+project `global`, so a project override would not uniquely target this test.
+Moreover, the Desktop listener can approve an unknown session using its default
+before looking up that session's project. Do not assume that adding a project
+override alone removes the race. No supported GUI driver/tool is available here;
+direct edits to native settings/database files are not a substitute.
+
+**Current blocker:** establish Desktop approval isolation through an explicitly
+authorized, supported/manual control. Preserve the user's global preference
+unless they authorize its temporary change. No live replay, new allocation,
+application shutdown, driver install or service restart occurred. Other mechanical
+implementation and original selected qualification tasks are already complete;
+the routed judge still depends on Smart Routing and remains outside this plan.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on
