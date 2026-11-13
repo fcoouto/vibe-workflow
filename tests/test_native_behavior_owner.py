@@ -78,6 +78,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             reads, hashes = bootstrap_reads()
             calls = [*reads, *wrapped_patch_denial()]
         native_rows = [row('session_meta', dict(id='native-thread', cwd=str(self.fixture.repo))),
+            row('world_state', dict(state='x' * (1024 * 1024))),
             started(), *calls, row('event_msg', dict(type='task_complete', turn_id='native-turn'))]
         rollout = home/'fixture-rollout.jsonl'
         settings = home/'fixture-input.json'
