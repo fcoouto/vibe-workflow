@@ -241,8 +241,10 @@ def validate(root=ROOT):
     if len(entries) != 1 or entries[0]["source"] != {"source": "local", "path": "./"}:
         raise ValueError("Local marketplace must reference this package root once")
     export = package_export(root)
+    from runtime import model_names  # the user's compiled table names the models; none there means not_checked
     return {"package": manifest["name"], "validation": "passed", "skill_words": counts,
-            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
+            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked",
+            "model_names": model_names.check(root)}
 
 
 def release_pathspecs():

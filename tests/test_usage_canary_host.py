@@ -13,11 +13,17 @@ from tests.test_openai_api import Connection, Response, completed
 
 class CanaryHostTests(unittest.TestCase):
     def setUp(self):
+        # Execution never reads the table: the approved Plan carries the model and its verified rate card.
+        table = patch('runtime.model_names.table', side_effect=AssertionError('table read after approval'))
+        table.start()
+        self.addCleanup(table.stop)
         self.plan = host.Plan(
             thread_id='thread', host_id='desktop', checkout='/fixture/project', scope='scope',
             package_digest='a' * 64, account='account', reviewer='independent-reviewer',
             organization='org-fixture', project='proj_fixture', key_name='Codex',
             key_expiry=None, grant_expiry=10_000, grant_amount=270_000_000, created_at=100, expires_at=200,
+            model='vendor-light', input_rate=2_000_000, cached_input_rate=100_000, cache_write_rate=5_000_000,
+            output_rate=10_000_000,
         )
         self.message = dict(type='userMessage', id='user-item',
                             content=[dict(type='text', text=host.approval_text(self.plan))])
@@ -29,7 +35,7 @@ class CanaryHostTests(unittest.TestCase):
                             mode='off', binding=self.binding)
         self.config = dict(enabled=True, disabled=False, requested_mode='smart', revision=2, org_revision=1,
                            class_name='canary', binding=self.binding,
-                           profile=usage_canary.profile_for(101, 200))
+                           profile=usage_canary.profile_for(101, 200, host.card(self.plan)))
         cycle = 'canary-' + usage_admission.digest(asdict(self.plan))
         self.policy = dict(cycle=cycle, start=90, end=10_000, expiry=10_000, stop_at=900,
                            ceiling='subscription_benefit', amount=None, grant_amount=270_000_000,
@@ -50,13 +56,24 @@ class CanaryHostTests(unittest.TestCase):
 
     def test_exact_foreground_approval_binds_one_canary(self):
         evidence, native = self.issue()
-        task = usage_canary.task_for(evidence.approval_id, self.binding, native)
+        task = usage_canary.task_for(evidence.approval_id, self.binding, native, host.card(self.plan))
         usage_canary.validate(evidence, binding=self.binding, profile=self.config['profile'], task=task, now=106)
         self.assertEqual(native['windows'], [])
         self.assertEqual(evidence.approval_until, 200)
         self.message['id'] = 'another-direct-message'
         repeated, _ = self.issue()
         self.assertEqual(repeated.approval_id, evidence.approval_id)
+
+    def test_the_approval_determines_the_billed_model_and_rates(self):
+        self.assertIn('vendor-light', host.approval_text(self.plan))
+        for change in (dict(model='vendor-other'), dict(input_rate=2_000_001), dict(cached_input_rate=1),
+                       dict(cache_write_rate=5_000_001), dict(output_rate=10_000_001)):
+            with self.subTest(change=change):
+                self.assertNotEqual(host.approval_text(replace(self.plan, **change)), host.approval_text(self.plan))
+        for profile in (dict(self.config['profile'], model='vendor-other'),
+                        dict(self.config['profile'], output_rate=9_000_000)):
+            with self.subTest(profile=profile), self.assertRaisesRegex(BudgetError, '^canary_price_changed$'):
+                self.issue(config=dict(self.config, profile=profile))
 
     def test_native_approval_allows_one_terminal_line_feed(self):
         token = host.approval_text(self.plan)

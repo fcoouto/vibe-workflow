@@ -14,6 +14,7 @@ from unittest.mock import patch
 from tests.qualification import chatgpt, probe_stages, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
+from tests.qualification.doubles import qual_run
 from tests.qualification.probe_doubles import Events, ProbeServer
 
 NODE = shutil.which("node")
@@ -172,7 +173,7 @@ class StageHarness(Temp):
         base = self.private(self.tmp / "iso")
         for name in ("routing", "usage", "project"):
             self.private(base / name)
-        run = live.Run(base, ledger, purpose=purpose, stages=list(stages) if purpose == "qualification-2" else None,
+        run = qual_run(base, ledger, purpose=purpose, stages=list(stages) if purpose == "qualification-2" else None,
                        chatgpt_model=model)
         self.addCleanup(run.routing.stop)
         route = QUAL2 if purpose == "qualification-2" else GPT
@@ -848,7 +849,7 @@ class WatchedHomeTests(Temp):
 
     def test_the_run_watches_codex_through_its_user_dir_check(self):
         home = self.fake_home()
-        run = live.Run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
+        run = qual_run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
                        purpose="chatgpt", chatgpt_model="openai/gpt-test-mini#low")
         with patch.dict("os.environ", HOME=str(home)):
             before, report = run.snapshot_user_dirs(), run.report_only_home()
@@ -934,7 +935,7 @@ class SessionOutputChurnTests(Temp):
         home = self.private(self.tmp / "home")
         data = home / ".local" / "share" / "opencode"
         (data / "shell" / "abc").mkdir(parents=True)
-        run = live.Run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
+        run = qual_run(self.private(self.tmp / "iso"), approved_ledger(self.private(self.tmp / "state") / "calls.jsonl"),
                        purpose="chatgpt", chatgpt_model="openai/gpt-test-mini#low")
         with patch.dict("os.environ", HOME=str(home)):
             before, report = run.snapshot_user_dirs(), run.report_only_home()
@@ -950,7 +951,7 @@ class ProbeStructureTests(StageHarness):
     def test_new_runs_shadow_no_method(self):
         ledger = approved_ledger(self.private(self.tmp / "state") / "calls.jsonl")
         for purpose, model in (("qualification-2", None), ("chatgpt", "openai/gpt-test-mini#low")):
-            run = live.Run(self.private(self.tmp / ("iso-" + purpose)), ledger, purpose=purpose,
+            run = qual_run(self.private(self.tmp / ("iso-" + purpose)), ledger, purpose=purpose,
                            stages=["descendants"] if purpose == "qualification-2" else None, chatgpt_model=model)
             cls = type(run)
             shadowed = [name for name in vars(run) if callable(getattr(cls, name, None)) or isinstance(getattr(cls, name, None), property)]

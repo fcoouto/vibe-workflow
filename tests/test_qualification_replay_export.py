@@ -10,6 +10,7 @@ from unittest import mock
 from tests.qualification import canary, replay_export, safety
 from tests.qualification import opencode_live as live
 from tests.qualification.doubles import Temp
+from tests.qualification.doubles import qual_plan, qual_driver, qual_run
 from tests.qualification.server import Routing
 
 
@@ -23,7 +24,7 @@ class ExportTests(Temp):
 
     def admit(self, count, tag="t"):
         canary.initialize_state(self.routing)
-        for item in canary.plan_assignments(count, tag):
+        for item in qual_plan(count, tag):
             answer, _ = self.routing("prepare", **item["body"])
             self.assertEqual(answer.get("state"), "admitted", answer)
             attempt = item["body"]["assignment"]["attempt_id"]  # closed before the next, as the pilot runs serially
@@ -124,7 +125,7 @@ class ExportTests(Temp):
                 return dict(exported=2) if self.calls.count("export_if_due") == 2 else None
         env = Exporting()
         ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
-        results = canary.PilotDriver(env, ledger, n=3, run="t").run()
+        results = qual_driver(env, ledger, n=3, run="t").run()
         self.assertEqual(env.calls.count("export_if_due"), 3)  # once per admission, before its first routing step
         self.assertEqual(env.calls[env.calls.index("export_if_due") + 1], "status")
         self.assertEqual(results["exports"], [dict(admission=2, exported=2)])
@@ -134,7 +135,7 @@ class ExportTests(Temp):
         with mock.patch.dict(os.environ, HOME=str(self.home)):
             self.assertEqual(replay_export.default_dir(), self.home / ".local/state/vibe-workflow-replay/canary")
             ledger = safety.CallLedger.initialize(self.private(self.tmp / "calls") / "calls.jsonl")
-            run = live.Run(self.private(self.tmp / "iso"), ledger)
+            run = qual_run(self.private(self.tmp / "iso"), ledger)
             self.assertEqual(run.replay_dir, self.home / ".local/state/vibe-workflow-replay/canary")
 
     def test_the_export_keeps_records_a_later_prune_drops(self):
@@ -167,7 +168,7 @@ class CanaryWiringTests(Temp):
         state = canary.check_canary_state(self.canary_state, home=self.home)
         routing = Routing(state["settings"], state["ledger"])
         canary.initialize_state(routing)
-        answer, _ = routing("prepare", **canary.plan_assignments(1, "seed")[0]["body"])
+        answer, _ = routing("prepare", **qual_plan(1, "seed")[0]["body"])
         self.assertEqual(answer["state"], "admitted")
         return state
 
@@ -188,7 +189,7 @@ class CanaryWiringTests(Temp):
         project = self.private(self.tmp / "project")
         os.system("git -C %s init -q" % project)
         ledger = safety.CallLedger(self.ledger_path)
-        run = live.Run(self.q, ledger, canary_project=str(project), canary_state=state)
+        run = qual_run(self.q, ledger, canary_project=str(project), canary_state=state)
         run.replay_dir = self.replay
         run.cleanup()
         self.assertEqual(run.results["replay_export"]["exported"], 1)
