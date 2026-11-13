@@ -129,3 +129,20 @@ alone do not prove runtime/client isolation. Approval origin remains unknown;
 caller-level attribution or supported isolation of the answering client/path is
 the actual next dependency. Do not repeat the user's already-observed setting
 change, alter other clients or restore global auto-accept without authorization.
+
+## User-requested read-only approval-writer trace
+
+Installed CLI source traces create→ask→park→Asked separately from explicit
+reply→Replied→settlement. Saved allows do not synthesize this sequence, and service
+close replies reject. Candidate writers include TUI manual/auto modes, Desktop
+manual/auto modes, owned headless run auto, ACP chooser and API/plugin calls.
+Retained event/log fields do not identify the approving caller. Complete controller
+protocol responses did not parse as Return in an offline installed-parser check;
+historical streaming input remains untraced. No fixture/native request replay or
+settings/service change occurred. See the report's new writer-trace section.
+
+A dormant isolation-driver precondition was also found: save=[] omits Always allow,
+but its label guard required that choice. It was not reached before the observed
+early approval and did not cause it. Keep executed evidence intact; correct that
+guard only before a separately authorized new attempt. Qualification remains
+blocked on caller attribution or supported isolation, not another unchanged run.

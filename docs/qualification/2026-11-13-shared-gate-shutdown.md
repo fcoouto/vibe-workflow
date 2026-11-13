@@ -138,6 +138,61 @@ approval path answered. Do not ask the user to repeat the same setting change as
 if the persisted change were absent. Caller-level attribution or supported client
 isolation is needed before another attempt; the live gate follow-up stays blocked.
 
+### Read-only trace of possible `once` writers
+
+The user subsequently requested tracing without another fixture run or settings
+change. Inspection of the installed 2.2.7 CLI's embedded source narrows the path:
+
+`session.permission.create` calls `Permission.ask`, evaluates the request, parks
+it and publishes `Asked`. It does not manufacture `once`. The reply endpoint
+validates the request/session pair and calls `Permission.reply`, which publishes
+`Replied`, resolves the waiting permission and removes it. The server plugin
+`ctx.permission.reply` reaches that same service. A saved allow changes evaluation
+before parking; permission-service shutdown rejects pending requests. Neither
+explains the observed `Asked` followed by `once`.
+
+| Possible writer | Required path | What retained evidence establishes |
+| --- | --- | --- |
+| TUI auto-accept | Auto flag or CLI autoaccept mode; current root/family request | Owned frontend had no auto/yolo/skip flag, explicit prompt config and no `auto` footer marker. This is setup evidence, not a complete runtime-mode trace. |
+| TUI choice | Return or mouse-up selects a choice; default is once | No controller permission-choice input was recorded. Protocol traffic was not separately input-traced. |
+| Desktop auto-approver | Covered project and mounted server-wide listener | Persisted preference was off during isolation. Other windows' live state/hydration was not captured. |
+| Desktop dock/inbox | UI decision invokes the permission API | No actor-bound record identifies such a decision. |
+| Headless `run --auto` | An awaited root/descendant ownership check must pass | Current local CLI inventory showed only the shared server, not a matching run client. This cannot exclude a past or remote client. |
+| ACP client | External permission chooser returns once | A possible installed path, not an observed responder. |
+| Authenticated API client or server plugin | Explicit reply supplies once | These reach the same reply service; the retained event does not distinguish them. The tested controller/observer did not call a reply endpoint. |
+
+The CLI `api` command handler itself performs its selected HTTP request and writes
+the response. Its traced body contains no automatic permission reply/subscription.
+This excludes an implicit approval in that handler body, not arbitrary imported
+code, remote clients or plugins. The captured `permission.replied` record contains
+session, request and reply, but no approving client/process/transport identity.
+The native `source` attached to an ask identifies the requesting tool, not the
+actor that later approved it. Retained request-specific logs do not fill that gap.
+
+**Controller protocol check:** an offline call of the installed pure keypress
+parser at its default options discarded complete cursor-position, primary-device-attribute and color
+responses. The secondary-device-attribute response produced an unnamed key, not
+Return. An actual carriage return produced Return as the positive control. These
+are the complete response forms the controller can generate; this does not replay
+the full streaming parser or recover historical stdin fragmentation. It reduces
+support for a straightforward protocol-response-as-Enter explanation without
+proving that all controller input paths are excluded.
+
+**Separate dormant preflight issue:** the isolation request used `save=[]`, for
+which the native TUI offers Allow once and Reject, not Always allow. Its controller
+would nevertheless wait for all three labels. The observed early-reply guard
+failed before that branch, so this is not the cause of the 19-ms approval. Preserve
+the executed script; align the visible-choice guard before any separately
+authorized future attempt. No script repair or test replay was made here.
+
+The installed CLI digest is
+`2160e46e87e83561195271e69d0385440bbc91bc4b9c8dc38e0a3822190614a1`.
+Private evidence retains bounded source-range digests and parser-check results.
+**Conclusion:** an explicit reply path is traced, but the responder cannot be
+identified retrospectively from the retained event/log fields. Caller-bound
+telemetry or supported isolation remains necessary. No new native permission,
+fixture run, live model call, settings change or service restart occurred.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on

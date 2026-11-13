@@ -121,6 +121,25 @@
     "original_campaign_allocation_reset": false,
     "completed_cases_replayed": false
   },
+  "read_only_writer_trace": {
+    "cli_version": "2.2.7",
+    "binary_sha256": "2160e46e87e83561195271e69d0385440bbc91bc4b9c8dc38e0a3822190614a1",
+    "ask_synthesizes_once": false,
+    "permission_close_reply": "reject",
+    "observed_once_requires_reply_path": true,
+    "reply_event_caller_identity": "not recorded",
+    "historical_responder": "unattributed",
+    "api_command_body_auto_reply": "none found; not a whole-import/runtime audit",
+    "candidate_paths": ["TUI automatic", "TUI manual", "Desktop automatic", "Desktop manual", "headless run auto", "ACP chooser", "authenticated API or server plugin"],
+    "offline_complete_protocol_responses": "cursor/primary-DA/color discarded; secondary-DA unnamed, not Return; actual CR positive control returns Return",
+    "parser_sha256": "938215321195021c8005060f518f35c799084c13b2af6548ec9aa21317ec4f39",
+    "protocol_limit": "complete sequences only; actual streaming input and chunking unrecorded",
+    "dormant_preflight_issue": "save=[] omits Always allow, but original visible-choice guard required it; not the cause of the earlier uncontrolled reply",
+    "fixture_replays": 0,
+    "new_permission_requests": 0,
+    "settings_changes": 0,
+    "live_qualification_model_requests": 0
+  },
   "limits": [
     "No semantic judge or Smart Routing work",
     "No productivity comparison",
