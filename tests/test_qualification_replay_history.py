@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -234,6 +235,16 @@ class ReplayHistoryTests(unittest.TestCase):
         self.assertEqual((low["work_kind"], low["complexity_band"], low["risk_band"]), ("review", "low", "high"))
         self.assertIsNone(replay.profile(dict(specialist="unknown", complexity_band="low", risk_band="unknown")))
 
+    def test_negative_duration_is_unknown_without_discarding_a_known_token_band(self):
+        row = dict(store="opencode", kind="opencode", agent="reviewer", title="", model="m",
+                   start_ms=10, end_ms=9, output=None, reasoning=None, output_includes_reasoning=None)
+        labels = replay.label(row)
+        self.assertEqual(labels["complexity_band"], "unknown")
+        self.assertEqual(replay.profile(labels)["complexity_band"], "high")
+        self.assertEqual(replay.label(dict(row, end_ms=10))["complexity_band"], "low")
+        self.assertEqual(replay.label(dict(row, output=20_000, output_includes_reasoning=True))["complexity_band"],
+                         "high")
+
     def test_a_session_seen_twice_counts_once(self):
         first = self.codex([child("dup", created_at_ms=NOW_MS - 6 * HOUR_MS)], [("p", "dup")], "b.sqlite")
         second = self.codex([child("dup", agent_role="reviewer")], [("p", "dup")], "a.sqlite")
@@ -391,6 +402,16 @@ class ReplayHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "schema_changed: codex threads.reasoning_effort"):
             replay.collect([dict(name="codex", kind="codex", path=path, roots=[ROOT])], now_ms=NOW_MS)
 
+    def test_missing_mapped_column_refuses_before_session_rows_are_selected(self):
+        store = self.codex([child("t")], [("p", "t")])
+        with closing(sqlite3.connect(store["path"])) as db:
+            db.execute("ALTER TABLE threads DROP COLUMN reasoning_effort")
+            db.commit()
+        with mock.patch.object(replay, "_codex_rows", side_effect=AssertionError("session rows selected")), \
+                mock.patch.dict(replay.READERS, codex=replay._codex_rows), \
+                self.assertRaisesRegex(Refused, "schema_changed: codex threads.reasoning_effort"):
+            replay.collect([store], now_ms=NOW_MS)
+
 
 PATH_ID = "opencode-claude-subscription"  # a production path from the packaged rules, qualified only in temp storage
 HARNESS = "claude-agent-sdk via opencode"
@@ -464,6 +485,10 @@ class DecisionCompositionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.folder = Path(self.temporary.name)
+        self.home = self.folder.resolve() / "home"
+        patch = mock.patch.dict(os.environ, HOME=str(self.home))
+        patch.start()
+        self.addCleanup(patch.stop)
         self.settings, self.table = routing_inputs(self.folder)
         self.labelled()
 
@@ -569,7 +594,72 @@ class DecisionCompositionTests(unittest.TestCase):
         for secret in ("sess-a", "Implement", "/synthetic", self.settings, str(NOW_MS - 10 * HOUR_MS)):
             self.assertNotIn(secret, text)
         self.assertEqual(sorted(p.name for p in Path(self.settings).parent.iterdir()),
-                         [".paths.lock", "path-qualifications.json", "strategy-table.json"])  # ledger stays private
+                          [".paths.lock", "path-qualifications.json", "strategy-table.json"])  # ledger stays private
+
+    def test_unknown_specialist_is_counted_without_admission_or_comparison(self):
+        with mock.patch.object(routing, "admit", side_effect=AssertionError("unknown specialist admitted")):
+            report = replay.compose(self.arrivals()[-1:], settings_path=self.settings)
+        self.assertEqual((report["compared"], report["pending"], report["not_compared"]), (0, 0, 1))
+        self.assertEqual(report["unknowns"]["specialist"], 1)
+        self.assertEqual(report["labels"]["specialist"], {"unknown": 1})
+        self.assertEqual(report["disagreement"]["overall"], dict(compared=0, disagreed=0))
+
+    def test_temporary_ledger_is_private_in_replay_state_and_removed_on_success_or_error(self):
+        root = self.home / ".local/state/vibe-workflow-replay"
+        created, real = [], replay.usage_budget.initialize
+
+        def initialize(path):
+            identity = real(path)
+            created.append(path)
+            self.assertEqual(path.parent.parent.parent, root)
+            for directory in (root, path.parent.parent, path.parent):
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            return identity
+
+        for failing in (False, True):
+            with self.subTest(failing=failing), mock.patch.object(replay.usage_budget, "initialize", initialize):
+                if failing:
+                    with mock.patch.object(routing, "rank", side_effect=RuntimeError("synthetic failure")), \
+                            self.assertRaisesRegex(RuntimeError, "synthetic failure"):
+                        replay.compose(self.arrivals()[:1], settings_path=self.settings)
+                else:
+                    self.assertEqual(replay.compose(self.arrivals()[:1], settings_path=self.settings)["compared"], 1)
+            self.assertTrue(root.is_dir())
+            self.assertEqual(list(root.iterdir()), [])
+        self.assertEqual(len(created), 2)
+        self.assertTrue(all(not path.parent.parent.exists() for path in created))
+
+    def test_unsafe_replay_state_is_refused_without_creating_a_ledger(self):
+        root = self.home / ".local/state/vibe-workflow-replay"
+        root.parent.mkdir(parents=True, mode=0o700)
+        target = self.folder / "unrelated"
+        target.mkdir(mode=0o700)
+        root.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(Refused):
+            replay.compose(self.arrivals()[:1], settings_path=self.settings)
+        self.assertEqual(list(target.iterdir()), [])
+        root.unlink()
+        root.mkdir(mode=0o755)
+        root.chmod(0o755)
+        with self.assertRaises(Refused):
+            replay.compose(self.arrivals()[:1], settings_path=self.settings)
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o755)
+        self.assertEqual(list(root.iterdir()), [])
+        root.chmod(0o700)
+        (self.home / ".git").mkdir()
+        with self.assertRaises(Refused):
+            replay.compose(self.arrivals()[:1], settings_path=self.settings)
+        self.assertEqual(list(root.iterdir()), [])
+
+    def test_symlinked_replay_parent_is_refused_before_creating_directories(self):
+        target = self.folder / "real-home"
+        target.mkdir(mode=0o700)
+        alias = self.folder / "alias-home"
+        alias.symlink_to(target, target_is_directory=True)
+        with mock.patch.dict(os.environ, HOME=str(alias)), self.assertRaises(Refused):
+            replay.compose(self.arrivals()[:1], settings_path=self.settings)
+        self.assertEqual(list(target.iterdir()), [])
 
     def test_without_a_qualified_path_nothing_is_decided(self):
         bare = self.folder / "bare" / "routing-settings.json"

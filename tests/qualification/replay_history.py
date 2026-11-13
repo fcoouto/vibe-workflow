@@ -1,5 +1,5 @@
 """Advisory historical replay over past session metadata (validation Edit 6; labels amended by Edit 7; store fields
-registered by Edit 9 and its 12 November supplement; project-only scope in Edit 10).
+registered by Edit 9 and its 12 November supplement; project-only scope in Edit 10; conservative rules in Edit 11).
 
 `run(stores, ...)` reads each registered store through one `mode=ro` SQLite connection, selects only the metadata
 columns the registration maps, labels each eligible session by the fixed rules and returns an aggregate report. It
@@ -34,6 +34,7 @@ from urllib.parse import quote
 
 from runtime import (routing, routing_launch, routing_observations, routing_paths, routing_settings, task_profile,
                      usage_budget)
+from tests.qualification import replay_export
 from tests.qualification.safety import Refused
 
 # Retained source mappings (Edit 9); Edit 10 excludes the other `opus` project rather than requiring its mapping.
@@ -242,6 +243,8 @@ def _complexity(row):
     else:
         tokens = None if reasoning is None else output + reasoning
     duration = None if row.get("start_ms") is None or row.get("end_ms") is None else row["end_ms"] - row["start_ms"]
+    if duration is not None and duration < 0:
+        duration = None  # Edit 11: an invalid duration is unknown, not low complexity.
     known = [band for band in (_band(tokens, TOKEN_BANDS), _band(duration, DURATION_BANDS)) if band != "unknown"]
     return max(known, key=BANDS.index) if known else "unknown"
 
@@ -400,7 +403,11 @@ def compose(rows, *, settings_path):
     settings = dict(routing_settings.resolve({}), revision=1)
     ordered = sorted(rows, key=lambda row: (row["start_ms"], row["id"].encode()))
     labelled, decisions, reasons, eligibility = [label(row) for row in ordered], [], {}, {}
-    with tempfile.TemporaryDirectory() as folder:
+    ledger_root = Path.home() / ".local/state/vibe-workflow-replay"
+    if ledger_root != ledger_root.resolve():
+        raise Refused("replay ledger directory must be canonical and contain no symlinks")
+    ledger_root = replay_export.check_dir(ledger_root)
+    with tempfile.TemporaryDirectory(prefix="history-", dir=ledger_root) as folder:
         private = Path(folder) / "ledger"
         os.mkdir(private, 0o700)
         path = private / "ledger.sqlite3"

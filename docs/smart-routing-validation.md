@@ -391,6 +391,38 @@ or changed directory metadata fails the schema check, rather than widening the
 sample. No real store was opened and no historical replay ran for this supplement.
 It registers the scope filter only; all other pre-real-run decisions remain open.
 
+## Edit 11 (13 November 2026): conservative historical-replay rules
+
+The user approved these four rules before any historical replay ran. Earlier
+registration and results remain unchanged; these points govern where they differ.
+
+1. **Mapped schema.** A missing, renamed or retyped mapped column stops the run
+   with `schema_changed` before session rows are selected. A missing column is
+   not silently treated as a missing value. A present column whose row value is
+   absent still follows the registered missing-value rules. This settles Edit 9's
+   schema wording in favor of the runner's existing fail-closed behavior.
+2. **Unknown specialist.** Count the session and its unknown labels, but do not
+   invent a specialist or profile. It is `not_compared`, holds no reservation and
+   contributes nothing to the disagreement denominator. Known specialists with
+   unknown bands still use the router's conservative floors.
+3. **Negative duration.** When last update precedes start, the duration band is
+   `unknown`, not `low`. A separately known generated-token band still applies;
+   with neither band known, complexity remains `unknown` and takes the router's
+   floor. Zero duration remains `low`. No timestamp is rewritten or inferred.
+4. **Temporary ledger.** Create each run's private temporary directory under
+   `~/.local/state/vibe-workflow-replay/`, outside every repository. Refuse an
+   unsafe, symlinked or non-private destination rather than repairing it. The
+   replay directory and temporary directories are owner-only (0700); ledger files
+   are 0600. Keep session ids and titles out of the ledger; per-arrival times are
+   second-precision and remain private. Close and remove the temporary ledger on
+   normal exit and exceptions. A forced kill can leave private residue; do not
+   claim crash cleanup or automatically delete earlier runs or unrelated files.
+
+This registration authorizes implementation and synthetic checks only. It grants
+no history, pilot or credential access, live call, spending, settings change or
+qualification. Both project-scoped sources, validated exclusion provenance and
+IDs, qualified routing inputs and every live/canary gate remain required.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
