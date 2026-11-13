@@ -104,6 +104,35 @@ application shutdown, driver install or service restart occurred. Other mechanic
 implementation and original selected qualification tasks are already complete;
 the routed judge still depends on Smart Routing and remains outside this plan.
 
+### User-authorized fixture-only isolation preflight
+
+After the user disabled Desktop's global auto-accept, a new zero-model fixture
+tested whether its native permission request would wait for terminal input.
+Read-only checks before and after observed the persisted Desktop default off and
+no project overrides. The existing shared process remained 61057/version 2.2.7.
+
+**Result: failed.** The first externally created native canary permission request
+resolved `ask` but received native `once` **19 ms later**, before any controller
+terminal input. The controller stopped the one-attempt test immediately; it did
+not replay the request or submit an API permission reply. Only one of the maximum
+two permission requests ran. No prompt, tool execution, model request or rejected
+model attempt occurred. The canary stayed 0; all five protected inputs matched.
+
+The requested five-second pending observation and deliberate TUI Reject/Allow-once
+controls were therefore not reached. Failure recovery killed and reaped the
+owned frontend (`-9`); that is not a clean-exit pass. The owned root was inactive
+and had no pending permissions at final observation. No file edit, settings
+change, service restart or old-case replay occurred.
+
+This is an API-created idle-root permission/UI preflight, **not** another live
+gate-flow case. Earlier Case A/B results and the 49/80 allocation remain unchanged.
+The result establishes that persisted Desktop auto-accept being off is not enough
+to establish control isolation on this shared connection. It does not identify
+the responder or prove whether a stale Desktop view, another client or a different
+approval path answered. Do not ask the user to repeat the same setting change as
+if the persisted change were absent. Caller-level attribution or supported client
+isolation is needed before another attempt; the live gate follow-up stays blocked.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on

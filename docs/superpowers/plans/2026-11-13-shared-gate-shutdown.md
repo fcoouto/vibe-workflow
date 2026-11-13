@@ -110,3 +110,22 @@ driver or restart the shared service. An explicit supported/manual isolation
 decision is needed before a separately bounded approval-only follow-up. No prior
 case or allowance was replayed/reset. Remaining original mechanical implementation
 tasks are already complete; judge implementation still waits for Smart Routing.
+
+## Authorized fixture-only isolation outcome
+
+The user disabled Desktop global auto-accept and requested a fixture-only
+isolation test. Before and after, persisted autoApprove was false with no project
+overrides. A new API-created idle root made no prompt/model/tool calls. Its first
+native canary permission request was asked, then replied once after 19 ms, before
+any controller terminal input. Stop condition fired; no request replay occurred.
+Only one of the two allowed permission requests ran; the two-minute allocation
+permitted zero model requests. Original Case A/B budgets/results stay unchanged.
+
+The fixture stayed byte-identical, the shared process stayed 61057/2.2.7, and final
+root observation showed inactive/no pending permissions. Failure recovery forced
+the owned frontend closed; do not count it as clean exit. Controlled Reject,
+deliberate Allow once and a new live gate case were not run. Persisted settings
+alone do not prove runtime/client isolation. Approval origin remains unknown;
+caller-level attribution or supported isolation of the answering client/path is
+the actual next dependency. Do not repeat the user's already-observed setting
+change, alter other clients or restore global auto-accept without authorization.
