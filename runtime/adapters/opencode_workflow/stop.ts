@@ -2,6 +2,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs"
 import { resolve } from "node:path"
+import { isDeepStrictEqual } from "node:util"
 import type { Gate } from "./gate.ts"
 
 export type StopForms = {
@@ -48,7 +49,7 @@ function snapshot(file: string): string {
 
 const binding = (event: any) => JSON.stringify({ session: event.sessionID, source: event.source,
   agent: event.agent ?? null, action: event.action, resources: event.resources, metadata: event.metadata })
-const identity = (form: any) => JSON.stringify({ id: form?.id, sessionID: form?.sessionID,
+const identity = (form: any) => ({ id: form?.id, sessionID: form?.sessionID,
   title: form?.title, metadata: form?.metadata, fields: form?.fields })
 
 export class StopApprovals {
@@ -116,7 +117,7 @@ export class StopApprovals {
       const { sessionID: _session, ...payload } = form
       a.sent = true
       const created = await this.call(a, "create", { sessionID: a.session, form: payload })
-      if (identity(created) !== identity(form)) throw new Error("form identity mismatch")
+      if (!isDeepStrictEqual(identity(created), identity(form))) throw new Error("form identity mismatch")
       let detail = await this.read(a)
       if (detail.state.status === "pending") {
         await this.wait(a)
@@ -225,7 +226,7 @@ export class StopApprovals {
 
   private async read(a: Attempt, cleanup = false): Promise<any> {
     const detail = await this.call(a, "get", { sessionID: a.session, formID: a.form.id }, cleanup)
-    if (identity(detail) !== identity(a.form) || !["pending", "answered", "cancelled"].includes(detail?.state?.status)) {
+    if (!isDeepStrictEqual(identity(detail), identity(a.form)) || !["pending", "answered", "cancelled"].includes(detail?.state?.status)) {
       throw new Error("invalid authoritative form")
     }
     a.detail = detail

@@ -605,3 +605,20 @@ test("ordinary editing stays quiet and a native post-format result still complet
   await h.complete(stopped, { result: { metadata: { files: [{ patch: "native formatter changed spacing" }] } } })
   assert.deepEqual((await h.status()).held, [])
 })
+
+test("native JSON field ordering does not turn an exact form approval into a denial", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const nativeOrder = (value: any) => ({ ...value,
+    fields: value.fields.map((field: any) => ({ description: field.description, key: field.key,
+      title: field.title, required: field.required, type: field.type, custom: field.custom, options: field.options })),
+    metadata: { nonce: value.metadata.nonce, binding: value.metadata.binding, generation: value.metadata.generation },
+  })
+  const create = h.driver.create; const get = h.driver.get
+  h.driver.create = async (...args: any[]) => nativeOrder(await create(...args))
+  h.driver.get = async (...args: any[]) => nativeOrder(await get(...args))
+  const c = h.makeCall(); await h.evaluate(c)
+  assert.equal(c.effect, "allow")
+  await h.complete(c)
+  assert.deepEqual((await h.status()).held, [])
+})
