@@ -142,3 +142,11 @@ implementation file changed. Preserve the 1,149-test evidence for unchanged leaf
 behavior; rerun shared guard/delegation, admission, instruction and escalation
 integration checks on the merged candidate. [PR #288](https://github.com/fcoouto/vibe-workflow/pull/288)
 remains draft until those checks and final package validation pass.
+
+The first integrated guard check run on `0194be5` was explicitly interrupted and
+all units stopped after package validation found `runtime/delegation.py` three
+lines over its fixed 3,358-line ceiling. No passing evidence is claimed for that
+interrupted run. Kept the same minimum condition in the existing assignment
+filter and reused the module import list, preserving the ceiling without raising
+it or dropping any safety check. Package validation then passed. The guard and
+integration checks run again on that final committed correction.
