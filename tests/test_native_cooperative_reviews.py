@@ -49,7 +49,9 @@ class NativeCooperativeReviewTests(NativeReviewFixture, unittest.TestCase):
             path.write_text("".join(json.dumps(item) + "\n" for item in rows))
             path.chmod(0o600)
 
-        child_rows = [child_meta, child_start, context]
+        child_rows = [child_meta, child_start, context,
+            row('world_state', state='x' * (1024 * 1024)),
+            *[row('token_usage_record', tokens=1) for _ in range(5000)]]
         write(child_path, child_rows)
         with patch.dict(os.environ, CODEX_HOME=str(home)), patch.object(codex, "_native_reader",
                 side_effect=AssertionError("The child hook must not launch another Codex process")):
@@ -110,7 +112,7 @@ class NativeCooperativeReviewTests(NativeReviewFixture, unittest.TestCase):
             source='unified_exec_startup', aggregated_output='D6_READY\n', cwd=Path(args['workdir']).as_uri(),
             command=[args['shell'], '-c', args['cmd']])
         patch_item = dict(type='FileChange', id='inner-patch', status='completed', changes={'canary.py': {'type': 'update'}},
-            stdout='Success. Updated the following files:\nM canary.py\n', stderr='')
+            stdout='Success. Updated the following files:\nM canary.py\n', stderr='', native_context='x' * (1024 * 1024))
         wait_rows = wrapped('outer-wait', 'exec_command', args, wait_item, wait_result)
         patch_rows = wrapped('outer-patch', 'apply_patch', command, patch_item, {})
         patch_rows[0]['input'] = patch_rows[0]['input'].replace('));\n', '))\n')
