@@ -19,6 +19,10 @@ PACKAGE = Path(__file__).resolve().parents[1]
 RPC_TIMEOUT = 5
 TOTAL_TIMEOUT = 15
 MAX_OUTPUT = 512 * 1024
+# Native transcripts include full context and history, not bounded hook/RPC envelopes.
+NATIVE_MAX_RECORD = 72 * 1024 * 1024
+NATIVE_MAX_FILE = 128 * 1024 * 1024
+NATIVE_MAX_ROWS = 131072
 # Historical observations only; support is determined by the live protocol contract.
 NATIVE_COMPATIBILITY = {
     ("0.163.0", "0.163.0", "codex-cli", "exec", "codex_exec"),
@@ -66,28 +70,28 @@ def _native_witness_content(witness):
 
 def native_behavior_records(raw, *, thread_id, source_reference):
     """Decode bounded original rollout bytes; retain actual IDs and exact line sources."""
-    from runtime.startup import CANONICAL_MAX_ROWS, _canonical_freeze
+    from runtime.startup import _canonical_freeze
     try:
         def identifier(value):
             if not isinstance(value, str) or not value.strip() or len(value) > 256 or not value.isprintable():
                 raise ValueError
             return value
         identifier(thread_id)
-        if (not isinstance(raw, bytes) or not raw or len(raw) > MAX_OUTPUT or not raw.endswith(b'\n')
+        if (not isinstance(raw, bytes) or not raw or len(raw) > NATIVE_MAX_FILE or not raw.endswith(b'\n')
                 or not isinstance(source_reference, str) or not source_reference.isprintable()
                 or len(source_reference) > 4096 or not Path(source_reference).is_absolute()
                 or '#' in source_reference):
             raise ValueError
         lines = raw.splitlines(keepends=True)
-        if len(lines) > CANONICAL_MAX_ROWS:
+        if len(lines) > NATIVE_MAX_ROWS:
             raise ValueError
-        records, turns, started, completed = [], [], set(), set()
+        records, turns, seen_turns, started, completed = [], [], set(), set(), set()
         session = active = None
         offset = 0
         for line in lines:
-            if not line.endswith(b'\n') or len(line) > MAX_INPUT:
+            if not line.endswith(b'\n') or len(line) > NATIVE_MAX_RECORD:
                 raise ValueError
-            value = json_object(line)
+            value = json_object(line, limit=NATIVE_MAX_RECORD)
             if (not {'timestamp', 'type', 'payload'} <= set(value)
                     or set(value) - {'timestamp', 'type', 'payload', 'ordinal', 'metadata'}
                     or not isinstance(value['timestamp'], str) or not value['timestamp']
@@ -130,7 +134,8 @@ def native_behavior_records(raw, *, thread_id, source_reference):
                             raise ValueError
                         started.add(turn)
                     active = turn
-                if turn not in turns:
+                if turn not in seen_turns:
+                    seen_turns.add(turn)
                     turns.append(turn)
             elif kind == 'response_item':
                 identifier(payload.get('type'))

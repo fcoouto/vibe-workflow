@@ -12,7 +12,7 @@ No streaming rewrite, new settings, dependency, resource framework, depth rule o
 
 ## Plan and acceptance
 
-- [ ] Add regressions first: a 64 MiB framed record through native proof consumers; large files/history and ordered distinct turns; strict malformed JSON, wrong expected identity, late unexpected calls, EOF and exact sources. Exercise chosen boundaries and file-size rejection without changing unrelated limits. Observe the intended old-reader failures.
+- [x] Add regressions first: a 64 MiB framed record through native proof consumers; large files/history and ordered distinct turns; strict malformed JSON, wrong expected identity, late unexpected calls, EOF and exact sources. Exercise chosen boundaries and file-size rejection without changing unrelated limits. Commit `12ea09c` reproduced decoder, guard, cooperative wrapper and metadata refusal. Three modules ran 28 tests; 16 errors were expected size refusals. Logs: `test-units-3ys13tfr` in the runner's temporary directory.
 - [ ] Apply native constants in `runtime/doctor.py` and every transcript file read/raw-line rescan in `runtime/adapters/codex.py`. Keep API and source protections. Prove guarded child, cooperative/wrapped, setup metadata and managed observations handle larger native history using existing software fixtures.
 - [ ] Validate, commit, then run affected sharded modules on the committed candidate. Use available Python versions; report minimum-version absence. Run no live native qualification or installation.
 - [ ] Obtain independent behavior/security review of the exact candidate, fix relevant findings, and recheck affected proof.

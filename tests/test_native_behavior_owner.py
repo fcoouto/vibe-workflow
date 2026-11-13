@@ -435,6 +435,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
         data = json.loads(original['settings'].read_bytes())
         data.update(thread_id='qualification-native-thread', rollout=str(original['home']/'qualification-rollout.jsonl'),
             records=[row('session_meta', dict(id='qualification-native-thread', cwd=str(self.fixture.repo))),
+                row('world_state', dict(state='x' * (1024 * 1024))),
                 started(), call(), output(), row('event_msg', dict(type='task_complete', turn_id='native-turn'))],
             hook_command=[sys.executable, '-B', str(state.PACKAGE/'scripts/workflow.py'), 'codex', 'SessionStart'],
             hook_payload=dict(hook_event_name='SessionStart', session_id='qualification-native-thread',
@@ -607,7 +608,8 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             spawn_turn, spawn_item, child_turn = 'actual-parent-spawn-turn', 'actual-spawn-item', 'actual-child-turn'
             data = json.loads(original['settings'].read_bytes())
             child_rollout = original['home']/'child-rollout.jsonl'
-            child_rollout.write_bytes(encoded([row('session_meta', dict(id=child, cwd=str(self.fixture.repo)))]))
+            child_rollout.write_bytes(encoded([row('session_meta', dict(id=child, cwd=str(self.fixture.repo))),
+                row('world_state', dict(state='x' * (1024 * 1024)))]))
             child_rollout.chmod(0o600)
             data['threads'][child] = dict(id=child, cwd=str(self.fixture.repo), path=str(child_rollout), source=dict(subAgent=dict(thread_spawn=dict(parent_thread_id=parent))),
                 parentThreadId=parent, originator='codex_exec', cliVersion='0.165.0', modelProvider='fixture-provider',
