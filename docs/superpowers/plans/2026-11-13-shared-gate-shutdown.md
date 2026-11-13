@@ -117,7 +117,7 @@ The user disabled Desktop global auto-accept and requested a fixture-only
 isolation test. Before and after, persisted autoApprove was false with no project
 overrides. A new API-created idle root made no prompt/model/tool calls. Its first
 native canary permission request was asked, then replied once after 19 ms, before
-any controller terminal input. Stop condition fired; no request replay occurred.
+any controller permission-choice input. Stop condition fired; no request replay occurred.
 Only one of the two allowed permission requests ran; the two-minute allocation
 permitted zero model requests. Original Case A/B budgets/results stay unchanged.
 

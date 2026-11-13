@@ -113,10 +113,15 @@ no project overrides. The existing shared process remained 61057/version 2.2.7.
 
 **Result: failed.** The first externally created native canary permission request
 resolved `ask` but received native `once` **19 ms later**, before any controller
-terminal input. The controller stopped the one-attempt test immediately; it did
+permission-choice input. The controller stopped the one-attempt test immediately; it did
 not replay the request or submit an API permission reply. Only one of the maximum
 two permission requests ran. No prompt, tool execution, model request or rejected
 model attempt occurred. The canary stayed 0; all five protected inputs matched.
+
+The empty decision-controls trace contains no guarded click, prompt or exit key.
+Automatic terminal-query responses were enabled but not separately input-traced;
+this is not a claim that the controller sent zero protocol bytes to the terminal.
+No evidence establishes that those protocol responses caused the approval.
 
 The requested five-second pending observation and deliberate TUI Reject/Allow-once
 controls were therefore not reached. Failure recovery killed and reaped the
