@@ -637,7 +637,7 @@ test("nothing is written to prompts or messages while nothing is held", async ()
   t.cleanup()
 })
 
-test("final review: an approved stop-stage edit clears the hold; a rejected one does not", async () => {
+test("stop-form regression: native approval alone cannot release a stopped file", async () => {
   const t = await start()
   const MAX = { providerID: "p", id: "m", variant: "max" }
   await t.hooks["session.model.request"]({ sessionID: ROOT, kind: "primary", model: MAX })
@@ -646,15 +646,15 @@ test("final review: an approved stop-stage edit clears the hold; a rejected one 
   for (let i = 0; i < 2; i++) { await edit(t, ["a.ts"]); await failCheck(t) }
   const rejected = permissionEvent(ROOT, ["a.ts"], "call_rejected")
   await t.hooks["permission.evaluate"](rejected)
-  assert.equal(rejected.effect, "ask")
+  assert.equal(rejected.effect, "deny")
   await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_rejected", tool: "edit", input: {}, status: "error",
     error: { message: "rejected" } })
   const approved = permissionEvent(ROOT, ["a.ts"], "call_approved")
   await t.hooks["permission.evaluate"](approved)
-  assert.equal(approved.effect, "ask")
+  assert.equal(approved.effect, "deny")
   await t.hooks["tool.execute.after"]({ sessionID: ROOT, id: "call_approved", tool: "edit", input: {}, status: "completed",
     result: { content: "ok" } })
-  assert.equal((await edit(t, ["a.ts"])).effect, "allow")
+  assert.equal((await edit(t, ["a.ts"])).effect, "deny")
   t.cleanup()
 })
 

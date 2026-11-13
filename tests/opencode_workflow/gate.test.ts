@@ -222,7 +222,10 @@ test("re-evaluation resets once; the next exhaustion asks; an approved edit clea
   assert.equal(decision.effect, "ask")
   diagnose(g, R("t", "max"))  // no second reset
   assert.equal(effect(g), "ask")
-  g.edited(ROOT, [FA])  // the user approved the ask
+  const before = held(g)
+  g.edited(ROOT, [FA])
+  assert.deepEqual(held(g), before, "native completion alone must not clear a stopped entry")
+  g.edited(ROOT, [FA], g.stopped?.(ROOT, FA)?.hold)  // matching form-qualified completion
   assert.equal(effect(g), "allow")
   assert.deepEqual(held(g), [])
 })
@@ -236,6 +239,30 @@ test("no ranked option above goes to re-evaluation, then asks", () => {
   retrip(g)
   assert.equal(held(g)[0].stage, "stop")
   assert.equal(effect(g), "ask")
+})
+
+test("a stop permit cannot clear another tree or a reset-and-reheld incarnation", () => {
+  const g = gate(R("m", "max"))
+  trip(g)
+  diagnose(g, R("m", "max"))
+  retrip(g)
+  const old = g.stopped?.(ROOT, FA)
+  assert.ok(old, "the gate must expose the stopped incarnation to its approval owner")
+  g.created("ses_other", null)
+  g.routed("ses_other", R("m", "max"))
+  for (let i = 0; i < 3; i++) { g.edited("ses_other", [FA]); g.failed("ses_other") }
+  g.edited("ses_other", [FA], old.hold)
+  assert.equal(g.editDecision("ses_other", [FA]).effect, "deny")
+  g.reset(ROOT, { files: [] })
+  trip(g)
+  diagnose(g, R("m", "max"))
+  retrip(g)
+  const current = g.stopped(ROOT, FA)!
+  assert.notEqual(current.hold, old.hold)
+  g.edited(ROOT, [FA], old.hold)
+  assert.equal(effect(g), "ask")
+  g.edited(ROOT, [FA], current.hold)
+  assert.equal(effect(g), "allow")
 })
 
 test("ranking: ladder order, then variants; unranked is null", () => {
