@@ -269,6 +269,7 @@ class CeilingTests(GatewayBase):
                  (isolation_file(results, blockers=["probes failed: A5"]), "isolation_run_blocked"),
                  (isolation_file(results, cleanup=False), "isolation_cleanup_unverified"),
                  (isolation_file(results, version="2.2.5"), "isolation_version_below_minimum"),
+                 (isolation_file(results, version=5), "isolation_version_invalid"),
                  (isolation_file(results, date="2026-01-01"), "isolation_result_stale"),
                  (isolation_file(results, mode="drill"), "isolation_result_wrong_mode"), (old, "isolation_result_stale")]
         for path, reason in cases:

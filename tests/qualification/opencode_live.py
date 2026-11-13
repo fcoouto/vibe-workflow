@@ -19,7 +19,7 @@ tests/qualification/canary.py. A dead run's reservation is settled with `--settl
 
 Safety rules it enforces itself (tests/test_qualification_harness.py covers the pure parts):
 - `--isolated-dir` must be an empty, owner-only directory outside OpenCode's user directories, ~/Library/Application
-  Support and any git worktree; `opencode --version` must be 2.2.6 before anything starts.
+  Support and any git worktree; known `opencode --version` releases must meet the supported minimum before starting.
 - Only the approved `--route PROVIDER/MODEL#VARIANT`. `qual-pre` (before the shim) and `qual-post` (after it) record every
   `model.request`; `qual-post` blocks any other model or variant, any title not allowed, held sessions and anything
   past the permitted count. A recorder log write that fails blocks the hook. Nothing is sent before stage 0 has
@@ -49,10 +49,8 @@ import subprocess
 import sys
 import time
 import uuid
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-
 from tests.qualification import canary, canary_cli, canary_ranked, canary_ranked_state, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, PROMPT_TEXT,
@@ -63,7 +61,6 @@ from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_M
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
 from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener, off_route_spawn,  # noqa: E402
                                         processes, server_environment, status_view)
-
 POOL = "sub"
 PROBE_REQUEST = dict(provider="opencode", model="session-probe", variant=None, harness="opencode session probe",
                      kind="primary", funding_pool="none")
@@ -862,7 +859,6 @@ class Run:
         self.results["user_dirs"] = user_dirs.compare(Path.home(), before, home_before, self.results["blockers"],
                                                       getattr(self, "own_ids", ()), self.snapshot_user_dirs(),
                                                       self.report_only_home())
-
     def output(self, results):
         meta = dict(opencode=self.server_version if self.server_version is not None else self.cli_version,
                     opencode_cli=self.cli_version, opencode_server=self.server_version,
@@ -870,8 +866,6 @@ class Run:
                     provider=self.route_ref() if self.route else None,
                     counting=COUNTING, sanitized=True, generated_by="tests/qualification/opencode_live.py (no post-processing)")
         return self.redact(dict(_meta=meta, **results))
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--isolated-dir")
