@@ -2,10 +2,15 @@
 
 ## Outcome
 
-**Partial qualification of released 0.1.39 on OpenCode 2.2.6.** Six native
+**Original campaign: partial qualification of released 0.1.39 on OpenCode 2.2.6.** Six native
 mechanical cases and both instrumented lifecycle instances passed. Interactive
 TUI qualification remains blocked. No product code, gate threshold, dependency,
 coordinator route, global configuration or billing route changed.
+
+**Later user-authorized standalone TUI follow-up passed the missing selected
+surface checks: actual presentation, native child identity and event ordering.**
+It used 19/24 requests under a separate 15-minute allocation. The original
+campaign and its failures remain unchanged. See [the follow-up](#standalone-tui-follow-up).
 
 The [sanitized evidence](../../tests/fixtures/opencode_workflow/qualification-2026-11-13.json)
 retains ordered observations, runtime hashes, request counts and explicit limits.
@@ -150,8 +155,69 @@ Same-file false holds, moving-file misses, shell/API bypasses, unsupported outpu
 attribution and convincing printed footers remain documented limits. The judge
 still waits for Smart Routing; this campaign adds no fallback inference route.
 
-Next: establish a safely isolated actual TUI startup, then complete only that
+The original next action was to establish a safely isolated actual TUI startup, then complete only that
 missing surface under a separately authorized attempt if the original deadline
 has expired. Keep this campaign's aggregate partial until those observations
 exist. Review and publication of honest partial evidence do not qualify that
 missing surface or make the entire requested qualification complete.
+
+## Standalone TUI follow-up
+
+The user subsequently authorized proceeding with actual terminal presentation,
+TUI-created child identity and event ordering, and requested an instruction
+refresh from installed 0.1.39 first. The installed manifest and applicable
+instructions were checked. Runtime hashes still matched the released subject.
+This follow-up did not reset the expired original campaign's limits.
+
+The CLI and private standalone server reported **2.2.6**; the shared server
+reported **2.2.7**. Explicit shared-server attachment required a separate
+password context, so no credential was copied or changed. Documented
+`--standalone` mode instead rendered a real full-screen TUI on a controlling
+pseudoterminal. The shared server's identity remained unchanged throughout.
+
+The initial TUI-created root stopped before tools or edits after reporting
+the status tool absent. A zero-inference native context inspection showed it
+registered but hidden by the fixture's deny-by-default permissions. Adding
+only an allow rule for the read-only `escalation_gate_status` tool restored
+model visibility; file-write permissions, gate code and global settings stayed
+unchanged. A second zero-inference inspection confirmed visibility. Continuation
+reused the same root, two consumed requests and original deadline, executing
+only previously unexecuted gate steps. The initial stop remains recorded.
+
+Observed results, corroborated by native events, terminal output and file hashes:
+
+- Three actual unittest checks failed on values 1, 2 and 3 against immutable 99.
+  Native metadata and structured output both reported exit 1.
+- Status showed `canary.py` held at two rounds, stage `escalating`.
+- The parent's next patch was denied, with the gate's refusal rendered in the TUI.
+- The real native `subagent` tool created one child without a model override.
+  Its edit permission carried that child's identity and was denied by the same
+  hold. Tool errors were correlated with permission source IDs.
+- Child creation arrived at raw observer index 49, its prompt at 50. This is
+  the reverse of the earlier CLI trace; the adapter must handle both orders.
+- Both root and child actually used the same primary route. Child completion
+  preserved the hold. Final canary bytes stayed `VALUE = 3\n`.
+- The unrelated `free.py` edit succeeded with `OK = True\n`.
+- Root and child completion events preceded shutdown. The owned frontend was
+  stopped and reaped; protected inputs matched the declared fixture transition.
+
+Total follow-up usage was **19/24 requests**: 18 primary and one title request,
+all before the original follow-up deadline. This is separate from 155/240 in
+the original campaign. Terminal capture contained 255,567 bytes; the
+[sanitized follow-up evidence](../../tests/fixtures/opencode_workflow/tui-followup-2026-11-13.json)
+binds ordered observations, terminal/event-log hashes and protected-file hashes.
+
+The first evaluator incorrectly applied masked-output footer placement to
+nonzero TUI results, whose content appends `Exited with code 1`. A focused
+regression failed before correction and passed afterward, with three negative
+controls. Acceptance now checks the actual runner output, matching native exit
+metadata and literal assertion mismatches. No gate behavior was changed or replayed.
+
+**Limits:** terminal output was inspected as ANSI/text, not pixel certification.
+The exit shortcut and SIGTERM did not finish the owned frontend; forced shutdown
+was required and remains an explicit harness/exit-control limitation. This
+does not qualify interactive attachment to the shared 2.2.7 server, every
+terminal implementation, or a TUI stop-stage approval dialog. The earlier
+native release/approval evidence retains its original scope. Positive custom
+check execution, semantic judging and general workflow improvement remain
+unproven; a scripted mechanical exercise is not a productivity comparison.

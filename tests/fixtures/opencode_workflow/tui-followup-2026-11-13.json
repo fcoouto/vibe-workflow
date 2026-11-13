@@ -1,0 +1,89 @@
+{
+  "date": "2026-11-13",
+  "runtime_version": "0.1.39",
+  "frontend": "actual OpenCode 2.2.6 full-screen TUI on an owned controlling pseudoterminal",
+  "server_mode": "standalone",
+  "standalone_version_observed_in_native_context": "2.2.6",
+  "shared_server_version": "2.2.7",
+  "shared_server_identity_unchanged": true,
+  "verdict": "passed_selected_tui_mechanical_flow",
+  "authorization": "User requested proceeding with terminal presentation, TUI-created child identity and event ordering, after refreshing installed 0.1.39 instructions.",
+  "budget": {
+    "max_requests": 24,
+    "requests": 19,
+    "primary_requests": 18,
+    "title_requests": 1,
+    "minutes": 15,
+    "deadline_preserved_during_continuation": true,
+    "original_campaign_requests_unchanged": 155,
+    "original_campaign_max_requests_unchanged": 240
+  },
+  "runtime_sha256": {
+    "index.ts": "527816deab2ddfe7b470d213be2a7586e23200647bf520a6214fe9f089b3acf9",
+    "gate.ts": "97513e84d2eefdbfe139609ef0a05934b6fd4f55bbfefb7aa8a3d20dfdcce860"
+  },
+  "route": {"providerID": "openai", "id": "gpt-6.1-sol", "variant": "low"},
+  "same_route_observed_for_root_and_child": true,
+  "evidence": {
+    "root_created_by_tui_not_api": true,
+    "child_created_by_native_subagent_tool_not_api": true,
+    "root_and_child_gate_denials_correlated_with_native_tool_errors": true,
+    "three_actual_unittest_failures": true,
+    "native_metadata_and_structured_output_exit": 1,
+    "held_rounds": 2,
+    "held_stage": "escalating",
+    "same_level_child_preserves_hold": true,
+    "final_canary": "VALUE = 3\n",
+    "unrelated_file": "OK = True\n",
+    "terminal_contains_gate_refusal": true,
+    "terminal_bytes": 255567,
+    "terminal_sha256": "97d95c1b0e05198f325afbb0acec9783fc89c27574322f5e26b4ebe4c5980744",
+    "native_event_log_sha256": "0ec567fda67a5ea366c33dff2cb4063470b1ff4943e41d41c4fd074b9652dc8c",
+    "frontend_process_reaped": true,
+    "forced_frontend_shutdown_required": true
+  },
+  "ordered_observations": [
+    {"index": 1, "kind": "session.created", "session": "root", "parent": null, "version": "2.2.6"},
+    {"index": 2, "kind": "prompt", "session": "root", "phase": "initial_tool_visibility_precondition"},
+    {"index": 20, "kind": "status", "session": "root", "held": []},
+    {"index": 29, "kind": "unittest_failure", "value": 1, "exit": 1},
+    {"index": 35, "kind": "unittest_failure", "value": 2, "exit": 1},
+    {"index": 41, "kind": "unittest_failure", "value": 3, "exit": 1},
+    {"index": 43, "kind": "status", "session": "root", "file": "canary.py", "rounds": 2, "stage": "escalating"},
+    {"index": 45, "kind": "edit_denied", "session": "root", "file": "canary.py", "correlated_patch_error_index": 46},
+    {"index": 49, "kind": "session.created", "session": "child", "parent": "root"},
+    {"index": 50, "kind": "prompt", "session": "child"},
+    {"index": 55, "kind": "edit_denied", "session": "child", "file": "canary.py", "correlated_patch_error_index": 56},
+    {"index": 58, "kind": "subagent_tool_completed", "session": "root", "returned_session": "child"},
+    {"index": 59, "kind": "session.execution.succeeded", "session": "child"},
+    {"index": 61, "kind": "status", "session": "root", "file": "canary.py", "rounds": 2, "stage": "escalating"},
+    {"index": 64, "kind": "patch_completed", "session": "root", "file": "free.py"},
+    {"index": 66, "kind": "session.execution.succeeded", "session": "root"}
+  ],
+  "fixture_integrity": {
+    "test_source_and_file_write_permissions_unchanged": true,
+    "declared_fixture_only_permission_addition": {"action": "escalation_gate_status", "resource": "*", "effect": "allow"},
+    "final_protected_sha256": {
+      ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+      "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+      "opencode.json": "bfe99bf95e09c683766ebb2c576d7b155f3bf47d077025de796c5015140bbec2",
+      ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a"
+    }
+  },
+  "preserved_preconditions_and_failures": [
+    "Explicit-server attachment required a separate password context; no credential was copied or changed.",
+    "Zero-inference standalone preflight rendered 14406 bytes and preserved the shared server, but required forced frontend shutdown.",
+    "The initial root used two requests and stopped before tools or edits because fixture permissions hid the registered read-only status tool.",
+    "Native zero-inference context diagnosis distinguished registered from exposed tools; the exact read-only status permission restored visibility.",
+    "Continuation reused the original TUI-created root, two consumed requests, original deadline and remaining 22 requests. No completed gate step was replayed.",
+    "A masked-footer evaluator incorrectly rejected nonzero native results with an appended exit annotation. Focused reproduction failed before correction and passed afterward, including three negative controls. Actual gate behavior was not changed or replayed."
+  ],
+  "limits": [
+    "This qualifies the selected standalone TUI flow, not interactive attachment to the shared 2.2.7 server or every terminal implementation.",
+    "Native child creation preceded the child prompt here; the earlier CLI trace observed the opposite order. Ordering is surface-dependent.",
+    "Terminal output was captured and inspected as ANSI/text, not pixel-perfect screenshot certification.",
+    "No stop-stage approval dialog or stronger-diagnosis release was newly exercised in this TUI follow-up; prior native evidence retains its original scope.",
+    "Forced frontend termination is an explicit harness/exit-control limitation, not a clean-exit pass.",
+    "Positive replacement-command execution and semantic judging remain untested; general workflow improvement is not established by this scripted mechanical flow."
+  ]
+}
