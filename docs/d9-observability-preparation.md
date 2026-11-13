@@ -1,5 +1,15 @@
 # D9b: Task-status observability preparation
 
+## Compatibility update — 13 November 2026
+
+The [minimum-only software policy](software-compatibility.md) supersedes the
+release allowlists and exact dependency pins described in this historical report.
+Codex usage collection now accepts compatible records from releases at or above
+0.163.0 with no upper bound; unknown version metadata alone is not a collection
+gap. Keyring uses 25.7.0 as a minimum. Actual record/counter, privacy, ownership,
+credential backend, permission and qualification requirements remain. Original
+0.167.0/25.7.0 observations below retain their dates, scope and limitations.
+
 28 October 2026 · Bounded implementation slice under [D9](onboard-my-project-plan.md#d9-qualification-usage-and-pilot). Read when implementing or reviewing this preparation path. This is local supplied-data preparation, not a collector, export payload or native measurement qualification.
 
 ## Implementation status — 12 November 2026

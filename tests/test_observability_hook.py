@@ -195,14 +195,16 @@ class HookTests(HookFixture):
         self.assertEqual(self.envelope_path().stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.exports.stat().st_mode & 0o777, 0o700)
 
-    def test_unqualified_versions_record_totals_unknown_and_send_nothing(self):
-        self.session()
+    def test_minimum_newer_and_unknown_versions_upload_without_qualified_provenance(self):
         self.enable()
-        self.run_hook(qualified=False)
-        envelope = self.envelope()
-        self.assertEqual(envelope["last_result"]["code"], "totals_unknown")
-        self.assertIsNone(envelope["export_state"])
-        self.assertEqual((FakeConnection.created, FakeConnection.posts), ([], []))
+        for index, version in enumerate(("0.163.0", "0.167.1", "0.168.0", "1.0.0", None), 1):
+            with self.subTest(version=version):
+                self.task["revision"] += 1
+                usage = {key: count * index for key, count in USAGE.items()}
+                self.session(version=version, usage=usage)
+                self.run_hook(qualified=False)
+                self.assertEqual(self.envelope()["last_result"]["code"], "accepted")
+                self.assertEqual(self.envelope()["export_state"]["exported_totals"], usage)
 
     def test_pending_is_saved_before_post_and_a_crash_leaves_it_uncertain(self):
         self.session()
@@ -753,13 +755,12 @@ class CollectionStatusTests(HookFixture):
         self.assertEqual(report["checkout_connection"], dict(configured=True, desired_opt_in=True))
         self.assertEqual(settings.disable_project(self.scope, dict(expected_revision=2))["collection"], "off")
 
-    def test_qualified_sources_follow_the_adapter(self):
-        for versions, sources in ((frozenset({"0.168.0", "0.167.0"}), ["codex 0.167.0", "codex 0.168.0"]),
-                                  (frozenset(), [])):
+    def test_collection_sources_describe_minimum_not_qualified_provenance(self):
+        for versions in (frozenset({"0.168.0", "0.167.0"}), frozenset()):
             with self.subTest(versions=versions), patch.object(codex_usage, "QUALIFIED_VERSIONS", versions):
                 for report in (settings.project_status(self.scope), settings.status(self.scope)):
                     self.assertEqual((report["native_collection_qualified"], report["collection_sources"]),
-                                     (bool(versions), sources))
+                                     (True, ["codex >= 0.163.0"]))
 
     def test_gates_stop_before_later_records(self):
         loaded, acquired = [], []
@@ -882,8 +883,6 @@ class CollectionStatusTests(HookFixture):
         settings.configure_project(self.scope, dict(expected_revision=1, repository_ids=[self.scope.repository_id],
                                                     desired_collection=True))
         self.assertEqual(observe(), ("connection_not_enabled", sorted([checkout, project]), False))
-
-
 
 class SettingsLimitTests(HookFixture):
     """Deferred O2 and integration review findings: repository IDs, record sizes, lookups and a busy lock."""

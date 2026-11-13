@@ -492,12 +492,27 @@ class NativeBoundaryTests(NativeBase):
 
     def test_native_alias_mapping_is_bound_to_current_client(self):
         self.billing()
-        changed = dict(BINDINGS['claude-code'], client_version='invented-3')
+        changed = dict(BINDINGS['claude-code'], controls='changed-controls')
         with mock.patch.object(native_catalog, 'current_binding', lambda client: changed):
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_changed')
         with mock.patch.object(native_catalog, 'current_binding', lambda client: None):  # the production default
             self.assertEqual(self.prepare('claude-code')['reason'], 'native_binding_unverified')
         self.assertEqual(self.holds(), {})
+
+    def test_software_release_change_does_not_invalidate_unchanged_native_binding(self):
+        for client, version in (('codex', '0.163.0'), ('codex', '0.168.1'), ('codex', '9.0.0'),
+                                ('claude-code', '2.1.304'), ('claude-code', '2.1.312'), ('claude-code', '9.0.0')):
+            with self.subTest(client=client, version=version):
+                changed = dict(BINDINGS[client], client_version=version)
+                with mock.patch.object(native_catalog, 'current_binding', lambda selected: changed):
+                    catalog, reason = native_catalog.catalog(self.settings, client)
+                self.assertIsNone(reason)
+                self.assertTrue(catalog)
+
+    def test_known_below_minimum_native_client_is_not_eligible(self):
+        changed = dict(BINDINGS['claude-code'], client_version='2.1.303')
+        with mock.patch.object(native_catalog, 'current_binding', lambda client: changed):
+            self.assertEqual(native_catalog.catalog(self.settings, 'claude-code'), (None, 'native_version_too_old'))
 
     def test_a_snapshot_is_reused_without_a_process_and_invalidated_by_a_changed_binding(self):
         self.billing()

@@ -7,7 +7,7 @@ What this workflow needs on a machine before it can load its rules and do its wo
 | Python 3.11 or newer | `python` | machine | Runs the plugin's hooks and checks. |
 | Git | `git` | machine | Runs the plugin's checks and publishes task branches. |
 | GitHub CLI, signed in | `gh` | machine | Publishes task branches and pull requests. |
-| vibe-workflow plugin at the expected version | `vibe-workflow-plugin` | each client | Loads the workflow rules at session start; a stale copy leaves a client on old rules. |
+| vibe-workflow plugin installed and enabled | `vibe-workflow-plugin` | each client | Loads workflow rules at session start; version drift is diagnostic, while hook content and trust remain checked. |
 | vibe-workflow hooks trusted | `vibe-workflow-hooks` | each client | Hooks that are not trusted do not run, so the workflow rules never load. |
 | Superpowers | `superpowers` | each client | Design, planning, execution and review skills the workflow relies on. |
 | Ponytail | `ponytail` | each client | Smallest complete change by default. |

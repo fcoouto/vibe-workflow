@@ -354,6 +354,28 @@ class LaunchTests(LauncherBase):
 class HostRuleTests(LauncherBase):
     """F4.4 and the effort omission contract on the OpenCode launcher."""
 
+    def test_host_version_metadata_does_not_pin_managed_launches(self):
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=self.now + 3000,
+            unifiedWindows=dict(five_hour=dict(utilization=0.25, resetsAt=self.now + 3000, status='allowed')))
+        for index, version in enumerate(('2.2.7', '2.3.0', '3.0.0', '10.0.0', None, 'unknown')):
+            with self.subTest(version=version):
+                self.host.version = version
+                result = self.launch(assignment=self.assignment('version-%d' % index))
+                self.assertEqual(result['state'], 'recorded', result)
+
+    def test_enforcement_requires_real_health_even_when_version_passes(self):
+        self.host.version = '3.0.0'
+        for answer in (None, {}, dict(state='not_ready', managed_denies=list(adapter.MANAGED_DENIES))):
+            with self.subTest(answer=answer):
+                self.assertEqual(launcher.enforcement(self.host, answer), 'advisory')
+
+    def test_unknown_info_does_not_replace_positive_plugin_health(self):
+        original = self.host.request
+        for response in ((503, None), (200, {})):
+            with self.subTest(response=response), mock.patch.object(self.host, 'request', side_effect=lambda method,
+                    path, body=None, query=None: response if path == '/api/info' else original(method, path, body, query)):
+                self.assertEqual(launcher.enforcement(self.host, launcher.health(self.host)), 'enforced')
+
     def test_the_request_carries_the_opencode_hosts_harnesses(self):
         prepared = []
         real = command.Service._prepare
@@ -406,7 +428,7 @@ class RefusalTests(LauncherBase):
         self.assertNotIn('dispatch', self.order)
 
     def test_an_advisory_profile_is_refused(self):
-        for knob in (dict(denies=[]), dict(version='2.3.0')):
+        for knob in (dict(denies=[]), dict(version='2.2.5'), dict(version='2.2.6-rc.1')):
             with self.subTest(knob=knob):
                 self.host.__dict__.update(knob)
                 self.assert_refused('profile_not_enforced', self.launch())

@@ -18,7 +18,7 @@ Hard ceiling (review B2), every part required:
 - (a) the launch carries F4's per-launch output cap and step count (`opencode_launcher.launch_options` and
   `start_server(options=)`, PR #229), detected by capability; without them the mode refuses
   (`launch_options_unavailable`). The step count must cover every agent the server lists (`steps_not_universal`
-  otherwise), and the run needs this session's launcher-probes result showing A1 passed on the same OpenCode
+  otherwise), and the run needs this session's launcher-probes result showing A1 passed on supported OpenCode
   (`--isolation-result`): only that shows the inline config is honoured;
 - (b) the harness waits itself: on an idle timeout or an unreadable count it aborts every session of the attempt
   through the API, re-counts from the server and settles the actual count (more than reserved is recorded as sent);
@@ -46,6 +46,7 @@ from tests.qualification import live_common
 from tests.qualification.live_common import Reservation, ZeroCallHost, data, message_counts, zero_call_proof
 from tests.qualification.managed_state import ManagedState, attempt_id
 from tests.qualification.safety import Blocker, BudgetExceeded, PROMPT_TEXT, Refused
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 PROVIDER = "openrouter"
 MAX_OUTPUT_TOKENS, STEPS, INPUT_TOKENS = 500, 2, 10_000
@@ -101,10 +102,9 @@ def prompt_tokens(text):
 
 def read_isolation(path, now=None):
     """The launcher-probes result of this session, or `Refused` with a fixed reason: A1, A2, A3 and A4 all passed,
-    no blockers, cleanup verified, on the qualified OpenCode version, written today and at most ISOLATION_MAX_AGE_S
+    no blockers, cleanup verified, not on a known below-minimum OpenCode version, written today and at most ISOLATION_MAX_AGE_S
     ago. A1 shows the inline config's plugin, password and flags honoured; it does not show the step count or the
     output cap honoured (those are observed by the gateway run itself)."""
-    from tests.qualification.safety import QUALIFIED_OPENCODE
     now = time.time() if now is None else now
     if not path:
         raise Refused("--isolation-result is required: the launcher-probes result of this session (A1 passed)")
@@ -126,11 +126,15 @@ def read_isolation(path, now=None):
         raise Refused("isolation_run_blocked: --isolation-result records blockers")
     if (value.get("cleanup") or {}).get("verified_by_harness") is not True:
         raise Refused("isolation_cleanup_unverified: --isolation-result's cleanup was not verified")
-    if a1.get("server_version") != QUALIFIED_OPENCODE:
-        raise Refused("isolation_version_differs: --isolation-result's server is not OpenCode %s" % QUALIFIED_OPENCODE)
+    version = a1.get("server_version")
+    if version is not None and not isinstance(version, str):
+        raise Refused("isolation_version_invalid: --isolation-result's server version is malformed")
+    if at_least(version, MINIMUM_VERSIONS['opencode']) is False:
+        raise Refused("isolation_version_below_minimum: --isolation-result's server is below OpenCode %s" %
+                      MINIMUM_VERSIONS['opencode'])
     if meta.get("date") != time.strftime("%Y-%m-%d", time.localtime(now)) or not 0 <= age <= ISOLATION_MAX_AGE_S:
         raise Refused("isolation_result_stale: --isolation-result is not from this session (today, at most 12 h old)")
-    return dict(file=file.name, server_version=a1["server_version"])
+    return dict(file=file.name, server_version=version)
 
 
 def launch_options_supported():
@@ -288,15 +292,17 @@ class Gateway:
         return self.results
 
     def check_server(self, state):
-        """Before any sign-in or reservation: the same OpenCode version as the A1 result, and the step count on every
+        """Before any sign-in or reservation: no known below-minimum OpenCode version, and the step count on every
         agent the server lists (a session or its children may run any of them), else `steps_not_universal`. The rule
         is the launcher's `uncapped_agents`: an agent's steps come from the server's own listing when it reports them;
         otherwise from the inline config the launcher builds, and the results say so."""
         from runtime import opencode_launcher
         status, info = self.host.request("GET", "/api/info")
         version = info.get("version") if status == 200 and isinstance(info, dict) else None
-        if version != self.isolation["server_version"]:
-            raise Blocker("server_version_differs: not the OpenCode the A1 result was taken on")
+        version = version if isinstance(version, str) else None
+        self.results.update(server_version=version, isolation_server_version=self.isolation["server_version"])
+        if at_least(version, MINIMUM_VERSIONS['opencode']) is False:
+            raise Blocker("server_version_below_minimum: OpenCode is below %s" % MINIMUM_VERSIONS['opencode'])
         status, body = self.host.request("GET", "/api/agent")
         listed = data(body) if status == 200 else None
         config = opencode_launcher.server_config(state.settings, state.ledger, "plugin", self.options).get("agents") or {}

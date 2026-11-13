@@ -384,11 +384,13 @@ class StatusTests(WorldTestCase):
         report = self.world.status()
         self.assertEqual(self.world.states(report)["vibe-workflow-hooks"], dict(codex="ready", **{"claude-code": "ready"}, opencode="not-supported"))
 
-    def test_a_note_for_other_hooks_or_another_version_leaves_hooks_unknown(self):
+    def test_a_note_for_other_hooks_or_client_leaves_hooks_unknown(self):
         self.deliver("codex")
         path = hd.note_path("codex", self.world.environ())
         note = json.loads(path.read_text())
-        for field, value in (("version", "0.0.1"), ("hook_sha256", "0" * 64), ("client", "claude-code")):
+        path.write_text(json.dumps(dict(note, version="0.0.1")))
+        self.assertEqual(self.hooks()["state"], "ready")
+        for field, value in (("hook_sha256", "0" * 64), ("client", "claude-code")):
             path.write_text(json.dumps(dict(note, **{field: value})))
             with self.subTest(field=field):
                 self.assertEqual(self.hooks()["state"], "unknown")
@@ -452,7 +454,7 @@ class StatusTests(WorldTestCase):
         self.world.cli("codex", "plugin list --json", codex_plugins(vibe=[codex_entry("vibe-workflow", "m", "0.0.1")]))
         self.world.cli("claude", "plugin list --json", claude_plugins(vibe=[]))
         report = self.world.status()
-        self.assertEqual(self.cell(report, "vibe-workflow-plugin", "codex")["state"], "outdated")
+        self.assertEqual(self.cell(report, "vibe-workflow-plugin", "codex")["state"], "ready")
         self.assertIn(VERSION, self.cell(report, "vibe-workflow-plugin", "codex")["reason"])
         self.assertEqual(self.cell(report, "vibe-workflow-plugin", "claude-code")["state"], "missing")
         self.world.cli("codex", "plugin list --json", codex_plugins(vibe=[codex_entry("vibe-workflow", "m", VERSION, enabled=False)]))
@@ -484,6 +486,18 @@ class StatusTests(WorldTestCase):
         self.assertEqual(self.cell(report, "graphify-cli", "machine")["state"], "missing")
         self.assertEqual(self.cell(report, "graphify-skill", "codex")["state"], "missing")
         self.assertEqual(self.cell(report, "graphify-skill", "opencode")["state"], "ready")
+
+    def test_software_minimums_have_no_upper_bound_and_keep_prerelease_information(self):
+        for command, below, newer, item, client in (
+                ("codex", "0.162.9", "1.0.0", "superpowers", "codex"),
+                ("claude", "2.1.303", "3.0.0", "superpowers", "claude-code"),
+                ("opencode", "2.2.6-alpha.1", "2.2.7", "superpowers", "opencode"),
+                ("graphify", "0.9.103", "1.0.0", "graphify-cli", "machine")):
+            with self.subTest(command=command):
+                self.world.cli(command, "--version", below)
+                self.assertEqual(self.cell(self.world.status(), item, client)["state"], "outdated")
+                self.world.cli(command, "--version", newer)
+                self.assertEqual(self.cell(self.world.status(), item, client)["state"], "ready")
 
     def test_graphify_skill_is_also_found_in_the_shared_home_locations(self):
         for client in ("codex", "opencode"):

@@ -717,12 +717,32 @@ class Probe(unittest.TestCase):
         for bad in ({"image_generation": "maybe"}, {"config_edit": None}, {"image": "deny"}):
             assert_error_hides(self, opencode.probe, {**base, "worker_tools": {**four, **bad}})
 
-    def test_missing_hook_and_unqualified_version(self):
+    def test_minimum_version_never_replaces_capability_checks(self):
+        for version in ("2.2.6", "2.2.7", "2.3.0", "2.10.0", "3.0.0", "10.0.0", None, "unknown"):
+            with self.subTest(version=version):
+                result = opencode.probe({"version": version, "hooks": self.HOOKS, "plugin_health": "ok",
+                                         "worker_tools": self.ENFORCED_TOOLS})
+                self.assertEqual((result["managed_launch"], result["enforcement_profile"]), ("allow", "enforced"))
+                self.assertEqual(result["version"], version)
+                self.assertEqual(result["unsupported"], list(opencode.ALWAYS_UNSUPPORTED))
+                self.assertIs(result["version_supported"], None if version in (None, "unknown") else True)
+
+    def test_below_minimum_refuses_managed_launches(self):
+        for version in ("2.2.5", "2.1.99", "1.99.99", "2.2.6-rc.1"):
+            with self.subTest(version=version):
+                result = opencode.probe({"version": version, "hooks": self.HOOKS, "plugin_health": "ok",
+                                         "worker_tools": self.ENFORCED_TOOLS})
+                self.assertEqual((result["managed_launch"], result["enforcement_profile"]), ("refuse", "advisory"))
+                self.assertIn("version_below_minimum", result["unsupported"])
+                self.assertIs(result["version_supported"], False)
+
+    def test_missing_hook_still_refuses_newer_versions(self):
         result = opencode.probe({"version": "2.3.0", "hooks": self.HOOKS[:2], "plugin_health": "ok",
                                  "worker_tools": self.ENFORCED_TOOLS})
         self.assertEqual(result["missing_hooks"], ["permission.evaluate", "shell.create.before"])
         self.assertEqual((result["managed_launch"], result["enforcement_profile"]), ("refuse", "advisory"))
-        self.assertIn("version_unqualified", result["unsupported"])
+        self.assertIn("hooks_missing", result["unsupported"])
+        self.assertNotIn("version_unqualified", result["unsupported"])
         self.assertEqual(result["version"], "2.3.0")
 
     def test_probe_rejects_malformed_capabilities(self):
@@ -739,10 +759,10 @@ class Purity(unittest.TestCase):
             if isinstance(node, ast.Import):
                 names.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                names.add((node.module or "").split(".")[0])
+                names.add(node.module or "")
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 self.assertNotIn(node.func.id, {"open", "print", "exec", "eval", "__import__", "input", "compile"})
-        self.assertLessEqual(names, {"math", "re", "unicodedata"})
+        self.assertLessEqual(names, {"math", "re", "unicodedata", "runtime.software_versions"})
 
     def test_normalization_performs_no_io(self):
         def refuse(*args, **kwargs):

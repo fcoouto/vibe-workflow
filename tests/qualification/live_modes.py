@@ -17,7 +17,7 @@ Run it as this script path, never with `python3 -m` (tests/__init__.py would red
 The same safety rules as opencode_live.py, checked before anything starts: an empty owner-only `--isolated-dir`
 outside every worktree and OpenCode's directories; `--out` outside every repository and the isolated dir; the
 purpose's cap opened by a recorded `--set-cap` approval (opencode_live.py) with enough remaining and no open
-reservation; the real HOME; OpenCode 2.2.6. Every send is reserved first. SIGTERM and SIGINT stop the run; cleanup
+reservation; the real HOME; no known below-minimum OpenCode version. Every send is reserved first. SIGTERM and SIGINT stop the run; cleanup
 stops every server, kills leftovers, removes the isolated dir and compares the user's OpenCode directories. Output
 is redacted twice and leak-checked; refused results go to the owner-only withheld file and a skeleton is written.
 """
@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests.qualification import (chatgpt, demand, drill, gateway, launcher_probes, live_common, outputs,  # noqa: E402
                                  user_dirs)
-from tests.qualification.safety import (COUNTING, CallLedger, QUALIFIED_OPENCODE, Redactor, Refused,  # noqa: E402
+from tests.qualification.safety import (COUNTING, CallLedger, Redactor, Refused,  # noqa: E402
                                         check_isolated_dir, check_opencode_version, check_real_home)
 from tests.qualification.server import kill_leftovers  # noqa: E402
 
@@ -292,7 +292,11 @@ class Session:
         self.results["call_ledger"] = totals
 
     def output(self):
-        meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.mode, purpose=self.purpose,
+        cli = getattr(self.args, "opencode_version", None)
+        server = (self.results.get("gateway") or {}).get("server_version") if self.mode == "gateway" else \
+            ((self.results.get("probes") or {}).get("A1") or {}).get("server_version")
+        meta = dict(opencode=server if server is not None else cli, opencode_cli=cli, opencode_server=server,
+                    date=time.strftime("%Y-%m-%d"), mode=self.mode, purpose=self.purpose,
                     counting=COUNTING + "; launcher-started servers load no recorder, so a step's count is its "
                                         "assistant messages (or the reserved count when unreadable)",
                     sanitized=True, generated_by="tests/qualification/live_modes.py (no post-processing)")
@@ -376,7 +380,7 @@ def preflight(args, home_check=check_real_home, version_check=check_opencode_ver
     live_common.require_cap(ledger, MODES[args.mode], needed_calls(args))
     home_check()  # the last checks: nothing has started yet
     from runtime import opencode_launcher
-    version_check(env=opencode_launcher.host_environment(os.environ))
+    args.opencode_version = version_check(env=opencode_launcher.host_environment(os.environ))
     return base, ledger
 
 

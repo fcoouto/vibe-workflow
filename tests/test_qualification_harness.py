@@ -127,12 +127,22 @@ class VersionTests(unittest.TestCase):
     def run_with(self, stdout, code=0):
         return lambda *args, **kwargs: subprocess.CompletedProcess(args, code, stdout=stdout, stderr="")
 
-    def test_only_the_qualified_version_passes(self):
-        self.assertEqual(safety.check_opencode_version(self.run_with("opencode v2.2.6\n")), "2.2.6")
-        self.assertEqual(safety.check_opencode_version(self.run_with("2.2.6\n")), "2.2.6")
-        for stdout, code in (("opencode v2.2.7\n", 0), ("v2.2.60\n", 0), ("", 0), ("opencode v2.2.6\n", 1)):
+    def test_minimum_version_passes_without_an_upper_bound(self):
+        for version in ("2.2.6", "2.2.7", "2.2.60", "2.10.0", "3.0.0", "10.0.0"):
+            for prefix in ("", "opencode v"):
+                with self.subTest(version=version, prefix=prefix):
+                    self.assertEqual(safety.check_opencode_version(self.run_with(prefix + version + "\n")), version)
+
+    def test_known_old_versions_and_failed_commands_are_refused(self):
+        for stdout, code in (("opencode v2.2.5\n", 0), ("v1.99.0\n", 0), ("2.2.6-rc.1\n", 0),
+                             ("opencode v2.2.6\n", 1)):
             with self.assertRaises(safety.Refused, msg=stdout):
                 safety.check_opencode_version(self.run_with(stdout, code))
+
+    def test_unknown_version_metadata_alone_does_not_refuse(self):
+        for stdout in ("", "opencode development\n"):
+            with self.subTest(stdout=stdout):
+                self.assertIsNone(safety.check_opencode_version(self.run_with(stdout)))
 
     def test_a_missing_binary_is_refused(self):
         def missing(*args, **kwargs):

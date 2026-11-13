@@ -209,10 +209,10 @@ class DeliveredTests(StateMixin, unittest.TestCase):
         self.assertTrue(hd.delivered(self.package, "codex", self.environ))
         self.assertFalse(hd.delivered(self.package, "claude-code", self.environ))
 
-    def test_another_version_or_hook_definition_is_not_delivery(self):
+    def test_version_only_drift_preserves_delivery_but_changed_hooks_do_not(self):
         self.record()
         fake_package(self.base, version="1.2.4")
-        self.assertFalse(hd.delivered(self.package, "codex", self.environ))
+        self.assertTrue(hd.delivered(self.package, "codex", self.environ))
         fake_package(self.base)
         self.assertTrue(hd.delivered(self.package, "codex", self.environ))
         (self.package / "hooks/codex.json").write_text('{"hooks": {"changed": []}}\n')

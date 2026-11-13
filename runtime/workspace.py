@@ -15,6 +15,7 @@ import time
 from runtime import hook_delivery
 from runtime import package_versions as pv
 from runtime import workspace_observe as ob
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 
 CATALOG = "clients/workspace-requirements.json"
@@ -70,7 +71,7 @@ def check_cli(context, spec):
     if not match:
         return _unobserved("cli-failed" if result["code"] else "unrecognized-output")
     minimum = spec.get("minimum")
-    if minimum and tuple(map(int, match[0].split("."))) < tuple(map(int, minimum.split("."))):
+    if minimum and at_least(match[0], minimum) is False:
         return cell("outdated", f"{command} is {match[0]}; {minimum} or newer is needed")
     if spec.get("sign_in_argv"):
         auth = context.observer.run(spec["sign_in_argv"])
@@ -83,7 +84,7 @@ def check_cli(context, spec):
 
 
 def check_package(context, client):
-    """The vibe-workflow plugin at this package's version, read through package_versions."""
+    """An enabled plugin; differing release numbers are update hints, not failures."""
     text, reason = ob.listing(context.observer, client, "plugin")
     if text is None:
         return _unobserved(reason)
@@ -95,11 +96,9 @@ def check_package(context, client):
     enabled = [install for install in parsed["installs"] if install["status"] == "enabled"]
     if not enabled:
         return cell("missing", f"{pv.PLUGIN} is installed but disabled")
-    if context.expected is None:
-        return _unobserved("the package version is not readable")
     stale = sorted({install["version"] for install in enabled if install["version"] != context.expected})
     if stale:
-        return cell("outdated", f"{client} runs {', '.join(stale)}; this package is {context.expected}")
+        return cell("ready", f"version metadata: {client} runs {', '.join(stale)}; this package is {context.expected}")
     return cell("ready")
 
 
@@ -301,6 +300,8 @@ def run_check(context, spec, client):
         return check_cli(context, spec)
     if client not in context.installed:
         return _unobserved("cli-missing")
+    if context.old_clients.get(client):
+        return cell("outdated", context.old_clients[client])
     simple = {"package": check_package, "hooks-trust": check_hooks, "rtk": check_rtk}
     if kind in simple:
         return simple[kind](context, client)
@@ -311,6 +312,7 @@ class Context:
     def __init__(self, package, environ, observer, installed):
         self.package, self.environ, self.observer, self.installed = package, environ, observer, installed
         self.expected = pv.package_version(package)
+        self.old_clients = {}
 
 
 def discover(observer, session, environ):
@@ -343,6 +345,10 @@ def status(package, environ=None, client=None, budget=BUDGET):
     clients = discover(observer, session, environ)
     present = [entry["client"] for entry in clients if entry["installed"] or entry["session"]]
     context = Context(package, environ, observer, {entry["client"] for entry in clients if entry["installed"]})
+    context.old_clients = {entry["client"]: f"{entry['client']} is {entry['cli_version']}; "
+                           f"{MINIMUM_VERSIONS[entry['client']]} or newer is needed"
+                           for entry in clients if entry["installed"] and
+                           at_least(entry["cli_version"], MINIMUM_VERSIONS[entry["client"]]) is False}
     items, notes = [], [] if present else ["No supported client was found on PATH and none is the session's client."]
     for item in catalog["items"]:
         if item["scope"] == "machine":

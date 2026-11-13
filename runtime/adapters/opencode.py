@@ -9,9 +9,11 @@ import math
 import re
 import unicodedata
 
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
+
 SCHEMA = 1
 CLIENT = "opencode"
-QUALIFIED_VERSION = "2.2.6"
+QUALIFIED_VERSION = "2.2.6"  # Historical probe provenance, not software eligibility.
 HOOKS = ("model.request", "tool.execute.before", "permission.evaluate", "shell.create.before")
 REQUEST_KINDS = {"primary", "title", "compaction", "generate"}
 # Built-in tool names recorded in the probe's tool lists; anything else is an MCP or plugin tool.
@@ -594,9 +596,10 @@ def probe(capabilities):
     `capabilities`: {"version", "hooks": [registered hook names], "plugin_health": "ok" when the
     `routing.health` RPC answered for the canonical directory, "worker_tools": {shell|mcp|execute|webfetch|
     image_generation|config_edit: "deny"|"narrow"|"allow"}}. Managed launches refuse unless health is ok and every hook
-    S3 uses is present; enforcement also needs the qualified version, `shell` denied (commands inside any allowed shell
-    stay unenforceable), the other tools denied or narrowed by the caller's policy rules, image generation denied and
-    model edits of OpenCode configuration denied or narrowed to exclude it (S3.3d). A missing state is not enforced.
+    S3 uses is present and the version is not known below the minimum; enforcement also needs `shell` denied
+    (commands inside any allowed shell stay unenforceable), the other tools denied or narrowed by the caller's policy
+    rules, image generation denied and model edits of OpenCode configuration denied or narrowed to exclude it (S3.3d).
+    A missing state is not enforced.
     """
     caps = _object(capabilities, "invalid capabilities")
     version = _text(caps, "version", reason="invalid capabilities")
@@ -615,17 +618,19 @@ def probe(capabilities):
         unsupported.append("plugin_health_failed")
     if missing:
         unsupported.append("hooks_missing")
-    if version != QUALIFIED_VERSION:
-        unsupported.append("version_unqualified")
+    version_supported = at_least(version, MINIMUM_VERSIONS[CLIENT])
+    if version_supported is False:
+        unsupported.append("version_below_minimum")
     if tools.get("shell") != "deny" or any(tools.get(tool) not in ("deny", "narrow") for tool in WORKER_TOOLS):
         unsupported.append("worker_unmediated_tools")
     if tools.get("image_generation") != "deny":
         unsupported.append("image_generation_unmediated")
     if tools.get("config_edit") not in ("deny", "narrow"):
         unsupported.append("config_edit_unmediated")
-    managed = "allow" if healthy and not missing else "refuse"
+    managed = "allow" if healthy and not missing and version_supported is not False else "refuse"
     enforced = managed == "allow" and unsupported == list(ALWAYS_UNSUPPORTED)
     return {"schema": SCHEMA, "client": CLIENT, "version": version, "qualified_version": QUALIFIED_VERSION,
+            "minimum_version": MINIMUM_VERSIONS[CLIENT], "version_supported": version_supported,
             "supported_hooks": supported, "missing_hooks": missing, "unsupported": unsupported,
             "managed_launch": managed, "interactive_sessions": "unguarded",
             "enforcement_profile": "enforced" if enforced else "advisory"}

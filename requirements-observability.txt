@@ -1,2 +1,2 @@
 # Optional native credential storage; environment mode remains dependency-free.
-keyring==25.7.0; sys_platform == "darwin" or sys_platform == "win32"
+keyring>=25.7.0; sys_platform == "darwin" or sys_platform == "win32"
