@@ -31,7 +31,8 @@ Do not add a general cleanup framework, dependency, service or settings control.
       final RPC/process checks, and retain unknown/error outcomes as failures.
 - [x] Wire the revised controller; test deadlines, timeouts, budgets,
       configuration failures and simultaneous case/cleanup failures.
-- [ ] Validate, commit, run affected committed tests, review and publish draft
+- [x] Validate, commit, run affected committed tests and review.
+- [ ] Publish draft
       BLOCKED findings. Independent review and live qualification stay explicit.
 
 Acceptance: delayed and immediate unload can pass only with timely positive
@@ -175,7 +176,29 @@ GREEN at `cd789c1`: `python3 -B scripts/test_sharded.py test_form_gate_cleanup
 test_qualification_harness test_opencode_workflow` passed **83 tests**. An initial
 command named nonexistent `test_opencode_workflow_gate`; the selector rejected it
 before running tests. This is not counted as test execution. Additional committed
-controller checks and final validation/review are recorded after their execution.
+controller checks and final validation/review are recorded below.
+
+At `082c50b8d46dea3b4cee6e436e9cb54c23192d23`,
+`python3 -B scripts/test_sharded.py test_form_gate_cleanup test_form_gate_controller
+test_qualification_harness test_opencode_workflow` passed **91 tests**, with no
+skips. This includes 21 helper tests and 8 actual-controller tests. The controller
+tests substitute only time, subprocess transport and disposable file paths; the
+real receipt, budget, configuration mutation and teardown code execute. Module
+entry refusal was also checked in a local Python subprocess: exit 1 with the
+expected offline-only message, not a native controller run.
+
+Independent native child `ses_e293f2d9effeC1xkcCCarixSA6` reviewed all five files
+and connected original evidence at that exact head against the recorded base.
+The reviewer independently ran 29 helper/controller tests, endpoint diff checks
+and the 24-file original-manifest comparison. All passed; no findings were
+substantiated. The review accepted the offline repair, not native qualification.
+Configured/executed child model and effort were not observed; native dispatch and
+completion establish independence. Visibility preparation was unavailable. The
+coordinator's title helper returned `invalid_request`; no title delivery is claimed.
+This native review is a separate model assignment, not zero total model usage or
+part of the exhausted case/recovery allocation. A private copy of the returned
+review preserves its limits. Final documentation only records these results;
+reviewed controller/helper/test bytes remain unchanged.
 
 Package validation passed with the existing 75%-bundle-size warning. Python
 3.15.2 and Node v26.13.0 were observed. No linter/type/build command exists here.
