@@ -1,7 +1,7 @@
 """Advisory historical replay over past session metadata (validation Edit 6; labels amended by Edit 7; store fields
 registered by Edit 9 and its 12 November supplement; project-only scope in Edit 10; conservative rules in Edit 11).
 
-`run(stores, ...)` reads each registered store through one `mode=ro` SQLite connection, selects only the metadata
+`run(stores, ...)` reads each registered store through one `mode=ro` SQLite snapshot, selects only the metadata
 columns the registration maps, labels each eligible session by the fixed rules and returns an aggregate report. It
 holds titles in memory for the keyword match only and returns no session id, title, timestamp or path. Extracted
 rows stay in memory; the only file written is a private temporary admission ledger, removed after the run.
@@ -14,14 +14,15 @@ fail closed with a precise reason, in this order; the first two open no store:
   caller (shape-checked here, not verified; Edit 9);
 - `_registered`: `store_unregistered` for any store outside the retained OpenCode/Codex mapping (including `opus`,
   excluded by Edit 10), then `store_missing` when either retained source is absent;
-- `gather` (the first read): `qualification_session_found` when an eligible session id is one of those ids;
+- `gather` (the first read): global metadata eligibility and `qualification_session_found` when an eligible session
+  id is one of those ids, before any title read; only kept eligible rows then supply titles from the same snapshots;
 - `route_unqualified: <code>`: no settings path, or `routing_paths.gate` finds no qualified path or no generated route.
 
 Callers supply only approved roots of this project's current and legacy checkouts, never another project's roots
 or their shared parent. Each authorized read binds the observed schema by SHA-256 (`schemas`, by store name).
 Registration is not permission: no historical run is authorized by this module.
 """
-from contextlib import closing
+from contextlib import ExitStack, closing
 import copy
 import hashlib
 import json
@@ -60,16 +61,17 @@ MAPPED = dict(
                                   tokens_output="INTEGER", tokens_reasoning="INTEGER"),
                   project=dict(id="TEXT", worktree="TEXT"),
                   project_directory=dict(project_id="TEXT", directory="TEXT")))
-CODEX_READ = ("SELECT t.id, t.agent_role, t.title, t.model_provider, t.model, t.reasoning_effort, t.created_at_ms, "
+CODEX_READ = ("SELECT t.id, t.agent_role, t.model_provider, t.model, t.reasoning_effort, t.created_at_ms, "
               "t.updated_at_ms, e.parent_thread_id, t.attached_thread_parent_id FROM threads t "
               "LEFT JOIN thread_spawn_edges e ON e.child_thread_id = t.id WHERE t.cwd = ? OR substr(t.cwd, 1, ?) = ?")
 # Store A (supplement of 12 November 2026): `model` is JSON `{id, providerID, variant?}` and the timestamps are
 # epoch milliseconds. Whether historical `tokens_output` includes `tokens_reasoning` stays unproved.
-OPENCODE_READ = ("SELECT s.id, s.parent_id, s.agent, s.title, s.model, s.time_created, s.time_updated, "
+OPENCODE_READ = ("SELECT s.id, s.parent_id, s.agent, s.model, s.time_created, s.time_updated, "
                   "s.tokens_output, s.tokens_reasoning FROM session_v2 s WHERE "
                   "(s.directory = ? OR substr(s.directory, 1, ?) = ?) AND s.project_id IN "
                  "(SELECT id FROM project WHERE worktree = ? UNION SELECT project_id FROM project_directory "
-                 "WHERE directory = ?)")
+                  "WHERE directory = ?)")
+TITLE_READ = dict(codex="SELECT title FROM threads WHERE id = ?", opencode="SELECT title FROM session_v2 WHERE id = ?")
 
 ROLE_AGENT = (("reviewer", ("reviewer", "review")), ("researcher", ("explore", "explorer", "researcher")),
               ("repair", ("repair",)))
@@ -111,9 +113,9 @@ def _codex_rows(db, store):
     rows = []
     for root in store["roots"]:
         prefix = root.rstrip("/") + "/"
-        for (identifier, agent, title, provider, model, effort, start, end, parent,
-             attached) in db.execute(CODEX_READ, (root, len(prefix), prefix)):
-            rows.append(dict(id=identifier, parent=parent or attached, agent=agent, title=title, provider=provider,
+        for (identifier, agent, provider, model, effort, start, end, parent,
+              attached) in db.execute(CODEX_READ, (root, len(prefix), prefix)):
+            rows.append(dict(id=identifier, parent=parent or attached, agent=agent, provider=provider,
                              model=model, effort=effort, start_ms=_millis(start), end_ms=_millis(end), output=None,
                              reasoning=None, output_includes_reasoning=None))
     return rows
@@ -135,10 +137,10 @@ def _opencode_rows(db, store):
     rows = []
     for root in store["roots"]:
         prefix = root.rstrip("/") + "/"
-        for identifier, parent, agent, title, model, start, end, output, reasoning in db.execute(
+        for identifier, parent, agent, model, start, end, output, reasoning in db.execute(
                 OPENCODE_READ, (root, len(prefix), prefix, root, root)):
             provider, model_id, variant = _opencode_model(model)
-            rows.append(dict(id=identifier, parent=parent, agent=agent, title=title, provider=provider,
+            rows.append(dict(id=identifier, parent=parent, agent=agent, provider=provider,
                              model=model_id, effort=variant, start_ms=start if type(start) is int else None,
                              end_ms=end if type(end) is int else None, output=output, reasoning=reasoning,
                              output_includes_reasoning=None))
@@ -148,13 +150,10 @@ def _opencode_rows(db, store):
 READERS = dict(codex=_codex_rows, opencode=_opencode_rows)
 
 
-def _read(store):
-    if store.get("kind") not in READERS:
-        raise Refused("store_unregistered: %s has no registered field mapping" % store.get("name"))
-    with closing(_connect(store["path"])) as db:
-        _check_schema(db, store)
-        schema = _schema_digest(db)
-        rows = READERS[store["kind"]](db, store)
+def _read(db, store):
+    _check_schema(db, store)
+    schema = _schema_digest(db)
+    rows = READERS[store["kind"]](db, store)
     unique = {}  # overlapping roots can select one row twice; that is one read, not a duplicate session
     for row in rows:
         row.update(store=store["name"], kind=store["kind"], path=str(store["path"]))
@@ -184,29 +183,9 @@ def _first_copy(rows):
 
 
 def collect(stores, *, now_ms):
-    """Read the mapped stores; return `sessions_found`, `excluded` by reason, the in-memory `eligible` rows and
-    `schemas`, the observed schema digest of each store read, by store name (never a path or SQL)."""
-    rows, schemas = [], {}
-    for store in stores:
-        found, schema = _read(store)
-        rows.extend(found)
-        schemas.setdefault(store["name"], []).append(schema)
-    unique, duplicates = _first_copy(rows)
-    excluded = dict.fromkeys(EXCLUSIONS, 0)
-    excluded["duplicate"] = duplicates
-    eligible = []
-    for row in unique:
-        if not row["parent"]:
-            excluded["no_parent"] += 1
-        elif not row["model"]:
-            excluded["no_model_id"] += 1
-        elif row["start_ms"] is None or row["end_ms"] is None:
-            excluded["no_timestamp"] += 1
-        elif row["end_ms"] > now_ms - HOUR_MS:
-            excluded["still_running"] += 1
-        else:  # Neither store has a title, compaction or summary marker (Edit 9): that count stays 0.
-            eligible.append(row)
-    return dict(sessions_found=len(unique), excluded=excluded, eligible=eligible, schemas=schemas)
+    """Low-level historical collection without known-ID exclusions; titles still follow metadata eligibility.
+    Return `sessions_found`, exclusion counts, in-memory eligible rows and schema digests by store name."""
+    return gather(stores, frozenset(), now_ms=now_ms)
 
 
 def _words(text):
@@ -486,9 +465,39 @@ def _registered(stores):
 
 
 def gather(stores, blocked, *, now_ms):
-    """The authorized read `run` performs after `_registered`: `collect`, then refuse while any eligible session id
-    is a qualification or pilot session id (Edit 6)."""
-    found = collect(stores, now_ms=now_ms)
-    if any(row["id"] in blocked for row in found["eligible"]):
-        raise Refused("qualification_session_found: an eligible session is a qualification or pilot session")
-    return found
+    """Read metadata after `_registered`, then deduplicate, filter and refuse known eligible IDs before titles.
+    Keep each source's read-only snapshot until its eligible titles are read; close before composition."""
+    with ExitStack() as sources:
+        rows, schemas, owners = [], {}, {}
+        for store in stores:
+            if store.get("kind") not in READERS:
+                raise Refused("store_unregistered: %s has no registered field mapping" % store.get("name"))
+            db = sources.enter_context(closing(_connect(store["path"])))
+            db.execute("BEGIN")
+            found, schema = _read(db, store)
+            rows.extend(found)
+            owners.update((id(row), db) for row in found)
+            schemas.setdefault(store["name"], []).append(schema)
+        unique, duplicates = _first_copy(rows)
+        excluded = dict.fromkeys(EXCLUSIONS, 0)
+        excluded["duplicate"] = duplicates
+        eligible = []
+        for row in unique:
+            if not row["parent"]:
+                excluded["no_parent"] += 1
+            elif not row["model"]:
+                excluded["no_model_id"] += 1
+            elif row["start_ms"] is None or row["end_ms"] is None:
+                excluded["no_timestamp"] += 1
+            elif row["end_ms"] > now_ms - HOUR_MS:
+                excluded["still_running"] += 1
+            else:  # Neither store has a title, compaction or summary marker (Edit 9): that count stays 0.
+                eligible.append(row)
+        if any(row["id"] in blocked for row in eligible):
+            raise Refused("qualification_session_found: an eligible session is a qualification or pilot session")
+        for row in eligible:
+            title = owners[id(row)].execute(TITLE_READ[row["kind"]], (row["id"],)).fetchmany(2)
+            if len(title) != 1:
+                raise Refused("title_projection_invalid: selected metadata has no unique title row")
+            row["title"] = title[0][0]
+        return dict(sessions_found=len(unique), excluded=excluded, eligible=eligible, schemas=schemas)
