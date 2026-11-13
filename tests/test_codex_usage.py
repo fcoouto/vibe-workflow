@@ -297,32 +297,50 @@ class CodexUsageTests(unittest.TestCase):
                 self.assertNotIn(SECRET, repr(result))
                 path.unlink()
 
-    def test_source_version_unqualified(self):
+    def test_deprecated_qualified_versions_cannot_veto_valid_usage(self):
         self.standard()
-        result = self.read(qualified=frozenset())
-        self.assertGap(result, "source_version_unqualified")
-        self.assertEqual(result["cli_version"], VERSION)
-        self.assertGap(self.read(qualified=frozenset({"0.168.0"})), "source_version_unqualified")
+        for qualified in (frozenset(), frozenset({"0.168.0"})):
+            with self.subTest(qualified=qualified):
+                result = self.read(qualified=qualified)
+                self.assertEqual((result["gaps"], result["usage"], result["cli_version"]), ([], totals(250), VERSION))
 
-    def test_shipped_qualified_versions_are_exactly_0_167_0(self):
-        self.assertEqual(codex_usage.QUALIFIED_VERSIONS, frozenset({"0.167.0"}))
-        self.standard()
-        result = codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
-                                               deadline=time.monotonic() + 30)
-        self.assertEqual((result["gaps"], result["usage"]), ([], totals(250)))
-        path = self.write([meta(version="0.168.0"), token(at(10, 30), 1)])
-        self.assertGap(codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
-                                                     deadline=time.monotonic() + 30), "source_version_unqualified")
-        path.unlink()
+    def test_minimum_and_newer_releases_are_accepted_without_an_allowlist(self):
+        for version in ("0.163.0", "0.163.1", VERSION, "0.167.1", "0.168.0", "0.1000.0", "1.0.0", "20.0.0"):
+            with self.subTest(version=version):
+                self.write([meta(version=version), token(at(10, 30), 1)])
+                result = codex_usage.read_thread_usage(THREAD, started_at=START, cutoff_at=CUTOFF,
+                                                      deadline=time.monotonic() + 30)
+                self.assertEqual((result["gaps"], result["usage"], result["cli_version"]), ([], totals(1), version))
 
-    def test_missing_or_invalid_version_is_unqualified(self):
+    def test_known_versions_below_minimum_still_leave_totals_unknown(self):
+        for version in ("0.162.9", "0.99.0", "0.163.0-rc.1"):
+            with self.subTest(version=version):
+                self.write([meta(version=version), token(at(10, 30), 1)])
+                self.assertGap(self.read(qualified=frozenset({version})), "source_version_unqualified")
+
+    def test_missing_or_invalid_version_does_not_block_valid_rows(self):
         for version in (None, 167, "", "x" * 65, "path/x", "1.0:evil", "v@1", "0.167.0 beta"):
             with self.subTest(version=version):
-                path = self.write([meta(version=version), token(at(10, 30), 1)])
+                self.write([meta(version=version), token(at(10, 30), 1)])
                 result = self.read()
-                self.assertGap(result, "source_version_unqualified")
+                self.assertEqual((result["gaps"], result["usage"]), ([], totals(1)))
                 self.assertIsNone(result["cli_version"])
-                path.unlink()
+        header = meta()
+        del header["payload"]["cli_version"]
+        self.write([header, token(at(10, 30), 1)])
+        self.assertEqual(self.read()["usage"], totals(1))
+
+    def test_unknown_version_preserves_identity_shape_counter_and_time_failures(self):
+        for version in (None, "development"):
+            cases = (([meta(thread=OTHER, version=version)], "session_meta_mismatch"),
+                     ([meta(version=version), token(at(10, 30), info={})], "token_info_missing"),
+                     ([meta(version=version), token(at(10, 30), info={"total_token_usage": {}})], "counter_missing"),
+                     ([meta(version=version), token(at(10, 30), 2), token(at(11), 1)], "counter_decreased"),
+                     ([meta(version=version), token(at(11), 1), token(at(10, 30), 2)], "timestamp_unusable"))
+            for rows, code in cases:
+                with self.subTest(version=version, code=code):
+                    self.write(rows)
+                    self.assertGap(self.read(), code)
 
     def test_token_info_missing(self):
         cases = ([meta(), token(at(9, 30), 1), token(at(10, 30), info=None)],
@@ -583,11 +601,13 @@ class CodexUsageTests(unittest.TestCase):
 
     def test_paginated_thread_sums_across_files(self):
         self.plain()
-        self.page([meta(at(11), version="0.167.1"), token(at(11, 10), 201), token(at(11, 30), 350)])
-        result = self.read(qualified=frozenset({VERSION, "0.167.1"}))
-        self.assertEqual((result["gaps"], result["cli_version"]), ([], "0.167.1"))
-        self.assertEqual((result["baseline"], result["final"], result["usage"]),
-                         (totals(100), totals(350), totals(250)))
+        for version in ("0.163.0", "0.167.1", "0.168.0", "1.0.0", None, "development"):
+            with self.subTest(version=version):
+                self.page([meta(at(11), version=version), token(at(11, 10), 201), token(at(11, 30), 350)])
+                result = self.read()
+                self.assertEqual((result["gaps"], result["cli_version"]), ([], version))
+                self.assertEqual((result["baseline"], result["final"], result["usage"]),
+                                 (totals(100), totals(350), totals(250)))
 
     def test_pages_in_different_date_folders_are_read_in_name_order(self):
         self.plain(folder=self.folder(day=10))
@@ -707,7 +727,7 @@ class CodexUsageTests(unittest.TestCase):
     def test_each_page_must_pass_its_own_header_and_version_checks(self):
         cases = (([meta(at(11), thread=PAGE), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
                  ([message(at(11)), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
-                 ([meta(at(11), version="0.168.0"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
+                  ([meta(at(11), version="0.162.9"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
                  ([meta(at(11)), token(at(11, 10), 201), meta(at(11, 20), thread=OTHER)], "session_meta_mismatch",
                   QUALIFIED))
         for rows, code, qualified in cases:
@@ -871,8 +891,9 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(result["gaps"], [{"thread_id": OTHER, "code": "thread_file_not_found"}])
         self.assertEqual(result["threads"][0]["usage"], totals(250))
         self.assertEqual(result["threads"][1]["usage"], UNKNOWN)
-        unqualified = self.acquire([{"thread_id": THREAD, "role": "coordinator"}], qualified=frozenset())
-        self.assertEqual(unqualified["gaps"], [{"thread_id": THREAD, "code": "source_version_unqualified"}])
+        self.write([meta(version="0.162.9"), token(at(10, 30), 1)])
+        unsupported = self.acquire([{"thread_id": THREAD, "role": "coordinator"}])
+        self.assertEqual(unsupported["gaps"], [{"thread_id": THREAD, "code": "source_version_unqualified"}])
 
     def test_task_threads_are_validated(self):
         bad = ({"thread_id": THREAD}, {"thread_id": THREAD, "role": "worker", "path": "x"},
