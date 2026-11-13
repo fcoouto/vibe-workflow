@@ -168,7 +168,8 @@ class UserDirPolicyTests(Temp):
             entry = result["opencode"][relative]
             self.assertEqual(entry["unexpected_count"], 2)
             self.assertEqual(entry["unexpected"], ["auth.json", "storage/link"])
-            self.assertEqual(entry["unexpected_reasons"], {"sensitive_name": 1, "symlink_or_dot_segment": 1})
+            reason = "outside_stores" if relative == ".local/share/opencode" else "sensitive_name"
+            self.assertEqual(entry["unexpected_reasons"], {reason: 1, "symlink_or_dot_segment": 1})
             self.assertEqual(sum(entry["concurrent_session_churn"].values()), 1)
             self.assertIn("the user's %s changed during the run" % relative, blockers)
 
