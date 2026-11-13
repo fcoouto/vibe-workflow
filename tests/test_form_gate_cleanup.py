@@ -138,6 +138,73 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(result['passed'])
         self.assertFalse(result['shared_process_unchanged'])
 
+    def test_malformed_inventory_never_counts_as_absence(self):
+        for data in [None, {}, [None], [{'state': {'status': 'active'}}]]:
+            with self.subTest(data=data):
+                clock = Clock()
+                native = Native(clock)
+
+                def call(method, path, *args, **kwargs):
+                    value = native(method, path, *args, **kwargs)
+                    return {'data': data} if '/api/plugin?' in path else value
+
+                result = cleanup.observe_unload(call, lambda: 10 - native.used, 30, 'fixture',
+                    {'pid': 123, 'version': '2.2.7'}, clock=clock, sleep=clock.sleep)
+                self.assertFalse(result['passed'])
+                self.assertIsNone(result['inventory_subject_absent'])
+                self.assertTrue(result['errors'])
+
+    def test_rpc_unavailability_requires_exact_error_type_and_http_status(self):
+        for status, body in [('HTTP 500 Internal Server Error\n', {'_tag': 'RpcError', 'type': 'rpc.unavailable'}),
+                             ('HTTP 400 Bad Request\n', {'_tag': 'RpcError', 'type': 'rpc.internal',
+                                                        'message': 'rpc.unavailable'})]:
+            with self.subTest(status=status, body=body):
+                clock = Clock()
+                native = Native(clock)
+
+                def call(method, path, *args, **kwargs):
+                    value = native(method, path, *args, **kwargs)
+                    if '/hello?' in path:
+                        value.update(stderr=status, stdout=json.dumps(body))
+                    return value
+
+                result = cleanup.observe_unload(call, lambda: 10 - native.used, 30, 'fixture',
+                    {'pid': 123, 'version': '2.2.7'}, clock=clock, sleep=clock.sleep)
+                self.assertFalse(result['passed'])
+                self.assertFalse(result['rpc_unavailable'])
+
+    def test_slow_response_after_deadline_is_not_positive_proof(self):
+        clock = Clock()
+        native = Native(clock)
+
+        def call(method, path, *args, **kwargs):
+            value = native(method, path, *args, **kwargs)
+            clock.sleep(31)  # Transport violated its timeout contract; still reject the receipt.
+            return value
+
+        result = cleanup.observe_unload(call, lambda: 10 - native.used, 30, 'fixture',
+            {'pid': 123, 'version': '2.2.7'}, clock=clock, sleep=clock.sleep)
+        self.assertFalse(result['passed'])
+        self.assertIsNone(result['inventory_subject_absent'])
+        self.assertEqual(len(native.requests), 1)
+
+    def test_short_window_shrinks_timeouts_and_preserves_all_three_checks(self):
+        clock = Clock()
+        native = Native(clock)
+        result = cleanup.observe_unload(native, lambda: 10 - native.used, 0.3, 'fixture',
+            {'pid': 123, 'version': '2.2.7'}, clock=clock, sleep=clock.sleep)
+        self.assertTrue(result['passed'])
+        self.assertLessEqual(native.requests[0][3], 0.1)
+        self.assertLessEqual(native.requests[1][3], 0.15)
+        self.assertLessEqual(native.requests[2][3], 0.3)
+
+    def test_one_remaining_call_is_reserved_for_process_identity(self):
+        result, native, _ = self.run_observation(used=9)
+        self.assertFalse(result['passed'])
+        self.assertIsNone(result['rpc_unavailable'])
+        self.assertTrue(result['shared_process_unchanged'])
+        self.assertEqual([item[1] for item in native.requests], ['/api/info'])
+
 
 class ReportingTests(unittest.TestCase):
     def finish(self, case_result, case_error, recovery):
