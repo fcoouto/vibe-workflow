@@ -14,7 +14,7 @@ MINIMUM_VERSIONS = {
 _STABLE = re.compile(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?", re.ASCII)
 _RELEASE = re.compile(
     r"v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?"
-    r"(?P<suffix>-[0-9A-Za-z.-]+|(?:a|b|rc|dev)[0-9]+|\.post[0-9]+)?"
+    r"(?P<suffix>-[0-9A-Za-z.-]+|(?:a|b|rc|dev)[0-9]+|\.(?:dev|post)[0-9]+)?"
     r"(?:\+[0-9A-Za-z.-]+)?", re.ASCII)
 
 

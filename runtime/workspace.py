@@ -309,10 +309,10 @@ def run_check(context, spec, client):
 
 
 class Context:
-    def __init__(self, package, environ, observer, installed, old_clients=None):
+    def __init__(self, package, environ, observer, installed):
         self.package, self.environ, self.observer, self.installed = package, environ, observer, installed
         self.expected = pv.package_version(package)
-        self.old_clients = old_clients or {}
+        self.old_clients = {}
 
 
 def discover(observer, session, environ):
