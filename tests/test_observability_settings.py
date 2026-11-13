@@ -49,7 +49,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 1)
         self.assertEqual(report["control_scope"], "checkout")
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.core_digest(), before)
@@ -98,7 +98,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
             report = self.settings.enable(self.scope, dict(expected_revision=1))
             verify.assert_called_once_with(CONFIGURE["destination"], CONFIGURE["langfuse_project_id"])
         self.assertTrue(report["desired_opt_in"])
-        self.assertEqual(report["collection"], "unavailable")
+        self.assertEqual(report["collection"], "off")
         before = self.path.read_bytes()
         with patch("runtime.langfuse.verify_project", side_effect=AssertionError("network")):
             report = self.settings.status(self.scope)
@@ -511,6 +511,20 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertFalse(report["desired_opt_in"])
         self.assertEqual(report["revision"], 2)
 
+    def test_forget_without_saved_entry_keeps_the_revision(self):
+        from runtime.observability_credentials import CredentialError
+        self._select_os_store()
+        before = self.path.read_bytes()
+        with patch("runtime.observability_credentials.forget",
+                   side_effect=CredentialError("saved_credentials_unavailable")) as forget:
+            with self.assertRaisesRegex(CredentialError, "^saved_credentials_unavailable$"):
+                self.settings.forget_credentials(self.scope, dict(expected_revision=1))
+        self.assertIn("before_change", forget.call_args.kwargs)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.settings.status(self.scope)["revision"], 1)
+        with patch("runtime.observability_credentials.forget", return_value=None):
+            self.assertEqual(self.settings.forget_credentials(self.scope, dict(expected_revision=1))["revision"], 2)
+
     def test_reconfiguration_cannot_silently_downgrade_the_selected_source(self):
         self._select_os_store()
         report = self.settings.configure(self.scope, dict(CONFIGURE, expected_revision=1))
@@ -582,8 +596,9 @@ class ObservabilitySettingsTests(unittest.TestCase):
                              ("project", self.scope.project_id, 1))
             self.assertEqual(report["repository_ids"], [self.scope.repository_id])
             self.assertTrue(report["desired_collection"])
-            self.assertEqual(report["collection"], "unavailable")
-            self.assertFalse(report["native_collection_qualified"])
+            self.assertEqual(report["collection"], "connection_not_enabled")
+            self.assertTrue(report["native_collection_qualified"])
+            self.assertEqual(report["collection_sources"], ["codex 0.167.0"])
             self.assertEqual(self.settings.project_status(self.scope), report | dict(
                 checkout_connection=dict(configured=False, desired_opt_in=False)))
             before = self.project_path().read_bytes()
@@ -617,7 +632,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                      self.project_request(desired_collection=1), self.project_request(desired_collection="PRIVATE"),
                      self.project_request(repository_ids=[]), self.project_request(repository_ids=repository),
                      self.project_request(repository_ids=[repository, repository]),
-                     self.project_request(repository_ids=[repository, "PRIVATE/path"]),
+                     self.project_request(repository_ids=[repository, "PRIVATE\npath"]),
                      self.project_request(repository_ids=[repository, 7]),
                      self.project_request(repository_ids=[repository] + ["r%d" % i for i in range(64)]))
         invalid = [(request, "invalid_observability_request") for request in malformed]
@@ -647,7 +662,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
                 self.settings.disable_project(self.scope, dict(expected_revision=1))
         self.assertEqual((report["configured"], report["revision"], report["desired_collection"]), (False, 0, False))
         self.assertEqual((report["project_id"], report["repository_ids"]), (self.scope.project_id, []))
-        self.assertEqual((report["collection"], report["checkout_connection"]), ("unavailable", None))
+        self.assertEqual((report["collection"], report["checkout_connection"]), ("off", None))
         self.assertFalse(self.directory.exists())
         self.assertEqual(database.read_bytes(), before)
 
@@ -798,6 +813,83 @@ class ObservabilitySettingsTests(unittest.TestCase):
         self.assertEqual((code, report['revision']), (0, 2), report)
         self.assertEqual(run('disable-project', dict(expected_revision=2))[1]['revision'], 2)
         self.assertEqual(run('configure-project', self.project_request(2))[0], 1)
+
+
+class ExportStoreTests(unittest.TestCase):
+    """Upload-state files reuse the private store: same permissions, binding, lock and recovery path."""
+
+    TASK = dict(client="codex", session_id="session-1", task_id="settings-fixture")
+
+    def setUp(self):
+        ObservabilitySettingsTests.setUp(self)
+        self.key = self.settings.destination_key(CONFIGURE["destination"], CONFIGURE["langfuse_project_id"])
+        self.settings.configure(self.scope, CONFIGURE)
+        self.exports = self.directory / "exports"
+
+    def save(self, task=None, **changes):
+        task = task or self.TASK
+        with self.settings.export_store(self.scope, task, self.key, write=True, create=True) as owner:
+            self.assertIsNone(owner.load())
+            owner.check()
+            record = dict(version=1, revision=1, binding=owner.binding, task_ref=task, destination_key=self.key,
+                          export_state=None, last_result=dict(at=1, code="nothing_to_send")) | changes
+            owner.save(record)
+            return record
+
+    def name(self, task=None):
+        return self.settings.export_name(state._scope_id(self.scope), task or self.TASK, self.key) + ".json"
+
+    def test_saved_upload_state_is_private_and_readable_through_recovery(self):
+        record = self.save()
+        path = self.exports / self.name()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.exports.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(set(record["binding"]), {"scope_id", "project_id", "authority_directory"})
+        for scope in (self.scope, self.scope.repository_root):
+            with self.subTest(recovery=type(scope).__name__), \
+                    self.settings.export_store(scope, self.TASK, self.key, recovery=True) as owner:
+                self.assertEqual(owner.load(), record)
+        self.assertNotEqual(self.name(), self.name(dict(self.TASK, task_id="other")))
+
+    def test_absent_upload_state_is_not_created_by_reads(self):
+        with self.settings.export_store(self.scope.repository_root, self.TASK, self.key, recovery=True) as owner:
+            self.assertIsNone(owner)
+        with self.settings.export_store(self.scope, self.TASK, self.key) as owner:
+            self.assertIsNone(owner.load())
+        self.assertFalse(self.exports.exists())
+
+    def test_linked_exports_directory_or_foreign_record_is_refused(self):
+        self.save()
+        path = self.exports / self.name()
+        other = dict(self.TASK, task_id="other")
+        os.link(path, self.exports / self.name(other))
+        os.unlink(path)
+        with self.assertRaisesRegex(self.settings.SettingsError, r"\Aobservability_export_mismatch\Z"), \
+                self.settings.export_store(self.scope, other, self.key) as owner:
+            owner.load()
+        moved = self.directory / "moved"
+        self.exports.rename(moved)
+        self.exports.symlink_to(moved)
+        with self.assertRaises(self.settings.SettingsError), \
+                self.settings.export_store(self.scope, self.TASK, self.key, write=True, create=True) as owner:
+            owner.load()
+
+    def test_invalid_names_or_envelopes_fail_closed(self):
+        for task, key in ((dict(self.TASK, extra="x"), self.key), (dict(self.TASK, task_id=""), self.key),
+                          (self.TASK, "PRIVATE"), (self.TASK, self.key.upper())):
+            with self.subTest(task=task, key=key), self.assertRaises(self.settings.SettingsError):
+                with self.settings.export_store(self.scope, task, key):
+                    pass
+        self.save(last_result=dict(at=1, code="PRIVATE"))
+        with self.assertRaisesRegex(self.settings.SettingsError, r"\Ainvalid_observability_configuration\Z"), \
+                self.settings.export_store(self.scope, self.TASK, self.key) as owner:
+            owner.load()
+
+    def test_busy_upload_lock_is_refused(self):
+        with self.settings.export_store(self.scope, self.TASK, self.key, write=True, create=True):
+            with self.assertRaisesRegex(self.settings.SettingsError, r"\Aobservability_operation_busy\Z"):
+                with self.settings.export_store(self.scope, self.TASK, self.key, write=True):
+                    pass
 
 
 class ProjectLinkedWorktreeTests(unittest.TestCase):

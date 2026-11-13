@@ -1,5 +1,7 @@
 # Project-document templates implementation plan
 
+> **Update, 11 November 2026:** the stored instruction map, `--prepare` and `build_manifest` were removed. Nested `templates/**/*.md` stay readable through the reader's allowed-path rule, and package validation checks every such source directly. Map regeneration steps below record earlier work, not current requirements.
+
 > **For agentic workers:** Use `executing-plans` for this single, coupled change.
 
 **Goal:** Implement candidate D: locally available project-document shapes for all nine onboarding responsibilities, without creating nine mandatory files.
@@ -28,7 +30,7 @@
 
 ## Task 1: Local templates and reader support
 
-**Files:** `templates/project/{product,overview,shared-instructions,claude-instructions,architecture,design,local-preparation,quality}.md`; `templates/README.md`, `templates/LICENSE`; `scripts/read_instructions.py`; `tests/test_prepared_instructions.py`; `skills/onboard-my-project/references/procedure.md`; `docs/policy-sources.md`; existing design; generated `clients/instruction-map.json`.
+**Files:** `templates/project/{product,overview,shared-instructions,claude-instructions,architecture,design,local-preparation,quality}.md`; `templates/README.md`, `templates/LICENSE`; `scripts/read_instructions.py`; `tests/test_prepared_instructions.py`; `skills/onboard-my-project/references/procedure.md`; existing design; generated `clients/instruction-map.json`.
 
 **Interfaces:** Existing `instruction_name(name)` and `build_manifest(root)` accept nested `templates/**/*.md` while retaining their public shapes and checks. Onboarding's nine-row table remains the routing owner. No new schema or runtime state.
 

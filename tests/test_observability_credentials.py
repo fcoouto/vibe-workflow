@@ -25,6 +25,19 @@ class ObservabilityCredentialsTests(unittest.TestCase):
         self.credentials = observability_credentials
         self.entries, self.calls = {}, []
         entries, calls = self.entries, self.calls
+        errors, api = ModuleType("keyring.errors"), ModuleType("keyring.backends.macOS.api")
+
+        class PasswordDeleteError(Exception):
+            pass
+
+        class Error(Exception):
+            pass
+
+        class NotFound(Error):
+            pass
+
+        errors.PasswordDeleteError, api.Error, api.NotFound = PasswordDeleteError, Error, NotFound
+        self.errors, self.api = errors, api
 
         class NativeBackend:
             priority = 5
@@ -45,7 +58,11 @@ class ObservabilityCredentialsTests(unittest.TestCase):
             def delete_password(self, service, username):
                 calls.append(("delete", service, username))
                 if (service, username) not in entries:
-                    raise RuntimeError("PRIVATE missing record")
+                    # The pinned macOS backend wraps the item-not-found status this way.
+                    try:
+                        raise NotFound(-25300, "PRIVATE missing record")
+                    except NotFound as error:
+                        raise PasswordDeleteError("PRIVATE " + str(error)) from error
                 del entries[(service, username)]
 
         class MacBackend(NativeBackend):
@@ -62,9 +79,10 @@ class ObservabilityCredentialsTests(unittest.TestCase):
         for name in ("get_keyring", "set_keyring", "get_password", "set_password", "delete_password"):
             setattr(root, name, forbidden)
         mac, windows = ModuleType("keyring.backends.macOS"), ModuleType("keyring.backends.Windows")
-        mac.Keyring, windows.WinVaultKeyring = MacBackend, WindowsBackend
-        modules = {"keyring": root, "keyring.backends": backends,
-                   "keyring.backends.macOS": mac, "keyring.backends.Windows": windows}
+        mac.Keyring, windows.WinVaultKeyring, mac.api = MacBackend, WindowsBackend, api
+        modules = {"keyring": root, "keyring.backends": backends, "keyring.errors": errors,
+                   "keyring.backends.macOS": mac, "keyring.backends.macOS.api": api,
+                   "keyring.backends.Windows": windows}
         self.addCleanup(patch.stopall)
         patch.dict(sys.modules, modules).start()
         patch.object(self.credentials, "version", return_value="25.7.0").start()
@@ -185,6 +203,129 @@ class ObservabilityCredentialsTests(unittest.TestCase):
         self.assertNotIn("PRIVATE", str(caught.exception))
         self.assertNotIn(PAIR[1], str(caught.exception))
 
+    def forget_error(self):
+        guard = lambda: self.calls.append(("guard",))
+        with self.assertRaises(self.credentials.CredentialError) as caught:
+            self.credentials.forget(DESTINATION, PROJECT, before_change=guard)
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        return str(caught.exception)
+
+    def test_forget_without_saved_entry_reports_it_unavailable_after_guard_and_without_a_read(self):
+        self.credentials.store(DESTINATION, "other-project", PAIR, before_change=lambda: None)
+        self.calls.clear()
+        self.assertEqual(self.forget_error(), "saved_credentials_unavailable")
+        target = self.credentials.reference(DESTINATION, PROJECT)
+        self.assertEqual(self.calls, [("construct", "macos"), ("guard",), ("delete", target, "project-keys")])
+        self.assertEqual(len(self.entries), 1)
+
+    def test_other_delete_failures_stay_uncertain(self):
+        errors, api = self.errors, self.api
+
+        def wrapped(cause):
+            def delete(backend, service, username):
+                try:
+                    raise cause
+                except Exception as error:
+                    raise errors.PasswordDeleteError("PRIVATE") from error
+            return delete
+
+        def bare(backend, service, username):
+            raise errors.PasswordDeleteError("PRIVATE")
+
+        def unwrapped(backend, service, username):
+            raise api.NotFound(-25300, "PRIVATE")
+
+        def context_only(backend, service, username):
+            try:
+                raise api.NotFound(-25300, "PRIVATE")
+            except api.NotFound:
+                raise errors.PasswordDeleteError("PRIVATE")
+
+        def other_type(backend, service, username):
+            try:
+                raise api.NotFound(-25300, "PRIVATE")
+            except api.NotFound as error:
+                raise RuntimeError("PRIVATE") from error
+
+        for name, delete in (("denied", wrapped(api.Error(-128, "PRIVATE"))), ("other", wrapped(RuntimeError("PRIVATE"))),
+                             ("bare", bare), ("unwrapped", unwrapped), ("context", context_only),
+                             ("other_type", other_type)):
+            with self.subTest(name=name), patch.object(self.mac, "delete_password", delete):
+                self.assertEqual(self.forget_error(), "credential_store_delete_unknown")
+
+    def test_forget_on_windows_without_entry_reports_unavailable_after_guard(self):
+        with patch.object(sys, "platform", "win32"), \
+                patch.object(self.windows, "_read_credential", lambda backend, target: None, create=True), \
+                patch.object(self.windows, "_delete_password", side_effect=AssertionError("delete"), create=True):
+            self.assertEqual(self.forget_error(), "saved_credentials_unavailable")
+        self.assertEqual(self.calls, [("construct", "windows"), ("guard",)])
+
+
+class PinnedMacCredentialsTests(unittest.TestCase):
+    """Run the unchanged pinned macOS backend with only its Keychain item calls replaced."""
+
+    @classmethod
+    def setUpClass(cls):
+        if sys.platform != "darwin":
+            raise unittest.SkipTest("The pinned macOS backend loads the macOS Security framework")
+        try:
+            installed = distribution("keyring")
+        except PackageNotFoundError:
+            raise unittest.SkipTest("Optional pinned keyring is not installed")
+        if installed.version != "25.7.0":
+            raise unittest.SkipTest("The macOS source regression requires keyring 25.7.0")
+        for path, digest in (("keyring/backends/macOS/__init__.py",
+                              "f8220e36fc2b2456deba3eb4a296c2319c38c16b621b21ee182b21a1c77835d8"),
+                             ("keyring/backends/macOS/api.py",
+                              "7a292205a19c602429a83b0d74bcbcc0da01fe714161f638d63ff7f2fb0c2a9a")):
+            if hashlib.sha256(installed.locate_file(path).read_bytes()).hexdigest() != digest:
+                raise AssertionError("Pinned macOS backend source differs from the official wheel")
+        from keyring.backends.macOS import api
+        cls.api = api
+
+    def setUp(self):
+        from runtime import observability_credentials
+        self.credentials = observability_credentials
+        self.statuses = []
+
+        def delete(query):
+            self.statuses.append("delete")
+            return self.status
+
+        def forbidden(*args):
+            raise AssertionError("Real Keychain item access")
+
+        clean = {key: value for key, value in os.environ.items()
+                 if "KEYRING_PROPERTY_" not in key and key != "KEYCHAIN_PATH"}
+        self.assertIs(self.api.delete_generic_password.__globals__, vars(self.api))
+        for context in (patch.object(self.api, "SecItemDelete", delete),
+                        patch.object(self.api, "SecItemCopyMatching", forbidden),
+                        patch.object(self.api, "SecItemAdd", forbidden),
+                        patch.dict(os.environ, clean, clear=True)):
+            context.start()
+            self.addCleanup(context.stop)
+
+    def forget(self):
+        self.credentials.forget(DESTINATION, PROJECT, before_change=lambda: self.statuses.append("guard"))
+
+    def test_item_not_found_is_unavailable_after_guard(self):
+        self.status = self.api.error.item_not_found
+        with self.assertRaisesRegex(self.credentials.CredentialError, "^saved_credentials_unavailable$"):
+            self.forget()
+        self.assertEqual(self.statuses, ["guard", "delete"])
+
+    def test_other_statuses_stay_uncertain_and_success_returns(self):
+        for status in (self.api.error.keychain_denied, -25293, -1):
+            self.statuses.clear()
+            self.status = status
+            with self.subTest(status=status), \
+                    self.assertRaisesRegex(self.credentials.CredentialError, "^credential_store_delete_unknown$"):
+                self.forget()
+            self.assertEqual(self.statuses, ["guard", "delete"])
+        self.status = 0
+        self.assertIsNone(self.forget())
+
 
 class PinnedWindowsCredentialsTests(unittest.TestCase):
     """Run the unchanged pinned backend with only its native calls replaced."""
@@ -281,6 +422,14 @@ class PinnedWindowsCredentialsTests(unittest.TestCase):
         self.credentials.forget(DESTINATION, PROJECT, before_change=self.guard)
         self.assertEqual(set(self.entries), {"unrelated"})
         self.assertEqual(self.calls, [("read", self.target), ("guard",), ("delete", self.target)])
+
+    def test_forget_without_entry_reports_unavailable_after_guard_without_delete(self):
+        self.entries["unrelated"] = dict(Type=1, TargetName="unrelated", UserName="project-keys",
+                                         CredentialBlob="x".encode("utf-16"))
+        with self.assertRaisesRegex(self.credentials.CredentialError, "^saved_credentials_unavailable$"):
+            self.credentials.forget(DESTINATION, PROJECT, before_change=self.guard)
+        self.assertEqual(self.calls, [("read", self.target), ("guard",)])
+        self.assertEqual(set(self.entries), {"unrelated"})
 
     def test_compound_entry_is_never_a_read_fallback(self):
         self.save()

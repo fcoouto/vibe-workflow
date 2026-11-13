@@ -8,7 +8,7 @@
 
 **Source inspection:** the coordinator resolved Toolkit `main` on 25 October 2026 to `790a895304e0c08b70a5b215c9d334f1c86b816c`, matching the reviewed basis; a future new run must resolve again.
 
-**Basis:** [approved scope](../policies/01-project-scope.md), [onboarding contract](../policies/10-project-onboarding.md), [D3 deliverable](onboard-my-project-plan.md#5-small-deliverables) and [source coverage](policy-sources.md). Follow OpenAI's installed `skill-creator` standard: concise entry, explicit loading triggers, complete applicable procedure, no duplicated rules. Python 3.11+ and standard library only.
+**Basis:** [approved scope](../policies/01-project-scope.md), [onboarding contract](../policies/10-project-onboarding.md) and [D3 deliverable](onboard-my-project-plan.md#5-small-deliverables). Follow OpenAI's installed `skill-creator` standard: concise entry, explicit loading triggers, complete applicable procedure, no duplicated rules. Python 3.11+ and standard library only.
 
 ## Boundaries and reuse
 
@@ -24,7 +24,7 @@ Add `skills/onboard-my-project/SKILL.md` with name/description/body together wit
 
 Keep `prepare-my-workspace` and its manifest entry distinct. The new skill becomes discoverable through the existing skills directory; do not repurpose the machine-preparation onboarding manifest field. Generate UI metadata only if it provides the same supported invocation behavior as the existing skill.
 
-The procedure reads local scope/onboarding contracts, resolves Toolkit sources for setup through available trusted connectors/tools and then loads the required upstream source bundle at the pinned revision. Prompt 12 requires README, overview, installation, onboarding playbook, complete tool/prompt/template catalogs, project defaults and the nine-destination project-document manifest; its section 7 explicitly requires guides 17–23. Read every explicitly required guide before deciding applicability, then read applicable linked procedures/templates and dependencies completely. It never copies a prompt collection into the package or makes routine runtime tasks fetch upstream. Authoring changes to local contracts require updating `docs/policy-sources.md` in the same change.
+The procedure reads local scope/onboarding contracts, resolves Toolkit sources for setup through available trusted connectors/tools and then loads the required upstream source bundle at the pinned revision. Prompt 12 requires README, overview, installation, onboarding playbook, complete tool/prompt/template catalogs, project defaults and the nine-destination project-document manifest; its section 7 explicitly requires guides 17–23. Read every explicitly required guide before deciding applicability, then read applicable linked procedures/templates and dependencies completely. It never copies a prompt collection into the package or makes routine runtime tasks fetch upstream. Authoring changes to local contracts require updating their source-to-contract coverage in the same change.
 
 ## Private plan and interfaces
 
