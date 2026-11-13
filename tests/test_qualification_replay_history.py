@@ -480,18 +480,21 @@ class ReplayHistoryTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in found["eligible"]], ["boundary"])
 
     def test_schema_metadata_and_titles_share_one_read_snapshot(self):
-        for kind in ("codex", "opencode"):
-            with self.subTest(kind=kind):
-                store = (self.codex([child("t", title="Implement original")], [("p", "t")], "snapshot-c.db")
+        for kind, phase in (("codex", "schema"), ("opencode", "schema"),
+                            ("codex", "metadata"), ("opencode", "metadata")):
+            with self.subTest(kind=kind, phase=phase):
+                name = "snapshot-%s-%s.db" % (kind, phase)
+                store = (self.codex([child("t", title="Implement original")], [("p", "t")], name)
                          if kind == "codex" else dict(name=kind, kind=kind, roots=[ROOT], path=opencode_store(
-                             str(self.folder / "snapshot-o.db"), [dict(id="t", parent_id="p", title="Implement original",
-                                                                     model='{"id":"m","providerID":"x"}')])) )
+                             str(self.folder / name), [dict(id="t", parent_id="p", title="Implement original",
+                                                           model='{"id":"m","providerID":"x"}')])) )
                 with closing(sqlite3.connect(store["path"])) as db:
                     self.assertEqual(db.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
-                real, transactions = replay._schema_digest, []
+                real = replay._schema_digest if phase == "schema" else replay.READERS[kind]
+                transactions = []
 
-                def fingerprint(db):
-                    digest = real(db)
+                def mutate_after_read(db, *args):
+                    result = real(db, *args)
                     transactions.append(db.in_transaction)
                     table, updated = ("threads", "updated_at_ms") if kind == "codex" else ("session_v2", "time_updated")
                     model = "new-model" if kind == "codex" else '{"id":"new-model","providerID":"x"}'
@@ -499,9 +502,11 @@ class ReplayHistoryTests(unittest.TestCase):
                         writer.execute("UPDATE %s SET title=?, model=?, %s=? WHERE id='t'" % (table, updated),
                                        ("Review changed", model, NOW_MS - HOUR_MS))
                         writer.commit()
-                    return digest
+                    return result
 
-                with mock.patch.object(replay, "_schema_digest", fingerprint):
+                patch = (mock.patch.object(replay, "_schema_digest", mutate_after_read) if phase == "schema"
+                         else mock.patch.dict(replay.READERS, {kind: mutate_after_read}))
+                with patch:
                     found = replay.collect([store], now_ms=NOW_MS)
                 self.assertEqual(transactions, [True])
                 (row,) = found["eligible"]
@@ -510,6 +515,24 @@ class ReplayHistoryTests(unittest.TestCase):
                 (later,) = replay.collect([store], now_ms=NOW_MS)["eligible"]
                 self.assertEqual((later["title"], later["model"], later["end_ms"]),
                                  ("Review changed", "new-model", NOW_MS - HOUR_MS))
+
+    def test_nullable_titles_identical_bindings_and_empty_collection_keep_their_shapes(self):
+        store = dict(name="opencode", kind="opencode", roots=[ROOT], path=opencode_store(
+            str(self.folder / "nullable.db"), [dict(id="null", parent_id="p", title=None,
+                                                   model='{"id":"m","providerID":"x"}'),
+                                             dict(id="empty", parent_id="p", title="",
+                                                  model='{"id":"m","providerID":"x"}')]))
+        found = replay.collect([store, dict(store)], now_ms=NOW_MS)
+        self.assertEqual((found["sessions_found"], found["excluded"]["duplicate"]), (2, 2))
+        self.assertEqual({row["id"]: row["title"] for row in found["eligible"]}, {"null": None, "empty": ""})
+        self.assertEqual([replay.label(row)["specialist"] for row in found["eligible"]], ["unknown", "unknown"])
+        self.assertEqual(len(found["schemas"]["opencode"]), 2)
+        empty = dict(sessions_found=0, excluded=dict(no_parent=0, no_model_id=0, no_timestamp=0, still_running=0,
+                                                    host_marked_title_compaction_summary=0, duplicate=0),
+                     eligible=[], schemas={})
+        with mock.patch.object(replay, "_connect", side_effect=AssertionError("empty collection opened a store")):
+            self.assertEqual(replay.collect([], now_ms=NOW_MS), empty)
+            self.assertEqual(replay.gather([], {"blocked"}, now_ms=NOW_MS), empty)
 
     def test_read_connections_close_on_later_schema_or_title_failure(self):
         first = self.codex([child("t")], [("p", "t")], "first.db")
