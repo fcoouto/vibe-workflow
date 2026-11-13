@@ -17,6 +17,7 @@ Sources, all unqualified today:
   into snapshot models, for that acquisition. Parsing a payload is not qualifying its source.
 """
 from runtime import routing, routing_launch, routing_observations as collector
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 SNAPSHOT_FILE = 'native-catalogs.json'
 HOSTS = {'claude-code': 'claude_native', 'codex': 'codex_native'}
@@ -81,10 +82,12 @@ def catalog(settings_path, client):
     binding = current_binding(client)
     if not _binding_ok(binding):
         return None, 'native_binding_unverified'
+    if at_least(binding['client_version'], MINIMUM_VERSIONS[client]) is False:
+        return None, 'native_version_too_old'
     snapshot = stored(settings_path, client)
     if snapshot is None:
         return None, 'native_catalog_unavailable'
-    if snapshot['binding'] != binding:
+    if any(snapshot['binding'][key] != binding[key] for key in ('connection', 'controls')):
         return None, 'native_binding_changed'
     return identities(client, snapshot['models']), None
 
