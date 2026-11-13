@@ -2,6 +2,19 @@
 
 Status: approved by the user, 2026-11-10. Base: `main` at `5ed0784`.
 
+## Advisory replay retirement, 13 November 2026
+
+The user approved retiring the pre-canary historical/prospective advisory replay
+and F8 implementation/merge prerequisite after the simplest-path brainstorm.
+[Validation Edit 14](../../smart-routing-validation.md#edit-14-13-november-2026-advisory-replay-retired)
+owns this amendment. No sender journal, capture controls or managed-cohort report
+replaces that work. Preserve old evidence as incomplete, the separate 21 strict
+pilot admissions, the partial F8 branch and local native prototypes. Strict replay
+and all billing, dispatch, allowance, native, canary and release safeguards remain.
+The cost is losing the early comparison with past choices; L1 outcome learning
+does not recreate it. API Usage remains required next release and production
+OpenRouter deferred. This decision supplies no collection or live-run authority.
+
 ## Requirements amendment, 11 November 2026
 
 The user authorized these changes after reviewing the six-requirement gap
