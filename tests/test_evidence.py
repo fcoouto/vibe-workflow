@@ -426,6 +426,12 @@ class EvidenceTests(EvidenceFixture, unittest.TestCase):
 
 class CooperativeQualificationTests(unittest.TestCase):
     def test_guarded_worker_check_and_review_complete_only_the_qualification(self):
+        self.complete_qualification()
+
+    def test_guarded_child_patch_accepts_differing_supported_observer_and_child_versions(self):
+        self.complete_qualification(child_version='9.0.0')
+
+    def complete_qualification(self, child_version=None):
         from runtime import delegation, evidence, setup_readiness
         from runtime.adapters import codex
         from tests.test_delegation import AdmissionTests
@@ -493,6 +499,12 @@ class CooperativeQualificationTests(unittest.TestCase):
         payload['transcript_path'] = str(d5.root / 'rollout.jsonl')
         lineage = dict(parent_session_id='parent', task_name=prepared['task_name'],
             native_version=native.catalog['native_version'], model=prepared['requested_model'], effort=prepared['requested_effort'])
+        if child_version is not None:
+            self.assertNotEqual(child_version, lineage['native_version'])
+            lineage['native_version'] = child_version
+        for old_version in ('0.162.9', '0.163.0-alpha.1'):
+            with patch.object(codex, 'guarded_child_lineage', return_value=lineage | dict(native_version=old_version)):
+                self.assertEqual(state.process_event(scope, codex.normalize_runtime(payload)).action, 'deny')
         with patch.object(codex, 'guarded_child_lineage', return_value=lineage | dict(parent_session_id='foreign'), create=True):
             self.assertEqual(state.process_event(scope, codex.normalize_runtime(payload)).action, 'deny')
         with patch.object(codex, 'guarded_child_lineage', return_value=lineage, create=True):
