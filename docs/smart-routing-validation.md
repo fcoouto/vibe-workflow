@@ -423,6 +423,25 @@ no history, pilot or credential access, live call, spending, settings change or
 qualification. Both project-scoped sources, validated exclusion provenance and
 IDs, qualified routing inputs and every live/canary gate remain required.
 
+## Edit 12 (13 November 2026): input-bound historical exclusion proof
+
+The user approved this independently reviewed simpler method before any historical
+replay ran. It permits the input-bound provenance check below where original
+qualification or pilot identifiers are unavailable; it does not waive exclusion.
+Earlier registration and Results remain unchanged. Approval of this method is not
+acceptance of the currently incomplete evidence.
+
+**Design note:** Keep it as simple as possible, yet robust. Use existing records
+and checks; add no provenance registry, service or exemption flag.
+
+Retain the 21 derived expected pilot-ID checks, labelled as derived. Before replay, require evidence that no qualification or pilot session can enter the complete approved project-only sample from either registered source. Use existing records to account for potentially contaminating sessions; accept verified identifiers or existing provenance that establishes their absence from the actual replay inputs. Isolation paths, cleanup flags, schema hashes and operator recollection alone do not establish absence after copying or migration. Missing coverage blocks replay. Cleanup and version evidence are supporting facts only where needed for that proof. Preserve ID-match refusal, privacy, eligibility rules and all independent gates. Obtain user approval and register the dated method before use; review its evidence independently. Current evidence does not satisfy this condition.
+
+Separately applicable operational cleanup requirements, including Edit 11's
+temporary-ledger cleanup, remain unchanged. This edit authorizes no broader data
+access, historical or strict replay execution, live call, spending, activation,
+settings change, qualification or release. Both retained sources and all remaining
+production and canary prerequisites still apply. No replay result is recorded.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
