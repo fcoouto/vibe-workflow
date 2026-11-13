@@ -598,7 +598,7 @@ class ObservabilitySettingsTests(unittest.TestCase):
             self.assertTrue(report["desired_collection"])
             self.assertEqual(report["collection"], "connection_not_enabled")
             self.assertTrue(report["native_collection_qualified"])
-            self.assertEqual(report["collection_sources"], ["codex 0.167.0"])
+            self.assertEqual(report["collection_sources"], ["codex >= 0.163.0"])
             self.assertEqual(self.settings.project_status(self.scope), report | dict(
                 checkout_connection=dict(configured=False, desired_opt_in=False)))
             before = self.project_path().read_bytes()
