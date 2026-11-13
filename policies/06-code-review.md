@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | Before every merge; before completing nontrivial work or work requiring review under the task/project rules; when explicitly requested; after changes affecting prior review evidence. |
 | Decision | Select complementary review scopes from the actual diff, acceptance criteria and consequences. Determine necessary independent and specialist coverage without a fixed panel. |
 | Required action | Establish the exact target, inspect changes and connected behavior, substantiate findings, verify their disposition and rerun affected checks after authorized fixes. |
 | Evidence | Record every [review report](../templates/review-report.md) line marked for code review. |

@@ -36,7 +36,7 @@
 - [x] Add focused regression tests for complete/selective procedure delivery and executable Git observations. Demonstrate failure against the baseline before authoring the contract; entry-point routing additionally receives fresh-context evaluation in Task 2.
 - [x] Amend the shared rule/procedure and reconcile every live Markdown contradiction found by targeted repository-wide search. Preserve historical evidence with supersession notes.
 - [x] Document adoption, branch designation, legacy opt-out reconciliation and unenrolled-worktree guidance explicitly.
-- [x] Regenerate instruction map; commit source before running package-dependent tests.
+- [x] Commit source before running package-dependent tests. The map regeneration performed for #256 was superseded by #248's current-source reader; do not regenerate a stored map.
 - [x] Run `python3 -B scripts/validate.py`, focused instruction/onboarding/delivery tests and `git diff --check` (135 tests passed at `0450a09`; final clarifications require the current-candidate recheck below).
 
 ### Task 2: Evaluate routing and review the exact candidate
@@ -63,3 +63,70 @@
 - Checks at `0450a09`: expanded 8-module run passed 135 tests in 133.2 seconds; package validation passed without warnings; whitespace passed. Final documentation-only clarifications are rechecked before readiness. No restarted-client delivery, sandbox protection or fleet rollout is claimed.
 - Publication/integration outcomes and final candidate checks belong in the PR's verification record; the remaining delivery boxes are pending remote observations, not an assertion of completion.
 - Deployment: no installed package, other repository, hook, permission or enrollment has been changed by this task.
+
+## Reconcile open #248 with merged #256
+
+The user requested integration and focused validation, not merging #248. Work in
+the native `reconcile-pr248-checkout` worktree, continuing #248's original head
+`0474764ab9dee4ac4218c5fd648768301693ef39` on a separate local branch. Leave the
+original peer worktree untouched. Current integration base is
+`796729dd3fe89cc5e8afa9cee227231f268ef84d`, which includes #256 and subsequent
+changes. No installed-client or other-project update is part of this task.
+
+- [x] Baseline #248's reader and package tests: 73 passed before integration.
+- [x] Merge current main without rewriting PR history; preserve main's retired
+  document deletions and newer runtime/managed-host behavior.
+- [x] Keep the stored map, `build_manifest` and `--prepare` writer removed.
+  Preserve #248's single trigger table while carrying #256's expanded task-entry
+  and review-only triggers, checkout rule and complete delivery procedure.
+- [x] Adapt the newer template-helper consumer to the map-free reader; exercise
+  current-source delivery and revision invalidation before and after the fix.
+- [x] Remove active regeneration requirements from surviving newer guidance;
+  keep historical evidence explicitly historical.
+- [x] Commit and run focused reader, template, startup, checkout, package and
+  managed-host checks plus package validation and whitespace checks.
+- [x] Obtain independent review of conflict resolutions.
+- [ ] Fast-forward the
+  existing PR branch only if its observed head still matches the starting head.
+  Record outcomes in #248 and retain its draft/blocked status and no-merge scope.
+
+Rollback before publishing uses the existing PR head; after publishing, recovery
+uses explicit follow-up commits. Do not force-push, reset a peer branch, restore
+the stored map or switch the primary checkout. No adherence experiment is rerun.
+
+The integration regression first failed in the committed merge candidate with
+`AttributeError: module 'scripts.read_instructions' has no attribute 'MAP'` in
+three template-preparation cases. The narrow fix removes that obsolete read;
+the replacement test verifies current template text, changed-source revision
+invalidation and absence of any generated map. The earlier stale-map test was
+adapted to the intended current-source contract, not bypassed.
+
+### Reconciliation verification and review
+
+- Candidate `b52ac72ced363e3a5defda25e65c8b95dc1bfebc`: 259 tests passed,
+  none skipped, across `test_prepared_instructions`, `test_instruction_drain`,
+  `test_startup`, `test_package`, `test_harness_evaluation`,
+  `test_graphify_maintenance_instructions`, `test_project_review_instructions`,
+  `test_checkout_stability_instructions`, `test_template_tools`,
+  `test_routing_managed_projects` and `test_task_profile`, with four workers.
+  Package validation and `git diff --check` passed. Validation warned about
+  6,304,578 of 8,388,608 bundle bytes; client execution was not checked.
+- Independent native review: session `ses_e308e489cffeNGsw1WnLRikm3C`, requested
+  `claude-agent/claude-fable-5-2`, with the child's system model reported as
+  `claude-fable-5-2`. Effort and usage were not observed. One read-only combined
+  code/security review covered base `796729dd3fe89cc5e8afa9cee227231f268ef84d`
+  through `b52ac72ced363e3a5defda25e65c8b95dc1bfebc`; no blocking defect was
+  substantiated. The report was returned in chat, not saved separately.
+- F1, low: the active template guide still counted a removed map among input
+  paths. Static comparison confirmed the finding. Remove that phrase as part of
+  the user's explicit obsolete-guidance cleanup, not unrelated minor polishing.
+  No executable behavior changes; rerun the focused checks on the final commit.
+- F2, informational: reader header handling for control characters in trusted
+  package filenames is pre-existing. No correction was requested; leave it
+  unchanged. Template selections already reject those names. No security defect
+  was substantiated; broader hardening remains outside this reconciliation.
+- Review limits: static review, no installed-client execution, and no existing
+  template-helper continuation-page test. No adherence experiment, full-suite
+  run, plugin installation or deployment is part of this task.
+- The final publication comment on #248 will bind final checks and publication
+  to the exact commit, preserving this plan's historical candidate evidence.

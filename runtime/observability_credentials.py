@@ -126,16 +126,31 @@ def store(destination, project_id, pair, *, before_change):
         raise CredentialError("credential_store_write_unknown") from None
 
 
+def _missing_item(error):
+    """True only for the pinned macOS backend's wrapping of the Keychain item-not-found status."""
+    try:
+        from keyring.backends.macOS import api
+        from keyring.errors import PasswordDeleteError
+    except Exception:
+        return False
+    return isinstance(error, PasswordDeleteError) and isinstance(error.__cause__, api.NotFound)
+
+
 def forget(destination, project_id, *, before_change):
     target = reference(destination, project_id)
     backend = _backend()
-    if sys.platform == "win32":
-        _windows_entry(backend, target)
+    entry = _windows_entry(backend, target) if sys.platform == "win32" else None
     before_change()
+    if sys.platform == "win32" and entry is None:
+        raise CredentialError("saved_credentials_unavailable")
     try:
         if sys.platform == "win32":
             backend._delete_password(target)
         else:
             backend.delete_password(target, USERNAME)
-    except Exception:
-        raise CredentialError("credential_store_delete_unknown") from None
+        return
+    except Exception as error:
+        code = ("saved_credentials_unavailable" if sys.platform == "darwin" and _missing_item(error)
+                else "credential_store_delete_unknown")
+    # Raised outside the handler so no native error or message stays reachable from the diagnostic.
+    raise CredentialError(code)

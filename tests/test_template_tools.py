@@ -56,15 +56,21 @@ class TemplateToolsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "context_unavailable"):
             self.tools.prepare(self.root, ["worker-brief.md"], [".workflow/OWNER.md"])
 
-    def test_prepare_refuses_stale_packaged_templates(self):
+    def test_prepare_reads_current_templates_without_map_and_binds_revision(self):
         package = self.base / "package"
         shutil.copytree(PACKAGE / "templates", package / "templates")
-        (package / "clients").mkdir()
-        shutil.copyfile(PACKAGE / "clients/instruction-map.json", package / "clients/instruction-map.json")
-        (package / "templates/project/product.md").write_text("changed")
+        template = package / "templates/project/product.md"
+        template.write_text("# Current product\n")
         with patch.object(self.tools, "PACKAGE", package):
-            with self.assertRaisesRegex(ValueError, "prepared_source_unavailable"):
-                self.tools.prepare(self.root, ["project/product.md"], [])
+            first = self.tools.prepare(self.root, ["project/product.md"], [])
+            self.assertEqual(first["instructions"]["sections"][0]["text"], "# Current product\n")
+            template.write_text("# Updated product\n")
+            with self.assertRaisesRegex(ValueError, "context_changed"):
+                self.tools.prepare(self.root, ["project/product.md"], [], revision=first["revision"])
+            current = self.tools.prepare(self.root, ["project/product.md"], [])
+            self.assertEqual(current["instructions"]["sections"][0]["text"], "# Updated product\n")
+            self.assertNotEqual(current["revision"], first["revision"])
+        self.assertFalse((package / "clients/instruction-map.json").exists())
 
     def test_prepare_revision_binds_consumer_context(self):
         path = self.write("rules.md", "original")

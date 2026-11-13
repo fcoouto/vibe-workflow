@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | When starting or resuming a task; when behavior, commands, schema, boundaries, configuration or material decisions change; before handing off unfinished work. |
 | Decision | Identify the authoritative record, relevant context and evidence needed now. Separate durable knowledge from temporary progress, observations from assumptions, and current decisions from superseded ones. |
 | Required action | Retrieve applicable records, reconcile them against actual state, and update the responsible document alongside the change. Preserve enough verified context to continue without copying entire conversations or maintaining competing instructions. |
 | Evidence | Record canonical paths and loading mechanisms; durable facts include their source, scope, last verification and invalidation trigger. Task records distinguish actual checks, pending work and unavailable observations. |
@@ -27,6 +26,15 @@ Apply with the [shared contract rules](00-index.md).
 ## Lifecycle record and reports
 
 Use the existing task context or plan for starts, meaningful checkpoints, completion and unfinished work. Keep standing context once and update only changes, in short prose or the optional [task record template](../templates/task-record.md). Keep planned, observed, reviewable and accepted results distinct, and stopped, running and unknown workers or processes; claim background work only when active execution is verified.
+
+At each meaningful checkpoint, the coordinator executes the next required,
+authorized action whose prerequisites are satisfied, without waiting for
+another user prompt. Pending review, verification or delivery is unfinished
+work, not a stopping reason. A blocker holds only dependent actions. Before
+stopping with unfinished scope, establish why no remaining authorized action
+can proceed and record the blocker, next owner and resumption condition in
+the existing task context. Preserve user pauses, permissions, ownership and
+existing limits.
 
 A child report sends this record's changed result, snapshot-bound candidate/proof references when output changes, material exceptions and necessary next action/owner. Reuse known assignment context, saved role declarations and native sender identity; supply compact context when the receiver cannot resolve it after resume or reassignment. Reports grant no authority and replace neither independent verification nor required decision-time observations of readiness, permissions, liveness and ownership.
 

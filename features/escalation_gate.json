@@ -1,0 +1,16 @@
+{
+  "manifest_version": 1,
+  "id": "escalation_gate",
+  "summary": "Holds repeated same-level repairs on OpenCode until a stronger diagnosis runs.",
+  "skills": [],
+  "default": {"enabled": false},
+  "settings": {
+    "check_patterns": {"type": "array", "default": ["scripts/validate.py", "scripts/test_sharded.py", "pytest", "unittest", "node --test", "npm test", "pnpm test", "yarn test", "go test", "cargo test", "make test", "make check"]},
+    "ladder": {"type": "array", "default": []}
+  },
+  "scopes": ["project"],
+  "consent": "none",
+  "control": "settings",
+  "requires": [],
+  "procedure": "clients/opencode-escalation-gate.md"
+}
