@@ -54,7 +54,7 @@ MAPPED = dict(
                             reasoning_effort="TEXT", created_at_ms="INTEGER", updated_at_ms="INTEGER", cwd="TEXT",
                             attached_thread_parent_id="TEXT"),
                thread_spawn_edges=dict(parent_thread_id="TEXT", child_thread_id="TEXT")),
-    opencode=dict(session_v2=dict(id="TEXT", parent_id="TEXT", project_id="TEXT", agent="TEXT", title="TEXT",
+     opencode=dict(session_v2=dict(id="TEXT", parent_id="TEXT", project_id="TEXT", directory="TEXT", agent="TEXT", title="TEXT",
                                   model="TEXT", time_created="INTEGER", time_updated="INTEGER",
                                   tokens_output="INTEGER", tokens_reasoning="INTEGER"),
                   project=dict(id="TEXT", worktree="TEXT"),
@@ -65,7 +65,8 @@ CODEX_READ = ("SELECT t.id, t.agent_role, t.title, t.model_provider, t.model, t.
 # Store A (supplement of 12 November 2026): `model` is JSON `{id, providerID, variant?}` and the timestamps are
 # epoch milliseconds. Whether historical `tokens_output` includes `tokens_reasoning` stays unproved.
 OPENCODE_READ = ("SELECT s.id, s.parent_id, s.agent, s.title, s.model, s.time_created, s.time_updated, "
-                 "s.tokens_output, s.tokens_reasoning FROM session_v2 s WHERE s.project_id IN "
+                  "s.tokens_output, s.tokens_reasoning FROM session_v2 s WHERE "
+                  "(s.directory = ? OR substr(s.directory, 1, ?) = ?) AND s.project_id IN "
                  "(SELECT id FROM project WHERE worktree = ? UNION SELECT project_id FROM project_directory "
                  "WHERE directory = ?)")
 
@@ -132,8 +133,9 @@ def _opencode_model(text):
 def _opencode_rows(db, store):
     rows = []
     for root in store["roots"]:
+        prefix = root.rstrip("/") + "/"
         for identifier, parent, agent, title, model, start, end, output, reasoning in db.execute(
-                OPENCODE_READ, (root, root)):
+                OPENCODE_READ, (root, len(prefix), prefix, root, root)):
             provider, model_id, variant = _opencode_model(model)
             rows.append(dict(id=identifier, parent=parent, agent=agent, title=title, provider=provider,
                              model=model_id, effort=variant, start_ms=start if type(start) is int else None,

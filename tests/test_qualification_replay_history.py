@@ -159,6 +159,37 @@ class ReplayHistoryTests(unittest.TestCase):
         # Whether stored output includes reasoning stays unproved for historical rows: duration alone decides.
         self.assertEqual(labels["complexity_band"], "critical")
 
+    def test_opencode_shared_project_id_does_not_widen_approved_checkout_roots(self):
+        current = "/work/vibe-workflow"
+        rows = [dict(id="current", parent_id="r", directory=current),
+                dict(id="nested", parent_id="r", directory=current + "/src"),
+                dict(id="legacy", parent_id="r", directory=ROOT),
+                dict(id="outside", parent_id="r", directory=OPUS),
+                dict(id="prefix-only", parent_id="r", directory=current + "-other")]
+        path = opencode_store(str(self.folder / "shared.db"),
+                              [dict(row, model='{"id":"synthetic-model","providerID":"test"}') for row in rows])
+        with closing(sqlite3.connect(path)) as db:
+            for directory in (current, OPUS):
+                db.execute("INSERT INTO project_directory VALUES ('p1', ?, 'worktree', NULL, 0)", (directory,))
+            db.commit()
+        real = replay._connect
+
+        def checked(target):
+            db = real(target)
+
+            def projected(cursor, row):
+                self.assertNotIn(row[0], ("outside", "prefix-only"), "out-of-scope row reached the reader")
+                return row
+
+            db.row_factory = projected
+            return db
+
+        store = dict(name="opencode", kind="opencode", path=path, roots=[current, ROOT])
+        with mock.patch.object(replay, "_connect", checked):
+            found = replay.collect([store], now_ms=NOW_MS)
+        self.assertEqual(found["sessions_found"], 3)
+        self.assertEqual(sorted(row["id"] for row in found["eligible"]), ["current", "legacy", "nested"])
+
     def test_labels_follow_the_registered_rules(self):
         def label(**row):
             base = dict(store="codex", kind="codex", agent=None, title="", provider="openai", model="m",
@@ -567,7 +598,7 @@ class DecisionCompositionTests(unittest.TestCase):
         current = "/work/vibe-workflow"
         opencode = dict(name="opencode", kind="opencode", roots=[current], path=opencode_store(
             str(self.folder / "o.db"), [
-                dict(id="current-child", parent_id="r", title="Implement the parser",
+                dict(id="current-child", parent_id="r", directory=current, title="Implement the parser",
                      model='{"id":"zeta-large","providerID":"claude-agent","variant":"high"}'),
                 dict(id="other-child", parent_id="r", project_id="other", title=SECRET)]))
         with closing(sqlite3.connect(opencode["path"])) as db:

@@ -376,6 +376,21 @@ budget increase, settings change or activation is authorized by this amendment.
 Report the actual eligible count and exclusions; do not substitute the old
 three-source total or infer a result for the excluded `opus` sessions.
 
+### Scope-filter supplement (13 November 2026)
+
+The saved OpenCode schema inspection of 12 November includes
+`session_v2.directory` (`TEXT NOT NULL`). For Edit 10's checkout boundary, this
+column is now part of the mapped schema and is used only in the SQL predicate:
+the session directory must equal a supplied approved root or lie below that
+root's `/` boundary. The existing `project`/`project_directory` match is also
+required. A shared project ID alone does not include sessions from unsupplied
+checkouts. Current and legacy roots remain explicit caller inputs; no parent
+directory is inferred. Codex keeps its existing exact-or-descendant `cwd` filter.
+The directory column is not returned to the labeler or aggregate report. Missing
+or changed directory metadata fails the schema check, rather than widening the
+sample. No real store was opened and no historical replay ran for this supplement.
+It registers the scope filter only; all other pre-real-run decisions remain open.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
