@@ -1,0 +1,14 @@
+{
+  "minimal": {
+    "before": "For the document responsibilities, select and read the relevant layouts linked by [project template index](templates/README.md#project-documents). Use applicable shapes; no new files are authorized by a shape. Use [task/handoff record](templates/task-record.md) for the final handoff. Do not copy package-relative author links into generated documents.",
+    "after": "For the document responsibilities, read `.workflow/templates/README.md` with the read tool, then select the relevant linked layouts. Markdown links are relative to the containing file; pass project-root-relative paths to tools. For example, its `project/product.md` link resolves to `.workflow/templates/project/product.md`. Read `.workflow/templates/task-record.md` for the final handoff. Use applicable shapes; no new files are authorized by a shape. Do not copy package-relative author links into generated documents."
+  },
+  "customized": {
+    "before": "For the document responsibilities, select and read the relevant layouts linked by [project template index](templates/README.md#project-documents). Use applicable shapes; no new files are authorized by a shape. Use [task/handoff record](templates/task-record.md) for the final handoff. Do not copy package-relative author links into generated documents.",
+    "after": "For the document responsibilities, read `.workflow/templates/README.md` with the read tool, then select the relevant linked layouts. Markdown links are relative to the containing file; pass project-root-relative paths to tools. For example, its `project/product.md` link resolves to `.workflow/templates/project/product.md`. Read `.workflow/templates/task-record.md` for the final handoff. Use applicable shapes; no new files are authorized by a shape. Do not copy package-relative author links into generated documents."
+  },
+  "review": {
+    "before": "For this code+security review, read [review report](templates/review-report.md) and [task/handoff record](templates/task-record.md), then use their applicable fields.",
+    "after": "For this code+security review, read `.workflow/templates/review-report.md` and `.workflow/templates/task-record.md` with the read tool, then use their applicable fields."
+  }
+}

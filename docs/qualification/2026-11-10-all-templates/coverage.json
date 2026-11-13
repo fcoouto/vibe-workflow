@@ -1,0 +1,310 @@
+[
+  {
+    "template": "project/architecture.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/architecture.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/claude-instructions.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-interface-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/claude-instructions.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-interface-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/design.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-interface-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/design.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-interface-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/local-preparation.md",
+    "model": "gpt-6-luna",
+    "status": "not_qualified",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [
+      "Minimal treatment reports Python prerequisites as not established instead of documenting inferable Python/standard-library requirements."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/local-preparation.md",
+    "model": "haiku",
+    "status": "not_qualified",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [
+      "Minimal treatment reports Python prerequisites as not established instead of documenting inferable Python/standard-library requirements."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/overview.md",
+    "model": "gpt-6-luna",
+    "status": "not_qualified",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [
+      "Concrete next-delivery task and observable acceptance missing from the interface treatment and other selected cases."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/overview.md",
+    "model": "haiku",
+    "status": "not_qualified",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [
+      "Concrete next-delivery task and observable acceptance missing from the interface treatment and other selected cases."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/product.md",
+    "model": "gpt-6-luna",
+    "status": "not_qualified",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [
+      "Concrete next-delivery task and observable acceptance missing from the interface treatment and other selected cases."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/product.md",
+    "model": "haiku",
+    "status": "not_qualified",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [
+      "Concrete next-delivery task and observable acceptance missing from the interface treatment and other selected cases."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/quality.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/quality.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/shared-instructions.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "project/shared-instructions.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "pull-request.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-pr-templates"
+    ],
+    "findings": [],
+    "scope": "Local blocked/draft body and title only; no live publication qualification."
+  },
+  {
+    "template": "pull-request.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-pr-templates"
+    ],
+    "findings": [],
+    "scope": "Local blocked/draft body and title only; no live publication qualification."
+  },
+  {
+    "template": "review-report.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-review-templates"
+    ],
+    "findings": [],
+    "scope": "Reused unchanged code/security review and handoff evidence; no fresh review inference."
+  },
+  {
+    "template": "review-report.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-review-templates-recovery-1"
+    ],
+    "findings": [],
+    "scope": "Reused unchanged code/security review and handoff evidence; no fresh review inference."
+  },
+  {
+    "template": "setup-record.md",
+    "model": "gpt-6-luna",
+    "status": "not_qualified",
+    "evidence": [
+      "gpt-6-luna-interface-templates",
+      "gpt-6-luna-minimal-templates",
+      "gpt-6-luna-customized-templates"
+    ],
+    "findings": [
+      "Minimal treatment wrongly says the supplied verification date is unavailable; interface setup lacks explicit maintenance/recovery accounting."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "setup-record.md",
+    "model": "haiku",
+    "status": "not_qualified",
+    "evidence": [
+      "haiku-interface-templates",
+      "haiku-minimal-templates",
+      "haiku-customized-templates"
+    ],
+    "findings": [
+      "Customized setup copies template-origin author notes into the output."
+    ],
+    "scope": "Artifact adaptation only. Browser accessibility, native Claude startup and real onboarding/recovery not qualified."
+  },
+  {
+    "template": "task-record.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-review-templates"
+    ],
+    "findings": [],
+    "scope": "Reused unchanged code/security review and handoff evidence; no fresh review inference."
+  },
+  {
+    "template": "task-record.md",
+    "model": "haiku",
+    "status": "supported_scoped",
+    "evidence": [
+      "haiku-review-templates-recovery-1"
+    ],
+    "findings": [],
+    "scope": "Reused unchanged code/security review and handoff evidence; no fresh review inference."
+  },
+  {
+    "template": "worker-brief.md",
+    "model": "gpt-6-luna",
+    "status": "supported_scoped",
+    "evidence": [
+      "gpt-6-luna-brief-templates",
+      "gpt-6-luna-brief-templates-consumer"
+    ],
+    "findings": [],
+    "scope": "Assignment artifact plus fresh-session consumption; no native child-lineage/badge claim."
+  },
+  {
+    "template": "worker-brief.md",
+    "model": "haiku",
+    "status": "unassessed_operator_gap",
+    "evidence": [
+      "haiku-brief-templates",
+      "haiku-brief-templates-consumer"
+    ],
+    "findings": [
+      "Consumer context relocation omitted referenced producer support files."
+    ],
+    "scope": "Assignment artifact plus fresh-session consumption; no native child-lineage/badge claim."
+  }
+]

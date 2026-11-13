@@ -1,0 +1,30 @@
+{
+  "all_slots_completed": 24,
+  "guard_admissions": 138,
+  "all_admissions_before_deadline": true,
+  "protected_hashes_scope_and_checks": true,
+  "links_and_json": true,
+  "exact_model_variants": true,
+  "peak_concurrency": 4,
+  "per_account_peaks": {
+    "gpt-6-luna": 2,
+    "haiku": 2
+  },
+  "selected_secrets_before_cleanup": 0,
+  "credential_pattern_files_before_cleanup": 13,
+  "removed_evaluation_runtime_files": 360,
+  "selected_secret_and_pattern_files_remaining": 0,
+  "evaluation_owned_native_processes_remaining": 0,
+  "global_credential_mutation": false,
+  "secure_erasure_claimed": false,
+  "package_validation": {
+    "command": "python3 -B scripts/validate.py",
+    "status": "passed",
+    "warning": "Package export remains below 8 MiB but is close to the limit.",
+    "client_execution": "not_checked"
+  },
+  "independent_report_review": "not_run_no_extra_inference",
+  "full_suite": "not_run_out_of_scope",
+  "overall_qualified": false,
+  "stop_condition": "20_minute_limit"
+}

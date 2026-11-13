@@ -1,0 +1,711 @@
+[
+  {
+    "name": "beam-free-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 5,
+    "returned_assistant_messages": 5,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 4371,
+      "output": 969,
+      "reasoning": 88,
+      "cache_read": 13184,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 11.61,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "beam-free-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "partial_template_use",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": false,
+    "notes": [
+      "T: catalog and handoff read, but no project-document layout or setup-record layout read; project template content not exercised."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "required_layouts_read": false,
+    "requests_passed_guard": 5,
+    "returned_assistant_messages": 5,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 6049,
+      "output": 1083,
+      "reasoning": 172,
+      "cache_read": 14784,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 12.06,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "beam-free-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "transport_failure",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md"
+    ],
+    "required_layouts_read": false,
+    "requests_passed_guard": 11,
+    "returned_assistant_messages": 11,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 15363,
+      "output": 2221,
+      "reasoning": 433,
+      "cache_read": 41024,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 22.06,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.transport",
+      "message": "EPROTO: The TLS handshake failed. Does the server speak TLS on this port?"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "handbook/setup.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "beam-free-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D4: mapping treats nested src/AGENTS.md as client instructions; no justified client inapplicability. Generic extend-checks/docs wording is not a concrete next product delivery.",
+      "D7: final handoff supplies changed paths but neither fixture snapshot identity nor an equivalent candidate binding."
+    ],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 6,
+    "returned_assistant_messages": 6,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 5474,
+      "output": 1213,
+      "reasoning": 248,
+      "cache_read": 19264,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 12.95,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "beam-free-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "R5: F1 counterevidence says none; F2 attacker prerequisites says none without a supported trust/call-path basis.",
+      "R6: reviewer execution identity and supplied runtime/check versions are omitted from report despite being provided."
+    ],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 3,
+    "returned_assistant_messages": 3,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 4469,
+      "output": 1093,
+      "reasoning": 63,
+      "cache_read": 5888,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 9.61,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    }
+  },
+  {
+    "name": "beam-free-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "observed_variants": [
+      "low"
+    ],
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "R3/R6: finding wrongly suggests equal empty-string IDs may be denied because empty strings are falsy. The predicate applies Boolean to the equality result, so matching empty IDs return true.",
+      "R5: both counterevidence fields cite confirming failures rather than checked disconfirming evidence."
+    ],
+    "template_reads": [
+      ".workflow/templates/review-report.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "required_layouts_read": true,
+    "requests_passed_guard": 5,
+    "returned_assistant_messages": 5,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 6092,
+      "output": 1500,
+      "reasoning": 103,
+      "cache_read": 16640,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 13.37,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": false,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.55,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "SETUP.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.19,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "SETUP.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.32,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "handbook/setup.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": false,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.26,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "handbook/setup.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": false,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.22,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "REPORT.md",
+      "HANDOFF.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    }
+  },
+  {
+    "name": "iceman-contributor-free-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "observed_variants": [
+      "default"
+    ],
+    "classification": "provider_refused",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "No model completion; not graded as model incapability."
+    ],
+    "template_reads": [],
+    "required_layouts_read": null,
+    "requests_passed_guard": 1,
+    "returned_assistant_messages": 1,
+    "observed_returned_message_cost_usd": 0,
+    "observed_tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache_read": 0,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 1.23,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.invalid-request",
+      "message": "This Go model trains on request data. Turn on \"Allow paid endpoints that train on request data\" at https://opencode.ai/console/<redacted-org>/settings/privacy#training to use it.",
+      "status": "400"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": true,
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "REPORT.md",
+      "HANDOFF.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    }
+  }
+]

@@ -1,0 +1,47 @@
+{
+  "minimal": {
+    "arithmetic.py": "def add(a, b):\n    return a + b\n",
+    "check.py": "from arithmetic import add\nassert add(2, 3) == 5\nassert add(-2, 2) == 0\n",
+    "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n",
+    "AGENTS.md": "# Project notes\n\nPreserve this note and the accepted check.py.\nRun python3 -B check.py for the project check.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n"
+  },
+  "customized": {
+    "check.py": "from src.cleaning import normalize_labels\nassert normalize_labels([' z ', ' a ', ' z ']) == ['z', 'a', 'z']\nassert normalize_labels([' 漢字 ']) == ['漢字']\n",
+    "README.md": "# Label Tools\n\nThe product overview lives in [the handbook](handbook/overview.md).\nPreserve this introduction.\n",
+    "AGENTS.md": "# Team guidance\n\nKeep the handbook as our canonical documentation.\nRead handbook/engineering.md for commands. Preserve src/AGENTS.md.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n",
+    "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py. Python standard library only.\nKeep the root AGENTS.md and src/AGENTS.md as the instruction owners.\n",
+    "handbook/ARCHITECTURE.md": "# Architecture\n\nPure transformations live in src/cleaning.py. No services or storage.\n",
+    "handbook/overview.md": "# Product overview\n\nNormalize label whitespace while preserving order and duplicates.\n\nTeam note: release names stay unchanged.\n",
+    "src/AGENTS.md": "# Source rules\n\nPreserve order, duplicate labels and Unicode. Do not weaken accepted checks.\n",
+    "src/cleaning.py": "def normalize_labels(values):\n    return [value.strip() for value in values]\n"
+  },
+  "interface": {
+    "check.py": "from pathlib import Path\nhtml = Path(\"web/index.html\").read_text()\nscript = Path(\"web/app.js\").read_text()\nassert 'for=\"source\"' in html\nassert 'id=\"source\"' in html\nassert 'role=\"status\"' in html\nassert \"textContent\" in script and \"innerHTML\" not in script\n",
+    "README.md": "# Label Desk\n\nPreserve this introduction and the existing handbook owners.\n",
+    "AGENTS.md": "# Team rules\n\nKeep original text, nested rules and accepted checks. Read handbook/engineering.md for commands.\nClient choice: Claude Code only; local changes; manual owner merge; no Workstreams.\nMemory index: memory/INDEX.md; read it before work, and never invent a memory service.\n",
+    "CLAUDE.md": "@AGENTS.md\n\nKeep this Claude-only local note: never duplicate shared rules here.\n",
+    "memory/INDEX.md": "# Memory index\n\nNo saved facts yet. This is a plain file, not a service.\n",
+    "web/index.html": "<!doctype html>\n<html lang=\"en\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Label Desk</title><link rel=\"stylesheet\" href=\"styles.css\"><main><h1>Trim labels</h1><form id=\"labels\"><label for=\"source\">One label per line</label><textarea id=\"source\" required></textarea><button type=\"submit\">Trim labels</button></form><h2>Result</h2><pre id=\"result\" role=\"status\" aria-live=\"polite\"></pre></main><script src=\"app.js\"></script></html>\n",
+    "web/styles.css": ":root { --accent: #1748a3; --ink: #152036; --paper: #ffffff; --space: 1rem; }\nbody { color: var(--ink); background: var(--paper); font: 1rem/1.5 system-ui; margin: var(--space); }\nmain { max-width: 60rem; margin: auto; }\ntextarea { display: block; width: 100%; min-height: 10rem; box-sizing: border-box; }\nbutton { background: var(--accent); color: white; padding: .75rem 1rem; }\n:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }\n@media (min-width: 40rem) { main { padding: 2rem; } }\n",
+    "web/AGENTS.md": "# Web rules\n\nPreserve keyboard access, order, duplicate labels and Unicode. Never use HTML insertion for output.\n",
+    "web/app.js": "const form = document.getElementById(\"labels\");\nform.addEventListener(\"submit\", (event) => {\n  event.preventDefault();\n  const labels = document.getElementById(\"source\").value.split(\"\\n\");\n  document.getElementById(\"result\").textContent = labels.map((label) => label.trim()).join(\"\\n\");\n});\n",
+    "handbook/product.md": "# Label Desk product\n\nOperators paste one label per line and copy trimmed labels in the same order, including duplicates. English interface, mobile and desktop. No accounts or storage.\n",
+    "handbook/engineering.md": "# Engineering\n\nRun python3 -B check.py and node --check web/app.js from the project root. Start locally with python3 -m http.server 8000 --directory web. No install or build step.\n",
+    "handbook/ARCHITECTURE.md": "# Architecture\n\nStatic HTML, CSS and browser JavaScript. No backend, dependencies, services or persistence.\n",
+    "handbook/quality.md": "# Quality\n\nKeep accepted checks. Static checks do not establish browser behavior or accessibility. No CI or dependency audit has run.\n",
+    "handbook/design.md": "# Design\n\nPreserve the existing blue accent, visible focus and semantic form. Keyboard and screen-reader checks remain pending.\n"
+  },
+  "pr": {
+    "arithmetic.py": "def add(a, b):\n    return a + b\n",
+    "check.py": "from arithmetic import add\nassert add(2, 3) == 5\nassert add(-2, 2) == 0\n",
+    "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n\nDocumentation-only change: the accepted check is unchanged.\n",
+    "facts.json": "{\n  \"candidate\": \"6d26c070fa2796f9a435962521afcfef833ea5a5\",\n  \"base\": \"0aace79ee5cdaf46c83913eb92f8fe40d535c7e9\",\n  \"comparison\": \"endpoint\",\n  \"changed_paths\": [\n    \"README.md\"\n  ],\n  \"request\": \"Document the unchanged accepted project check.\",\n  \"review\": \"Independent review not run; required before readiness.\",\n  \"checks\": [\n    {\n      \"command\": \"python3 -B check.py\",\n      \"result\": \"exit 0, no output\",\n      \"basis\": \"coordinator run on candidate\"\n    }\n  ],\n  \"publication\": \"No remote publication authorized; generate a local draft body and title only.\",\n  \"readiness\": \"BLOCKED: independent review pending; never mark READY or accepted.\"\n}\n",
+    "AGENTS.md": "# Project notes\n\nPreserve this note and the accepted check.py.\nRun python3 -B check.py for the project check.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n"
+  },
+  "brief": {
+    "arithmetic.py": "def add(a, b):\n    return a - b\n",
+    "check.py": "from arithmetic import add\nassert add(2, 3) == 5\nassert add(-2, 2) == 0\n",
+    "README.md": "# Tiny Totals\n\nKeep this project description. This small Python project adds two values.\n",
+    "AGENTS.md": "# Project notes\n\nPreserve this note and the accepted check.py.\nRun python3 -B check.py for the project check.\n\nFixture setup choices: Codex only; keep changes local; owner merges manually; Workstreams disabled. Preserve these fixture choices.\n"
+  }
+}

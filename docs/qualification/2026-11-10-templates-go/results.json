@@ -1,0 +1,759 @@
+[
+  {
+    "name": "beam-free-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "template_reads": [],
+    "notes": [],
+    "requests_passed_guard": 4,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 4447,
+      "output": 1068,
+      "reasoning": 89,
+      "cache_read": 9024,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 9.34,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "beam-free-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "template_reads": [],
+    "notes": [
+      "T: required linked-template discovery/use not observed; the complete owner routing line was read, but no template was opened."
+    ],
+    "requests_passed_guard": 5,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 7953,
+      "output": 962,
+      "reasoning": 116,
+      "cache_read": 9792,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 11.36,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "beam-free-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "template_reads": [],
+    "notes": [
+      "D4: product responsibility is incomplete: no next useful product delivery is documented; a generic future backup/undo suggestion in chat is not a concrete product delivery.",
+      "T: required linked-template discovery/use not observed; the complete owner routing line was read, but no template was opened."
+    ],
+    "requests_passed_guard": 5,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 4805,
+      "output": 632,
+      "reasoning": 253,
+      "cache_read": 14656,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 9.06,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "beam-free-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "template_reads": [],
+    "notes": [
+      "D4: product responsibility is incomplete: no next useful product delivery is documented; review/merge is not a product delivery. No fixed headings or separate mapping table are required."
+    ],
+    "requests_passed_guard": 10,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 5645,
+      "output": 1173,
+      "reasoning": 315,
+      "cache_read": 37376,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 13.1,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "beam-free-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "template_reads": [],
+    "notes": [
+      "R5: F-001 counterevidence is only \"none\"; no checked counterexample or countervailing scope evidence is given.",
+      "R6: F-002 calls the implementation \"loose equality\", but the inspected source uses strict ===."
+    ],
+    "requests_passed_guard": 4,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 8883,
+      "output": 1341,
+      "reasoning": 100,
+      "cache_read": 6208,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 9.85,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "beam-free-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "beam-free",
+    "requested_variant": "low",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "template_reads": [],
+    "notes": [
+      "R5: F1 counterevidence is hypothetical caller enforcement, not something checked; F2 says none. The supported absent-input denial could have served as actual counterevidence.",
+      "T: required linked-template discovery/use not observed; the complete owner routing line was read, but no template was opened."
+    ],
+    "requests_passed_guard": 6,
+    "observed_cost_usd": 0,
+    "observed_tokens": {
+      "input": 9810,
+      "output": 1737,
+      "reasoning": 129,
+      "cache_read": 13184,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 13.0,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "succeeded",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "longcat-2.5-free-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.87,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "longcat-2.5-free-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.86,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "longcat-2.5-free-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.86,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "longcat-2.5-free-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.85,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "longcat-2.5-free-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.84,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "longcat-2.5-free-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "longcat-2.5-free",
+    "requested_variant": null,
+    "classification": "unavailable",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Selected model absent from isolated discovery; endpoint permission cause not established."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.85,
+    "created_session": false,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": false,
+    "transcript_terminal_outcome": null,
+    "collection_error": "selected free model absent from isolated discovery"
+  },
+  {
+    "name": "iceman-contributor-free-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 1.01,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "iceman-contributor-free-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.9,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "iceman-contributor-free-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.78,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "iceman-contributor-free-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.98,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "iceman-contributor-free-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.91,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  },
+  {
+    "name": "iceman-contributor-free-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "iceman-contributor-free",
+    "requested_variant": null,
+    "classification": "infrastructure_blocked",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "template_reads": [],
+    "notes": [
+      "Request guard expected null variant but native resolution selected default; blocked before transmission. Not a model failure."
+    ],
+    "requests_passed_guard": 0,
+    "observed_cost_usd": null,
+    "observed_tokens": null,
+    "elapsed_seconds": 0.86,
+    "created_session": true,
+    "preserved_original_text": true,
+    "outside_write_scope": [],
+    "bad_links": [],
+    "placeholders": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected 5 pass / 2 fail"
+    },
+    "transcript_recovered": true,
+    "transcript_terminal_outcome": "failed",
+    "collection_error": "API /api/session/<redacted:id>/message?limit=1000&order=asc: 400 {'_tag': 'InvalidRequestError', 'message': 'Expected a value less than or equal to 200\\n  at [\"limit\"]', 'kind': 'Query'}"
+  }
+]

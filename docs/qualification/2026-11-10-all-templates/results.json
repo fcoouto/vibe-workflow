@@ -1,0 +1,1723 @@
+[
+  {
+    "name": "gpt-6-luna-interface-prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "interface",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No concrete next delivery or complete nine-responsibility account."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      "SETUP.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/design.md",
+      "handbook/engineering.md",
+      "handbook/product.md",
+      "handbook/quality.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 6,
+    "observed_tokens": {
+      "input": 23228,
+      "output": 1724,
+      "reasoning": 0,
+      "cache_read": 6656,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 48.16,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "javascript": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-interface-templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "interface",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: Product and overview defer next delivery to owner instead of proposing a smallest useful task with an observable criterion."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      "SETUP.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/design.md",
+      "handbook/engineering.md",
+      "handbook/product.md",
+      "handbook/quality.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 8,
+    "observed_tokens": {
+      "input": 24250,
+      "output": 3590,
+      "reasoning": 0,
+      "cache_read": 34304,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 89.84,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "javascript": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-interface-templates",
+    "model": "haiku",
+    "variant": "low",
+    "case": "interface",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: Product and overview say next delivery is unspecified; no concrete proposed task/observable criterion."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/LICENSE"
+    ],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/design.md",
+      "handbook/engineering.md",
+      "handbook/product.md",
+      "handbook/quality.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 12,
+    "observed_tokens": {
+      "input": 24,
+      "output": 8790,
+      "reasoning": 15731,
+      "cache_read": 294627,
+      "cache_write": 33496
+    },
+    "elapsed_seconds": 110.26,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "javascript": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-interface-prose",
+    "model": "haiku",
+    "variant": "low",
+    "case": "interface",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No concrete next delivery."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/design.md",
+      "handbook/engineering.md",
+      "handbook/product.md",
+      "handbook/quality.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "CLAUDE.md": true,
+      "memory/INDEX.md": true,
+      "web/index.html": true,
+      "web/styles.css": true,
+      "web/AGENTS.md": true,
+      "web/app.js": true,
+      "handbook/product.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/quality.md": true,
+      "handbook/design.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 7,
+    "observed_tokens": {
+      "input": 14,
+      "output": 6245,
+      "reasoning": 6791,
+      "cache_read": 94385,
+      "cache_write": 21981
+    },
+    "elapsed_seconds": 58.74,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "javascript": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-pr-prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "pr",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [],
+    "changed_paths": [
+      "PR.md",
+      "TITLE.txt"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 6,
+    "observed_tokens": {
+      "input": 9854,
+      "output": 762,
+      "reasoning": 0,
+      "cache_read": 7168,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 29.37,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-pr-templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "pr",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [
+      ".workflow/templates/pull-request.md"
+    ],
+    "changed_paths": [
+      "PR.md",
+      "TITLE.txt"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 6,
+    "observed_tokens": {
+      "input": 15316,
+      "output": 940,
+      "reasoning": 0,
+      "cache_read": 4352,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 32.98,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-pr-templates",
+    "model": "haiku",
+    "variant": "low",
+    "case": "pr",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [
+      ".workflow/templates/pull-request.md"
+    ],
+    "changed_paths": [
+      "PR.md",
+      "TITLE.txt"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 2451,
+      "reasoning": 568,
+      "cache_read": 27595,
+      "cache_write": 8884
+    },
+    "elapsed_seconds": 17.93,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-pr-prose",
+    "model": "haiku",
+    "variant": "low",
+    "case": "pr",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [],
+    "changed_paths": [
+      "PR.md",
+      "TITLE.txt"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "facts.json": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 2410,
+      "reasoning": 481,
+      "cache_read": 24367,
+      "cache_write": 7031
+    },
+    "elapsed_seconds": 17.61,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-brief-prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "brief",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [],
+    "changed_paths": [
+      "BRIEF.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 3,
+    "observed_tokens": {
+      "input": 6619,
+      "output": 1105,
+      "reasoning": 0,
+      "cache_read": 3072,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 31.93,
+    "protected_checks": {
+      "python": {
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Traceback (most recent call last):\n  File \"<private-path>\", line 2, in <module>\n    assert add(2, 3) == 5\n           ^^^^^^^^^^^^^^\nAssertionError\n"
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-brief-templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "brief",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [
+      ".workflow/templates/worker-brief.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "BRIEF.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 11582,
+      "output": 954,
+      "reasoning": 0,
+      "cache_read": 2176,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 33.46,
+    "protected_checks": {
+      "python": {
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Traceback (most recent call last):\n  File \"<private-path>\", line 2, in <module>\n    assert add(2, 3) == 5\n           ^^^^^^^^^^^^^^\nAssertionError\n"
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-brief-templates",
+    "model": "haiku",
+    "variant": "low",
+    "case": "brief",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [
+      ".workflow/templates/worker-brief.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "BRIEF.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 3612,
+      "reasoning": 462,
+      "cache_read": 28559,
+      "cache_write": 10389
+    },
+    "elapsed_seconds": 22.39,
+    "protected_checks": {
+      "python": {
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Traceback (most recent call last):\n  File \"<private-path>\", line 2, in <module>\n    assert add(2, 3) == 5\n           ^^^^^^^^^^^^^^\nAssertionError\n"
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-brief-prose",
+    "model": "haiku",
+    "variant": "low",
+    "case": "brief",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C5: Brief denies worker execution but also tells worker to stop when check execution is unavailable, despite coordinator-owned post-checks."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "BRIEF.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 3344,
+      "reasoning": 592,
+      "cache_read": 34638,
+      "cache_write": 8798
+    },
+    "elapsed_seconds": 23.94,
+    "protected_checks": {
+      "python": {
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "Traceback (most recent call last):\n  File \"<private-path>\", line 2, in <module>\n    assert add(2, 3) == 5\n           ^^^^^^^^^^^^^^\nAssertionError\n"
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-minimal-prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "minimal",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C2: Python standard-library prerequisite is not stated.",
+      "C4: Nine responsibilities and concrete next delivery are not fully accounted for."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 5,
+    "observed_tokens": {
+      "input": 8248,
+      "output": 1059,
+      "reasoning": 0,
+      "cache_read": 10112,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 32.49,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-minimal-templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "minimal",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C2: Claims Python prerequisites are not established, instead of deriving the required Python/standard-library environment from inspected code.",
+      "C4: No concrete next delivery.",
+      "C5: Setup says verification date was not supplied, although prompt supplies 2026-11-10."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md"
+    ],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 7,
+    "observed_tokens": {
+      "input": 20292,
+      "output": 2202,
+      "reasoning": 0,
+      "cache_read": 28928,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 59.29,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-minimal-templates",
+    "model": "haiku",
+    "variant": "low",
+    "case": "minimal",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C2: Prerequisites are reported as not established despite the Python check/code.",
+      "C4: No concrete next delivery."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 4387,
+      "reasoning": 8778,
+      "cache_read": 36689,
+      "cache_write": 18987
+    },
+    "elapsed_seconds": 65.31,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-minimal-prose",
+    "model": "haiku",
+    "variant": "low",
+    "case": "minimal",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No concrete next delivery."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 6,
+    "observed_tokens": {
+      "input": 12,
+      "output": 4049,
+      "reasoning": 2804,
+      "cache_read": 52562,
+      "cache_write": 12095
+    },
+    "elapsed_seconds": 34.69,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-customized-prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "customized",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No complete nine-responsibility account or concrete next delivery.",
+      "C7: Final chat says a template-origin team note was removed; the original note remains in the actual file, relocated below new sections."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": false,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 6,
+    "observed_tokens": {
+      "input": 10125,
+      "output": 1371,
+      "reasoning": 0,
+      "cache_read": 12544,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 38.08,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-customized-templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "customized",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No concrete next delivery."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 7,
+    "observed_tokens": {
+      "input": 33907,
+      "output": 1938,
+      "reasoning": 0,
+      "cache_read": 15232,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 51.65,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-customized-templates",
+    "model": "haiku",
+    "variant": "low",
+    "case": "customized",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C6: New setup record retains template-origin author instructions: Omit lines that do not apply; never invent values."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 11,
+    "observed_tokens": {
+      "input": 22,
+      "output": 8856,
+      "reasoning": 10339,
+      "cache_read": 201952,
+      "cache_write": 27879
+    },
+    "elapsed_seconds": 89.33,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "haiku-customized-prose",
+    "model": "haiku",
+    "variant": "low",
+    "case": "customized",
+    "arm": "prose",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true
+    ],
+    "content_pass": false,
+    "classification": "content_failure",
+    "findings": [
+      "C4: No concrete next delivery; client bridge applicability is not justified by the selected-client choice.",
+      "C5: Invents a conflict between a synthetic project selecting Codex and an evaluator running Haiku; these are distinct settings.",
+      "C7: Next owner is asked to resolve that nonexistent conflict."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "original_block_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 5621,
+      "reasoning": 6099,
+      "cache_read": 45697,
+      "cache_write": 17384
+    },
+    "elapsed_seconds": 51.88,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true
+  },
+  {
+    "name": "gpt-6-luna-brief-prose-consumer",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "consumer",
+    "arm": "prose",
+    "content_criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "content_pass": null,
+    "classification": "operator_context_gap",
+    "findings": [
+      "Operator copied source and brief but omitted producer .workflow context and relocated checkout. The brief references producer supporting files. Functional repair passes, but strict brief-consumption qualification is unassessed; not a model incapability finding."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "HANDOFF.md",
+      "arithmetic.py"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": false,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 5,
+    "observed_tokens": {
+      "input": 4051,
+      "output": 437,
+      "reasoning": 0,
+      "cache_read": 11136,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 20.64,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true,
+    "functional_repair_pass": true,
+    "brief_read_observed": true
+  },
+  {
+    "name": "haiku-brief-templates-consumer",
+    "model": "haiku",
+    "variant": "low",
+    "case": "consumer",
+    "arm": "templates",
+    "content_criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "content_pass": null,
+    "classification": "operator_context_gap",
+    "findings": [
+      "Operator copied source and brief but omitted producer .workflow context and relocated checkout. The brief references producer supporting files. Functional repair passes, but strict brief-consumption qualification is unassessed; not a model incapability finding."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "HANDOFF.md",
+      "arithmetic.py"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": false,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 1702,
+      "reasoning": 153,
+      "cache_read": 26159,
+      "cache_write": 7153
+    },
+    "elapsed_seconds": 12.78,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true,
+    "functional_repair_pass": true,
+    "brief_read_observed": true
+  },
+  {
+    "name": "haiku-brief-prose-consumer",
+    "model": "haiku",
+    "variant": "low",
+    "case": "consumer",
+    "arm": "prose",
+    "content_criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "content_pass": null,
+    "classification": "operator_context_gap",
+    "findings": [
+      "Operator copied source and brief but omitted producer .workflow context and relocated checkout. The brief references producer supporting files. Functional repair passes, but strict brief-consumption qualification is unassessed; not a model incapability finding."
+    ],
+    "template_reads": [],
+    "changed_paths": [
+      "HANDOFF.md",
+      "arithmetic.py"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": false,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 1830,
+      "reasoning": 305,
+      "cache_read": 35462,
+      "cache_write": 7610
+    },
+    "elapsed_seconds": 14.8,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true,
+    "functional_repair_pass": true,
+    "brief_read_observed": true
+  },
+  {
+    "name": "gpt-6-luna-brief-templates-consumer",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "case": "consumer",
+    "arm": "templates",
+    "content_criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "content_pass": true,
+    "classification": "pass",
+    "findings": [],
+    "template_reads": [],
+    "changed_paths": [
+      "HANDOFF.md",
+      "arithmetic.py"
+    ],
+    "original_block_preserved": {
+      "arithmetic.py": false,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "original_statements_preserved": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "protected_hashes_unchanged": true,
+    "outside_scope": [],
+    "bad_links": [],
+    "missing_outputs": [],
+    "terminal": "succeeded",
+    "requests": 4,
+    "observed_tokens": {
+      "input": 6484,
+      "output": 430,
+      "reasoning": 0,
+      "cache_read": 4480,
+      "cache_write": 0
+    },
+    "elapsed_seconds": 17.07,
+    "protected_checks": {
+      "python": {
+        "returncode": 0,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "process_stopped": true,
+    "functional_repair_pass": true,
+    "brief_read_observed": true
+  }
+]

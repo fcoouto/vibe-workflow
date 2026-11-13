@@ -1,0 +1,1309 @@
+[
+  {
+    "name": "gpt-6-luna-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 6,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 6,
+    "observed_tokens": {
+      "input": 11242,
+      "output": 1418,
+      "reasoning": 0,
+      "cache_read": 9984,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 41.67,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "gpt-6-luna-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "transport_failure",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "EPROTO provider.transport after inspection; no edits. Retained as unassessed."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 13,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 13,
+    "observed_tokens": {
+      "input": 26637,
+      "output": 447,
+      "reasoning": 0,
+      "cache_read": 39680,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 51.44,
+    "terminal_outcome": "failed",
+    "terminal_error": {
+      "type": "provider.transport",
+      "message": "EPROTO: The TLS handshake failed. Does the server speak TLS on this port?"
+    },
+    "collection_error": null,
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "SETUP.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "gpt-6-luna-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/project/overview.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 9,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 9,
+    "observed_tokens": {
+      "input": 16412,
+      "output": 2197,
+      "reasoning": 8,
+      "cache_read": 39424,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 67.99,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "gpt-6-luna-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D3: Original README directive and release-name note deleted.",
+      "D7: Final chat does not bind its handoff to the supplied snapshot."
+    ],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 6,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 6,
+    "observed_tokens": {
+      "input": 10850,
+      "output": 1847,
+      "reasoning": 0,
+      "cache_read": 14464,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 56.16,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": false,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": false,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "gpt-6-luna-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 5,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 5,
+    "observed_tokens": {
+      "input": 10276,
+      "output": 2512,
+      "reasoning": 0,
+      "cache_read": 9344,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 61.66,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "local-notes.txt": true,
+      "access.mjs": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected_broken_baseline_5_pass_2_fail"
+    }
+  },
+  {
+    "name": "gpt-6-luna-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [
+      ".workflow/templates/review-report.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 5,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 5,
+    "observed_tokens": {
+      "input": 10487,
+      "output": 1954,
+      "reasoning": 0,
+      "cache_read": 12288,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 53.08,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "local-notes.txt": true,
+      "access.mjs": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected_broken_baseline_5_pass_2_fail"
+    }
+  },
+  {
+    "name": "haiku-minimal-templates",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D3: Original README directive removed as an author note."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/design.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 5,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 5028,
+      "reasoning": 2259,
+      "cache_read": 49723,
+      "cache_write": 25300
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 42.61,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": false,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "haiku-minimal-prose",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D3: Original README directive removed as an author note."
+    ],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 4,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 4129,
+      "reasoning": 1635,
+      "cache_read": 33459,
+      "cache_write": 16735
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 38.25,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": false,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "haiku-customized-prose",
+    "case": "customized",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "discovery_block",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "Native asynchronous catalog race; zero admitted inference, not missing entitlement."
+    ],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 0,
+    "observed_variants": [],
+    "returned_assistant_messages": 0,
+    "observed_tokens": {},
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 3.72,
+    "terminal_outcome": null,
+    "terminal_error": null,
+    "collection_error": "selected free model absent from isolated discovery",
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "handbook/setup.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "haiku-customized-templates",
+    "case": "customized",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D2: Claims three assertions/examples; check.py contains two.",
+      "D3: Original README preservation directive deleted.",
+      "D5: Check coverage count is unsupported; internal-whitespace expansion is presented as a current gap rather than only a proposed requirement."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 8,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 8,
+    "observed_tokens": {
+      "input": 16,
+      "output": 9798,
+      "reasoning": 6223,
+      "cache_read": 150549,
+      "cache_write": 32256
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 74.18,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": false,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    }
+  },
+  {
+    "name": "haiku-review-templates",
+    "case": "review",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "discovery_block",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "Native asynchronous catalog race; zero admitted inference, not missing entitlement."
+    ],
+    "template_reads": [],
+    "selected_layouts_read_and_used": false,
+    "requests_passed_guard": 0,
+    "observed_variants": [],
+    "returned_assistant_messages": 0,
+    "observed_tokens": {},
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 4.09,
+    "terminal_outcome": null,
+    "terminal_error": null,
+    "collection_error": "selected free model absent from isolated discovery",
+    "changed_paths": [],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "local-notes.txt": true,
+      "access.mjs": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [
+      "REPORT.md",
+      "HANDOFF.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected_broken_baseline_5_pass_2_fail"
+    }
+  },
+  {
+    "name": "haiku-review-prose",
+    "case": "review",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "initial",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 3,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 3,
+    "observed_tokens": {
+      "input": 6,
+      "output": 5660,
+      "reasoning": 1550,
+      "cache_read": 18226,
+      "cache_write": 12046
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 37.88,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "local-notes.txt": true,
+      "access.mjs": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected_broken_baseline_5_pass_2_fail"
+    }
+  },
+  {
+    "name": "gpt-6-luna-minimal-templates-recovery-1",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "batch": "recovery",
+    "classification": "behavioral_failure",
+    "criteria": [
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "semantic_pass": false,
+    "qualifies": false,
+    "notes": [
+      "D3: Original README directive deleted and original description rewritten.",
+      "D7: Final chat does not identify the supplied snapshot."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/setup-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 10,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 10,
+    "observed_tokens": {
+      "input": 22595,
+      "output": 2293,
+      "reasoning": 0,
+      "cache_read": 49152,
+      "cache_write": 0
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 69.45,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": false,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "recovery_of": "gpt-6-luna-minimal-templates"
+  },
+  {
+    "name": "haiku-customized-prose-recovery-1",
+    "case": "customized",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "recovery",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 5,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 5563,
+      "reasoning": 6727,
+      "cache_read": 49478,
+      "cache_write": 19433
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 55.57,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "recovery_of": "haiku-customized-prose"
+  },
+  {
+    "name": "haiku-review-templates-recovery-1",
+    "case": "review",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "recovery",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [
+      ".workflow/templates/review-report.md",
+      ".workflow/templates/task-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 4,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 6355,
+      "reasoning": 2382,
+      "cache_read": 34500,
+      "cache_write": 18339
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 43.87,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "HANDOFF.md",
+      "REPORT.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "local-notes.txt": true,
+      "access.mjs": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 1,
+      "outcome": "expected_broken_baseline_5_pass_2_fail"
+    },
+    "recovery_of": "haiku-review-templates"
+  },
+  {
+    "name": "haiku-minimal-templates-clarified-1",
+    "case": "minimal",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "clarified",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/claude-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/setup-record.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 6,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 6,
+    "observed_tokens": {
+      "input": 14,
+      "output": 5846,
+      "reasoning": 8561,
+      "cache_read": 99749,
+      "cache_write": 24917
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 68.71,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "comparison_of": "haiku-minimal-templates"
+  },
+  {
+    "name": "haiku-minimal-prose-clarified-1",
+    "case": "minimal",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "clarified",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 4,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 4,
+    "observed_tokens": {
+      "input": 8,
+      "output": 3992,
+      "reasoning": 1471,
+      "cache_read": 36045,
+      "cache_write": 18740
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 32.67,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "SETUP.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "arithmetic.py": true,
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "comparison_of": "haiku-minimal-prose"
+  },
+  {
+    "name": "haiku-customized-prose-clarified-1",
+    "case": "customized",
+    "arm": "prose",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "clarified",
+    "classification": "pass",
+    "criteria": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "semantic_pass": true,
+    "qualifies": true,
+    "notes": [],
+    "template_reads": [],
+    "selected_layouts_read_and_used": null,
+    "requests_passed_guard": 6,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 6,
+    "observed_tokens": {
+      "input": 12,
+      "output": 5726,
+      "reasoning": 4776,
+      "cache_read": 69578,
+      "cache_write": 18072
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 48.69,
+    "terminal_outcome": "succeeded",
+    "terminal_error": null,
+    "collection_error": null,
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md",
+      "handbook/setup.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [],
+    "placeholders": [],
+    "missing_outputs": [],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "comparison_of": "haiku-customized-prose"
+  },
+  {
+    "name": "haiku-customized-templates-clarified-1",
+    "case": "customized",
+    "arm": "templates",
+    "model": "haiku",
+    "variant": "low",
+    "batch": "clarified",
+    "classification": "deadline_interruption",
+    "criteria": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "semantic_pass": null,
+    "qualifies": null,
+    "notes": [
+      "Missing setup record and final handoff at cutoff; three links target missing setup.md. All content criteria remain unassessed."
+    ],
+    "template_reads": [
+      ".workflow/templates/README.md",
+      ".workflow/templates/task-record.md",
+      ".workflow/templates/setup-record.md",
+      ".workflow/templates/project/product.md",
+      ".workflow/templates/project/shared-instructions.md",
+      ".workflow/templates/project/architecture.md",
+      ".workflow/templates/project/local-preparation.md",
+      ".workflow/templates/project/quality.md",
+      ".workflow/templates/project/overview.md",
+      ".workflow/templates/project/design.md",
+      ".workflow/templates/project/claude-instructions.md"
+    ],
+    "selected_layouts_read_and_used": true,
+    "requests_passed_guard": 5,
+    "observed_variants": [
+      "low"
+    ],
+    "returned_assistant_messages": 5,
+    "observed_tokens": {
+      "input": 10,
+      "output": 4608,
+      "reasoning": 7893,
+      "cache_read": 42059,
+      "cache_write": 19454
+    },
+    "observed_returned_message_cost_usd": 0,
+    "elapsed_seconds": 62.03,
+    "terminal_outcome": null,
+    "terminal_error": null,
+    "collection_error": "timed out",
+    "changed_paths": [
+      "AGENTS.md",
+      "README.md",
+      "handbook/ARCHITECTURE.md",
+      "handbook/engineering.md",
+      "handbook/overview.md"
+    ],
+    "outside_write_scope": [],
+    "preserved_original_text": {
+      "check.py": true,
+      "README.md": true,
+      "AGENTS.md": true,
+      "handbook/engineering.md": true,
+      "handbook/ARCHITECTURE.md": true,
+      "handbook/overview.md": true,
+      "src/AGENTS.md": true,
+      "src/cleaning.py": true
+    },
+    "bad_links": [
+      [
+        "README.md",
+        "handbook/setup.md",
+        "missing file"
+      ],
+      [
+        "README.md",
+        "handbook/setup.md",
+        "missing file"
+      ],
+      [
+        "AGENTS.md",
+        "handbook/setup.md",
+        "missing file"
+      ]
+    ],
+    "placeholders": [],
+    "missing_outputs": [
+      "handbook/setup.md"
+    ],
+    "process_stopped": true,
+    "protected_check": {
+      "returncode": 0,
+      "outcome": "pass"
+    },
+    "comparison_of": "haiku-customized-templates"
+  }
+]

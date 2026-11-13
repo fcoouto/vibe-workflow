@@ -1,0 +1,968 @@
+[
+  {
+    "seconds_from_start": 422.734,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 426.647,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 429.972,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 436.418,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 455.279,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 463.851,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 422.736,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 426.277,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 431.527,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 436.0,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 439.173,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 446.761,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 484.91,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 504.959,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 423.824,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 425.859,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 430.819,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 465.124,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 502.666,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 505.903,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 508.76,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 511.377,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 514.125,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 517.276,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 519.44,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 526.42,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 424.245,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 426.852,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 429.281,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 463.39,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 469.341,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 472.139,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 474.268,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 471.029,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 473.865,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 477.292,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 480.126,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 483.209,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 494.466,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 500.266,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 503.294,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 506.904,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 511.471,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 515.036,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 527.35,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 501.489,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 503.89,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 505.024,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 513.62,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 519.389,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 521.692,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 522.821,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 531.838,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 518.268,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 527.008,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 545.369,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 533.261,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 539.222,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 545.362,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 560.891,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 534.205,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 536.987,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 538.733,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 551.128,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 536.66,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 540.279,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 543.481,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 545.175,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 556.087,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 583.738,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 586.783,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 590.162,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 595.242,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 609.14,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 570.687,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 573.852,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 578.896,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 585.907,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 597.144,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 604.38,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 620.825,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 575.527,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 578.078,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 581.627,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 633.683,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 584.931,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 587.02,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 589.2,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 605.145,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 610.969,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 613.376,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 616.308,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 618.573,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 620.815,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 626.07,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 628.459,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 646.77,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 630.012,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 632.165,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 636.255,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 642.271,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 646.713,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 662.523,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 675.241,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 630.872,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 633.222,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 636.134,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 640.026,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 687.463,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 691.96,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 696.546,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 701.986,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 705.469,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 708.021,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 711.857,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 640.832,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 643.036,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 645.147,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 678.724,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 685.8,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 550.075,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 552.871,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 556.472,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 560.488,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 565.684,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 556.609,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 559.36,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 561.687,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 565.688,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 560.683,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 562.685,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 564.94,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 567.81,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 571.546,
+    "provider": "claude-agent",
+    "model": "haiku",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 566.617,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 568.704,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 571.596,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  },
+  {
+    "seconds_from_start": 578.922,
+    "provider": "openai",
+    "model": "gpt-6-luna",
+    "variant": "low",
+    "kind": "primary"
+  }
+]
