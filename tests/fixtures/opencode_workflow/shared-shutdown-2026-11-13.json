@@ -1,0 +1,92 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "scope": "Actual shared-server gate flow and shutdown only",
+  "overall": "partial; approval-control qualification blocked",
+  "base": "0ce70fbeea70f98999e69d5394a8414f17fed927",
+  "subject": "released 0.1.39; unchanged gate runtime bytes",
+  "client_version": "2.2.7",
+  "shared_pid": 61057,
+  "budget": {
+    "maximum": 80,
+    "consumed": 49,
+    "duration_seconds": 1800,
+    "shares": {"A": 44, "B": 36},
+    "attempts_per_case": 1,
+    "reset": false
+  },
+  "runtime_sha256": {
+    "index.ts": "527816deab2ddfe7b470d213be2a7586e23200647bf520a6214fe9f089b3acf9",
+    "gate.ts": "97513e84d2eefdbfe139609ef0a05934b6fd4f55bbfefb7aa8a3d20dfdcce860"
+  },
+  "cases": [
+    {
+      "case": "A",
+      "verdict": "passed",
+      "requests": 27,
+      "share": 44,
+      "primary_efforts": {"root": "low", "same_level_child": "low", "diagnosis_child": "high", "barrier_child": "low"},
+      "native_model": "openai/gpt-6.1-sol",
+      "native_failed_checks": 3,
+      "status_stages": ["clear", "escalating", "escalating", "clear"],
+      "observations": {
+        "hold_and_native_denials": true,
+        "stronger_readonly_release": true,
+        "active_child_survived_disconnect": true,
+        "backend_child_and_root_completed": true,
+        "reattached_completed_root_without_prompt": true
+      },
+      "protected_inputs_unchanged": true,
+      "owned_sessions_inactive": true,
+      "final_canary": "VALUE = 99\n",
+      "independent_check_exit": 0,
+      "event_sha256": "bf36ea7defb47eda569a1590afeb135635bbe63acc79c59dff81e6ed6311852a",
+      "terminal": {"returncode": 0, "exit_key_sent": true, "forced_shutdown": false, "sha256": "e10d56f98cece0e97236514fea108b861d431abb461f05fd53fea276f6ba03b1"},
+      "reattached_terminal": {"returncode": 0, "exit_key_sent": true, "forced_shutdown": false, "sha256": "31ad6342703d6da8508fd9a0acd4ee27ec7a48240954e9424519d072a9595a48"}
+    },
+    {
+      "case": "B",
+      "verdict": "failed",
+      "requests": 22,
+      "share": 36,
+      "primary_efforts": {"root": "max", "architecture_child": "max"},
+      "native_model": "openai/gpt-6.1-sol",
+      "native_failed_checks": 5,
+      "status_stages": ["clear", "reevaluation", "clear", "stop", "clear"],
+      "observations": {
+        "reevaluation_then_stop_observed": true,
+        "stop_permission_ui_rendered": true,
+        "requested_reject": true,
+        "native_reply": "once",
+        "reply_preceded_controller_input": true,
+        "approval_source": "unknown",
+        "reject_preserved_bytes": false,
+        "controlled_allow_once_tested": false,
+        "completed_work_clean_exit": false
+      },
+      "permission_chronology": {
+        "ask_event_index": 76,
+        "reply_event_index": 77,
+        "reply_at_ms": 1794584032029,
+        "reject_click_at_ms": 1794584032038.527,
+        "canary_at_click": "VALUE = 6\n",
+        "native_tui_reply_http_statuses": [404, 404]
+      },
+      "protected_inputs_unchanged": true,
+      "owned_sessions_inactive": true,
+      "final_canary": "VALUE = 6\n",
+      "independent_check_exit": 1,
+      "event_sha256": "0936b7f4f7835fdf8cc64e1c7d995c95e529cc1a149afc6ce004611737149718",
+      "terminal": {"returncode": -9, "exit_key_sent": false, "forced_shutdown": true, "sha256": "ed0a15304f5737f739fa8ad7c16f36db0b764b5e645aa991aa945fdd345ffd87"},
+      "failure": "Native once reply allowed VALUE = 6 before intended Reject input; controller's preserved-bytes assertion failed."
+    }
+  ],
+  "limits": [
+    "No semantic judge or Smart Routing work",
+    "No productivity comparison",
+    "No approval source attribution",
+    "Reject and deliberate Allow once remain unqualified",
+    "No live replay or allowance reset",
+    "Earlier failures remain preserved"
+  ]
+}
