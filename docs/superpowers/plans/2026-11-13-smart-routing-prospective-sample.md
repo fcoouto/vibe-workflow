@@ -20,6 +20,7 @@
 - Preserve all billing, entitlement, routing-path/table, native-host, strict-replay and canary gates.
 - No campaign/ledger reset, allowance namespace, settings change, polling service, registry or bypass flag.
 - No collection boundary is active and no sample records exist yet.
+- Before capture, register the eligibility-reference instant and permitted-input freeze rule; later processing uses the same frozen inputs and instant.
 - The earlier Astra review covers Edit 12 only, not this changed design.
 
 ## Review Focus
@@ -29,6 +30,7 @@
 - A missing capture or source must not disappear from coverage or become a zero-result success.
 - A hand-written identifier list or schema hash must not masquerade as independently observed creation provenance.
 - The advisory replacement must not erase legacy failures or reset strict replay, billing or canary obligations.
+- Delaying replay or updating a source after the registered freeze must not change membership or labels, including the one-hour exclusion.
 
 These are mandatory future synthetic/independent review cases, not checks claimed to pass in this documentation phase.
 
@@ -65,8 +67,8 @@ The user chose a fresh prospective sample rather than another attempt to reconst
 
 1. Independently review the prospective design and fix any substantive gap before implementation is accepted. No earlier review allowance is restarted.
 2. Establish which existing per-client lifecycle receipt/export can prove original creation, purpose and complete ancestry. If either producer cannot do so, define the smallest producer change and its synthetic tests before proposing an implementation. Do not guess an API, endpoint or data source.
-3. Implement and synthetically test the minimal prospective intake in `tests/qualification/replay_history.py` and `tests/test_qualification_replay_history.py`, with corresponding caller/producer edits only where the established evidence path needs them. Test every Review Focus case, refusal before sensitive row projection, existing ID/schema/privacy gates, unchanged source bytes and aggregate-only output. This document does not authorize that unresolved implementation yet.
-4. Before any real capture, register immutable UTC start/end, exact approved roots/source bindings and the qualified capture mechanism; obtain separate bounded metadata-access/collection authority. Do not run tasks solely to pad the sample. Missing capture remains incomplete, not silently replaced by another interval.
+3. Implement and synthetically test the minimal prospective intake in `tests/qualification/replay_history.py` and `tests/test_qualification_replay_history.py`, with corresponding caller/producer edits only where the established evidence path needs them. Test every Review Focus case, refusal before sensitive row projection, existing ID/schema/privacy gates, unchanged source bytes and aggregate-only output. Include a regression proving that delayed replay and post-freeze source updates cannot change membership or labels. This document does not authorize that unresolved implementation yet.
+4. Before any real capture, register immutable UTC start/end, the UTC eligibility-reference instant and deterministic permitted-input freeze rule, exact approved roots/source bindings and the qualified capture mechanism; obtain separate bounded metadata-access/collection authority. Preserve the one-hour exclusion using that instant and use the same frozen inputs/reference for all later processing or replay. Do not run tasks solely to pad the sample. Missing capture remains incomplete, not silently replaced by another interval.
 5. After authorized ordinary work has produced a complete nonempty sample, independently trace its retained original IDs, ancestry, purpose and source-to-input bindings. Record actual coverage and omissions, not invented identifiers or proof flags.
 6. Only after that acceptance and all unchanged prerequisites, seek the separately scoped replay/live decisions. Keep strict pilot replay separate. A prospective advisory result is not a billing, canary or release qualification.
 

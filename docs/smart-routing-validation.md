@@ -496,6 +496,10 @@ the advisory sample neither replaces that strict sample nor claims a strict pass
    existing historical exclusion input remains insufficient; no empty basis or
    prose `checked` field may bypass it.
 
+**PS-01 timing correction (13 November 2026).**
+
+Before collection, also register the UTC eligibility reference instant and the rule for freezing permitted replay inputs, including the unchanged one-hour exclusion. Later processing or replay must use those same frozen inputs and that instant; delaying or repeating processing must not change membership or labels. Missing capture remains incomplete.
+
 **Status and authority.** The sample is **not started**: no boundary, new sample
 records, complete provenance, replay result or qualification claim exists. This
 approval covers the revised plan only. It authorizes no client-history/content or
