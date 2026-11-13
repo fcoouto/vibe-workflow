@@ -199,6 +199,7 @@ class HookTests(HookFixture):
         self.enable()
         for index, version in enumerate(("0.163.0", "0.167.1", "0.168.0", "1.0.0", None), 1):
             with self.subTest(version=version):
+                self.task["revision"] += 1
                 usage = {key: count * index for key, count in USAGE.items()}
                 self.session(version=version, usage=usage)
                 self.run_hook(qualified=False)

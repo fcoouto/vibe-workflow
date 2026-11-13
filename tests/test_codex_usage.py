@@ -727,7 +727,7 @@ class CodexUsageTests(unittest.TestCase):
     def test_each_page_must_pass_its_own_header_and_version_checks(self):
         cases = (([meta(at(11), thread=PAGE), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
                  ([message(at(11)), token(at(11, 10), 201)], "session_meta_mismatch", QUALIFIED),
-                  ([meta(at(11), version="0.162.9"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
+                 ([meta(at(11), version="0.162.9"), token(at(11, 10), 201)], "source_version_unqualified", QUALIFIED),
                  ([meta(at(11)), token(at(11, 10), 201), meta(at(11, 20), thread=OTHER)], "session_meta_mismatch",
                   QUALIFIED))
         for rows, code, qualified in cases:
