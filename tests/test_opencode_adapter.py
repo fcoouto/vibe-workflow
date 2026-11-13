@@ -759,10 +759,10 @@ class Purity(unittest.TestCase):
             if isinstance(node, ast.Import):
                 names.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
-                names.add((node.module or "").split(".")[0])
+                names.add(node.module or "")
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 self.assertNotIn(node.func.id, {"open", "print", "exec", "eval", "__import__", "input", "compile"})
-        self.assertLessEqual(names, {"math", "re", "unicodedata", "runtime"})
+        self.assertLessEqual(names, {"math", "re", "unicodedata", "runtime.software_versions"})
 
     def test_normalization_performs_no_io(self):
         def refuse(*args, **kwargs):
