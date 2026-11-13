@@ -34,12 +34,17 @@ def _append(output, text):
     return package_versions.append_warning(output, text)
 
 
+def deliver(package, client, deadline):
+    """Write the delivery note before the deadline. A diagnostic startup writes it too: trust is per client."""
+    if time.monotonic() < deadline:
+        _optional(_deliver, package, client, deadline)
+
+
 def apply(package, client, output, deadline, restricted=False):
     """Write the delivery note, then append the package drift and workspace readiness warnings as one text.
 
     The restricted qualification-only context gets no warnings."""
-    if time.monotonic() < deadline:
-        _optional(_deliver, package, client, deadline)
+    deliver(package, client, deadline)
     if output is None or restricted:
         return output
     warnings = []

@@ -3,10 +3,9 @@
 An empty ranking (``no_recommendation``) is never a refusal: callers fall through to the
 deterministic admission path or the user's explicit worker choices. Only admission can block.
 
-Profiling and ranking are pure: no network, subprocess or model call happens here except through
-the caller-supplied, optional ``jev`` enrichment callable. ``admit`` and ``dispatch`` are the
-exceptions: each writes the local ledger in one short transaction of pure arithmetic. ``dispatch``
-issues the single-use dispatch authority (S3.4).
+Profiling and ranking are pure: no network, subprocess or model call happens here. ``admit`` and
+``dispatch`` are the exceptions: each writes the local ledger in one short transaction of pure
+arithmetic. ``dispatch`` issues the single-use dispatch authority (S3.4).
 """
 import copy
 import functools
@@ -17,26 +16,24 @@ import math
 import re
 import secrets
 
-from runtime import routing_allocator as allocator, routing_gates, routing_settings
+from runtime import routing_allocator as allocator, routing_gates, routing_settings, task_profile
 from runtime import subscription_reconcile as sub_reconcile
 from runtime import usage_budget
 from runtime.usage_budget import MAX_INTEGER, ORG, WIN, BudgetError, Ledger
 
-CONTRACT_VERSION = 1
-ROLES = ('worker', 'review', 'coordinator', 'check')
+CONTRACT_VERSION = 2  # the template's contract_version; tests/test_task_profile.py pins the constants below to it
 COMPLEXITY_BANDS = ('low', 'medium', 'high', 'critical')
 RISK_BANDS = ('low', 'medium', 'high', 'critical')
 REVIEW_POLICIES = ('none', 'self', 'independent', 'strict')
 UNCERTAINTY = ('low', 'medium', 'high')
-PROVENANCE = ('coordinator', 'metadata', 'floor', 'jev')
+PROVENANCE = ('coordinator', 'metadata', 'floor')
 # Conservative values for fields nobody supplied: higher bands, stricter review.
-FLOORS = dict(task_family='general', complexity_band='high', risk_band='high', review_policy='independent')
+FLOORS = dict(complexity_band='high', risk_band='high', review_policy='independent')
 # Requirement floors implied by a write claim, independent of any supplied value.
 WRITE_FLOORS = dict(complexity_band='medium', risk_band='medium')
-SEMANTIC_FIELDS = ('task_family', 'complexity_band', 'risk_band')
-SUPPLIED_FIELDS = ('task_family', 'complexity_band', 'risk_band', 'context_tokens', 'tools', 'review_policy',
-                   'uncertainty')
-SUPPLIED_REFERENCES = ('scope_ref', 'contract_version', 'semantic_digest')
+SEMANTIC_FIELDS = ('complexity_band', 'risk_band')
+SUPPLIED_FIELDS = ('complexity_band', 'risk_band', 'context_tokens', 'tools', 'review_policy', 'uncertainty')
+SUPPLIED_REFERENCES = ('scope_ref', 'contract_version', 'semantic_digest', 'task_family')  # task_family: retired, ignored
 _ORDERS = dict(complexity_band=COMPLEXITY_BANDS, risk_band=RISK_BANDS, review_policy=REVIEW_POLICIES)
 MAX_TOKENS = 10**9
 # Same bounds as the worker brief and claim limits in runtime/delegation.py.
@@ -45,7 +42,7 @@ MAX_CLAIMS = 64
 
 
 class ProfileUnavailable(ValueError):
-    """Floors cannot be established, for example an unknown role or missing scope."""
+    """Floors cannot be established, for example a role that is no roster specialist or a missing scope."""
 
 
 def _name(value):
@@ -53,8 +50,6 @@ def _name(value):
 
 
 def _valid(field, value):
-    if field == 'task_family':
-        return _name(value)
     if field in _ORDERS:
         return value in _ORDERS[field]
     if field == 'context_tokens':
@@ -138,9 +133,9 @@ def semantic_digest(job):
                         tools=_tools(job), floors=_floors(job)))
 
 
-def row_key(role, task_family, complexity_band, risk_band):
+def row_key(work_kind, complexity_band, risk_band):
     """Stable string key for a strategy-table row."""
-    parts = (role, task_family, complexity_band, risk_band)
+    parts = (work_kind, complexity_band, risk_band)
     if not all(isinstance(part, str) and part and '|' not in part for part in parts):
         raise ValueError('Invalid strategy row key')
     return '|'.join(parts)
@@ -175,42 +170,28 @@ def _usable_supplied(job, digest, reasons):
     return supplied
 
 
-def _jev_view(job, fields):
-    return dict(job_id=job.get('id'), role=job.get('role'), objective=job.get('objective'),
-                context=job.get('context'), scope=_claims(job), tools=_tools(job), unresolved=list(fields))
-
-
-def ensure_profile(job, *, jev=None):
+def ensure_profile(job):
     """Return a TaskProfile for ``job`` without mutating it.
 
-    Complete coordinator-supplied profiles never call ``jev``. Gaps take
-    deterministic floors; ``jev`` (optional) is asked once for unresolved
-    semantic fields. No supplied or enriched value can lower a requirement floor.
+    Complete coordinator-supplied profiles are used as supplied. Gaps take
+    deterministic floors. No supplied value can lower a requirement floor.
     """
-    if not isinstance(job, dict) or not isinstance(job.get('role'), str) or job.get('role') not in ROLES:
-        raise ProfileUnavailable('profile_unavailable: unknown role')
+    try:
+        specialist = task_profile.specialist(job.get('role')) if isinstance(job, dict) else None
+    except task_profile.TemplateUnavailable:
+        raise ProfileUnavailable('profile_unavailable: task profile template unavailable') from None
+    if specialist is None:
+        raise ProfileUnavailable('profile_unavailable: not a roster specialist')
     if not isinstance(job.get('scope_ref'), str) or not job['scope_ref']:
         raise ProfileUnavailable('profile_unavailable: no scope')
     digest = semantic_digest(job)
     reasons = []
     supplied = _usable_supplied(job, digest, reasons)
     values, provenance = {}, {}
-    for field in ('task_family', *_ORDERS):
+    for field in _ORDERS:
         if _valid(field, supplied.get(field)):
             values[field], provenance[field] = supplied[field], 'coordinator'
-    unresolved = [field for field in SEMANTIC_FIELDS if field not in values]
-    enriched = False
-    if unresolved and callable(jev):
-        try:
-            answer = jev(_jev_view(job, unresolved), tuple(unresolved))
-        except Exception:
-            answer = None
-        if isinstance(answer, dict):
-            for field in unresolved:
-                if _valid(field, answer.get(field)):
-                    values[field], provenance[field] = answer[field], 'jev'
-                    enriched = True
-    gaps = [field for field in ('task_family', *_ORDERS) if field not in values]
+    gaps = [field for field in _ORDERS if field not in values]
     for field in gaps:
         values[field], provenance[field] = FLOORS[field], 'floor'
     for field, floor in _floors(job).items():
@@ -227,49 +208,45 @@ def ensure_profile(job, *, jev=None):
         context, context_source = dict(tokens=supplied['context_tokens'], kind='estimated'), 'coordinator'
     else:
         context, context_source = dict(tokens=_estimate_tokens(job), kind='estimated'), 'floor'
-    uncertainty = 'high' if gaps else 'medium' if enriched else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
+    uncertainty = 'high' if gaps else supplied.get('uncertainty') if _valid('uncertainty', supplied.get('uncertainty')) else 'low'
     return dict(contract_version=CONTRACT_VERSION, job_id=job.get('id'), role=job['role'], scope_ref=job['scope_ref'],
-                task_family=values['task_family'], complexity_band=values['complexity_band'],
+                work_kind=specialist['work_kind'], complexity_band=values['complexity_band'],
                 risk_band=values['risk_band'], review_policy=values['review_policy'], context=context,
                 tools=tools, uncertainty=uncertainty, uncertain_fields=gaps, reasons=reasons,
                 provenance=dict(provenance, context=context_source, tools=tools_source),
                 semantic_digest=digest)
 
 
+TABLE_SCHEMA = 2  # rows keyed `work_kind|complexity_band|risk_band`; routing_evidence compiles this schema
 CONSTRAINT_FIELDS = ('allowed_models', 'excluded_models', 'allowed_efforts', 'allowed_harnesses',
                      'allowed_strategy_ids')
 
 
 def resolve_row(table, profile):
-    """Pick the table row for a profile: exact, then the nearest stricter band, then the strongest row.
+    """Pick the table row for a profile: the exact row, then the nearest stricter band for the same work kind.
 
-    Returns ``(strategies, reason)``. An empty list (``no_recommendation``, never a refusal) means no
-    qualified row at or above the profile's bands exists for the role. Bands only rise: a weaker row is never used, even as the conservative fallback.
+    Returns ``(strategies, reason)``. An empty list (``no_recommendation``, never a refusal) means no qualified row
+    at or above the profile's bands exists for its work kind. A weaker row or another work kind's is never used.
     """
     rows = table.get('rows') if isinstance(table, dict) else None
     if not isinstance(rows, dict) or not rows:
         return [], 'no_recommendation'
-    role, family = profile['role'], profile['task_family']
+    kind = profile['work_kind']
     c, r = COMPLEXITY_BANDS.index(profile['complexity_band']), RISK_BANDS.index(profile['risk_band'])
-    exact = rows.get(row_key(role, family, profile['complexity_band'], profile['risk_band']))
+    exact = rows.get(row_key(kind, profile['complexity_band'], profile['risk_band']))
     if exact:
         return exact, 'ranking_exact'
-    stricter, strongest = [], []
+    stricter = []
     for name, strategies in rows.items():
         parts = name.split('|')
-        if len(parts) != 4 or parts[0] != role or not strategies or \
-                parts[2] not in COMPLEXITY_BANDS or parts[3] not in RISK_BANDS:
+        if len(parts) != 3 or parts[0] != kind or not strategies or \
+                parts[1] not in COMPLEXITY_BANDS or parts[2] not in RISK_BANDS:
             continue
-        ci, ri = COMPLEXITY_BANDS.index(parts[2]), RISK_BANDS.index(parts[3])
-        if ci < c or ri < r:
-            continue  # A cheaper row below the task's floors is never eligible.
-        strongest.append((ci + ri, name, strategies))
-        if parts[1] == family:
+        ci, ri = COMPLEXITY_BANDS.index(parts[1]), RISK_BANDS.index(parts[2])
+        if ci >= c and ri >= r:  # A cheaper row below the task's floors is never eligible.
             stricter.append((ci + ri, ci, ri, name, strategies))
     if stricter:
         return min(stricter, key=lambda item: item[:4])[4], 'ranking_stricter_band'
-    if strongest:
-        return max(strongest, key=lambda item: (item[0], [-ord(ch) for ch in item[1]]))[2], 'ranking_conservative'
     return [], 'no_recommendation'
 
 
@@ -300,7 +277,8 @@ def rank(profile, table, constraints):
         if field in constraints and not (isinstance(constraints[field], (list, tuple)) and
                                          all(isinstance(item, str) for item in constraints[field])):
             raise ValueError('Invalid ranking constraint ' + field)
-    strategies, reason = resolve_row(table, profile)
+    outdated = isinstance(table, dict) and bool(table.get('rows')) and table.get('schema') != TABLE_SCHEMA
+    strategies, reason = ([], 'no_recommendation') if outdated else resolve_row(table, profile)
     reasons = [reason]
     if strategies:
         tokens = (profile.get('context') or {}).get('tokens')
@@ -317,6 +295,8 @@ def rank(profile, table, constraints):
         reasons.append('no_recommendation')
     if not isinstance(table, dict) or not table.get('rows'):
         reasons.append('table_empty')
+    elif outdated:
+        reasons.append('table_outdated')  # another schema, e.g. role rows: no strategy until a table refresh
     return dict(strategy_ids=[item['strategy_id'] for item in strategies], reason_codes=reasons,
                 table_version=table.get('version') if isinstance(table, dict) else None,
                 profile_digest=profile.get('semantic_digest'), review_policy=profile.get('review_policy'),
@@ -341,6 +321,7 @@ MAX_POOLS = 64
 MAX_WINDOWS = 8
 MAX_STRATEGIES = 256
 MAX_REASONS = 16
+MAX_SHORTLIST = 10  # F5.2: the subscription shortlist (`routing_funding.SHORTLIST_MAX`)
 
 
 def _pending(reason, reasons=()):
@@ -429,13 +410,7 @@ def _credential_reasons(route, scope, settings):
     return reasons
 
 
-def _caps(data, settings):
-    """(total, per_account): the stricter of the settings caps and the ledger-stored caps."""
-    stored_total, stored_account = Ledger._caps(data)
-    return min(settings['caps']['total'], stored_total), min(settings['caps']['per_account'], stored_account)
-
-
-def _candidate(data, route, observations, assignment, settings, held, accounts, now):
+def _candidate(data, route, observations, assignment, settings, held, now):
     """Return (candidate or None, reasons) for one route; eligibility, billing class, then feasibility."""
     cls = FUNDING_OF.get(route.get('billing_class')) if isinstance(route, dict) else None
     if cls is None:
@@ -454,8 +429,6 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         reasons.append('capability_missing')
     if route.get('permitted', True) is not True:
         reasons.append('not_permitted')
-    if accounts.count(route['account']) >= _caps(data, settings)[1]:
-        reasons.append('concurrency_cap')
     if reasons:
         return None, reasons
     funding = revision = None
@@ -469,7 +442,7 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         except BudgetError:
             return None, ['funding_unverified']
     windows = {window['id']: window for window in pool['windows']}
-    vector, constraints = {}, []
+    vector, constraints, money = {}, [], usage_budget.usage_budget_money.API_MONEY_BUFFER_BP  # F5.A2: dollars
     bounds = route.get('next_request_bound') or {}
     for window_id, estimate in route['demand'].items():
         window = windows.get(window_id)
@@ -480,7 +453,7 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
         if stale:
             return None, ['stale_observation']
         try:
-            reserve = Ledger._reserve(estimate, bounds.get(window_id), settings['margin_bp'])
+            reserve = Ledger._reserve(estimate, bounds.get(window_id), money if funding else settings['margin_bp'])
         except BudgetError:
             return None, ['invalid_observation']
         key = ORG + funding if funding else _window_key(route['pool'], window_id)
@@ -502,45 +475,6 @@ def _candidate(data, route, observations, assignment, settings, held, accounts, 
                 spec=route, windows=pool['windows'], revision=revision), []
 
 
-def _utilization(candidates, held, settings, now):
-    """Lowest projected maximum over feasible subscription routes; unknown is conservative, never zero."""
-    best, reasons = None, []
-    for item in candidates:
-        windows, reserve_new = [], {}
-        for window in item['windows']:
-            limit = window['limit']
-            windows.append(dict(id=window['id'], used=None if window.get('used') is None else window['used'] / limit,
-                                reserved=held.get(_window_key(item['pool'], window['id']), 0) / limit,
-                                length=window.get('length'), reset_at=window.get('reset_at'),
-                                fresh=window.get('fresh', True), rolling=window.get('rolling', False)))
-            reserve_new[window['id']] = item['vector'].get(_window_key(item['pool'], window['id']), 0) / limit
-        value, why = allocator.projected_utilization(windows, reserve_new, now, settings['min_elapsed_fraction'])
-        reasons += why
-        best = value if best is None or (value is not None and value < best) else best
-    if best is None:
-        reasons.append('utilization_unknown')
-        best = 1.0
-    return best, list(dict.fromkeys(reasons))
-
-
-def _expiry(candidates, observations, settings, now):
-    """E from the earliest-expiring grant of a feasible, eligible direct route; gateways never contribute."""
-    grants = [observations['pools'][item['pool']]['grant'] for item in candidates
-              if item['spec']['billing_class'] == 'api_grant' and 'grant' in observations['pools'][item['pool']]]
-    grants = [grant for grant in grants if grant['expires_at'] > now]
-    if not grants:
-        return 0.0
-    grant = min(grants, key=lambda item: item['expires_at'])
-    return allocator.expiry_pressure(grant['remaining'], grant.get('expected_spend', 0),
-                                     (grant['expires_at'] - now) / SECONDS_PER_HOUR, settings['T_hours'])
-
-
-def _snapshot(item, now, horizon):
-    found = allocator.binding_constraint(item['constraints'], now, horizon)
-    pressure = None if found is None or found[1] is None else float(found[0] / found[1])
-    return dict(pressure=pressure, constraints=[dict(c) for c in item['constraints']])
-
-
 def _choice_matches(entry, item):
     spec = item['spec']
     return all(spec.get(field) == entry[field] for field in ROUTE_IDENTITY) and item['cls'] == entry['funding']
@@ -548,39 +482,24 @@ def _choice_matches(entry, item):
 
 def _decide(data, assignment, ranking, settings, observations, workflow=None):
     now, horizon = observations['now'], observations.get('minimum_horizon', DEFAULT_MINIMUM_HORIZON)
-    accounts, held = Ledger.open_accounts(data), sub_reconcile.held(data)  # S3.6c: plus window debits
-    if len(accounts) >= _caps(data, settings)[0]:
-        return _pending('concurrency_cap')
-    candidates, excluded = [], []
-    for route in observations['routes']:
-        item, why = _candidate(data, route, observations, assignment, settings, held, accounts, now)
+    held = sub_reconcile.held(data)  # S3.6c: plus window debits. F5.A1: no count of open attempts admits or refuses
+    explicit = assignment.get('choice')
+    from runtime import routing_funding  # the ranked decision and the record (F5.2); never at module import time
+    ranked = routing_funding.is_ranked(assignment, ranking, settings)
+    candidates, excluded = [], []  # a ranked decision sees one subscription shortlist, cut before any window
+    for route in routing_funding.ranked_routes(observations, ranking) if ranked else observations['routes']:
+        item, why = _candidate(data, route, observations, assignment, settings, held, now)
         if item is not None:
             candidates.append(item)
         excluded += why
-    bucket = [assignment['role'], assignment['complexity_band']]
-    explicit = assignment.get('choice')
-    ranked = settings['smart_routing'] and not explicit and bool(ranking.get('strategy_ids'))
+    bucket = [assignment['work_kind'], assignment['complexity_band']]
     reasons = list(ranking.get('reason_codes', [])) if ranked else []
     u = e = None
     if ranked:
-        order = {sid: i for i, sid in enumerate(ranking['strategy_ids'])}
-        pool = sorted((c for c in candidates if c['spec'].get('strategy_id') in order),
-                      key=lambda c: order[c['spec']['strategy_id']])
-        by_class = {cls: [c for c in pool if c['cls'] == cls] for cls in ('api', 'subscription')}
-        feasible = [cls for cls, items in by_class.items() if items]
-        if not feasible:
-            return _pending(_dominant(excluded), excluded)
-        if len(feasible) == 2:
-            u, why = _utilization(by_class['subscription'], held, settings, now)
-            e = _expiry(by_class['api'], observations, settings, now)
-            reasons += why
-            api = allocator.api_share(u, e, settings['L'], settings['H'])
-        else:
-            api = 1.0 if feasible == ['api'] else 0.0  # hard overrides
-        shares = dict(api=api, subscription=1 - api)
-        rows = decision_rows(data, settings.get('revision', 0), now)
-        cls = allocator.choose_class(shares, rows, bucket, observations.get('epoch_at', 0), feasible)
-        chosen = allocator.choose_route(by_class[cls], now, horizon) if cls else None
+        pending, chosen, shares = routing_funding.ranked(data, candidates, excluded, ranking, settings, observations,
+                                                         bucket)
+        if pending is not None:
+            return pending
         mode = 'ranked'
     else:
         entries = [explicit] if explicit else settings['worker_choices'].get(assignment['role'], [])
@@ -596,21 +515,8 @@ def _decide(data, assignment, ranking, settings, observations, workflow=None):
             return _pending('explicit_choice_unavailable' if explicit else 'worker_choice_unavailable', excluded)
     if chosen is None:
         return _pending(_dominant(excluded), excluded)
-    item = next(c for c in candidates if c['route'] == chosen)
-    spec = item['spec']
-    credential = spec.get('credential') or {}
-    record = dict(attempt_id=assignment['attempt_id'], task=assignment['task'], bucket=bucket, shares=shares,
-                  **{'class': item['cls']}, route=item['route'], pool=item['pool'], account=spec['account'],
-                  route_identity=route_identity(*(spec.get(field) for field in ROUTE_IDENTITY)),
-                  billing_class=spec['billing_class'], credential_ref=credential.get('ref'),
-                  pressure=dict(u=u, e=e, **_snapshot(item, now, horizon)), reserved=dict(item['vector']),
-                  settings_revision=settings.get('revision', 0), organization_revision=item['revision'], at=now,
-                  mode=mode,
-                  snapshot_id=observations.get('snapshot_id'),
-                  reason_codes=list(dict.fromkeys(reasons)),
-                  ranking=dict(table_version=ranking.get('table_version'), profile_digest=ranking.get('profile_digest')))
-    record['binding'] = routing_gates.binding(copy.deepcopy(workflow), credential_marker(data, record))
-    return dict(record=record, vector=item['vector'], account=spec['account'], now=now, revision=item['revision'])
+    return routing_funding.record(data, assignment, candidates, chosen, bucket, shares, mode, u, e, reasons, ranking,
+                                  settings, observations, workflow)
 
 
 def decision_rows(data, revision, now):
@@ -622,9 +528,7 @@ def decision_rows(data, revision, now):
 
 
 def _dominant(excluded):
-    """The reason a pending assignment reports: a concurrency place first, then the commonest exclusion."""
-    if 'concurrency_cap' in excluded:
-        return 'concurrency_cap'
+    """The reason a pending assignment reports: the commonest actionable exclusion."""
     if excluded and set(excluded) == {'no_funded_organization'}:
         return 'no_funded_organization'  # the user enabled no organization for these routes; not an error
     if 'credential_unavailable' in excluded:
@@ -659,11 +563,11 @@ def _amounts(value, allow_none=False):
 
 
 def _valid_assignment(assignment):
-    if not isinstance(assignment, dict) or not all(_text(assignment.get(key)) for key in
-                                                   ('attempt_id', 'task', 'role', 'complexity_band', 'scope')):
-        return False
-    choice = assignment.get('choice')
-    return choice is None or (type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding')))
+    choice = assignment.get('choice') if isinstance(assignment, dict) else None  # with an optional pinned `endpoint`
+    return isinstance(assignment, dict) and all(_text(assignment.get(key)) for key in (
+        'attempt_id', 'task', 'role', 'work_kind', 'complexity_band', 'scope')) and (choice is None or (
+            type(choice) is dict and all(_text(choice.get(key)) for key in (*ROUTE_IDENTITY, 'funding'))
+            and _optional(choice.get('endpoint'), _text)))
 
 
 def _valid_route(route):
@@ -700,15 +604,17 @@ def _valid_pool(pool):
 
 
 def _valid_observations(observations):
-    if type(observations) is not dict or not _amount(observations.get('now')):
-        return False
-    if not (_optional(observations.get('snapshot_id'), _text) and _optional(observations.get('epoch_at'), _finite)
+    if type(observations) is not dict or not _amount(observations.get('now')) or not (
+            all(_optional(observations.get(key), _text) for key in ('snapshot_id', 'routes_version'))
+            and _optional(observations.get('epoch_at'), _finite)
             and _optional(observations.get('minimum_horizon'), lambda v: _finite(v) and v > 0)):
         return False
-    routes, pools = observations.get('routes'), observations.get('pools')
+    routes, pools, shortlist = observations.get('routes'), observations.get('pools'), observations.get('shortlist', [])
     return (type(routes) is list and len(routes) <= MAX_ROUTES and all(_valid_route(r) for r in routes)
             and type(pools) is dict and len(pools) <= MAX_POOLS
-            and all(_part(key) and _valid_pool(pool) for key, pool in pools.items()))
+            and all(_part(key) and _valid_pool(pool) for key, pool in pools.items())
+            and type(shortlist) is list and len(shortlist) <= MAX_SHORTLIST and all(map(_text, shortlist))
+            and len(set(shortlist)) == len(shortlist))  # F5.2: optional, distinct bounded ids
 
 
 def _valid_ranking(ranking):
@@ -739,18 +645,21 @@ def _shape_error(assignment, ranking, settings, observations):
                                  ('invalid_observation', _valid_observations, observations)):
         if not valid(value):
             return reason
-    return None
+    from runtime import routing_funding  # F5.2: in a ranked decision a shortlist only narrows the ranking
+    ranked = routing_funding.is_ranked(assignment, ranking, settings)
+    return 'invalid_observation' if ranked and not routing_funding.in_ranking_order(observations, ranking) else None
 
 
 def admit(assignment, ranking, settings, observations, *, ledger, workflow=None, clear_debits=False):
     """Choose a funding class and route, reserve the padded claim and record the decision atomically.
 
-    ``assignment`` is ``{attempt_id, task, role, complexity_band, scope, choice?}``; ``ranking`` the
+    ``assignment`` is ``{attempt_id, task, role, work_kind, complexity_band, scope, choice?}``; ``ranking`` the
     result of ``rank`` (empty ``strategy_ids`` falls back to worker choices, never blocks); ``settings`` a
     resolved ``routing_settings`` dict plus ``revision``.
 
     ``observations`` is the collector's cached snapshot ``{now, routes, pools, snapshot_id?, epoch_at?,
-    minimum_horizon?}``; ``snapshot_id`` is stamped into the record for audit. Health keys are REQUIRED and
+    minimum_horizon?, shortlist?}``; ``snapshot_id`` is stamped into the record for audit. A ranked decision sees one
+    subscription shortlist (``routing_funding.ranked_routes``), cut before any window. Health keys are REQUIRED and
     never default: per route ``capable``, ``permitted`` (bool), ``demand`` (dict), ``route``, ``pool``,
     ``account``; subscription routes ``binding_enforceable``; direct API and gateway routes
     ``funding_verified`` and a ``credential`` ``{ref, scope, state}`` (None means unavailable; gateways also
@@ -766,15 +675,15 @@ def admit(assignment, ranking, settings, observations, *, ledger, workflow=None,
     subscription window is a ``win:<pool>/<window>`` claim in its own units. A funded route the ledger's
     gates refuse (blocked, stale balance, cycle boundary, revision) is excluded with
     ``funding_unverified``; the collector's ``limit``/``used``/``protected`` can only make a dollar claim
-    stricter. The concurrency caps are the stricter of ``settings.caps``
-    and the ledger-stored caps. Unknown utilization (no usable subscription window) deliberately counts as
-    u = 1.0 with ``utilization_unknown``: it pushes toward API, which stays gated by enablement, headroom
-    and funding. Returns the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt)
-    or ``status='pending'`` with a ``reason_code``. Pending and duplicate decisions consume nothing, create
-    no record and leave the ledger unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while
-    it is among the ledger's last ``MAX_SEEN`` ids. This is not dispatch authority: ``dispatch`` issues it
-    for the hold, and lifecycle events go through ``record_event``. ``Ledger.convert_hold`` (which turns a
-    dollar hold into the attempt's run claim without changing R) still requires an admitted hold.
+    stricter. No count of open attempts admits or refuses (F5.A1); saved caps are only read for status. A ranked
+    decision funds only subscription routes (F5.3, ``routing_funding.choose``): paid routes are left out before any
+    candidate check and never a fallback; a paid route is admitted only as an explicit or settings choice. Returns
+    the record with ``status='admitted'`` (``duplicate=True`` for a repeated attempt) or ``status='pending'`` with a
+    ``reason_code``. Pending and duplicate decisions consume nothing, create no record and leave the ledger
+    unwritten. A reused attempt id is rejected (``attempt_id_in_use``) while it is among the ledger's last
+    ``MAX_SEEN`` ids. This is not dispatch authority: ``dispatch`` issues it for the hold, and lifecycle events go
+    through ``record_event``. ``Ledger.convert_hold`` (which turns a dollar hold into the attempt's run claim
+    without changing R) still requires an admitted hold.
 
     The whole input shape is validated first (types, finite numbers within ``MAX_INTEGER``, integer
     demands and bounds, identifiers within the ledger's 256-character name limit, table sizes); a malformed
@@ -1472,11 +1381,11 @@ def reconcile_summary(data):
 
 
 def ledger_summary(data):
-    """Counts and nonsecret labels only: open holds by state and unstamped, caps and the user's organizations."""
+    """Counts and nonsecret labels only: open holds by state and unstamped, the user's organizations and any saved
+    legacy caps (`legacy_caps`, `enforced: false`; F5.A1: no admission reads them)."""
     holds = {}
     for hold in Ledger.open_holds(data).values():
         holds[hold['state']] = holds.get(hold['state'], 0) + 1
-    total, per_account = Ledger._caps(data)
     organizations = [dict(id=key, enabled=not org.get('disabled', False))
                      for key, org in sorted(data['organizations'].items())]
     # Holds admitted before `authority_required` keep the old rules; the canary needs this count at zero.
@@ -1503,4 +1412,4 @@ def ledger_summary(data):
                 overrun_backlog=Ledger.overrun_backlog(data),
                 authority_required=bool(data.get('authority_required')), unstamped_open_holds=unstamped,
                 unbound_open_holds=unbound,
-                caps=dict(total=total, per_account=per_account), organizations=organizations)
+                legacy_caps=dict(data['caps'], enforced=False) if 'caps' in data else None, organizations=organizations)

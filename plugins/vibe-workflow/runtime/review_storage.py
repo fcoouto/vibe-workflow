@@ -12,7 +12,7 @@ import subprocess
 import time
 import uuid
 
-from runtime import evidence, startup, state
+from runtime import evidence, persisted_binding, startup, state
 from runtime.screening import screening_status, reserve_screening, settle_screening
 from runtime.startup import (PROJECT_FILE, checkout, json_object, read_git, _canonical_freeze,
                              _canonical_plain, _acquire_canonical_membership, _check_observation_deadline)
@@ -603,9 +603,9 @@ def _enrolled_selection(acquired, budget):
     _require(acquired.authority_path == project / PROJECT_FILE
         and target['path'] == str(acquired.authority_path)
         and target['fingerprint']['status'] == 'read'
-        and target['parents'].get(str(project)) == data['project_binding']
+        and persisted_binding.matches(data['project_binding'], target['parents'].get(str(project)))
         and observed['project_root'] == str(project)
-        and observed['project_binding'] == data['project_binding']
+        and persisted_binding.matches(data['project_binding'], observed['project_binding'])
         and observed['membership'] == 'included')
     directories = {str(project): data['project_binding']}
     roots = {str(project), observed['root'], observed['primary_root'], observed['git_dir'], observed['git_common_dir']}
@@ -617,23 +617,23 @@ def _enrolled_selection(acquired, budget):
             _require(path not in directories or directories[path] == binding)
             directories[path] = binding
             roots.add(path)
-    for key, binding in observed['binding'].items():
-        path = observed[key]
-        _require(path not in directories or directories[path] == binding)
+    for path, binding in ((observed[key], value) for key, value in observed['binding'].items()):  # Record values ignore the device.
+        _require(path not in directories or persisted_binding.matches(directories[path], binding))
         directories[path] = binding
+    fresh = {observed[key] for key in observed['binding']}
     for path, binding in target['parents'].items():
-        _require(path not in directories or directories[path] == binding)
+        _require(path not in directories or (directories[path] == binding if path in fresh else persisted_binding.matches(directories[path], binding)))
     matches = [repo for repo in data['repositories'] if repo['primary_root'] == observed['primary_root']]
     _require(len(matches) == 1)
     repo = matches[0]
     _require(repo['membership'] == 'joined' and repo['git_common_dir'] == observed['git_common_dir']
-        and all(observed['binding'][key] == binding for key, binding in repo['binding'].items()))
+        and all(persisted_binding.matches(binding, observed['binding'][key]) for key, binding in repo['binding'].items()))
     selected = next((entry for entry in repo['checkouts'] if entry['root'] == observed['root']), None)
     if selected is not None:
         _require(selected['git_dir'] == observed['git_dir']
-            and all(observed['binding'][key] == binding for key, binding in selected['binding'].items()))
+            and all(persisted_binding.matches(binding, observed['binding'][key]) for key, binding in selected['binding'].items()))
     else:
-        _require(not any(entry['binding']['root'] == observed['binding']['root'] for entry in repo['checkouts']))
+        _require(not any(persisted_binding.matches(entry['binding']['root'], observed['binding']['root']) for entry in repo['checkouts']))
     stores, selected_stores = set(), set()
     for member in data['repositories']:
         if member['membership'] != 'joined':
@@ -788,7 +788,7 @@ def _capture_birth_history(record):
             else:
                 context = _ready_context(config, parents, deadline=budget['deadline'])
                 _storage_outside(context, path, targets)
-            _require(evidence._binding(Path(record['project_root'])) == record['project_binding'])
+            _require(persisted_binding.matches(record['project_binding'], evidence._binding(Path(record['project_root']))))
             for repository in record['repositories']:
                 for selected in repository['checkouts']:
                     observed, error = d3._checkout_observation(selected['root'], budget)
@@ -945,7 +945,7 @@ def _enrolled_control_members(data, budget):
                 if current == data:
                     _require(acquired.authority_path == project / PROJECT_FILE
                         and observed['project_root'] == str(project)
-                        and observed['project_binding'] == data['project_binding']
+                        and persisted_binding.matches(data['project_binding'], observed['project_binding'])
                         and observed['membership'] == membership)
                 else:
                     _require(repository['membership'] == 'removed' or membership != 'included')

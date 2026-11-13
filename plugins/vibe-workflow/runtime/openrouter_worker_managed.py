@@ -22,10 +22,10 @@ import sys
 import time
 import uuid
 
-from runtime import external_delegation, openrouter_settings as settings
+from runtime import external_delegation, openrouter_settings as settings, task_profile
 
 HOST = 'openrouter_worker'
-ROLE = 'researcher'
+DEFAULT_SPECIALIST = 'software-engineer'  # a brief that names no routed roster specialist
 ADMISSION_EXPIRED = 'admission_expired'  # a prepared run never executed within routing.ADMISSION_TTL
 SELF_CHECK_BUDGET = 8  # seconds, inside the activation gate's own 10 s budget
 SELF_CHECK_UNSAFE = 'self_check_workdir_unsafe'
@@ -54,10 +54,12 @@ def _routed_request(api, brief, checkout, attempt):
     from runtime import openrouter_worker_routing as state
     _, launch = api._shared()._routing()
     scope = launch.assignment_scope(checkout)
-    choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'])
-    assignment = dict(attempt_id=attempt, role=ROLE, scope=scope, choice=choice,
+    choice = launch.choice(HOST, 'api', model=brief['model'], provider=brief['provider'], effort=brief['effort'],
+                           endpoint=launch.pinned_endpoint(HOST, provider=brief['provider']))
+    role = brief.get('role') if task_profile.routed(brief.get('role')) else DEFAULT_SPECIALIST
+    assignment = dict(attempt_id=attempt, role=role, scope=scope, choice=choice,
                       task='worker:' + hashlib.sha256(brief['task_id'].encode()).hexdigest()[:32])
-    return assignment, launch.unplanned_job(ROLE, scope, brief['task_id'], tools=state.READ_ONLY)
+    return assignment, launch.unplanned_job(role, scope, brief['task_id'], tools=state.READ_ONLY)
 
 
 def _admit(api, service, checkout, brief, limits, attempt):
@@ -67,15 +69,17 @@ def _admit(api, service, checkout, brief, limits, attempt):
     if reason is not None:
         return None, reason
     assignment, job = _routed_request(api, brief, checkout, attempt)
-    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits))
+    prepared = launch._call(service, launch.prepare_request(assignment, job, constraints=limits,
+                                                             harnesses=launch.host_harnesses(HOST)))
     if prepared.get('state') != 'admitted':
         reason = prepared.get('reason')
         return None, reason if isinstance(reason, str) and reason else 'routing_unavailable'
     admission = prepared['admission']
     identity = launch.route_identity(HOST, model=brief['model'], provider=brief['provider'], effort=brief['effort'])
     _, reason = launch.admitted_check(admission, host=HOST, catalog=[identity], settings_path=service.settings_path)
-    if reason is None and not api._shared()._endpoint(service.settings_path, admission['route'], brief['provider']):
-        reason = launch.CATALOG_MISMATCH  # the admitted manifest route must pin this brief's endpoint
+    if reason is None and not api._shared()._endpoint(service.settings_path, admission['route'], identity,
+                                                      brief['provider']):
+        reason = launch.CATALOG_MISMATCH  # the admitted route must pin this brief's endpoint
     if reason is not None:
         return None, reason
     reserved = [value for key, value in (admission.get('reserved') or {}).items() if key.startswith('org:')]

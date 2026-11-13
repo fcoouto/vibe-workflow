@@ -1,23 +1,105 @@
 {
-  "version": 1,
-  "decision": "pending: C.3 design 7.1 user decision 5",
-  "source": "docs/smart-routing-capability-matrix.md",
-  "note": "Production routes are added with their classification only after user decision 5. Until then no route is qualified, so the collector admits nothing from this file and the activation gate fails closed.",
-  "window_unit": "utilization_thousandths",
-  "endpoint_rule": "Gateway routes name their pinned OpenRouter endpoint in `endpoint`. The route identity (provider, model, effort, harness) has no endpoint yet, so two qualified routes with the same identity must name the same endpoint, or the whole manifest is refused (routing_observations.validate_routes).",
-  "routes": [
+  "version": 2,
+  "paths": [
     {
-      "route": "test-only-subscription",
-      "status": "test_only",
-      "provider": "test",
-      "model": "test-model",
-      "effort": "none",
+      "path": "opencode-claude-subscription",
+      "harness": "claude-agent-sdk via opencode",
+      "provider": "claude-agent",
+      "sign_in": "subscription",
+      "billing_class": "included_subscription",
+      "pool": "claude-subscription",
+      "account": "claude-plan",
+      "binding_enforceable": true,
+      "windows": ["5h", "7d"],
+      "window_unit": "utilization_thousandths"
+    },
+    {
+      "path": "opencode-chatgpt-subscription",
+      "harness": "opencode provider openai",
+      "provider": "openai",
+      "sign_in": "subscription",
+      "billing_class": "included_subscription",
+      "pool": "chatgpt-subscription",
+      "account": "chatgpt-plan",
+      "binding_enforceable": true,
+      "windows": ["7d"],
+      "window_unit": "utilization_thousandths"
+    },
+    {
+      "path": "codex-chatgpt-subscription",
+      "harness": "codex-native",
+      "provider": "openai",
+      "sign_in": "subscription",
+      "billing_class": "included_subscription",
+      "pool": "chatgpt-subscription",
+      "account": "chatgpt-plan",
+      "binding_enforceable": true,
+      "windows": ["7d"],
+      "window_unit": "utilization_thousandths",
+      "host": "codex_native",
+      "advisory": true
+    },
+    {
+      "path": "claude-native-subscription",
+      "harness": "claude-native",
+      "provider": "anthropic",
+      "sign_in": "subscription",
+      "billing_class": "included_subscription",
+      "pool": "claude-subscription",
+      "account": "claude-plan",
+      "binding_enforceable": true,
+      "windows": ["5h", "7d"],
+      "window_unit": "utilization_thousandths",
+      "host": "claude_native",
+      "advisory": true
+    },
+    {
+      "path": "opencode-go-subscription",
+      "harness": "opencode provider opencode-go",
+      "provider": "opencode-go",
+      "sign_in": "api_key",
+      "billing_class": "included_subscription",
+      "pool": "opencode-go-subscription",
+      "account": "opencode-go-workspace",
+      "binding_enforceable": true,
+      "windows": ["rolling", "weekly", "monthly"],
+      "window_unit": "utilization_thousandths",
+      "demand_scope": "per_model"
+    },
+    {
+      "path": "openrouter-workers",
+      "harness": "opencode provider openrouter",
+      "provider": "openrouter",
+      "sign_in": "gateway_key",
+      "billing_class": "gateway",
+      "pool": "openrouter",
+      "account": "fixture-openrouter",
+      "windows": ["credit"],
+      "integration_route": "workers"
+    },
+    {
+      "path": "openrouter-proposals",
+      "harness": "openrouter-proposal",
+      "provider": "openrouter",
+      "sign_in": "gateway_key",
+      "billing_class": "gateway",
+      "pool": "openrouter",
+      "account": "fixture-openrouter",
+      "windows": ["credit"],
+      "integration_route": "proposals"
+    },
+    {
+      "path": "test-only-subscription",
       "harness": "test",
+      "provider": "test",
+      "sign_in": "subscription",
       "billing_class": "included_subscription",
       "pool": "test-only-subscription",
       "account": "test-only-subscription",
-      "demand": {"5h": 1},
-      "binding_enforceable": true
+      "binding_enforceable": true,
+      "windows": ["5h"],
+      "window_unit": "utilization_thousandths",
+      "status": "test_only"
     }
   ]
 }

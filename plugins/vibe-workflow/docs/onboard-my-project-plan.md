@@ -29,7 +29,7 @@ The user authorized the same startup layer for the next clients. Claude Code now
 ## 1. Authority and scope
 
 1. **Vibe Coding Toolkit defines the workflow.** [Prompt 12][setup] governs existing-project onboarding. Follow its complete applicable procedure and current catalog, including native harness evaluation. New-project creation and machine setup retain their separate entry points.
-2. **The user's decisions define project-specific choices and extensions.** Automatic workflow controls, shared coordination and required merge review are our requested extensions. The toolkit itself excludes Git hooks, branch/worktree requirements and commit/push protections from ordinary setup. Do not introduce those as toolkit requirements.
+2. **The user's decisions define project-specific choices and extensions.** Automatic workflow controls, shared coordination and required merge review are our requested extensions. The Toolkit itself excludes Git hooks, branch/worktree requirements and commit/push protections from ordinary setup. The user's 12 November 2026 decision adds [checkout stability](../policies/02-task-planning.md#planning-and-verification) for every onboarded repository, with task worktrees and no automatic primary-branch switching. This is a documented plugin extension, not an upstream Toolkit requirement or mechanical enforcement permission.
 3. **Official client documentation defines adapter behavior.** An unsupported capability remains unsupported.
 4. **`vibe-setup` supplies implementation lessons only.** Reuse concepts after evaluation; implement small modules against the new contracts.
 
@@ -37,7 +37,7 @@ Reviewed toolkit revision: `790a895304e0c08b70a5b215c9d334f1c86b816c`. Secondary
 
 For authoring, setup and reviewed updates, consult Toolkit as the workflow authority. For every new onboarding/update run, resolve current toolkit `main` once; read required sources at that revision outside the project and record it. Resume interrupted setup at its recorded revision. A trusted available copy may support offline setup with freshness explicitly unverified; unavailable sources block only dependent setup work.
 
-Runtime uses complete, locally authored contracts and accepted project configuration. It requires no Toolkit checkout, permanent snapshot or upstream fetch, including agent-side policy reads after hooks. Keep source provenance and requirement coverage in the [maintenance source map](policy-sources.md), outside routine loading paths. Temporary source retrieval during authoring/setup is sufficient; do not ship a copied repository or mirrored prompt collection. Review Toolkit changes before updating contracts; never silently change an active task's rules.
+Runtime uses complete, locally authored contracts and accepted project configuration. It requires no Toolkit checkout, permanent snapshot or upstream fetch, including agent-side policy reads after hooks. Keep source provenance and requirement coverage in maintenance records, outside routine loading paths. Temporary source retrieval during authoring/setup is sufficient; do not ship a copied repository or mirrored prompt collection. Review Toolkit changes before updating contracts; never silently change an active task's rules.
 
 ## 2. Stages and policy decisions
 
@@ -235,7 +235,7 @@ Applicable lint belongs to approved onboarding at the real dependency/package-wo
 | D6 — `runtime/delegation.py`, `runtime/state.py`, existing reconciliation | One editable software repository/worktree per worker, shared-resource claims and write/report/recovery coverage; settled-history retirement without hiding owners. Carry into `policies/03-agent-delegation.md`, `clients/delegation.md` and `clients/runtime.md`. Current package controls do not prove these new seams. |
 | D7 — `runtime/repository_gate.py`, `scripts/repository_gate.py` | Keep each target gate/merge authority; consume complete required companion delivery links with D5. Carry into `clients/repository-gate.md` under Merge Readiness; no group gate or transferred merge permission. |
 | D9/D10/D11 — existing qualification, review and reporting owners | Require affected membership/evidence seams before umbrella claims; D10 temporary review scope grants no enrollment; D11 projects lifecycle-owned evidence and remains last. Independent repository work and explicit unknown states remain possible. |
-| Source-to-contract coverage owner — `docs/policy-sources.md` | Trace approved extensions and PHIOON implementation references separately from Toolkit authority; update affected local contracts during implementation, not by claiming this plan loads or implements them. |
+| Source-to-contract coverage owner | Trace approved extensions and PHIOON implementation references separately from Toolkit authority; update affected local contracts during implementation, not by claiming this plan loads or implements them. |
 
 Future release acceptance must exercise selective loading and complete applicable requirements across these owners: standalone/future umbrella joining without startup writes; exclusions/symlink escapes/common-Git worktrees/clones/overlaps and preserved preferences; actual hook owner and command cwd; one-repository worker write/report/recovery scope; linked failed/stale/unmerged companions with manual merge preserved; rollback after later joins/user edits/active pins; temporary unenrolled umbrella review; and settled history beyond 4096 with uncertain owners, required references and all retention protections intact. Reuse applicable prior evidence and qualify changed seams only; word counts or package validation alone do not prove behavior. Native and repository-enforcement observations remain separate.
 
@@ -460,7 +460,7 @@ Upstream's native harness method supplies the evaluation procedure: run relevant
 8. [GitHub rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets).
 9. [GitHub required-check behavior](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 10. Secondary reference: [`vibe-setup` workflow transactions][reference-workflow], [subagent hooks][reference-hooks] and [native qualification][reference-native].
-11. [Instruction authoring standard](../AGENTS.md#instruction-authoring).
+11. [Instruction authoring standard](development.md#instruction-authoring).
 
 [setup]: https://github.com/soumatheusgomes/vibe-coding-toolkit/blob/790a895304e0c08b70a5b215c9d334f1c86b816c/docs/prompts/12-existing-project-setup.md
 [toolkit-hooks]: https://github.com/soumatheusgomes/vibe-coding-toolkit/blob/790a895304e0c08b70a5b215c9d334f1c86b816c/docs/tools/10-hooks-best-practices.md

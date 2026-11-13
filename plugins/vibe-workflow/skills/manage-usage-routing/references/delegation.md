@@ -69,9 +69,17 @@ elapsed time, process death or a refreshed balance. No automatic retry, provider
 switch, new purchases or paid funding is permitted. A `legacy_route_retired`
 refusal is not uncertain exposure; see [managed projects](procedure.md#managed-projects).
 
+Before the count is sent, the whole task is reserved once: 120% of the offline
+estimate (count bound plus generation quote), with a fixed 20% API-money buffer
+separate from subscription window margins. Count and generation draw from that one
+reservation; an approved maximum smaller than the buffered amount refuses the task.
 Count completion does not authorize generation. If later activation, reviewer readiness,
-source, price or affordability checks fail before sending generation, retain the
-count charge and release only the proven-unsent generation reservation. Each task
+source, price or affordability checks fail before sending generation, or the counted
+request no longer fits the reservation (`envelope_exceeded`), retain the count
+exposure and release only the proven-unsent generation reservation. The count
+transport reports no cost and the generation figure is an estimate, so both stay
+unpriced at their full reservation until an operator settles them with receipts or
+the charge reservation (`settle_legacy_call`). Each task
 is sent live at most once per checkout, so a correction continues natively; when
 the user asks for another API attempt, propose it as a new task under the same caps.
 

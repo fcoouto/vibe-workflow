@@ -73,10 +73,11 @@ The brief requires `task_id`, `coordinator_chat_id`,
 `model`, `provider`, `effort`, `objective`, `source_root`,
 `files`, `timeout_seconds`, `steps` and `external`. `approval_ref` is optional: when omitted,
 the brief records the enablement's activation reference. Map the shared declaration
-to `role` and `specialty`; add `model_display_name` when known. Add `custom_role_name`
-only for an explicit native fallback declaration, using the shared bounds.
-New external badges display the declared role followed by the
-model display name, for example `Scout · GLM 5.3 Flash`. Existing receipts keep
+to `role` (a roster specialist id, which routing also uses; a brief without one routes
+as `software-engineer`) and `specialty`; add `model_display_name` when known. Add
+`custom_role_name` only for an explicit native fallback declaration, using the shared bounds.
+New external badges display the specialist's roster label followed by the
+model display name, for example `Explorer Agent · <model display name>`. Existing receipts keep
 their original badge. The existing sized brief may also include `sizing`. Use the actual
 root coordinator chat UUID for the Habblaud parent; retain the genuine native
 supervisor UUID separately in evidence. This keeps both workers visible in consumers

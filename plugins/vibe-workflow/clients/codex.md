@@ -27,7 +27,7 @@ acknowledgments need no title update.
 
 ## Instruction output budgets
 
-Select only applicable instruction files. Supply Vibe paths relative to the package or as absolute paths; supply external skills and their triggered Markdown references as absolute paths. A selection may mix both: the reader determines each source's authority and retains its package or external checks. Never run `--prepare` during routine tasks.
+Select only applicable instruction files. Supply Vibe paths relative to the package or as absolute paths; supply external skills and their triggered Markdown references as absolute paths. A selection may mix both: the reader determines each source's authority and retains its package or external checks.
 
 With `functions.exec`, use this complete launcher in one invocation for each selection. Set only `root` and `paths`; keep the launcher body intact. It loads one fixed packaged runner per selection, which automatically drains continuations through separate `notify` outputs, including bounded small-page recovery. Do not print/collect batch bodies into the direct result, run continuation calls manually, or evaluate instruction contents. If the cell yields as running, wait for its terminal result before proceeding. Only `complete: true` establishes delivery of the selected text; it does not establish applicability, semantic compliance or retention after compaction.
 
@@ -61,3 +61,7 @@ In enrolled checkouts, the existing `PostToolUse` hook surfaces the observed chi
 ## Startup implementation
 
 Read [startup implementation and qualification](codex-startup-implementation.md) when implementing or diagnosing startup, preparing enrollment, qualifying a client adapter, or changing hook registration, trust or packaging.
+
+## Native routing
+
+In a [managed project](../policies/03-agent-delegation.md#managed-projects), a checkout whose Codex enrolment keeps runtime task state routes native workers through [delegation preparation](delegation.md#prepare-and-launch-once), with its task bindings. Without that state, use the [native routing bridge](claude-code.md#native-routing-bridge) with `"client":"codex"`; its permit, single launch, settlement and refusals are the same, and the bridge refuses a checkout that has runtime state (`managed_delegation_required`).

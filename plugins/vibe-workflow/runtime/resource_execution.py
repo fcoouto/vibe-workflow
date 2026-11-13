@@ -8,14 +8,14 @@ import shutil
 import tempfile
 import time
 
-from runtime import delegation as d6, evidence, state, workstreams
+from runtime import delegation as d6, evidence, state, task_profile, workstreams
 
 
 def _authority(scope, request, cleanup=False):
     with state._database(scope) as db:
         d6._require(db is not None, 'Missing native assignment state')
         records = d6._ledger(scope, db, task=request)
-        record = d6._assignment(scope, db, request, roles=('worker', 'review', 'coordinator'), records=records)
+        record = d6._assignment(scope, db, request, roles=(task_profile.native, task_profile.orchestrates), records=records)
         task = (state._task(db, state._scope_id(scope), request['client'], request['session_id'], request['task_id'])
             if cleanup else d6._assignment_task(scope, db, request, revision=False))
         d6._require(task is not None and task['pins'] == record['body']['pins'], 'Resource task authority changed')
@@ -38,7 +38,7 @@ def _authority(scope, request, cleanup=False):
             if job is not None:
                 d6.validate_dependencies(scope,task,plan,job,records)
             claims=d6._claims(job['claims']) if job is not None else record['data']['claims']
-            d6._resources_available(scope,db,claims,records if record['data']['role']=='review' else [r for r in records if r['id']!=record['id']])
+            d6._resources_available(scope,db,claims,records if task_profile.reviews(record['data']['role']) else [r for r in records if r['id']!=record['id']])
         return record, plan
 
 

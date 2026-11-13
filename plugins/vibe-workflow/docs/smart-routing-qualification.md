@@ -4,6 +4,254 @@
 
 **Re-run outcome (harness at 3f87159): stages 0–4 completed with no blocker.** There is one deviation (below). The run used 4 calls, so the durable ledger stands at **9 of 14** qualification calls spent and **0 of 24** pilot calls. The [re-run](#re-run-stages-04-harness-3f87159) section has the results. The first run, further below, stopped in stage 3 on a blocker that #146 fixed on `main`. Nothing here closes a gate by itself; the [capability matrix](smart-routing-capability-matrix.md#live-re-qualification-9-november-2026) records what changed.
 
+## Live session runbook
+
+The commands for the live session that the [pre-canary requirements](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements) need. The harness modes come from #234, the Codex reader from #231. Nothing here has run yet; results go in a new dated section below, never into this one. Each run follows the [lightweight principle](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#design-principle-lightweight). The safety rules every mode enforces before it starts (isolated directory, `--out` location, OpenCode 2.2.6, the real HOME, reservations, redaction, cleanup) are in the docstring of `tests/qualification/live_modes.py`; this section does not repeat them.
+
+**What this session qualifies (F4).** There is no route manifest any more. The package ships model-free path rules (`runtime/routing_routes.json`); each `prepare` generates routes in memory from the qualified paths and the strategy table, and no file holds a route. This scheduled session qualifies only the OpenCode subscription paths it measures. The operator works in stages, each with its own prerequisite: `measure-demand` ([step 6](#6-measure-demand-no-calls)), then `qualify_path` for each proposed request, then `seed_window` for each demanded window ([step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)), then activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)). The gateway check (step 5) and the Codex path qualify nothing in this canary (decisions A and C of the [redesign plan](superpowers/plans/2026-11-10-smart-routing-redesign.md#coordinator-calls-for-the-users-review)). A new model on a qualified path needs no new session unless its allowance or demand semantics differ ([F4.5](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f45-opencode-subscription-connection-and-allowance-binding)). The separate evidence the release matrix still needs (OpenCode Go connections, native Codex and Claude Code launches, a qualified Claude usage reader and an account-scoped subscription-only billing boundary) is named in F4.5 and [F4.6](superpowers/plans/2026-11-10-smart-routing-redesign.md#task-f46-native-only-selection-and-launch-for-codex-and-claude-code); this session does not supply it.
+
+**Activation and the canary cannot pass today.** No real subscription route has a qualified billing producer (the account-scoped subscription-only billing fact). Every subscription route is therefore left out at selection and refused at dispatch (`billing_unverified`), and activation's `subscription_sources` check refuses each managed host (for example `opencode_billing_unverified`). Until a qualified producer exists, activation ([step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)) and the canary (step 8) cannot pass. Scope any authorized session to the prerequisites it can complete (steps 1 to 7). Open no budget for the canary and spend nothing on it.
+
+### Before the session
+
+- Run in a quiet window: no other lanes, workers or OpenCode sessions using the same logins, because another session's use inflates every window reading.
+- Work from a checkout of current `main` that has #228, #229, #231, #234 and #239. Run each harness file as a script path, never with `python3 -m`.
+- Set the shell variables once. Every path is outside every repository; the commands below guard each variable with `${…:?}` so an unset one stops the command:
+
+```sh
+L=~/.local/state/vibe-workflow-qualification/calls.jsonl   # the durable call ledger
+OUT=~/.local/state/vibe-workflow-qualification/runs/$(date +%F)
+mkdir -p -m 700 "$OUT"
+```
+
+Exit codes for every `live_modes.py` mode: `0` passed, `1` ran with blockers, `2` refused before anything started, `3` output withheld by the leak check (the full results are kept owner-only next to the ledger in `withheld/`; read them, then delete them).
+
+### 1. Open each purpose's cap (user approval)
+
+Each purpose is closed in code (cap 0) until a recorded approval opens it. Open only the purposes the user approved, with the user's own words for who, when and scope:
+
+```sh
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap isolation 8 \
+  --reason "live-session runbook A1-A7" --approval "<who>" "<when, ISO 8601>" "<scope the user approved>"
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap drill 4 \
+  --reason "live-session runbook S3.6c drill" --approval "<who>" "<when>" "<scope>"
+python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --set-cap gateway 8 \
+  --reason "live-session runbook OpenRouter gateway" --approval "<who>" "<when>" "<scope>"
+```
+
+The caps shown are the code's maximums (`isolation` 8, `drill` 4, `gateway` 8); a smaller approved cap works if it covers the mode's reservation. No calls, no process beyond the command. Pass: the printed totals show the new cap. A run later refuses before starting if its purpose lacks the calls it reserves or has an open reservation.
+
+### 2. Launcher probes (A1–A7, purpose `isolation`)
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py launcher-probes --isolated-dir "${Q:?}" --call-ledger "${L:?}" \
+  --out "${OUT:?}/launcher-probes.json" --a5-model openai/<MODEL>#<VARIANT> --no-variant-model <PROVIDER>/<MODEL>
+```
+
+- **Proves** pre-canary item 3: A1 the launcher's flags, password and inline config are honoured; A2 and A3 a hostile project or global config adds no plugin, MCP, formatter or LSP and relaxes no permission; A4 no second routing plugin from the real global config; A5 outside reads and server- vs session-permission precedence, with the permission answer's shape; A6 the fixed `PATH` reaches the Claude tool, and the reply's text-part key; A7 a model listed without variants is admitted, launched and settled. A6 and A7 also store the window readings `measure-demand` uses, and A5 takes its two Codex readings (step 6).
+- **Order it enforces:** A5 only after A1–A3 pass in the same run; A6 and A7 only after A4 passes.
+- **Expect:** 4 model calls (A5 2, A6 1, A7 1; A1–A4 send none), 9 processes (`opencode --version`, then three servers each with its routing child, and two short-lived `codex app-server` reads around A5), about 1 minute plus the interactive ChatGPT sign-in for A5. `--accept-outside-reads` records allowed outside reads as the user's accepted risk; pass it only on the user's say-so.
+- **Pass:** exit 0, every probe `passed: true`, no blockers, `cleanup.verified_by_harness: true`. **Fail:** any probe `passed: false` or a blocker; do not run the gateway (step 5).
+
+### 3. Lost-acknowledgment drill (S3.6c, purpose `drill`)
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py drill --isolated-dir "${Q:?}" --call-ledger "${L:?}" --out "${OUT:?}/drill.json"
+```
+
+- **Proves** pre-canary item 4: drill 1 stops the real launcher after the prompt went idle, so it records `uncertain`, and the one-shot `reconcile_subscription` settles it from a re-read of the session (a replay is a `duplicate`); drill 2 stops it before the prompt, `abandon` leaves one window debit, `drop_debit` clears it and `status` is clean. It runs on a temporary managed state, never the production ledger.
+- **Expect:** 1 model call, 9 processes (version check, one server and its routing child, two launcher children, four one-shot operator ops), about 1–2 minutes.
+- **Pass:** exit 0, `drill.passed: true`, clean `status`, cleanup verified. **Fail:** any step's blocker.
+
+### 4. Codex window reader, one read
+
+```sh
+T=$(mktemp -d) && chmod 700 "${T:?}"
+stat -f '%m %z' ~/.codex/auth.json                      # metadata only; never open the file
+python3 -B scripts/codex_rate_limits.py --settings "${T:?}/settings.json"
+stat -f '%m %z' ~/.codex/auth.json
+```
+
+- **Proves** pre-canary item 9: Codex accepts the reader's handshake, the real spawn and read time (`timing.spawn_ms`, `timing.wall_ms`), whether a read rewrote `auth.json` (the two `stat` lines, and the reader's own `codex_auth_changed`), and which windows this plan reports. `--settings` points at a temporary directory so the production routing state is untouched. The [reader's contract](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#codex-window-reader) defines the reasons.
+- **Expect:** 0 tokens, 1 process (`codex app-server`), at most about 5.6 s.
+- **Pass:** the shipped path rules declare the `chatgpt-subscription` pool's `7d` window, so the answer is `stored` with the plan's windows (only `7d` expected); a reported window the rules do not declare is `codex_window_undeclared`. (Before F4, without the manifest of #227, the expected answer was `failed` with `codex_pool_undeclared`.) The `auth.json` times are unchanged. **Fail:** any other `codex_*` reason, such as `codex_protocol_unexpected` or `codex_auth_changed`. The account check is manual: the user confirms the Codex login and OpenCode's Sign in with ChatGPT are the same account; the reader never prints an account id.
+
+### 5. OpenRouter gateway (purpose `gateway`)
+
+The scheduled OpenCode canary session skips this step (decision A); a separately approved gateway run qualifies no path, and `measure-demand` proposes no gateway request. Run it only after a clean `launcher-probes` run on the same day: the gateway refuses an `--isolation-result` that does not show A1–A4 passed, no blockers and verified cleanup, that is older than 12 hours or not from today, or that comes from another OpenCode version or mode. It also needs the user's decision 4, because it spends real API dollars, and an OpenRouter key the user creates with its own credit limit of at most $1.00.
+
+```sh
+Q=$(mktemp -d) && chmod 700 "${Q:?}"
+python3 -B tests/qualification/live_modes.py gateway --isolated-dir "${Q:?}" --call-ledger "${L:?}" \
+  --out "${OUT:?}/gateway.json" --gateway-model openrouter/<VENDOR>/<MODEL> --gateway-endpoint <ENDPOINT> \
+  --key-limit-usd <LIMIT, at most 1.00> --isolation-result "${OUT:?}/launcher-probes.json"
+```
+
+- **Proves** pre-canary item 8: the inline config's endpoint pin, `max_tokens` and steps on every listed agent are honoured (`GET /api/agent` read before any reservation; `steps_not_universal` otherwise); an OpenRouter `vendor/model` id end to end through attach, `check`, a request, accounting with a cost and a dollar settlement; and, for user decision 4, the S3.6 positive and negative descendants runs with real costs.
+- **The user** enters the key in OpenCode's own sign-in under the run's temporary data directory, and types the run's total cost from the OpenRouter activity page when asked. The harness never reads the key.
+- **Admission:** the positive run needs an OpenRouter organization, the cached OpenRouter status and the gateway credential; without them it stops at `prepare` with 0 calls and nothing reserved.
+- **Expect:** 2 model calls (3 reserved), output cap 500, 2 steps; 3 processes; about 2 minutes plus the sign-in and the receipt lookup. The hard bound is the key's own limit; the output cap, steps and the running-cost abort are soft bounds until the run reports them `observed`.
+- **Pass:** positive run: every cost known and equal to the receipt, a dollar settlement, `descendants` refused after `detach`, clean `status`; negative run: `complete: false` with `root_creation_unobserved` and 0 calls. **Fail:** any blocker, an unknown cost or a bound violation.
+
+### 6. Measure demand (no calls)
+
+```sh
+python3 -B tests/qualification/live_modes.py measure-demand --call-ledger "${L:?}" --out "${OUT:?}/demand.json"
+```
+
+- **Proves** pre-canary item 10: each window's rise in `used` across the budgeted launches (A6, A7, the drill), from readings they already stored next to the ledger. Each reading is tagged with the path id of the route the harness launched, the run id and the launch's account, model and effort; readings pair only on the same path and account. The suggestion is the largest delta plus 50% (at least 1). Other use of the same login can only raise a delta, so values are upper bounds. The ChatGPT pool's readings come from A5: one Codex rate-limit read before its launch and one after, through `runtime/codex_rate_limits.py` (0 tokens, the user's Codex login used read-only, nothing stored). It reads the windows the path rules declare for the pool. A failed read is recorded as `A5.demand.reason` (the reader's fixed reason); A5 is not failed for it, and that run gives the pool no sample.
+- **Proposes** one `qualify_path` request (`requests` in the output) per subscription path whose samples from one known account cover every window the path's rule names, bound to that account, with the measured demand and the run ids as `evidence`. `paths` says why each other path has none:
+  - a window whose every sample is `below_resolution` (the reading did not move; not proof of precise launch usage) gets the floor demand 10 and is listed in `floor_windows` beside the request;
+  - a window with no sample at all gives no request (`window_unmeasured`, with `missing_windows`);
+  - samples of several accounts are never combined (`account_ambiguous`), and samples without an account never qualify (`account_unknown`). A5's Codex readings have no account-bound source, so they propose no ChatGPT request;
+  - a gateway path is never proposed (`gateway_not_qualified`).
+
+  A request qualifies a path's demand only, never its billing boundary or account entitlement.
+- **Expect:** 0 calls, 0 processes, under 1 s.
+- **Pass:** a request for every OpenCode subscription path this session launched on. **Fail:** a path reported with a reason instead of a request; that path stays unqualified.
+
+### 6a. Qualify the measured paths and seed their windows (no calls)
+
+Run these one-shot operator operations against the production routing settings (the canary of [step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only) runs there). Each refuses under `--serve`, so no launcher or plugin can run them.
+
+```sh
+python3 -B scripts/routing.py qualify_path <<'EOF'
+<one object from "requests" in "${OUT:?}/demand.json", unchanged>
+EOF
+python3 -B scripts/routing.py seed_window <<'EOF'
+{"v": 1, "op": "seed_window", "pool": "<the path's pool>", "window": "<window id>", "used": <thousandths now used>, "limit": 1000, "reset_at": <epoch seconds>, "length": <host length of that window, seconds>, "event_id": "<a new id>"}
+EOF
+```
+
+1. **`qualify_path`**, once per proposed request. It needs a path from the shipped rules that is not `test_only`, demand keys equal to that path's windows (thousandths, 1 to 1000), and the run ids as `evidence`. It writes `path-qualifications.json` beside the routing settings, owner-only. `unqualify_path {path}` removes a qualification; a held admission on that path is then refused at dispatch.
+2. **`seed_window`**, once for each window a qualified path demands, from the host's current reading of that window. It needs a qualified path on the pool, not a table, and follows the [seed rules](superpowers/specs/2026-11-10-smart-routing-c3-wiring-design.md#seed-window): `limit` 1000, the host's `length`, refused while a fresh host reading exists, fresh for 900 s, replaced by the first host reading. Seed again after a stale gap where no eligible pool is fresh. A seed is recovery input, never billing or entitlement proof.
+3. **Activation** is [step 8.1](#8-canary-on-the-production-routing-ledger-user-approval-canary-only). Its `route_manifest` check passes only when a qualified, non-test path has a table strategy with that path's harness and provider (`no_qualified_path` or `no_generated_route` otherwise). It reads the shipped rules and the qualification and table files beside the settings path the command uses, and nothing else. Its `subscription_sources` check then needs, for each managed host of the project being added, a qualified subscription path with a current billing fact (and, for a native host, a catalog bound to the current client). No billing producer is qualified yet, so this check refuses today (`<host>_billing_unverified`).
+
+- **Expect:** 0 calls, one short process per operation.
+- **Pass:** each `qualify_path` answers `qualified`, each `seed_window` answers `recorded`, and `status` lists the seeded windows with `source: operator`. **Fail:** any `blocked` reason; fix its input and repeat that operation only.
+
+### 7. Canary admission export (no calls)
+
+```sh
+CS=<the dedicated canary state directory>   # absolute, owner-only parent; never the production routing state
+python3 -B tests/qualification/opencode_live.py --export-canary-admissions --canary-state "${CS:?}" \
+  [--replay-dir <export dir>]
+```
+
+For the production-ledger canary (step 8), replace `--canary-state "${CS:?}"` with the same `--production-ledger --approval` arguments as its run.
+
+- **Proves:** every canary admission record, with its snapshot detail, is in the owner-only export (`~/.local/state/vibe-workflow-replay/canary/`) before the ledger prunes the detail after 24 hours. The canary also exports at the end of each run and at the next admission once the last export is 12 hours old, and refuses a new run while any record is missing. Rules: [validation Edit 6](smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history).
+- **Expect:** 0 calls, no server, one read-only ledger connection, under a second.
+- **Limit:** `--canary-state` refuses the production routing state; only the step-8 form reads it.
+
+### 7a. Strict replay over the export (no calls)
+
+```sh
+python3 -B -m tests.qualification.replay_strict --dir <export dir>
+```
+
+- **Proves:** each exported admission record replays from its stored detail alone ([validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) points 2, 3 and 6). For a ranked record, `routing_funding.choose` (admission's own decision) recomputes the class and route from the stored subscription candidates, and the earlier records count as `routing.decision_rows` counts them (same settings revision, at most 14 days older). Worker-choice records, old and new, are checked by point 3 and counted apart. Every record is checked for funding violations, resurrected capacity and stray records. A ranked paid record or a ranked record without its snapshot detail fails and is counted.
+- **Expect:** 0 calls, no server, no network; it opens only the owner-only export directory and the package's own task-profile template. It prints counts, work kinds and bands only (no id, title or timestamp); a bucket label that is not a shipped work kind or complexity band fails and is counted, never printed and exits 1 unless `passed`. A record stores its specialist's work kind, not the specialist's name, so `specialists` counts work kinds.
+- **Limit:** the replay over the exported pilot ledger runs only after F7 and F8 have both merged, by the coordinator, in a separate Results PR. Until then it runs only on disposable synthetic exports. Headroom that rises without a reset counts as resurrected capacity even in a rolling window without `resets_at`. This is conservative: it can flag a legitimate roll-off, or another open hold that settled below its reservation between two records.
+
+### 8. Canary on the production routing ledger (user approval, canary only)
+
+**Blocked today:** without a qualified billing producer, activation (8.1) refuses and the canary admits nothing (`billing_unverified`). Do not schedule this step until one exists; see the [runbook entry](#live-session-runbook).
+
+The user approved the canary, and nothing else, on the production routing settings and ledger ([pre-canary item 11](superpowers/plans/2026-11-08-smart-routing.md#pre-canary-requirements)). The harness never defaults to it: without both `--production-ledger` and an `--approval` whose scope names the canary, it uses the dedicated canary state.
+
+1. **The user activates the project.** Only the user adds the checkout to the production `managed_projects`, with the one-shot `scripts/routing.py set` (it passes only once the activation gate passes, including the path check of [step 6a](#6a-qualify-the-measured-paths-and-seed-their-windows-no-calls)). The harness never changes `managed_projects` and refuses a project that is not on it.
+2. **The production ledger must exist and be clean.** The harness never creates, initializes or resets it. An unclean state (open attempts or holds, Smart Routing off, API Usage on, an enabled organization, raised caps) is refused before any write, with the condition named; fix it through `scripts/routing.py`, for example settle open holds with the one-shot operator ops.
+3. **Run the canary:**
+
+   ```sh
+   Q=$(mktemp -d) && chmod 700 "${Q:?}"
+   python3 -B tests/qualification/opencode_live.py --isolated-dir "${Q:?}" --call-ledger "${L:?}" --canary \
+     --route "<PROVIDER>/<MODEL>#<VARIANT>" \
+     --project <the allowlisted checkout> --production-ledger --approval "<who>" "<when, ISO 8601>" "<scope, naming the canary>" \
+     --out "${OUT:?}/canary.json"
+   ```
+
+   `--route` is the one route the approval names. It is a parameter, never a default: every `opencode_live.py` run that sends (all but `--chatgpt`) refuses
+   without `--route`, and its guard refuses any other model or variant before a send. The stage-2 off-route spawn runs only on the identity pre-registered for that route (`server.OFF_ROUTE_SPAWNS`); any other route refuses that probe instead of guessing a model. A `--chatgpt` run starts route-free and writes its route-bound table and guard control once the login's model list fixes the route. A kept run's re-read takes the
+   same route: `python3 -B tests/qualification/opencode_inspect.py <kept dir> <PROVIDER>/<MODEL>#<VARIANT>`.
+   Every canary write goes through `scripts/routing.py` under its one-shot and operator rules. The approval is recorded verbatim in the results (`production_ledger.approval`).
+4. **Export read-only.** The canary exports its admissions at the end of the run and every 12 hours by key, and on demand with step 7 in its production form; each export is one read-only connection to the production ledger.
+5. **Reset never applies.** `--reset-canary-state` refuses the production state.
+6. **On an abort** the harness turns Smart Routing OFF in the production settings through `scripts/routing.py set` (the kill switch). When the canary ends, the user removes the project from `managed_projects` with the one-shot `set`.
+
+### 8a. Ranked canary rules on the production ledger (F7.2; not yet authorized to run)
+
+The production-ledger form of step 8 runs only ranked: without `--ranked` it is refused before any store, call ledger or server is touched, and nothing converts an explicit-route invocation into a ranked one. `plan_assignments` sends no explicit choice and no observation. It rotates `software-engineer`, `code-reviewer` and `explorer-agent` over the `low` and `medium` bands, and the routing service ranks and collects. The pilot and isolation modes keep their single explicit `--route`. Rules: [validation Edit 7](smart-routing-validation.md#edit-7-11-november-2026-redesigned-replay-ranking-and-canary) point 9 (call 36). Code: `tests/qualification/canary_ranked.py`.
+
+**Preflight, before the server starts (local reads only, 0 calls).**
+- **Preflight and lifecycle modes:**
+  1. `python3 -B tests/qualification/opencode_live.py --ranked-preflight --project <checkout> --approval BY AT SCOPE [--acknowledge-low-coverage N]` reads saved local data only (0 calls, no server, no write). It prints the pins, coverage, baseline, earliest reset and a `digest`.
+  2. Resume uses `--canary --production-ledger --ranked --approve-digest <original-digest> --approval BY AT SCOPE --probe-route PROVIDER/MODEL#VARIANT [--admissions 60..80]`. A missing campaign refuses; resume never creates one or substitutes a fresh preflight.
+  3. Only a separately approved first start adds `--ranked-start HISTORY_DECISION_REF`. The nonblank reference names the operator's separately approved, finite history-inventory/reconciliation decision. It is a manual attestation, not machine-verified history, automatic discovery or a new allowance namespace. First start also requires BY/AT/SCOPE and the exact approved current preflight digest. The reference is recorded in `production_ledger.approval.ranked.history_decision_ref`, not in a new durable schema. No actual history decision, inventory or first start is authorized by this source change; activation remains blocked.
+
+  `--probe-route` is used for the plugin-chain probes only, never for an admission, and `--route` or `--pilot-max` with `--ranked` is refused.
+- **Call purpose:** the run reserves the `ranked-canary` call purpose. Its cap is 0 in code, and its recorded maximum is 83, which is the 80-admission stop's write-ahead exposure. Until a future recorded, approved cap line opens enough of it, the run is refused before anything starts. The pilot's calls never fund it.
+- **Approval pins:** the approval pins these inputs:
+  - the qualified OpenCode subscription path ids of the signed-in providers, and their generated strategy routes;
+  - the table content digest and version, and the existing `routes_version`;
+  - the effective host harnesses, the settings revision and the margin.
+
+  The digest and these inputs are written into the run's existing `production_ledger.approval` record under `ranked`, with no per-profile route lists.
+- **Account authority:** one verified local account has one retained `~/.local/state/vibe-workflow-qualification/ranked-canary/campaign.json` and lifetime `campaign.json.lock`. Direct setup and preflight verify HOME against the OS account, then validate the default production ledger and settings. An unrelated direct ledger or settings store refuses. Both stores must be absolute existing regular files; a final symlink refuses. Parent symlinks and case/Unicode aliases may validate by file identity, but identity is never a persisted key. The resolver's default ledger spelling is the metadata both preflight and setup bind. No caller path, working directory, fresh digest or history reference selects another campaign.
+- **Retained state:** the campaign holds the approved digest and pins, original baseline and earliest reset, cumulative/last/seen usage, unsettled reservations, stop state and whole-run admission count. It is saved before every send, and a failed save aborts. The common lock spans selection, creation/loading and the entire run. Concurrent, missing, corrupt or mismatched state refuses. Completed and aborted campaigns stay retained, and an existing campaign refuses every new start, including a changed reference, approval, project or reset window. There is no archive, reset or deletion procedure.
+- **Legacy and ambiguity:** any old `run-*.json` or lock, orphan temporary file, dangling symlink or unexplained entry in that fixed directory refuses both first creation and existing-campaign preference, without rewriting old bytes. A prior lock without its campaign is unfinished-creation evidence, never an empty account. The harness inspects only that directory; it does not recursively scan HOME or open ledger paths recorded in old files. Unknown historical directories therefore require the separate manual history decision. No automatic adoption or migration exists. Stop all old harness writers before deployment: the new lock cannot constrain old code. Source rollback is not permission to run old code on a new campaign. Owner tampering and hostile races remain outside this harness contract.
+- **Refusals:** `no_qualified_path`, `table_empty` and `no_generated_route` refuse before anything is written. Missing demand, missing profile coverage, or a reset that is unknown or already passed also refuses.
+- **Coverage:** per approved pool/window, `d_w` is the largest qualified demand. `r_w = Ledger._reserve(d_w, None, margin_bp)`, and coverage is `floor(100 / r_w)`. For example, demand 10 with margin 2000 reserves 12, so coverage is 8. The report shows the minimum across windows beside the 60-admission minimum, the six profiles' structural coverage, the enabled funding classes (`subscription`), the earliest demanded reset and the time remaining.
+- **Low coverage:** coverage below 60 needs `--acknowledge-low-coverage N`, where N is exactly the computed minimum. N is part of the digest, and no prose in SCOPE counts. It records that completion before the reset is not guaranteed; it is an interface, not anyone's start approval. Coverage is not a usage forecast.
+
+**Per admission (outside the preparation timer).** Each admission goes through these steps:
+1. The deadline and the pinned inputs are rechecked.
+2. One shared `Service.preview` runs for the exact `prepare` body the served child receives. A refused ranking reason or a changed `routes_version` stops the run.
+3. Only the kept subscription routes go to `refresh_needed`. The existing bounded reader runs only for a stale ChatGPT pool that is needed, and served preparation never starts it.
+4. `window_status` plus one stored-window read per kept pool decide whether any kept pool is fresh with a future reset.
+5. After admission, a non-ranked admission aborts. The admission must exactly match its pinned strategy route: the route, the pool, the route identity digest and an approved path. Being a member of the approval is not enough.
+6. Dispatch uses the facts from `routing_launch.admitted_check` against the server's model list. Attach, the session model and `qual-post`'s guard use that attempt's identity and pool.
+7. After each settled launch, only the reported windows are stored, at their observation time.
+
+**Stops.**
+- **`seed_required` (resumable):** no kept pool is fresh. The stop names the pool/windows that need a seed.
+  1. Seed only those windows with the one-shot `seed_window` (`scripts/routing.py`). Use the provider's current reading and the same `reset_at`.
+  2. Run again with the same `--approve-digest`, omitting `--ranked-start`. The new process resumes from the campaign: the original baseline, cumulative use, holds, earliest reset and admission count carry over, and nothing is recomputed. A changed input, or a stop other than `seed_required`, cannot resume.
+- **`allowance_exhausted`:** the reservation plus this run's other unsettled reservations would pass 100 thousandths. The undispatched admission is released (`not_dispatched`).
+- **`window_usage_unknown`:** any reset or ambiguous decrease of a demanded window, or `now >= earliest_reset` at preflight, before preparation, before dispatch or after settlement. This applies even when no launch crossed the reset.
+- **`approval_inputs_changed`:** any pinned input changed after the preview. The unsent admission is released, and a renewed preflight and approval are needed.
+- **Abort (`window_overrun`):** an observed overrun. Actual cost can exceed the reservation, so this is not a provider-side hard stop.
+- **Recovery on an incomplete stop:** a stop stays incomplete only when its recovery is proven safe (`none` or `not_dispatched`). A refused release, an error, an uncertain or left-dispatched launch aborts with the kill switch. A launch that was sent keeps its status check, admission entry and sample count, and every reported window is stored before any stop.
+- **Never undone:** nothing replenishes the allowance, restarts the deadline or erases unknown usage by reseeding.
+- **Debits:** the harness never drops an abandoned-window debit. One that blocks progress is reconciled with the existing one-shot operator procedure.
+
+**Per-bound evidence (validation [Canary](smart-routing-validation.md#canary) table).** Fewer than 60 usable admissions is reported as incomplete (`sample_below_minimum`), never a pass. Strict replay (step 7a) and the latency budgets still gate a pass.
+
+| Bound | Check | Reported evidence |
+|---|---|---|
+| One project | `check_project` with `managed_projects` | `production_ledger.approval`, refusal before start |
+| 60 admissions, three specialists, two bands | `plan_assignments(ranked=True)`, `canary_ranked.summary` | `admissions[]` role, band, mode, route, pool; `incomplete` |
+| Each enabled funding class | ranked mode is subscription-only | `coverage.funding_classes`; every admission `mode: ranked`, settlement `window` |
+| Window cap (10% per pool/window) | `Allowance.check` before dispatch, `Allowance.observe` after settlement | `incomplete.reason` / `abort.reason`; cumulative per window |
+| Seven days / 80-admission stop | `MAX_DURATION_S` (24 h pilot driver limit stays stricter), `RANKED_MAX = 80`; the earliest reset is stricter | `abort: max_duration`; `incomplete: window_usage_unknown` |
+| Concurrency | retired by Edit 8; the driver's one-at-a-time rule is the qualification protocol | `abort: concurrency` if an attempt is open |
+| Aborts | funding violation, unresolved launch, recovery error, non-ranked admission, overrun | `abort.reason`, `recovery`, `kill_switch_ok` |
+| Kill switch | `CanaryEnv.kill_switch` on every abort | `abort.kill_switch` |
+
+- **Stale holds:** a hold saved for an attempt that later aborts or crashes stays in the record. It reduces the remaining allowance and never replenishes it; there is no automatic release. An `allowance_exhausted` stop and driver aborts are not stored as stops; a resumed run relies on the existing start refusals and the kill switch.
+- **Limit:** a live ranked run still needs formal registration and an approved `ranked-canary` cap. Neither exists, so the run is refused. No production billing producer exists either, so `admitted_check` refuses with `billing_unverified` until one is qualified.
+
+### After the session
+
+- **Revoke sign-ins.** Delete or disable the OpenRouter key at openrouter.ai. The ChatGPT login used by A5 lives in the run's temporary data directory and goes with it; the user may also sign that session out in the ChatGPT account settings.
+- **Remove temporary directories.** The harness removes each run's `$Q` itself; after each run, confirm with `test ! -e "${Q:?}"`. Remove the reader's directory with `rm -rf -- "${T:?}"`. Delete any `withheld/` file after reading it.
+- **Verify no processes.** `pgrep -fl 'codex app-server'` prints nothing, `pgrep -fl -- "${Q:?}"` prints nothing after each run, and each result file shows `cleanup.processes_left: 0`.
+- **Re-export the call ledger** (0 calls): `python3 -B tests/qualification/opencode_live.py --call-ledger "${L:?}" --export-call-ledger "${OUT:?}/qual-call-ledger.json"`.
+- **Record results** in a new dated section of this document, with the call-ledger totals, and update the pre-canary items they close.
+
 ## Live probes: descendants, S3.3d and the ChatGPT route (pre-registered, not yet run)
 
 These probes are fixed here **before any run**. No numbers in this section change after a run starts; results go in the "Observed" lines. The existing qualification (9 of 14) and pilot (23 of 28) budgets and thresholds are untouched.
@@ -390,6 +638,8 @@ Also recorded:
 | 4 lost acknowledgment | counted; message absent; `uncertain` keeps exposure | Launcher killed after `dispatch` (exit −9). The hold was `dispatched` and counted, and the derived message and session returned HTTP 404. A session-only check answered `authority_required`. `record uncertain` → hold `uncertain`, still open; a check answered `attempt_uncertain`; `complete` answered `reconciliation_required`. | pass |
 | 4 operator recovery for an uncertain subscription hold | none exists | `reconcile_uncertain` → `hold_state_forbidden`. **No operator path exists for an uncertain subscription hold**: it stays open and counted. Here it stayed only in the temporary ledger, which was deleted. | recorded gap |
 
+*Note, 11 November 2026:* the recorded result above stands for this run. The gap has since closed: #192 added the one-shot `reconcile_subscription` for uncertain subscription holds, and [step 3](#3-lost-acknowledgment-drill-s36c-purpose-drill) of the runbook exercises it.
+
 **Order evidence.** For the guard probe, `qual-pre` recorded the request and then `qual-post` recorded `guard_variant`, after it in time. For the pending probe, only `qual-pre` recorded it. Together these show the hook order `qual-pre` → shim → `qual-post`. Two requests were off the route, and neither was sent: the `haiku#high` guard probe and the `sonnet` command child.
 
 **Latency.** Shim time is measured from the `qual-pre` hook to the `qual-post` hook:
@@ -471,7 +721,7 @@ The per-criterion table is in the [validation results](smart-routing-validation.
 
 - **Closed attempt reason (accepted).** A closed attempt's session answers `attach_required` instead of `attempt_closed` while its pending entry lasts; that entry has a 5-minute lifetime by contract. The session stays blocked at 0 tokens.
 - **`version_changed` on every live aggregate (accepted, open P0.8 item).** The resync gives zero deltas. Whether `durable.version` is a version per aggregate or per event type is not established.
-- **Uncertain subscription holds (follow-up).** They have no operator recovery path. The plan's follow-up task "subscription hold reconcile" is required before cutover and before any production use of enforced routing. Until then the pilot runs on a dedicated canary ledger.
+- **Uncertain subscription holds (follow-up, since closed).** At this re-run they had no operator recovery path. The plan's follow-up task "subscription hold reconcile" was required before cutover and before any production use of enforced routing. It exists since #192: the one-shot `reconcile_subscription` settles an uncertain subscription hold from a re-read of the session or abandons it ([step 3](#3-lost-acknowledgment-drill-s36c-purpose-drill) exercises it). The bounded pilot keeps its dedicated canary ledger; only the approved canary runs on the production ledger ([step 8](#8-canary-on-the-production-routing-ledger-user-approval-canary-only)).
 - **Probe exposure.** The probes' reserved calls count against the cap of the purpose they run under (`pilot` in canary mode).
 
 ## Settling a dead run's reservation

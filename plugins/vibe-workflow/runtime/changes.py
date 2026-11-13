@@ -21,7 +21,7 @@ import time
 import unicodedata
 import uuid
 
-from runtime import onboarding as d3
+from runtime import onboarding as d3, persisted_binding, task_profile
 from runtime import state as task_state
 from runtime import recovery_uses
 from runtime.startup import (PROJECT_FILE, ProjectScope, StartupError, checkout,
@@ -1944,7 +1944,7 @@ def _canonical_record(record, plan, *, current):
     from runtime.startup import decode_project_record
     decode_project_record(record)
     d3._require(all(record[k] == plan["identity"][k] for k in ("project_id", "project_root", "kind"))
-                and record["project_binding"] == plan["identity"]["binding"], "Canonical Project binding changed")
+                and persisted_binding.matches(plan["identity"]["binding"], record["project_binding"]), "Canonical Project binding changed")
     entries = _scoped_entries(record)
     for assessment in plan["assessments"]["repositories"]:
         owner, identity = assessment["owner"], assessment["identity"]
@@ -1952,7 +1952,7 @@ def _canonical_record(record, plan, *, current):
         selected = next((c for c in repo["checkouts"] if c["checkout_id"] == owner["checkout_id"]), None) if repo else None
         d3._require(repo is not None and selected is not None and all(repo[k] == owner[k] for k in ("primary_root", "git_common_dir"))
                     and selected["root"] == owner["root"] and selected["git_dir"] == owner["git_dir"]
-                    and repo["binding"] | selected["binding"] == identity["binding"], "Canonical selected owner changed")
+                    and persisted_binding.all_match(identity["binding"], repo["binding"] | selected["binding"]), "Canonical selected owner changed")
         if current:
             for key, (_, _, entry) in entries.items():
                 if key[:2] == (owner["repository_id"], owner["checkout_id"]) and entry["configuration"] is not None:
@@ -2074,7 +2074,7 @@ def _validate_scoped(request, plan, *, operation=None):
                 from runtime.startup import _canonical_target
                 _canonical_target(effect["target"])
                 d3._require(effect["target"]["path"] == str(Path(owner["root"])/effect["path"])
-                    and effect["target"]["parents"].get(owner["root"]) == next(a["identity"]["binding"]["root"] for a in m["owners"] if a["owner"] == owner)
+                    and persisted_binding.matches(next(a["identity"]["binding"]["root"] for a in m["owners"] if a["owner"] == owner), effect["target"]["parents"].get(owner["root"]))
                     and all(Path(p).is_relative_to(Path(owner["root"])) for p in effect["target"]["parents"]), "Command effect target is outside its selected owner")
             location = Path(owner["root"]) / effect["path"]
             d3._require(all(not location.is_relative_to(p) and not p.is_relative_to(location) for p in physical), "Scoped effects overlap")
@@ -2389,10 +2389,10 @@ def _assignment_certificate_shape(value, task):
         ('scope_id','client','session_id','task_id')),'Stopped assignment original owner differs')
     task_state._integer(value['created_at'],'original stopped assignment age'); d3._hash(value['request_digest'])
     delegation._stored_claims(value['claims'],maximum=delegation.MAX_VERIFICATION_CLAIMS)
-    role=value['role']; d3._require(role in {'coordinator','check','worker','review'},'Unknown stopped assignment role')
+    role=value['role']; d3._require((task_profile.stored(role) is not None or role==task_profile.CHECK),'Unknown stopped assignment role')
     rec=value['reconciliation']
     if 'version' in value:
-        d3._require(type(value['version']) is int and value['version']==2 and task.get('writer_stop') and task.get('state') in {'DONE','REVIEW','CANCELLED'} and role=='coordinator',
+        d3._require(type(value['version']) is int and value['version']==2 and task.get('writer_stop') and task.get('state') in {'DONE','REVIEW','CANCELLED'} and task_profile.orchestrates(role),
             'Barrier certificate needs its independently stopped complete owner')
         task_state._fields(rec,('version','kind','reference','body','outcome','stop_digest','bindings'))
         task_state._artifact_reference(rec['reference']);body=rec['body']
@@ -2421,10 +2421,9 @@ def _assignment_certificate_shape(value, task):
         type(proof.get('expected_revision')) is int and proof['expected_revision']==rec['revision']-1,
         'Stopped assignment proof original identity differs')
     bindings=rec['bindings']
-    fields={'coordinator':('operation','operation_evidence','resource_observations','d5_plan','d6_plan','candidate','current_candidate'),
+    fields={'orchestrator':('operation','operation_evidence','resource_observations','d5_plan','d6_plan','candidate','current_candidate'),
         'check':('d5_plan','candidate','current_candidate','execution'),
-        'worker':('plan','candidate','current_candidate','observation','native_receipt'),
-        'review':('plan','candidate','current_candidate','observation','native_receipt')}[role]
+        'native':('plan','candidate','current_candidate','observation','native_receipt')}['orchestrator' if task_profile.orchestrates(role) else role if role==task_profile.CHECK else 'native']
     task_state._fields(bindings,fields)
     for key in fields:
         if key!='native_receipt' and bindings[key] is not None: task_state._artifact_reference(bindings[key])
@@ -2436,7 +2435,7 @@ def _assignment_certificate_shape(value, task):
         for key in ('changed_paths','evidence'): delegation._strings(assessment[key],key,maximum=64,limit=4096,nonempty=key=='evidence')
         for name in assessment['changed_paths']: evidence._relative(name)
         task_state._text(assessment['coordinator_ref'],'assessment coordinator',4096)
-    if role=='coordinator':
+    if task_profile.orchestrates(role):
         d3._require(proof.get('kind')=='coordinator-operation-reconciliation' and proof.get('operation_stopped') is True and
             proof.get('operation_descendants_stopped') is True and proof.get('operation_digest')==bindings['operation']['digest'] and
             all(proof.get(k)==bindings[k] for k in ('operation_evidence','resource_observations')),
@@ -2486,7 +2485,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
     d3._require(type(rec.get('version')) is int and rec['version']==2,'Recovery assignment requires version2 role proof')
     role=data['role']
     task_state._fields(rec,('version','proof','source_digest','request_digest','current_candidate',*(() if role=='check' else ('assessment','revision','reservation_snapshot_digest'))),
-        ('prior_cooperative',) if role in delegation.NATIVE_ROLES else ())
+        ('prior_cooperative',) if task_profile.native(role) else ())
     if 'prior_cooperative' in rec:
         prior=read(rec['prior_cooperative'])
         d3._require(prior.get('proof',{}).get('kind')==delegation.COOPERATIVE_PROOF and
@@ -2506,7 +2505,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
         # The check writer persists no revision/assessment; its exact transition increments once.
         revision=proof['expected_revision']+1; assessment=None
     else:
-        if role=='review':
+        if task_profile.reviews(role):
             d3._require(attempt is not None and attempt['status'] not in {'reserved','running','uncertain'} and
                 attempt.get('ownership_reconciliation')==data['reconciliation'],'Recovery review remains unresolved')
         assessment=rec['assessment']; task_state._fields(assessment,('outcome','changed_paths','result_assessment','partial_change_assessment','evidence','coordinator_ref'))
@@ -2518,7 +2517,7 @@ def _assignment_certificate_fields(context,db,task,record,rec):
         linked_review=lambda a:delegation._linked_review(None,owner['scope_id'],task,a,[record],context=context,db=db),
         current_candidate_digest=current['digest'] if current else None)
     if current is not None: evidence._candidate_projection(read(current),task)
-    if role=='coordinator':
+    if task_profile.orchestrates(role):
         bindings={k:body[k] for k in ('operation','d5_plan','d6_plan')}
         bindings.update({k:proof[k] for k in ('operation_evidence','resource_observations')})
     elif role=='check':
@@ -3527,8 +3526,8 @@ def _historical_recovery_roots(manifest,context,db,task,reference):
     proposed=canonical_scope_projection(decode_project_record(record),repository_id=key[0],checkout_id=key[1],client=key[2])
     if proposed is None or _canonical_plain(proposed)!=projection:return []
     if _scoped_entries(record)[key][2]['activation']['status']!='suspended':return []
-    if evidence._binding(Path(identity['project_root']))!=identity['project_binding']:return []
-    if any(evidence._binding(Path(identity[path]))!=identity['bindings'][binding] for path,binding in
+    if not persisted_binding.matches(identity['project_binding'],evidence._binding(Path(identity['project_root']))):return []
+    if any(not persisted_binding.matches(identity['bindings'][binding],evidence._binding(Path(identity[path]))) for path,binding in
             (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))):return []
     effects=_historical_effects(identity,_canonical_plain(proposed),manifest['actions'])
     if not effects or not (task.get('retirement') or task.get('writer_stop')):return []
@@ -4230,10 +4229,10 @@ def _d4_taskless_permission(journal,context,db,project):
         identities[scope_id]=identity;roots[d3._digest([identity['project_root'],identity['project_binding']])]=identity
     d3._require(len(roots)==1,'Taskless D4 source Project authority is ambiguous')
     identity=next(iter(roots.values()));root=Path(identity['project_root'])
-    d3._require(evidence._binding(root)==identity['project_binding'],'Taskless D4 source Project physical ownership changed')
+    d3._require(persisted_binding.matches(identity['project_binding'],evidence._binding(root)),'Taskless D4 source Project physical ownership changed')
     observed=d3._authority_observation(root,{'paths':0,'bytes':0},canonical_only=True)
     record=journal['manifest']['enrollment']['record'];_,prior=_scoped_prior(journal['plan'])
-    own=project==record['project_id'] and str(root)==record['project_root'] and identity['project_binding']==record['project_binding']
+    own=project==record['project_id'] and str(root)==record['project_root'] and persisted_binding.matches(record['project_binding'],identity['project_binding'])
     d3._require(not observed['error'],'Taskless D4 source current Project authority is unavailable')
     candidates=[]
     if observed['record'] is not None:
@@ -4257,7 +4256,7 @@ def _d4_taskless_permission(journal,context,db,project):
             if identities.get(scope_id)!=task_state._physical_identity(projection):continue
             d3._require(configuration['runtime_digest']==task_state.runtime_fingerprint() and
                 configuration['policy_digest']==policy_digest(task_state.PACKAGE),'Taskless D4 source current bookkeeping configuration changed')
-            d3._require(all(evidence._binding(Path(projection[path]))==projection['bindings'][binding]
+            d3._require(all(persisted_binding.matches(projection['bindings'][binding],evidence._binding(Path(projection[path])))
                 for path,binding in (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))),
                 'Taskless D4 source physical member bindings changed')
             proof=dict(subject={k:projection[k] for k in ('project_id','repository_id','checkout_id','client')},phase=phase,identity=projection)
@@ -4383,8 +4382,8 @@ def _d4_permission_facts(journal,source,projections=None):
             key=tuple(identity[k] for k in ('repository_id','checkout_id','client'))
             transition=own and _d4_owned_transition(journal,key)
             if transition:
-                d3._require(evidence._binding(Path(identity['project_root']))==identity['project_binding'] and
-                    all(evidence._binding(Path(identity[k]))==identity['bindings'][binding]
+                d3._require(persisted_binding.matches(identity['project_binding'],evidence._binding(Path(identity['project_root']))) and
+                    all(persisted_binding.matches(identity['bindings'][binding],evidence._binding(Path(identity[k])))
                     for k,binding in (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))),
                     'D4 source subject physical bindings changed')
             else:
@@ -5343,10 +5342,10 @@ def _scoped_owner_bindings(plan):
     for assessment in d3._assessments(plan["assessments"]):
         owner, identity = assessment["owner"], assessment["identity"]
         root = Path(owner["root"])
-        d3._require(d3._filesystem_binding(root) == (plan["identity"]["binding"] if owner["kind"] == "project" else identity["binding"]["root"]), "Selected root physical identity changed")
+        d3._require(persisted_binding.matches(plan["identity"]["binding"] if owner["kind"] == "project" else identity["binding"]["root"], d3._filesystem_binding(root)), "Selected root physical identity changed")
         if owner["kind"] == "repository":
             current, error = d3._checkout_observation(str(root), {"paths":0,"bytes":0})
-            d3._require(error is None and all(current[k] == identity[k] for k in ("root","primary_root","git_dir","git_common_dir","binding")), "Selected Git physical identity changed")
+            d3._require(error is None and all(current[k] == identity[k] for k in ("root","primary_root","git_dir","git_common_dir")) and persisted_binding.all_match(identity["binding"], current["binding"]), "Selected Git physical identity changed")
 
 
 def _scoped_parent_guard(target, journal):
@@ -5429,12 +5428,12 @@ def _scoped_fresh(plan, journal):
     for assessment in d3._assessments(plan["assessments"]):
         owner, identity = assessment["owner"], assessment["identity"]
         root = Path(owner["root"])
-        d3._require(d3._filesystem_binding(root) == (plan["identity"]["binding"] if owner["kind"] == "project" else identity["binding"]["root"]), "Selected root physical identity changed")
+        d3._require(persisted_binding.matches(plan["identity"]["binding"] if owner["kind"] == "project" else identity["binding"]["root"], d3._filesystem_binding(root)), "Selected root physical identity changed")
         owned = {e["path"] for a in journal["manifest"]["actions"] if a["owner"] == owner and a["id"] in journal["receipts"] for e in a["effects"]}
         if root == Path(plan["identity"]["project_root"]) and journal["enrollment"] is not None: owned.add(str(PROJECT_FILE))
         if owner["kind"] == "repository":
             observed, error = d3._checkout_observation(str(root), {"paths": 0, "bytes": 0})
-            d3._require(error is None and all(observed[k] == identity[k] for k in ("root", "primary_root", "git_dir", "git_common_dir", "binding")), "Selected Git physical identity changed")
+            d3._require(error is None and all(observed[k] == identity[k] for k in ("root", "primary_root", "git_dir", "git_common_dir")) and persisted_binding.all_match(identity["binding"], observed["binding"]), "Selected Git physical identity changed")
             local_actions = [dict(a, id=d3._qualified(owner, a["id"])) for a in assessment["actions"]]
             local = dict(plan, identity=identity["snapshot"], actions=local_actions, schema_version=1)
             view = dict(journal, manifest=dict(journal["manifest"], actions=[a for a in journal["manifest"]["actions"] if a["owner"] == owner]),

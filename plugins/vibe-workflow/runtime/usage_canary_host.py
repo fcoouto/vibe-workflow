@@ -33,11 +33,23 @@ class Plan:
     grant_amount: int
     created_at: int
     expires_at: int
+    # The billed identity and its verified rate card (USD micros per million tokens), frozen before approval; the
+    # approval digest covers them and execution reads nothing else (`usage_canary.candidate` helps choose them).
+    model: str
+    input_rate: int
+    cached_input_rate: int
+    cache_write_rate: int
+    output_rate: int
+
+
+def card(plan):
+    require(type(plan) is Plan, 'invalid_canary_plan')
+    return {key: getattr(plan, key) for key in ('model', *usage_canary.RATES)}
 
 
 def approval_text(plan):
-    require(type(plan) is Plan, 'invalid_canary_plan')
-    return 'Approve Usage Routing canary ' + usage_admission.digest(asdict(plan))[:16]
+    require(type(plan) is Plan and type(plan.model) is str, 'invalid_canary_plan')
+    return 'Approve Usage Routing canary %s %s' % (name(plan.model), usage_admission.digest(asdict(plan))[:16])
 
 
 def direct_approval(turn, token):
@@ -94,9 +106,11 @@ def issue(plan, *, thread_snapshot, key_receipt, config, policy, grant, native_l
                 and policy['pilot_limit'] == policy['task_limit'] == usage_canary.MAXIMUM_USD_MICROS,
                 'canary_funding_changed')
         profile = config['profile']
+        require(type(profile) is dict and profile == usage_canary.profile_for(
+            profile.get('verified_at'), profile.get('valid_until'), card(plan)), 'canary_price_changed')
         native = native_capacity(plan.account)
         approval_id = usage_admission.digest(asdict(plan))
-        task = usage_canary.task_for(approval_id, binding, native)
+        task = usage_canary.task_for(approval_id, binding, native, card(plan))
         evidence = usage_admission.Admission(
             scope=scope, config_revision=config['revision'], org_revision=config['org_revision'],
             policy_digest=usage_admission.digest(policy), binding_digest=usage_admission.digest(binding),
@@ -172,7 +186,7 @@ def execute(plan, *, thread_snapshot, key_receipt, grant, native_limits=None,
         binding = key_receipt['binding']
     except (KeyError, TypeError):
         raise BudgetError('canary_key_receipt_changed') from None
-    profile = usage_canary.profile_for(price_observed_at, price_valid_until)
+    profile = usage_canary.profile_for(price_observed_at, price_valid_until, card(plan))
     policy = dict(cycle=usage_admission.CANARY_CYCLE_PREFIX + usage_admission.digest(asdict(plan)), start=plan.created_at,
                   end=plan.grant_expiry, expiry=plan.grant_expiry,
                   stop_at=min(plan.expires_at, plan.grant_expiry - 900),

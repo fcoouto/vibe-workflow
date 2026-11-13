@@ -36,11 +36,12 @@ import re
 import tempfile
 import time
 
-from runtime import delegation, evidence, routing, routing_launch, state
+from runtime import delegation, evidence, routing, routing_launch, routing_observations, state, task_profile
 
 HOST = 'codex_native'
-ROLES = dict(worker='implementer', review='reviewer')
 MODES = ('explicit', 'inherit', 'routed')
+# Assignment roles that are not native workers or reviewers: the orchestrator (and its stored name) and `check`.
+_NOT_NATIVE = tuple(r for r in (task_profile.ORCHESTRATOR, task_profile.CHECK, *task_profile.LEGACY) if not task_profile.native(r))
 REASON = re.compile(r'[a-z][a-z0-9_]{0,63}')
 PROOF_REF = 'delegation_routing:never-dispatched'
 PRE_MANAGED = 'legacy_route_retired'  # a replay of an assignment committed before the project was managed
@@ -146,7 +147,7 @@ def _writer_models(service, scope, request, attempt_id):
         records = delegation._ledger(scope, db, task=request)
     models = set()
     for record in records:
-        if record['data']['role'] != 'worker' or record['id'] == attempt_id:
+        if not task_profile.native_worker(record['data']['role']) or record['id'] == attempt_id:
             continue
         model = (_route(scope, record, _hold(service, record['id'])[1]) or {}).get('model') or \
             record['data']['binding'].get('requested_model')
@@ -155,20 +156,21 @@ def _writer_models(service, scope, request, attempt_id):
     return sorted(models)
 
 
-def admit(service, scope, request, *, attempt_id, routing_attempt, role, choice, constraints=None, job=None):
+def admit(service, scope, request, *, attempt_id, routing_attempt, choice, constraints=None, job=None):
     """One routing `prepare` for a committed delegation assignment, bound to its planned job and attempt. `job` is
     the canonical job (`delegation.routing_job`); only the self-check supplies it."""
     preflight = routing_launch.preflight(_call(service, dict(v=1, op='status')))
     if preflight is not None:
         return dict(state='blocked', reason=preflight)
     locator = _locator(scope, request, attempt_id)
-    assignment = dict(attempt_id=routing_attempt, task=request['task_id'], role=ROLES[role],
+    job = job or delegation.routing_job(scope, locator)  # its role is the planned job's specialist
+    assignment = dict(attempt_id=routing_attempt, task=request['task_id'], role=job['role'] if job else None,
                       scope=routing_launch.assignment_scope(scope.repository_root))
     if choice is not None:
         assignment['choice'] = choice
     try:
-        body = routing_launch.prepare_request(assignment, job or delegation.routing_job(scope, locator), workflow=locator,
-                                              constraints=constraints, planned=True)
+        body = routing_launch.prepare_request(assignment, job, workflow=locator, constraints=constraints, planned=True,
+                                              harnesses=routing_launch.host_harnesses(HOST))
     except routing_launch.Refused as error:
         return dict(state='blocked', reason=error.reason)
     answer = _call(service, body)
@@ -193,12 +195,12 @@ def _committed(scope, attempt_id):
     return found
 
 
-def prepare(scope, request, role, inner):
+def prepare(scope, request, review, inner):
     """`prepare_assignment` / `prepare_review`: delegation's reservation, then routing in a managed project."""
     current = managed(scope)  # read once per call (review S1a); the hooks inside `inner` see the same answer
     token = _MANAGED.set(current)
     try:
-        reply = inner(scope, request, role=role)
+        reply = inner(scope, request, review=review)
     finally:
         _MANAGED.reset(token)
     workstream = 'dispatch_prepared' in reply
@@ -225,10 +227,10 @@ def prepare(scope, request, role, inner):
     selection = record['body']['request']['selection']
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         constraints = None
-        if role == 'review':
+        if review:
             excluded = _writer_models(service, scope, record['body']['request'], attempt)
             constraints = dict(excluded_models=excluded) if excluded else None
-        answer = admit(service, scope, request, attempt_id=attempt, routing_attempt=attempt, role=role,
+        answer = admit(service, scope, request, attempt_id=attempt, routing_attempt=attempt,
                        choice=_choice(selection), constraints=constraints)
         if answer.get('state') != 'admitted':
             reply['routing'] = dict(state=answer.get('state', 'blocked'), reason=answer.get('reason'))
@@ -274,7 +276,7 @@ def release(scope, request, attempt_id, reason, *, service=None):
     _record(service, attempt_id, 'not_dispatched', '%s:%s' % (reason, attempt_id))
     identity = {key: request[key] for key in evidence.IDENTITY}
     with state._database(scope) as db:
-        record = delegation._assignment(scope, db, dict(identity, attempt_id=attempt_id), roles=('worker', 'review'))
+        record = delegation._assignment(scope, db, dict(identity, attempt_id=attempt_id), roles=(task_profile.native,))
         task = delegation._assignment_task(scope, db, dict(identity, attempt_id=attempt_id), revision=False)
     state_ = record['data']
     if state_['status'] != 'prepared' or state_['observation'] is not None or 'workstream_dispatch' in state_ or \
@@ -322,28 +324,51 @@ def _require_unlaunched(service, attempt_id):
         raise state.StateError('A dispatched routing attempt needs host reconciliation, not a routing release')
 
 
+def _close(service, data, attempt, kind, event_id):
+    """Record `kind` for one routing hold of a managed assignment: `{attempt_id, kind, state[, reason]}`. A native
+    turn reports no reading, so before a dispatched subscription hold records `complete` the pool its admission
+    holds is marked used (`mark_consumed`, once per attempt, F4 N-1): the readings that turn ran on stop counting for
+    every alias of the pool until one observed later arrives. A replay or retry never moves that mark. Unknown
+    funding, or a mark that cannot be written, records nothing: the hold keeps its capacity. A replay of the same
+    reconcile never reaches it again; a later continuation of the same child closes it (`_close_turns`), or the client
+    records `uncertain` and the one-shot operator `reconcile_subscription` abandons it into a counted window debit."""
+    if kind == 'complete':
+        admission = _admission(data, attempt) or {}
+        billing = admission.get('billing_class')
+        if billing == 'included_subscription':
+            try:
+                routing_observations.mark_consumed(service.settings_path, admission.get('pool'), int(time.time()),
+                                                   attempt)
+            except (OSError, ValueError):
+                return dict(attempt_id=attempt, kind=kind, state='blocked', reason='observation_store_unavailable')
+        elif billing not in routing.FUNDED:
+            return dict(attempt_id=attempt, kind=kind, state='blocked', reason='admission_unknown')
+    answer = _record(service, attempt, kind, event_id)
+    return dict(attempt_id=attempt, kind=kind, state=answer.get('state'))
+
+
 def settled(scope, record, reply):
     """`reconcile_assignment`: close the routing holds of a settled managed assignment and its continuations. A
-    dispatched hold records `complete` (the coordinator never spawned, or the child finished); an admitted one
-    records `not_dispatched`. It goes by the record's routing holds, not by whether the project is still managed
-    (review S3); a record with no routing hold, and so every unmanaged one, gets today's reply unchanged."""
-    if record['data']['role'] not in ROLES:
+    dispatched hold records `complete` (the coordinator never spawned, or the child finished; `_close` marks its
+    subscription pool first); an admitted one records `not_dispatched`. It goes by the record's routing holds, not by
+    whether the project is still managed (review S3); a record with no routing hold, and so every unmanaged one, gets
+    today's reply unchanged."""
+    if not task_profile.native(record['data']['role']):
         return reply
     closed = []
     with closing(_command().managed_service(scope.repository_root, scope=scope)) as service:
         try:
-            holds = _holds(service).get('holds', {})
-        except state.StateError:  # the assignment is settled; its holds close at the next reconcile or by the operator
+            data = _holds(service)
+        except state.StateError:  # the assignment is settled; its holds stay counted and close as `_close` describes
             return dict(reply, routing=dict(state='unavailable', reason='ledger_unavailable')) if managed(scope) \
                 else reply
-        for attempt, hold in sorted(holds.items()):
+        for attempt, hold in sorted(data.get('holds', {}).items()):
             if hold['closed'] or not (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
                 continue
             kind = 'complete' if hold['state'] == 'dispatched' else 'not_dispatched' if hold['state'] == 'admitted' \
                 else None
             if kind is not None:
-                answer = _record(service, attempt, kind, '%s:%s' % (kind, attempt))
-                closed.append(dict(attempt_id=attempt, kind=kind, state=answer.get('state')))
+                closed.append(_close(service, data, attempt, kind, '%s:%s' % (kind, attempt)))
     return dict(reply, routing=dict(closed=closed)) if closed else reply
 
 
@@ -428,8 +453,8 @@ def open_unrouted_assignments(checkout):
             with state._database(scope) as db:
                 rows = [] if db is None else db.execute(
                     "select id from assignments where scope_id=? and json_extract(data,'$.status')='prepared' and "
-                    "json_extract(data,'$.observation') is null and json_extract(data,'$.role') in ('worker','review') "
-                    "order by id limit ?", (state._scope_id(scope), MAX_OPEN)).fetchall()
+                    "json_extract(data,'$.observation') is null and json_extract(data,'$.role') not in (?,?,?) "
+                    "order by id limit ?", (state._scope_id(scope), *_NOT_NATIVE, MAX_OPEN)).fetchall()
             found.update(row[0] for row in rows)
     except Exception:  # noqa: BLE001 - sqlite3.Error, StateError
         return ['state_unavailable']
@@ -443,17 +468,20 @@ def _continuation_attempt(record, value):
 
 def _close_turns(service, record):
     """Close the holds of the child's earlier turns: a continuation is prepared only after its previous native turn
-    ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`."""
-    for attempt, hold in sorted(_holds(service).get('holds', {}).items()):
+    ended (`_continuation_receipt`), so a dispatched turn is `complete` and an unsent one `not_dispatched`. The
+    reason a turn's hold had to stay held (`_close`), or None."""
+    data, kept = _holds(service), None
+    for attempt, hold in sorted(data.get('holds', {}).items()):
         if not hold['closed'] and (attempt == record['id'] or attempt.startswith(record['id'] + '.c')):
             kind = dict(dispatched='complete', admitted='not_dispatched').get(hold['state'])
             if kind is not None:
-                _record(service, attempt, kind, 'turn:%s:%s' % (kind, attempt))
+                kept = _close(service, data, attempt, kind, 'turn:%s:%s' % (kind, attempt)).get('reason') or kept
+    return kept
 
 
 def continuation(scope, request, record, value, reply):
     """`prepare_continuation`: the same child and profile, with a fresh admission on the child's own route."""
-    if record['data']['role'] not in ROLES or not managed(scope):
+    if not task_profile.native(record['data']['role']) or not managed(scope):
         return reply
     original, attempt = record['body']['request'], _continuation_attempt(record, value)
     identity = dict({key: original[key] for key in ('client', 'session_id', 'task_id')}, job_id=record['data']['job_id'])
@@ -461,10 +489,10 @@ def continuation(scope, request, record, value, reply):
         route = _route(scope, record, _hold(service, record['id'])[1])
         choice = routing_launch.choice(HOST, 'subscription', model=route['model'], effort=route['effort']) \
             if route else _choice(original['selection'])
-        if _hold(service, attempt)[0] is None:
-            _close_turns(service, record)
-        answer = admit(service, scope, identity, attempt_id=record['id'], routing_attempt=attempt,
-                       role=record['data']['role'], choice=choice)
+        kept = _close_turns(service, record) if _hold(service, attempt)[0] is None else None
+        # an earlier turn still holds its capacity: no fresh permit on top of it
+        answer = dict(state='blocked', reason=kept) if kept else admit(
+            service, scope, identity, attempt_id=record['id'], routing_attempt=attempt, choice=choice)
     if answer.get('state') != 'admitted':
         return dict(reply, routing=dict(state=answer.get('state', 'blocked'), reason=answer.get('reason')))
     return dict(reply, routing=dict(state='admitted', attempt_id=attempt))
@@ -567,7 +595,7 @@ class _Reader:
         self.digest = digest
 
     def view(self, locator):
-        return dict(etag='self-check', job=dict(role='worker', revision='1' * 64, semantic_digest=self.digest, open=True),
+        return dict(etag='self-check', job=dict(role='software-engineer', revision='1' * 64, semantic_digest=self.digest, open=True),
                     dependencies=dict(accepted=True, digest='2' * 64, count=0),
                     ownership=dict(digest='3' * 64, conflict=False), resource=None)
 
@@ -583,7 +611,7 @@ def _self_check_in_child(workdir):
     if root is None:
         return ['self_check_workdir_unsafe']
     from types import SimpleNamespace
-    from runtime import routing_observations, routing_settings
+    from runtime import routing_observations, routing_settings, subscription_billing
     checkout = root / 'checkout'
     checkout.mkdir(mode=0o700)
     identity = routing_launch.route_identity(HOST, model='self-check-model', effort='high')
@@ -592,10 +620,11 @@ def _self_check_in_child(workdir):
               account='self-check', demand={'5h': 1}, binding_enforceable=True,
               window_unit=routing_observations.WINDOW_UNIT, **identity)],
         lambda pool, at: [dict(id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False,
-                               observed_at=at, unit=routing_observations.WINDOW_UNIT)])
+                               observed_at=at, unit=routing_observations.WINDOW_UNIT)],
+        billing=subscription_billing.double('self-check'))  # sandbox only: no production billing producer exists
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
-    job = dict(id='self-check', role='worker', scope_ref='self-check', claims=[], objective=None, context=None)
+    job = dict(id='self-check', role='software-engineer', scope_ref='self-check', claims=[], objective=None, context=None)
     service = _command().Service(root / 'routing' / 'settings.json', root / 'usage' / 'organizations.sqlite3',
                                  project=checkout, workflow=_Reader(routing.ensure_profile(job)['semantic_digest']))
     request, attempt, codes = dict(client='codex', session_id='self-check', task_id='self-check', job_id='self-check'), \
@@ -604,7 +633,7 @@ def _self_check_in_child(workdir):
         if _call(service, dict(v=1, op='set', authority_required=True)).get('state') != 'updated':
             return ['self_check_store_unavailable']
         answer = admit(service, SimpleNamespace(repository_root=checkout), request, attempt_id=attempt,
-                       routing_attempt=attempt, role='worker', job=job,
+                       routing_attempt=attempt, job=job,
                        choice=routing_launch.choice(HOST, 'subscription', model='self-check-model', effort='high'))
         record = _hold(service, attempt)[1] if answer.get('state') == 'admitted' else None
         bound = (((record or {}).get('binding') or {}).get('job') or {}).get('locator') or {}

@@ -3,7 +3,7 @@
 Contract: clients/opencode.md#uncertain-subscription-holds-s36c. `reconcile_subscription{attempt_id, evidence,
 event_id}` is a one-shot operator op for an open `uncertain` hold with window claims only; it never charges dollars.
 `host_usage` (the launcher's idle re-read of the derived session) settles like a subscription `complete`; `abandon`
-frees the concurrency place and turns the window claims into a debit that admission keeps counting (`held`) until
+closes the open attempt and turns the window claims into a debit that admission keeps counting (`held`) until
 a `prepare` snapshot shows a fixed window that began after the abandon (`_qualifies`). Time alone never releases.
 Only a `prepare` outside `--serve` clears a debit (C3-0a); a debit that never clears (a rolling window) is removed by the
 one-shot operator op `drop_debit{key, marker, event_id}` against the marker `status` lists.
@@ -29,7 +29,7 @@ MAX_WINDOW_DEBITS = 32
 # collector (routing.MAX_CLOCK_DRIFT): a window must begin at least this long after the abandon mark.
 CLOCK_MARGIN = 60
 HINT = ('Uncertain subscription holds (one-shot reconcile_subscription; stop the worker first): host_usage settles '
-        "from the launcher's re-read of the idle derived session; abandon frees the concurrency place and keeps the "
+        "from the launcher's re-read of the idle derived session; abandon closes the open attempt and keeps the "
         'window claim as a debit until telemetry shows a window that began after the abandon.')
 
 

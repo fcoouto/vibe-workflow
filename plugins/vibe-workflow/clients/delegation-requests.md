@@ -29,11 +29,16 @@ coordinator or check. Review claims must be read-only. Claims use `kind`, `key`,
 `host:"local"`; ports use `tcp:N` or `udp:N` with N from 1 to 65,535. File aliases and overlapping directory claims remain validated.
 
 Budget integers are positive. Deadline is future Unix seconds; resource units
-remain at most 1,000,000,000 and deadline below 2^63. Worker concurrency must fit
-observed host capacity (maximum 1,024). Job attempts must fit task attempts;
+remain at most 1,000,000,000 and deadline below 2^63. No worker count limits
+admission (11 November 2026): omit `max_parallel_workers`, `host_capacity` and
+`capacity_ref`. A legacy plan may still carry all three (workers at most host
+capacity, at most 1,024, plus a reference); they are validated and reported as
+`capacity.legacy_declared` with `enforced:false`. Packages before this change
+reject plans without them; see the [downgrade limit](../docs/smart-routing-validation.md#edit-8-11-november-2026-no-worker-count-admission).
+Job attempts must fit task attempts;
 dependencies name distinct existing jobs without cycles. Byte/ledger bounds remain;
 no fixed 32-job ceiling applies. Fallback is stop or explicitly authorized
-direct-coordinator. Obtain capacity/route/ownership references from actual checks.
+direct-coordinator. Obtain route/ownership references from actual checks.
 
 <!-- example:plan -->
 ```json
@@ -63,10 +68,7 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
     "limits": {
       "max_attempts": 8,
       "max_resource_units": 8,
-      "deadline": "<DEADLINE>",
-      "max_parallel_workers": 4,
-      "host_capacity": 4,
-      "capacity_ref": "coordinator:observed-slots"
+      "deadline": "<DEADLINE>"
     },
     "fallback": {
       "action": "stop",
@@ -75,7 +77,7 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
     "jobs": [
       {
         "id": "edit",
-        "role": "worker",
+        "role": "software-engineer",
         "claims": [
           {
             "kind": "path",
@@ -94,12 +96,20 @@ direct-coordinator. Obtain capacity/route/ownership references from actual check
 Return: `ok`, current `revision`, immutable `plan` reference and `plan_digest`, plus
 limitations. Plan acceptance starts no native worker and spends no worker attempt.
 
-Each job may carry an optional `profile` the coordinator fills: `task_family`,
-`complexity_band`, `risk_band` (`low|medium|high|critical`), `context_tokens`, `tools`,
-`review_policy` (`none|self|independent|strict`) and `uncertainty`. Code validates it;
-unknown fields are rejected. Missing or invalid fields take conservative floors, and no
-supplied value can lower a floor from write scope or job requirements. This task profile
-is separate from guidance `profile_ids`, which only reference cached recommendations.
+Each job's `role` is a specialist id from the roster in
+[the task profile template](../templates/task-profile.json), or `check` for a check run.
+A specialist that does not write files gets read-only claims. Each job may carry an
+optional `profile` the coordinator fills from the same template: its fields, their
+allowed values, one definition and example for each complexity and risk level, and the
+floors. Code validates the profile; unknown fields are rejected, except a retired
+`task_family`, which is accepted and ignored. Missing or invalid fields take
+conservative floors, and no supplied value can lower a floor from write scope or job
+requirements. Routing `prepare` lists the floor-filled fields as `missing_fields` and
+never blocks on them. Fill the profile before an attempt's first `prepare`: a decision
+is never replaced, so a repeated `prepare` of the same attempt returns its stored
+admission, while its `missing_fields` and `profile` describe only the repeated request.
+This task profile is separate from guidance `profile_ids`, which only reference cached
+recommendations.
 
 ## Prepare worker
 

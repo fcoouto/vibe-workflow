@@ -48,6 +48,29 @@ class Admission:
     qualification_digest: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ChargeRef:
+    """One settled local charge: an S1 run call (`kind='run'`, `phase` count or generation) or an S3.6 dollar hold
+    (`kind='hold'`, `phase=None`), with its exact charged amount."""
+
+    kind: str
+    id: str
+    phase: str | None
+    amount: int
+
+
+@dataclass(frozen=True, slots=True)
+class Coverage:
+    """Trusted in-process evidence that the staged balance observation `grant` already reflects `charges`.
+    Never parsed from JSON; no production producer is qualified (F5.A2). See `usage_budget_money.stage_coverage`."""
+
+    scope: str
+    config_revision: int
+    binding_digest: str
+    grant: Grant
+    charges: tuple
+
+
 def digest(value):
     """Canonical SHA-256 for the JSON values used by this protocol."""
     try:

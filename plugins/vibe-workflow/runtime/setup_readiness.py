@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import time
 
-from runtime import delegation, evidence as d5, startup, state
+from runtime import delegation, evidence as d5, startup, state, task_profile
 
 _ISSUER = object()
 _require = d5._require
@@ -47,7 +47,7 @@ def _current(scope, request):
         delegation._resources_available(scope, db, closure, records)
         delegation._qualification_allocation(scope, task, admission, records)
         barrier = next((row for row in records if row['id'] == verification['barrier_id']), None)
-        _require(barrier is not None and barrier['data']['role'] == 'coordinator'
+        _require(barrier is not None and task_profile.orchestrates(barrier['data']['role'])
             and all(barrier['owner'][key] == task[key] for key in ('client', 'session_id', 'task_id'))
             and barrier['owner']['scope_id'] == scope_id and barrier['body']['d5_plan'] == references['plan']
             and barrier['body']['request']['operation']['kind'] == 'completion-verification'

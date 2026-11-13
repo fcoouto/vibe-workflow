@@ -16,17 +16,22 @@ never prevent otherwise authorized execution; runtime schemas remain permissive
 for legacy input. Use this versioned object or the route's equivalent fields:
 
 ```json
-{"version":1,"role":"Reviewer","specialty":"Security assessment","custom_role_name":"Threat reviewer"}
+{"version":2,"role":"code-reviewer","specialty":"Security assessment","custom_role_name":"Threat reviewer"}
 ```
 
-Choose the actual responsibility: `Coordinator`, `Scout`, `Builder`, `Tester`,
-`Reviewer`, `Scribe` or `Investigator`. Never infer it from a task name, model,
-specialty or D6 authority role. Supply `custom_role_name` only when explicitly
-declared. Specialty and custom name are nonblank printable text, each at most
-4,096 characters. Preserve Unicode and the exact custom name. A custom name
-appears on native workers as `Custom role name · Model Display Name`. New
-external badges display `Role · Model Display Name`. Retain canonical role and
-specialty separately.
+Set `role` to the specialist id of the actual responsibility from the roster in
+[the task profile template](../templates/task-profile.json), for example
+`code-reviewer`, `software-engineer` or `explorer-agent`. Never infer it from a
+task name, model, specialty or D6 authority role. A new declaration must be
+version 2 with a roster id; a new version 1 declaration or an old role label is
+refused as invalid display metadata. Declarations already stored in a context or
+receipt keep their version and are shown as written, including version 1 roles.
+Supply `custom_role_name` only when explicitly declared. Specialty and custom
+name are nonblank printable text, each at most 4,096 characters. Preserve
+Unicode and the exact custom name. A custom name appears on native workers as
+`Custom role name · Model Display Name`. New external badges display the
+specialist's roster label, as in `Code Reviewer · Model Display Name`. Retain
+canonical role and specialty separately.
 The full label is sent in the existing display field without truncation. Report
 an unsupported label or receiver capability explicitly; the transport enforces
 its wire byte limit separately from the declared text lengths. Habblaud uses its

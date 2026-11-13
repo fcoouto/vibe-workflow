@@ -66,6 +66,8 @@ For Claude Code local testing without installing, launch `claude --plugin-dir .`
 
 For an explicitly selected existing project, use [onboard-my-project](skills/onboard-my-project/SKILL.md) to prepare a private plan, apply authorized configuration, activate qualified managed behavior, or undo owned changes. Configuration completes independently of runtime creation and native qualification. Canonical operations use the verified coordinator entry; the JSON CLI is for retained schema-1 requests. See [application and recovery](skills/onboard-my-project/references/apply-and-recovery.md). Package validation and actual client execution remain separate.
 
+Every onboarded repository follows [checkout stability](policies/02-task-planning.md#planning-and-verification): keep the primary checkout on its designated branch and use task worktrees. Native observations detect drift; this is not a Git hook or enforced sandbox. Existing installations need an authorized plugin/project update to reconcile old pointers and branch-only choices; no automatic fleet migration or active-session update occurs.
+
 ## Development
 
 Requires Git and Python 3.11+ on macOS or Linux. There is no package manager, linter or CI.

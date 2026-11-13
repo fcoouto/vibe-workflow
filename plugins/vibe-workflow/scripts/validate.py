@@ -20,16 +20,16 @@ MAX_PYTHON_LINES = 1000
 SKIPPED_DIRECTORIES = {"__pycache__", "node_modules", "venv", "site-packages"}
 OVERSIZED_PYTHON = {
     "runtime/adapters/codex.py": 1579,
-    "runtime/changes.py": 6074,
-    "runtime/delegation.py": 3369,
+    "runtime/changes.py": 6073,
+    "runtime/delegation.py": 3358,
     "runtime/evidence.py": 8505,
     "runtime/onboarding.py": 2620,
     "runtime/review_storage.py": 1297,
-    "runtime/routing.py": 1506,
+    "runtime/routing.py": 1415,
     "runtime/setup_observation.py": 1526,
     "runtime/startup.py": 1515,
     "runtime/state.py": 2613,
-    "runtime/usage_budget.py": 1553,
+    "runtime/usage_budget.py": 1467,
 }
 
 
@@ -140,11 +140,19 @@ def validate(root=ROOT):
         raise ValueError("Default hooks would duplicate Claude's explicit registration")
     local_file(root, "./clients/codex.md")
     local_file(root, "./runtime/adapters/codex.py")
-    from scripts.read_instructions import build_manifest
+    from scripts.read_instructions import instruction_name, source_entry, source_path
     local_file(root, "./scripts/read_instructions.py")
     local_file(root, "./scripts/drain_instructions.js")
-    if read_json(local_file(root, "./clients/instruction-map.json")) != build_manifest(root):
-        raise ValueError("Prepared instruction map is stale; run scripts/read_instructions.py --prepare during authoring")
+    for path in sorted([*(root / "clients").glob("*.md"), *(root / "policies").glob("*.md"),
+                        *(root / "templates").rglob("*.md"), *(root / "skills").rglob("*.md")]):
+        name = path.relative_to(root).as_posix()
+        if not instruction_name(name):
+            raise ValueError(f"Invalid instruction source name: {name}")
+        source_entry(source_path(root, name).read_bytes(), name)
+    from runtime import task_profile
+    drift = task_profile.brief_drift(root)  # the worker brief's generated Task Profile section
+    if drift:
+        raise ValueError("; ".join(drift))
     validate_codex_hooks(root, manifest)
     validate_startup_hook(root, claude, "claude-code", "CLAUDE_PLUGIN_ROOT")
     receiver = read_json(local_file(root, "./assets/habblaud/receiver.json"))
@@ -233,8 +241,10 @@ def validate(root=ROOT):
     if len(entries) != 1 or entries[0]["source"] != {"source": "local", "path": "./"}:
         raise ValueError("Local marketplace must reference this package root once")
     export = package_export(root)
+    from runtime import model_names  # the user's compiled table names the models; none there means not_checked
     return {"package": manifest["name"], "validation": "passed", "skill_words": counts,
-            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked"}
+            "package_export": export, "warnings": export["warnings"], "client_execution": "not_checked",
+            "model_names": model_names.check(root)}
 
 
 def release_pathspecs():

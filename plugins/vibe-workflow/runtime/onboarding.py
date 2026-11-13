@@ -14,6 +14,7 @@ import uuid
 
 from runtime.entry_budget import observe_within
 from runtime.onboarding_coverage import coverage_problem
+from runtime.persisted_binding import all_match as _same_all, matches as _same
 from runtime.startup import PROJECT_FILE, StartupError, checkout, _checkout_identity, decode_project_record, json_object, policy_digest, runtime_settings, _check_observation_deadline
 from runtime.state import runtime_fingerprint
 
@@ -1285,7 +1286,7 @@ def _project_plan_shape(plan):
                 binding(value)
     current = plan["current_observations"]
     _object(current, ("project_binding", "authority", "project", "repositories"))
-    _require(current["project_binding"] == identity["binding"] and current["authority"] == identity["authority"],
+    _require(_same(identity["binding"], current["project_binding"]) and current["authority"] == identity["authority"],
              "Current Project authority binding differs from the frozen identity")
     _object(plan["assessments"], ("project", "repositories"))
     repositories = plan["assessments"]["repositories"]
@@ -1337,7 +1338,7 @@ def _project_plan_shape(plan):
                 for entry in value["binding"].values():
                     binding(entry)
                 _require(all(value[key] == owner[key] for key in ("root", "primary_root", "git_dir", "git_common_dir"))
-                         and value["binding"] == assessment["identity"]["binding"]
+                         and _same_all(assessment["identity"]["binding"], value["binding"])
                          and value["membership"] in ("included", "excluded", "outside", "unknown"),
                          "Invalid Repository observation binding")
                 if value["snapshot"] is not None:
@@ -1397,7 +1398,7 @@ def _project_plan_shape(plan):
         decode_project_record(record)
         _require(record["project_id"] == plan["identity"]["project_id"]
                  and record["project_root"] == scope["project_root"] and record["kind"] == scope["kind"]
-                 and record["project_binding"] == plan["identity"]["binding"], "Canonical Project identity differs")
+                 and _same(record["project_binding"], plan["identity"]["binding"]), "Canonical Project identity differs")
         retained_ids = {r["repository_id"] for r in record["repositories"]} | {
             c["checkout_id"] for r in record["repositories"] for c in r["checkouts"]}
         for assessment in repositories:
@@ -1420,25 +1421,25 @@ def _canonical_owner_ids(record, repository):
     if not matches:
         for known in record["repositories"]:
             _require(known["git_common_dir"] != repository["git_common_dir"] and
-                     known["binding"]["primary_root"] != repository["binding"].get("primary_root") and
-                     known["binding"]["git_common_dir"] != repository["binding"].get("git_common_dir") and
-                     all(c["root"] != repository["root"] and c["binding"]["root"] != repository["binding"].get("root")
+                     not _same(known["binding"]["primary_root"], repository["binding"].get("primary_root")) and
+                     not _same(known["binding"]["git_common_dir"], repository["binding"].get("git_common_dir")) and
+                     all(c["root"] != repository["root"] and not _same(c["binding"]["root"], repository["binding"].get("root"))
                          for c in known["checkouts"]), "Canonical Repository identity conflicts; reconcile ownership")
         return None, None
     known = matches[0]
     _require(known["membership"] == "joined" and repository["membership"] == "included"
              and known["git_common_dir"] == repository["git_common_dir"]
-             and all(known["binding"][k] == repository["binding"].get(k) for k in known["binding"]),
+             and all(_same(known["binding"][k], repository["binding"].get(k)) for k in known["binding"]),
              "Canonical Repository binding or removed membership requires reconciliation")
     selected = next((c for c in known["checkouts"] if c["root"] == repository["root"]), None)
     if selected is None:
-        _require(all(c["binding"]["root"] != repository["binding"].get("root") and
+        _require(all(not _same(c["binding"]["root"], repository["binding"].get("root")) and
                      c["git_dir"] != repository["git_dir"] and
-                     c["binding"]["git_dir"] != repository["binding"].get("git_dir") for c in known["checkouts"]),
+                     not _same(c["binding"]["git_dir"], repository["binding"].get("git_dir")) for c in known["checkouts"]),
                  "Canonical checkout identity moved; reconcile ownership")
         return known["repository_id"], None
     _require(selected["git_dir"] == repository["git_dir"] and
-             all(selected["binding"][k] == repository["binding"].get(k) for k in selected["binding"]),
+             all(_same(selected["binding"][k], repository["binding"].get(k)) for k in selected["binding"]),
              "Canonical checkout binding requires reconciliation")
     return known["repository_id"], selected["checkout_id"]
 
@@ -1472,7 +1473,7 @@ def _inspect_project_scope(cwd, plan_dir, request):
             _require(not selected["error"] and len(present) == 1
                      and selected["fingerprint"].get("sha256") == scope["authority"]["sha256"]
                      and canonical["kind"] == scope["kind"] and canonical["project_root"] == scope["project_root"]
-                     and canonical["project_binding"] == observed["project_binding"],
+                     and _same(canonical["project_binding"], observed["project_binding"]),
                      "Canonical authority identity/bindings conflict; start a reconciled plan")
             for repository in observed["repositories"]:
                 _canonical_owner_ids(canonical, repository)
@@ -1518,7 +1519,7 @@ def _inspect_project_scope(cwd, plan_dir, request):
                     "requirements": _requirements(declared), "invalidations": [], "decision_history": [],
                     "recovery_requirement": "Schema 2 requires scoped D3 proposals and D4 adoption support before apply"}
         else:
-            _require(plan["identity"]["binding"] == observed["project_binding"]
+            _require(_same(plan["identity"]["binding"], observed["project_binding"])
                      and _match_authorities(plan["identity"]["authority"], observed["authority"]),
                      "Project authority/filesystem binding changed; start a new reviewed plan")
             observed["authority"] = deepcopy(plan["identity"]["authority"])
@@ -1872,7 +1873,7 @@ def _frozen_project(plan):
 def _project_current(plan):
     sources = _sources(plan["sources"]["declared"])
     observed, blockers = _project_observations(plan["project_scope"], sources, plan["assessments"])
-    _require(observed["project_binding"] == plan["identity"]["binding"]
+    _require(_same(plan["identity"]["binding"], observed["project_binding"])
              and _match_authorities(plan["identity"]["authority"], observed["authority"]),
              "Project authority/filesystem binding changed; start a new reviewed plan")
     observed["authority"] = deepcopy(plan["identity"]["authority"])

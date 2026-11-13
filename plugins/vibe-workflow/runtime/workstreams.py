@@ -2,7 +2,7 @@
 
 import hashlib
 
-from runtime import delegation as d6, delegation_routing, evidence, state
+from runtime import delegation as d6, delegation_routing, evidence, persisted_binding, state
 from runtime.startup import json_object
 
 
@@ -61,7 +61,7 @@ def _validate_setting_value(value,binding):
     state._fields(value, ('version', 'revision', 'enabled', 'binding'), ('handoff', 'features'))
     d6._require(type(value['version']) is int and value['version'] == 1 and
         type(value['revision']) is int and 0 < value['revision'] < 2**53 and
-        type(value['enabled']) is bool and binding is not None and value['binding'] == binding,
+        type(value['enabled']) is bool and binding is not None and persisted_binding.record_matches(value['binding'], binding),
         'Workstreams setting is corrupt or its checkout authority changed')
     if 'features' in value:
         features = value['features']
@@ -187,7 +187,7 @@ def validate_admission(scope, request):
         return
     d6._require(present == {'workstream_revision', 'workstream_limits'}, 'Workstreams requires revision and task-derived limits')
     _permission(scope, request['workstream_revision'])
-    d6._native_name('0' * 32, 'worker', request)
+    d6._native_name('0' * 32, 'software-engineer', request)  # Workstreams gates admit implementation workers
     limits = request['workstream_limits']
     state._fields(limits, ('context_id', 'rationale', 'output_tokens', 'context_tokens', 'max_steps',
         'max_seconds', 'max_continuations', 'backoff_seconds'))

@@ -11,32 +11,30 @@ import stat
 import uuid
 
 from runtime import ledger_versions  # state versions and migration (C3-0a); it reads this module lazily
+from runtime import usage_budget_money, usage_budget_runs, usage_budget_storage  # each reads this module lazily
 
 MAX_INTEGER = 2**53 - 1  # also the bound for every micro-unit amount (about 9e9 USD)
-# Two record limits (compact JSON characters). A write that adds exposure or grows a table (`grows=True`:
-# begin, top_up, reserve_generation, admit, configure, enable_organization) commits only while the record stays
-# within SOFT_RECORD; past it those are refused with `ledger_capacity_reached`. Every other write (dispatch,
-# dispatch_hold, complete, uncertain, reject_unsent, close_run, mark_*, close_attempt, require_authority,
-# convert_hold, observe, disable_organization, release_native) commits up to MAX_RECORD, so a full ledger can always settle and
-# never leaves a call in `dispatching`. MAX_RECORD is also the read limit. It covers the computed worst case
-# (tests/test_routing_funding_capacity.py CapacityTests: every table and entry at its bound, 256-character ASCII
-# identifiers, every native task finished, every call with a maximal `incomplete` record, one `over_bound` marker per
-# run and S3.6c's 32 window debits): 10,716,910, 89.31% with S3.6a's settlement (352 per hold), a legacy block (10.53M, 87.8% after
-# S3.5's binding allowance). The margin to the 90% test ceiling is thin: avoid further per-hold or per-call fields. S3.6a's event and root tables
-# are separate rows with their own bounds (MAX_EVENTS, MAX_ROOTS), outside this record.
-SOFT_RECORD = 6_000_000
-MAX_RECORD = 12_000_000
+# Two body limits in UTF-8 bytes of compact, lossless JSON (F5.S, approved storage amendment; usage_budget_storage).
+# A growing write (`grows=True`: begin, top_up, reserve_*, admit, configure, enable_organization, a lot list that grows,
+# handoffs) commits only while body + R (the growth existing owners may still add) stays within SOFT_RECORD; past it,
+# `ledger_capacity_reached`. Every other write (dispatch, dispatch_hold, complete, uncertain, reject_unsent, close_run,
+# mark_*, close_attempt, convert_hold, scalar observe, disable_organization, release_native, settlement) only needs the
+# body within MAX_RECORD: R prepaid its growth, including a hold's conversion into a run and native task, so admitted
+# work can always settle. MAX_RECORD is also the read limit. Ledgers written by older code did not prepay R: they stay
+# readable and keep every exposure, and new admission waits until body + R fits. Event and root rows are separate
+# and keep their character limits (MAX_EVENT_BYTES, MAX_ROOT_BYTES).
+SOFT_RECORD = 192 * 1024 * 1024
+MAX_RECORD = 256 * 1024 * 1024
 FRESH_SECONDS = 900
 MAX_RUNS = 1000
 MAX_ADMISSIONS = 256
-MAX_HOLDS = 256  # open holds are bounded by the concurrency caps; released ones are pruned at the bound
+MAX_HOLDS = 256  # storage integrity, not a worker policy: released holds are pruned at the bound (F5.A1)
 MAX_SEEN = 1000  # recent attempt ids kept for reuse rejection; older ids are the caller's responsibility
-# Per-entry bounds (compact JSON characters) so the worst case provably fits; see CapacityTests.
-# A larger admission is refused with `record_too_large` and writes nothing. An admission carries its workflow
-# binding (S3.5, runtime/routing_gates.py), bounded by MAX_BINDING_BYTES on top of the S3.4 record allowance.
-MAX_BINDING_BYTES = 2560
-MAX_ADMISSION_BYTES = 4096 + MAX_BINDING_BYTES
-MAX_HOLD_BYTES = 2048
+# Per-entry bounds in UTF-8 bytes (F5.S); a larger admission is refused with `record_too_large` and writes nothing.
+# Measured caller maxima (tests/test_routing_storage.py): record 192,682, hold about 19.6 K, binding 7,357 bytes.
+MAX_BINDING_BYTES = 16 * 1024
+MAX_ADMISSION_BYTES = 256 * 1024
+MAX_HOLD_BYTES = 32 * 1024
 # Fixed-size fields `dispatch_hold` adds to an admitted hold (two derived ids, an authority hash and a time); the
 # worst-case capacity test counts every hold at both bounds.
 DISPATCH_HOLD_BYTES = 256
@@ -60,7 +58,7 @@ HOLD_OUTCOMES = ('not_dispatched', 'complete', 'uncertain')
 BASIS_POINTS = 10000
 DEFAULT_ALLOWANCE_BP = 9800
 DEFAULT_MARGIN_BP = 2000
-DEFAULT_CAPS = dict(total=4, per_account=2)
+DEFAULT_CAPS = dict(total=4, per_account=2)  # legacy caps shape: stored values stay readable, never enforced
 POLICY_FIELDS = 'cycle start end expiry stop_at ceiling amount grant_amount pilot_limit task_limit'
 # S3.6a accounting. Contract: docs/superpowers/plans/2026-11-08-smart-routing.md#task-s36-lineage-settlement-and-retention
 # Settled charges stay in R (like S1 run costs). Retiring one needs evidence that the observed balance reflects it
@@ -82,7 +80,7 @@ TOKEN_FIELDS = ('input', 'output', 'reasoning', 'cache_read', 'cache_write')
 STAGES = ('coordinator', 'profiling', 'routing', 'worker', 'review', 'rescue', 'repair', 'check', 'escalation',
           'auxiliary')
 ROLE_STAGES = dict(implementer='worker', worker='worker', reviewer='review', review='review', repair='repair',
-                   check='check', researcher='auxiliary')
+                   check='check', researcher='auxiliary')  # keyed by bucket[0]: a work kind, or a stored old role
 # Lifecycle events live in their own table of the ledger file, written in the ledger transaction. A body holds
 # ids, labels, integer totals and the outcome; never a prompt, body, transcript or credential. Worst case in
 # characters: two 256-character ids, eight 517-character unit keys in the usage and in the outcome, nine claim
@@ -237,16 +235,14 @@ class Ledger:
         self.db.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
         try:
             row = self.db.execute('SELECT body FROM ledger WHERE id=1').fetchone()
-            require(row is not None and len(row[0]) <= MAX_RECORD, 'invalid_ledger')
+            require(row is not None and usage_budget_storage.text_size(row[0]) <= MAX_RECORD, 'invalid_ledger')
             data = json.loads(row[0])
             original = json.loads(row[0]) if write else None
             ledger_versions.upgrade(data, self.identity)  # refuses an unknown version, then migrates in place
             yield data
             self._check()
             if write and data != original:
-                raw = json.dumps(data, allow_nan=False, separators=(',', ':'))
-                require(len(raw) <= (SOFT_RECORD if grows else MAX_RECORD), 'ledger_capacity_reached')
-                self.db.execute('UPDATE ledger SET body=? WHERE id=1', (raw,))
+                self.db.execute('UPDATE ledger SET body=? WHERE id=1', (usage_budget_storage.body_for_write(data, grows=grows),))
             self.db.execute('COMMIT')
         except BaseException:
             self.db.execute('ROLLBACK')
@@ -325,9 +321,12 @@ class Ledger:
             require(org['observed_at'] is None or observed_at > org['observed_at'], 'observation_not_newer')
             lots = self._lots(org, lots)
             self._note_balance(org, balance, issued)
+            grew = lots is not None and usage_budget_storage.encoded_size(lots) > usage_budget_storage.encoded_size(
+                org.get('lots', []))  # F5.S: lot metadata that grows (same length included) is a growing write
             if lots is not None:
                 org['lots'] = lots
             org['observed_at'] = observed_at
+            if grew: usage_budget_storage.require_growth(data)
 
     @staticmethod
     def _note_balance(org, balance, issued=None):
@@ -401,7 +400,9 @@ class Ledger:
     def _credit_raw(cls, data, organization, now=None):
         org = data['organizations'][organization]
         require(org['balance'] is not None, 'balance_unverified')
-        return cls._available(org, now) - cls._protected(org) - cls._total(data, organization)
+        # F5.A2: a charge a trusted observation already reflects in B is not subtracted again (`_total` keeps it).
+        return cls._available(org, now) - cls._protected(org) - cls._total(data, organization) + \
+            usage_budget_money.covered(data, organization)
 
     @classmethod
     def _credit(cls, data, organization, now=None):
@@ -568,20 +569,15 @@ class Ledger:
         bound = integer(next_request_bound or 0)
         return max(-(-(estimate * (BASIS_POINTS + margin)) // BASIS_POINTS), bound)
 
-    @staticmethod
-    def _caps(data):
-        caps = data.get('caps', DEFAULT_CAPS)
-        return caps['total'], caps['per_account']
-
     def set_caps(self, total, per_account):
-        """Persist the concurrency caps (spec 7.4); defaults are 4 total and 2 per account."""
+        """Store legacy concurrency caps. F5.A1: kept readable for old ledgers and status; no admission reads them."""
         require(integer(total) > 0 and integer(per_account) > 0, 'invalid_caps')
         with self.transaction() as data:
             data['caps'] = dict(total=total, per_account=per_account)
 
     @staticmethod
     def open_attempts(data):
-        """One concurrency place per open attempt id, with its provider account.
+        """One entry per open attempt id, with its provider account (an inventory, not an admission count).
 
         A run converted from a hold keeps the hold's account and id, so the attempt is counted once whether its
         hold, its run or both are open. A run begun directly counts under its organization."""
@@ -595,17 +591,7 @@ class Ledger:
     def open_accounts(cls, data):
         return list(cls.open_attempts(data).values())
 
-    @classmethod
-    def _check_caps(cls, data, account):
-        total, per_account = cls._caps(data)
-        accounts = cls.open_accounts(data)
-        require(len(accounts) < total and accounts.count(account) < per_account, 'concurrency_cap')
-
-    @staticmethod
-    def _active_call(run):
-        """The call that still holds an envelope: reserved or in flight."""
-        active = [call for call in run['calls'].values() if call['state'] in ('reserved', 'dispatching')]
-        return active[-1] if active else None
+    _active_call = staticmethod(usage_budget_money.active_call)  # reserved or in flight; never a placeholder
 
     @classmethod
     def _transfer(cls, data, organization, transfer_from, amount_limit):
@@ -614,8 +600,8 @@ class Ledger:
         parent_id, amount = transfer_from
         name(parent_id); integer(amount)
         parent = data['runs'].get(parent_id)
-        require(parent is not None and not parent['closed'] and parent['organization'] == organization,
-                'transfer_forbidden')
+        require(parent is not None and not parent['closed'] and parent['organization'] == organization
+                and not parent.get('envelope'), 'transfer_forbidden')  # an envelope never holds review provision
         call = cls._active_call(parent)
         require(call is not None, 'transfer_forbidden')
         require(amount <= call.get('provision', 0) and amount <= amount_limit, 'provision_exceeded')
@@ -647,7 +633,6 @@ class Ledger:
             return run
         require(run_id not in data['holds'], 'attempt_id_in_use')  # an admitted attempt becomes a run only by conversion
         require(len(data['runs']) < MAX_RUNS, 'ledger_capacity_reached')
-        self._check_caps(data, organization)
         moved = 0
         if transfer_from is not None:
             moved = self._transfer(data, organization, transfer_from, maximum)
@@ -688,7 +673,7 @@ class Ledger:
         come from the hold; another `organization` raises `hold_organization_mismatch`. The run's own bound
         (`estimate` padded as in `begin`) must fit the hold, else `hold_exceeded`: a larger need goes through
         an explicit `top_up` and its headroom check. The whole hold amount moves 1:1 into the run's envelope,
-        so R and the attempt's single concurrency place are unchanged; window claims stay on the hold. Any
+        so R and the attempt's single open-attempt entry are unchanged; window claims stay on the hold. Any
         refusal leaves the ledger unchanged.
         """
         for value in (attempt_id, organization, digest): name(value)
@@ -731,75 +716,22 @@ class Ledger:
         return dict(maximum=maximum, cost=None, digest=digest, state='reserved',
                     cycle=data['organizations'][run['organization']]['policy']['cycle'])
 
+    reserve_task, reserve_call = usage_budget_money.reserve_task, usage_budget_money.reserve_call  # F5.A2 envelope
+    complete_unknown, apply_coverage = usage_budget_money.complete_unknown, usage_budget_money.apply_coverage
     def reserve_generation(self, run_id, digest, maximum, revision, now, *, live_gate=None):
-        name(digest)
-        with self.transaction(grows=True) as data:
-            run = data['runs'][run_id]
-            require(not run['closed'] and run['calls']['count']['state'] == 'completed', 'count_not_completed')
-            require('generation' not in run['calls'], 'attempt_exists')
-            require(run['revision'] == revision, 'policy_revision_changed')
-            self._live_admit(data, run['organization'], maximum, now, live_gate, run)
-            self._admit(data, run['organization'], run['task'], maximum, revision, now)
-            run['calls']['generation'] = self._call(data, run, maximum, digest)
+        usage_budget_runs.reserve_generation(self, run_id, digest, maximum, revision, now, live_gate=live_gate)
 
     def dispatch(self, run_id, phase, revision, now, *, live_gate=None):
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            if run.get('consent') is not None:
-                self._consent(data, run['consent'])
-            require(not run['closed'] and call['state'] == 'reserved', 'dispatch_forbidden')
-            require(run['revision'] == revision, 'policy_revision_changed')
-            # The call's own reservation has already reduced headroom.
-            self._live_admit(data, run['organization'], 0, now, live_gate, run)
-            self._admit(data, run['organization'], run['task'], 0, revision, now)
-            require(self._headroom(data, run['organization'], run['task']) >= 0, 'insufficient_headroom')
-            policy = data['organizations'][run['organization']]['policy']
-            require((policy['pilot_limit'] is None or self._total(data, run['organization']) <= policy['pilot_limit'])
-                    and (policy['task_limit'] is None
-                         or self._total(data, run['organization'], run['task']) <= policy['task_limit']),
-                    'limits_changed')
-            cap = policy['amount'] if policy['ceiling'] == 'custom' else policy['grant_amount']
-            require(policy['ceiling'] == 'none' or self._total(data, run['organization'], cycle=policy['cycle']) <= cap, 'limits_changed')
-            require(self._credit_raw(data, run['organization'], now) >= 0, 'credit_changed')
-            call['state'] = 'dispatching'
-            data['native'][run['native']]['latest_at'] = now
+        usage_budget_runs.dispatch(self, run_id, phase, revision, now, live_gate=live_gate)
 
     def complete(self, run_id, phase, actual):
-        integer(actual)
-        overrun = False
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            require(call['state'] in ('dispatching', 'unresolved'), 'completion_forbidden')
-            # Over-bound is sticky: a later (lower) report never settles the call or unblocks its organization.
-            require('over_bound' not in call, 'over_bound_unresolved')
-            if actual > call['maximum']:
-                call.update(state='unresolved', over_bound=actual); overrun = True  # blocks via block_reasons
-            else:
-                call.update(cost=actual, state='completed')  # Charges actual; unused padding is released.
-                call.pop('provision', None)
-                if phase == 'generation':
-                    self._close_run(data, run_id)
-        require(not overrun, 'cost_exceeds_bound')
+        usage_budget_runs.complete(self, run_id, phase, actual)
 
     def uncertain(self, run_id, phase, *, incomplete=None):
-        with self.transaction() as data:
-            call = data['runs'][run_id]['calls'][phase]
-            require(call['state'] == 'dispatching', 'uncertainty_forbidden')
-            call['state'] = 'unresolved'
-            if incomplete is not None:
-                try:
-                    size = len(json.dumps(incomplete, allow_nan=False, separators=(',', ':')))
-                except (TypeError, ValueError, RecursionError):
-                    size = MAX_INCOMPLETE_BYTES + 1
-                call['incomplete'] = incomplete if size <= MAX_INCOMPLETE_BYTES else dict(omitted='too_large')
+        usage_budget_runs.uncertain(self, run_id, phase, incomplete=incomplete)
 
     def close_run(self, run_id):
-        with self.transaction() as data:
-            run = data['runs'][run_id]
-            require(not any(c['state'] in ('dispatching', 'unresolved') for c in run['calls'].values()), 'request_may_be_running')
-            for call in run['calls'].values():
-                if call['state'] == 'reserved': call.update(cost=0, state='rejected-before-send')
-            self._close_run(data, run_id)
+        usage_budget_runs.close_run(self, run_id)
 
     @staticmethod
     def held(data):
@@ -863,7 +795,6 @@ class Ledger:
                 organization, amount = name(dollars[0][len(ORG):]), vector[dollars[0]]
                 self._admit(data, organization, task, amount, outcome.get('revision'), outcome.get('now'))
                 cycle = data['organizations'][organization]['policy']['cycle']
-            self._check_caps(data, account)
             # A random nonce per admission keeps a reused attempt id from deriving the same host ids (S3.4).
             record = dict(record, nonce=secrets.token_hex(16))
             if data.get('authority_required'):
@@ -874,7 +805,7 @@ class Ledger:
             hold.update(zip(('root', 'stage'), self._record_root(record, task)))
             for entry, limit in ((record, MAX_ADMISSION_BYTES), (hold, MAX_HOLD_BYTES)):
                 try:
-                    size = len(json.dumps(entry, allow_nan=False, separators=(',', ':')))
+                    size = usage_budget_storage.encoded_size(entry)  # UTF-8 bytes (F5.S)
                 except (TypeError, ValueError, RecursionError) as error:
                     raise BudgetError('invalid_admission') from error
                 require(size <= limit, 'record_too_large')
@@ -965,7 +896,7 @@ class Ledger:
             return dict(issued=True, state='dispatched', ids=dict(ids))
 
     def mark_uncertain(self, attempt_id):
-        """Delivery cannot be established; the hold keeps its exposure and its concurrency place.
+        """Delivery cannot be established; the hold stays open and keeps its exposure.
 
         No proof of non-launch is accepted: an uncertain dollar hold stays counted until the operator's
         `reconcile_uncertain` settles it from receipts or charges its full reservation (S3.6b-2)."""
@@ -1523,11 +1454,7 @@ class Ledger:
 
     def reject_unsent(self, run_id, phase):
         """Host transport established no send; not a user/worker receipt."""
-        with self.transaction() as data:
-            run = data['runs'][run_id]; call = run['calls'][phase]
-            require(call['state'] == 'dispatching', 'rejection_forbidden')
-            call.update(cost=0, state='rejected-before-send')
-            self._close_run(data, run_id)
+        usage_budget_runs.reject_unsent(self, run_id, phase)
 
     @staticmethod
     def _consent(data, pin):
@@ -1537,17 +1464,4 @@ class Ledger:
                 and not config['disabled'] and (pin['qualification_revision'] is None
                 or config['qualification_revision'] == pin['qualification_revision']), 'consent_changed')
 
-    def reconcile(self, *, scope=None):
-        """Report scoped recovery evidence without altering reservations."""
-        result = {'state': 'manual_recovery_required'}
-        if scope is None:
-            return result
-        pending = [dict(attempt_id=run_id + ':' + phase, reserved_usd_micros=call['maximum'],
-                        incomplete=call.get('incomplete'))
-                   for run_id, run in sorted(self.snapshot()['runs'].items())
-                   if (run.get('consent') or {}).get('scope') == scope
-                   for phase, call in run['calls'].items() if call['state'] == 'unresolved']
-        if pending:
-            result['pending'] = pending[0]
-            result['pending_attempts'] = pending
-        return result
+    reconcile = usage_budget_money.reconcile  # scoped recovery evidence; never alters reservations

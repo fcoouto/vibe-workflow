@@ -27,7 +27,8 @@ import sys
 import tempfile
 import time
 
-from runtime import opencode_accounting, routing, routing_launch, routing_observations
+from runtime import opencode_accounting, opencode_subscription, routing, routing_launch, routing_observations, \
+    subscription_billing
 from runtime.adapters import opencode as adapter
 
 # Fixed refusal codes this slice defines (C.3 design 3.6). Codes from the core and the routing command pass through.
@@ -38,6 +39,7 @@ ATTACH_FAILED = 'attach_failed'
 LAUNCH_UNCONFIRMED = 'launch_unconfirmed'
 LAUNCH_OPTIONS_UNEXPRESSIBLE = 'launch_options_unexpressible'
 LAUNCH_OPTIONS_MISMATCH = 'launch_options_mismatch'
+AGENT_STEPS_UNCAPPED = 'agent_steps_uncapped'
 # User decision 4 (C.3 design 7.1): an API-funded OpenCode route is refused until the S3.6 positive and negative
 # descendants runs have been observed with real costs. Only a code change lifts it.
 API_FUNDING_QUALIFIED = False
@@ -85,10 +87,16 @@ WINDOW_UNIT = routing_observations.WINDOW_UNIT
 
 
 # Per-launch provider options (`launch_options`) go into the launch's own inline config, in OpenCode's V2 keys:
-# `providers.<p>.models.<m>.body` request fields and `agents.<PRIMARY_AGENT>.steps`. Only OpenRouter can pin an
-# endpoint (its request body's `provider.only` with `allow_fallbacks: false`). Whether 2.2.6 honours each key, and
-# that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6), are live items (clients/opencode.md).
+# `providers.<p>.models.<m>.body` request fields and `agents.<name>.steps` for every BUILTIN_AGENTS name. Only
+# OpenRouter can pin an endpoint (its request body's `provider.only` with `allow_fallbacks: false`). V2 has no
+# default step limit, so an agent the config does not name would run uncapped: the launch reads the host's agent
+# listing once and refuses unless `uncapped_agents` finds none. Whether 2.2.6 honours each key, whether its
+# listing includes the hidden agents, and that a prompt without an agent runs as PRIMARY_AGENT (recorded on 2.2.6),
+# are live items (clients/opencode.md).
 PRIMARY_AGENT = 'build'
+# The V2 built-in agents: the visible `build`, `plan`, `general` and `explore`, and the hidden maintenance agents.
+BUILTIN_AGENTS = (PRIMARY_AGENT, 'plan', 'general', 'explore', 'compaction', 'title', 'summary')
+LISTING_UNREADABLE = 'agent listing unreadable'
 ENDPOINT_PIN_PROVIDERS = ('openrouter',)
 MAX_OUTPUT_TOKENS = 1_000_000
 MAX_STEPS = 64
@@ -152,11 +160,45 @@ def launch_options(provider, model, *, endpoint, max_output_tokens, steps):
     return dict(provider=provider, model=model, endpoint=endpoint, max_output_tokens=max_output_tokens, steps=steps)
 
 
+def agents_config(steps):
+    """The inline config's `agents`: every built-in agent capped at `steps`."""
+    return {name: dict(steps=steps) for name in BUILTIN_AGENTS}
+
+
+def uncapped_agents(listing, config_agents, steps):
+    """The agents in a host's listing (`GET /api/agent` data) that are not capped at exactly `steps`; an empty list
+    means every listed agent is. The one rule the launcher and the gateway harness share. An agent's name is its
+    `id`, else its `name`. When it reports `steps`, they must equal `steps` (a bool never counts). When it does not,
+    it is capped only if `config_agents` (the inline config's `agents`) sets exactly `steps` for that name. An empty,
+    malformed or unreadable (None) listing answers `[LISTING_UNREADABLE]`, so a non-empty answer always refuses."""
+    def exact(value):
+        return type(value) is int and value == steps
+
+    if not isinstance(listing, list) or not listing:
+        return [LISTING_UNREADABLE]
+    config_agents = config_agents if isinstance(config_agents, dict) else {}
+    found = []
+    for agent in listing:
+        if not isinstance(agent, dict):
+            return [LISTING_UNREADABLE]
+        name = agent.get('id') if isinstance(agent.get('id'), str) else agent.get('name')
+        if not isinstance(name, str):
+            return [LISTING_UNREADABLE]
+        if 'steps' in agent:
+            capped = exact(agent['steps'])
+        else:
+            configured = config_agents.get(name)
+            capped = isinstance(configured, dict) and exact(configured.get('steps'))
+        if not capped:
+            found.append(name)
+    return found
+
+
 def server_config(settings_path, ledger_path, plugin, options=None):
     """The inline server config (`OPENCODE_CONFIG_CONTENT`): the routing shim as the only plugin, pinned to the
     managed service's own stores with the routing state directories protected from model edits; no MCP server,
     formatter or LSP server; and the worker profile's permission rules. With `options` (`launch_options`), the
-    model's request body pins the endpoint and caps the output, and the primary agent's steps are capped. Whether
+    model's request body pins the endpoint and caps the output, and every built-in agent's steps are capped. Whether
     OpenCode lets a project or global config add to or override it is unobserved (clients/opencode.md#managed-launcher,
     pre-canary probe)."""
     shim = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
@@ -168,7 +210,7 @@ def server_config(settings_path, ledger_path, plugin, options=None):
         body = dict(provider=dict(only=[options['endpoint']], allow_fallbacks=False),
                     max_tokens=options['max_output_tokens'])
         config.update(providers={options['provider']: dict(models={options['model']: dict(body=body)})},
-                      agents={PRIMARY_AGENT: dict(steps=options['steps'])})
+                      agents=agents_config(options['steps']))
     return config
 
 
@@ -315,6 +357,15 @@ def enforcement(host, answer):
     except adapter.AdapterError:
         return 'advisory'
     return probed['enforcement_profile']
+
+
+def agents_capped(host, steps):
+    """Whether every agent the host lists is capped at `steps` (`uncapped_agents`; one `GET /api/agent`)."""
+    try:
+        status, body = host.request('GET', '/api/agent')
+    except Exception:  # noqa: BLE001 - an unreadable listing proves no cap
+        return False
+    return not uncapped_agents(_data(body) if status == 200 else None, agents_config(steps), steps)
 
 
 def catalog(host):
@@ -490,7 +541,9 @@ class _Attempt:
     def __call__(self, route, *, authority, session_id, message_id):
         self._token, self.session = authority, session_id
         attempt = self.gate.attempt_id
-        model = '%s/%s#%s' % (route['provider'], route['model'], route['variant'])
+        # An omitted effort (None) is sent as no variant, to the shim and the session alike; the routing check reads
+        # a missing variant as the admitted identity's `none` sentinel.
+        model = '%s/%s' % (route['provider'], route['model']) + ('' if route['variant'] is None else '#' + route['variant'])
         try:
             status, body = self.host.rpc('attach', dict(session_id=session_id, attempt_id=attempt, authority=authority,
                                                         funding_pool=route['funding_pool'], model=model,
@@ -503,7 +556,8 @@ class _Attempt:
         self.attached = True
         status, created = self.host.request('POST', '/api/session', dict(
             id=session_id, title=SESSION_TITLE, permissions=WORKER_RULES, location=dict(directory=self.host.directory),
-            model=dict(id=route['model'], providerID=route['provider'], variant=route['variant'])))
+            model=dict(id=route['model'], providerID=route['provider'],
+                       **({} if route['variant'] is None else dict(variant=route['variant'])))))
         if status != 200 or (_data(created) or {}).get('id') != session_id:
             raise Unconfirmed('session_unconfirmed')
         began = int(time.time() * 1000)
@@ -567,14 +621,33 @@ def _interrupted(service, gate):
 
 
 def _account_of(settings_path, source, route):
+    """The account of the admitted route, from the source's read-only lookup (the qualified path's for a generated
+    route), or None."""
     try:
-        manifest = (source or routing_observations.default_source(settings_path)).manifest()
+        spec = (source or routing_observations.default_source(settings_path)).admitted_route(route)
     except (OSError, ValueError):
         return None
-    for spec in manifest:
-        if isinstance(spec, dict) and spec.get('route') == route and isinstance(spec.get('account'), str):
-            return spec['account']
-    return None
+    return spec['account'] if isinstance(spec, dict) and isinstance(spec.get('account'), str) else None
+
+
+def _store_settled(attempt, admission, settings_path):
+    """Before the releasing `record complete` (`routing_launch.launch`'s `settled`): store the launch's own settled
+    rate-limit readings for the admitted pool, with their reported observation times, and return the ids of the
+    windows they cover. A reading covers its window only when the store now holds it (an older cached reading that
+    left a newer one in place covers nothing) and it was observed no earlier than the admission (an earlier one cannot
+    show this launch's use). A launch that reported none returns none; a store failure raises (it covers nothing). A
+    refused attach created no session and sent nothing, so it used none of its claims: every claimed window is
+    covered."""
+    if attempt.refusal is not None and not attempt.attached:
+        return [key.split('/', 1)[1] for key in (admission.get('reserved') or {}) if key.startswith(routing.WIN)]
+    if attempt.read is None:
+        return []
+    admitted_at, covered = admission.get('at'), []
+    for window in windows(attempt.read['result'].get('rate_limit')):
+        held = routing_observations.store_window(settings_path, admission['pool'], window)
+        if held is True and routing._amount(admitted_at) and window['observed_at'] >= admitted_at:
+            covered.append(window['id'])
+    return covered
 
 
 def _finish(result, gate, attempt, detached, settings_path, source):
@@ -589,12 +662,6 @@ def _finish(result, gate, attempt, detached, settings_path, source):
         return result
     result = dict(result, detached=detached, not_entitled=attempt.read['not_entitled'])
     admission = result.get('admission') or {}
-    if admission.get('billing_class') == 'included_subscription':
-        try:  # telemetry for the collector; an unusable observation is skipped, never fatal
-            for window in windows(attempt.read['result'].get('rate_limit')):
-                routing_observations.store_window(settings_path, admission['pool'], window)
-        except (OSError, ValueError, KeyError, TypeError):
-            result['windows_stored'] = False
     if attempt.read['not_entitled']:
         account_name = _account_of(settings_path, source, admission.get('route'))
         if account_name is None:  # never a mark without its account: the route stays a candidate, the result says why
@@ -617,6 +684,7 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
     nothing and close any admitted hold with `not_dispatched`; a refused attach creates nothing and closes the hold
     with `record complete`; a launch that cannot be confirmed is recorded `uncertain` and names the operator op.
     With `options` (`launch_options`), `host.options` must be exactly those options (`launch_options_unexpressible`,
+    before anything is prepared), every agent the host lists must carry their step cap (`agent_steps_uncapped`, also
     before anything is prepared) and the admitted model theirs (`launch_options_mismatch`, before `dispatch`)."""
     owned = service is None
     if owned:
@@ -634,6 +702,8 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
                 options = None
             if options is None or getattr(host, 'options', None) != options:
                 return dict(state='blocked', reason=LAUNCH_OPTIONS_UNEXPRESSIBLE)
+            if not agents_capped(host, options['steps']):
+                return dict(state='blocked', reason=AGENT_STEPS_UNCAPPED)
         reason = routing_launch.preflight(service.handle(json.dumps(dict(v=1, op='status')).encode()))
         if reason is not None:
             return dict(state='blocked', reason=reason)
@@ -645,11 +715,18 @@ def launch(checkout, *, host, assignment, job, prompt, workflow=None, constraint
         gate = _Gate(service, host, options)
         attempt = _Attempt(host, gate, prompt, idle_timeout)
         detached = None
+        listed = catalog(host)  # read once: the host's harnesses before `prepare` and the admitted check after it
         try:
-            result = routing_launch.launch(gate, host='opencode', assignment=assignment, job=job, catalog=catalog(host),
+            result = routing_launch.launch(gate, host='opencode', assignment=assignment, job=job, catalog=listed,
                                            transport=attempt, workflow=workflow, constraints=constraints,
                                            planned=planned, profile=profile, settings_path=service.settings_path,
-                                           source=source)
+                                           source=source, harnesses=routing_launch.host_harnesses(
+                                               'opencode', listed, dollar=API_FUNDING_QUALIFIED),
+                                           before_prepare=lambda request: opencode_subscription.refresh(  # F4.5 Go
+                                               service, lambda: host.request('GET', opencode_subscription.USAGE_PATH),
+                                               request, now=int(time.time())),
+                                           settled=lambda admission: _store_settled(attempt, admission,
+                                                                                    service.settings_path))
         except BaseException:
             # An interrupt (KeyboardInterrupt, the command's signal exception) passes the core's `except Exception`;
             # close or mark the hold it leaves before re-raising.
@@ -670,14 +747,15 @@ class _SelfCheckHost:
     def __init__(self, shim, directory):
         self.shim, self.directory, self.created, self.tokens, self.sessions = shim, directory, 0, [], {}
         self.healthy, self.denies, self.attach_ok = True, list(adapter.MANAGED_DENIES), True
-        self.models = [dict(providerID='self-check', id='self-check-model', variants=['high'])]
+        self.models = [dict(providerID=SELF_CHECK_PROVIDER, id='self-check-model', variants=['high'])]
 
     def rpc(self, method, payload):
         if method == 'health':
             return (200, dict(state='ok', managed_denies=list(self.denies))) if self.healthy else (500, None)
         self.tokens.append(payload.get('authority'))
         if method == 'attach':
-            facts = dict(provider='self-check', model='self-check-model', variant='high', harness=routing_launch.shim_harness('self-check'),
+            facts = dict(provider=SELF_CHECK_PROVIDER, model='self-check-model', variant='high',
+                         harness=routing_launch.shim_harness(SELF_CHECK_PROVIDER),
                          kind='primary', funding_pool=payload['funding_pool'])
             answer = self.shim.handle(json.dumps(dict(v=1, op='check', attempt_id=payload['attempt_id'],
                                                       session_id=payload['session_id'], authority=payload['authority'],
@@ -710,7 +788,7 @@ class _SelfCheckHost:
             self.sessions[parts[2]] += [
                 dict(id=body['id'], type='user', time=dict(created=now)),
                 dict(id='msg_selfcheckassistant', type='assistant', finish='stop', cost=0, tokens=tokens,
-                     model=dict(id='self-check-model', providerID='self-check', variant='high'),
+                     model=dict(id='self-check-model', providerID=SELF_CHECK_PROVIDER, variant='high'),
                      time=dict(created=now, completed=now + 1)),
                 dict(id='msg_selfcheckidle', type='idle', outcome='succeeded', time=dict(created=now + 2))]
             return 200, dict(data=dict(id=body['id']))
@@ -719,6 +797,8 @@ class _SelfCheckHost:
 
 
 _SELF_CHECK_CHILD = False  # set only by SELF_CHECK_CHILD's code, never from the environment or a request
+# The self-check's provider: one a shipped subscription path names, so the host's harness set reaches `prepare`.
+SELF_CHECK_PROVIDER = 'openai'
 SELF_CHECK_MARK = 'opencode-launcher-self-check:'
 SELF_CHECK_CHILD = (
     'import json, sys\n'
@@ -772,13 +852,13 @@ def _self_check_in_child(workdir):
     from scripts import routing as command  # the gate puts the plugin package root first on sys.path
     checkout = root / 'checkout'
     checkout.mkdir(mode=0o700)
-    picked = choice('self-check', 'self-check-model', 'high')
+    picked = choice(SELF_CHECK_PROVIDER, 'self-check-model', 'high')
     spec = dict(route='self-check', status='qualified', billing_class='included_subscription', pool='self-check',
                 account='self-check', demand={'5h': 1}, binding_enforceable=True, window_unit=WINDOW_UNIT,
                 **{key: picked[key] for key in routing.ROUTE_IDENTITY})
     source = routing_observations.StaticSource([spec], lambda pool, at: [dict(
         id='5h', limit=1000, used=0, length=18000, reset_at=at + 3600, rolling=False, observed_at=at,
-        unit=WINDOW_UNIT)])
+        unit=WINDOW_UNIT)], billing=subscription_billing.double('self-check'))  # sandbox only: no real producer
     saved = routing_settings.managed_project, routing_observations.default_source
     routing_settings.managed_project = lambda path, *args, **kwargs: Path(path).resolve() == checkout
     routing_observations.default_source = lambda *args, **kwargs: source
@@ -791,13 +871,14 @@ def _self_check_in_child(workdir):
             return ['self_check_store_unavailable']
         cases = (('unhealthy', dict(healthy=False), HOST_UNHEALTHY, 'host_not_checked'),
                  ('advisory', dict(denies=[]), PROFILE_NOT_ENFORCED, 'profile_not_checked'),
-                 ('catalog', dict(models=[]), routing_launch.CATALOG_MISMATCH, 'catalog_not_checked'),
+                 ('catalog', dict(models=[dict(providerID=SELF_CHECK_PROVIDER, id='self-check-model', variants=['low'])]),
+                  routing_launch.CATALOG_MISMATCH, 'catalog_not_checked'),
                  ('attach', dict(attach_ok=False), ATTACH_FAILED, 'attach_not_checked'))
         for name, knobs, reason, code in cases + (('launch', {}, None, 'managed_launch_failed'),):
             host = _SelfCheckHost(shim, str(checkout))
             host.__dict__.update(knobs)
             result = launch(checkout, host=host, service=service, prompt='self-check', job=routing_launch.unplanned_job(
-                'implementer', routing_launch.assignment_scope(checkout), 'self-check'),
+                'software-engineer', routing_launch.assignment_scope(checkout), 'self-check'),
                 assignment=dict(attempt_id=name, task='self-check-' + name, scope=routing_launch.assignment_scope(
                     checkout), choice=picked))
             outputs.append(json.dumps(result))

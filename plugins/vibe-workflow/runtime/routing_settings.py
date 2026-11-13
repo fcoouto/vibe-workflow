@@ -5,17 +5,14 @@ import os
 from pathlib import Path
 import uuid
 
-from runtime import usage_budget
+from runtime import task_profile, usage_budget
 from runtime.usage_budget import private
 
 VERSION = 1
 MAX_BYTES = 65536
 MAX_REVISION = 2 ** 53 - 1
-ROLES = ('implementer', 'reviewer', 'researcher', 'repair')
-# Task-profile role (runtime.routing.ROLES) -> worker-choice role. The coordinator is never routed: the user's
-# coordinator keeps its own model. `researcher` and `repair` have no profile role, so callers state them explicitly.
-PROFILE_ROLES = dict(worker='implementer', review='reviewer', check='reviewer')
-EXPLICIT_ROLES = ('researcher', 'repair')
+# `worker_choices` is keyed by routed roster specialist. The orchestrator is never routed: the user's coordinator keeps
+# its own model. A stored key of any other name (an old role) stays in the file, is ignored and is reported by `warnings`.
 FUNDING = ('subscription', 'api')
 CHOICE_FIELDS = {'provider', 'model', 'effort', 'harness', 'funding'}
 MAX_CHOICES = 16
@@ -27,7 +24,8 @@ MAX_PROJECT_PATH = 1024
 LEGACY_ROUTE_RETIRED = 'legacy_route_retired'
 DEFAULTS = dict(smart_routing=True, api_usage_enabled=False, L=0.65, H=0.85, T_hours=72,
                 min_elapsed_fraction=0.10, lookback_hours=72, margin_bp=usage_budget.DEFAULT_MARGIN_BP,
-                caps=usage_budget.DEFAULT_CAPS, worker_choices={}, managed_projects=[])
+                worker_choices={}, managed_projects=[])
+# F5.A1: a stored `caps` value stays readable and validated but has no default and no effect on admission.
 
 
 class SettingsError(ValueError):
@@ -62,8 +60,15 @@ def _choice(entry):
     return dict(entry)
 
 
+def _routed(key):
+    try:
+        return task_profile.routed(key)
+    except task_profile.TemplateUnavailable:
+        raise SettingsError('roster_unavailable') from None
+
+
 def _worker_choices(value):
-    require(type(value) is dict and set(value) <= set(ROLES), 'invalid_worker_choices')
+    require(type(value) is dict and all(_routed(key) for key in value), 'invalid_worker_choices')
     for role, entries in value.items():
         require(type(entries) is list and len(entries) <= MAX_CHOICES, 'invalid_worker_choices')
     result = {role: [_choice(entry) for entry in entries] for role, entries in value.items()}
@@ -117,9 +122,20 @@ def resolve(stored):
     require(type(stored) is dict, 'invalid_settings')
     value = {key: (dict(v) if type(v) is dict else list(v) if type(v) is list else v) for key, v in DEFAULTS.items()}
     for key, item in stored.items():
+        if key == 'worker_choices' and type(item) is dict:
+            item = {role: entries for role, entries in item.items() if _routed(role)}
         value[key] = _validated(key, item)
     require(0 <= value['L'] < value['H'] <= 1, 'invalid_thresholds')
     return value
+
+
+def warnings(stored):
+    """Stored settings that are kept but ignored: `worker_choices` keys that name no routed roster specialist, and
+    legacy `caps` (F5.A1: never enforced)."""
+    choices = stored.get('worker_choices') if type(stored) is dict else None
+    ignored = [dict(code='worker_choice_key_unknown', key=key) for key in choices if not _routed(key)] \
+        if type(choices) is dict else []
+    return ignored + ([dict(code='caps_not_enforced', key='caps')] if type(stored) is dict and 'caps' in stored else [])
 
 
 def _load(path):
@@ -203,14 +219,11 @@ def update(path, change, expected_revision):
 
 
 def assignment_role(profile_role, explicit=None):
-    """The worker-choice role for a profile role; an explicit role must agree with it or be explicit-only."""
-    require(profile_role != 'coordinator', 'coordinator_not_routed')
-    require(profile_role in PROFILE_ROLES, 'invalid_role')
-    if explicit is None:
-        return PROFILE_ROLES[profile_role]
-    require(explicit in ROLES, 'invalid_role')
-    require(explicit in EXPLICIT_ROLES or explicit == PROFILE_ROLES[profile_role], 'role_mismatch')
-    return explicit
+    """The worker-choice key for a profile's specialist: the specialist itself. An explicit role must equal it."""
+    require(not task_profile.orchestrates(profile_role), 'coordinator_not_routed')
+    require(_routed(profile_role), 'invalid_role')
+    require(explicit is None or explicit == profile_role, 'role_mismatch')
+    return profile_role
 
 
 def _identity(path):

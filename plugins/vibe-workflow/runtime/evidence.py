@@ -23,7 +23,7 @@ import sys
 import time
 import uuid
 
-from runtime import state
+from runtime import persisted_binding, state, task_profile
 from runtime.startup import MAX_INPUT, StartupError, AcceptedScope, ProjectScope, RuntimeSettings, json_object, policy_digest, _canonical_freeze, _canonical_plain
 
 VERSION = 1
@@ -1094,9 +1094,9 @@ def _closure_assignment_projection(context,db,task,records):
             review['assessments']=assessments;reviews.append(review)
         outcomes.append(outcome)
     for record in records:
-        if record['data']['role'] not in {'worker','review'}:continue
+        if not task_profile.native(record['data']['role']):continue
         history=delegation._worker_history(None,record['data']['observation'],context=context,db=db)
-        if record['data']['role']=='worker':
+        if task_profile.native_worker(record['data']['role']):
             for _,value in history:
                 if value['report'] is not None:
                     _require(delegation._worker_report(None,record,value['result'])==value['report'],
@@ -1107,7 +1107,7 @@ def _closure_assignment_projection(context,db,task,records):
     verification_refs={_raw(entry['verification']):entry['verification'] for entry in
         task.get('evidence',{}).get('history',[])+[task.get('evidence',{})] if 'verification' in entry}
     for record in records:
-        if record['data']['role']=='coordinator':
+        if task_profile.orchestrates(record['data']['role']):
             reconciled=read(record['data']['reconciliation'])
             if reconciled.get('kind')=='synchronous-verification':
                 reference=reconciled['verification'];verification_refs[_raw(reference)]=reference
@@ -1240,7 +1240,7 @@ def _ordinary_peer_census(context,task,budget):
             identity=json_object(row[5])
             _require(row[1]==identity['project_id']==project and row[2:4]==(identity['repository_root'],identity['git_common_dir'])
                 and identity['project_root']==task['accepted_identity']['project_root']
-                and identity['project_binding']==task['accepted_identity']['project_binding']
+                and persisted_binding.matches(task['accepted_identity']['project_binding'],identity['project_binding'])
                 and type(row[4]) is int and row[4]>=0 and row[0]==state._digest([3,project,identity['repository_id'],identity['checkout_id']]),
                 'Ordinary peer checkout identity differs')
             bindings={identity['project_root']:identity['project_binding']}
@@ -1248,7 +1248,7 @@ def _ordinary_peer_census(context,task,budget):
                 (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
             for path,binding in bindings.items():
                 info=observe(path)
-                _require(info is not None and stat.S_ISDIR(info[2]) and dict(device=info[0],inode=info[1])==binding,
+                _require(info is not None and stat.S_ISDIR(info[2]) and persisted_binding.matches(binding,dict(device=info[0],inode=info[1])),
                     'Ordinary peer checkout physical binding changed')
             canonical=observe(Path(identity['project_root'])/PROJECT_FILE)
             _require(canonical is not None and stat.S_ISREG(canonical[2]),'Ordinary peer canonical authority is unavailable')
@@ -1464,7 +1464,7 @@ def _stop_verification(context,db,task,*,allow_absent=False):
     barriers=[]
     for record in delegation._ledger(None,db,context=context):
         if not all(record['owner'][k]==ref[k] for k in ('scope_id','client','session_id','task_id')):continue
-        if record['data']['role']!='coordinator' or record['data']['status']!='settled':continue
+        if not task_profile.orchestrates(record['data']['role']) or record['data']['status']!='settled':continue
         rec=_read(None,record['data']['reconciliation'],context=context,db=db)
         if rec.get('kind')=='synchronous-verification':
             changes._barrier_facts(context,db,task,record,rec);barriers.append(rec)
@@ -1529,7 +1529,7 @@ def _stop_input_files(task,candidate):
     for path in sorted(paths):
         value=_closure_file_stat(path) if os.path.lexists(path) else None
         if path in bindings:
-            _require(value is not None and stat.S_ISDIR(value[2]) and dict(device=value[0],inode=value[1])==bindings[path],
+            _require(value is not None and stat.S_ISDIR(value[2]) and persisted_binding.matches(bindings[path],dict(device=value[0],inode=value[1])),
                 'Accepted Project or primary-root physical binding changed')
         # Ancestor/tool sibling activity is not a candidate change; their identity still binds lookup.
         if value is not None and stat.S_ISDIR(value[2]) and not any(path.is_relative_to(base) for base in (root,git,common,policy,runtime)):
@@ -1633,7 +1633,7 @@ def _closure_facts(context, task_ref, db, recovery, *, recovery_files=None, ordi
     original=task['accepted_identity']
     bindings={original['project_root']:original['project_binding']}
     bindings.update({original[k]:original['bindings'][label] for k,label in (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
-    _require(all(_binding(Path(path))==binding for path,binding in bindings.items()),'Historical checkout physical identity changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in bindings.items()),'Historical checkout physical identity changed')
     facts=dict(version=1,task_ref=task_ref,task=task,certificate=certificate,bindings=bindings,recovery_files=recovery_files or {},
         observed=normalized,physical=physical,ready_files=ready_files,requirements=sorted(requirements,key=_raw),recovery=recovery,
         artifacts=sorted(own_refs,key=_raw),projection=projection,guidance=guidance)
@@ -2065,7 +2065,7 @@ def _check_closure_observation(context, db, task_ref, observations, *, new_compa
         expected['turns']=[row for row in expected['turns'] if tuple(row[:4]) not in removed_turns]
         expected['receipts']=[row for row in expected['receipts'] if tuple(row[:4]) not in removed_turns]
     _require(current==expected,'Closure rows, source heads, generation or metadata changed')
-    _require(all(_binding(Path(path))==binding for path,binding in facts['bindings'].items()),'Closure checkout binding changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in facts['bindings'].items()),'Closure checkout binding changed')
     for item in facts['physical']:
         if item['stat'] is None:
             _require(_historical_inventory(context,db,[item])==[item],'Historical diagnostic absence changed')
@@ -2990,7 +2990,7 @@ def _retention_routes(context,db,original):
             for field,child_kind in (('candidate','candidate'),('plan','native-plan'),('d5_plan','plan'),
                     ('d6_plan','native-plan'),('operation','definition'),('discovery','discovery')):
                 child(body.get(field),child_kind)
-            child(body.get('policy'),'policy' if body['role'] in {'worker','review'} else 'routing' if body['role']=='check' else 'operation-policy')
+            child(body.get('policy'),'policy' if task_profile.native(body['role']) else 'routing' if body['role']=='check' else 'operation-policy')
             child(body.get('review',{}).get('d5_plan'),'plan')
             child(body.get('guidance',{}).get('snapshot_ref'),'guidance')
             child(body.get('request',{}).get('guidance',{}).get('snapshot_ref'),'guidance')
@@ -3091,7 +3091,7 @@ def _retention_original_support_core(context,db,reference,*,budget):
             and _digest(assignment['request'])==certificate['request_digest'],
             'Closed detail original request/pins/binding correspondence differs')
         markers.append(dict(id=ref['id'],marker=marker))
-        if certificate['role'] in delegation.NATIVE_ROLES:
+        if task_profile.native(certificate['role']):
             discovery_ref=assignment['discovery'];discovery_meta,discovery_raw=_managed_artifact(None,discovery_ref,context=context,db=db)
             discovery=json.loads(discovery_raw)
             native_sources.append(dict(assignment=ref,discovery=dict(reference=discovery_ref,metadata=discovery_meta,
@@ -3524,7 +3524,7 @@ class _CapInputControl:
         identity=self.trigger['subject']['identity']
         _require(all(accounting['checkout'][key]==identity[field] for key,field in
             (('root','repository_root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir')))
-            and accounting['checkout']['binding']==identity['bindings'],
+            and persisted_binding.all_match(identity['bindings'],accounting['checkout']['binding']),
             'Cap acquisition selected a different triggering Repository checkout')
         current=canonical_scope_projection(decode_project_record(project),repository_id=identity['repository_id'],
             checkout_id=identity['checkout_id'],client=identity['client'])
@@ -4073,7 +4073,7 @@ def _source_current_permission_files(context,source,subject,*,resources=None,hel
     bindings={identity['project_root']:identity['project_binding']}
     bindings.update({identity[k]:identity['bindings'][label] for k,label in
         (('repository_root','root'),('primary_root','primary_root'),('git_dir','git_dir'),('git_common_dir','git_common_dir'))})
-    _require(all(_binding(Path(path))==binding for path,binding in bindings.items()),'Current source physical enrollment changed')
+    _require(all(persisted_binding.matches(binding,_binding(Path(path))) for path,binding in bindings.items()),'Current source physical enrollment changed')
     path=project/state.PROJECT_FILE
     raw=(onboarding._read_file(path,onboarding.MAX_REQUEST,expected_binding=observed['target']['binding']) if resources is None else
         onboarding._read_file(path,onboarding.MAX_REQUEST,expected_binding=observed['target']['binding'],resources=resources,held=held))
@@ -4141,7 +4141,7 @@ def _linked_producer(scope,request,snapshot,db):
     dispatch='verify:'+str(request['expected_revision'])+':'+request['purpose']
     _require(record is not None and record['owner']==dict(scope_id=reference['scope_id'],
         **{key:task[key] for key in ('client','session_id','task_id')},dispatch_id=dispatch) and
-        record['data']['role']=='coordinator' and record['data']['status']=='settled' and
+        task_profile.orchestrates(record['data']['role']) and record['data']['status']=='settled' and
         _read(scope,record['body']['operation'],db=db)==dict(id=dispatch,kind='completion-verification',
             decision_ref=task['decision_ref'],claims_digest=_digest(record['data']['claims'])),
         'Foreign publication lacks its actual original synchronous producer')
@@ -5119,8 +5119,8 @@ def _canonical_inputs(scope):
 def _observe_pinned_identity(identity):
     from runtime.onboarding import _checkout_observation, _filesystem_binding, _fingerprint
     observed, error = _checkout_observation(identity['repository_root'], {'paths': 0})
-    _require(error is None and _filesystem_binding(Path(identity['project_root'])) == identity['project_binding'] and
-        observed['binding'] == identity['bindings'] and
+    _require(error is None and persisted_binding.matches(identity['project_binding'], _filesystem_binding(Path(identity['project_root']))) and
+        persisted_binding.all_match(identity['bindings'], observed['binding']) and
         all(observed[key] == identity['repository_root' if key == 'root' else key]
             for key in ('root', 'primary_root', 'git_dir', 'git_common_dir')), 'Accepted checkout physical identity changed')
     for shared in identity['shared_policy']:
@@ -5691,7 +5691,7 @@ def _review_response(scope, db, request, record, admitted=False):
 def prepare_review(scope, request):
     """The sole native review admission path: one D5 round and one D6 launch permit."""
     from runtime import delegation
-    return delegation.delegation_routing.prepare(scope, request, 'review', delegation._prepare_native)  # C3-2
+    return delegation.delegation_routing.prepare(scope, request, True, delegation._prepare_native)  # C3-2
 
 
 def prepared_native_review(scope, attempt_id):
@@ -6278,7 +6278,7 @@ def _verify_member(scope, request, *, linked=False, _held=False):
         ownership_ref=task['decision_ref'], stop_conditions=['Return after this synchronous verification'],
         verification=dict(purpose=request['purpose'], **routing))
     try:
-        reserved = delegation._reserve_operation(scope, barrier_request, role='coordinator',
+        reserved = delegation._reserve_operation(scope, barrier_request, role=task_profile.ORCHESTRATOR,
             _verification=True, _cooperative=cooperative)
     except state.StateError:
         blockers = ownership_blockers()
@@ -6924,7 +6924,7 @@ def _linked_stop_basis(pointer,authorities):
         with _context_database(current['context']) as db:
             bindings=state._ready_stop_bindings(current['context'],db,task);barriers=[]
             for record in delegation._ledger(None,db,context=current['context']):
-                if record['data']['role']!='coordinator' or not all(record['owner'][k]==current['reference'][k] for k in ('scope_id','client','session_id','task_id')):continue
+                if not task_profile.orchestrates(record['data']['role']) or not all(record['owner'][k]==current['reference'][k] for k in ('scope_id','client','session_id','task_id')):continue
                 rec=_read(None,record['data']['reconciliation'],context=current['context'],db=db)
                 if rec.get('kind')=='synchronous-verification':
                     changes._barrier_facts(current['context'],db,task,record,rec);barriers.append(rec)

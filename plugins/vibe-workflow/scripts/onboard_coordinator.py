@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from runtime import changes, onboarding, startup
+from runtime import changes, onboarding, persisted_binding, startup
 
 
 class CoordinatorOperationOwner:
@@ -116,9 +116,9 @@ class CoordinatorOperationOwner:
         target = authority['target']
         self._require(target['accepted_scope_digest'] == onboarding._digest(identity)
             and all(target[key] == identity[key] for key in ('repository_root','git_common_dir')))
-        self._require(onboarding._filesystem_binding(Path(identity['project_root'])) == identity['project_binding'])
+        self._require(persisted_binding.matches(identity['project_binding'], onboarding._filesystem_binding(Path(identity['project_root']))))
         for name,binding in identity['bindings'].items():
-            self._require(onboarding._filesystem_binding(Path(identity['repository_root' if name=='root' else name])) == binding)
+            self._require(persisted_binding.matches(binding, onboarding._filesystem_binding(Path(identity['repository_root' if name=='root' else name]))))
         from runtime import state
         self._require(startup.policy_digest(state.PACKAGE)==identity['configuration']['policy_digest']
             and state.runtime_fingerprint()==identity['configuration']['runtime_digest'])

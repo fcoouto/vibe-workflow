@@ -8,17 +8,17 @@ Read the [policy index](../../../policies/00-index.md), [Project Scope](../../..
 
 0. **Readiness.** Run `python3 -I -B "$PLUGIN_ROOT/scripts/workflow.py" workspace status`. `PLUGIN_ROOT` is the installed package root (the parent of this skill's `skills` directory), never the target checkout. When the command may observe a sandbox instead of the host (for example Claude Desktop Cowork), report the affected items `unknown`. For each `missing` or `outdated` required item, say what it is and why it matters (the item's `why`), then run [prepare-my-workspace](../../prepare-my-workspace/SKILL.md) in prepare mode, scoped to those items (its steps 1–7), as its own operation under the [consent rule](../../../policies/11-tool-integrations.md#choose-and-configure), and resume here. Carry items still `needs-user` or `unknown` to the report; wait only where work depends on them, such as that client's startup verification. For an inspect-only or plan-only request, report what is missing and propose preparation without running it.
    *Done when* every required item is `ready`, `not-supported` with its reason, or carried to the report with the action that resolves it. *On failure* (status cannot run, or exit 2): report it, treat the affected items as unknown and continue.
-1. **Target and clients.** Confirm the selected checkout; never the toolkit checkout just because it is the working directory; keep new-project creation separate. Name the client running this session and the agent clients installed, and select the clients to enroll (installed clients the plugin can enroll, by default). A client the plugin cannot enroll yet, such as OpenCode until its plugin client ships, is an explicit gap: say what is unavailable (startup orientation, enrollment) and that its tools come from step 0; never skip it silently. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client.
-   *Done when* the checkout, the selected clients and every gap are stated. *On failure* (uncertain target): make no writes until it is confirmed.
+1. **Target and clients.** Confirm the selected checkout; never the toolkit checkout just because it is the working directory; keep new-project creation separate. Follow [delivery preparation](../../../clients/delivery.md#prepare-the-destination) to establish the primary-worktree identity, designated branch and source, and the task worktree for source/document edits. Explicit primary-only enrollment/configuration effects keep their selected destination and require the existing setup authority; do not copy enrollment into a task worktree. Name the client running this session and the agent clients installed, and select the clients to enroll (installed clients the plugin can enroll, by default). A client the plugin cannot enroll yet, such as OpenCode until its plugin client ships, is an explicit gap: say what is unavailable (startup orientation, enrollment) and that its tools come from step 0; never skip it silently. Follow [client startup integration](../../../policies/10-project-onboarding.md#client-startup-integration) for each selected client.
+   *Done when* the checkout, the selected clients and every gap are stated. An unresolved branch designation stays pending through inspection/preferences; it does not prevent safe inspection or independent setup checks. *On failure* (uncertain target): make no writes until it is confirmed.
 2. **Sources and inspection.** Resolve the canonical [Vibe Coding Toolkit](https://github.com/soumatheusgomes/vibe-coding-toolkit) revision once for this setup or update; resume an interrupted setup at its recorded revision; a trusted versioned copy may serve offline setup with freshness marked unverified. Read the component guidance and linked sources needed for the selected work; keep provenance in authoring records, not routine task loading. Inspect relevant instructions, configuration, commands, paths and baseline checks. A runtime or tool the project itself declares is a project need, reported and checked with the project's own commands. Separate observed facts from assumptions; preserve user changes, data, permissions, model/provider choices and existing protections.
-   *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. *On failure* (source unavailable): block only the work that depends on it.
+   *Done when* the revision, the observed facts, the project needs and the baseline results are recorded. Record primary-checkout stability and any branch-only/standing-opt-out conflict in the existing setup assessment; apply [adoption and update](../../../clients/delivery.md#adopt-and-update-the-rule), preserving historical choices, active pins and later user edits. *On failure* (source unavailable): block only the work that depends on it.
 3. **Preferences.** Resolve missing [project preferences](#project-preference-questions), one at a time, before preparing changes.
-   *Done when* each question is answered, reused, defaulted (4 and 5 only) or reported pending or inapplicable with its reason.
+   *Done when* each question is answered, reused, defaulted (Graphify and memory only) or reported pending or inapplicable with its reason.
 4. **Plan.** Assess every component in the complete Toolkit catalog for relevance, current adoption or an equivalent, and any useful action; [adapt the nine project documents](#adapt-project-documents) and [author the policy entry point](#author-the-policy-entry-point). Each component ends planned, reused with evidence, inapplicable with its reason, or blocked with its prerequisite and resume condition. An applicable component is omitted only through a recorded user decision linked from its row; a mandatory one never is.
    *Done when* every catalog component has one of those four outcomes and all nine documents map to a path or a reason. A plan-only request ends here.
-5. **Apply.** Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes, then use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations and each selected client's startup membership. Undo restores only content that still matches. Load detailed procedures only for a selected capability.
+5. **Apply.** Make only authorized, useful changes. Retain a recoverable private backup before meaningful configuration changes, then use the [configuration and undo contract](apply-and-recovery.md#file-configuration-and-undo) for managed file operations and each selected client's startup membership. Undo restores only content that still matches. Load detailed procedures only for a selected capability. Before enrollment, verify tracked/untracked/ignored status of its exact paths. Prepare tracked enrollment and guidance in the task worktree, then integrate them through the project's authorized delivery path before claiming setup complete in the selected target checkout. If enrollment itself is tracked, defer client membership registration until its integrated postimage is available there. Ignored enrollment may be written earlier under explicit target-only authority when delivery preparation's disjoint-path conditions hold; report that registration separately from pending target guidance. A keep-local publication choice grants no commit/merge permission: retain the worktree and report target setup pending integration, rather than move files into the primary or silently change the enrollment target.
    *Done when* the changes are applied with their backup and undo location recorded. *On failure*: recover from the backup, keep later user edits and report.
-6. **Verify.** Run useful project commands and relevant local/client checks, including [policy discovery](#verify-policy-discovery) and startup in a new session per selected client. State what each check establishes and what remains unobserved.
+6. **Verify.** Run useful project commands and relevant local/client checks, including [policy discovery](#verify-policy-discovery) and startup in a new session per selected client at the exact selected enrollment checkout. Task-worktree inspection alone does not prove primary-checkout guidance or startup delivery. State what each check establishes and what remains unobserved.
    *Done when* every check has a recorded result and its limit.
 7. **Report.** Per client: version, trust and startup observed. Also: changes made, pending user actions (including step 0's), limitations and the undo location. Report documentation setup and client integration separately.
    *Done when* the report shows all of these, and useful guidance and working project commands are left.
@@ -27,11 +27,15 @@ When using packaged file tools for standalone basic setup, select `project_scope
 
 Use [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish) to assess completion, including startup integration and the local procedures reached through generated project guidance. This does not establish AcceptedScope, task readiness, managed runtime activation, qualification, merge readiness or external authority.
 
-Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup, except questions 4 and 5, which apply their default as described there.
+Present onboarding preference choices one at a time in the client’s native single-select question box. Preserve default and recommendation labels even when the client orders the recommendation first. Record only submitted answers. If the box is unavailable or unanswered, leave the choice pending and continue independent authorized setup, except Graphify and memory, which apply their default as described there.
 
 ## Adapt project documents
 
-Adapt the local shapes below to project facts; they authorize neither prompt execution nor a default stack. During setup/update, reconcile them with the Toolkit revision already resolved for that operation; do not silently ignore a material source change. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Read only shapes needed for authorized additions or repairs. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames. Replace author notes and placeholders with verified facts or explicit unresolved decisions; never copy package-relative links unchanged into another project.
+Adapt the local shapes below to project facts; they authorize neither prompt execution nor a default stack. During setup/update, reconcile them with the Toolkit revision already resolved for that operation; do not silently ignore a material source change. Map all nine manifest responsibilities in the existing assessment/plan to canonical paths or explicit reasons. Read only shapes needed for authorized additions or repairs. Reuse useful equivalents, including shared destinations; create no empty files or duplicates to match template filenames. Replace template-origin author notes and placeholders with verified facts or explicit unresolved decisions; never copy package-relative links unchanged into another project.
+
+Distinguish observed facts, accepted decisions and proposed work. An unapproved next delivery stays proposed, with a concrete task and observable criterion. Infer required tools from inspected commands/code; an unknown minimum version does not make the tool itself unknown. Retain supplied dates and decision provenance in the existing owner.
+
+Use selective native reads and existing checks by default. If a specific template-preparation or mechanical-check need warrants the optional CLI, load [template assistance](../../../clients/template-tools.md) and choose only the needed operation. Onboarding and document adaptation do not require helper invocation. Preserve the same mapping, original-content, link-verification and semantic-review duties with either approach.
 
 | Responsibility | Adaptation |
 | --- | --- |
@@ -80,6 +84,12 @@ the same effective guidance is a no-op. For an authorized update, reconcile owne
 stale pointers through [file configuration and undo](apply-and-recovery.md#file-configuration-and-undo),
 preserving later edits and other clients/checkouts; do not append a competing router.
 
+Make the accepted package and setup-record pointers usable from task worktrees,
+not only from the onboarding agent's current folder. Tracked instructions carry
+the policy-index route, including task entry and checkout-affecting review work.
+Verify the pointer after a move; missing checkout-local enrollment does not
+require ordinary work to activate runtime or copy another checkout's authority.
+
 ### Verify policy discovery
 
 Apply [Verify and finish](../../../policies/10-project-onboarding.md#verify-and-finish)
@@ -90,10 +100,13 @@ to the generated instructions, not just the onboarding agent's loaded context:
    through existing configuration/recovery checks. File existence and a successful
    reader invocation prove neither task selection nor agent compliance.
 2. Walk representative project requests from that entry point: a small change,
-   review-only work, resume, and applicable delegation, setup-repair or merge work.
+   review-only PR checkout, resume, and applicable delegation, setup-repair or merge work.
    Use the canonical policy triggers to check that required procedures are reached
    before the affected action and unrelated procedures stay unloaded. Include a
-   missing or conflicting package pointer when changed resolution needs coverage.
+    missing or conflicting package pointer when changed resolution needs coverage.
+   Include task-worktree entry without enrollment, non-`main` designation, a dirty
+   or detached primary, safe fast-forward and a historical worktree opt-out. Check
+   that branch-only guidance does not survive as a current standing exception.
 3. For observed routing, use a fresh native context with the request, generated
    entry point and necessary raw project inputs. Do not preload the expected policy
    list or the author's conclusions. Observe actual reads and actions using
@@ -107,7 +120,12 @@ to the generated instructions, not just the onboarding agent's loaded context:
 
 ## Project preference questions
 
-After identifying the repository, remote and primary branch, and before preparing
+After identifying the repository, remote and designated primary branch, record
+that branch and its authority in the existing setup record. Do not infer it from
+the current checkout or silently adopt a remote's default; reuse settled project
+facts, and ask only for a genuinely unresolved designation. Checkout stability
+applies to every onboarded repository and is not an optional preference below.
+Before preparing
 changes, resolve missing preferences in the order below. Use the native
 single-select rule above for each question. Reuse existing decisions and keep
 answers bound to the selected repository and target. Explain the effect before
@@ -126,7 +144,26 @@ affected choice as inapplicable or pending, respectively.
    the named target.
    - No. I will merge `[READY]` PRs myself. (default)
    - Yes. Agents merge their PRs once they are `[READY]`.
-3. **Enable Workstreams for `<project_name>`?**
+3. **Automatically clean up task worktrees and their local and remote branches after their PRs merge in `<project_name>`?**
+   Explain that agents first refresh the designated primary branch and complete
+   required maintenance. Only eligible task resources are deleted; unfinished
+   work, active dependencies and uncertain ownership are retained. A Yes grants
+   standing cleanup permission within this repository. Remote deletion can be
+   disabled separately. Partial cleanup stops for a later explicit attempt.
+   - No. Keep task worktrees and branches. (default)
+   - Yes. Automatically clean up eligible task worktrees and branches.
+   Ask regardless of whether agents or the user merge PRs. Reuse explicit scoped
+   decisions and preserve refusals. An unanswered question leaves permission
+   pending and cleanup disabled; it does not authorize writing a new choice over
+   an existing one. Record the submitted answer, scope and provenance in the setup
+   record. Apply Yes/No with `workflow.py features enable|disable cleanup --cwd
+   <task-checkout>` under [feature settings](../../../clients/features.md), then
+   verify readback and integrate tracked settings through normal delivery.
+   `delete_remote_branch` defaults to `true`; use `features set cleanup
+   delete_remote_branch false` for an explicitly requested local-only choice.
+   Follow [post-merge cleanup](../../../clients/delivery.md#post-merge-cleanup)
+   for runtime behavior; a feature status of on is not itself deletion authority.
+4. **Enable Workstreams for `<project_name>`?**
    Explain that Enabled automatically uses suitable native child work; small
    tasks can stay with the coordinator. Show one choice:
    - Disabled. (default)
@@ -135,7 +172,7 @@ affected choice as inapplicable or pending, respectively.
    through the shared [Workstreams project preference](../../workstreams/references/procedure.md)
    during this setup. Verify readback before reporting it enabled or disabled.
    Ordinary coordination needs no runtime activation or qualification campaign.
-4. **Set up Graphify for `<project_name>`?**
+5. **Set up Graphify for `<project_name>`?**
    Explain that a local code map lets agents answer "what depends on this?"
    without reading many files. Setup adds `.graphifyignore` (secrets, `.env*`,
    caches, tool state) and a Git ignore for `graphify-out/`, then builds a
@@ -149,7 +186,7 @@ affected choice as inapplicable or pending, respectively.
    and uncommitted task-worktree edits. Skip the question when the project has no code.
    - Yes, set it up now. (default, recommended)
    - Not now.
-5. **Connect `<project_name>` to a long-term memory vault?**
+6. **Connect `<project_name>` to a long-term memory vault?**
    Explain that lasting facts stay outside the always-loaded instructions so
    those stay short. With an existing vault, add a pointer to the shared and
    client instructions; agents read it when relevant, write only when asked, and
@@ -159,7 +196,7 @@ affected choice as inapplicable or pending, respectively.
    - Yes, connect or set it up now. (default, recommended)
    - Not now.
 
-Apply questions 4 and 5 from the Toolkit revision resolved for this setup. Yes
+Apply the Graphify and memory questions from the Toolkit revision resolved for this setup. Yes
 plans and completes the setup with its evidence (graph query result, readable
 pointer). If a question is unanswered, apply its default and report it as
 "default applied, not answered"; the reviewed plan names any location outside the

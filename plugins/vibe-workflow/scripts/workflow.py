@@ -319,6 +319,15 @@ def control_main():
                 raise StartupError(RETIRED_CONTEXT_ID)
             report = (evidence.evidence_status(scope, client, args.session) if args.action == "status" else
                       operations[args.review_action if args.action == "review" else args.action](scope, request))
+            if args.action == "verify":
+                # Any future linked-verification caller must call this hook once per member after the linked operation returns.
+                try:
+                    from runtime import observability_hook
+                except Exception:
+                    # Optional upload must preserve the verification result.
+                    observability_hook = None
+                if observability_hook is not None:
+                    observability_hook.after_completion(scope, request, report)
             if args.action == "review" and args.review_action == "prepare":
                 from runtime.worker_visibility import prepare_managed
                 report = prepare_managed(scope.repository_root, request.get("session_id"), report)
@@ -369,6 +378,7 @@ def main():
         return session_start.diagnostic(reason)
 
     deadline = time.monotonic() + 4
+    noted = False
     try:
         adapters = {"codex": codex, "claude-code": claude_code}
         if len(sys.argv) != 3 or sys.argv[1] not in adapters:
@@ -402,6 +412,7 @@ def main():
                     restricted = qualification_only(_entry_scope(acquisition, managed=False))
                 except Exception:
                     restricted = True
+                noted = True
                 output = startup_notes.apply(PACKAGE, start.client, output, deadline, restricted)
             except Exception:
                 # The optional delivery note and warnings must preserve the startup result.
@@ -435,6 +446,13 @@ def main():
     except (ValueError, OSError, RecursionError, subprocess.TimeoutExpired):
         # Input and OS exception text may contain private paths or record contents.
         output = failure("invalid input, enrollment or local runtime; inspect the installed client instructions")
+    if not noted and requested_event == "SessionStart" and sys.argv[1] in {"codex", "claude-code"}:
+        try:
+            from runtime import startup_notes
+            startup_notes.deliver(PACKAGE, sys.argv[1], deadline)
+        except Exception:
+            # A diagnostic startup still writes the delivery note; its failure preserves the diagnostic.
+            pass
     if output is not None:
         print(json.dumps(output))
     return 0

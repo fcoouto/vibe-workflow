@@ -2,7 +2,7 @@
 
 Read only the client instructions for the current task. Shared workflow requirements live in the [policy index](../policies/00-index.md).
 
-For delivery workspace preparation and task-owned publication evidence, load [delivery](delivery.md) only when that operation applies, including before the first edit when the project's instructions or delivery policy select separate worktrees. Its current callable workspace binding does not activate a client or qualify publication/merge execution.
+For workspace preparation or a checkout-affecting operation, including review-only PR checkout, load [delivery](delivery.md) before acting. Also load it for task-owned publication evidence. [Task Planning](../policies/02-task-planning.md#planning-and-verification) owns the rule for every onboarded repository. The callable workspace binding does not activate a client or qualify publication/merge execution.
 
 | Client | Load when |
 | --- | --- |
@@ -11,6 +11,7 @@ For delivery workspace preparation and task-owned publication evidence, load [de
 | [Workstreams](../skills/workstreams/SKILL.md) | Name threads, manage saved mode, or coordinate a suitable enabled assignment. |
 | [Claude Code](claude-code.md) | Claude Code startup activates the workflow, or you implement, validate or diagnose its adapter. |
 | [OpenCode](opencode.md) | You implement, test or diagnose Smart Routing on OpenCode: its adapter, routing plugin or a routed launch. Not a startup or onboarding client. |
+| [OpenCode escalation gate](opencode-escalation-gate.md) | You install, configure, test or diagnose the optional OpenCode stuck-pattern escalation gate. |
 
 The [workspace requirements](workspace-requirements.md) list what every installed client needs; `prepare-my-workspace` and `onboard-my-project` read it through `workflow.py workspace status`.
 

@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import time
 
-from runtime import onboarding, startup, state
+from runtime import onboarding, persisted_binding, startup, state
 
 
 @dataclass(frozen=True)
@@ -36,9 +36,10 @@ def _acquire(cwd, *, deadline=None, settings=False):
     selected = next((row for row in repo['checkouts'] if row['root'] == observed['root']), None) if repo else None
     if selected is None:
         raise startup.StartupError('local_ownership_unavailable')
-    if (repo['membership'] != 'joined' or data['project_binding'] != observed['project_binding']
+    if (repo['membership'] != 'joined' or data['project_root'] != observed['project_root']
+            or not persisted_binding.matches(data['project_binding'], observed['project_binding'])
             or selected['git_dir'] != observed['git_dir'] or repo['git_common_dir'] != observed['git_common_dir']
-            or repo['binding'] | selected['binding'] != observed['binding']):
+            or not persisted_binding.all_match(repo['binding'] | selected['binding'], observed['binding'])):
         raise startup.StartupError('local_ownership_changed')
     projected = startup.canonical_scope_projection(acquired.record,
         repository_id=repo['repository_id'], checkout_id=selected['checkout_id'], client='codex')
@@ -67,7 +68,8 @@ def settings_scope(cwd):
     return _acquire(cwd, settings=True)
 
 
-def settings_absent(owner, namespace):
+def settings_absent(owner, namespace, record=None):
+    """`record` names a shared record in the namespace; the default is this checkout's own record."""
     if settings_scope(owner.repository_root) != owner:
         raise startup.StartupError('local_ownership_changed')
     if owner.runtime is None: return True
@@ -75,7 +77,7 @@ def settings_absent(owner, namespace):
         onboarding._no_links(directory)
         try: state._private(directory, True)
         except FileNotFoundError: return True
-    target = owner.state_dir / namespace / (owner.scope_id + '.json')
+    target = owner.state_dir / namespace / ((owner.scope_id if record is None else record) + '.json')
     try: target.lstat()
     except FileNotFoundError: return True
     return False

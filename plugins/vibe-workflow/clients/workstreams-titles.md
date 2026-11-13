@@ -151,8 +151,13 @@ overwritten. Readback catches a rename that lands after the write.
 Tests with a fake `opencode` executable check this command. Against OpenCode
 2.2.6 (Desktop server) on 9 November 2026, only the `--proof` check was observed:
 it accepted the calling session with a quoted token, and refused a missing
-token, another session's ID and a session the server did not know. A title write through this command has not been observed on
-OpenCode.
+token, another session's ID and a session the server did not know. On 10
+November 2026 a coordinator session on the same Desktop server adopted its first
+managed title through this command with `"adopt": true` and a quoted token: it
+returned `ok: true` with the new title as `baseline` and the replaced title as
+`previous`, and a separate `session.get` read of that session showed the new
+title. Writes with a `baseline`, deferrals and the `manual_title` path remain
+covered by fake-executable tests only.
 
 ## Record status and accepted progress
 

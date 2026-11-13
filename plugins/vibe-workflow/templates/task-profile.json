@@ -1,0 +1,54 @@
+{
+  "contract_version": 2,
+  "fields": {
+    "role": {"required": true, "values": "roster", "meaning": "the specialist id"},
+    "complexity_band": {"values": ["low", "medium", "high", "critical"], "floor": "high"},
+    "risk_band": {"values": ["low", "medium", "high", "critical"], "floor": "high"},
+    "review_policy": {"values": ["none", "self", "independent", "strict"], "floor": "independent"},
+    "uncertainty": {"values": ["low", "medium", "high"]},
+    "context_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+    "tools": {"type": "list"}
+  },
+  "write_floors": {"complexity_band": "medium", "risk_band": "medium"},
+  "levels": {
+    "complexity_band": {
+      "low": {"definition": "One file or one mechanical change with an obvious solution.", "example": "Fix a typo, rename a local variable, update a constant."},
+      "medium": {"definition": "A few files in one component, following a pattern that already exists.", "example": "Add an option to an existing command, with its test."},
+      "high": {"definition": "Several components, a new design choice, or behaviour that is hard to test.", "example": "Add a module with its own state and callers in two components."},
+      "critical": {"definition": "A change across shared core, concurrency or stored formats, where a wrong design is costly to undo.", "example": "Change the ledger's reservation rules or a stored record format."}
+    },
+    "risk_band": {
+      "low": {"definition": "A mistake is caught by existing checks and affects only this task.", "example": "Documentation, comments, test-only changes."},
+      "medium": {"definition": "A mistake could break one feature and is easy to revert.", "example": "A change to one command's output or validation."},
+      "high": {"definition": "A mistake could lose data, spend money, weaken a safety rule or break many callers.", "example": "Funding, permissions, migrations, shared state."},
+      "critical": {"definition": "A mistake could be irreversible or expose a secret.", "example": "Credential handling, destructive operations, release steps."}
+    }
+  },
+  "work_kinds": ["implementation", "review", "investigation", "planning", "testing", "writing"],
+  "roster": [
+    {"id": "orchestrator", "label": "Orchestrator", "when_to_use": "Coordinates a task that spans several areas and delegates each part to other specialists.", "work_kind": "planning", "writes": false, "reviews": false},
+    {"id": "code-reviewer", "label": "Code Reviewer", "when_to_use": "Reviews any code change for bugs, error handling and test coverage.", "work_kind": "review", "writes": false, "reviews": true},
+    {"id": "security-reviewer", "label": "Security Reviewer", "when_to_use": "Reviews a change for common web vulnerabilities, committed secrets, authentication flaws and vulnerable dependencies.", "work_kind": "review", "writes": false, "reviews": true},
+    {"id": "typescript-reviewer", "label": "TypeScript Reviewer", "when_to_use": "Reviews TypeScript or JavaScript for type safety, async correctness, injection and prototype pollution.", "work_kind": "review", "writes": false, "reviews": true},
+    {"id": "react-reviewer", "label": "React Reviewer", "when_to_use": "Reviews React code for hook rules, server and client component boundaries, accessibility and render performance.", "work_kind": "review", "writes": false, "reviews": true},
+    {"id": "react-build-resolver", "label": "React Build Resolver", "when_to_use": "Fixes a broken build or development server: bundler configuration, compile errors, missing types.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "test-engineer", "label": "Test Engineer", "when_to_use": "Writes unit and integration tests, test first, including edge cases.", "work_kind": "testing", "writes": true, "reviews": false},
+    {"id": "qa-automation-engineer", "label": "QA Automation Engineer", "when_to_use": "Writes end-to-end tests and pipeline quality gates for a critical user flow.", "work_kind": "testing", "writes": true, "reviews": false},
+    {"id": "database-architect", "label": "Database Architect", "when_to_use": "Designs schemas, migrations, indexes and query strategy.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "devops-engineer", "label": "DevOps Engineer", "when_to_use": "Works on deployment, pipelines, infrastructure and production operations.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "backend-specialist", "label": "Backend Specialist", "when_to_use": "Builds API endpoints, server-side business logic and data persistence.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "frontend-specialist", "label": "Frontend Specialist", "when_to_use": "Builds interface components, layout, styling and frontend structure.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "seo-specialist", "label": "SEO Specialist", "when_to_use": "Works on metadata, structured data, search indexing and visibility in AI search.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "performance-optimizer", "label": "Performance Optimizer", "when_to_use": "Removes a bottleneck that profiling has already identified.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "software-engineer", "label": "Software Engineer", "when_to_use": "Implements a change that no narrower specialist covers.", "work_kind": "implementation", "writes": true, "reviews": false},
+    {"id": "product-manager", "label": "Product Manager", "when_to_use": "Clarifies undefined or ambiguous requirements before a work item exists.", "work_kind": "planning", "writes": false, "reviews": false},
+    {"id": "product-owner", "label": "Product Owner", "when_to_use": "Turns a business goal into acceptance criteria for a work item.", "work_kind": "planning", "writes": false, "reviews": false},
+    {"id": "project-planner", "label": "Project Planner", "when_to_use": "Breaks a feature into ordered, executable tasks.", "work_kind": "planning", "writes": false, "reviews": false},
+    {"id": "code-archaeologist", "label": "Code Archaeologist", "when_to_use": "Explains legacy or undocumented code before it is changed.", "work_kind": "investigation", "writes": false, "reviews": false},
+    {"id": "debugger", "label": "Debugger", "when_to_use": "Finds the root cause of a bug, crash or flaky test before any fix is proposed.", "work_kind": "investigation", "writes": false, "reviews": false},
+    {"id": "explorer-agent", "label": "Explorer Agent", "when_to_use": "Maps an unfamiliar or complex codebase before a change is planned.", "work_kind": "investigation", "writes": false, "reviews": false},
+    {"id": "documentation-writer", "label": "Documentation Writer", "when_to_use": "Writes or updates READMEs, API documentation and runbooks on request.", "work_kind": "writing", "writes": true, "reviews": false},
+    {"id": "penetration-tester", "label": "Penetration Tester", "when_to_use": "Simulates attacks against a real authentication flow or release.", "work_kind": "review", "writes": false, "reviews": true},
+    {"id": "security-auditor", "label": "Security Auditor", "when_to_use": "Reviews defence in depth and models threats before an important release.", "work_kind": "review", "writes": false, "reviews": true}
+  ]
+}
