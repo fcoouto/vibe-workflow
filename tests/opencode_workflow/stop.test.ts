@@ -206,6 +206,15 @@ test("native ask survives form approval and native rejection keeps the hold", as
   assert.equal((await h.status()).held[0].stage, "stop")
 })
 
+test("form approval preserves a pre-existing native permission explanation", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const c = h.makeCall({ effect: "ask", message: "existing native permission reason" })
+  await h.evaluate(c)
+  assert.equal(c.effect, "ask")
+  assert.equal(c.message, "existing native permission reason")
+})
+
 test("configured deny never creates a form or broadens the decision", async (t) => {
   const h = await harness(t)
   await h.stop()
@@ -338,4 +347,261 @@ test("symlink, binary and oversized stopped files are not admitted", async (t) =
     assert.equal(c.effect, "deny", kind)
   }
   assert.deepEqual(h.operations, [])
+})
+
+for (const action of ["write", "patch"]) {
+  test(`an edit tool cannot use its form permit for permission action ${action}`, async (t) => {
+    const h = await harness(t, { answer: "approve" })
+    await h.stop()
+    const c = h.makeCall({ action })
+    await h.evaluate(c)
+    assert.equal(c.effect, "deny")
+    assert.deepEqual(h.operations, [])
+  })
+}
+
+test("a malformed proposed native diff cannot acquire approval", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const c = h.makeCall({ metadata: { files: [
+    { file: h.file, patch: "not a native proposed diff", status: "modified", additions: 1, deletions: 1 },
+  ] } })
+  await h.evaluate(c)
+  assert.equal(c.effect, "deny")
+  assert.deepEqual(h.operations, [])
+})
+
+test("an old successful completion cannot clear a reset-and-reheld stop", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const old = h.makeCall(); await h.evaluate(old)
+  assert.equal(old.effect, "allow")
+  await h.hooks["session.prompt"]({ sessionID: ROOT, prompt: { text: "reset the gate" } })
+  await h.stop()
+  await h.complete(old)
+  assert.equal((await h.status()).held[0].stage, "stop")
+  const current = h.makeCall(); await h.evaluate(current); await h.complete(current)
+  assert.deepEqual((await h.status()).held, [])
+})
+
+test("reset of a pending form invalidates its answer before the same path is held again", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle()
+  await h.hooks["session.prompt"]({ sessionID: ROOT, prompt: { text: "reset the gate" } })
+  await pending
+  await h.stop()
+  await h.reply(); await h.complete(c)
+  assert.equal(c.effect, "deny")
+  assert.equal((await h.status()).held[0].stage, "stop")
+})
+
+test("an approved native ask retains target occupancy until terminal tool result", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const c = h.makeCall({ effect: "ask" }); await h.evaluate(c)
+  const other = h.makeCall(); await h.evaluate(other)
+  assert.equal(other.effect, "deny")
+  assert.equal(h.forms.size, 1)
+  await h.complete(c, { status: "error" })
+  const next = h.makeCall(); await h.evaluate(next)
+  assert.equal(next.effect, "allow")
+  assert.equal(h.forms.size, 2)
+})
+
+test("foreign session, form ID, answer field and binding changes cannot authorize", async (t) => {
+  for (const mutation of ["session", "id", "binding", "generation", "fields", "extra-answer"]) {
+    const h = await harness(t, { answer: "approve" })
+    await h.stop()
+    const original = h.driver.get
+    h.driver.get = async (...args: any[]) => {
+      const value = await original(...args)
+      if (mutation === "session") value.sessionID = "ses_foreign"
+      if (mutation === "id") value.id = "frm_old"
+      if (mutation === "binding") value.metadata.binding = "old"
+      if (mutation === "generation") value.metadata.generation = "old"
+      if (mutation === "fields") value.fields[0].description = "different change"
+      if (mutation === "extra-answer") value.state.answer.extra = "approve"
+      return value
+    }
+    const c = h.makeCall(); await h.evaluate(c)
+    assert.equal(c.effect, "deny", mutation)
+    await h.complete(c)
+    assert.equal((await h.status()).held[0].stage, "stop")
+    assert.ok(!h.operations.includes("cancel"), "never cancel an unverified foreign form")
+  }
+})
+
+test("unknown native call or changed message ID cannot acquire a form", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const unknown = h.makeCall(); await h.hooks["permission.evaluate"](unknown)
+  assert.equal(unknown.effect, "deny")
+  const c = h.makeCall(); await h.hooks["tool.execute.before"](c)
+  c.source.messageID = "msg_foreign"
+  await h.hooks["permission.evaluate"](c)
+  assert.equal(c.effect, "deny")
+  assert.deepEqual(h.operations, [])
+})
+
+test("a reply before create response and a reply during the initial read are not lost", async (t) => {
+  for (const stage of ["create", "get"]) {
+    const h = await harness(t)
+    await h.stop()
+    const original = h.driver[stage]
+    let once = false
+    h.driver[stage] = async (...args: any[]) => {
+      const value = await original(...args)
+      if (!once) { once = true; await h.reply() }
+      return value
+    }
+    const c = h.makeCall(); await h.evaluate(c)
+    assert.equal(c.effect, "allow", stage)
+    await h.complete(c)
+    assert.deepEqual((await h.status()).held, [])
+    assert.ok(h.operations.length <= 4)
+  }
+})
+
+test("repeated authorization under the same native call invalidates its permit", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const c = h.makeCall(); await h.evaluate(c)
+  assert.equal(c.effect, "allow")
+  await h.hooks["permission.evaluate"](c)
+  assert.equal(c.effect, "deny")
+  await h.complete(c)
+  assert.equal((await h.status()).held[0].stage, "stop")
+  assert.equal(h.forms.size, 1)
+})
+
+test("event hints with a foreign session cannot release a pending native call", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); let done = false
+  const pending = h.evaluate(c).then(() => { done = true })
+  await settle()
+  const form: any = [...h.forms.values()][0]
+  await h.emit({ type: "form.replied", data: { id: form.id, sessionID: "ses_foreign", answer: { decision: "approve" } } })
+  assert.equal(done, false)
+  assert.equal(c.effect, "deny")
+  await h.reply(); await pending
+  assert.equal(c.effect, "allow")
+})
+
+test("read operation timeout denies and late authoritative success cannot re-activate it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const original = h.driver.get
+  let release!: (value: any) => void
+  let first = true
+  h.driver.get = async (...args: any[]) => {
+    if (!first) return original(...args)
+    first = false
+    return new Promise((done) => { release = done })
+  }
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle(); await h.advance(8000); await pending
+  assert.equal(c.effect, "deny")
+  release(copy([...h.forms.values()][0])); await settle(); await h.complete(c)
+  assert.equal((await h.status()).held[0].stage, "stop")
+  assert.ok(h.operations.length <= 6)
+})
+
+test("uncertain create is never retried; late creation is reported unconfirmed, not authorized", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const h = await harness(t)
+  await h.stop()
+  const create = h.driver.create
+  let release!: () => void
+  h.driver.create = (...args: any[]) => new Promise((done) => { release = () => { void create(...args).then(done) } })
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle(); await h.advance(8000); await pending
+  assert.equal(c.effect, "deny")
+  assert.match((await h.status()).lastError, /cleanup_unconfirmed/)
+  release(); await settle(); await h.complete(c)
+  assert.equal((await h.status()).held[0].stage, "stop")
+  assert.equal(h.operations.filter((op) => op === "create").length, 1)
+})
+
+test("cleanup timeout preserves denial and reports unconfirmed owned cancellation", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const h = await harness(t)
+  await h.stop()
+  h.driver.cancel = () => new Promise(() => {})
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle(); await h.advance(110000); await h.advance(8000); await pending
+  assert.equal(c.effect, "deny")
+  assert.match((await h.status()).lastError, /cleanup_unconfirmed/)
+  assert.equal((await h.status()).held[0].stage, "stop")
+})
+
+test("pre-hook external changes remain a stated assumption rather than a fabricated native before-image check", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const c = h.makeCall()
+  writeFileSync(h.file, "VALUE = 9\n") // Outside approved writer scope, before the hook's first snapshot.
+  await h.evaluate(c)
+  assert.equal(c.effect, "allow", "stable hook bytes cannot authenticate the native executor's earlier read")
+  assert.equal(readFileSync(h.file, "utf8"), "VALUE = 9\n", "the plugin itself never applies the native diff")
+})
+
+test("the cleanup reserve bounds a final read by remaining time, not a new eight-second window", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] })
+  const h = await harness(t)
+  await h.stop()
+  let cancel!: () => void
+  h.driver.cancel = () => new Promise<void>((done) => { cancel = done })
+  const original = h.driver.get
+  let reads = 0
+  h.driver.get = (...args: any[]) => ++reads === 1 ? original(...args) : new Promise(() => {})
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle(); await h.advance(110000); await h.advance(7999)
+  cancel(); await settle(); await h.advance(2001)
+  await pending
+  assert.equal(c.effect, "deny")
+  assert.match((await h.status()).lastError, /cleanup_unconfirmed/)
+  await h.complete(c)
+  assert.equal((await h.status()).held[0].stage, "stop")
+})
+
+test("a child shares the stopped target but cannot borrow its parent's pending approval", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  await h.emit({ type: "session.created", data: { sessionID: "ses_child", parentID: ROOT } })
+  const parent = h.makeCall(); const pending = h.evaluate(parent)
+  await settle()
+  const child = h.makeCall({ sessionID: "ses_child" }); await h.evaluate(child)
+  assert.equal(child.effect, "deny")
+  await h.reply(); await pending
+  await h.complete(parent)
+  assert.deepEqual((await h.status()).held, [])
+  assert.equal(h.forms.size, 1)
+})
+
+test("correlation capacity refuses new calls without evicting an active permit", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  await h.stop()
+  const first = h.makeCall(); await h.evaluate(first)
+  for (let i = 0; i < 300; i++) await h.hooks["tool.execute.before"](h.makeCall())
+  const last = h.makeCall(); await h.evaluate(last)
+  assert.equal(last.effect, "deny")
+  await h.complete(first)
+  assert.deepEqual((await h.status()).held, [])
+  assert.equal(h.forms.size, 1)
+})
+
+test("ordinary editing stays quiet and a native post-format result still completes its exact permit", async (t) => {
+  const h = await harness(t, { answer: "approve" })
+  const ordinary = h.makeCall(); await h.evaluate(ordinary); await h.complete(ordinary)
+  assert.equal(ordinary.effect, "allow")
+  assert.deepEqual(h.operations, [])
+  await h.stop()
+  const stopped = h.makeCall(); await h.evaluate(stopped)
+  await h.complete(stopped, { messageID: "msg_other" })
+  assert.equal((await h.status()).held[0].stage, "stop")
+  await h.complete(stopped, { result: { metadata: { files: [{ patch: "native formatter changed spacing" }] } } })
+  assert.deepEqual((await h.status()).held, [])
 })

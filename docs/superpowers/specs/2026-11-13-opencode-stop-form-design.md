@@ -2,17 +2,19 @@
 
 ## Status and authority
 
-Proposed design for independent review and user approval. The user asked to proceed
+Design approved for offline implementation and deterministic regression review.
+The user asked to proceed
 with the next Escalation Gate milestone and submit it for review on 13 November
 2026. This document does not change runtime behavior or authorize a release.
-Implementation planning follows design approval; no new live allocation is spent
-by writing or reviewing this proposal.
+The subsequent implementation request explicitly excludes live qualification and
+keeps PR #294 draft/BLOCKED. No release or installed-package update is authorized.
 
 **Approved first-milestone assumption (user, 13 November 2026):** limit the first
 milestone to files with no concurrent external writer from native edit preparation
 through commit. This is a scope assumption, not a detected or enforced guarantee.
-This update records that approval only; runtime remains unchanged. It does not
-qualify the remaining host capabilities or approve stronger snapshot guarantees.
+The earlier scope-record update left runtime unchanged. The later implementation
+request permits candidate source changes, not live qualification or stronger
+snapshot guarantees.
 
 The milestone is one end-to-end **built-in `edit`** blocked at the stop stage,
 explicitly approved through a native form, executed by the original native tool,
@@ -72,7 +74,7 @@ authentication and general race-freedom are separate milestones.
 3. **Native form before the original native edit commits — proposed.** Reuse the
    qualified authoritative bridge and existing permission/completion hooks. Bind
    approval to native facts, not an agent argument or custom RPC writer. This is
-   the approach the user authorized exploring; the detailed design remains pending.
+   the approach the user subsequently authorized implementing for offline review.
 
 ## Integration
 
@@ -267,8 +269,11 @@ turning ordinary unheld operations into a new global fail-closed mode.
    installation update or promotion follows from a mocked or partial result.
 
 Independent design review is complete, and the user approved the first milestone's
-no-concurrent-external-writer assumption on 13 November 2026. Runtime changes,
-implementation planning and a fresh live campaign are not included in this update.
+no-concurrent-external-writer assumption on 13 November 2026. The user subsequently
+requested implementation with deterministic tests in a fresh worktree, no live
+qualification and draft/BLOCKED publication. The [implementation plan](../plans/2026-11-13-opencode-stop-form-implementation.md)
+records that scope. Default native form transport remains unavailable; candidate
+stopped edits deny rather than discover/start a service or copy credentials.
 
 ## Initial review disposition
 

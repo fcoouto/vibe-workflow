@@ -2,13 +2,15 @@
 //
 // Feeds observed edits, failed checks, finished child sessions and primary routes to the pure state machine in
 // gate.ts, and applies its holds through `permission.evaluate`. Interactive trees only: ledger-derived sessions
-// belong to the Smart Routing shim. State lives in memory; a reload starts afresh. Nothing is logged, and any internal
-// error allows the action.
+// belong to the Smart Routing shim. State lives in memory; a reload starts afresh. Nothing is logged. Ordinary internal
+// errors fail open; a captured stop-stage edit stays denied when its explicit form prerequisite fails.
 import { execFile } from "node:child_process"
 import { dirname, isAbsolute, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { DEFAULT_SETTINGS, Gate, derivedSession, isCheck, parseSettings, resetRequest } from "./gate.ts"
 import type { GateSettings, Route } from "./gate.ts"
+import { StopApprovals } from "./stop.ts"
+import type { StopForms } from "./stop.ts"
 
 const PACKAGE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const FEATURE = "escalation_gate"
@@ -23,7 +25,8 @@ const FINISHED = "session.execution.succeeded"
 const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+\/-]{0,127}$/
 
-type Config = { featureStatus?: (directory: string) => Promise<unknown> }
+type Config = { featureStatus?: (directory: string) => Promise<unknown>;
+  stopForms?: StopForms; stopNow?: () => number }
 
 /** The route a `model.request` names, or null when it is not one. */
 export function routeOf(model: unknown): Route | null {
@@ -120,6 +123,9 @@ export function createWorkflowPlugin(config: Config = {}) {
       let lastError: string | null = null
       const remembered = new Map<string, { session: string; files: string[] }>()
       const failedLookups = new Map<string, number>()
+      // No default native transport is qualified; the dependency seam never performs discovery or copies credentials.
+      const stops = new StopApprovals({ directory, gate: () => gate, forms: config.stopForms, now: config.stopNow,
+        error: (code) => { if (lastError !== "event_stream_lost") lastError = code } })
 
       const guard = (name: string, body: (event: any) => Promise<void> | void) => async (event: any) => {
         if (!gate) return
@@ -170,8 +176,10 @@ export function createWorkflowPlugin(config: Config = {}) {
       if (eventChannelAvailable) {
         void (async () => {
           try {
-            for await (const event of ctx.event.subscribe({ types: ["session.created", FINISHED], signal: events.signal })) {
+            for await (const event of ctx.event.subscribe({ types: ["session.created", FINISHED, "form.replied",
+              "form.cancelled", "session.execution.failed", "session.execution.interrupted"], signal: events.signal })) {
               if (!gate) continue
+              stops.event(event)
               const data = (event as any)?.data
               if (typeof data?.sessionID !== "string") continue
               if ((event as any)?.type === "session.created") {
@@ -184,6 +192,7 @@ export function createWorkflowPlugin(config: Config = {}) {
           } catch { /* handled below */ }
           // Releases depend on finished-run events: without them a hold could never end, so fail open.
           eventChannelAvailable = false
+          stops.close()
           gate = null
           if (!events.signal.aborted) {
             lastError = "event_stream_lost"
@@ -198,6 +207,11 @@ export function createWorkflowPlugin(config: Config = {}) {
         if (route && session) gate!.routed(session, route)
       }))
 
+      await ctx.tool.hook("execute.before", guard("tool_execute_before", async (event) => {
+        if (event?.tool !== "edit") return
+        if (await known(event?.sessionID)) stops.before(event)
+      }))
+
       await ctx.permission.hook("evaluate", guard("permission_evaluate", async (event) => {
         if (!EDIT_ACTIONS.has(event?.action) || event.effect === "deny") return
         const resources = event.resources
@@ -206,12 +220,17 @@ export function createWorkflowPlugin(config: Config = {}) {
         const session = await known(event.sessionID)
         if (!session) return
         const decision = gate!.editDecision(session, files)
-        if (decision.effect !== "allow") {
-          event.effect = decision.effect
-          event.message = display(decision.message)
-          if (decision.effect === "deny") return
+        if (decision.effect === "ask") {
+          // A native ask/reply cannot substitute for the distinct form prerequisite.
+          await stops.evaluate(event, files)
+          return
         }
-        // Remember allowed and asked edits; the completed call confirms them (an approved stop-stage edit clears).
+        if (decision.effect === "deny") {
+          event.effect = "deny"
+          event.message = display(decision.message)
+          return
+        }
+        // Remember ordinary allowed and asked edits; only the separate approval owner may clear a stop.
         const call = event.source?.id
         if (typeof call !== "string") return
         if (remembered.size >= MAX_REMEMBERED) remembered.delete(remembered.keys().next().value!)
@@ -219,8 +238,9 @@ export function createWorkflowPlugin(config: Config = {}) {
       }))
 
       await ctx.tool.hook("execute.after", guard("tool_execute_after", async (event) => {
+        if (stops.after(event)) return
         const edit = typeof event?.id === "string" ? remembered.get(event.id) : undefined
-        if (edit) {
+        if (edit && edit.session === event.sessionID) {
           remembered.delete(event.id)
           if (event.status === "completed") gate!.edited(edit.session, edit.files)
           return
@@ -240,6 +260,7 @@ export function createWorkflowPlugin(config: Config = {}) {
         const request = resetRequest(text)
         if (!request) return
         const cleared = gate!.reset(session, request)
+        stops.reset(session, cleared)
         if (cleared.length) {
           event.prompt.text = `${text}\n\n[escalation gate: counter reset by user for ${display(cleared.join(", "))}]`
         }
@@ -267,6 +288,7 @@ export function createWorkflowPlugin(config: Config = {}) {
 
       return () => {
         eventChannelAvailable = false
+        stops.close()
         gate = null
         events.abort()
       }

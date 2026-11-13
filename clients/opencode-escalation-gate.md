@@ -4,6 +4,16 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 
 **Status: selected mechanical paths qualified on OpenCode 2.2.6 with released 0.1.39. Six original native cases passed, plus a later actual standalone TUI flow covering rendered refusal, native child permission identity and event ordering. Two instrumented native fault instances passed separately. The TUI follow-up required a fixture-only read-only tool permission correction and forced frontend shutdown; shared-server TUI attachment and general workflow improvement are not qualified. Earlier failures remain recorded; neither general semantic detection nor the deferred judge is qualified. See the [13 November report](../docs/qualification/2026-11-13-opencode-escalation-gate.md), [earlier behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
+**Unreleased candidate:** the [approved no-concurrent-external-writer design](../docs/superpowers/specs/2026-11-13-opencode-stop-form-design.md)
+now has deterministic adapter/state-machine regression coverage. Stop-stage native
+approval alone no longer clears a hold. The default candidate has **no qualified
+authenticated form transport**: stopped edits deny with
+`stop_form_bridge_unavailable`; the existing root-message reset remains available.
+The form dependency seam supports offline tests and future qualified embedding,
+not a new user setting or a working installed bridge. No live qualification,
+manual UI proof, installation update or release follows from those tests. PR #294
+stays draft/BLOCKED. The released observations above do not qualify this change.
+
 ## What it does
 
 The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/opencode_workflow/index.ts) watches one tree per interactive root session: the session and its subagents. Ledger-derived sessions belong to the Smart Routing shim and are ignored. It makes no model calls and writes nothing while nothing is held.
@@ -12,13 +22,40 @@ The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/openco
 - **Trip.** A repair round on a file is a re-edit after a failure. After two rounds and a new failure, the file is held. Passing checks never clear rounds; a second failure without a repair in between does.
 - **Hold.** Edits of a held file by any session in the tree are denied, with a message naming the files, rounds, stage and next step. Everything else passes.
 - **Release.** A new subagent, created after the hold, that made no edits and finished successfully releases a file when its route is stronger than every level on the file. Where two routes cannot be ranked, a different route is enough. Same-level reviews never release.
-- **Stages.** Up to three escalations; then, or when no ranked option is above every level, the architecture re-evaluation: a new read-only session at least as strong as every level releases the file and resets its count once. After that, three more escalations or no stronger option turn the hold into an approval prompt; an approved edit starts the file afresh.
+- **Stages.** Up to three escalations; then, or when no ranked option is above every level, the architecture re-evaluation: a new read-only session at least as strong as every level releases the file and resets its count once. After that, three more escalations or no stronger option require a distinct form decision. In the candidate, only its matching successful native edit starts the file afresh; missing form capability keeps the edit denied.
 - **Ranking.** The `ladder` setting lists `provider/model` entries, weakest first. Within one model, variants rank `low`, `medium`, `high`, `xhigh`, `max`. Anything else is unranked.
 
 ## Reset and troubleshooting
 
 - **Reset by message.** While something is held, a message from the user in the main session asking to reset the gate, counter, hold or escalation clears the named files, or every held file when none is named. The plugin appends `[escalation gate: counter reset by user for <files>]` to that message. Messages in subagent sessions and negated requests ("don't reset") never reset. The agent cannot clear its own hold.
 - **Status.** While the gate is active, the read-only tool `escalation_gate_status` reports held files, rounds, stage, escalations, levels and the last internal error.
+
+## Candidate stop-form behavior
+
+- Only one existing regular non-symlink UTF-8 text file through the observed native
+  `edit` tool is supported. File limit: 1 MiB; complete native change metadata limit:
+  64 KiB. Unsupported stopped tools, multi-file requests and malformed metadata deny.
+- A form decision binds generation, tree, native session/message/call, hold
+  incarnation, complete native proposed change and hook-observed file digest.
+  Exact authoritative approval restores the incoming native allow/ask effect;
+  it never overrides a configured deny or grants broader permissions.
+- Pending, reject, cancel, stale/foreign/mutated state, repeated authorization,
+  interruption, bridge failure and unconfirmed settlement deny. A terminal event
+  permits authoritative readback and at most one extra confirmation read; no
+  periodic polling or create retry. Target occupancy lasts through native
+  permission wait and execution. Failed or unrelated completions never clear it.
+- Acquisition stops at 110 seconds; final 10 seconds of a 120-second form-operation
+  budget are reserved for owned cleanup. Up to six form operations, with cleanup
+  capacity reserved. A later native permission wait/execution is separate.
+  Unconfirmed cleanup reports `stop_form_cleanup_unconfirmed`; it does not renew
+  budgets or authorize an edit. A late-created form can remain unconfirmed.
+- The approved first milestone assumes no concurrent external writer from native
+  preparation through commit. Stable hook snapshots do not authenticate the
+  executor's earlier complete before-image. A form answer is automation-capable
+  workflow data, not proof of a physical-human decision.
+- Tests use fake native form responses and temporary local files, not a custom
+  production writer. Authenticated same-service access, complete client display,
+  scheduling during a native permission hook and cleanup still need live proof.
 
 ## Install and configure
 
@@ -37,7 +74,7 @@ The feature is off by default, needs no consent and changes a tracked file, so c
 
 ## Limits
 
-- Not a security boundary: writes through the shell, `` !`cmd` `` command templates, other plugins and the server API are not seen. A plugin that fails to load enforces nothing, and any internal error allows the action.
+- Not a security boundary: writes through the shell, `` !`cmd` `` command templates, other plugins and the server API are not seen. A plugin that fails to load enforces nothing. Ordinary internal errors fail open; captured known-stop operations remain denied if their form prerequisite fails.
 - State lives in memory; a plugin reload starts afresh.
 - An unavailable or lost session-event stream disables enforcement for that plugin instance, including loss before feature loading completes. Reload to start a fresh instance; the plugin does not reconnect. Cleanup also prevents late activation.
 - Loops whose repairs move to files never repaired before are not detected.

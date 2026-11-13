@@ -207,7 +207,7 @@ export class Gate {
     if (known) known.route = route
   }
 
-  edited(session: string, files: string[]): void {
+  edited(session: string, files: string[], approvedHold?: number): void {
     const known = this.session(session)
     if (!known) return
     known.edited = true
@@ -215,8 +215,9 @@ export class Gate {
     const now = ++this.seq
     for (const file of files) {
       let entry = tree.get(file)
-      if (entry && entry.heldAt !== null && this.stage(entry) === "stop") {
-        tree.delete(file)  // the user approved the stop-stage ask: start this file afresh
+      if (entry && entry.heldAt !== null) {
+        if (files.length !== 1 || entry.heldAt !== approvedHold || this.stage(entry) !== "stop") continue
+        tree.delete(file)  // only the matching form-qualified completion starts this file afresh
         entry = undefined
       }
       if (!entry) {
@@ -275,6 +276,13 @@ export class Gate {
   holds(session: string): boolean {
     const known = this.session(session)
     return known !== undefined && [...this.trees.get(known.root)!.values()].some((entry) => entry.heldAt !== null)
+  }
+
+  stopped(session: string, file: string): { root: string; hold: number } | null {
+    const known = this.session(session)
+    const entry = known && this.trees.get(known.root)?.get(file)
+    return known && entry && entry.heldAt !== null && this.stage(entry) === "stop"
+      ? { root: known.root, hold: entry.heldAt } : null
   }
 
   reset(session: string, request: { files: string[] }): string[] {
