@@ -596,8 +596,8 @@ def probe(capabilities):
     `capabilities`: {"version", "hooks": [registered hook names], "plugin_health": "ok" when the
     `routing.health` RPC answered for the canonical directory, "worker_tools": {shell|mcp|execute|webfetch|
     image_generation|config_edit: "deny"|"narrow"|"allow"}}. Managed launches refuse unless health is ok and every hook
-    S3 uses is present and the version is not known below the minimum; enforcement also needs `shell` denied (commands inside any allowed shell
-    stay unenforceable), the other tools denied or narrowed by the caller's policy rules, image generation denied and
+    S3 uses is present and the version is not known below the minimum; enforcement also needs `shell` denied
+    (commands inside any allowed shell stay unenforceable), the other tools denied or narrowed by the caller's policy rules, image generation denied and
     model edits of OpenCode configuration denied or narrowed to exclude it (S3.3d). A missing state is not enforced.
     """
     caps = _object(capabilities, "invalid capabilities")

@@ -355,6 +355,8 @@ class HostRuleTests(LauncherBase):
     """F4.4 and the effort omission contract on the OpenCode launcher."""
 
     def test_host_version_metadata_does_not_pin_managed_launches(self):
+        self.host.rate_limit = dict(status='allowed', rateLimitType='five_hour', resetsAt=self.now + 3000,
+            unifiedWindows=dict(five_hour=dict(utilization=0.25, resetsAt=self.now + 3000, status='allowed')))
         for index, version in enumerate(('2.2.7', '2.3.0', '3.0.0', '10.0.0', None, 'unknown')):
             with self.subTest(version=version):
                 self.host.version = version
