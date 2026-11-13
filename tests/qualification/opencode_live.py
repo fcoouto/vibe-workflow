@@ -55,7 +55,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests.qualification import canary, canary_cli, canary_ranked, canary_ranked_state, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
-                                        DERIVED_SESSION, PROMPT_TEXT, QUALIFIED_OPENCODE,
+                                        DERIVED_SESSION, PROMPT_TEXT,
                                         Redactor, Refused, check_isolated_dir, check_real_home,
                                         check_opencode_version, id_shape,
                                         latency_pairs, on_route, repo_snapshot,
@@ -85,6 +85,7 @@ class Run:
     def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
                  canary_state=None, purpose=None, stages=None, chatgpt_model=None, route=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
+        self.cli_version, self.server_version = None, None
         self.canary_project = canary_project
         self.purpose = purpose or ("pilot" if canary_project else "qualification")
         if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt", canary.RANKED_PURPOSE):
@@ -325,7 +326,10 @@ class Run:
     def start(self, stage):
         self.server.start()
         self.redact.add_secret(self.server.password)
-        self.note(stage, "server", dict(version=self.server.request("GET", "/api/info")[1].get("version"), port="<random>",
+        status, info, _ = self.server.request("GET", "/api/info")
+        version = info.get("version") if status == 200 and isinstance(info, dict) else None
+        self.server_version = version if isinstance(version, str) else None
+        self.note(stage, "server", dict(version=self.server_version, port="<random>",
                                         location="canary project subdirectory" if self.canary_project else "isolated project"))
         if self.purpose == "chatgpt":  # no Claude login in this run: the only provider is the ChatGPT one
             self.events = EventStream(self.server)
@@ -860,7 +864,9 @@ class Run:
                                                       self.report_only_home())
 
     def output(self, results):
-        meta = dict(opencode=QUALIFIED_OPENCODE, date=time.strftime("%Y-%m-%d"), mode=self.purpose,
+        meta = dict(opencode=self.server_version if self.server_version is not None else self.cli_version,
+                    opencode_cli=self.cli_version, opencode_server=self.server_version,
+                    date=time.strftime("%Y-%m-%d"), mode=self.purpose,
                     provider=self.route_ref() if self.route else None,
                     counting=COUNTING, sanitized=True, generated_by="tests/qualification/opencode_live.py (no post-processing)")
         return self.redact(dict(_meta=meta, **results))
@@ -964,13 +970,14 @@ def main(argv=None):
                 args.admissions = limit if args.admissions is None else args.admissions
                 canary.plan_assignments(args.admissions, "check", limit=limit, route=safety.choice(safety.parse_route(args.route)))
         check_real_home()  # the last check: nothing has started yet
-        check_opencode_version(env=server_environment(base))
+        cli_version = check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
               canary_state=state, purpose=canary.RANKED_PURPOSE if args.ranked else purpose, stages=stages,
               chatgpt_model=args.chatgpt_model, route=args.route)
+    run.cli_version = cli_version
     run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage,
                               start=args.ranked_start) if args.ranked else None
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
