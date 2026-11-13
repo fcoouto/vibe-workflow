@@ -367,6 +367,88 @@ manual question UI, reload/state persistence and fresh-human authentication rema
 outside this partial result. Diagnosis and evidence review are separate bounded
 native model assignments, not zero total model usage.
 
+### Fresh form-access bridge and native edit-gating qualification
+
+After directing continued work, the user explicitly authorized bridge qualification
+and a fresh bounded gating test. This successor exercised the earlier unrun cases;
+it did not replay the old fixture, reset its allowance or change the shipped gate.
+
+**Native bridge and pre-edit cases passed in the tested prototype.** The bridge
+uses the installed CLI's supported form API and existing authentication instead of
+the absent plugin-context methods. It accepts only fixed form create/get/cancel
+operations, checks the expected shared PID, bounds calls/time, validates response
+envelopes and propagates lookup failures. No SDK install or credential copy was
+needed. Internal service-discovery HTTP traffic is not separately measured; the
+counts below are selected API operations, not every underlying HTTP transaction.
+
+Readiness required one exact plugin generation plus actual native form
+create/get/cancel and correlated created/cancelled events. Each subsequent RPC
+carried that generation. Form state used for permission decisions came from native
+API reads, not caller-supplied answer snapshots or an unacknowledged event stream.
+One generation remained throughout the cases; no replacement was silently adopted.
+
+| Native case or group | Observed result |
+| --- | --- |
+| Pending initial, new and next-action forms | Edit denied; canary unchanged. |
+| Rejected or cancelled form | Edit denied. |
+| Foreign session or tampered proposed value | Edit denied without consuming the valid approval. |
+| Wrong generation | RPC refused the edit; canary unchanged. This is not a live reload test. |
+| Exact recorded form/session/approve for the bound action | Native permission assertion allowed one actual canary write to 1. |
+| Consumed approval or old form applied to a new action | Edit denied. |
+| Two concurrent attempts using one fresh approval | One native allow/write to 2 and one denial; approval consumed once. |
+| Approved form whose pre-edit content no longer matched | Edit denied. |
+
+The 13 recorded case checks produced **two actual writes, two native permission
+allows and 11 native denials**. The wrong-generation check stops at the RPC guard;
+the concurrent case contains two native permission evaluations. Both writes were
+correlated with the matching native form reply and authoritative answered state.
+The binding also includes the single canary resource, requested value, pre-edit
+digest and one-use state. Form ID/session/answer alone are not the whole edit gate.
+
+A separate single conflicting-reply trial accepted reject and returned HTTP 409
+for approve. No edit used that form. This characterizes one trial, not general
+concurrency reliability of OpenCode's form settlement. Bridge error propagation and
+binding edge cases also passed deterministic checks; no live lookup-failure fault
+was injected. Native error events cannot stand in for successful expected denials.
+
+The cases used 39/120 controller and 23/60 bridge API operations, seven of at most
+eight forms, two idle sessions and no initiated model request. All 23 bridge child
+processes were observed returning exit code 0. No native permission ask/reply
+occurred: the pre-edit hook returned deny or allow, so automatic permission `once`
+was not the release channel. Final canary was `VALUE = 2`; all code pins matched.
+
+**Retained teardown failure and reconciliation:** the controller exited 1 because
+four rapid inventory reads preceded asynchronous unloading. The same generation's
+closed event arrived about 63 ms after its last early metadata read. No successful
+case was repeated. Three later metadata-only calls verified subject inventory
+absence, RPC unavailability and the unchanged shared process. Total recovery calls
+were 10, within the reserved count; the completion readback exceeded the declared
+30-second recovery-observation window but stayed within the original 300-second
+overall window. That timing criterion did **not** pass. Do not call the original
+controller run wholly green or silently replace its failed teardown receipt.
+
+Only the owned disposable plugin registration was removed, after archiving its
+original configuration. No global reload/restart, user/feature settings change or
+production runtime edit occurred. Raw receipts and the independent evaluator retain
+case success separately from the teardown assertion and later reconciliation.
+The earlier fixture's API-only result and failed guards remain unchanged.
+
+Native event-log SHA-256:
+`854f7eea6de3d39a0b8ef3770306985616903fd07eb9b36779ef7c0f011183d7`;
+controller API-log SHA-256:
+`a0c1a8d62298eb71992faf795edf1e4facdf6b831951c7719e22fecc819d2c79`.
+Private proof retains the exact generation, session/form/action mapping, child
+exits, before/after hashes, native permission decisions and both teardown records.
+
+**Implementation implication:** an explicit form answer can drive a scoped,
+one-use pre-edit workflow gate when authoritative state and action binding are
+checked before execution. An authorized API client can also provide that answer;
+it is still not human-origin authentication. This qualifies the native
+permission-assert/RPC canary prototype, not integration into the released gate,
+built-in edit-tool dispatch, manual question UI, actual reload recovery or restart
+persistence. Those limits and the original failed approval controls keep PR #289
+draft `[BLOCKED]`; Smart Routing and the judge remain deferred.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on

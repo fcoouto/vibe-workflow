@@ -240,3 +240,57 @@ Original test remains17 calls; recovery adds3, no renewed live allocation. Befor
 separately authorized gating attempt, source-qualify authoritative form access and
 an exact generation/capability readiness barrier. Runtime implementation remains
 outside this qualification. Parent/sibling watching is not a proved cause.
+
+## Authorized continuation: form-access bridge and fresh gating test
+
+The user directed continued work and explicitly authorized qualification of the
+bridge plus a fresh bounded gating test. The previous attempt stays closed with
+its failures, 17 test calls and three teardown calls. Its limits were not a stop
+for source investigation or disposable-harness repair, and are not reset here.
+
+Use a new immutable fixture package. Replace unsupported `ctx.session.form` calls
+with a fixed-operation bridge through the already-installed authenticated native
+CLI. Reuse native service discovery, never copy credentials or install an SDK.
+Guard the expected shared PID before bridge calls and verify native identity in
+preflight. All returned form state comes from native API responses, not RPC caller
+snapshots. Errors deny; no fallback approval or model route exists.
+
+New live allocation: five minutes, at most 120 controller API calls plus 60 bridge
+API calls, eight owned forms, two idle sessions and zero model requests. Reserve
+at most ten recovery-only API calls/30 seconds after case execution. No old fixture
+replay, global setting, shared reload/restart or shipped runtime change.
+
+- [x] Regression-check bridge parsing/error handling without native calls; retain
+  existing binding checks. Qualify bridge create/get/cancel in native preflight.
+- [x] Establish cleanup before activation. Bounded readiness must prove exact
+  generation, required bridge capability and correlated native form events, not
+  merely inventory presence. Every case RPC is bound to that generation; abort
+  instead of adopting a replacement. Keep package sources unchanged during cases.
+- [x] Run previously unrun pending/reject/cancel, mismatched session/action,
+  approval-only edit, replay, stale-before-image and concurrent-consumption cases.
+  Characterize conflicting native replies without editing from an ambiguous form.
+- [ ] Remove only the owned disposable loader registration, observe native
+  inventory/RPC removal, retain exact original configuration and case evidence,
+  then independently review, check and update PR #289 with scoped results.
+
+This is a native permission-assert/RPC canary prototype, not a shipped gate change,
+built-in edit-tool/UI qualification or human authentication. A test cutoff stops
+that run, not independent authorized diagnosis, source repair or publication.
+
+### Successor execution checkpoint
+
+Native bridge preflight and 13 recorded gating checks passed in one generation:
+two real writes (1, then 2), two native allows and 11 denials. The concurrent pair
+consumed one approval once. Native form ID/session/answer events and authoritative
+state were correlated before writes. One conflicting reply trial accepted reject
+and returned409 for approve; it authorized no edit. Seven forms, two idle sessions,
+39 controller/23 bridge selected API operations, zero initiated model requests;
+all23 bridge children returned0. No product runtime or user/feature settings changed.
+
+The controller nevertheless exited1 at its early teardown inventory guard. Closure
+followed its last early metadata read by about63ms. Three metadata-only completion
+reads later established inventory absence/RPC unavailable and unchanged service.
+Recovery used the full10-call count, but completion exceeded its30-second
+observation window while staying inside original300s. Preserve that failed timing
+criterion and both receipts; no case replay or blanket green run is claimed.
+Continue independent verification/review/publication, not more native case runs.
