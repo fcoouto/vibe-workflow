@@ -53,7 +53,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402
+from tests.qualification import canary, canary_cli, canary_ranked, canary_ranked_state, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
                                         DERIVED_SESSION, PROMPT_TEXT, QUALIFIED_OPENCODE,
                                         Redactor, Refused, check_isolated_dir, check_real_home,
@@ -87,7 +87,7 @@ class Run:
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
         self.canary_project = canary_project
         self.purpose = purpose or ("pilot" if canary_project else "qualification")
-        if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt"):
+        if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt", canary.RANKED_PURPOSE):
             raise Refused("unknown run purpose")
         self.stage_names, self.chatgpt_model = list(stages or []), chatgpt_model
         # The one approved route (--route) this run may send to; the chatgpt run sets it after the login's list is checked.
@@ -109,6 +109,7 @@ class Run:
             self.routing = Routing(self.server.settings, self.server.ledger)
         # Not `self.account`: that name is the accounting method (shadowing it caused pilot attempt 1's TypeError).
         self.pool, self.route_account = dict(pilot=(canary.POOL, canary.ACCOUNT), qualification=("sub", "anthropic:qual"),
+                                             **{canary.RANKED_PURPOSE: (canary.POOL, canary.ACCOUNT)},  # probes only
                                              **{"qualification-2": ("sub", "anthropic:qual2"),
                                                 "chatgpt": ("chatgpt-sub", "openai:chatgpt-qual")})[self.purpose]
         self.repo_start = None
@@ -224,8 +225,8 @@ class Run:
                 self.last_pages = pages
                 return found
 
-    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None):
-        provider, model, default = self.route
+    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None, route=None):
+        provider, model, default = route or self.route  # the ranked canary's admitted identity, else the run's route
         body = {"model": {"id": model, "providerID": provider, "variant": variant or default},
                 "location": {"directory": self.server.directory}, "permissions": permissions or DENY_ALL}
         if session_id:
@@ -728,14 +729,20 @@ class Run:
         checked before anything is written to the project or a server starts; health and the probes follow the
         start, and no admission begins unless they pass."""
         s = "pilot"
+        options = getattr(self, "ranked_options", None)  # F7.2: only `--ranked`, before start
+        if options:
+            canary_ranked_state.resolve(self.canary_state["ledger"], self.canary_state["settings"])
         self.note(s, "canary_state", canary.initialize_state(self.routing, self.canary_state.get("production")))
         before = self.routing("status")[0]
         self.note(s, "status_at_start", status_view(before))
         refusals = canary.preflight(before)
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
+        if bool(options) != bool(self.canary_state.get("production")):  # N1: a direct entry is never converted
+            raise Refused(canary_cli.PRODUCTION_RANKED_ONLY)
         canary.check_ancestor_configs(self.canary_project)
-        if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
+        self.ranked = canary_ranked.setup(self, **options) if options else None
+        if self.ledger.remaining(self.purpose) < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
         self.repo_start = repo_snapshot(self.canary_project)
         self.note(s, "repo_at_start", dict(dirty_paths=len(self.repo_start["dirty"]), head_known=self.repo_start["head"] is not None))
@@ -748,7 +755,7 @@ class Run:
         if refusals:
             raise Refused("canary refused: %s" % ", ".join(refusals))
         driver = canary.PilotDriver(CanaryEnv(self), self.ledger, n=self.admissions, run=self.run_id, tag=self.run_id,
-                                     route=self.route_choice())
+                                     route=None if self.ranked else self.route_choice(), ranked=self.ranked)
         result = driver.run()
         self.note(s, "pilot", result)
         self.note(s, "status_at_end", status_view(self.routing.served("status")[0]))
@@ -874,30 +881,19 @@ def main(argv=None):
     parser.add_argument("--chatgpt-methods", action="store_true", help="0 calls: list the openai integration's methods")
     parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
-    parser.add_argument("--project", help="canary: the allowlisted checkout")
-    parser.add_argument("--canary-state", help="canary: the dedicated routing state directory (default %s; never the "
-                                               "production one)" % canary.DEFAULT_STATE)
-    parser.add_argument("--production-ledger", action="store_true", help="canary and its export only, with --approval: "
-                        "the production routing settings and ledger (never the default)")
+    canary_cli.add_arguments(parser)  # the canary's options, the pilot's and the ranked branch's
     parser.add_argument("--set-cap", nargs=2, metavar=("PURPOSE", "CAP"),
                         help="append a recorded cap change (up to the code's recorded maximum; needs --reason)")
     parser.add_argument("--reason", help="the recorded reason for --set-cap")
     parser.add_argument("--approval", nargs=3, metavar=("BY", "AT", "SCOPE"),
                         help="--set-cap and --production-ledger: who approved, when, for what")
-    parser.add_argument("--reset-canary-state", action="store_true",
-                        help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
                         help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
-    parser.add_argument("--admissions", type=int, default=None, help="canary: admissions (1 to the pilot max)")
-    parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
-    parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
-    parser.add_argument("--export-canary-admissions", action="store_true", help="0 calls: export the canary admissions")
-    parser.add_argument("--replay-dir", help="canary: the admission export dir (default under ~/.local/state)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
     try:
-        canary.check_production_options(args)
+        canary_cli.check_options(args)  # a production-ledger canary only as the ranked run, before anything is read
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))
@@ -910,6 +906,12 @@ def main(argv=None):
             print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or "", approval=approval),
                              indent=2))
             return 0
+        if args.ranked_preflight:  # 0 calls, no server: the record and digest to approve
+            print(json.dumps(canary_cli.preflight(args), indent=2, sort_keys=True))
+            return 0
+        if args.ranked:  # the probes' fixed route stands in as the run's route; no admission carries it
+            ranked = canary_cli.check(args, ledger := CallLedger(args.call_ledger or ""))
+            args.route = safety.route_ref(ranked[1])
         if args.export_canary_admissions:
             state = canary.resolve_state(args.canary_state, args.production_ledger, args.approval)
             print(json.dumps(replay_export.export(state["ledger"], args.replay_dir and Path(args.replay_dir)), indent=2))
@@ -955,16 +957,22 @@ def main(argv=None):
         if args.canary:
             canary.check_ancestor_configs(project)
             replay_export.require_fresh(state["ledger"], args.replay_dir and Path(args.replay_dir))  # every record exported
-            limit = canary.pilot_max(args.pilot_max, ledger)
-            args.admissions = limit if args.admissions is None else args.admissions
-            canary.plan_assignments(args.admissions, "check", limit=limit, route=safety.choice(safety.parse_route(args.route)))
+            if args.ranked:
+                args.admissions = ranked[0]
+            else:
+                limit = canary.pilot_max(args.pilot_max, ledger)
+                args.admissions = limit if args.admissions is None else args.admissions
+                canary.plan_assignments(args.admissions, "check", limit=limit, route=safety.choice(safety.parse_route(args.route)))
         check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
-              canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model, route=args.route)
+              canary_state=state, purpose=canary.RANKED_PURPOSE if args.ranked else purpose, stages=stages,
+              chatgpt_model=args.chatgpt_model, route=args.route)
+    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage,
+                              start=args.ranked_start) if args.ranked else None
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     if args.replay_dir:
         run.replay_dir = Path(args.replay_dir)

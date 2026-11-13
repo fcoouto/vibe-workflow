@@ -30,6 +30,9 @@ from tests.qualification.safety import (APPROVAL_FIELDS, BudgetExceeded, HARNESS
 
 ALLOWLIST = "/Users/fcouto/dev/git/vibe-workflow"
 PILOT_MAX = 20
+RANKED_MAX = 80  # the ranked canary's stop: the 60-admission minimum plus 20 (validation Canary table)
+RANKED_MIN = 60
+RANKED_PURPOSE = "ranked-canary"  # its own call purpose: cap 0 in code; never funded by the pilot's calls
 MAX_DURATION_S = 24 * 3600
 REPO_CHECK_EVERY = 5
 # Distinct ids for the pilot, so nothing it admits can be mistaken for another route's or another ledger's holds.
@@ -340,13 +343,20 @@ def preconditions(status, health, probes):
     return reasons
 
 
-def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, limit=None):
+def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, limit=None, ranked=False):
     """`n` (1 to `limit`, default PILOT_MAX) explicit subscription admissions cycling three roles and two complexity
-    bands. `route` is the approved `{provider, model, effort, harness}`; there is no default route."""
-    if not route:
+    bands. `route` is the approved `{provider, model, effort, harness}`; there is no default route. `ranked` (the
+    production-ledger canary, plan Task F7.2): no explicit choice, no route and no synthetic observation, up to
+    RANKED_MAX; the routing service ranks and its collector supplies the snapshot."""
+    if ranked:
+        if route:
+            raise Refused("the ranked canary sends no explicit route")
+        limit = RANKED_MAX if limit is None else min(limit, RANKED_MAX)
+    elif not route:
         raise Refused("the pilot needs its approved --route")
-    route = dict(route)
-    limit = PILOT_MAX if limit is None else min(limit, PILOT_MAX)
+    else:
+        route = dict(route)
+        limit = PILOT_MAX if limit is None else min(limit, PILOT_MAX)
     if type(n) is not int or not 1 <= n <= limit:
         raise Refused("the pilot runs 1 to %d admissions" % limit)
     now = int(time.time()) if now is None else now
@@ -355,20 +365,22 @@ def plan_assignments(n, tag, now=None, pool=POOL, account=ACCOUNT, route=None, l
         role, profile_role, explicit = ROLES[index % len(ROLES)]
         band = BANDS[(index // len(ROLES)) % len(BANDS)]
         attempt = "%s-%02d" % (tag, index + 1)
-        assignment = dict(attempt_id=attempt, task="%s-task-%02d" % (tag, index + 1), scope="pilot-scope",
-                          choice=dict(route, funding="subscription"))
+        assignment = dict(attempt_id=attempt, task="%s-task-%02d" % (tag, index + 1), scope="pilot-scope")
+        if not ranked:
+            assignment["choice"] = dict(route, funding="subscription")
         if explicit:
             assignment["role"] = explicit
         job = dict(id="job-" + attempt, role=profile_role, scope_ref="pilot-scope", objective="o", context="c",
                    profile=dict(complexity_band=band, risk_band="medium", review_policy="independent",
                                 context_tokens=100, tools=["read"], uncertainty="low"))
-        observations = dict(now=now, routes=[dict(route="sub", strategy_id="s-sub", **route, account=account,
-                                                  billing_class="included_subscription", pool=pool, demand={"5h": 10},
-                                                  capable=True, permitted=True, binding_enforceable=True)],
-                            pools={pool: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None,
-                                                            rolling=True, fresh=True)])})
-        plan.append(dict(label=dict(role=role, band=band, index=index + 1),
-                         body=dict(assignment=assignment, job=job, observations=observations)))
+        body = dict(assignment=assignment, job=job)
+        if not ranked:
+            body["observations"] = dict(now=now, routes=[dict(
+                route="sub", strategy_id="s-sub", **route, account=account, billing_class="included_subscription",
+                pool=pool, demand={"5h": 10}, capable=True, permitted=True, binding_enforceable=True)],
+                pools={pool: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None,
+                                                rolling=True, fresh=True)])})
+        plan.append(dict(label=dict(role=role, band=band, index=index + 1), body=body))
     return plan
 
 
@@ -380,6 +392,15 @@ class Abort(Exception):
         self.origin = origin
 
 
+class Incomplete(Exception):
+    """The ranked canary stops without an abort (Edit 7 point 9): `allowance_exhausted`, `window_usage_unknown`,
+    `approval_inputs_changed` or a resumable `seed_required`. Undispatched work is released; no kill switch."""
+
+    def __init__(self, reason, detail=None, resumable=False):
+        super().__init__(reason)
+        self.reason, self.detail, self.resumable = reason, detail, resumable
+
+
 class PilotDriver:
     """Runs the pilot admissions one at a time (never more than one open), each with a write-ahead reservation in
     the durable `pilot` purpose. Any abort condition, and any exception or signal, stops launching, recovers the
@@ -388,9 +409,11 @@ class PilotDriver:
     OPS = ("prepare", "health", "dispatch", "attach", "check", "record")  # per-admission timings, kept even on abort
 
     def __init__(self, env, ledger, n=PILOT_MAX, run="pilot", clock=time.monotonic, max_duration=MAX_DURATION_S,
-                 tag=None, now=None, route=None):
+                 tag=None, now=None, route=None, ranked=None):
         self.env, self.ledger, self.run_id, self.clock, self.max_duration = env, ledger, run, clock, max_duration
-        self.plan = plan_assignments(n, tag or run, now, route=route)
+        self.ranked = ranked  # canary_ranked.Controller for the production-ledger canary, else None
+        self.purpose = "pilot" if ranked is None else RANKED_PURPOSE  # the durable call purpose it reserves
+        self.plan = plan_assignments(n, tag or run, now, route=route, ranked=ranked is not None)
         self.current = None
         self.results = dict(planned=n, completed=0, admissions=[], settlements={}, abort=None, repo=[], deviations=[],
                             latency={op: [] for op in self.OPS}, blocked_titles=0)
@@ -409,6 +432,17 @@ class PilotDriver:
                     self.repo_check(index)
             self.current = None
             self.repo_check("end")
+        except Incomplete as stop:  # no abort and no kill switch: release what was not sent, then stop
+            self.quiesce()
+            try:
+                recovery = self.recover()
+            except BaseException as error:  # noqa: BLE001
+                recovery = "error:%s" % type(error).__name__
+            if recovery not in ("none", "not_dispatched"):  # only a proven-safe recovery may stay incomplete
+                self.abort("recovery_error", dict(incomplete=stop.reason, recovery=recovery), exception_origin(stop))
+            else:
+                self.results["incomplete"] = dict(reason=stop.reason, detail=stop.detail, resumable=stop.resumable,
+                                                  admission=(self.current or {}).get("index"), recovery=recovery)
         except Abort as stop:
             self.quiesce()  # first: no signal may skip the recovery
             self.abort(stop.reason, stop.detail, stop.origin or exception_origin(stop))
@@ -416,6 +450,11 @@ class PilotDriver:
             self.quiesce()
             interrupted = isinstance(error, KeyboardInterrupt) or type(error).__name__ == "Interrupted"
             self.abort("interrupted" if interrupted else "unexpected_error", type(error).__name__, exception_origin(error))
+        if self.ranked is not None:
+            from tests.qualification import canary_ranked
+            self.results["incomplete"] = canary_ranked.summary(self.results, self.ranked.completed)
+            self.results["run_completed"] = self.ranked.completed  # the whole run's sample, across resumes
+            self.results["preparation_reads"] = list(self.ranked.timings)  # preview and refresh, outside `prepare`
         latency = self.results["latency"]
         self.results["latency_summary"] = {key: summarize_ms(values) for key, values in latency.items()}
         return self.results
@@ -501,9 +540,11 @@ class PilotDriver:
         problems = anomalies(status)
         if problems:
             raise Abort("status_anomaly", problems)
+        if self.ranked is not None:
+            self.ranked.before_prepare(item["body"])  # outside the preparation timer
         allowed = 2 if first else 1  # the first admission may carry the one observed title request
         try:
-            current["ref"] = self.ledger.reserve("pilot", "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
+            current["ref"] = self.ledger.reserve(self.purpose, "admission %d (%s, %s)" % (label["index"], label["role"], label["band"]),
                                                  allowed, run=self.run_id)
         except BudgetExceeded:
             raise Abort("cap_breach") from None
@@ -514,6 +555,8 @@ class PilotDriver:
         if answer.get("state") != "admitted" or (answer.get("admission") or {}).get("billing_class") != "included_subscription":
             raise Abort("admission_refused", answer.get("reason"))
         self.phase("admitted")
+        if self.ranked is not None:
+            self.ranked.before_dispatch(answer["admission"])
         if (self.timed("health", env.health) or {}).get("state") != "ok":
             raise Abort("routing_unhealthy")
         self.phase("dispatching")
@@ -570,9 +613,13 @@ class PilotDriver:
         for op, value in timings.items():
             self.results["latency"][op].append(value)
         kinds = [r["kind"] for r in ((accounting.get("usage") or {}).get("requests") or [])]
-        self.results["admissions"].append(dict(label, sent=sent, unknown=sorted(accounting.get("unknown") or []),
+        admitted = env.admissions.get(attempt) if self.ranked is not None else None
+        ranked = {} if admitted is None else {key: admitted.get(key) for key in ("mode", "route", "pool")}
+        self.results["admissions"].append(dict(label, **ranked, sent=sent, unknown=sorted(accounting.get("unknown") or []),
                                                kinds=kinds, title_state=(accounting.get("title") or {}).get("state"),
                                                rereads=accounting.get("rereads", 0),
                                                settlement=settlement.get("kind"), outcome=launched.get("outcome"),
                                                released=sorted(settlement.get("released") or {}),
                                                charged=settlement.get("charged") or 0, timings=dict(timings)))
+        if self.ranked is not None:  # after the sent launch is fully recorded: its telemetry, then any stop
+            self.ranked.after_settlement(env.admissions[attempt], accounting)
