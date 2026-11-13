@@ -442,6 +442,73 @@ access, historical or strict replay execution, live call, spending, activation,
 settings change, qualification or release. Both retained sources and all remaining
 production and canary prerequisites still apply. No replay result is recorded.
 
+## Edit 13 (13 November 2026): prospective replacement; collection not started
+
+The user approved proceeding with a fresh prospective sample, preserving the old
+evidence as explicitly incomplete and making no live calls or spending yet. This
+replaces the all-eligible-past-session sample in Edit 6 and the corresponding
+pre-canary advisory-report obligation with a prospectively collected advisory
+sample. It does not turn the unsuccessful historical evidence recovery into a
+pass. Existing registration and Results remain unchanged below and above this edit.
+
+**Old evidence.** Retain the original result versions, both saved pilot ledgers,
+the 21 derived expected pilot-ID checks, partial provenance and failed recovery
+findings. Historical exclusion coverage remains incomplete. Do not delete, reset,
+rewrite, backdate or merge these artifacts into a newly qualified sample. The
+surviving 21 pilot admissions remain the separate strict-replay input; replacing
+the advisory sample neither replaces that strict sample nor claims a strict pass.
+
+**Prospective design, pending independent review and source qualification.**
+
+1. Before collection, register one finite UTC collection interval, the approved
+   current/legacy checkout roots and both OpenCode/Codex source bindings. No start
+   or end has been selected yet. Do not choose or extend the interval after seeing
+   labels or routing outcomes. Both source mappings/completeness checks remain;
+   `opus`, unrelated projects and a shared parent directory remain out of scope.
+2. Include every otherwise eligible ordinary worker/reviewer assignment within
+   that declared capture scope whose original creation and complete parent chain
+   are observed prospectively. Each tree must be newly created within the interval.
+   A new child of an older root does not qualify. Timestamps, a new file path or a
+   new export alone are not proof of new origin; copied/imported, resumed and
+   unobserved sessions do not acquire eligibility by being rediscovered later.
+3. Capture original session IDs, parents, creation times, ordinary versus
+   qualification/pilot purpose, host/writer version and source/creation-receipt
+   bindings at the existing assignment lifecycle boundary. Retain these metadata
+   privately before cleanup or redaction, then bind the final sample to its actual
+   inputs. Reuse existing receipts/exports where sufficient; a new self-authored
+   manifest, a schema hash or an assertion of completeness is not independent
+   origin evidence. An unavailable producer is a blocker, not an invented receipt.
+4. Account for every assignment within the declared scope, including failures and
+   incomplete captures. Missing observations, unresolved parents, contradictory
+   origins or missing source coverage leave the sample incomplete. Do not select
+   only successful assignments. No artificial assignments, extra measurement
+   model calls, polling service, provenance registry or exemption flag are added.
+5. Keep qualification/pilot sessions and their descendants out of the ordinary
+   sample. Retain known-ID match refusal and the derived-ID labels. Only verified
+   prospective IDs may reach the later metadata/label projection; do not read old
+   session titles and filter them afterward. Reuse the registered eligibility,
+   deduplication, labels, unknown handling, one-hour still-running cut, private
+   storage and aggregate-only reporting. Empty/uncollected data is not completion.
+6. Independently review the origin/coverage evidence before accepting or replaying
+   the sample. The current runner has no prospective-origin gate and must not be
+   treated as supporting this design merely because these words are registered.
+   Required source/consumer changes need synthetic regression proof first. The
+   existing historical exclusion input remains insufficient; no empty basis or
+   prose `checked` field may bypass it.
+
+**Status and authority.** The sample is **not started**: no boundary, new sample
+records, complete provenance, replay result or qualification claim exists. This
+approval covers the revised plan only. It authorizes no client-history/content or
+credential read, collection launch, model/provider call, spending, activation,
+campaign reset, new allowance namespace, settings change or release. Independent
+review is pending; no review call is authorized by this registration. The
+ranked-canary cap stays 0. Billing, entitlement, qualified paths/table, native
+isolation/catalog/demand/windows, strict replay and canary gates remain separate
+prerequisites. The prior Astra review does not cover this different design.
+
+Registration work and its later gates are recorded in the
+[prospective sample registration plan](superpowers/plans/2026-11-13-smart-routing-prospective-sample.md).
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
