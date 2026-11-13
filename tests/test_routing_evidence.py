@@ -46,6 +46,55 @@ class CompileTests(unittest.TestCase):
         self.assertEqual(self.table['sources'][0]['sha256'], '1' * 64)
         self.assertIn('checked_at', self.table['sources'][0])
 
+    def test_display_name_comes_from_the_table(self):
+        from runtime import model_names
+        from runtime.adapters import codex
+        import os
+        import shutil
+        import tempfile
+        guidance, catalog, benchmarks = inputs()
+        catalog = copy.deepcopy(catalog)
+        named = {item['model'] for item in catalog}
+        for item in catalog:
+            item['display_name'] = 'Display ' + item['model']
+        catalog.append(dict(model='vendor-unlisted', harnesses=['h'], supported_efforts=[], display_name='Unlisted'))
+        table = evidence.compile_table(guidance, catalog, benchmarks, now='2026-11-08T00:00:00Z')
+        listed = {item['model'] for rows in table['rows'].values() for item in rows}
+        self.assertTrue(listed and listed <= named)
+        self.assertEqual(table['display_names'], {model: 'Display ' + model for model in sorted(listed)})
+        self.assertEqual(table['version'], self.table['version'])  # display only: the ranking version is unchanged
+        self.assertEqual(self.table['display_names'], {})
+        for bad in ('', ' padded', 7, 'x' * 129, 'bell\x07name', 'tab\tname', 'line\u2028name'):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'Invalid catalog display name'):
+                evidence.compile_table(guidance, [dict(catalog[0], display_name=bad)], benchmarks)
+        twice = [dict(catalog[0], harnesses=['h1']), dict(catalog[0], harnesses=['h2'], display_name='Other')]
+        with self.assertRaisesRegex(ValueError, 'Invalid catalog display name'):
+            evidence.compile_table(guidance, twice, benchmarks)
+        root = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        settings = root / 'routing' / 'settings.json'
+        settings.parent.mkdir(mode=0o700)
+        model = sorted(listed)[0]
+        self.assertIsNone(model_names.display_name(model, settings))  # no table: the vendor's spelling stays
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(table))
+        (settings.parent / 'strategy-table.json').chmod(0o600)
+        self.assertEqual(model_names.display_name(model, settings), 'Display ' + model)
+        for absent in ('vendor-unlisted', None, 7):
+            self.assertIsNone(model_names.display_name(absent, settings))
+        broken = dict(table, display_names={model: 'bell\x07name'})  # a hand-edited table: the vendor's spelling stays
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(broken))
+        self.assertIsNone(model_names.display_name(model, settings))
+        (settings.parent / 'strategy-table.json').write_text(json.dumps(table))
+
+        def request(method, params):
+            return dict(data=[dict(model=model, displayName='Vendor-Spelling')])
+        with unittest.mock.patch.dict(os.environ, HOME=str(root)), unittest.mock.patch.object(
+                model_names, 'default_settings', return_value=settings):
+            self.assertEqual(codex._visibility_model_name(request, model), 'Display ' + model)
+            self.assertEqual(codex._visibility_model_name(request, 'vendor-unlisted'), None)
+        with unittest.mock.patch.object(model_names, 'default_settings', return_value=root / 'none' / 'settings.json'):
+            self.assertEqual(codex._visibility_model_name(request, model), 'Vendor-Spelling')
+
     def test_version_is_stable_for_identical_inputs(self):
         again = evidence.compile_table(*inputs(), now='2030-01-01T00:00:00Z')
         self.assertEqual(again['version'], self.table['version'])

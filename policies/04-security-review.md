@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | After implementing a deliverable, before completion or merge; reassess after changes affecting review coverage or evidence. A deliverable may be a task or wave. |
 | Decision | Assess actual security impact, then choose scope, depth, checks and necessary independent specialist coverage. Investigate uncertainty before selecting additional review. |
 | Required action | Establish the target, review relevant security boundaries and substantiate findings using the procedure below. Reviewers remain read-only; authorized fixes return to the responsible writer. |
 | Evidence | Record every [review report](../templates/review-report.md) line marked for security review. Keep sensitive evidence private and redacted. |

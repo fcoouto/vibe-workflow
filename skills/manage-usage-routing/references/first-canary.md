@@ -10,7 +10,14 @@ A Smart Routing managed project refuses this canary; see
 1. Freeze a `usage_canary_host.Plan` using the actual Codex thread, host,
    checkout, candidate digest, native account, independent reviewer, selected
    Platform organization/project, confirmed key selection and current benefit
-   grant. Show the exact scope, Keychain destination, key expiry, prompt,
+   grant. Freeze the billed model and its rate card in the plan too, so the
+   approval decides what is billed: `usage_canary.candidate()` names the lightest
+   model the compiled strategy table lists for the API host (`openai`/`api`) at
+   medium reasoning, with that catalog entry's input and output list prices.
+   Fill all four rates (input, cached input, cache write, output) from the
+   provider's published prices for that model; never assume one. Stop when it
+   refuses: `canary_model_unavailable` (no priced API model) or
+   `canary_price_evidence_missing` (no per-side price). Show the exact scope, Keychain destination, key expiry, prompt,
    profile, spend bound and independent reviewer to the user. Keep identifiers and
    evidence in private local state.
 2. Obtain the plan's exact `approval_text` as a direct user message in that
@@ -27,7 +34,8 @@ A Smart Routing managed project refuses this canary; see
    in the staged package. There is no public JSON canary command. Do not
    reconstruct authority from user or worker claims.
 5. Execute one free count and at most one generation. The fixed request is
-   `Reply with the word READY.` with GPT-6.1 Sol, medium reasoning, Standard
+   `Reply with the word READY.` with the plan's model and rates (execution
+   reads no table; a changed profile refuses with `canary_price_changed`), medium reasoning, Standard
    tier, a 10,000-input-token bound and 64 total output tokens. The maximum
    generation reservation is $0.05064. The direct approval expires after
    five minutes or the plan's earlier cutoff.

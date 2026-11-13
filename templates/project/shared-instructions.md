@@ -4,6 +4,8 @@ Shape for the project's actual shared instruction owner, adapted through [policy
 
 ## Start here
 
+Delegation is substantive work, even for a read-only check or a worker requested by name; complete step 1 before considering or calling a worker.
+
 1. Before substantive work, locate the accepted installed `vibe-workflow` package
    through this client's startup pointers or installed workflow skill location.
    Read its `policies/00-index.md` unless its complete, current text is already in

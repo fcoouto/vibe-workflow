@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+## 0.1.39
+
 - **Stable primary checkout for every onboarded repository.** Shared task entry routes edits and checkout-affecting reviews to existing delivery preparation. Task work uses separate worktrees; primary checkout keeps its recorded designated branch. Before/after native observations detect drift without hooks, runtime activation or automatic repair. Onboarding/update reconciles legacy branch-only choices and standing worktree opt-outs while preserving historical records and active-task pins. Existing installs need an authorized plugin/project update and refreshed instructions; source checks do not establish client enforcement.
+- **Optional OpenCode escalation gate.** The dependency-free, in-memory plugin holds repeated same-file repairs until a stronger read-only diagnosis completes. It handles supported masked unittest failures, rejects ambiguous output attribution and fails open after event-channel loss, including startup races. The feature stays off by default; installation does not enable it. The routed semantic judge remains deferred, and the gate is not a security boundary.
+- **Escalation policy.** At most three escalations before architecture re-evaluation, with one count reset that does not reset other budgets. From the second escalation, assess whether the design causes the problem. Authorized escalation needs no repeated approval; architecture choices must preserve every agreed requirement.
+- **Opt-in post-merge cleanup.** Adds guarded local eligibility inspection and a coordinator procedure for eligible task worktrees and branches. Cleanup is disabled by default and needs separate scoped permission; merge permission alone does not authorize deletion.
+- **Current instruction sources.** Instruction metadata is derived on demand rather than loaded from a stored instruction map. Project entry and coordinator follow-through rules are clearer.
+- **Usage observations and roster compatibility.** Codex session acquisition reuses validated source snapshots within its time budget, handles paginated histories and preserves held-descriptor checks. Observability settings, upload serialization and credential handling gain boundary fixes. Bounded Python vocabulary checks distinguish attempt kinds from specialist roles; legacy telemetry without a known specialist retains role `unknown`.
+- **Routing preparation.** API budget accounting uses dollar limits, ordered funding admission and preserved settlement rather than fixed request-count controls. Model display names resolve through catalog metadata, and ranked-canary/replay checks cover native lifecycle paths. These source and test additions do not activate routing or qualify billing: the subscription canary remains blocked until a qualified account-scoped billing producer exists.
+- GitHub release `0.1.38` already exists, but its plugin manifests still declare `0.1.37`; this release advances both client manifests to `0.1.39` without changing the earlier tag. Package validation does not establish installed-client execution or new live qualification.
 
 ## 0.1.37
 

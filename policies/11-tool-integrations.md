@@ -8,7 +8,6 @@ Apply with the [shared contract rules](00-index.md).
 
 | Element | Contract |
 | --- | --- |
-| Trigger | Selecting, adding, updating, repairing or removing an integration; using a new or unqualified capability; after changes or failures that invalidate prior qualification. |
 | Decision | Reuse an existing capability, configure a compatible addition, defer an optional extra, or block a dependent mandatory capability. |
 | Required action | Inspect actual support and existing configuration, resolve authority and prerequisites, make the smallest recoverable change, and verify discovery and a representative operation. |
 | Evidence | Record client surface/version, component/source/version, owned configuration, required access, installed/configured/discovered/trusted/loaded/executed observations, actual probe results and limits. |

@@ -302,7 +302,7 @@ def select_model(run, announce=print):
         write_state(run, selection=dict(selected=selection["selected"], rule=AUTO_RULE, candidates=selection["candidates"]))
     run.note(PURPOSE, "model_selection", selection)
     run.route, run.guard_variant, run.chatgpt_variants = route, others[0], [str(v)[:40] for v in variants][:10]
-    run.server.write_control(route=list(route))
+    run.server.set_route(route)  # the route-bound table and qual-post control, now that the route is known
     run.note(PURPOSE, "model", dict(listed=True, variants=len(variants),
                                     openai_models=sum(1 for m in listed if m.get("providerID") == "openai")))
     return route

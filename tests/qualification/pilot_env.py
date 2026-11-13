@@ -3,13 +3,19 @@
 It maps the driver's contract (see canary.py) onto the isolated OpenCode server, the routing shim's RPC and the
 launcher's persistent routing child. Only the first admission's session is created untitled (it observes the one
 real title request); later sessions are titled at creation.
+
+In the ranked canary (`run.ranked`, plan Task F7.2) it keeps each returned admission by attempt. Dispatch facts come
+from `routing_launch.admitted_check` against the isolated server's actual model list and the qualified path; attach,
+the session's model, `qual-post`'s guard and the off-route count use that attempt's admitted identity and pool. The
+pilot and isolation modes keep the run's one `--route`.
 """
 import json
 import signal
 import time
 
+from runtime import routing_launch
 from tests.qualification import canary
-from tests.qualification.safety import Blocker, ROUTE, latency_pairs, on_route, repo_changes, repo_snapshot, shape_of
+from tests.qualification.safety import Blocker, latency_pairs, on_route, route_ref, repo_changes, repo_snapshot, shape_of
 
 
 class CanaryEnv:
@@ -17,6 +23,18 @@ class CanaryEnv:
 
     def __init__(self, run):
         self.run = run
+        self.admissions = getattr(run, "admissions_by_attempt", None)
+        if self.admissions is None:
+            self.admissions = run.admissions_by_attempt = {}  # kept on the run: every env of the run sees them
+        self.sessions = {}  # dispatched session -> attempt
+
+    @property
+    def ranked(self):
+        return getattr(self.run, "ranked", None)
+
+    def _route(self, attempt):
+        """The route this attempt may send to: its admitted identity (ranked), else the run's one route."""
+        return self.ranked.identity(self.admissions[attempt]) if self.ranked else self.run.route
 
     def export_if_due(self):
         """The canary admissions' 12-hour replay export, read-only on the canary ledger (replay_export)."""
@@ -33,16 +51,32 @@ class CanaryEnv:
         body = json.loads(json.dumps(body))
         if "observations" in body:  # the unmanaged pilot's own snapshot; a managed canary sends none (server.Routing)
             body["observations"]["now"] = int(time.time())
-        return self.run.routing.served("prepare", **body)
+        answer, ms = self.run.routing.served("prepare", **body)
+        if answer.get("state") == "admitted":
+            self.admissions[answer["admission"]["attempt_id"]] = answer["admission"]
+        return answer, ms
 
     def dispatch(self, attempt):
-        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=canary.request())
+        if self.ranked:
+            admission = self.admissions[attempt]
+            _, listed, _ = self.run.server.request("GET", "/api/model")
+            facts, reason = routing_launch.admitted_check(
+                admission, host="opencode", catalog=self.ranked.catalog((listed or {}).get("data") or []),
+                settings_path=self.run.canary_state["settings"])
+            if reason is not None:
+                return dict(state="refused", reason=reason), 0.0
+        else:
+            facts = canary.request(self.run.route)
+        answer, ms = self.run.routing.served("dispatch", attempt_id=attempt, request=facts)
         self.run.redact.add_secret(answer.get("authority"))
+        if answer.get("session_id"):
+            self.sessions[answer["session_id"]] = attempt
         return answer, ms
 
     def attach(self, session, attempt, token):
+        pool = self.admissions[attempt]["pool"] if self.ranked else canary.POOL
         status, body, _ = self.run.server.rpc("attach", dict(session_id=session, attempt_id=attempt, authority=token,
-                                                             funding_pool=canary.POOL, model=ROUTE))
+                                                             funding_pool=pool, model=route_ref(self._route(attempt))))
         return status == 200 and (body or {}).get("state") == "attached"
 
     def detach(self, session, attempt, token):
@@ -51,12 +85,13 @@ class CanaryEnv:
 
     def launch(self, session, message, allow_title):
         run = self.run
+        route = self._route(self.sessions.get(session)) if self.ranked else run.route
         # Only the first admission observes a real title; later sessions are titled at creation, so OpenCode sends no
         # title request (the guard still blocks any unexpected one at 0 tokens).
-        _, created, _ = run.create_session(session, title=None if allow_title else "pilot admission")
+        _, created, _ = run.create_session(session, title=None if allow_title else "pilot admission", route=route)
         if (run.data(created) or {}).get("id") != session:
             return dict(idle=False)
-        run.server.write_control(title_session=session if allow_title else None)
+        run.server.write_control(title_session=session if allow_title else None, route=list(route))
         mark, began = len(run.server.hooks()), int(time.time() * 1000)
         run.gate(2 if allow_title else 1)  # the driver already wrote the reservation ahead
         run.prompt(session, message)
@@ -75,7 +110,7 @@ class CanaryEnv:
         transmitted["other"] = len(sent) - transmitted["primary"] - transmitted["title"]
         pairs, _ = latency_pairs([r for r in records if r.get("session") == session and r.get("kind") == "primary"])
         return dict(idle=True, transmitted=transmitted, outcome=run.outcome(messages, began)["outcome"],
-                    off_route=sum(1 for r in records if r.get("hook") == "model.request" and r.get("phase") == "pre" and not on_route(r)),
+                    off_route=sum(1 for r in records if r.get("hook") == "model.request" and r.get("phase") == "pre" and not on_route(r, route)),
                     blocked_titles=sum(1 for r in records if r.get("decision") == "guard_title"),
                     check_ms=pairs[0]["ms"] if pairs else None)
 

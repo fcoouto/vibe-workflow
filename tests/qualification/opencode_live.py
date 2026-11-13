@@ -20,7 +20,7 @@ tests/qualification/canary.py. A dead run's reservation is settled with `--settl
 Safety rules it enforces itself (tests/test_qualification_harness.py covers the pure parts):
 - `--isolated-dir` must be an empty, owner-only directory outside OpenCode's user directories, ~/Library/Application
   Support and any git worktree; `opencode --version` must be 2.2.6 before anything starts.
-- Only `claude-agent/haiku#low`. `qual-pre` (before the shim) and `qual-post` (after it) record every
+- Only the approved `--route PROVIDER/MODEL#VARIANT`. `qual-pre` (before the shim) and `qual-post` (after it) record every
   `model.request`; `qual-post` blocks any other model or variant, any title not allowed, held sessions and anything
   past the permitted count. A recorder log write that fails blocks the hook. Nothing is sent before stage 0 has
   proved the chain: all three plugins present, a guard probe refused by `qual-post` (`guard_variant`) after
@@ -53,20 +53,18 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tests.qualification import canary, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402
+from tests.qualification import canary, canary_cli, canary_ranked, canary_ranked_state, chatgpt, outputs, probe_stages, replay_export, safety, user_dirs  # noqa: E402,E501
 from tests.qualification.safety import (Blocker, COUNTING, CallLedger, DERIVED_MESSAGE,  # noqa: E402
-                                        DERIVED_SESSION, MODEL, PROMPT_TEXT, PROVIDER, QUALIFIED_OPENCODE, ROUTE,
-                                        Redactor, Refused, VARIANT, check_isolated_dir, check_real_home,
+                                        DERIVED_SESSION, PROMPT_TEXT, QUALIFIED_OPENCODE,
+                                        Redactor, Refused, check_isolated_dir, check_real_home,
                                         check_opencode_version, id_shape,
                                         latency_pairs, on_route, repo_snapshot,
                                         summarize_ms, verify_plugin_chain)
 from tests.qualification.pilot_env import CanaryEnv  # noqa: E402,F401 - re-exported: live.CanaryEnv
-from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener,  # noqa: E402
+from tests.qualification.server import (EventStream, Routing, Server, kill_leftovers, listener, off_route_spawn,  # noqa: E402
                                         processes, server_environment, status_view)
 
 POOL = "sub"
-REQUEST = dict(provider=PROVIDER, model=MODEL, variant=VARIANT, harness="claude-agent-sdk via opencode", kind="primary",
-               funding_pool=POOL)
 PROBE_REQUEST = dict(provider="opencode", model="session-probe", variant=None, harness="opencode session probe",
                      kind="primary", funding_pool="none")
 DENY_ALL = [{"action": "*", "resource": "*", "effect": "deny"}]
@@ -85,16 +83,16 @@ def _interrupt(signum, _frame):
 
 class Run:
     def __init__(self, base, ledger, through=4, canary_project=None, admissions=canary.PILOT_MAX, keep=False,
-                 canary_state=None, purpose=None, stages=None, chatgpt_model=None):
+                 canary_state=None, purpose=None, stages=None, chatgpt_model=None, route=None):
         self.base, self.ledger, self.through, self.keep = base, ledger, through, keep
         self.canary_project = canary_project
         self.purpose = purpose or ("pilot" if canary_project else "qualification")
-        if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt"):
+        if self.purpose not in ("pilot", "qualification", "qualification-2", "chatgpt", canary.RANKED_PURPOSE):
             raise Refused("unknown run purpose")
         self.stage_names, self.chatgpt_model = list(stages or []), chatgpt_model
-        # The one route this run may send to; the chatgpt run sets it only after the login's model list is checked.
-        self.route = None if self.purpose == "chatgpt" else (PROVIDER, MODEL, VARIANT)
-        self.guard_variant = "high"
+        # The one approved route (--route) this run may send to; the chatgpt run sets it after the login's list is checked.
+        self.route = None if self.purpose == "chatgpt" else safety.parse_route(route)
+        self.guard_variant = "low" if self.route and self.route[2] == "high" else "high"  # never the route's own
         self.chatgpt_timeout = 900
         self.run_id = "%s-%s" % (self.purpose, uuid.uuid4().hex[:8])
         self.admissions = admissions
@@ -104,13 +102,14 @@ class Run:
         production = bool(canary_state and canary_state.get("production"))
         self.replay_dir = replay_export.default_dir()  # canary admission exports; HOME is read now, never at import
         if canary_project:
-            self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"])
+            self.server = Server(base, canary_project, canary_state["settings"], canary_state["ledger"], route=self.route)
             self.routing = Routing(canary_state["settings"], canary_state["ledger"], project=canary_project)
         else:
             self.server = Server(base, route=self.route)
             self.routing = Routing(self.server.settings, self.server.ledger)
         # Not `self.account`: that name is the accounting method (shadowing it caused pilot attempt 1's TypeError).
         self.pool, self.route_account = dict(pilot=(canary.POOL, canary.ACCOUNT), qualification=("sub", "anthropic:qual"),
+                                             **{canary.RANKED_PURPOSE: (canary.POOL, canary.ACCOUNT)},  # probes only
                                              **{"qualification-2": ("sub", "anthropic:qual2"),
                                                 "chatgpt": ("chatgpt-sub", "openai:chatgpt-qual")})[self.purpose]
         self.repo_start = None
@@ -131,8 +130,7 @@ class Run:
 
     def route_choice(self):
         """The explicit worker choice for `prepare`: the run's route as `{provider, model, effort, harness}`."""
-        provider, model, variant = self.route
-        return dict(provider=provider, model=model, effort=variant, harness=safety.harness_for(provider))
+        return safety.choice(self.route)
 
     def request_facts(self, route=None):
         """The `check`/`dispatch` request facts for the route (the run's own by default)."""
@@ -227,8 +225,8 @@ class Run:
                 self.last_pages = pages
                 return found
 
-    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None):
-        provider, model, default = self.route or (PROVIDER, MODEL, VARIANT)
+    def create_session(self, session_id=None, title=None, permissions=None, variant=None, parent=None, route=None):
+        provider, model, default = route or self.route  # the ranked canary's admitted identity, else the run's route
         body = {"model": {"id": model, "providerID": provider, "variant": variant or default},
                 "location": {"directory": self.server.directory}, "permissions": permissions or DENY_ALL}
         if session_id:
@@ -346,13 +344,13 @@ class Run:
         for _ in range(30):
             time.sleep(0.5)
             _, models, _ = self.server.request("GET", "/api/model")
-            listed = [m for m in (models or {}).get("data", []) if m.get("providerID") == PROVIDER and m.get("id") == MODEL]
+            listed = [m for m in (models or {}).get("data", []) if m.get("providerID") == self.route[0] and m.get("id") == self.route[1]]
             if listed:
                 break
         variants = [v if isinstance(v, str) else (v or {}).get("id") for v in (listed[0].get("variants") or [])] if listed else []
-        self.note(stage, "haiku_listed", dict(listed=bool(listed), low_variant=VARIANT in variants))
-        if not listed or VARIANT not in variants:
-            raise Blocker("claude-agent/haiku#low is not available on the isolated server")
+        self.note(stage, "haiku_listed", dict(listed=bool(listed), low_variant=self.route[2] in variants))
+        if not listed or self.route[2] not in variants:
+            raise Blocker("%s is not available on the isolated server" % self.route_ref())
         self.events = EventStream(self.server)
         self.events.start()
 
@@ -361,7 +359,7 @@ class Run:
         status, plugins, _ = self.server.request("GET", "/api/plugin")
         ids = [p.get("id") for p in (plugins or {}).get("data", []) if isinstance(p, dict)]
         chain_ids = [i for i in ids if i in ("qual-pre", "vibe-workflow.routing", "qual-post")]
-        # Guard probe: an interactive session on haiku#high; `qual-post` must refuse it (guard_variant).
+        # Guard probe: an interactive session on another variant of the route's model; `qual-post` must refuse it (guard_variant).
         _, created, _ = self.create_session(title="qual guard probe", variant=self.guard_variant)
         guard_session = (self.data(created) or {}).get("id")
         mark, began = len(self.server.hooks()), int(time.time() * 1000)
@@ -412,7 +410,8 @@ class Run:
             self.results["deviations"].append("stage 0: health before any ledger was not not_ready")
         answer, ms = self.routing("set", authority_required=True)
         self.note(s, "set_authority_required", dict(answer=answer, ms=ms))
-        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1", pool=self.pool, account=self.route_account)[0]["body"])
+        answer, ms = self.routing("prepare", **canary.plan_assignments(1, "qual-a1", pool=self.pool, account=self.route_account,
+                                                                            route=self.route_choice())[0]["body"])
         self.attempt = "qual-a1-01"
         self.note(s, "prepare", dict(state=answer.get("state"), reason=answer.get("reason"), ms=ms,
                                      billing_class=(answer.get("admission") or {}).get("billing_class")))
@@ -516,7 +515,7 @@ class Run:
     # ------------------------------------------------------------ stage 2 (shim live)
     def stage2(self):
         s = "2"
-        answer, ms = self.routing("dispatch", attempt_id=self.attempt, request=REQUEST)
+        answer, ms = self.routing("dispatch", attempt_id=self.attempt, request=dict(self.request_facts(), funding_pool=POOL))
         if answer.get("state") != "dispatched":
             raise Blocker("dispatch refused: %s" % answer.get("reason"))
         self.token = answer.pop("authority")
@@ -526,12 +525,12 @@ class Run:
         self.note(s, "dispatch", dict(state="dispatched", ms=ms, token_length=len(self.token),
                                       session_derived=bool(DERIVED_SESSION.fullmatch(session)),
                                       message_derived=bool(DERIVED_MESSAGE.fullmatch(message))))
-        again, _ = self.routing("dispatch", attempt_id=self.attempt, request=REQUEST)
+        again, _ = self.routing("dispatch", attempt_id=self.attempt, request=dict(self.request_facts(), funding_pool=POOL))
         self.note(s, "dispatch_repeated", dict(state=again.get("state"), has_authority="authority" in again))
         status, health, ms = self.server.rpc("health", {})
         if (health or {}).get("state") != "ok":
             raise Blocker("routing.health not ok before the managed launch")
-        attach = dict(session_id=session, attempt_id=self.attempt, authority=self.token, funding_pool=POOL, model=ROUTE)
+        attach = dict(session_id=session, attempt_id=self.attempt, authority=self.token, funding_pool=POOL, model=self.route_ref())
         status, body, ms = self.server.rpc("attach", {**attach, "authority": "A" * 43})
         self.note(s, "attach_wrong_token", dict(http=status, ms=ms))
         status, body, ms = self.server.rpc("attach", attach)
@@ -579,6 +578,8 @@ class Run:
         if any(r["phase"] == "post" and r["probe_present"] for r in shells):
             raise Blocker("the shell kept a credential-like variable while a session was attached")
         mark, began = len(self.server.hooks()), int(time.time() * 1000)
+        if not off_route_spawn(self.route):  # never an unknown model passed off as the guard's refusal
+            raise Refused("no pre-registered off-route spawn identity for %s" % self.route_ref())
         self.server.write_control(hold=[session])  # the parent's follow-up turn after the child's failure is held
         token = self.expect(s, "subagent command on another model", 0, exposure=1)
         self.server.request("POST", "/api/session/%s/command" % session, {"name": "qualspawn", "text": ""})
@@ -686,7 +687,7 @@ class Run:
     # ------------------------------------------------------------ stage 4 (lost acknowledgment)
     def stage4(self):
         s = "4"
-        body = canary.plan_assignments(1, "qual-a2", pool=self.pool, account=self.route_account)[0]["body"]
+        body = canary.plan_assignments(1, "qual-a2", pool=self.pool, account=self.route_account, route=self.route_choice())[0]["body"]
         attempt = body["assignment"]["attempt_id"]
         answer, _ = self.routing("prepare", **body)
         if answer.get("state") != "admitted":
@@ -698,7 +699,7 @@ class Run:
                 "os.kill(os.getpid(), signal.SIGKILL)\n")
         launcher = subprocess.run([sys.executable, "-I", "-B", "-c", code, sys.executable, "-I", "-B", str(ROOT / "scripts" / "routing.py"),
                                    "dispatch", *self.routing.argv],
-                                  input=json.dumps(dict(v=1, op="dispatch", attempt_id=attempt, request=REQUEST)),
+                                  input=json.dumps(dict(v=1, op="dispatch", attempt_id=attempt, request=dict(self.request_facts(), funding_pool=POOL))),
                                   capture_output=True, text=True, timeout=60)
         lost = json.loads(launcher.stdout.splitlines()[0])
         self.note(s, "lost_launcher", dict(dispatch_state=lost.get("state"), launcher_exit=launcher.returncode))
@@ -713,7 +714,7 @@ class Run:
         answer, _ = self.routing("record", event=dict(event_id=attempt + "-uncertain", attempt_id=attempt, kind="uncertain"))
         self.note(s, "record_uncertain", dict(state=answer.get("state"), reason=answer.get("reason")))
         self.note(s, "status_after_uncertain", status_view(self.routing("status")[0]))
-        answer, _ = self.routing("check", attempt_id=attempt, session_id=session, request=REQUEST)
+        answer, _ = self.routing("check", attempt_id=attempt, session_id=session, request=dict(self.request_facts(), funding_pool=POOL))
         self.note(s, "check_after_uncertain", dict(state=answer.get("state"), reason=answer.get("reason")))
         answer, _ = self.routing("record", event=dict(event_id=attempt + "-complete", attempt_id=attempt, kind="complete"))
         self.note(s, "complete_on_uncertain", dict(state=answer.get("state"), reason=answer.get("reason")))
@@ -728,14 +729,20 @@ class Run:
         checked before anything is written to the project or a server starts; health and the probes follow the
         start, and no admission begins unless they pass."""
         s = "pilot"
+        options = getattr(self, "ranked_options", None)  # F7.2: only `--ranked`, before start
+        if options:
+            canary_ranked_state.resolve(self.canary_state["ledger"], self.canary_state["settings"])
         self.note(s, "canary_state", canary.initialize_state(self.routing, self.canary_state.get("production")))
         before = self.routing("status")[0]
         self.note(s, "status_at_start", status_view(before))
         refusals = canary.preflight(before)
         if refusals:
             raise Refused("canary refused before any write: %s. %s" % (", ".join(refusals), canary.refusal_advice(self.canary_state)))
+        if bool(options) != bool(self.canary_state.get("production")):  # N1: a direct entry is never converted
+            raise Refused(canary_cli.PRODUCTION_RANKED_ONLY)
         canary.check_ancestor_configs(self.canary_project)
-        if self.ledger.remaining("pilot") < 4:  # two probe exposures plus the first admission and its title
+        self.ranked = canary_ranked.setup(self, **options) if options else None
+        if self.ledger.remaining(self.purpose) < 4:  # two probe exposures plus the first admission and its title
             raise Refused("the pilot call budget is exhausted")
         self.repo_start = repo_snapshot(self.canary_project)
         self.note(s, "repo_at_start", dict(dirty_paths=len(self.repo_start["dirty"]), head_known=self.repo_start["head"] is not None))
@@ -747,7 +754,8 @@ class Run:
         self.note(s, "preconditions", dict(refusals=refusals, health=health.get("state")))
         if refusals:
             raise Refused("canary refused: %s" % ", ".join(refusals))
-        driver = canary.PilotDriver(CanaryEnv(self), self.ledger, n=self.admissions, run=self.run_id, tag=self.run_id)
+        driver = canary.PilotDriver(CanaryEnv(self), self.ledger, n=self.admissions, run=self.run_id, tag=self.run_id,
+                                     route=None if self.ranked else self.route_choice(), ranked=self.ranked)
         result = driver.run()
         self.note(s, "pilot", result)
         self.note(s, "status_at_end", status_view(self.routing.served("status")[0]))
@@ -832,7 +840,7 @@ class Run:
         self.results["latency"] = dict(shim_ms_by_hook={k: summarize_ms(v) for k, v in sorted(by_hook.items())},
                                        unmatched_pre_records=len(blocked))
         self.results["off_route_requests"] = sum(1 for r in hooks if r.get("hook") == "model.request" and r.get("phase") == "pre"
-                                                 and not on_route(r))
+                                                 and not on_route(r, self.route))
         fields = ("phase", "hook", "kind", "model", "variant", "tool", "effect", "probe_present", "decision", "session")
         self.results["hooks"] = [{k: r.get(k) for k in fields if r.get(k) is not None} for r in hooks]
         if not self.keep:
@@ -868,34 +876,24 @@ def main(argv=None):
     parser.add_argument("--canary", action="store_true", help="run the bounded pilot canary instead")
     parser.add_argument("--stages", help="live probes on claude-agent/haiku#low under purpose qualification-2: "
                                          "descendants,s33d (docs/smart-routing-qualification.md)")
+    parser.add_argument("--route", help="the approved route PROVIDER/MODEL#VARIANT (required except --chatgpt)")
     parser.add_argument("--chatgpt", action="store_true", help="the ChatGPT route probe under purpose chatgpt (its own run)")
     parser.add_argument("--chatgpt-methods", action="store_true", help="0 calls: list the openai integration's methods")
     parser.add_argument("--chatgpt-model", help="chatgpt: openai/MODEL[#VARIANT] from the login's list, or auto (cheapest)")
     parser.add_argument("--chatgpt-timeout", type=int, default=900, help="chatgpt: seconds to wait for the sign-in")
-    parser.add_argument("--project", help="canary: the allowlisted checkout")
-    parser.add_argument("--canary-state", help="canary: the dedicated routing state directory (default %s; never the "
-                                               "production one)" % canary.DEFAULT_STATE)
-    parser.add_argument("--production-ledger", action="store_true", help="canary and its export only, with --approval: "
-                        "the production routing settings and ledger (never the default)")
+    canary_cli.add_arguments(parser)  # the canary's options, the pilot's and the ranked branch's
     parser.add_argument("--set-cap", nargs=2, metavar=("PURPOSE", "CAP"),
                         help="append a recorded cap change (up to the code's recorded maximum; needs --reason)")
     parser.add_argument("--reason", help="the recorded reason for --set-cap")
     parser.add_argument("--approval", nargs=3, metavar=("BY", "AT", "SCOPE"),
                         help="--set-cap and --production-ledger: who approved, when, for what")
-    parser.add_argument("--reset-canary-state", action="store_true",
-                        help="delete the dedicated canary state (refused while a harness process is alive)")
     parser.add_argument("--settle-dead", type=int, metavar="SEQ",
                         help="settle a dead run's reservation at its reserved count (needs --call-ledger)")
-    parser.add_argument("--admissions", type=int, default=None, help="canary: admissions (1 to the pilot max)")
-    parser.add_argument("--canary-allow", help="canary: this run's allowlisted checkout (on the canary managed_projects)")
-    parser.add_argument("--pilot-max", type=int, help="canary: this run's admission cap (bounded by the pilot ledger cap)")
-    parser.add_argument("--export-canary-admissions", action="store_true", help="0 calls: export the canary admissions")
-    parser.add_argument("--replay-dir", help="canary: the admission export dir (default under ~/.local/state)")
     parser.add_argument("--out", help="write the sanitized results JSON here (outside the isolated dir)")
     parser.add_argument("--keep", action="store_true", help="leave the isolated dir in place (it holds the server password)")
     args = parser.parse_args(argv)
     try:
-        canary.check_production_options(args)
+        canary_cli.check_options(args)  # a production-ledger canary only as the ranked run, before anything is read
         if args.init_call_ledger:
             CallLedger.initialize(Path(args.init_call_ledger).expanduser())
             print(json.dumps(CallLedger(Path(args.init_call_ledger).expanduser()).summary(), indent=2))
@@ -908,6 +906,12 @@ def main(argv=None):
             print(json.dumps(CallLedger(args.call_ledger or "").set_cap(purpose, int(cap), args.reason or "", approval=approval),
                              indent=2))
             return 0
+        if args.ranked_preflight:  # 0 calls, no server: the record and digest to approve
+            print(json.dumps(canary_cli.preflight(args), indent=2, sort_keys=True))
+            return 0
+        if args.ranked:  # the probes' fixed route stands in as the run's route; no admission carries it
+            ranked = canary_cli.check(args, ledger := CallLedger(args.call_ledger or ""))
+            args.route = safety.route_ref(ranked[1])
         if args.export_canary_admissions:
             state = canary.resolve_state(args.canary_state, args.production_ledger, args.approval)
             print(json.dumps(replay_export.export(state["ledger"], args.replay_dir and Path(args.replay_dir)), indent=2))
@@ -937,6 +941,10 @@ def main(argv=None):
         if args.chatgpt_model and not args.chatgpt:
             raise Refused("--chatgpt-model belongs to --chatgpt")
         stages = probe_stages.parse_stages(args.stages) if args.stages else None
+        if not (args.chatgpt or args.chatgpt_methods):  # an approved route is required; there is no default
+            route = safety.parse_route(args.route)
+            if stages:
+                safety.check_route("qualification-2", route)  # the pre-registered live-probe route only
         if args.chatgpt:
             chatgpt.parse_models(args.chatgpt_model)  # auto, one model, or up to 3 in order (fallback on refusal)
             if not 60 <= args.chatgpt_timeout <= 1800:
@@ -949,16 +957,22 @@ def main(argv=None):
         if args.canary:
             canary.check_ancestor_configs(project)
             replay_export.require_fresh(state["ledger"], args.replay_dir and Path(args.replay_dir))  # every record exported
-            limit = canary.pilot_max(args.pilot_max, ledger)
-            args.admissions = limit if args.admissions is None else args.admissions
-            canary.plan_assignments(args.admissions, "check", limit=limit)
+            if args.ranked:
+                args.admissions = ranked[0]
+            else:
+                limit = canary.pilot_max(args.pilot_max, ledger)
+                args.admissions = limit if args.admissions is None else args.admissions
+                canary.plan_assignments(args.admissions, "check", limit=limit, route=safety.choice(safety.parse_route(args.route)))
         check_real_home()  # the last check: nothing has started yet
         check_opencode_version(env=server_environment(base))
     except Refused as error:
         print("refused: %s" % error, file=sys.stderr)
         return 2
     run = Run(base, ledger, args.through, canary_project=project, admissions=args.admissions or canary.PILOT_MAX, keep=args.keep,
-              canary_state=state, purpose=purpose, stages=stages, chatgpt_model=args.chatgpt_model)
+              canary_state=state, purpose=canary.RANKED_PURPOSE if args.ranked else purpose, stages=stages,
+              chatgpt_model=args.chatgpt_model, route=args.route)
+    run.ranked_options = dict(approved=args.approve_digest, acknowledge=args.acknowledge_low_coverage,
+                              start=args.ranked_start) if args.ranked else None
     run.chatgpt_timeout, run.chatgpt_methods = args.chatgpt_timeout, args.chatgpt_methods
     if args.replay_dir:
         run.replay_dir = Path(args.replay_dir)

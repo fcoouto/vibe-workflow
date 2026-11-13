@@ -25,7 +25,7 @@ import threading
 import time
 import urllib.parse
 
-from tests.qualification.safety import (Blocker, HARNESS_NAME, MODEL, PROBE_ENV, PROMPT_TEXT, PROVIDER, Refused, VARIANT,
+from tests.qualification.safety import (Blocker, HARNESS_NAME, PROBE_ENV, PROMPT_TEXT, Refused, harness_for,
                                         leftover_processes, recorder_source)
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -93,10 +93,19 @@ class ProjectConfig:
         return not self.directory.exists() and gone
 
 
+# The stage-2 off-route spawn identity pre-registered per qualified route (the live qualification record's stage 2).
+OFF_ROUTE_SPAWNS = {("claude-agent", "haiku", "low"): "claude-agent/sonnet#low"}
+
+
+def off_route_spawn(route):
+    """The pre-registered off-route spawn identity for `route`, or None (the probe is then refused)."""
+    return OFF_ROUTE_SPAWNS.get(tuple(route)) if route else None
+
+
 class Server:
     """One `opencode serve` on a random localhost port with its own XDG dirs."""
 
-    def __init__(self, base, canary_project=None, settings=None, ledger=None, route=(PROVIDER, MODEL, VARIANT)):
+    def __init__(self, base, canary_project=None, settings=None, ledger=None, route=None):
         self.base = base
         self.canary = canary_project is not None
         self.project_config = ProjectConfig(canary_project) if self.canary else None
@@ -110,7 +119,9 @@ class Server:
         # Qualification pins temporary stores in the run dir; canary pins the dedicated canary state.
         self.settings = settings or base / "routing" / "settings.json"
         self.ledger = ledger or base / "usage" / "organizations.sqlite3"
-        # `route`: the one route `qual-post` lets through (None blocks every model request until the harness sets it).
+        # `route`: the one approved route `qual-post` lets through (None blocks every model request until the harness
+        # sets it); never a default. The config names its model only when the route is known.
+        self.route = None if route is None else tuple(route)
         self.control = dict(budget=0, hold=[], title_session=None, route=None if route is None else list(route))
 
     def write_control(self, **change):
@@ -122,22 +133,27 @@ class Server:
     def config(self):
         recorder = dict(log=str(self.log), control=str(self.control_path))
         shim = {"python": "python3", "settings": str(self.settings), "ledger": str(self.ledger)}
-        return {
+        config = {
             "$schema": "https://opencode.ai/config.json",
-            "model": "%s/%s" % (PROVIDER, MODEL),
             "plugins": [{"package": str(self.base / "plugins/qual-pre"), "options": recorder},
                         {"package": str(self.base / "plugins/routing"), "options": shim},
                         {"package": str(self.base / "plugins/qual-post"), "options": recorder}],
-            # A background child session on another model: the spawn test of stage 2 (blocked before sending).
-            "commands": {"qualspawn": {"template": PROMPT_TEXT, "model": "%s/sonnet#%s" % (PROVIDER, VARIANT),
-                                       "subagent": True, "agent": "general"},
-                         # descendants stage: a `subagent: true` command child on the qualification route.
-                         "qualchild": {"template": PROMPT_TEXT, "model": "%s/%s#%s" % (PROVIDER, MODEL, VARIANT),
-                                       "subagent": True, "agent": "general"},
-                         # s33d stage: only whether the dummy credential-like variable exists, never its value.
-                         "qualenv": {"template": "!`env | grep -q '^%s=' && echo QUAL_PROBE_PRESENT || echo QUAL_PROBE_ABSENT`"
+            # s33d stage: only whether the dummy credential-like variable exists, never its value.
+            "commands": {"qualenv": {"template": "!`env | grep -q '^%s=' && echo QUAL_PROBE_PRESENT || echo QUAL_PROBE_ABSENT`"
                                                  % PROBE_ENV}},
         }
+        if self.route:
+            provider, model, variant = self.route
+            config["model"] = "%s/%s" % (provider, model)
+            # A background child session on another model: the spawn test of stage 2 (blocked before sending), only
+            # on the identity pre-registered for this route; none is guessed.
+            if off_route_spawn(self.route):
+                config["commands"]["qualspawn"] = {"template": PROMPT_TEXT, "model": off_route_spawn(self.route),
+                                                   "subagent": True, "agent": "general"}
+            # descendants stage: a `subagent: true` command child on the approved route.
+            config["commands"]["qualchild"] = {"template": PROMPT_TEXT, "model": "%s/%s#%s" % self.route,
+                                               "subagent": True, "agent": "general"}
+        return config
 
     def prepare_files(self):
         for name in ("config", "data", "state", "cache", "tmp", "plugins/qual-pre", "plugins/qual-post", "plugins/routing"):
@@ -153,12 +169,29 @@ class Server:
             return
         for name in ("project", "routing", "usage"):
             (self.base / name).mkdir(mode=0o700, exist_ok=True)
-        table = self.settings.parent / "strategy-table.json"
-        table.write_text(json.dumps({"schema": 1, "version": "qual-1", "rows": {"worker|code|medium|medium": [
-            {"strategy_id": "s-sub", "model": MODEL, "effort": VARIANT, "harness": HARNESS_NAME, "evidence_refs": ["qual"]}]}}))
-        table.chmod(0o600)
+        if self.route:
+            self.write_table()  # a route-free (chatgpt) run writes it in `set_route`, once the route is known
         self.project = self.base / "project"
         (self.project / "opencode.json").write_text(json.dumps(self.config(), indent=2))
+
+    def write_table(self):
+        """The qualification table for the run's one route (never a guessed one)."""
+        provider, model, variant = self.route
+        table = self.settings.parent / "strategy-table.json"
+        table.write_text(json.dumps({"schema": 1, "version": "qual-1", "rows": {"worker|code|medium|medium": [
+            {"strategy_id": "s-sub", "model": model, "effort": variant, "harness": harness_for(provider),
+             "evidence_refs": ["qual"]}]}}))
+        table.chmod(0o600)
+
+    def set_route(self, route):
+        """Bind a route-free run to its route once known: the route-bound table, then `qual-post`'s control."""
+        route = tuple(route)
+        if self.route is not None and self.route != route:
+            raise Refused("a run has one route")
+        self.route = route
+        if not self.canary:
+            self.write_table()
+        self.write_control(route=list(route))
 
     def start(self):
         self.prepare_files()
@@ -429,14 +462,14 @@ def listener():
     return server, Count
 
 
-def prepare_request(attempt_id, task):
+def prepare_request(attempt_id, task, route):
     return dict(
         assignment=dict(attempt_id=attempt_id, task=task, role="software-engineer", scope="qual-scope"),
         job=dict(id="job-" + attempt_id, role="software-engineer", scope_ref="qual-scope", objective="o", context="c", profile=dict(
             complexity_band="medium", risk_band="medium", review_policy="independent",
             context_tokens=100, tools=["edit"], uncertainty="low")),
         observations=dict(now=int(time.time()), routes=[dict(
-            route="sub", strategy_id="s-sub", provider=PROVIDER, model=MODEL, effort=VARIANT, harness=HARNESS_NAME,
+            route="sub", strategy_id="s-sub", provider=route[0], model=route[1], effort=route[2], harness=harness_for(route[0]),
             account="anthropic:qual", billing_class="included_subscription", pool=POOL, demand={"5h": 10},
             capable=True, permitted=True, binding_enforceable=True)],
             pools={POOL: dict(windows=[dict(id="5h", limit=1000, used=100, length=18000, reset_at=None, rolling=True,

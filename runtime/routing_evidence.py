@@ -8,7 +8,7 @@ never guessed. Model, effort and harness names appear only as data.
 Input shapes (all plain JSON):
   guidance:   [{id, sha256, checked_at, rows:[{work_kind, complexity_band, risk_band,
                 strategies:[{model, effort, harness, evidence_refs}]}]}]   # ordered strongest first
-  catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?, list_price?}]  # one client's own
+  catalog:    [{model, harnesses, supported_efforts, provider?, context_limit?, list_price?, display_name?}]
   benchmarks: [{id, model, harness, work_kind, sha256, checked_at}]        # harness and work_kind are required to match
 
 A row's work kind is one of the task profile template's; a row naming a `role` or `task_family` (the schema-1
@@ -22,6 +22,10 @@ The entry's optional ``list_price`` ``{input, output}`` is in dollars per millio
 strategy carries ``list_price_micros`` (``round((3 * input + output) / 4 * 1_000_000)``, None when unpriced), and each
 row is ordered priced first, by that price, then by the effort's index in the model's ``supported_efforts`` (listed
 lowest first; no effort counts as 0), then in guidance order.
+An entry's optional ``display_name`` (printable) is the catalog's spelling for people; the table's ``display_names``
+maps each model in its rows to it (one name per model). The table's ``list_prices`` carries each listed priced
+``(harness, model)`` entry's own ``{input, output}`` as ``{harness: {model: price}}``; both are outside the table
+``version`` (ranking uses only ``list_price_micros``), so a consumer binds them by its own digest.
 OpenRouter-specific mapping into these shapes belongs to a thin adapter added later; none exists yet.
 An empty or unusable table yields ``no_recommendation`` for callers, never a refusal to delegate.
 """
@@ -78,9 +82,10 @@ def _micros(price_in, price_out):
 
 
 def _catalog(items):
-    """``{(model, harness): {efforts, provider, context_limit}}``; a duplicate pair or a missing harness list is
-    invalid, while the same model on different harnesses is not."""
-    live = {}
+    """``{(model, harness): {efforts, provider, context_limit}}`` and ``{model: display_name}``; a duplicate pair, a
+    missing harness list or two display names for one model is invalid, while the same model on different harnesses
+    is not."""
+    live, names = {}, {}
     for item in _list(items, 'catalog'):
         _require(isinstance(item, dict), 'Invalid catalog entry')
         model = _text(item.get('model'), 'catalog model', 128)
@@ -99,10 +104,16 @@ def _catalog(items):
             (type(price[side]) is int or type(price[side]) is float and math.isfinite(price[side])) and price[side] >= 0
             for side in ('input', 'output')), 'Invalid catalog list price')
         micros = None if price is None else _micros(price['input'], price['output'])
+        display = item.get('display_name')
+        _require(display is None or isinstance(display, str) and 0 < len(display) <= 128 and display == display.strip() and display.isprintable()
+                 and names.get(model, display) == display, 'Invalid catalog display name')
+        if display is not None:
+            names[model] = display
         for harness in harnesses:
             _require((model, harness) not in live, 'Duplicate catalog model and harness')
-            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit, list_price=micros)
-    return live
+            live[(model, harness)] = dict(efforts=efforts, provider=provider, context_limit=limit, list_price=micros,
+                                          price=None if price is None else dict(price))
+    return live, names
 
 
 def _sources(guidance, benchmarks):
@@ -141,7 +152,7 @@ def _qualified(strategy, kind, refs, entry):
 
 def compile_table(guidance, catalog, benchmarks, *, now=None):
     """Return the versioned strategy table; see the module docstring for input shapes."""
-    live = _catalog(catalog)
+    live, names = _catalog(catalog)
     sources, refs = _sources(guidance, benchmarks)
     kinds = task_profile.load()['work_kinds']  # TemplateUnavailable is a ValueError: the compile fails
     rows, dropped = {}, []
@@ -194,8 +205,17 @@ def compile_table(guidance, catalog, benchmarks, *, now=None):
     rows = {name: [item for _, item in sorted(value, key=lambda pair: pair[0])]
             for name, value in rows.items() if value}
     checks = [source['checked_at'] for source in sources]
+    listed = {item['model'] for value in rows.values() for item in value}
+    prices = {}
+    for value in rows.values():
+        for item in value:
+            price = live[(item['model'], item['harness'])]['price']
+            if price is not None:
+                prices.setdefault(item['harness'], {})[item['model']] = price
     return dict(schema=SCHEMA, version=_digest([SCHEMA, rows, sources]), compiled_at=now or _now(),
-                checked_at=min(checks) if checks else None, sources=sources, rows=rows, dropped=dropped)
+                checked_at=min(checks) if checks else None, sources=sources, rows=rows, dropped=dropped,
+                display_names={model: name for model, name in sorted(names.items()) if model in listed},
+                list_prices=prices)
 
 
 def refresh_table(previous, load, *, now=None):

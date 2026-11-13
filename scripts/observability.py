@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit optional connection controls and native credential entry; no collector."""
+"""Explicit optional connection and Project collection controls, upload status and resolution, and native credential entry; no collector."""
 
 import argparse
 import json
@@ -47,11 +47,14 @@ def main():
     try:
         parser = Parser(description=__doc__)
         parser.add_argument("action", choices=("configure", "status", "enable", "disable", "probe",
-                                              "store-credentials", "forget-credentials"))
+                                              "store-credentials", "forget-credentials",
+                                              "project-status", "configure-project", "disable-project",
+                                              "export-status", "resolve-export"))
         parser.add_argument("--cwd", required=True)
         parser.add_argument("--expected-revision", type=int)
         args = parser.parse_args()
         credential_action = args.action in ("store-credentials", "forget-credentials")
+        status_action = args.action in ("status", "project-status")
         if credential_action:
             if args.expected_revision is None:
                 raise StartupError("credential_revision_required")
@@ -59,25 +62,33 @@ def main():
         else:
             if args.expected_revision is not None:
                 raise StartupError("invalid_observability_arguments")
-            raw = b"{}" if args.action == "status" and sys.stdin.isatty() else sys.stdin.buffer.read(settings.MAX_CONFIG + 1)
+            raw = b"{}" if status_action and sys.stdin.isatty() else sys.stdin.buffer.read(settings.MAX_CONFIG + 1)
             request = json_object(raw or b"{}", limit=settings.MAX_CONFIG)
-        if args.action == "status" and request:
+        if status_action and request:
             raise StartupError("invalid_observability_status_request")
         scope = Path(args.cwd)
-        if args.action not in ('status', 'disable'):
+        if args.action not in ('status', 'disable', 'project-status', 'disable-project', 'export-status', 'resolve-export'):
             scope = _entry_scope(acquire_project_entry(SimpleNamespace(client="codex", cwd=scope), PACKAGE))
             if (type(scope) is not AcceptedScope or scope.client != "codex" or scope.runtime is None
                     or scope.runtime.schema_version != 3):
                 raise StartupError("existing_enrolled_runtime_required")
         if args.action == "status":
             result = settings.status(scope)
+        elif args.action == "project-status":
+            result = settings.project_status(scope)
+        elif args.action in ("export-status", "resolve-export"):
+            from runtime import observability_hook
+            result = (observability_hook.export_status if args.action == "export-status"
+                      else observability_hook.resolve_export)(scope, request)
         elif args.action == "store-credentials":
             result = settings.store_credentials(scope, request, _read_pair)
         elif args.action == "forget-credentials":
             result = settings.forget_credentials(scope, request)
         else:
             operation = {"configure": settings.configure, "enable": settings.enable,
-                         "disable": settings.disable, "probe": settings.probe}[args.action]
+                         "disable": settings.disable, "probe": settings.probe,
+                         "configure-project": settings.configure_project,
+                         "disable-project": settings.disable_project}[args.action]
             result = operation(scope, request)
         print(json.dumps(result, separators=(",", ":")))
         return 0

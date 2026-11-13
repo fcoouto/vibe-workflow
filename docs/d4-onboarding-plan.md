@@ -8,7 +8,7 @@ Contract revised 2 November 2026 after the self-host pilot exposed unrelated-his
 - **Activate:** explicitly prepare required runtime state and qualify mandatory adoption, native mechanisms and applicable enforcement. Configuration alone grants no task or merge readiness.
 - **Undo configuration:** restore recorded owned preimages, retain history and report conflicts. Use a supported current recovery reader without rewriting original pins.
 
-The operational contract lives in [apply and recovery](../skills/onboard-my-project/references/apply-and-recovery.md). [Project Onboarding](../policies/10-project-onboarding.md) retains complete Toolkit assessment. [Source coverage](policy-sources.md) tracks authoring requirements. [Earlier validation](d4-validation.md) records historical observations, not current admission requirements.
+The operational contract lives in [apply and recovery](../skills/onboard-my-project/references/apply-and-recovery.md). [Project Onboarding](../policies/10-project-onboarding.md) retains complete Toolkit assessment. Source-to-contract coverage tracks authoring requirements. [Earlier validation](d4-validation.md) records historical observations, not current admission requirements.
 
 Explicit managed-runtime creation can start without machine-private temporary
 history. The birth protocol records a version-2 absence witness without preparing

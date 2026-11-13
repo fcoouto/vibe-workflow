@@ -12,7 +12,25 @@ import time
 import types
 import unittest
 
-from tests.qualification import canary
+from tests.qualification import canary, safety
+
+# The fixtures' approved route (the doubles below record it): every Run, pilot and server is handed it explicitly.
+QUAL_ROUTE = "claude-agent/haiku#low"
+QUAL = safety.parse_route(QUAL_ROUTE)
+QUAL_CHOICE = safety.choice(QUAL)
+
+
+def qual_plan(*args, **kwargs):
+    return canary.plan_assignments(*args, **dict(dict(route=QUAL_CHOICE), **kwargs))
+
+
+def qual_driver(*args, **kwargs):
+    return canary.PilotDriver(*args, **dict(dict(route=QUAL_CHOICE), **kwargs))
+
+
+def qual_run(*args, **kwargs):
+    from tests.qualification import opencode_live
+    return opencode_live.Run(*args, **dict(dict(route=QUAL_ROUTE), **kwargs))
 
 
 class Temp(unittest.TestCase):
@@ -172,6 +190,9 @@ class FakeOpenCode:
     def write_control(self, **change):
         self.control.update(change)
 
+    def set_route(self, route):  # as server.Server.set_route: the double holds no table, only the control
+        self.write_control(route=list(route))
+
     def hooks(self):
         return [json.loads(line) for line in self.log.read_text().splitlines() if line.strip()]
 
@@ -192,7 +213,7 @@ class FakeOpenCode:
             return 200, dict(state="ok" if ledger == "ready" else "not_ready"), 1.0
         if method == "attach":
             answer = self.routing("check", attempt_id=payload["attempt_id"], session_id=payload["session_id"],
-                                  authority=payload["authority"], request=canary.request(payload["funding_pool"]))[0]
+                                  authority=payload["authority"], request=canary.request(QUAL, payload["funding_pool"]))[0]
             if answer.get("state") == "allow" and answer.get("authority") == "verified":
                 self.attached[payload["session_id"]] = (payload["attempt_id"], payload["authority"])
                 return 200, dict(state="attached", session_id=payload["session_id"]), 1.0
@@ -211,7 +232,7 @@ class FakeOpenCode:
         if session in self.attached:
             attempt, token = self.attached[session]
             answer = self.routing("check", attempt_id=attempt, session_id=session, authority=token,
-                                  request=dict(canary.request(), kind=kind))[0]
+                                  request=dict(canary.request(QUAL), kind=kind))[0]
             if answer.get("state") != "allow" or answer.get("authority") != "verified":
                 return False
         sent = self.transmitted()

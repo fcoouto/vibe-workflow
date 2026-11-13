@@ -353,6 +353,29 @@ Added later on 12 November 2026, before any historical replay has run. Edit 9 ab
 
 **Limits.** These are current upstream revisions, not proved to be the versions that wrote every stored row. The local schemas match the mapped columns by name and type, and the runner stops on any change to a mapped column. Until store C is mapped, an approved caller supplies the exclusion metadata and a route is qualified live, the historical replay refuses to report. This supplement authorizes no run.
 
+## Edit 10 (13 November 2026): project-only historical replay
+
+The user approved excluding the other `opus` project from the historical replay
+on 13 November 2026, before any historical replay had run. This changes only the
+sample scope in Edit 6 and the requirement to identify and map store C. Earlier
+registrations and counts remain as historical context, not sample targets.
+
+The sample is every eligible session of **this project's current and legacy
+checkouts**, from the registered OpenCode and Codex sources. Store C (`opus`) is
+out of scope: do not locate, inspect, map or read it for this replay. Its absence
+does not block F8. A caller must provide only the approved checkout roots of this
+project, not a parent directory that also includes another project. Other-project
+sessions in a shared client database are outside the sample. Supplied unregistered
+stores are refused before any store read, never silently dropped.
+
+Both retained source mappings and their completeness checks remain required.
+Qualification/pilot exclusion provenance and ID checks, mapped-metadata-only
+read-only access, schema identity, privacy, fixed labels, qualified routing inputs
+and every live/canary gate remain unchanged. No replay, data access, live call,
+budget increase, settings change or activation is authorized by this amendment.
+Report the actual eligible count and exclusions; do not substitute the old
+three-source total or infer a result for the excluded `opus` sessions.
+
 ## Results
 
 Replay, disagreement, re-execution and the pre-registered canary: not yet run.
