@@ -230,16 +230,19 @@ class ReplayHistoryTests(unittest.TestCase):
         codex = self.codex([child("t")], [("p", "t")])
         opencode = dict(name="opencode", kind="opencode", roots=[ROOT],
                         path=opencode_store(str(self.folder / "o.db"), [dict(id="s1", parent_id="r")]))
-        fake_opus = dict(name="opus", kind="codex", path=codex["path"], roots=[OPUS])  # a name is not a mapping
+        fake_opus = dict(name="opus", kind="codex", path=codex["path"], roots=[OPUS])  # excluded by Edit 10
         foreign = dict(name="other", kind="codex", path=codex["path"], roots=[ROOT])
         forbidden = AssertionError("a store was read before the registration gates")
         cases = (([], None, "exclusion_basis_missing"), ([codex], None, "exclusion_basis_missing"),
                  ([], BASIS, "store_missing: opencode, codex"), ([codex], BASIS, "store_missing: opencode"),
-                 ([opencode], BASIS, "store_missing: codex"), ([opencode, codex], BASIS, "store_c_unmapped"),
-                 ([opencode, codex, fake_opus], BASIS, "store_c_unmapped"), ([fake_opus], BASIS, "store_c_unmapped"),
+                 ([opencode], BASIS, "store_missing: codex"), ([opencode, codex], None, "exclusion_basis_missing"),
+                 ([opencode, codex, fake_opus], BASIS, "store_unregistered"),
+                 ([fake_opus], BASIS, "store_unregistered"),
+                 ([opencode, dict(codex, kind="opencode")], BASIS, "store_unregistered"),
+                 ([opencode, codex, {}], BASIS, "store_unregistered"),
                  ([opencode, codex, foreign], BASIS, "store_unregistered"))
         for stores, basis, reason in cases:
-            with self.subTest(reason=reason, stores=[store["name"] for store in stores]), \
+            with self.subTest(reason=reason, stores=[store.get("name") for store in stores]), \
                     mock.patch.object(replay, "collect", side_effect=forbidden), \
                     mock.patch.object(replay, "gather", side_effect=forbidden), \
                     mock.patch.object(replay.sqlite3, "connect", side_effect=forbidden), \
@@ -554,12 +557,49 @@ class DecisionCompositionTests(unittest.TestCase):
         bare.parent.mkdir(mode=0o700)
         with self.assertRaisesRegex(Refused, "store_missing: codex"):  # registration gates precede every read
             replay.run([store], settings_path=str(bare), exclusions=BASIS)
-        opus = dict(name="opus", kind="opencode", path=store["path"], roots=[OPUS])  # a name is not a mapping
-        with self.assertRaisesRegex(Refused, "store_c_unmapped"):
+        opus = dict(name="opus", kind="opencode", path=store["path"], roots=[OPUS])  # excluded by Edit 10
+        with self.assertRaisesRegex(Refused, "store_unregistered"):
             replay.run([store, codex, opus], settings_path=self.settings, exclusions=BASIS)
-        with mock.patch.object(replay, "compose", side_effect=AssertionError("composed before the gates")):
-            with self.assertRaisesRegex(Refused, "store_c_unmapped"):
-                replay.run([store, codex], settings_path=self.settings, exclusions=BASIS)  # no now_ms needed
+        with self.assertRaisesRegex(Refused, "route_unqualified: no_qualified_path"):
+            replay.run([store, codex], settings_path=str(bare), exclusions=BASIS, now_ms=NOW_MS)
+
+    def test_project_only_run_reports_both_sources_without_other_project_sessions(self):
+        current = "/work/vibe-workflow"
+        opencode = dict(name="opencode", kind="opencode", roots=[current], path=opencode_store(
+            str(self.folder / "o.db"), [
+                dict(id="current-child", parent_id="r", title="Implement the parser",
+                     model='{"id":"zeta-large","providerID":"claude-agent","variant":"high"}'),
+                dict(id="other-child", parent_id="r", project_id="other", title=SECRET)]))
+        with closing(sqlite3.connect(opencode["path"])) as db:
+            db.execute("UPDATE project SET worktree = ? WHERE id = 'p1'", (current,))
+            db.execute("INSERT INTO project VALUES ('other', ?, 'git', 'x', NULL, NULL, NULL, 0, 0, NULL, 0, NULL, "
+                       "'[]', NULL)", (OPUS,))
+            db.commit()
+        codex = dict(name="codex", kind="codex", roots=[ROOT], path=codex_store(
+            str(self.folder / "c.sqlite"), [child("legacy-child"), child("opus-child", cwd=OPUS)],
+            [("p", "legacy-child"), ("p", "opus-child")]))
+        before = {store["path"]: Path(store["path"]).read_bytes() for store in (opencode, codex)}
+        report = replay.run([opencode, codex], settings_path=self.settings, exclusions=BASIS, now_ms=NOW_MS)
+        self.assertEqual(report["sessions_found"], 2)
+        self.assertEqual((report["compared"], report["pending"], report["not_compared"]), (1, 1, 0))
+        self.assertEqual(report["disagreement"]["by_store"], {"opencode": dict(compared=1, disagreed=0)})
+        self.assertEqual(report["disagreement"]["overall"], dict(compared=1, disagreed=0))
+        self.assertEqual(report["excluded"], dict(no_parent=0, no_model_id=0, no_timestamp=0, still_running=0,
+                                                 host_marked_title_compaction_summary=0, duplicate=0))
+        self.assertEqual(set(report["inputs"]["store_schemas"]), {"opencode", "codex"})
+        for store in (opencode, codex):
+            self.assertRegex(report["inputs"]["store_schemas"][store["name"]][0], "^[0-9a-f]{64}$")
+            self.assertEqual(Path(store["path"]).read_bytes(), before[store["path"]])
+        for secret in ("current-child", "legacy-child", "other-child", "opus-child", SECRET, current, ROOT, OPUS):
+            self.assertNotIn(secret, repr(report))
+
+    def test_project_only_run_still_refuses_a_qualification_session(self):
+        opencode = dict(name="opencode", kind="opencode", roots=[ROOT],
+                        path=opencode_store(str(self.folder / "o.db"), []))
+        codex = dict(name="codex", kind="codex", roots=[ROOT],
+                     path=codex_store(str(self.folder / "c.sqlite"), [child("qual-1")], [("p", "qual-1")]))
+        with self.assertRaisesRegex(Refused, "^qualification_session_found:"):
+            replay.run([opencode, codex], settings_path=self.settings, exclusions=BASIS, now_ms=NOW_MS)
 
 
 if __name__ == "__main__":

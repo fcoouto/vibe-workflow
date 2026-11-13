@@ -1,5 +1,5 @@
 """Advisory historical replay over past session metadata (validation Edit 6; labels amended by Edit 7; store fields
-registered by Edit 9 and its 12 November supplement).
+registered by Edit 9 and its 12 November supplement; project-only scope in Edit 10).
 
 `run(stores, ...)` reads each registered store through one `mode=ro` SQLite connection, selects only the metadata
 columns the registration maps, labels each eligible session by the fixed rules and returns an aggregate report. It
@@ -12,15 +12,14 @@ fail closed with a precise reason, in this order; the first two open no store:
 
 - `exclusion_basis_missing`: no qualification and pilot session ids, sources and check method from an approved
   caller (shape-checked here, not verified; Edit 9);
-- `_registered`: `store_c_unmapped` for a store named `opus` (a caller's name is not the mapping store C needs),
-  `store_unregistered` for any store outside the registered mapping, `store_missing` when store A or B is absent,
-  then `store_c_unmapped` while `STORE_C_MAPPING` is None;
+- `_registered`: `store_unregistered` for any store outside the retained OpenCode/Codex mapping (including `opus`,
+  excluded by Edit 10), then `store_missing` when either retained source is absent;
 - `gather` (the first read): `qualification_session_found` when an eligible session id is one of those ids;
 - `route_unqualified: <code>`: no settings path, or `routing_paths.gate` finds no qualified path or no generated route.
 
-While store C has no registered mapping, `run` always stops at `store_c_unmapped` and opens no store. Each
-authorized read binds the observed schema by SHA-256 (`schemas`, by store name). Registration is not permission:
-no historical run is authorized by this module.
+Callers supply only approved roots of this project's current and legacy checkouts, never another project's roots
+or their shared parent. Each authorized read binds the observed schema by SHA-256 (`schemas`, by store name).
+Registration is not permission: no historical run is authorized by this module.
 """
 from contextlib import closing
 import copy
@@ -37,9 +36,8 @@ from runtime import (routing, routing_launch, routing_observations, routing_path
                      usage_budget)
 from tests.qualification.safety import Refused
 
-# Store names whose field mapping is registered (Edit 9), with their reader. Store C (`opus`) has none.
+# Retained source mappings (Edit 9); Edit 10 excludes the other `opus` project rather than requiring its mapping.
 MAPPED_STORES = dict(opencode="opencode", codex="codex")
-STORE_C_MAPPING = None  # set only by a dated edit that identifies and maps store C; until then `run` refuses
 HOSTS = dict(opencode="opencode", codex="codex_native")  # each mapped store's launching host (Edit 9 host formats)
 WINDOW_UNIT = routing_paths.WINDOW_UNIT
 WINDOW_LENGTHS = dict(routing_observations.RATE_WINDOWS.values())  # 5h and 7d, in seconds
@@ -149,7 +147,7 @@ READERS = dict(codex=_codex_rows, opencode=_opencode_rows)
 
 def _read(store):
     if store.get("kind") not in READERS:
-        raise Refused("store_c_unmapped: %s has no registered field mapping" % store.get("name"))
+        raise Refused("store_unregistered: %s has no registered field mapping" % store.get("name"))
     with closing(_connect(store["path"])) as db:
         _check_schema(db, store)
         schema = _schema_digest(db)
@@ -459,7 +457,7 @@ def run(stores, *, settings_path=None, exclusions=None, now_ms=None):
         raise Refused("exclusion_basis_missing: an approved caller must supply qualification and pilot session ids "
                       "with their sources and check method (shape-checked here, not verified; Edit 9)")
     _registered(stores)  # every registration and completeness gate, before any store is opened
-    found = gather(stores, blocked, now_ms=now_ms)  # unreachable while store C has no registered mapping
+    found = gather(stores, blocked, now_ms=now_ms)
     report = compose(found["eligible"], settings_path=settings_path)
     report.update(sessions_found=found["sessions_found"], excluded=found["excluded"])
     report["inputs"]["store_schemas"] = found["schemas"]
@@ -467,21 +465,15 @@ def run(stores, *, settings_path=None, exclusions=None, now_ms=None):
 
 
 def _registered(stores):
-    """Refuse, before any read, a store outside the registered mapping, a missing store A or B, or the unregistered
-    store C. A caller naming a store `opus` is not the mapping store C needs. While `STORE_C_MAPPING` is None this
-    always refuses: no input can reach a read."""
+    """Refuse unregistered sources before any read, then require both retained mappings (Edit 10).
+    The excluded `opus` project is neither required nor silently dropped if supplied."""
     for store in stores:
-        if store.get("name") == "opus":
-            raise Refused("store_c_unmapped: a store named opus is not the registered mapping store C needs (Edit 9)")
-        if MAPPED_STORES.get(store.get("name")) != store.get("kind"):
+        if store.get("name") not in MAPPED_STORES or MAPPED_STORES[store["name"]] != store.get("kind"):
             raise Refused("store_unregistered: a store outside the registered mapping is never read or dropped")
     names = {store.get("name") for store in stores}
     missing = [name for name in MAPPED_STORES if name not in names]
     if missing:
         raise Refused("store_missing: %s; the registered sample would be incomplete" % ", ".join(missing))
-    if STORE_C_MAPPING is None:
-        raise Refused("store_c_unmapped: store C (opus) is not identified or mapped; the registered sample would be "
-                      "incomplete (Edit 9)")
 
 
 def gather(stores, blocked, *, now_ms):
