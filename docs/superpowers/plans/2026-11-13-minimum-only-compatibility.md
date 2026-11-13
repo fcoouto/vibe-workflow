@@ -112,3 +112,33 @@ integrated candidate. All review/worker settings used native configuration; no
 model override, paid route or credential access was introduced. Remaining
 software-version comparisons in receipts and upgrade recording bind historical
 facts; schema/content checks are deliberately not removed.
+
+## Final review and integration
+
+On frozen candidate `4e7a402`, the parent ran 35 modules as 36 units: 1,149 tests,
+three skips and zero failures in 330.8 seconds. Skips were two optional
+source-pinned credential-backend classes and one filesystem-alias-dependent
+qualification case. Private-HOME writes in two qualification modules stayed
+inside the runner's disposable homes. This was selected coverage, not a full run.
+
+Independent native reviewer `ses_e2ab23643ffeghYF4iYD607N4W` covered all 39 changed
+files and connected identity/guard code. The reviewer reported one medium
+compatibility finding, no substantiated security issue, and no declined file.
+F1: `_qualified_child_patch` still equated observer and child software versions;
+this gates an incoming event, not historical receipt integrity. Parent verified
+the caller reaches `state.process_event` and denies an otherwise exact approved
+patch. Fix accepted: compare only the supported minimum and retain all parent,
+task, model, effort, canary, ownership and replay checks.
+
+Regression `CooperativeQualificationTests.test_guarded_child_patch_accepts_differing_supported_observer_and_child_versions`
+failed on `eb594d0` with `deny != pass`. On `5af9533`, both complete qualification
+cases passed (same release and differing supported releases), including below-floor,
+wrong-parent and repeated-patch denials. No second whole-review round is needed
+for this narrow, reproduced correction; affected guard checks are rerun below.
+
+Integrated current main `bb245f442784099e1cfabf54388125803e30d235` without conflicts.
+Its disjoint changes qualify escalation-gate mechanical/TUI paths; no compatibility
+implementation file changed. Preserve the 1,149-test evidence for unchanged leaf
+behavior; rerun shared guard/delegation, admission, instruction and escalation
+integration checks on the merged candidate. [PR #288](https://github.com/fcoouto/vibe-workflow/pull/288)
+remains draft until those checks and final package validation pass.
