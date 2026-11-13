@@ -37,6 +37,7 @@ The feature is off by default, needs no consent and changes a tracked file, so c
 
 ## Limits
 
+- Native approval is not proof of a fresh human decision. On inspected OpenCode 2.2.7, manual and automatic `once` use the same reply API without trusted human provenance. A completed host-authorized stop-stage edit clears the entry; a guaranteed human-stop boundary is not established. See the [approval-provenance investigation](../docs/qualification/2026-11-13-shared-gate-shutdown.md#astra-investigation-approval-provenance-and-implementation-implication). No runtime change was made by that investigation.
 - Not a security boundary: writes through the shell, `` !`cmd` `` command templates, other plugins and the server API are not seen. A plugin that fails to load enforces nothing, and any internal error allows the action.
 - State lives in memory; a plugin reload starts afresh.
 - An unavailable or lost session-event stream disables enforcement for that plugin instance, including loss before feature loading completes. Reload to start a fresh instance; the plugin does not reconnect. Cleanup also prevents late activation.

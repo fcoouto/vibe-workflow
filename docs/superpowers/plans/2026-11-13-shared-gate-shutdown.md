@@ -146,3 +146,27 @@ but its label guard required that choice. It was not reached before the observed
 early approval and did not cause it. Keep executed evidence intact; correct that
 guard only before a separately authorized new attempt. Qualification remains
 blocked on caller attribution or supported isolation, not another unchanged run.
+
+## Astra approval-provenance conclusion
+
+User explicitly selected native openai/gpt-6-astra#xhigh for a bounded read-only
+investigation. Installed 2.2.7 manual and automatic approval share the same reply
+API without trusted fresh-human provenance. Coordinator verified decisive installed
+source hashes and callbacks. Current stop maps to ask and clears after a completed
+host-authorized edit; it cannot attest that a human made the approval. Historical
+responder attribution or an isolated successful click would not fix that limit.
+
+Documented recommendation, not an accepted or implemented redesign: keep stop edits
+denied until an explicit decision/reset, reusing the existing root-message override.
+That removes the automatic-once release path but retains the accepted API/plugin
+prompt residual; root user-message intent is not authenticated human presence.
+A strict fresh-human guarantee needs a trustworthy upstream pre-execution boundary.
+Retaining current native-approval semantics instead would need an explicit decision
+to weaken that requirement. See the report's Astra section for proof and options.
+
+No runtime/settings/permission changes, live probe, fixture replay or renewed case
+allowance. Smart Routing/judge remain deferred and PR #289 remains draft BLOCKED.
+Any future behavior change needs its own design review and qualification. Existing
+failed observations remain failed. The original isolation digest still matches its
+exact five-record prefix; one later cleanup record changes only the current
+whole-file digest, as reconciled in the report without rewriting raw evidence.

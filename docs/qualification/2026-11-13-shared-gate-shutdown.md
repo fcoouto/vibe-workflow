@@ -193,6 +193,83 @@ identified retrospectively from the retained event/log fields. Caller-bound
 telemetry or supported isolation remains necessary. No new native permission,
 fixture run, live model call, settings change or service restart occurred.
 
+### Astra investigation: approval provenance and implementation implication
+
+The user explicitly requested a native `openai/gpt-6-astra#xhigh` investigation.
+**The inspected OpenCode 2.2.7 permission API and server-plugin surfaces cannot
+reliably distinguish a fresh human approval from automatic `once`.** Client code
+knows which callback it ran, but that distinction does not reach the permission
+service as trusted approval provenance. This is an installed-source conclusion,
+not a new live test or a claim about future releases.
+
+Manual and automatic Desktop paths submit the same reply under their connection's
+credentials. The TUI likewise uses the same reply method for manual and automatic
+approval. This supplies a positive counterexample to distinguishability; the
+conclusion does not depend on identifying the historical responder.
+
+| Inspected installed source | Evidence |
+| --- | --- |
+| Desktop source-map `app/src/session/requests/auto-approve.ts:109-120` | Automatic reply sends `decision:"once"`. |
+| Desktop `session-permission-dock.tsx:52-64`, `model.ts:202-215,237-259` in the same directory | Visible Allow once reaches the same permission reply API without gesture evidence. |
+| CLI bytes `148547200+1500`, `149045350+1700`, `157188000+1200` | Reply body accepts decision/message; route forwards request ID, decision and message, not approving actor. Replied data contains session ID, request ID and reply. |
+| CLI bytes `155737516+4477` | Core reply publishes settlement and releases the waiting permission; no fresh-human verification or reply-validation plugin hook appears on this path. |
+| CLI bytes `155398400+4800`, `156552700+5500` | Event metadata is supplied explicitly; this reply supplies none. Server authentication authorizes access, not a per-request human gesture. |
+| CLI bytes `156280650+2400` | Prompt admission creates a user-message input from caller-supplied prompt data, not authenticated human presence. |
+
+CLI coordinates are zero-based byte offset plus length in the installed binary
+whose digest is recorded above. Desktop coordinates refer to embedded source-map
+content in the installed archive. The private report retains additional source
+ranges and digests; the coordinator independently verified eight CLI range hashes,
+the full CLI digest and three decisive Desktop source hashes. Official API and
+plugin documentation corroborated the surfaces; installed source is decisive.
+Context7 was unavailable due to quota; no key or configuration was changed.
+
+Headers, client labels, request metadata and timing do not fill this gap. Shared
+credentials do not distinguish two branches of the same authorized client. Ask
+`source` identifies the requesting tool, not the approving person. Generic event
+metadata or a caller-supplied `human:true` would not establish trusted provenance.
+The evaluation hook runs before any decision. A Replied listener is not a supported
+pre-execution veto: filtering that event cannot prevent an edit already authorized
+by `once`, and preserving its counter afterward would not undo the edit.
+
+**Current gate semantics are host-authorized completed edit, not guaranteed human
+approval.** `gate.ts:254-273` returns ask at stop; `index.ts:201-226` remembers the
+tool and calls `edited` on completion; `gate.ts:218-220` clears the held stop entry.
+The source comment's inference that the user approved exceeds available provenance.
+Finding the earlier writer could explain the failed case or help isolate another
+test, but would not resolve this design limitation. An isolated successful human
+click would not prove that automatic approval cannot release the same stop.
+
+**Future options, not implemented or accepted as a redesign:**
+
+- Keeping current behavior means explicitly accepting native host approval rather
+  than a guaranteed fresh human decision. That would weaken the latter requirement
+  and needs an explicit requirements decision; this investigation does not make it.
+- The smallest recommended workflow correction is to keep stop-stage edits denied
+  until an explicit decision/reset, reusing the existing root-message override
+  instead of an auto-answerable ask. This would remove the automatic-once release
+  path. Root prompts still lack authenticated human provenance: authorized API or
+  plugin callers can submit them. This retains the design's documented reset
+  residual, not a physical-human authentication guarantee.
+- If that strict guarantee is required against other authorized automation, the
+  inspected surfaces are insufficient. It needs trusted human-presence evidence
+  bound to the pending action and checked before execution, not a new label,
+  after-hook, judge or generic RPC endpoint.
+
+No runtime, reset behavior, settings or permissions changed. No fixture replay,
+native permission probe or new live qualification occurred. The Astra assignment
+was a separate bounded native investigation, not zero model usage. Smart Routing
+and the judge remain deferred; PR #289 remains draft `[BLOCKED]`. A future runtime
+change requires its own design review, implementation and qualification.
+
+**Evidence snapshot reconciliation:** the earlier isolation event digest binds
+the original 1516-byte, five-record snapshot. The current file has one later
+48-byte cleanup record at `2026-11-13T18:24:32.726Z`; its full digest is now
+`34d3b5e993859659d9a5d58b4ebd286b57bdbdf35b65a5ef7bfd633bf7f8ae82`.
+The original prefix still exactly matches the retained `883b64d7…` digest. No
+request/reply bytes changed; this appended record neither identifies the responder
+nor establishes why cleanup occurred. Both observations and raw bytes are retained.
+
 ## Checks and next boundary
 
 - Existing baseline: two Python gate tests, including 77 Node tests, passed on
@@ -212,3 +289,5 @@ source without changing the user's existing permissions implicitly. A changed
 live attempt needs a separately bounded decision; do not replay Case A or reset
 the original allocation. Publish these partial results as `[BLOCKED]`, not ready
 for merge under the current qualification plan. Broader closure remains open.
+Separately, decide the stop-stage contract above: responder isolation alone cannot
+establish a guaranteed fresh human decision from the native approval channel.
