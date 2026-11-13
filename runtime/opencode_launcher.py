@@ -343,6 +343,8 @@ def health(host):
 
 def enforcement(host, answer):
     """The adapter's `probe` of this host with the worker profile's own tool states: `enforced` or `advisory`."""
+    if not isinstance(answer, dict) or answer.get('state') != 'ok':
+        return 'advisory'
     try:
         status, info = host.request('GET', '/api/info')
     except Exception:  # noqa: BLE001

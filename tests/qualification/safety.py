@@ -15,6 +15,7 @@ import time
 import traceback
 
 from tests.qualification import sanitize
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 # No route is built in: every launch is checked against the `--route PROVIDER/MODEL#VARIANT` the approval names.
 HARNESS_NAME = "claude-agent-sdk via opencode"
@@ -25,7 +26,7 @@ def harness_for(provider):
     """The route identity's harness, as the routing shim names it (runtime/adapters/opencode_plugin.ts)."""
     return HARNESS_NAME if provider == "claude-agent" else "opencode provider %s" % provider
 PROMPT_TEXT = "Reply with exactly: OK"
-QUALIFIED_OPENCODE = "2.2.6"
+QUALIFIED_OPENCODE = "2.2.6"  # Historical qualification provenance, not software eligibility.
 # Durable caps per purpose (the user's authorizations): qualification 14, the bounded pilot canary 24.
 # New purposes start at 0 in code: nothing may be spent until a recorded approval cap line opens them.
 CAPS = {"qualification": 14, "pilot": 24, "qualification-2": 0, "chatgpt": 0, "isolation": 0, "drill": 0, "gateway": 0,
@@ -151,15 +152,19 @@ def check_isolated_dir(path, home=None):
 
 
 def check_opencode_version(run=subprocess.run, env=None):
-    """`opencode --version` on the server's PATH must be the qualified version; checked before anything starts."""
+    """Refuse known below-floor CLI versions before starting; return None for unknown version metadata."""
     try:
         done = run(["opencode", "--version"], capture_output=True, text=True, timeout=30, env=env)
     except (OSError, subprocess.SubprocessError):
         raise Refused("opencode is not runnable") from None
-    match = re.fullmatch(r"\s*(?:opencode\s+)?v?(\d+\.\d+\.\d+)\s*", done.stdout or "")
-    if done.returncode != 0 or not match or match.group(1) != QUALIFIED_OPENCODE:
-        raise Refused("opencode on PATH is not %s" % QUALIFIED_OPENCODE)
-    return match.group(1)
+    if done.returncode != 0:
+        raise Refused("opencode is not runnable")
+    match = re.fullmatch(r"\s*(?:opencode\s+)?v?(\S+)\s*", done.stdout or "")
+    version = match.group(1) if match else None
+    supported = at_least(version, MINIMUM_VERSIONS['opencode'])
+    if supported is False:
+        raise Refused("opencode on PATH is below minimum %s" % MINIMUM_VERSIONS['opencode'])
+    return version if supported is True else None
 
 
 # ---------------------------------------------------------------- durable call ledger
