@@ -32,7 +32,7 @@ Do not add a general cleanup framework, dependency, service or settings control.
 - [x] Wire the revised controller; test deadlines, timeouts, budgets,
       configuration failures and simultaneous case/cleanup failures.
 - [x] Validate, commit, run affected committed tests and review.
-- [ ] Publish draft
+- [x] Publish draft
       BLOCKED findings. Independent review and live qualification stay explicit.
 
 Acceptance: delayed and immediate unload can pass only with timely positive
@@ -216,3 +216,11 @@ return a truthful failure while a later native unload completes. General watcher
 abort responsiveness, registration finalizer behavior, reload/replacement races
 and durable absence remain unqualified. Any new live trial needs its own approved
 scope and budget. No unspent old allowance exists. PR #289 remains draft/BLOCKED.
+
+Published offline repair: [draft PR #291](https://github.com/fcoouto/vibe-workflow/pull/291),
+branch `fix/disposable-plugin-teardown`. Final committed check at
+`07fc5ea99b3ab309ea070905ceedeee87470a2a5` passed the same 91 tests without skips.
+The independent review's four code/test files are unchanged; later edits record
+verification/publication only. PR #291 also remains draft/BLOCKED rather than
+implying a native cleanup qualification. Next possible native work belongs to a
+separately approved qualification scope, not automatic recovery or case replay.
