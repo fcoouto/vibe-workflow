@@ -412,6 +412,148 @@ class ReplayHistoryTests(unittest.TestCase):
                 self.assertRaisesRegex(Refused, "schema_changed: codex threads.reasoning_effort"):
             replay.collect([store], now_ms=NOW_MS)
 
+    def test_known_id_in_either_source_refuses_before_any_title_read(self):
+        codex = self.codex([child("qual-1")], [("p", "qual-1")])
+        opencode = dict(name="opencode", kind="opencode", roots=[ROOT], path=opencode_store(
+            str(self.folder / "o.db"), [dict(id="s", parent_id="r", model='{"id":"m","providerID":"x"}')]))
+        real = replay._connect
+        for stores in ([codex, opencode], [opencode, codex]):
+            for blocked in ("qual-1", "s"):
+                for entry in ("gather", "run"):
+                    with self.subTest(order=[s["name"] for s in stores], blocked=blocked, entry=entry):
+                        titles = []
+
+                        def connected(path):
+                            db = real(path)
+
+                            def authorize(action, table, column, *unused):
+                                if action == sqlite3.SQLITE_READ and column == "title":
+                                    titles.append((path, table))
+                                return sqlite3.SQLITE_OK
+
+                            db.set_authorizer(authorize)
+                            return db
+
+                        with mock.patch.object(replay, "_connect", connected), \
+                                mock.patch.object(replay, "label", side_effect=AssertionError("label before gate")), \
+                                mock.patch.object(replay, "compose", side_effect=AssertionError("route before gate")):
+                            with self.assertRaisesRegex(Refused, "^qualification_session_found:"):
+                                if entry == "gather":
+                                    replay.gather(stores, {blocked}, now_ms=NOW_MS)
+                                else:
+                                    replay.run(stores, exclusions=dict(BASIS, ids=[blocked]), now_ms=NOW_MS)
+                        self.assertEqual(titles, [], "a rejected sample read title data")
+
+    def test_only_eligible_duplicate_winners_supply_titles(self):
+        first = self.codex([child("dup", title="Review the parser", created_at_ms=NOW_MS - 6 * HOUR_MS),
+                            child("root"), child("running", updated_at_ms=NOW_MS - HOUR_MS + 1),
+                            child("missing", model=None), child("boundary", updated_at_ms=NOW_MS - HOUR_MS)],
+                           [("p", "dup"), ("p", "running"), ("p", "missing"), ("p", "boundary")], "first.db")
+        second = self.codex([child("dup", title="Implement something else")], [("p", "dup")], "second.db")
+        titles, real = [], replay._connect
+
+        def connected(path):
+            db = real(path)
+
+            def projected(cursor, row):
+                for index, column in enumerate(cursor.description):
+                    if column[0] == "title" and row[index] is not None:
+                        titles.append((path, row[index]))
+                return row
+
+            db.row_factory = projected
+            return db
+
+        with mock.patch.object(replay, "_connect", connected):
+            found = replay.gather([second, first], {"root", "running", "missing"}, now_ms=NOW_MS)
+        self.assertEqual(sorted(titles), sorted([(first["path"], "Review the parser"),
+                                                (first["path"], "Implement the parser")]))
+        self.assertEqual(found["sessions_found"], 5)
+        self.assertEqual(found["excluded"], dict(no_parent=1, no_model_id=1, no_timestamp=0, still_running=1,
+                                                 host_marked_title_compaction_summary=0, duplicate=1))
+        self.assertEqual(replay.label(found["eligible"][0])["specialist"], "code-reviewer")
+        # An ineligible earliest copy must not become a refusal because another copy would be eligible.
+        with closing(sqlite3.connect(first["path"])) as db:
+            db.execute("DELETE FROM thread_spawn_edges WHERE child_thread_id = 'dup'")
+            db.commit()
+        found = replay.gather([second, first], {"dup"}, now_ms=NOW_MS)
+        self.assertEqual([row["id"] for row in found["eligible"]], ["boundary"])
+
+    def test_schema_metadata_and_titles_share_one_read_snapshot(self):
+        for kind in ("codex", "opencode"):
+            with self.subTest(kind=kind):
+                store = (self.codex([child("t", title="Implement original")], [("p", "t")], "snapshot-c.db")
+                         if kind == "codex" else dict(name=kind, kind=kind, roots=[ROOT], path=opencode_store(
+                             str(self.folder / "snapshot-o.db"), [dict(id="t", parent_id="p", title="Implement original",
+                                                                     model='{"id":"m","providerID":"x"}')])) )
+                with closing(sqlite3.connect(store["path"])) as db:
+                    self.assertEqual(db.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+                real, transactions = replay._schema_digest, []
+
+                def fingerprint(db):
+                    digest = real(db)
+                    transactions.append(db.in_transaction)
+                    table, updated = ("threads", "updated_at_ms") if kind == "codex" else ("session_v2", "time_updated")
+                    model = "new-model" if kind == "codex" else '{"id":"new-model","providerID":"x"}'
+                    with closing(sqlite3.connect(store["path"])) as writer:
+                        writer.execute("UPDATE %s SET title=?, model=?, %s=? WHERE id='t'" % (table, updated),
+                                       ("Review changed", model, NOW_MS - HOUR_MS))
+                        writer.commit()
+                    return digest
+
+                with mock.patch.object(replay, "_schema_digest", fingerprint):
+                    found = replay.collect([store], now_ms=NOW_MS)
+                self.assertEqual(transactions, [True])
+                (row,) = found["eligible"]
+                self.assertEqual((row["title"], row["end_ms"]), ("Implement original", NOW_MS - 4 * HOUR_MS))
+                self.assertEqual(replay.label(row)["specialist"], "software-engineer")
+                (later,) = replay.collect([store], now_ms=NOW_MS)["eligible"]
+                self.assertEqual((later["title"], later["model"], later["end_ms"]),
+                                 ("Review changed", "new-model", NOW_MS - HOUR_MS))
+
+    def test_read_connections_close_on_later_schema_or_title_failure(self):
+        first = self.codex([child("t")], [("p", "t")], "first.db")
+        second = self.codex([child("u")], [("p", "u")], "second.db")
+        broken = self.codex([], name="broken.db")
+        with closing(sqlite3.connect(broken["path"])) as db:
+            db.execute("ALTER TABLE threads DROP COLUMN title")
+            db.commit()
+        for failure in ("schema", "title"):
+            with self.subTest(failure=failure):
+                opened, closed, titles = [], [], []
+
+                class Observed(sqlite3.Connection):
+                    def execute(connection, sql, *args):
+                        if sql.startswith("SELECT title FROM"):
+                            titles.append(sql)
+                            if failure == "title":
+                                raise sqlite3.OperationalError("synthetic title failure")
+                        return super().execute(sql, *args)
+
+                    def close(connection):
+                        closed.append(connection)
+                        super().close()
+
+                def connected(path):
+                    db = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True, factory=Observed)
+                    opened.append(db)
+                    return db
+
+                with mock.patch.object(replay, "_connect", connected):
+                    error = Refused if failure == "schema" else sqlite3.OperationalError
+                    with self.assertRaisesRegex(error, "schema_changed" if failure == "schema" else "synthetic title"):
+                        replay.collect([first, broken if failure == "schema" else second], now_ms=NOW_MS)
+                self.assertEqual(len(opened), 2)
+                self.assertEqual(set(opened), set(closed))
+                if failure == "schema":
+                    self.assertEqual(titles, [])
+
+    def test_nonunique_title_lookup_is_refused(self):
+        with mock.patch.dict(globals(), CODEX_SCHEMA=CODEX_SCHEMA.replace("id TEXT PRIMARY KEY", "id TEXT")):
+            store = self.codex([child("t"), child("t", title="Review other copy")], [("p", "t")])
+        with self.assertRaisesRegex(Refused, "^title_projection_invalid:"):
+            replay.collect([store], now_ms=NOW_MS)
+
 
 PATH_ID = "opencode-claude-subscription"  # a production path from the packaged rules, qualified only in temp storage
 HARNESS = "claude-agent-sdk via opencode"
