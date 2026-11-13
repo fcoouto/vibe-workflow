@@ -16,7 +16,7 @@ Requested on 13 November 2026: evaluate ordinary completed tasks for actual mist
 - [x] Freeze five PRs and task selection before checker execution.
 - [x] Reconcile native task windows, checker receipts, model counters and delegated coverage.
 - [x] Replay selected document checks, adjudicate findings and retain sanitized evidence.
-- [ ] Verify accounting, publish results and summarize whether selective checking is justified.
+- [x] Verify accounting, publish results and summarize whether selective checking is justified.
 
 ## Result
 
@@ -87,3 +87,7 @@ The evaluation's coordinator consumed **at least 7,134,825 tokens** through **21
 Collector self-checks verified literal token arithmetic (28 tokens across all five disjoint categories), explicit missing-usage handling, command detection and a negative native-read control. Missing-link failure and repaired-success controls passed. Published per-message counters independently reconcile exactly to the table; source identities, changed paths, selection and immutable snapshots are retained. The private collector and native transcripts remain outside Git; shared evidence excludes prompts, raw tool inputs/outputs, credentials and client configuration.
 
 Review scope is this report and sanitized numeric evidence only; product code, installed packages, hooks and settings are unchanged. Coordinator checked record attribution, arithmetic, limits, findings classification and redaction directly. No independent new-model report review or full-suite/live-client test is claimed. Package validation and diff-check outcomes belong to the publication record. Current source changes after `0.1.39` are not relabelled as released behavior.
+
+### Publication record
+
+Evidence candidate `2582c0b` passed `python3 -B scripts/validate.py` with the package-size advisory: 7,107,972 of 8,388,608 bytes. `git diff --check` passed. Report and sanitized evidence were pushed on `docs/selective-check-sample` and published in draft [PR #292](https://github.com/fcoouto/vibe-workflow/pull/292). Independent merge review was not launched; this evaluation authorizes no new model allocation. The current task worktree is the existing `template-efficiency` directory on its new sample branch; primary `main` was not switched. This record-only follow-up does not change observations or counters.
