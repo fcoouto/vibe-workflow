@@ -1,0 +1,3558 @@
+{
+  "date": "2026-11-13",
+  "host": "OpenCode 2.2.6",
+  "runtime_version": "0.1.39",
+  "test_candidate": "67e12a41fe64a49a4c62e6459e5fb7fd651fcbf4",
+  "base": "1f53c2a22ff006ddab2afb6efa61c5d67258adf9",
+  "runtime_sha256": {
+    "gate.ts": "97513e84d2eefdbfe139609ef0a05934b6fd4f55bbfefb7aa8a3d20dfdcce860",
+    "index.ts": "527816deab2ddfe7b470d213be2a7586e23200647bf520a6214fe9f089b3acf9"
+  },
+  "budget": {
+    "max_requests": 240,
+    "minutes": 60,
+    "requests_used": 155,
+    "deadline_preserved_across_interruptions": true
+  },
+  "aggregate": "partial_qualification_tui_blocked",
+  "cases": [
+    {
+      "case": "1-masked-diagnosis",
+      "verdict": "passed",
+      "requests": 20,
+      "share": 30,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "masked_failures": 4,
+        "child_denial": true,
+        "same_level_preserved": true,
+        "fresh_stronger_release": true,
+        "final_test_passed": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "5f8d7b470d7cc43abbabc5aa0045d2e9a36c75e1bf8538faeab5b3f014aa6d2f",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "ae0f40101386a3f356f1b63bb4e053057c4e16d108b0c450212ebf2905a8e72f",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "5f8d7b470d7cc43abbabc5aa0045d2e9a36c75e1bf8538faeab5b3f014aa6d2f"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "273fa5f7751623088513a33bca1c498e65adcce2090143f644477eff4aaab381",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 5,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "b94e1f06d5c72bf9f2c9af23154a1e33056d445345d9d308ceebed9c6bf8784b"
+        },
+        {
+          "index": 6,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 7,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 9,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 10,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 12,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 14,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "bc14cd8c45d9ff98a2190ba78aaf21c91032b7c287f11c7f25e3f230af3c01a3"
+        },
+        {
+          "index": 15,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 16,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 18,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 20,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "64706bbc93d620d11cdcf27c6cb9a55b2819e58834fa863eda652fd652de488d"
+        },
+        {
+          "index": 21,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 22,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 24,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 26,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "fc6062cca8c1ec8c2d37f99dfbf325e75feb951523a2c5d6c3fcc5e73c87fce9"
+        },
+        {
+          "index": 27,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 28,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 30,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 31,
+          "kind": "permission",
+          "session": "root",
+          "effect": "deny",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 33,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 34,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 37,
+          "kind": "model",
+          "session": "same-level-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 40,
+          "kind": "model",
+          "session": "same-level-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 41,
+          "kind": "permission",
+          "session": "same-level-child",
+          "effect": "deny",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 43,
+          "kind": "model",
+          "session": "same-level-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 44,
+          "kind": "session.execution.succeeded",
+          "session": "same-level-child"
+        },
+        {
+          "index": 47,
+          "kind": "model",
+          "session": "strong-diagnosis",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 50,
+          "kind": "model",
+          "session": "strong-diagnosis",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 53,
+          "kind": "model",
+          "session": "strong-diagnosis",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 54,
+          "kind": "session.execution.succeeded",
+          "session": "strong-diagnosis"
+        },
+        {
+          "index": 56,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 57,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 59,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 61,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary",
+          "exit": 0,
+          "output_sha256": "6c1dd11726c754421f00c759ee540caaf5f5306037970bbab141b9c63fa98d6f"
+        },
+        {
+          "index": 62,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 63,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 64,
+          "kind": "cleanup"
+        },
+        {
+          "index": 65,
+          "kind": "ready"
+        },
+        {
+          "index": 66,
+          "kind": "cleanup"
+        },
+        {
+          "index": 67,
+          "kind": "ready"
+        }
+      ]
+    },
+    {
+      "case": "2-unexpected-success",
+      "verdict": "passed",
+      "requests": 9,
+      "share": 12,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "genuine_masked_unexpected_successes": 3,
+        "held_bytes_preserved": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "8cd92bc729f91396cfb6ee433a1faa79592fe985415c0abf29be2d5b1303273b",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "5b0595b69395155cce4083f17cec2484cdfec59d0fd69803a768ba396bf9083b",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "8cd92bc729f91396cfb6ee433a1faa79592fe985415c0abf29be2d5b1303273b"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "703b7de3dd85d2b0e7718aceff6b7a6b6247951d16874975086d725b56d0a83d",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 4,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 6,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 8,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_unexpected 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "592d6da252b970bc5af515748b4d8ab7941591f51729c56afaa9b76539dfd80f"
+        },
+        {
+          "index": 9,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 10,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 12,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 14,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_unexpected 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "592d6da252b970bc5af515748b4d8ab7941591f51729c56afaa9b76539dfd80f"
+        },
+        {
+          "index": 15,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 16,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 18,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 20,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_unexpected 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "592d6da252b970bc5af515748b4d8ab7941591f51729c56afaa9b76539dfd80f"
+        },
+        {
+          "index": 21,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 22,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 24,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 25,
+          "kind": "permission",
+          "session": "root",
+          "effect": "deny",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 27,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 28,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 29,
+          "kind": "cleanup"
+        },
+        {
+          "index": 30,
+          "kind": "ready"
+        },
+        {
+          "index": 31,
+          "kind": "cleanup"
+        },
+        {
+          "index": 32,
+          "kind": "ready"
+        }
+      ]
+    },
+    {
+      "case": "3-negative-controls",
+      "verdict": "passed",
+      "requests": 14,
+      "share": 24,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "expected_failure": true,
+        "historical_output": true,
+        "ambiguous_wrapper": true,
+        "mixed_viewer": true,
+        "ordinary_fail_fix_pass": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "1575376bf599020a1eaebd84509b0779381a60578ddf1f56427f6d2434276bfa",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "2bc787bf773608a0ea9aea4cf8cf8d2132ef25e8a0261cf271770552a433cb53",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "1575376bf599020a1eaebd84509b0779381a60578ddf1f56427f6d2434276bfa"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "3ccf8ee37794fac1ae85134fd31518add78ac877da7be4fc14c1c90d56849527",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 4,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 6,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 8,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_expected 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "538d991f2c8a2dd78e5ca8fd5b40de03f9864902c78d349a070aa952cfd6212e"
+        },
+        {
+          "index": 9,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 10,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 12,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 14,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_historical 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "f44c8a1f70221e08e382ceca62b6137f2c71f917a94a897cddf20b9232388d55"
+        },
+        {
+          "index": 15,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 16,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 18,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 20,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "env -C unittest cat old-unittest.log",
+          "exit": 0,
+          "output_sha256": "89f7cc9896ff9f3496a1bd1a5855d4920b41e7eee64b44d026e5983dac7ab476"
+        },
+        {
+          "index": 21,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 22,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 24,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 26,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "cat old-unittest.log; python3 -B -m unittest test_expected 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "ffd87a7d8748eda7b4db1a5baeb8a57d73f021999fa2e23fe3aa779025d4f565"
+        },
+        {
+          "index": 27,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 28,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 30,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 31,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 33,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 35,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary",
+          "exit": 1,
+          "output_sha256": "a49491236d4a280788c2b0142ab26605f4d028b77107d64aa9c5a746d7f906dd"
+        },
+        {
+          "index": 36,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 37,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 39,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 41,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary",
+          "exit": 0,
+          "output_sha256": "6c1dd11726c754421f00c759ee540caaf5f5306037970bbab141b9c63fa98d6f"
+        },
+        {
+          "index": 42,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 43,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 44,
+          "kind": "cleanup"
+        },
+        {
+          "index": 45,
+          "kind": "ready"
+        },
+        {
+          "index": 46,
+          "kind": "cleanup"
+        },
+        {
+          "index": 47,
+          "kind": "ready"
+        }
+      ]
+    },
+    {
+      "case": "4-full-lifecycle",
+      "verdict": "passed",
+      "requests": 80,
+      "share": 90,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "escalations_before_reset": 3,
+        "architecture_resets": 1,
+        "escalations_after_reset": 3,
+        "stronger_child_cannot_reset_again": true,
+        "rejected_ask_preserved_bytes": true,
+        "exact_once_approval_cleared": true,
+        "stage_checkpoints": [
+          {
+            "stage": "escalating",
+            "escalations": 1,
+            "rounds": 2
+          },
+          {
+            "stage": "escalating",
+            "escalations": 2,
+            "rounds": 2
+          },
+          {
+            "stage": "reevaluation",
+            "escalations": 3,
+            "rounds": 2
+          },
+          {
+            "stage": "escalating",
+            "escalations": 1,
+            "rounds": 2
+          },
+          {
+            "stage": "escalating",
+            "escalations": 2,
+            "rounds": 2
+          },
+          {
+            "stage": "stop",
+            "escalations": 3,
+            "rounds": 2
+          }
+        ]
+      },
+      "inactive_after_restart_without_completion_claim": [
+        "escalation-3"
+      ],
+      "protected_files": {
+        "old-unittest.log": "98aae82564bab175ef694e0f3eb7108134fb27935f96be2eb543a1d63dc45d55",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "dd6a5a7247d1f0e38b608a14783999be302446c1e2ac86f6fce664ea578cf675",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "fabb85cf433ab3a24e3c64b3edb15f774bc25682ff97d10742c8960066a2a581",
+        "unittest/old-unittest.log": "98aae82564bab175ef694e0f3eb7108134fb27935f96be2eb543a1d63dc45d55"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "f5423403bb01a67a8614146feb74fc32c7730226d97fa15c660416e8ff52fc40",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 4,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 6,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 7,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 9,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 11,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "34642aa34397704e30b581f5d41a489d350f059194b98c0ffee39da75b95d707"
+        },
+        {
+          "index": 12,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 13,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 15,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 17,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "209b910e7e6487a31bbeef44c7500f78996ff84c61df3fac0d1771fee90b42eb"
+        },
+        {
+          "index": 18,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 19,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 21,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 23,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "f08c77daec3ac39db1fa80120ef2ebf3b7afea422854045a940116cc98de8ab9"
+        },
+        {
+          "index": 24,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 25,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 28,
+          "kind": "model",
+          "session": "escalation-1",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "medium"
+          }
+        },
+        {
+          "index": 31,
+          "kind": "model",
+          "session": "escalation-1",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "medium"
+          }
+        },
+        {
+          "index": 36,
+          "kind": "model",
+          "session": "escalation-1",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "medium"
+          }
+        },
+        {
+          "index": 37,
+          "kind": "session.execution.succeeded",
+          "session": "escalation-1"
+        },
+        {
+          "index": 39,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 40,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 42,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 44,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "1899491f97fd5282a345975009743db85129262682be1349546fe1ac3e7dbbf4"
+        },
+        {
+          "index": 45,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 46,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 48,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 50,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "76a91a2f621bd0122e4508e9edcd903fd7fdf381bbe01429c7d6b3243b1e9711"
+        },
+        {
+          "index": 51,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 52,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 55,
+          "kind": "model",
+          "session": "escalation-2",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 58,
+          "kind": "model",
+          "session": "escalation-2",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 63,
+          "kind": "model",
+          "session": "escalation-2",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 64,
+          "kind": "session.execution.succeeded",
+          "session": "escalation-2"
+        },
+        {
+          "index": 66,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 67,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 69,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 71,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "c951aea0ad39931c581cf47403ebeeb5001bcc2c22705f08b8d760825b0e2cfc"
+        },
+        {
+          "index": 72,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 73,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 75,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 77,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "0f0a0b28e12616b55b258d7f0d27d830e0c7a951bb8384b9ee20f14991cee60e"
+        },
+        {
+          "index": 78,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 79,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 82,
+          "kind": "model",
+          "session": "escalation-3",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "xhigh"
+          }
+        },
+        {
+          "index": 87,
+          "kind": "model",
+          "session": "escalation-3",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "xhigh"
+          }
+        },
+        {
+          "index": 88,
+          "kind": "cleanup"
+        },
+        {
+          "index": 89,
+          "kind": "ready"
+        },
+        {
+          "index": 90,
+          "kind": "cleanup"
+        },
+        {
+          "index": 91,
+          "kind": "ready"
+        },
+        {
+          "index": 93,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 94,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 96,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 98,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "34642aa34397704e30b581f5d41a489d350f059194b98c0ffee39da75b95d707"
+        },
+        {
+          "index": 99,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 100,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 102,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 104,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "209b910e7e6487a31bbeef44c7500f78996ff84c61df3fac0d1771fee90b42eb"
+        },
+        {
+          "index": 105,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 106,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 108,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 110,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "f08c77daec3ac39db1fa80120ef2ebf3b7afea422854045a940116cc98de8ab9"
+        },
+        {
+          "index": 111,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 112,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 115,
+          "kind": "model",
+          "session": "recovery-escalation-1",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "medium"
+          }
+        },
+        {
+          "index": 116,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-escalation-1"
+        },
+        {
+          "index": 118,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 119,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 121,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 123,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "1899491f97fd5282a345975009743db85129262682be1349546fe1ac3e7dbbf4"
+        },
+        {
+          "index": 124,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 125,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 127,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 129,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "76a91a2f621bd0122e4508e9edcd903fd7fdf381bbe01429c7d6b3243b1e9711"
+        },
+        {
+          "index": 130,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 131,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 134,
+          "kind": "model",
+          "session": "recovery-escalation-2",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 135,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-escalation-2"
+        },
+        {
+          "index": 137,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 138,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 140,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 142,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "c951aea0ad39931c581cf47403ebeeb5001bcc2c22705f08b8d760825b0e2cfc"
+        },
+        {
+          "index": 143,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 144,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 146,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 148,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "0f0a0b28e12616b55b258d7f0d27d830e0c7a951bb8384b9ee20f14991cee60e"
+        },
+        {
+          "index": 149,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 150,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 153,
+          "kind": "model",
+          "session": "recovery-escalation-3",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "xhigh"
+          }
+        },
+        {
+          "index": 154,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-escalation-3"
+        },
+        {
+          "index": 156,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 157,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 159,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 161,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "752084b1cab138c48cc0a0de1ecd6f160f884d72dcaaf64e57f11fa8bd950382"
+        },
+        {
+          "index": 162,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 163,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 165,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 167,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "6e3a9af304c69ca069ee6f8bec6444e6c726648040e8fcb19f2fa3d6da8ff83a"
+        },
+        {
+          "index": 168,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 169,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 172,
+          "kind": "model",
+          "session": "recovery-architecture",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "xhigh"
+          }
+        },
+        {
+          "index": 173,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-architecture"
+        },
+        {
+          "index": 175,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 176,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 178,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 180,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "b2df2fe8de9707b341d8ed6847a21b9fee628b7054f4e5bd02a645d3c8188842"
+        },
+        {
+          "index": 181,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 182,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 184,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 186,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "8d5fa5299665a86f86f32701ffa1fcfc362b31d0413a7263176a0c0e80040b9b"
+        },
+        {
+          "index": 187,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 188,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 191,
+          "kind": "model",
+          "session": "recovery-second-escalation-1",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "max"
+          }
+        },
+        {
+          "index": 192,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-second-escalation-1"
+        },
+        {
+          "index": 194,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 195,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 197,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 199,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "70e528b0b815da7a08eaa4fe1cfc87dc9142c6bc72a05cdd6b4ed944a51697e3"
+        },
+        {
+          "index": 200,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 201,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 203,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 205,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "3aa2ba0f3489bb088de2741a7258153233e7bd0c1c4b7ec28d434e67bd0b94ea"
+        },
+        {
+          "index": 206,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 207,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 210,
+          "kind": "model",
+          "session": "recovery-second-escalation-2",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 211,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-second-escalation-2"
+        },
+        {
+          "index": 213,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 214,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 216,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 218,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "f5715444c8acb439904a857679992ec8af60a4dd95cfaad383401cf7e2855eb7"
+        },
+        {
+          "index": 219,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 220,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 222,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 224,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "928fbc5c8288e5d9b379b7dafef2ba5a1e4e766842dea7e4709199b9a23bb0cd"
+        },
+        {
+          "index": 225,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 226,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 229,
+          "kind": "model",
+          "session": "recovery-second-escalation-3",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "medium"
+          }
+        },
+        {
+          "index": 230,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-second-escalation-3"
+        },
+        {
+          "index": 232,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 233,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 235,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 237,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "0a7be8a44ec4994c43ba00b5daad0fb4c9b935cf6ee7b185a5ac9f7018ad9d5c"
+        },
+        {
+          "index": 238,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 239,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 241,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 243,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "0c38a92a8dcc47469011104e8e7bf5ef4d08cfa71989b5703c5151808fc73611"
+        },
+        {
+          "index": 244,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 245,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 248,
+          "kind": "model",
+          "session": "recovery-no-second-reset",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 249,
+          "kind": "session.execution.succeeded",
+          "session": "recovery-no-second-reset"
+        },
+        {
+          "index": 251,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 252,
+          "kind": "permission",
+          "session": "root",
+          "effect": "ask",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 255,
+          "kind": "permission.replied",
+          "session": "root",
+          "reply": "reject"
+        },
+        {
+          "index": 256,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 257,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 259,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 260,
+          "kind": "permission",
+          "session": "root",
+          "effect": "ask",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 262,
+          "kind": "permission.replied",
+          "session": "root",
+          "reply": "once"
+        },
+        {
+          "index": 264,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6-luna",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 265,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        }
+      ]
+    },
+    {
+      "case": "5-reset-isolation",
+      "verdict": "passed",
+      "requests": 18,
+      "share": 28,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "old_child_no_release": true,
+        "independent_root_allowed": true,
+        "child_negated_synthetic_no_reset": true,
+        "selected_root_reset": true,
+        "all_held_root_reset": true,
+        "stale_input_failure_retained": true,
+        "evaluator_protection_revalidated": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "04a5e05598eebf4b868e4e05fed413be1198db54c1899f2a5c0d6942d8eb1849",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "af422e1005d644235ed0d9ebb1d042befce070be7383de41be9e5d888a7825c6",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "04a5e05598eebf4b868e4e05fed413be1198db54c1899f2a5c0d6942d8eb1849"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "4c4363712f27e6004a0b09d5cc0f9a25bb1c35fbd02b5e1bfc1442153dbd3b21",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "cleanup"
+        },
+        {
+          "index": 4,
+          "kind": "ready"
+        },
+        {
+          "index": 5,
+          "kind": "cleanup"
+        },
+        {
+          "index": 6,
+          "kind": "ready"
+        },
+        {
+          "index": 8,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 9,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py",
+            "b.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 11,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 13,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "7e2f6b25f9c4b26f9abb9fdddc35e391d9b69b19a3d259b286693d4ff84c5096"
+        },
+        {
+          "index": 14,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 15,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py",
+            "b.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 17,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 19,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "7eb9a03a3b3268f52b08153341678754f8a583427e8d49902fe9618ca2ce1cee"
+        },
+        {
+          "index": 20,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 21,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py",
+            "b.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 23,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 25,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "2749b19e445a1c960d5246740c54f2f83ebba7ae4c1d3004c39ea21378dd5e47"
+        },
+        {
+          "index": 26,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 27,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 29,
+          "kind": "model",
+          "session": "old-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 32,
+          "kind": "model",
+          "session": "old-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 35,
+          "kind": "model",
+          "session": "old-child",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "high"
+          }
+        },
+        {
+          "index": 36,
+          "kind": "session.execution.succeeded",
+          "session": "old-child"
+        },
+        {
+          "index": 39,
+          "kind": "model",
+          "session": "independent-root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 40,
+          "kind": "permission",
+          "session": "independent-root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 42,
+          "kind": "model",
+          "session": "independent-root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 43,
+          "kind": "session.execution.succeeded",
+          "session": "independent-root"
+        },
+        {
+          "index": 49,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 51,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 52,
+          "kind": "permission",
+          "session": "root",
+          "effect": "deny",
+          "resources": [
+            "b.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 54,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 55,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 57,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 60,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 61,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 63,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 64,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        }
+      ]
+    },
+    {
+      "case": "6-reload-controls",
+      "verdict": "passed",
+      "requests": 14,
+      "share": 16,
+      "evidence_class": "native_released_runtime",
+      "observations": {
+        "reload_loses_memory": true,
+        "request_budget_did_not_reset": true,
+        "disabled_inactive": true,
+        "replacement_pattern_excludes_default": true,
+        "malformed_settings_inactive": true,
+        "declared_setting_changes": true,
+        "evaluator_key_error_retained": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "325a4407aa33c05e7c905aa4e80dabfdd7059ff4885d1cfb268117b4367daec9",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "9ea627bc5e9e52830a27d9de83e2a597ed548f332a8566c21e4b04d4cdcc260a",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "86cc54391c010498d9a5999ac5f89ecc44677452ac75191f9aefd346230a5725",
+        "unittest/old-unittest.log": "325a4407aa33c05e7c905aa4e80dabfdd7059ff4885d1cfb268117b4367daec9"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "77a6ae74967f7d9138da0f690667f290b66835dec22e0dbcff508d6f08badc1c",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 3,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 4,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 6,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 8,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "99b5965c6933caa4b0b8427b6acc6e2747eecdcb419e4888dde415156dee4732"
+        },
+        {
+          "index": 9,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 10,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 12,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 14,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "8cb06d12f7f5ac9e3eb462150158529338c7a697aee087c6fd902ea18a9808e4"
+        },
+        {
+          "index": 15,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 16,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 18,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 20,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "9d0c85af5588033d9d2d5c150182ae52ed4d16375f71de993729f7b0008e9dd4"
+        },
+        {
+          "index": 21,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 22,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 23,
+          "kind": "cleanup"
+        },
+        {
+          "index": 24,
+          "kind": "ready"
+        },
+        {
+          "index": 26,
+          "kind": "cleanup"
+        },
+        {
+          "index": 27,
+          "kind": "ready"
+        },
+        {
+          "index": 29,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 30,
+          "kind": "cleanup"
+        },
+        {
+          "index": 31,
+          "kind": "ready"
+        },
+        {
+          "index": 34,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 35,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 37,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 39,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "2a6343a2aec05778151da9b4f15d69b14d54781e5663eeafcbfc5045f73d004f"
+        },
+        {
+          "index": 40,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 41,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 43,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 45,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "b1ff4c687c590fb340ea80710bfbb924d52cdad93a21cbd92e313e7fba89832e"
+        },
+        {
+          "index": 46,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 47,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 49,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 51,
+          "kind": "check",
+          "session": "root",
+          "status": "completed",
+          "command": "python3 -B -m unittest test_canary 2>&1 | tail -n 20",
+          "exit": 0,
+          "output_sha256": "3d8e18fb1d1d991968c93cc06c847637a250b1a18e5ddbe211d4531366045a5f"
+        },
+        {
+          "index": 52,
+          "kind": "model",
+          "session": "root",
+          "request_kind": "primary",
+          "model": {
+            "id": "gpt-6.1-sol",
+            "providerID": "openai",
+            "variant": "low"
+          }
+        },
+        {
+          "index": 53,
+          "kind": "session.execution.succeeded",
+          "session": "root"
+        },
+        {
+          "index": 54,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 55,
+          "kind": "cleanup"
+        },
+        {
+          "index": 56,
+          "kind": "ready"
+        },
+        {
+          "index": 58,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        }
+      ]
+    },
+    {
+      "case": "7-interactive-tui",
+      "verdict": "blocked",
+      "requests": 0,
+      "share": 24,
+      "evidence_class": "native_released_runtime",
+      "observations": {},
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "41a1a19284009b761f2d2c091ace69e33cb72f61fd61a31ee5c94a0ed0abcc6a",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "4184ec436c68d2246d9a94f97346a9d86dbc250680c2850120d65c4fe8213e12",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "41a1a19284009b761f2d2c091ace69e33cb72f61fd61a31ee5c94a0ed0abcc6a"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "1a14e9dcbec9f07a2abd0b80f8dc176ab1ec62e021315f35cbd7357eb8117032",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 2,
+          "kind": "cleanup"
+        },
+        {
+          "index": 3,
+          "kind": "ready"
+        },
+        {
+          "index": 4,
+          "kind": "cleanup"
+        },
+        {
+          "index": 5,
+          "kind": "ready"
+        }
+      ]
+    },
+    {
+      "case": "8-fault-active",
+      "verdict": "passed",
+      "requests": 0,
+      "share": 8,
+      "evidence_class": "instrumented_native_synthetic_hook_inputs",
+      "observations": {
+        "evidence_class": "instrumented_native_synthetic_hook_inputs",
+        "native_permission_boundary": true,
+        "guard_failure_open": true,
+        "stream_loss_open": true,
+        "no_late_reactivation": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "e9ad1a2d40ec944e8c64295440b5ce68cf23334b43f4cbf658e32c34dff420de",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "55d0ecf8f2b0a930547444130cf6b18b1fbfe799a6138a6201b1db14a19c69fe",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "e9ad1a2d40ec944e8c64295440b5ce68cf23334b43f4cbf658e32c34dff420de"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "9e1b6cde4f433a1014185dcb0e078361cf5da2ce1de56e0cdd5609efd2d9a592",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 2,
+          "kind": "fault",
+          "action": "seed-hold"
+        },
+        {
+          "index": 3,
+          "kind": "synthetic_seed"
+        },
+        {
+          "index": 4,
+          "kind": "permission",
+          "session": "root",
+          "effect": "deny",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 5,
+          "kind": "fault",
+          "action": "permission-error"
+        },
+        {
+          "index": 6,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 7,
+          "kind": "permission",
+          "session": "root",
+          "effect": "deny",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": true
+        },
+        {
+          "index": 8,
+          "kind": "fault",
+          "action": "lose-stream"
+        },
+        {
+          "index": 9,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 10,
+          "kind": "fault",
+          "action": "seed-hold"
+        },
+        {
+          "index": 11,
+          "kind": "synthetic_seed"
+        },
+        {
+          "index": 12,
+          "kind": "cleanup"
+        },
+        {
+          "index": 13,
+          "kind": "ready"
+        },
+        {
+          "index": 14,
+          "kind": "cleanup"
+        },
+        {
+          "index": 15,
+          "kind": "ready"
+        }
+      ]
+    },
+    {
+      "case": "8-fault-deferred",
+      "verdict": "passed",
+      "requests": 0,
+      "share": 8,
+      "evidence_class": "instrumented_native_synthetic_hook_inputs",
+      "observations": {
+        "evidence_class": "instrumented_native_synthetic_hook_inputs",
+        "lost_before_feature_resolution_stays_open": true,
+        "cleanup_prevents_reactivation": true
+      },
+      "inactive_after_restart_without_completion_claim": [],
+      "protected_files": {
+        "old-unittest.log": "396269b46423203dc80c20ac7c7d6762bf0221dc7dd21f7c77a8363af4fcab73",
+        ".gitignore": "6b6abbecc18058e8e7fd7e70938ba1a058332c8e19eb323153921fb8b720bbf8",
+        "test_historical.py": "33af9f8a861512caf43ab9dfbf0c7f9303df4b61ea9d38eb722e64e9fdbf3c38",
+        "opencode.json": "05cfd7a5b6f72d3fad3d6a610bce9f3d1919eb5e5ece77248c5545331c54dec9",
+        "test_expected.py": "f6b60a512fc6cd28de056c581cfb88c29b0dc786daab5022c46af8034be560cc",
+        "test_canary.py": "a9e228b47ef0be4768ec41c269f387bd8f2ac10a34eec6b9bbe78fa6aba4c998",
+        "test_unexpected.py": "94b2a1ec9b6b02d8bfb611e470da6d6a7831bf962a87123282999096e91cd206",
+        ".vibe-workflow/settings.json": "08d61bfd38312703837e3b482fa03bb7e79e96cddc4bdb6c86fedb32cf1e841a",
+        "unittest/old-unittest.log": "396269b46423203dc80c20ac7c7d6762bf0221dc7dd21f7c77a8363af4fcab73"
+      },
+      "protection_method": "explicit_declared_source_config_and_tool_record_revalidation_after_empty_initial_hash_receipt",
+      "private_event_log_sha256": "eb4f024aae1df74c85d75649a62c0b765d2ce73778922f2c7e41b3dfd4e53b26",
+      "timeline": [
+        {
+          "index": 0,
+          "kind": "ready"
+        },
+        {
+          "index": 2,
+          "kind": "fault",
+          "action": "lose-stream"
+        },
+        {
+          "index": 3,
+          "kind": "fault",
+          "action": "resolve-settings"
+        },
+        {
+          "index": 4,
+          "kind": "fault",
+          "action": "seed-hold"
+        },
+        {
+          "index": 5,
+          "kind": "synthetic_seed"
+        },
+        {
+          "index": 6,
+          "kind": "permission",
+          "session": "root",
+          "effect": "allow",
+          "resources": [
+            "canary.py"
+          ],
+          "gate_message": false
+        },
+        {
+          "index": 7,
+          "kind": "fault",
+          "action": "cleanup"
+        },
+        {
+          "index": 8,
+          "kind": "fault",
+          "action": "seed-hold"
+        },
+        {
+          "index": 9,
+          "kind": "synthetic_seed"
+        },
+        {
+          "index": 10,
+          "kind": "cleanup"
+        },
+        {
+          "index": 11,
+          "kind": "ready"
+        },
+        {
+          "index": 12,
+          "kind": "cleanup"
+        },
+        {
+          "index": 13,
+          "kind": "ready"
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "TUI startup attempts yielded zero bytes and coincided with two shared-server restarts; cause unproven.",
+    "No additional managed-service TUI startup attempted; interactive rendering and child ordering remain unqualified.",
+    "Original fixture hash receipts were empty; explicit source/configuration comparisons replaced those claims.",
+    "Case 5 retained a stale-source patch failure; a fresh read preceded only the remaining selected-file edit.",
+    "Case 6 retained evaluator KeyError after successful disable; disable was not repeated.",
+    "Lifecycle uses fixture-local ranked routes and API-created children, not autonomous semantic diagnosis validation.",
+    "Replacement-pattern observation proves defaults excluded, not positive execution of the replacement command.",
+    "Memory-only, fail-open, file-based holds are not a security boundary; semantic judge remains deferred."
+  ]
+}
