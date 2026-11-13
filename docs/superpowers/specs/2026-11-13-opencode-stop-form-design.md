@@ -8,6 +8,12 @@ with the next Escalation Gate milestone and submit it for review on 13 November
 Implementation planning follows design approval; no new live allocation is spent
 by writing or reviewing this proposal.
 
+**Approved first-milestone assumption (user, 13 November 2026):** limit the first
+milestone to files with no concurrent external writer from native edit preparation
+through commit. This is a scope assumption, not a detected or enforced guarantee.
+This update records that approval only; runtime remains unchanged. It does not
+qualify the remaining host capabilities or approve stronger snapshot guarantees.
+
 The milestone is one end-to-end **built-in `edit`** blocked at the stop stage,
 explicitly approved through a native form, executed by the original native tool,
 and correlated with the gate's successful-completion handling. The proposal is a
@@ -260,16 +266,18 @@ turning ordinary unheld operations into a new global fail-closed mode.
    commit, run affected committed tests and publish draft/BLOCKED. No release,
    installation update or promotion follows from a mocked or partial result.
 
-The next deliverable is this design's independent review and the user's approval.
-Runtime changes, implementation planning and a fresh live campaign remain pending.
+Independent design review is complete, and the user approved the first milestone's
+no-concurrent-external-writer assumption on 13 November 2026. Runtime changes,
+implementation planning and a fresh live campaign are not included in this update.
 
 ## Initial review disposition
 
 The independent builder/code/security review found two medium design issues.
 Current-file hashing does not establish the executor's earlier full before-image;
 the proposal now names the exact weaker observation, exclusive-writer assumption
-and unsupported stronger guarantee. This proposed scope needs user approval, not
-a retrospective waiver. Native reply events can precede state settlement; the
+and unsupported stronger guarantee. The user approved that scope for the first
+milestone on 13 November 2026; this does not waive or relabel any historical failed
+criterion. Native reply events can precede state settlement; the
 proposal now defines one bounded confirmation read and denied unconfirmed outcome.
 Neither finding is an observed shipped vulnerability or a newly run live failure.
 Executable/authenticated same-service selection, complete form-description display,
