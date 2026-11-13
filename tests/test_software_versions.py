@@ -18,6 +18,10 @@ class SoftwareVersionTests(unittest.TestCase):
         self.assertIs(versions.at_least("3.11.0", "3.11"), True)
         self.assertIs(versions.at_least("25.7.0.post1", "25.7.0"), True)
 
+    def test_python_distribution_development_releases_are_not_the_stable_floor(self):
+        self.assertIs(versions.at_least("25.7.0.dev1", "25.7.0"), False)
+        self.assertIs(versions.at_least("25.8.0.dev1", "25.7.0"), True)
+
     def test_missing_or_unrecognized_metadata_is_unknown_not_too_old(self):
         for version in (None, "", "unknown", 226, "2.2.bad", "2.2.6\n", "2.2.6/unsafe", "9" * 129):
             with self.subTest(version=version):
