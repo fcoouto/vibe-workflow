@@ -305,8 +305,10 @@ class Controller:
         began = time.perf_counter()
         request = self.request_body(body)
         self.acquire_billing(request)
+        acquired = round((time.perf_counter() - began) * 1000, 2)
+        began = time.perf_counter()
         answer = self.preview(request)
-        timing = dict(preview_ms=round((time.perf_counter() - began) * 1000, 2))
+        timing = dict(acquire_ms=acquired, preview_ms=round((time.perf_counter() - began) * 1000, 2))
         if answer.get("state") != "previewed":
             raise canary.Abort("preview_refused", answer.get("reason"))
         reasons = [code for code in (answer.get("ranking") or {}).get("reason_codes") or [] if code in REFUSED]

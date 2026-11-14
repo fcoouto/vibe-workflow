@@ -230,6 +230,8 @@ def acquire_billing(projects, settings_path):
         for host in delegation_routing.enrolled_hosts(project):
             if host not in command.MANAGED_HOSTS:
                 continue
+            if host == 'claude-code' and _runtime_delegation(project, host) is not None:
+                continue  # readiness refuses this host before billing; no read can make its bridge usable
             for path in paths:
                 if (host == 'opencode' and 'host' not in path) or path.get('host') == CLIENTS.get(host):
                     relevant[path['path']] = dict(path, route=path['path'] + ':activation')
