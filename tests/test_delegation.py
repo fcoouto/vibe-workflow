@@ -701,7 +701,7 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
                 try:
                     return reserve(request)
                 except state.StateError as error:
-                    self.assertEqual(str(error), D4_BUSY)
+                    self.assertTrue(isinstance(error, state.StateBusy) or str(error) == D4_BUSY, str(error))
                     return None
             guard = changes._authority_guards([self.scope.runtime.state_dir]) if contended else nullcontext()
             with guard, ThreadPoolExecutor(max_workers=2) as executor:

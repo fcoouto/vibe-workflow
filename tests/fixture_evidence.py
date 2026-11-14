@@ -45,7 +45,7 @@ class EvidenceFixture:
             peer=self.peer_scope.repository_root
             (peer/'app.py').write_text('value = 1\n')
             subprocess.run(['git','-c','core.hooksPath='+os.devnull,'-C',str(peer),'add','app.py'],check=True,capture_output=True,timeout=5)
-            subprocess.run(['git','-c','core.hooksPath='+os.devnull,'-C',str(peer),'commit','-qm','fixture peer application'],check=True,capture_output=True,timeout=5)
+            subprocess.run(['git','-c','core.hooksPath='+os.devnull,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-C',str(peer),'commit','-qm','fixture peer application'],check=True,capture_output=True,timeout=5)
 
         self.identity = dict(client='codex', session_id='parent', task_id='task', scope_ref='user:task')
         state.start_task(self.scope, self.identity | dict(mode='editable', decision_ref='user:accepted'))

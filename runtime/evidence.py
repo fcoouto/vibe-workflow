@@ -919,7 +919,7 @@ def _context_database(context, *, write=False,durable=False,before_commit=None,r
                     db.commit()
             finally:state._CAPTURE_SQL_SCOPE.reset(token)
     except sqlite3.Error as error:
-        raise state.StateError('Evidence authority registration unavailable or locked') from error
+        raise state.database_failure(error,None) or state.StateError('Evidence authority registration unavailable or locked') from error
     finally:
         if db is not None:db.close()
 
@@ -977,8 +977,8 @@ def _context_database_original(context, *, write=False,durable=False,before_comm
         if write:
             if before_commit is not None:before_commit(db)
             db.commit()
-    except sqlite3.Error:
-        raise state.StateError('Evidence authority registration unavailable or locked') from None
+    except sqlite3.Error as error:
+        raise state.database_failure(error,None) or state.StateError('Evidence authority registration unavailable or locked') from None
     finally:
         if db is not None:
             db.close()
