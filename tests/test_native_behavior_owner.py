@@ -114,7 +114,9 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             '  result=subprocess.run(data["hook_command"],input=json.dumps(data["hook_payload"]),text=True,capture_output=True,check=True,timeout=5)\n'
             '  text=json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]\n'
             '  hook=dict(type="message",role="user",id="fixture-message-"+data["thread_id"],content=[dict(type="input_text",text="<hook_prompt hook_run_id=\\\"fixture-hook-"+data["thread_id"]+"\\\">"+escape(text)+"</hook_prompt>")],internal_chat_message_metadata_passthrough=dict(content_item_metadata=[dict(provenance=dict(type="harness",hook=True))]))\n'
-            '  records.insert(1,dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=hook))\n'
+            '  if data.get("developer_context"):\n'
+            '   hook.update(role="developer",content=[dict(type="input_text",text=text)],internal_chat_message_metadata_passthrough=dict(turn_id="native-turn",content_item_kinds=["hooks.additional_context"],content_item_metadata=[dict(provenance=dict(type="harness",hook=True))]))\n'
+            '  records.insert(3 if data.get("developer_context") else 1,dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=hook))\n'
             ' path=Path(data["rollout"]);path.write_bytes(b"".join(json.dumps(value).encode()+b"\\n" for value in records));path.chmod(0o600)\n'
             ' print(json.dumps(dict(type="thread.started",thread_id=data["thread_id"])),flush=True)\n'
             'else:\n'
@@ -417,7 +419,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
         self.request = request
         return dict(scope=scope, decision=decision, allocation=allocation, binding=binding, source=retained, directory=directory)
 
-    def _qualified_context(self, *, managed_pre=False, limited=False, legacy_context=False):
+    def _qualified_context(self, *, managed_pre=False, limited=False, legacy_context=False, developer_context=False):
         import copy
         import os
         import sys
@@ -433,7 +435,8 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
         published = self._publish_partial_source(metadata, original, 'native-bootstrap-publication',
             legacy_context=legacy_context)
         data = json.loads(original['settings'].read_bytes())
-        data.update(thread_id='qualification-native-thread', rollout=str(original['home']/'qualification-rollout.jsonl'),
+        data.update(thread_id='qualification-native-thread', developer_context=developer_context,
+            rollout=str(original['home']/'qualification-rollout.jsonl'),
             records=[row('session_meta', dict(id='qualification-native-thread', cwd=str(self.fixture.repo))),
                 row('world_state', dict(state='x' * (1024 * 1024))),
                 started(), call(), output(), row('event_msg', dict(type='task_complete', turn_id='native-turn'))],
@@ -484,6 +487,9 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
 
     def test_real_owner_qualification_context_uses_actual_hook_and_retained_receipt(self):
         self._qualified_context()
+
+    def test_real_owner_developer_context_uses_actual_hook_and_retained_receipt(self):
+        self._qualified_context(developer_context=True)
 
     def test_real_owner_bounded_source_retains_limitation_through_qualification_context(self):
         observed = self._qualified_context(limited=True)

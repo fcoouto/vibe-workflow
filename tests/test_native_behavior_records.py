@@ -208,6 +208,69 @@ class NativeBehaviorRecordTests(unittest.TestCase):
                 self.api(codex, '_native_hook_context')(self.records([session(), started(), changed]),
                     expected_context=CONTEXT, turn_id='native-turn')
 
+    def developer_hook(self):
+        return row('response_item', dict(type='message', id='native-message', role='developer',
+            content=[dict(type='input_text', text=CONTEXT)],
+            internal_chat_message_metadata_passthrough=dict(turn_id='native-turn',
+                content_item_kinds=['hooks.additional_context'],
+                content_item_metadata=[dict(provenance=dict(type='harness', hook=True))])))
+
+    def test_developer_hook_context_preserves_actual_identity_and_source(self):
+        delivered = self.developer_hook()
+        rows = [session(), started(), delivered]
+        fact = codex._native_hook_context(self.records(rows), expected_context=CONTEXT, turn_id='native-turn')
+        self.assertIsNone(fact['hook_run_id'])
+        self.assertEqual(fact['message_id'], 'native-message')
+        self.assertEqual(fact['turn_id'], 'native-turn')
+        self.assertEqual(fact['content_index'], 0)
+        line = encoded([delivered])
+        self.assertEqual(startup._canonical_plain(fact['sources']), [dict(
+            reference=f'/public/native-rollout.jsonl#bytes:{len(encoded(rows[:2]))}:{len(line)}',
+            sha256=hashlib.sha256(line).hexdigest())])
+
+    def test_developer_hook_requires_indexed_provenance_kind_turn_and_message(self):
+        from copy import deepcopy
+        original = self.developer_hook()
+        variants = []
+        for key, values in (('role', ['user', 'assistant', 'system']), ('id', [None, '', 1]),
+                ('content', [[dict(type='input_text', text=CONTEXT+' altered')]])):
+            for value in values:
+                changed = deepcopy(original); changed['payload'][key] = value; variants.append(changed)
+        for key, values in (
+                ('turn_id', [None, 'other']),
+                ('content_item_kinds', [None, [], ['ordinary'], ['hooks.additional_context', 'ordinary']]),
+                ('content_item_metadata', [None, [], [dict(provenance=dict(type='user', hook=True))],
+                    [dict(provenance=dict(type='harness', hook=False))],
+                    [dict(provenance=dict(type='harness', hook=1))]])):
+            for value in values:
+                changed = deepcopy(original)
+                changed['payload']['internal_chat_message_metadata_passthrough'][key] = value
+                variants.append(changed)
+        for changed in variants:
+            with self.subTest(changed=changed), self.assertRaises(doctor.ObservationError):
+                codex._native_hook_context(self.records([session(), started(), changed]),
+                    expected_context=CONTEXT, turn_id='native-turn')
+        for rows, turn in (([session(), original, started()], None),
+                ([session(), started(), original], None),
+                ([session(), started(), original, original], 'native-turn'),
+                ([session(), started(), original, hook()], 'native-turn')):
+            with self.subTest(turn=turn, rows=rows), self.assertRaises(doctor.ObservationError):
+                codex._native_hook_context(self.records(rows), expected_context=CONTEXT, turn_id=turn)
+
+    def test_developer_hook_uses_matching_content_index_only(self):
+        delivered = self.developer_hook()
+        delivered['payload']['content'].insert(0, dict(type='input_text', text='Ordinary context'))
+        metadata = delivered['payload']['internal_chat_message_metadata_passthrough']
+        metadata['content_item_kinds'].insert(0, 'ordinary')
+        metadata['content_item_metadata'].insert(0, dict(provenance=dict(type='user')))
+        fact = codex._native_hook_context(self.records([session(), started(), delivered]),
+            expected_context=CONTEXT, turn_id='native-turn')
+        self.assertEqual(fact['content_index'], 1)
+        metadata['content_item_kinds'].reverse()
+        with self.assertRaises(doctor.ObservationError):
+            codex._native_hook_context(self.records([session(), started(), delivered]),
+                expected_context=CONTEXT, turn_id='native-turn')
+
     def test_startup_context_before_first_turn_retains_missing_turn(self):
         value = self.api(codex, '_native_hook_context')(self.records([session(), hook(), started()]),
             expected_context=CONTEXT, turn_id=None)
