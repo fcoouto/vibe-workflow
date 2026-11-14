@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from runtime import model_names
 from runtime.adapters import session_start
+from runtime.adapters.codex_context import native_hook_context as _native_hook_context
 from runtime.adapters.session_start import diagnostic, render
 from runtime.engine import HookResult, RuntimeEvent
 from runtime.doctor import MAX_OUTPUT, NATIVE_MAX_FILE, NATIVE_MAX_RECORD, NativeProcess, ObservationError, validate_initialize, version
@@ -1222,52 +1223,6 @@ def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id,
         return _canonical_freeze(fact)
     except (StartupError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
         raise ObservationError('native_managed_tool_unobserved') from None
-
-
-def _native_hook_context(records, *, expected_context, turn_id):
-    """Observe exact harness-hook context without inventing hook events or source paths."""
-    import xml.etree.ElementTree as xml
-    from runtime.startup import MAX_INPUT, _canonical_freeze, _canonical_plain
-    try:
-        if not isinstance(expected_context, str) or not expected_context or len(expected_context.encode()) > MAX_INPUT:
-            raise ValueError
-        data = _canonical_plain(records)
-        found = []
-        for row in data['records']:
-            item = row['payload']
-            if item['type'] != 'message' or item.get('role') != 'user':
-                continue
-            content = item.get('content')
-            passthrough = item.get('internal_chat_message_metadata_passthrough')
-            metadata = passthrough.get('content_item_metadata') if isinstance(passthrough, dict) else None
-            if not isinstance(content, list) or not isinstance(metadata, list) or len(content) != len(metadata):
-                continue
-            for index, part in enumerate(content):
-                provenance = metadata[index].get('provenance') if isinstance(metadata[index], dict) else None
-                if (not isinstance(part, dict) or part.get('type') != 'input_text'
-                        or not isinstance(provenance, dict) or provenance.get('type') != 'harness'
-                        or provenance.get('hook') is not True):
-                    continue
-                text = part.get('text')
-                if not isinstance(text, str) or '<!' in text or '<?' in text:
-                    raise ValueError
-                fragment = xml.fromstring(text)
-                if (fragment.tag != 'hook_prompt' or set(fragment.attrib) != {'hook_run_id'}
-                        or len(fragment) or fragment.tail is not None):
-                    raise ValueError
-                hook_id = _review_id(fragment.attrib['hook_run_id'])
-                if fragment.text == expected_context:
-                    if row['turn_id'] != turn_id:
-                        raise ValueError
-                    message_id = _review_id(item['id']) if item.get('id') is not None else None
-                    found.append(dict(thread_id=data['thread_id'], turn_id=row['turn_id'],
-                        hook_run_id=hook_id, message_id=message_id, content_index=index,
-                        context_sha256=hashlib.sha256(fragment.text.encode()).hexdigest(), sources=[row['source']]))
-        if len(found) != 1:
-            raise ValueError
-        return _canonical_freeze(found[0])
-    except (StartupError, ValueError, TypeError, KeyError, UnicodeError, RecursionError, xml.ParseError):
-        raise ObservationError('native_hook_context_unobserved') from None
 
 
 def _setup_executable(process):
