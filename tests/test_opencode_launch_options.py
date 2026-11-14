@@ -94,6 +94,21 @@ class UncappedAgents(unittest.TestCase):
 
 
 class StartedServer(unittest.TestCase):
+    def test_startup_failure_removes_private_config_without_changing_native_data_selection(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            record, fake = root / 'seen.json', root / 'opencode'
+            fake.write_text('#!%s\nimport json, os\nopen(%r,"w").write(json.dumps(dict(os.environ)))\n'
+                            % (sys.executable, str(record)))
+            fake.chmod(0o700)
+            with self.assertRaises(launcher.ServerUnavailable):
+                launcher.start_server(root, settings_path=root / 'settings.json', ledger_path=root / 'ledger.sqlite3',
+                                      opencode=str(fake), environ=dict(HOME=str(root)), timeout=5, options=GOOD)
+            seen = json.loads(record.read_text())
+            self.assertEqual(seen['HOME'], str(root))
+            self.assertNotIn('XDG_DATA_HOME', seen)
+            self.assertFalse(Path(seen['OPENCODE_CONFIG_DIR']).parent.exists())
+
     def start(self, root, options):
         record = root / 'seen.json'
         fake = root / 'opencode'

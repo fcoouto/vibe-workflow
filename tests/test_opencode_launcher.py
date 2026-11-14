@@ -631,10 +631,17 @@ class ServerStartTests(unittest.TestCase):
                                            environ=environ, timeout=10)
             try:
                 seen = json.loads(record.read_text())
+                private_config = Path(seen['env'].get('OPENCODE_CONFIG_DIR', '/missing-launcher-config'))
+                self.assertTrue(private_config.is_dir())
+                self.assertEqual(private_config, server.workdir / 'config')
+                self.assertEqual(private_config.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(list(private_config.iterdir()), [])  # no sign-in or user-setting copies
+                self.assertEqual({key: seen['env'][key] for key in ('HOME', 'USER', 'XDG_DATA_HOME')},
+                                 {key: environ[key] for key in ('HOME', 'USER', 'XDG_DATA_HOME')})
             finally:
                 server.stop()
             allowed = {'PATH', 'HOME', 'USER', 'LANG', 'TMPDIR', 'XDG_DATA_HOME', 'OPENCODE_CONFIG_CONTENT',
-                       'OPENCODE_SERVER_PASSWORD', *launcher.SERVER_FLAGS}
+                       'OPENCODE_SERVER_PASSWORD', 'OPENCODE_CONFIG_DIR', *launcher.SERVER_FLAGS}
             # macOS adds __CF_USER_TEXT_ENCODING to every process; nothing else may appear
             self.assertEqual(set(seen['env']) - allowed - {'__CF_USER_TEXT_ENCODING'}, set())
             self.assertEqual({key: seen['env'].get(key) for key in launcher.SERVER_FLAGS}, launcher.SERVER_FLAGS)
@@ -649,7 +656,6 @@ class ServerStartTests(unittest.TestCase):
             self.assertTrue(seen['env']['OPENCODE_SERVER_PASSWORD'])
             self.assertEqual(server.directory, str(checkout))
             self.assertFalse(server.workdir.exists())  # the private plugin wrapper and log are removed
-
 
 class SelfCheckTests(unittest.TestCase):
     def test_the_self_check_passes_in_a_child_and_leaves_home_empty(self):

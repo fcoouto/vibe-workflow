@@ -28,6 +28,42 @@ class ProbeTests(Temp):
     def reservations(self):
         return [e for e in self.ledger.export()["entries"] if e["kind"] == "reservation" and e["purpose"] == "isolation"]
 
+    def test_unidentified_plugin_rows_cannot_disappear_beside_an_active_shim(self):
+        active = dict(id="vibe-workflow.routing", source=dict(type="local", path="/synthetic/shim"),
+                      features=dict(server=True), state=dict(status="active"))
+        for row in (dict(source=dict(type="local", path="/synthetic/other"), features=dict(server=True),
+                         state=dict(status="failed", error="private load error")), {}, None, "untyped"):
+            with self.subTest(row=row):
+                checks, others = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=[active, row])))
+                self.assertTrue(checks["shim_listed_once"])
+                self.assertFalse(checks["no_other_plugin"])
+                self.assertEqual(len(others), 1)
+                self.assertNotIn("private load error", json.dumps(others))
+
+    def test_failed_or_untyped_shim_never_counts_as_loaded(self):
+        for state in (dict(status="failed", error="private load error"), {}, None):
+            with self.subTest(state=state):
+                row = dict(id="vibe-workflow.routing", source=dict(type="local", path="/synthetic/shim"),
+                           features=dict(server=True), state=state)
+                checks, _ = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=[row])))
+                self.assertFalse(checks["shim_listed_once"])
+
+    def test_only_active_identified_plugins_pass_the_listing_checks(self):
+        rows = [dict(id=name, source=dict(type=source), features=dict(server=True), state=dict(status="active"))
+                for name, source in (("opencode.agent", "builtin"), ("vibe-workflow.routing", "sdk"))]
+        checks, others = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=rows)))
+        self.assertEqual(checks, dict(shim_listed_once=True, no_other_plugin=True))
+        self.assertEqual(others, [])
+
+    def test_a_local_plugin_cannot_impersonate_a_builtin_by_id(self):
+        rows = [dict(id=name, source=dict(type="local", path="/synthetic/plugin"),
+                     features=dict(server=True), state=dict(status="active"))
+                for name in ("vibe-workflow.routing", "opencode.hostile")]
+        checks, others = launcher_probes.plugin_checks(launcher_probes.plugin_ids(dict(data=rows)))
+        self.assertTrue(checks["shim_listed_once"])
+        self.assertFalse(checks["no_other_plugin"])
+        self.assertEqual(len(others), 1)
+
     def test_zero_call_probes_pass_on_an_isolating_server_and_send_nothing(self):
         results = self.probes().run(["A1", "A2", "A3", "A4"])
         for probe in ("A1", "A2", "A3", "A4"):
@@ -44,6 +80,33 @@ class ProbeTests(Temp):
         for host in self.env.hosts:  # the routing stores are the run's own, never the user's
             self.assertTrue(all(str(path).startswith(str(self.base)) for path in host.probe_stores))
             self.assertTrue(host.environ["XDG_DATA_HOME"].startswith(str(self.base)))
+
+    def test_zero_call_listings_wait_for_plugin_readiness_before_sampling(self):
+        original = self.env.start
+
+        def start(*args):
+            host = original(*args)
+            request, rpc, ready = host.request, host.rpc, []
+
+            def health(method, payload):
+                result = rpc(method, payload)
+                if method == "health":
+                    ready.append(True)
+                return result
+
+            def listing(method, path, body=None, query=None):
+                if path == "/api/plugin" and not ready:
+                    return 200, dict(data=[])
+                return request(method, path, body=body, query=query)
+
+            host.request, host.rpc = listing, health
+            return host
+
+        self.env.start = start
+        results = self.probes().run(["A1", "A2", "A3", "A4"])
+        self.assertTrue(all(result["passed"] is True for result in results.values()), results)
+        self.assertTrue(all(result["zero_call_proof"]["proven"] for result in results.values()))
+        self.assertEqual(sum(host.prompts for host in self.env.hosts), 0)
 
     def test_a_server_that_loads_hostile_config_fails_A2_and_A3(self):
         self.env.knobs["honour_hostile"] = True
@@ -67,6 +130,12 @@ class ProbeTests(Temp):
         result = self.probes().run(["A2"])["A2"]
         self.assertFalse(result["checks"]["session_denies"])
         self.assertEqual(result["effects"]["shell"]["effect"], "allow")
+
+    def test_an_unreachable_shim_rpc_cannot_pass_plugin_list_checks(self):
+        self.env.knobs["healthy"] = False
+        results = self.probes().run(["A1", "A2", "A3", "A4"])
+        self.assertTrue(all(result["passed"] is False for result in results.values()))
+        self.assertTrue(all(result["checks"]["shim_listed_once"] is False for result in results.values()))
 
     def test_A1_checks_the_password_and_the_log(self):
         self.env.knobs.update(unauth=200)
