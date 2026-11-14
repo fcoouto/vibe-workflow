@@ -1,5 +1,96 @@
 # D9b: Task-status observability preparation
 
+## Current completion plan — 14 November 2026
+
+**Goal:** finish optional Codex/macOS observability with the fewest necessary
+changes and observations, without weakening privacy, accounting or native proof.
+The user authorized continuation after two independent Opus architecture reviews.
+This section supersedes older sequencing, proposed interfaces and unchecked
+implementation tasks below; their dated results remain historical evidence.
+O2–O5 and the completion hook are already merged. Do not implement them again.
+
+**Architecture:** keep the existing settings, source reader, accounting, export
+state and completion hook. D9a supplies the actual capabilities needed by each
+ordinary operation; D9b consumes verified acceptance and participant identities.
+There is no second collector, ledger, qualification registry or readiness owner.
+
+**Dependency decision:** D7b repository enforcement is not a prerequisite for
+D9b collection or acceptance. The hook runs after ordinary `evidence verify`,
+not a repository-gate operation. Preserve D5 acceptance, D6 identities when
+participants exist, canonical scope and source-side opt-in checks. Protected
+merges in D9c still require D7c. Observability cannot grant merge authority.
+
+### Four remaining outcomes
+
+1. [ ] **Accurate plan and status semantics.** Keep supported sources, current
+   collection eligibility and observed end-to-end qualification distinct.
+   `collection` reports the current gate. The existing
+   `native_collection_qualified` field and `collection_sources` describe source
+   support under the minimum-version policy, not a successful native export.
+   Being disabled does not make a supported source unsupported. Do not flip that
+   flag based on opt-in or add another state store.
+   **Done:** current plan and reports explain those distinctions consistently;
+   any reporting change preserves existing consumers and has focused tests.
+2. [ ] **Necessary D9a native evidence.** First implement parent-only pre-tool proof
+   without requiring a child assignment. The task-start owner captures its
+   immutable before-state in the existing transaction: task/attempt identity,
+   pins, revision, checkout generation, receipt watermark and approved canary.
+   Reuse exact native session/turn/outer-call parsing, fresh unconflicted Core
+   receipt and unchanged-canary/source readback. Keep legacy and child evidence
+   readable. Resolve the first-hook revision increment, denied-event accounting,
+   task-start probe validation and the limited meaning of a TRIAGE denial.
+   **Done:** a no-assignment reproduction fails before the fix; regression and
+   negative cases pass; one bounded real denial is observed. Independently
+   qualify any remaining operation capabilities before ordinary O7 execution.
+3. [ ] **One installed O6 management journey.** On an authorized disposable
+   connection, observe guided private credential entry through the installed CLI,
+   Project/checkout enable, reuse in a second authorized worktree, credential-free
+   status/disable, forget and selective loading during routine disabled work.
+   Explain destination, service limits and retention once. Preserve the user's
+   real saved entry and existing account/model choices. O6 can proceed separately
+   from parent-witness implementation when its accepted Codex schema-v3 runtime
+   prerequisite is met; ordinary task collection needs its additional capabilities.
+   **Done:** observe the actual journey and its result codes without leaked
+   secrets; retain explicit access, failure and unit-consumption gaps. Reuse valid
+   installed-discovery, direct-store and failure-code evidence instead of
+   re-running unchanged proof.
+4. [ ] **Integrated O7 accounting and export proof.** Keep the canonical native
+   coordinator/worker/reviewer task, including failed/retried/resumed work and
+   review, verification and integration overhead. Independently reconcile actual
+   task participants and source counters with metrics-only Langfuse readback.
+   A coordinator-only task is an optional diagnostic, not another mandatory
+   gate or a replacement for final participant coverage.
+   **Done:** source-side two-Project isolation, scope exclusion, disable, replay,
+   legitimate late corrections and unknown coverage are demonstrated; measure the
+   existing three-second upload budget. Preserve pending/uncertain no-resend
+   behavior and local gaps for negative deltas. Reuse deterministic failure
+   checks where they prove the criterion; distinguish them from native evidence.
+   Run the final frozen candidate's relevant broad regression once and obtain
+   risk-appropriate independent behavior/numerical/privacy review, combined when
+   one qualified reviewer covers all three. Re-run only invalidated evidence.
+
+**Next code task:** `runtime/state.py` owns task-start capture;
+`runtime/setup_observation.py` owns parent projection/readback and retained
+consumption; `runtime/adapters/codex.py` owns native observation. Use
+`tests/test_native_behavior_owner.py` for the real-owner transport fixture.
+Cover missing/forged before-state, stale or conflicted receipts, changed
+pins/revision/canary, wrong surface/session/turn/call and unstable source.
+Keep public signatures and historical fragments. If the legacy file ceilings
+require extraction, move only the managed-observation responsibility, not unrelated
+state, delegation or startup code. Never raise a ceiling.
+
+**Boundaries:** D9a's remaining applicable behavior cases and D9c's Python,
+Next.js and cross-repository pilot remain required under their canonical owners;
+the parent seam does not complete either. D11 dashboards, extra client/OS
+collection, OpenRouter coverage until claimed and package-size work stay deferred.
+No custom analytics, polling, telemetry-only model turns or remote deletion engine.
+Cutoff is the completion hook's source-reading time; disclose missing late work
+and never count unrelated post-task conversation as a correction.
+
+Plan/source work uses ordinary isolated task worktrees, not campaign authority.
+Live observations require separately scoped authorization and finite limits.
+Source changes alone grant no runtime, credential or hosted-operation permission.
+
 ## Compatibility update — 13 November 2026
 
 The [minimum-only software policy](software-compatibility.md) supersedes the
@@ -48,7 +139,7 @@ The user accepted the existing package-size warning for now; space work is defer
 Remaining:
 
 1. **Finish O6 installed/live qualification:** choose an authorized, qualified, runtime-enabled Codex checkout; this repository's checkout is startup-only. Observe the real CLI `store-credentials`/`forget-credentials` path, one guided management request from a fresh installation, reuse in a second authorized worktree, disable after a bounded run, and selective skill loading during routine work (needs model turns). The existing fake-store CLI test is not live OS-store proof. Preserve the remaining failure, unit-consumption and access/retention gaps in the O6 contract; live work needs its own scoped authorization and numeric limits.
-2. **O7 final qualification**, after applicable O6 proof and prior D7b evidence: one bounded native coordinator/worker/reviewer task, independent reconciliation of actual receipts and participants with Langfuse, source-side scope/isolation and replay/failure checks, the final frozen-candidate broad regression, and independent behavior/numerical/privacy review. The full hook path, built-in dashboard views and real task numbers remain unobserved; do not provision dashboards here. Measure the 3-second upload budget during this qualification.
+2. **O7 final qualification**, after applicable O6 proof and the actual D9a capabilities required by ordinary execution: one bounded native coordinator/worker/reviewer task, independent reconciliation of actual receipts and participants with Langfuse, source-side scope/isolation and replay/failure checks, the final frozen-candidate broad regression, and independent behavior/numerical/privacy review. D7b sequencing is superseded by the current completion plan above. The full hook path, built-in dashboard views and real task numbers remain unobserved; do not provision dashboards here. Measure the 3-second upload budget during this qualification.
 3. Package space work stays deferred. The accepted limitations in the table remain explicit; the fixed findings are not open work.
 
 **O6 checks without a qualified checkout, 12 November 2026** (user-authorized; observed against `main` `67f29024`, not a rerun on the later follow-up commits):
@@ -70,7 +161,7 @@ These observations establish partial O6 evidence only. Installed discovery is no
 
 The sections below are the historical planning record. Their gate statements, unticked checkboxes, "awaiting review", "gated" and "unstarted" wording, and frozen contracts describe the state when they were written. Where they differ from the merged code, this status section and the **Superseded** notes below take precedence.
 
-## Current assessment — 12 November 2026
+## Historical assessment — 12 November 2026
 
 **Plan proposal, awaiting user review.** Assessed clean source `7356f68f0a776ab901a7c57fab7b7d9514dc8b40` in the isolated OpenCode worktree, then created `docs/d9-observability-completion-plan` for this document update. Scope: assess existing implementation and propose completion tasks in this file. No implementation, workers, credentials, accounts, installed-client operations or runtime settings changes were authorized or performed by this assessment. Historical observations below retain their original source bindings; source inspection does not establish installed behavior.
 
@@ -105,7 +196,12 @@ Tasks below are **proposals**, not approved implementation or passing evidence. 
 - Make O2/O6 a guided, Project-scoped setup with private credential entry, reuse across authorized repositories/worktrees, actionable failures and safe disable/recovery. Users should not construct internal JSON requests or repeat maintainer source/native qualification campaigns. Cloud account/project access and keys remain prerequisites; setup must disclose them rather than imply zero setup.
 - Resolve the review's correction-convergence and conflicting-worktree migration cases in O1/O2/O5 before accepting those implementations. Retain D7b and final native reconciliation gates; neither is a new ordinary-user setup requirement.
 
-## Proposed completion tasks
+## Historical completion tasks
+
+The current completion plan above replaces this proposed execution order.
+Original D7b sequencing statements are retained as history, not current
+prerequisites. Fixed implementation findings and unchecked O2–O5 tasks below
+do not reopen merged work.
 
 Execute later through [Workstreams](../skills/workstreams/SKILL.md), using ordinary native child delivery and its delegation policy. At implementation startup, recheck the saved choice with `python3 -I -B scripts/workflow.py features status --cwd .`; this proposal changes no preference. Advanced resource/recovery controls and managed task state are not prerequisites unless separately selected. Preserve coordinator model, reasoning, authentication, subscriptions and user customizations.
 
@@ -457,7 +553,7 @@ The provider's [setup mapping contract](../skills/manage-observability/reference
 
 Local HTTPS, fake native-store and actual hidden-terminal/CLI proof establish this bounded path only. They do not establish real OS-entry access, live-account write/readback, installed-client skill execution, Windows runtime support, source qualification, D9b or D11. Preserve these observations separately.
 
-D9b acceptance still requires the native-only coordinator/worker/reviewer task, authoritative source reconciliation and preceding D7b proof. Exports require destination permissions, a qualified metrics-only payload and disclosure of destination retention/access behavior; eligible metrics do not require remote deletion qualification or plugin deletion logic. Local evidence retention remains unchanged. D11 remains last and requires supported target-version dashboards and observed scope/filter behavior. Preparation and unit fixtures pass none of those gates. No integration account, service connection, dashboard or collector is activated by this slice.
+D9b acceptance still requires the native-only coordinator/worker/reviewer task, authoritative source reconciliation and the actual D9a capabilities needed by ordinary execution; the current completion plan removes preceding D7b proof as a sequencing requirement. Exports require destination permissions, a qualified metrics-only payload and disclosure of destination retention/access behavior; eligible metrics do not require remote deletion qualification or plugin deletion logic. Local evidence retention remains unchanged. D11 remains last and requires supported target-version dashboards and observed scope/filter behavior. Preparation and unit fixtures pass none of those gates. No integration account, service connection, dashboard or collector is activated by this slice.
 
 ## Validation recorded on 28 October 2026
 
