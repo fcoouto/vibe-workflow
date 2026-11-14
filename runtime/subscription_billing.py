@@ -12,6 +12,8 @@ ahead of the clock beyond CLOCK_MARGIN, `valid_until` after now, and `paid_cross
 A source answers it through `billing(route, now)`; only code selects the source. No production producer is
 qualified: `LocalSource.billing` answers None and reads nothing, so every subscription route is refused. A label,
 digest, quota seed, path qualification, zero cost or absent credit is never this fact.
+Code-selected sources may acquire missing/stale facts before eligibility through `acquire_billing(routes, now)`.
+Acquisition is separate from pure reads; no production source implements that capability yet.
 
 `double` is the only positive producer here: a code-level double for tests and the sandboxed activation
 self-checks, labelled `synthetic:<label>`. It is never wired to `LocalSource`, a request, a setting or the

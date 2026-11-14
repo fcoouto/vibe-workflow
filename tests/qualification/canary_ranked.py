@@ -279,6 +279,15 @@ class Controller:
         finally:
             service.close()
 
+    def acquire_billing(self, body):
+        """Acquire outside the served child; the following preview remains a pure eligibility check."""
+        from scripts import routing as command
+        service = command.Service(self.settings, self.ledger_path, project=self.project)
+        try:
+            service.acquire_billing(body)
+        finally:
+            service.close()
+
     def _persisted(step):
         """Run one boundary step, then save the whole-run record whatever happened (a failed save aborts)."""
         def run(self, *args):
@@ -294,7 +303,9 @@ class Controller:
         self._deadline()
         self._unchanged()
         began = time.perf_counter()
-        answer = self.preview(self.request_body(body))
+        request = self.request_body(body)
+        self.acquire_billing(request)
+        answer = self.preview(request)
         timing = dict(preview_ms=round((time.perf_counter() - began) * 1000, 2))
         if answer.get("state") != "previewed":
             raise canary.Abort("preview_refused", answer.get("reason"))

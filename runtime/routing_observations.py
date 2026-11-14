@@ -4,7 +4,8 @@ It reads local trusted records only: the path rules and qualifications (routes a
 never stored), stored rate-limit observations, the entitlement record, the ledger it is given and
 `openrouter_settings.status`. It never reads a secret, makes a network call, calls a model or takes the OpenRouter
 admission lock; the one exception is the opt-in Codex window read (`refresh_windows`, R7), which runs
-`codex app-server` read-only for a kept stale route. Window and entitlement files live next to the routing settings
+`codex app-server` read-only for a kept stale route. The same opt-in permits code-selected billing acquisition
+before eligibility, but no production source is qualified to perform it yet. Window and entitlement files live next to the routing settings
 path the caller gives, never under a path derived from HOME.
 """
 from contextlib import closing, contextmanager
@@ -706,9 +707,10 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     any window), plus `excluded`, one fixed reason per route left out, and `routes_version`; `seen` holds only the
     revisions read: `openrouter_revision` (null when unread or not needed).
 
-    `refresh_windows` (the routing service outside `--serve` only) lets the local source's Codex pool be read from
+    `refresh_windows` (the routing service outside `--serve` only) first permits billing acquisition for statically
+    relevant paths, before eligibility. No production billing acquisition is qualified yet. It then lets the local source's Codex pool be read from
     `codex app-server` first when a kept route needs its reading and it is missing or stale; this is the collector's
-    only process or network use, and a failed read leaves the route stale or unobserved."""
+    only currently qualified process or network use, and a failed read leaves the route stale or unobserved."""
     source = source if source is not None else default_source(settings_path)
     if refresh_windows and type(source) is LocalSource:
         acquire_billing(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,

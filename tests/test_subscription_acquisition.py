@@ -88,6 +88,13 @@ class AcquisitionTests(Stores):
         self.assertEqual([item['reason'] for item in answer['observations']['excluded']], ['billing_unverified'])
         self.assertNotIn('private detail', json.dumps(answer))
 
+    def test_acquisition_return_value_is_not_accepted_as_a_fact(self):
+        with mock.patch.object(collector.LocalSource, 'acquire_billing', return_value=dict(
+                qualified=True, paid_crossover='provider_blocked')):
+            answer = self.collect()
+        self.assertEqual(answer['observations']['routes'], [])
+        self.assertEqual([item['reason'] for item in answer['observations']['excluded']], ['billing_unverified'])
+
     def test_foreign_unqualified_and_not_entitled_paths_cause_no_acquisition(self):
         foreign = self.collect(harnesses=['codex-native'])
         self.assertEqual(foreign['observations']['routes'], [])
