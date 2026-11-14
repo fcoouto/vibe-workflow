@@ -9,6 +9,7 @@ from runtime.adapters import native_catalog
 from scripts import routing as command
 from tests.test_routing_command import job
 from tests.test_routing_observations import Stores, sub_window
+from tests.test_qualification_canary_ranked import RankedStores
 
 PATH = 'claude-native-subscription'
 POOL = 'claude-subscription'
@@ -171,3 +172,25 @@ class UnqualifiedSourceTests(Stores):
             path.chmod(0o600)
         source = collector.LocalSource(self.settings)
         self.assertIsNone(source.billing(dict(route=PATH + ':s', pool=POOL, account='claude-plan'), self.now))
+
+
+class CanaryAcquisitionTests(RankedStores):
+    def test_boundary_acquires_before_preview_while_preview_itself_stays_pure(self):
+        controller = self.controller()
+        facts, reads = {}, []
+
+        def acquire(source, routes, at):
+            reads.append(copy.deepcopy(routes))
+            for route in routes:
+                facts[tuple(subscription_billing.scope(route).values())] = \
+                    subscription_billing.double('canary-acquisition')(route, at)
+
+        with mock.patch.object(collector.LocalSource, 'billing', lambda source, route, at:
+                               facts.get(tuple(subscription_billing.scope(route).values()))), \
+                mock.patch.object(collector.LocalSource, 'acquire_billing', acquire, create=True):
+            body = controller.request_body(self.body())
+            self.assertEqual(controller.preview(body)['routes'], [])
+            self.assertEqual(reads, [])
+            controller.before_prepare(self.body())
+        self.assertEqual(len(controller.kept), 2)
+        self.assertEqual(len(reads), 1)

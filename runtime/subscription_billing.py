@@ -63,6 +63,26 @@ def verified(source, route, now):
     return problem(fact, route, now) is None
 
 
+def acquire(source, routes, now):
+    """Ask a code-selected source to acquire missing/stale facts before eligibility, never from a pure read.
+
+    The caller supplies statically relevant subscription routes. The source owns verified connection grouping,
+    locking/backoff and any incidental window writes; sharing a pool label never establishes shared identity.
+    No production acquisition is qualified yet. An absent or failed source leaves the ordinary checks in force;
+    its return value is never accepted as a billing fact.
+    """
+    read = getattr(source, 'acquire_billing', None)
+    if not callable(read):
+        return
+    needed = [copy.deepcopy(route) for route in routes
+              if route.get('billing_class') == 'included_subscription' and not verified(source, route, now)]
+    if needed:
+        try:
+            read(needed, now)
+        except Exception:  # noqa: BLE001 - acquisition failure never supplies authority or leaks native error text
+            pass
+
+
 def double(label):
     """A code-level positive producer `(route, now) -> fact` for tests and sandboxed self-checks only."""
     def produce(route, now):

@@ -586,6 +586,50 @@ def _requested(source, table, strategy_ids, choices):
             spec.get('billing_class')))) for entry in choices)]
 
 
+def _static_cut(source, settings_path, table, strategy_ids, choices, harnesses):
+    """Request/host/manifest/entitlement exclusions before billing, windows or the one ranked shortlist."""
+    allowed = set(harnesses or ())
+    try:
+        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
+        marks_reason = None
+    except (OSError, ValueError, KeyError, TypeError):
+        marks, marks_reason = set(), 'entitlement_unavailable'
+    routes, excluded = [], []
+    for spec in _requested(source, table, strategy_ids, choices):
+        if spec.get('harness') not in allowed:
+            continue
+        reason = _manifest_reason(spec)
+        if reason is None:
+            reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
+        if reason is None and strategy_ids is not None and spec['billing_class'] in routing.FUNDED:
+            reason = 'billing_class_excluded'  # ranked dollar routes stay out before any funding read (decision B)
+        if reason is None and spec['billing_class'] == 'included_subscription' \
+                and not routing._text(spec.get('window_unit')):
+            reason = 'window_unit_undeclared'  # its demand's unit is unknown: fail closed
+        if reason is None:
+            routes.append(spec)
+        else:
+            excluded.append(dict(route=spec.get('route') if routing._text(spec.get('route')) else None, reason=reason))
+    return routes, excluded
+
+
+def acquire_billing(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
+                    source=None):
+    """Acquire only the request's statically relevant billing facts, outside served preparation and pure reads.
+
+    No production acquisition is qualified: an ordinary LocalSource has no acquisition capability and starts
+    nothing. A future qualified code-selected source must own its connection binding, bounded transport and
+    freshness. Neither requests nor settings can supply that source.
+    """
+    source = source if source is not None else default_source(settings_path)
+    if not callable(getattr(source, 'acquire_billing', None)):
+        return
+    routes, _ = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
+    routes = [spec for spec in routes if spec.get('demand_scope') != routing_paths.MODEL_DEMAND
+              or _model_demand(source, spec)]
+    subscription_billing.acquire(source, routes, int(time.time()))
+
+
 def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=None, choices=(), harnesses=None,
               source=None):
     """The shared pre-window cut `collect` and the internal request preview both use: `{routes, excluded, shortlist,
@@ -600,32 +644,18 @@ def shortlist(project, assignment, *, settings_path, table=None, strategy_ids=No
     `shortlist` holds strategy ids."""
     source = source if source is not None else default_source(settings_path)
     now = int(time.time())
-    allowed = set(harnesses or ())
     scope = assignment.get('scope') if type(assignment) is dict else None
-    try:
-        marks = {(mark['route'], mark['account']) for mark in entitlement_marks(settings_path)}
-        marks_reason = None
-    except (OSError, ValueError, KeyError, TypeError):
-        marks, marks_reason = set(), 'entitlement_unavailable'
-    routes, excluded, cache = [], [], {}
+    candidates, excluded = _static_cut(source, settings_path, table, strategy_ids, choices, harnesses)
+    routes, cache = [], {}
     seen = dict(openrouter_revision=None)
 
     def leave(route, reason):
         excluded.append(dict(route=route.get('route') if type(route) is dict and routing._text(route.get('route'))
                              else None, reason=reason))
 
-    for spec in _requested(source, table, strategy_ids, choices):
-        if spec.get('harness') not in allowed:
-            continue
-        reason = _manifest_reason(spec)
-        if reason is None:
-            reason = marks_reason or ('not_entitled' if (spec['route'], spec['account']) in marks else None)
-        if reason is None and strategy_ids is not None and spec['billing_class'] in routing.FUNDED:
-            reason = 'billing_class_excluded'  # ranked dollar routes stay out before any funding read (decision B)
-        if reason is None and spec['billing_class'] == 'included_subscription' \
-                and not routing._text(spec.get('window_unit')):
-            reason = 'window_unit_undeclared'  # its demand's unit is unknown: fail closed
-        if reason is None and spec['billing_class'] == 'included_subscription' \
+    for spec in candidates:
+        reason = None
+        if spec['billing_class'] == 'included_subscription' \
                 and not subscription_billing.verified(source, spec, now):
             reason = subscription_billing.UNVERIFIED  # unknown billing is neither full nor spare capacity
         if reason is None and spec.get('demand_scope') == routing_paths.MODEL_DEMAND \
@@ -680,6 +710,9 @@ def collect(project, assignment, *, settings_path, ledger_path, source=None, ref
     `codex app-server` first when a kept route needs its reading and it is missing or stale; this is the collector's
     only process or network use, and a failed read leaves the route stale or unobserved."""
     source = source if source is not None else default_source(settings_path)
+    if refresh_windows and type(source) is LocalSource:
+        acquire_billing(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
+                        choices=choices, harnesses=harnesses, source=source)
     cut = shortlist(project, assignment, settings_path=settings_path, table=table, strategy_ids=strategy_ids,
                     choices=choices, harnesses=harnesses, source=source)
     excluded, seen = cut['excluded'], cut['seen']

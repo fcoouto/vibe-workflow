@@ -452,21 +452,15 @@ class Service:
     def preview(self, body):
         """Internal, in-process (F7's request-specific need): the shared shortlist for one collector-mode `prepare`
         body, with no workflow binding, ledger, window read, reader, admission or write. Not a protocol operation."""
-        try:
-            require(type(body) is dict and {'assignment', 'job'} <= set(body) <= set(FIELDS['prepare'][1]) - {
-                'observations'} | {'assignment', 'job'}, 'invalid_request')  # `workflow` is ignored: nothing is bound
-            require(self.project is not None, 'project_required')
-            selected = self._select(body)
-            cut = importlib.import_module(COLLECTOR).shortlist(
-                str(self.project), selected['assignment'], settings_path=self.settings_path,
-                **{key: selected[key] for key in self.SELECTION})
-        except Blocked as error:
-            return dict(error.detail, state='blocked', reason=error.reason)
-        except Exception:  # noqa: BLE001 - unreadable rules or qualifications: fixed reason, never a traceback
-            return dict(state='blocked', reason='observations_unavailable')
-        return dict(state='previewed', mode=selected['mode'], ranking=selected['ranking'], shortlist=cut['shortlist'],
-                    routes=[route['route'] for route in cut['routes']], excluded=cut['excluded'],
-                    routes_version=cut['routes_version'])
+        return importlib.import_module('runtime.routing_preparation').preview(self, body)
+
+    def acquire_billing(self, body):
+        """Internal request-scoped acquisition before an external preview/served preparation; never a wire op.
+
+        Preview itself stays pure. An unqualified source acquires nothing, and the later preview must still
+        verify the source's facts. Served services never acquire even when this internal method is called.
+        """
+        return importlib.import_module('runtime.routing_preparation').acquire_billing(self, body)
 
     def _prepare(self, body):
         require(type(body['assignment']) is dict and set(body['assignment']) <= ASSIGNMENT_FIELDS, 'invalid_request')
@@ -779,6 +773,9 @@ class Service:
             _require_managed_hosts(delegation_routing, sorted(set(value) - set(self._settings()['managed_projects'])))
             require(not any(map(delegation_routing.open_unrouted_assignments, set(value) - set(self._settings()[
                 'managed_projects']))), 'open_unrouted_assignments')
+            from runtime import native_routing
+            native_routing.acquire_billing(
+                sorted(set(value) - set(self._settings()['managed_projects'])), self.settings_path)
             codes = activation_gate(self.settings_path, sorted(set(value) - set(self._settings()['managed_projects'])))
             if codes:
                 raise Blocked('managed_path_incomplete', failing=sorted(codes), codes=codes)
