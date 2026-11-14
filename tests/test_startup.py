@@ -664,13 +664,23 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
             self.assertEqual(self.snapshot((family,scope.authority_path,scope.runtime.state_dir/'runtime.sqlite3')),before)
 
     def test_legacy_return_rechecks_machine_ancestor_after_real_scope_resolution(self):
+        self._assert_legacy_machine_ancestor_rechecked(isolated_home=False)
+
+    def test_legacy_return_rechecks_account_ancestor_with_isolated_home(self):
+        self._assert_legacy_machine_ancestor_rechecked(isolated_home=True)
+
+    def _assert_legacy_machine_ancestor_rechecked(self,isolated_home):
+        from types import SimpleNamespace
         from runtime import startup
         legacy=StartupTests('runTest');self.addCleanup(legacy.doCleanups);legacy.setUp()
         local=legacy.enroll()
         directory=legacy.base/PROJECT_FILE.parent
         actual_resolve=startup.resolve_project
-        with patch.dict(os.environ,HOME=str(legacy.base)):
-            family=self.reserve()
+        home=legacy.base/'isolated-home' if isolated_home else legacy.base
+        home.mkdir(exist_ok=True)
+        with patch.dict(os.environ,HOME=str(home)), \
+                patch('pwd.getpwuid',return_value=SimpleNamespace(pw_dir=str(legacy.base))):
+            family=self.reserve(home=legacy.base)
             event=startup.StartupEvent('codex','legacy-machine-race',legacy.repo,'startup')
             for change in ('unknown-entry','directory-symlink','new-record'):
                 with self.subTest(change=change):
@@ -687,22 +697,32 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
                             introduced.write_bytes(local.read_bytes() if change=='new-record' else b'partial enrollment')
                         captured.append(self.snapshot((family,local,introduced,saved)))
                         return scope
-                    with patch.object(startup,'resolve_project',side_effect=mutate_after_real_resolution):
-                        try:
-                            observed=startup.acquire_project_entry(event,PACKAGE)
-                        except startup.StartupError:
-                            pass
-                        else:
-                            self.assertIsNone(observed.resolution.scope,observed.resolution)
-                            self.assertNotEqual(observed.resolution.status,'active')
-                    self.assertEqual(len(captured),1)
-                    self.assertEqual(self.snapshot((family,local,introduced,saved)),captured[0])
-                    if change=='directory-symlink':
-                        directory.unlink();saved.rename(directory)
-                    else:
-                        introduced.unlink()
+                    try:
+                        with patch.object(startup,'resolve_project',side_effect=mutate_after_real_resolution):
+                            try:
+                                observed=startup.acquire_project_entry(event,PACKAGE)
+                            except startup.StartupError:
+                                pass
+                            else:
+                                self.assertIsNone(observed.resolution.scope,observed.resolution)
+                                self.assertNotEqual(observed.resolution.status,'active')
+                        self.assertEqual(len(captured),1)
+                        self.assertEqual(self.snapshot((family,local,introduced,saved)),captured[0])
+                    finally:
+                        if captured:
+                            if change=='directory-symlink':
+                                directory.unlink();saved.rename(directory)
+                            else:
+                                introduced.unlink()
 
     def test_peer_only_home_snapshot_preserves_present_legacy_and_rejects_late_partial(self):
+        self._assert_peer_machine_ancestor_rechecked(isolated_home=False)
+
+    def test_peer_only_account_ancestor_rechecks_late_partial_with_isolated_home(self):
+        self._assert_peer_machine_ancestor_rechecked(isolated_home=True)
+
+    def _assert_peer_machine_ancestor_rechecked(self,isolated_home):
+        from types import SimpleNamespace
         from runtime import startup
         legacy=StartupTests('runTest');self.addCleanup(legacy.doCleanups);legacy.setUp()
         legacy.git(legacy.repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid',
@@ -715,8 +735,11 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
         local=legacy.enroll(root=linked)
         legacy.git(legacy.base,'init','-q')
         home_authority=legacy.enroll(root=legacy.base)
-        with patch.dict(os.environ,HOME=str(legacy.base)):
-            family=self.reserve()
+        home=legacy.base/'isolated-home' if isolated_home else legacy.base
+        home.mkdir(exist_ok=True)
+        with patch.dict(os.environ,HOME=str(home)), \
+                patch('pwd.getpwuid',return_value=SimpleNamespace(pw_dir=str(legacy.base))):
+            family=self.reserve(home=legacy.base)
             event=startup.StartupEvent('codex','peer-only-home',linked,'startup')
             before_present=self.snapshot((family,local,home_authority))
             present=startup.acquire_project_entry(event,PACKAGE)
