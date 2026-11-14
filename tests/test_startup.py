@@ -535,6 +535,59 @@ class MachineFamilyDiscoveryTests(unittest.TestCase):
         with patch.dict(os.environ,HOME=str(other)):
             self.assert_unavailable()
 
+    def test_account_home_machine_family_survives_isolated_home(self):
+        import time
+        from types import SimpleNamespace
+        from runtime import startup
+        self.reserve()
+        isolated=self.fixture.base/'isolated-home';isolated.mkdir()
+        account=SimpleNamespace(pw_dir=str(self.fixture.base))
+        with patch.dict(os.environ,HOME=str(isolated)), patch('pwd.getpwuid',return_value=account) as lookup:
+            before=self.snapshot()
+            membership=startup._acquire_canonical_membership(self.fixture.repo,authority_path=None,
+                budget=dict(paths=0,bytes=0,deadline=time.monotonic()+10))
+            self.assertEqual(membership.status,'observed',membership.reason)
+            observed=self.acquire()
+            self.assertEqual(observed.resolution.status,'active',observed.resolution)
+            self.assertEqual(observed.resolution.scope,self.scope)
+            guidance=self.acquire(managed=None)
+            self.assertEqual(guidance.resolution.status,'active',guidance.resolution)
+            self.assertIsNone(startup._entry_scope(guidance,managed=False).runtime)
+            lookup.assert_called_with(os.getuid())
+            self.assertEqual(self.snapshot(),before)
+
+    def test_account_home_lookup_failure_preserves_unknown_ancestor(self):
+        self.reserve()
+        isolated=self.fixture.base/'isolated-home';isolated.mkdir()
+        for failure in (KeyError('missing account'),OSError('account unavailable')):
+            with self.subTest(error=type(failure).__name__), patch.dict(os.environ,HOME=str(isolated)), \
+                    patch('pwd.getpwuid',side_effect=failure):
+                self.assert_unavailable()
+
+    def test_account_home_machine_exception_keeps_partial_and_link_guards(self):
+        from types import SimpleNamespace
+        self.reserve()
+        isolated=self.fixture.base/'isolated-home';isolated.mkdir()
+        account=SimpleNamespace(pw_dir=str(self.fixture.base))
+        with patch.dict(os.environ,HOME=str(isolated)), patch('pwd.getpwuid',return_value=account):
+            unknown=self.family.parent/'project.json.pending'
+            unknown.write_bytes(b'fixture:incomplete-enrollment')
+            self.assert_unavailable(extra=(unknown,))
+            unknown.unlink()
+            saved=self.fixture.base/'saved-family.sqlite3'
+            self.family.rename(saved)
+            self.family.symlink_to(saved)
+            self.assert_unavailable(extra=(saved,))
+            self.family.unlink()
+            sidecar=self.family.with_name(self.family.name+'-wal')
+            sidecar.write_bytes(b'fixture:incomplete-machine-creation')
+            self.assert_unavailable(extra=(saved,sidecar))
+            sidecar.unlink()
+            saved.rename(self.family)
+            authority=self.fixture.base/PROJECT_FILE
+            authority.write_bytes(b'{')
+            self.assert_unavailable(extra=(authority,))
+
     def test_empty_sidecar_only_and_unknown_partial_home_are_not_machine_only(self):
         self.family.parent.mkdir(mode=0o700)
         self.assert_unavailable()
