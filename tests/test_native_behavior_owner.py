@@ -106,6 +106,9 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
             '  else:\n'
             '   assert decision["permissionDecision"]=="deny"\n'
             '   text="Command blocked by PreToolUse hook: "+decision["permissionDecisionReason"]+". Command: "+command\n'
+            '   if data.get("wrapped_pre"):\n'
+            '    records[1]["payload"].update(name="exec",input="text(await tools.apply_patch("+json.dumps(command)+"));\\n")\n'
+            '    text=[dict(type="input_text",text="Script failed\\nWall time 0.5 seconds\\nOutput:\\n"),dict(type="input_text",text="Script error:\\n"+text)]\n'
             '  if data.get("child_patch"): text=[dict(type="input_text",text=text)]\n'
             '  records.extend([dict(timestamp="2026-11-02T10:00:00Z",type="response_item",payload=dict(type="custom_tool_call_output",call_id=payload["tool_use_id"],output=text)),dict(timestamp="2026-11-02T10:00:00Z",type="event_msg",payload=dict(type="task_complete",turn_id=payload["turn_id"]))])\n'
             '  with Path(data["rollout"]).open("ab") as stream: stream.write(b"".join(json.dumps(value).encode()+b"\\n" for value in records))\n'
@@ -531,7 +534,10 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
     def test_child_patch_receipt_rejects_a_different_tool_at_the_same_call(self):
         self._managed_hook_receipts(child_guard=True, wrong_post_tool=True)
 
-    def _managed_hook_receipts(self, *, child_guard, wrong_post_tool=False):
+    def test_real_parent_managed_wrapped_denial_uses_original_before_and_hook_receipt(self):
+        self._managed_hook_receipts(child_guard=False, wrapped_pre=True)
+
+    def _managed_hook_receipts(self, *, child_guard, wrong_post_tool=False, wrapped_pre=False):
         import inspect
         import os
         import subprocess
@@ -676,7 +682,7 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
                 self.assertEqual(result.action, 'deny')
                 data.update(rollout=str(child_rollout), child_patch=True)
             else:
-                data.update(tool_hook_command=[*workflow, 'PreToolUse'], tool_hook_payload=payload)
+                data.update(tool_hook_command=[*workflow, 'PreToolUse'], tool_hook_payload=payload, wrapped_pre=wrapped_pre)
                 original['settings'].write_text(json.dumps(data))
                 subprocess.run([str(original['executable']), 'exec', '--json', 'software-parent-pre'], cwd=self.fixture.repo,
                     check=True, capture_output=True, timeout=10)
