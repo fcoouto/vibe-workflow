@@ -1,10 +1,11 @@
 """Private guidance-cache fixtures; no network, models or live client changes."""
 from tests.fixture_canonical_birth import fixture_artifact
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from copy import deepcopy
 import json
 import os
+import sqlite3
 import subprocess
 from pathlib import Path
 import threading
@@ -658,6 +659,30 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
         with self.assertRaisesRegex(state.StateError, 'Canonical resource ownership conflicts'):
             self.api.prepare_assignment(self.scope, write)
 
+    def test_sqlite_busy_before_admission_keeps_the_same_request_retryable(self):
+        self.plan()
+        request = self.prepare_request()
+        capture = evidence.capture_candidate
+        with closing(sqlite3.connect(state._path(self.scope), timeout=0, isolation_level=None)) as other:
+            def locked_capture(*args, **kwargs):
+                candidate = capture(*args, **kwargs)
+                other.execute('begin immediate')
+                return candidate
+            with patch.object(evidence, 'capture_candidate', side_effect=locked_capture):
+                with self.assertRaises(state.StateError) as raised:
+                    self.api.prepare_assignment(self.scope, request)
+            other.execute('rollback')
+        self.assertIsInstance(raised.exception, state.StateBusy)
+        with state._database(self.scope) as db:
+            self.assertEqual(self.api._ledger(self.scope, db), [])
+        admitted = self.api.prepare_assignment(self.scope, request)
+        self.assertTrue(admitted['launch_admitted'])
+        replay = self.api.prepare_assignment(self.scope, request)
+        self.assertFalse(replay['launch_admitted'])
+        self.assertEqual(replay['attempt_id'], admitted['attempt_id'])
+        with state._database(self.scope) as db:
+            self.assertEqual(len(self.api._ledger(self.scope, db)), 1)
+
     def test_a_race_across_sessions_admits_one_owner_per_file_and_no_count_limit(self):
         """F5.A1 (was: a capacity race admits only one): physical ownership, not a declared count, serializes."""
         def race(names, offset, contended=False):
@@ -676,7 +701,7 @@ class AdmissionTests(AdmissionFixture, unittest.TestCase):
                 try:
                     return reserve(request)
                 except state.StateError as error:
-                    self.assertEqual(str(error), D4_BUSY)
+                    self.assertTrue(isinstance(error, state.StateBusy) or str(error) == D4_BUSY, str(error))
                     return None
             guard = changes._authority_guards([self.scope.runtime.state_dir]) if contended else nullcontext()
             with guard, ThreadPoolExecutor(max_workers=2) as executor:
