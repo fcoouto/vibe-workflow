@@ -814,3 +814,62 @@ for (const event of ["session.execution.interrupted", "session.execution.failed"
   assert.equal((await h.status()).held.length, 1)
   assert.equal(states.at(-1), expected)
 })
+
+for (const cause of ["binding", "terminal-read", "cancel-notice", "interrupt"])
+  for (const order of ["before", "after"]) test(`denial retirement ${cause} ${order} receipt response emits one terminal outcome`, async (t) => {
+    const h = await harness(t); await h.stop()
+    const call = h.makeCall(); const evaluation = h.evaluate(call); await settle()
+    const owner = h.owner(); const form = [...h.forms.values()][0]
+    const notices: string[] = []; const states: string[] = []
+    let releaseRead!: () => void; let releaseResponse!: () => void; let receiptStarted!: () => void
+    const readReady = new Promise<void>((done) => { releaseRead = done })
+    const response = new Promise<void>((done) => { releaseResponse = done })
+    const receipt = new Promise<void>((done) => { receiptStarted = done })
+    const get = h.driver.get; let reads = 0
+    h.driver.get = async (...args: any[]) => {
+      const value = await get(...args)
+      if (++reads === 2) {
+        await readReady
+        if (cause !== "binding") throw new Error("synthetic terminal read failure")
+      }
+      return value
+    }
+    const cancel = h.driver.cancel
+    h.driver.cancel = async (...args: any[]) => {
+      await cancel(...args)
+      if (cause === "cancel-notice") owner.event({ type: "form.cancelled", data: { id: form.id, sessionID: ROOT } })
+      if (cause === "interrupt") owner.event({ type: "session.execution.interrupted", data: { sessionID: ROOT } })
+    }
+    const rpc = { open: async (input: any) => owner.open(input.sessionID, input.formID, input.viewID),
+      begin: (input: any) => owner.begin(input),
+      complete: async (input: any) => { owner.complete(input.ticket, input.outcome); receiptStarted(); await response },
+      abandon: async (input: any) => owner.abandon(input.attemptID, input.viewID) }
+    const client = { session: { form: { reply: async () => {
+      form.state = { status: "answered", answer: { decision: "approve" } }
+      if (cause === "binding") call.metadata.files[0].patch += "changed synthetic binding"
+    } } } }
+    const live = { client, rpc, sessionID: ROOT, directory: h.directory, serverID: "builtin", visit: {},
+      desktop: true, builtin: true, connected: true, compatible: true, visible: true }
+    const viewer = new StopViewer({ current: () => live, usable: () => true, state: (state) => states.push(state) })
+    t.after(() => { releaseRead(); releaseResponse(); viewer.close() })
+    owner.observe((notice: any) => { notices.push(notice.state); viewer.notice(notice) })
+    const view = await viewer.open(ROOT, form.id)
+    const submitting = viewer.submit("approve")
+    await receipt
+    if (order === "after") {
+      releaseResponse(); await submitting
+      assert.equal(states.at(-1), "accepted", "a receipt may precede the final authorization read")
+    }
+    releaseRead(); await evaluation
+    await h.complete(call, { status: "error" }); await h.complete(call)
+    if (order === "before") { releaseResponse(); await submitting }
+    const expected = cause === "cancel-notice" || cause === "interrupt" ? "cancelled" : "failed"
+    assert.equal(call.effect, "deny")
+    assert.equal((await h.status()).held.length, 1, "denied attempts never release the hold")
+    assert.deepEqual(notices, [expected])
+    assert.equal(states.at(-1), expected)
+    viewer.notice({ ...view, state: "accepted" }); viewer.close()
+    assert.equal(states.at(-1), expected)
+    assert.equal(h.operations.filter((operation) => operation === "cancel").length, cause === "binding" ? 0 : 1)
+    assert.ok(h.operations.length <= 6)
+  })

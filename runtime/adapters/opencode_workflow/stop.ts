@@ -222,7 +222,7 @@ export class StopApprovals {
       if (a && !a.permit) {
         a.controller.abort()
         await this.reconcile(a)
-        if (this.targets.get(a.target) === a) this.targets.delete(a.target)
+        this.invalidate(a, "failed")
       }
     }
   }
