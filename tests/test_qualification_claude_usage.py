@@ -1,14 +1,19 @@
 """Synthetic wire-contract tests only: no native client, account, network or model calls."""
 import copy
+from contextlib import ExitStack, contextmanager
+import errno
 import json
 import math
 import os
 from pathlib import Path
 import signal
+import select
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from runtime import subscription_billing
@@ -150,6 +155,9 @@ for line in sys.stdin:
         if scenario == 'nonzero':
             sys.exit(3)
 record(dict(eof=True))
+if scenario == 'delayed_exit':
+    sys.stdout.close()
+    time.sleep(0.15)
 if scenario == 'nonzero_with_child':
     sys.exit(3)
 if scenario == 'signaled_with_child':
@@ -313,6 +321,110 @@ class ExchangeTests(Contract):
                             ANTHROPIC_API_KEY='synthetic-key', CLAUDE_CODE_OAUTH_TOKEN='synthetic-token',
                             OPENAI_API_KEY='synthetic-other-key', NODE_OPTIONS='synthetic-options',
                             CLAUDE_CONFIG_DIR='/synthetic/foreign', XDG_CONFIG_HOME='/synthetic/foreign')
+        self.processes, self.events, self.resources = [], [], []
+        self.allow_rescue = False
+        self.enterContext(self.owned_children())
+
+    @contextmanager
+    def owned_children(self):
+        """Spy on successful real reaps, including subprocess's cached destructor bindings; rescue red children."""
+        real_waitpid, real_killpg, real_popen = os.waitpid, os.killpg, subprocess.Popen
+        self.process_class = real_popen
+
+        def waitpid(pid, flags):
+            result = real_waitpid(pid, flags)
+            if result[0] > 0:
+                self.events.append(('reap', result[0], os.waitstatus_to_exitcode(result[1])))
+            return result
+
+        def killpg(pid, sig):
+            if sig:
+                self.events.append(('signal', pid, sig))
+            return real_killpg(pid, sig)
+
+        def spawn(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            self.processes.append((process, process.stdin, process.stdout))
+            self.events.append(('spawn', process.pid))
+            return process
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(os, 'waitpid', side_effect=waitpid))
+            stack.enter_context(mock.patch.object(os, 'killpg', side_effect=killpg))
+            stack.enter_context(mock.patch.object(subprocess, 'Popen', side_effect=spawn))
+            if hasattr(subprocess, '_waitpid'):
+                stack.enter_context(mock.patch.object(subprocess, '_waitpid', side_effect=waitpid))
+            poll = real_popen._internal_poll
+            defaults = tuple(waitpid if value is real_waitpid else value for value in poll.__defaults__)
+            stack.enter_context(mock.patch.object(poll, '__defaults__', defaults))
+            if hasattr(subprocess, '_del_safe'):
+                stack.enter_context(mock.patch.object(subprocess._del_safe, 'waitpid', new=staticmethod(waitpid)))
+            try:
+                yield
+            finally:
+                rescued = []
+                for process, stdin, stdout in self.processes:
+                    if not any(event[:2] == ('reap', process.pid) for event in self.events):
+                        rescued.append(process.pid)
+                        try:
+                            real_killpg(process.pid, signal.SIGKILL)  # this owned leader is still unreaped
+                        except OSError:
+                            pass
+                        end = time.monotonic() + 3
+                        while time.monotonic() < end:
+                            pid, status = real_waitpid(process.pid, os.WNOHANG)
+                            if pid:
+                                process.returncode = os.waitstatus_to_exitcode(status)
+                                break
+                            time.sleep(0.01)
+                        else:
+                            self.fail('Independent cleanup could not reap its owned child')
+                    for pipe in (stdin, stdout):
+                        if pipe is not None:
+                            pipe.close()
+                # Red runs still own the leaked helper; never signal its group after the leader is reaped.
+                for entry in self.entries():
+                    if 'child' in entry:
+                        try:
+                            os.kill(entry['child'], signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        self.assert_gone(entry['child'])
+                self.assertTrue(self.allow_rescue or not rescued, 'Exchange left an owned child unreaped')
+
+    def assert_gone(self, pid):
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.02)
+        self.fail('Owned synthetic process remains alive')
+
+    def assert_order(self, process, status, failed):
+        events = [entry for entry in self.events if entry[1] == process.pid and entry[0] != 'spawn']
+        want = [('signal', process.pid, signal.SIGTERM), ('signal', process.pid, signal.SIGKILL)] if failed else []
+        self.assertEqual(events, want + [('reap', process.pid, status)])
+        self.assert_gone(process.pid)
+        for entry in self.entries():
+            if 'child' in entry:
+                self.assert_gone(entry['child'])
+        # macOS can report EPERM for a group containing an orphan awaiting reaping; check owned PIDs first.
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(process.pid, 0)
+
+    @contextmanager
+    def exit_backend(self, kqueue=False):
+        """Use the native backend for core tests; force real kqueue only for macOS-specific extra coverage."""
+        self.assertTrue(hasattr(reader, '_waitid_capable'), 'Local lifecycle capability seam is missing')
+        if not kqueue:
+            yield
+            return
+        if sys.platform != 'darwin' or not callable(getattr(select, 'kqueue', None)):
+            self.skipTest('macOS-specific kqueue assertion')
+        with mock.patch.object(reader, '_waitid_capable', return_value=False):
+            yield
 
     def exchange(self, scenario='ok', timeout=2):
         return reader.exchange([str(self.executable), str(self.log), str(self.fixture), scenario],
@@ -417,108 +529,236 @@ class ExchangeTests(Contract):
         self.assertEqual(str(caught.exception), 'claude_inference_unverified')
 
     def test_normal_shutdown_is_graceful_without_group_signals(self):
-        with mock.patch.object(os, 'killpg', wraps=os.killpg) as signals:
+        native_waitid, original = reader._waitid_capable(), reader._ExitObserver.open
+        def opened(observer):
+            original(observer)
+            self.assertEqual(observer.using_waitid, native_waitid)
+        with self.exit_backend(), mock.patch.object(reader._ExitObserver, 'open', new=opened):
             self.assertEqual(self.exchange(), EXPECTED)
-        self.assertEqual(signals.call_args_list, [])
-        with self.assertRaises(ProcessLookupError):
-            os.kill(self.entries()[0]['pid'], 0)
+        self.assert_order(self.processes[-1][0], 0, False)
 
     def test_failed_exit_after_valid_responses_kills_helpers_before_reaping(self):
-        real_killpg = os.killpg
-        for scenario, code, status in (('nonzero_with_child', os.CLD_EXITED, 3),
-                                       ('signaled_with_child', os.CLD_KILLED, signal.SIGTERM)):
+        for scenario, status in (('nonzero_with_child', 3), ('signaled_with_child', -signal.SIGTERM)):
             with self.subTest(scenario=scenario):
-                signals, removed = [], False
                 self.log.write_text('')
-
-                def killpg(pid, sig):
-                    exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                    signals.append((sig, exited))
-                    return real_killpg(pid, sig)
-
-                try:
-                    with mock.patch.object(os, 'killpg', side_effect=killpg), \
-                            self.assertRaises(reader.ReadError) as caught:
-                        self.exchange(scenario)
-                    self.assertEqual(str(caught.exception), 'claude_exited')
-                    entries = self.entries()
-                    leader = entries[0]['pid']
-                    helpers = [entry for entry in entries if 'child' in entry]
-                    self.assertEqual(len(helpers), 1)
-                    self.assertEqual(helpers[0]['child_pgid'], leader)
-                    self.assertTrue(entries[-1]['eof'])
-                    self.assertEqual([entry['received']['request']['subtype'] for entry in entries
-                                      if 'received' in entry], ['initialize', 'get_usage'])
-                    self.assertEqual([sig for sig, _ in signals], [signal.SIGTERM, signal.SIGKILL])
-                    for _, exited in signals:
-                        self.assertIsNotNone(exited)  # each signal must precede reaping the failed leader
-                        self.assertEqual((exited.si_pid, exited.si_code, exited.si_status), (leader, code, status))
-                    for owned in (leader, helpers[0]['child']):
-                        end = time.monotonic() + 3
-                        while time.monotonic() < end:
-                            try:
-                                os.kill(owned, 0)
-                            except ProcessLookupError:
-                                break
-                            time.sleep(0.05)
-                        with self.assertRaises(ProcessLookupError):
-                            os.kill(owned, 0)
-                    removed = True
-                    with self.assertRaises(ProcessLookupError):
-                        os.killpg(leader, 0)
-                finally:
-                    # Red runs still own the leaked helper; never signal its group after the leader is reaped.
-                    if not removed:
-                        for entry in self.entries():
-                            if 'child' not in entry:
-                                continue
-                            try:
-                                os.kill(entry['child'], signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
-                            end = time.monotonic() + 3
-                            while time.monotonic() < end:
-                                try:
-                                    os.kill(entry['child'], 0)
-                                except ProcessLookupError:
-                                    break
-                                time.sleep(0.05)
-                            with self.assertRaises(ProcessLookupError):
-                                os.kill(entry['child'], 0)
+                with self.assertRaises(reader.ReadError) as caught:
+                    self.exchange(scenario)
+                self.assertEqual(str(caught.exception), 'claude_exited')
+                entries = self.entries()
+                self.assertEqual(next(entry['child_pgid'] for entry in entries if 'child' in entry), entries[0]['pid'])
+                self.assertTrue(entries[-1]['eof'])
+                self.assert_order(self.processes[-1][0], status, True)
 
     def test_timeout_kills_owned_group_before_reaping_even_when_leader_exits_on_eof(self):
-        real_killpg = os.killpg
         for scenario in ('hang', 'eof_leaving_child', 'hang_after_usage'):
-            signals = []
-            def killpg(pid, sig):
-                os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                signals.append(sig)
-                return real_killpg(pid, sig)
             self.log.write_text('')
             started = time.monotonic()
-            with self.subTest(scenario=scenario), mock.patch.object(os, 'killpg', side_effect=killpg), \
-                    self.assertRaises(reader.ReadError) as caught:
+            with self.subTest(scenario=scenario), self.assertRaises(reader.ReadError) as caught:
                 self.exchange(scenario, timeout=0.4)
             self.assertEqual(str(caught.exception), 'claude_timeout')
             self.assertLess(time.monotonic() - started, 3)
-            self.assertEqual(signals, [signal.SIGTERM, signal.SIGKILL])
-            entries = self.entries()
-            pid = entries[0]['pid']
-            # macOS can report EPERM for a group containing an orphan awaiting reaping; check owned PIDs first.
-            for owned in [pid, *[entry['child'] for entry in entries if 'child' in entry]]:
-                end = time.monotonic() + 3
-                while time.monotonic() < end:
-                    try:
-                        os.kill(owned, 0)
-                    except ProcessLookupError:
-                        break
-                    time.sleep(0.05)
-                with self.assertRaises(ProcessLookupError):
-                    os.kill(owned, 0)
-            with self.assertRaises(ProcessLookupError):
-                os.killpg(pid, 0)
+            status = 0 if scenario == 'eof_leaving_child' else -signal.SIGKILL if scenario == 'hang' else -signal.SIGTERM
+            self.assert_order(self.processes[-1][0], status, True)
             if scenario == 'eof_leaving_child':
-                self.assertTrue(entries[-1]['eof'])
+                self.assertTrue(self.entries()[-1]['eof'])
+
+    def test_supported_kqueue_zero_delayed_and_failed_exits(self):
+        with self.exit_backend(kqueue=True):
+            for scenario, status in (('ok', 0), ('delayed_exit', 0), ('nonzero_with_child', 3),
+                                     ('signaled_with_child', -signal.SIGTERM)):
+                with self.subTest(scenario=scenario):
+                    self.log.write_text('')
+                    if status:
+                        with self.assertRaises(reader.ReadError) as caught:
+                            self.exchange(scenario)
+                        self.assertEqual(str(caught.exception), 'claude_exited')
+                    else:
+                        self.assertEqual(self.exchange(scenario), EXPECTED)
+                    self.assert_order(self.processes[-1][0], status, bool(status))
+
+    def test_kqueue_is_allocated_before_spawn_and_registered_before_controls(self):
+        with self.exit_backend(kqueue=True):
+            original = reader._ExitObserver.attach
+            original_open = reader._ExitObserver.open
+            def opened(observer):
+                original_open(observer)
+                self.assertEqual(self.processes, [])
+                self.resources.append(observer.queue)
+            def attach(observer, pid):
+                self.assertFalse(any('received' in entry for entry in self.entries()))
+                self.assertFalse(os.get_inheritable(observer.queue.fileno()))
+                return original(observer, pid)
+            with mock.patch.object(reader._ExitObserver, 'attach', new=attach), \
+                    mock.patch.object(reader._ExitObserver, 'open', new=opened):
+                self.assertEqual(self.exchange(), EXPECTED)
+            self.assertTrue(self.resources[-1].closed)
+
+    def test_kqueue_allocation_and_spawn_failures_close_without_a_child(self):
+        with self.exit_backend(kqueue=True):
+            before = len(os.listdir('/dev/fd'))
+            with mock.patch.object(select, 'kqueue', side_effect=OSError('private')), self.assertRaises(reader.ReadError):
+                self.exchange()
+            with mock.patch.object(os, 'set_inheritable', side_effect=OSError('private')), \
+                    self.assertRaises(reader.ReadError):
+                self.exchange()
+            self.assertEqual(self.processes, [])
+            self.assertLessEqual(len(os.listdir('/dev/fd')), before)
+            original = reader._ExitObserver.open
+            def opened(observer):
+                original(observer)
+                self.resources.append(observer.queue)
+            with mock.patch.object(reader._ExitObserver, 'open', new=opened), self.assertRaises(reader.ReadError):
+                reader.exchange(['/nonexistent-private'], self.environ)
+            self.assertTrue(self.resources[-1].closed)
+
+    def test_kqueue_registration_of_exited_child_refuses_without_sending_controls(self):
+        with self.exit_backend(kqueue=True):
+            original = reader._ExitObserver.attach
+            def attach(observer, pid):
+                self.processes[-1][0].stdout.read()  # EOF from an exiting child, not a reap
+                time.sleep(0.05)
+                return original(observer, pid)
+            with mock.patch.object(reader._ExitObserver, 'attach', new=attach), self.assertRaises(reader.ReadError) as caught:
+                self.exchange('exit')
+            self.assertEqual(str(caught.exception), 'claude_protocol_invalid')
+            self.assertFalse(any('received' in entry for entry in self.entries()))
+            self.assert_order(self.processes[-1][0], 7, True)
+
+    def test_observer_and_session_setup_errors_still_signal_and_reap(self):
+        with self.exit_backend():
+            before = len(os.listdir('/dev/fd'))
+            with mock.patch.object(reader, '_ExitObserver', side_effect=RuntimeError('private')), \
+                    self.assertRaises(reader.ReadError):
+                self.exchange()
+            self.assertEqual(self.processes, [])
+            for target, name in ((reader._ExitObserver, 'attach'), (reader._ExitObserver, 'wait'),
+                                 (reader._Session, '__init__'), (reader.os, 'set_blocking'),
+                                 (reader.selectors, 'DefaultSelector')):
+                with self.subTest(name=name):
+                    self.log.write_text('')
+                    with mock.patch.object(target, name, side_effect=RuntimeError('private')), \
+                            self.assertRaises(reader.ReadError) as caught:
+                        self.exchange()
+                    self.assertEqual(str(caught.exception), 'claude_protocol_invalid')
+                    process = self.processes[-1][0]
+                    self.assert_order(process, process.returncode, True)
+                    self.assertTrue(self.processes[-1][1].closed and self.processes[-1][2].closed)
+            self.assertLessEqual(len(os.listdir('/dev/fd')), before)
+
+    def test_terminal_status_validation_rejects_errors_and_accepts_ordinary_eof(self):
+        with self.exit_backend(kqueue=True):
+            observer = reader._ExitObserver()
+            observer.pid = 12345
+            event = dict(ident=12345, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_EOF,
+                         fflags=select.KQ_NOTE_EXIT | 0x04000000, data=0)
+            self.assertEqual(observer.kqueue_status([SimpleNamespace(**event)]), 0)
+            for change in ({'ident': 1}, {'filter': select.KQ_FILTER_READ},
+                           {'flags': select.KQ_EV_ERROR, 'data': errno.ESRCH}, {'fflags': select.KQ_NOTE_EXIT},
+                           {'fflags': 0x04000000}, {'data': -1}, {'data': True}, {'data': 65536}, {'data': 0x7f},
+                           {'flags': False}, {'data': '0'}):
+                with self.subTest(change=change), self.assertRaises(reader.ReadError):
+                    observer.kqueue_status([SimpleNamespace(**dict(event, **change))])
+            for events in ([], [SimpleNamespace(**event)] * 2):
+                with self.assertRaises(reader.ReadError):
+                    observer.kqueue_status(events)
+            for raw, want in ((3 << 8, 3), (int(signal.SIGTERM), -signal.SIGTERM)):
+                self.assertEqual(observer.kqueue_status([SimpleNamespace(**dict(event, data=raw))]), want)
+
+    def test_waitid_status_validation_is_independent_of_kqueue(self):
+        observer = reader._ExitObserver()
+        observer.pid = 12345
+        info = dict(si_pid=12345, si_code=os.CLD_EXITED, si_status=0)
+        self.assertEqual(observer.waitid_status(SimpleNamespace(**info)), 0)
+        with self.assertRaises(reader.ReadError):
+            observer.waitid_status(None)
+        with self.assertRaises(reader.ReadError) as caught:
+            observer.wait(time.monotonic() - 1)
+        self.assertEqual(str(caught.exception), 'claude_timeout')
+        for change in ({'si_pid': 1}, {'si_code': os.CLD_STOPPED}, {'si_status': -1},
+                       {'si_status': 256}, {'si_status': True}, {'si_code': os.CLD_KILLED, 'si_status': 0}):
+            with self.subTest(change=change), self.assertRaises(reader.ReadError):
+                observer.waitid_status(SimpleNamespace(**dict(info, **change)))
+
+    def test_late_close_errors_cannot_signal_after_reaping_or_return_success(self):
+        with self.exit_backend():
+            for target in (reader._ExitObserver, reader._Session):
+                original = target.close
+                def close(handle, original=original):
+                    original(handle)
+                    raise OSError('private')
+                with self.subTest(target=target), mock.patch.object(target, 'close', new=close), \
+                        self.assertRaises(reader.ReadError) as caught:
+                    self.exchange()
+                self.assertEqual(str(caught.exception), 'claude_protocol_invalid')
+                self.assert_order(self.processes[-1][0], 0, False)
+
+    def test_inconsistent_final_reap_refuses_without_late_signaling(self):
+        self.assertTrue(hasattr(reader, '_ExitObserver'), 'Local lifecycle observer is missing')
+        # A false clean observation must not override the independent final successful reap's real status.
+        original = reader._ExitObserver.wait
+        def observe(observer, deadline):
+            original(observer, deadline)
+            return 0
+        with mock.patch.object(reader._ExitObserver, 'wait', new=observe), self.assertRaises(reader.ReadError) as caught:
+            self.exchange('nonzero')
+        self.assertEqual(str(caught.exception), 'claude_exited')
+        self.assert_order(self.processes[-1][0], 3, False)
+
+    def test_pipe_close_faults_cannot_skip_other_finalization(self):
+        class CloseOnce:
+            def __init__(self, pipe):
+                self.pipe, self.first = pipe, True
+            def __getattr__(self, name):
+                return getattr(self.pipe, name)
+            def close(self):
+                if self.first:
+                    self.first = False
+                    raise OSError('private')
+                self.pipe.close()
+        with self.exit_backend():
+            original = reader._Session.__init__
+            for name in ('stdin', 'stdout'):
+                def session(handle, process, deadline):
+                    original(handle, process, deadline)
+                    setattr(process, name, CloseOnce(getattr(process, name)))
+                with self.subTest(name=name), mock.patch.object(reader._Session, '__init__', new=session), \
+                        self.assertRaises(reader.ReadError) as caught:
+                    self.exchange()
+                self.assertEqual(str(caught.exception), 'claude_protocol_invalid')
+                self.assert_order(self.processes[-1][0], 0, name == 'stdin')
+                self.assertTrue(all(pipe.closed for pipe in self.processes[-1][1:]))
+
+    def test_signal_error_still_attempts_kill_and_final_reap(self):
+        with self.exit_backend():
+            real = os.killpg
+            def signal_error(pid, sig):
+                result = real(pid, sig)
+                if sig == signal.SIGTERM:
+                    raise OSError('private')
+                return result
+            with mock.patch.object(os, 'killpg', side_effect=signal_error), self.assertRaises(reader.ReadError) as caught:
+                self.exchange('error')
+            self.assertEqual(str(caught.exception), 'claude_protocol_error')
+            self.assert_order(self.processes[-1][0], 0, True)
+
+    def test_failed_final_wait_closes_resources_without_another_signal_phase(self):
+        with self.exit_backend():
+            self.allow_rescue = True  # independent finally will reap the deliberately interrupted final wait
+            with mock.patch.object(self.process_class, 'wait', side_effect=OSError('private')), \
+                    self.assertRaises(reader.ReadError) as caught:
+                self.exchange()
+            self.assertEqual(str(caught.exception), 'claude_protocol_invalid')
+            self.assertFalse(any(event[0] == 'signal' for event in self.events))
+            self.assertTrue(all(pipe.closed for pipe in self.processes[-1][1:]))
+
+    def test_repeated_exchanges_do_not_accumulate_descriptors(self):
+        with self.exit_backend():
+            before = len(os.listdir('/dev/fd'))
+            for _ in range(3):
+                self.exchange()
+                with self.assertRaises(reader.ReadError):
+                    self.exchange('error')
+            self.assertLessEqual(len(os.listdir('/dev/fd')), before)
 
     def test_readerror_never_preserves_arbitrary_native_text(self):
         self.assertEqual(str(reader.ReadError('fixture-private-error')), 'claude_protocol_invalid')

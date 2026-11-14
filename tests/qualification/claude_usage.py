@@ -10,12 +10,13 @@ import json
 import math
 import os
 import re
+import select
 import selectors
+import signal
 import stat
 import subprocess
+import sys
 import time
-
-from runtime import codex_rate_limits as lifecycle
 
 
 FLAGS = ('--bare', '--safe-mode', '--print', '--input-format', 'stream-json', '--output-format',
@@ -25,6 +26,10 @@ MAX_LINE = 256 << 10
 MAX_BYTES = 1 << 20
 MAX_MESSAGES = 8
 ENV_ALLOWLIST = ('HOME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR')
+STOP_GRACE = 0.3
+if sys.platform == 'darwin':
+    # Apple XNU bsd/sys/event.h: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/event.h
+    _NOTE_EXITSTATUS = 0x04000000  # macOS NOTE_EXITSTATUS is not exported by Python's select binding
 REASONS = ('claude_command_invalid', 'claude_environment_invalid', 'claude_timeout_invalid',
            'claude_unavailable', 'claude_exited', 'claude_timeout', 'claude_protocol_invalid',
            'claude_protocol_unexpected', 'claude_protocol_error', 'claude_metadata_invalid',
@@ -144,6 +149,123 @@ def _constant(value):
     raise ValueError('nonfinite_number')
 
 
+def _close(handle):
+    """Retry a failed close once, but never turn that failure into successful diagnostics."""
+    if handle is None:
+        return False
+    try:
+        handle.close()
+        return False
+    except Exception:
+        try:
+            handle.close()
+        except Exception:
+            pass
+        return True
+
+
+def _waitid_capable():
+    return callable(getattr(os, 'waitid', None)) and all(type(getattr(os, key, None)) is int for key in
+        ('P_PID', 'WEXITED', 'WNOHANG', 'WNOWAIT', 'CLD_EXITED', 'CLD_KILLED', 'CLD_DUMPED'))
+
+
+class _ExitObserver:
+    """One owned child's nonreaping terminal observation; never used by failure cleanup."""
+    def __init__(self):
+        self.pid, self.queue, self.using_waitid = None, None, False
+
+    def open(self):
+        self.using_waitid = _waitid_capable()
+        if not self.using_waitid:
+            if sys.platform != 'darwin' or not all(hasattr(select, name) for name in
+                    ('kqueue', 'kevent', 'KQ_FILTER_PROC', 'KQ_EV_ADD', 'KQ_EV_ONESHOT', 'KQ_NOTE_EXIT', 'KQ_EV_ERROR')):
+                raise ReadError('claude_unavailable')
+            self.queue = select.kqueue()
+            os.set_inheritable(self.queue.fileno(), False)
+
+    def attach(self, pid):
+        self.pid = pid
+        if self.queue is not None:
+            event = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                  fflags=select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS)
+            if self.queue.control([event], 1, 0):
+                raise ReadError('claude_protocol_invalid')  # registration loss/error is never an exit status
+
+    def kqueue_status(self, events):
+        if type(events) is not list or len(events) != 1:
+            raise ReadError('claude_protocol_invalid')
+        event = events[0]
+        values = [getattr(event, name, None) for name in ('ident', 'filter', 'flags', 'fflags', 'data')]
+        if any(type(value) is not int for value in values):
+            raise ReadError('claude_protocol_invalid')
+        ident, kind, flags, notes, status = values
+        required = select.KQ_NOTE_EXIT | _NOTE_EXITSTATUS
+        if ident != self.pid or kind != select.KQ_FILTER_PROC or flags & select.KQ_EV_ERROR \
+                or flags < 0 or notes & required != required or not 0 <= status <= 65535:
+            raise ReadError('claude_protocol_invalid')
+        if os.WIFEXITED(status) and status & 0xff == 0:
+            return os.WEXITSTATUS(status)
+        if os.WIFSIGNALED(status) and status >> 8 == 0 and 0 < os.WTERMSIG(status) < signal.NSIG:
+            return -os.WTERMSIG(status)
+        raise ReadError('claude_protocol_invalid')
+
+    def waitid_status(self, result):
+        values = [getattr(result, name, None) for name in ('si_pid', 'si_code', 'si_status')]
+        if any(type(value) is not int for value in values) or values[0] != self.pid:
+            raise ReadError('claude_protocol_invalid')
+        _, code, status = values
+        if code == os.CLD_EXITED and 0 <= status <= 255:
+            return status
+        if code in (os.CLD_KILLED, os.CLD_DUMPED) and 0 < status < signal.NSIG:
+            return -status
+        raise ReadError('claude_protocol_invalid')
+
+    def wait(self, deadline):
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise ReadError('claude_timeout')
+            if self.queue is not None:
+                events = self.queue.control(None, 1, left)
+                if not events:
+                    raise ReadError('claude_timeout')
+                return self.kqueue_status(events)
+            result = os.waitid(os.P_PID, self.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if result is not None:
+                return self.waitid_status(result)
+            time.sleep(min(0.05, left))
+
+    def close(self):
+        if self.queue is not None:
+            self.queue.close()
+
+
+def _finish(process, normal):
+    """Failure signaling never observes/reaps early; the sole final wait precedes remaining pipe closure."""
+    failed = _close(process.stdin)
+    if not normal:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                time.sleep(STOP_GRACE)
+            except Exception:
+                failed = True
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                failed = True
+    result = None
+    try:
+        result = process.wait(timeout=1)
+    except Exception:
+        failed = True
+    finally:
+        failed |= _close(process.stdin)
+        failed |= _close(process.stdout)
+    return result, failed
+
+
 class _Session:
     def __init__(self, process, deadline):
         self.process, self.deadline = process, deadline
@@ -152,9 +274,12 @@ class _Session:
         try:
             os.set_blocking(process.stdout.fileno(), False)
             self.selector.register(process.stdout, selectors.EVENT_READ)
-        except OSError:
-            self.selector.close()
-            raise
+        except Exception:
+            _close(self.selector)
+            raise ReadError('claude_protocol_invalid') from None
+
+    def close(self):
+        self.selector.close()
 
     def send(self, ident, request):
         message = dict(type='control_request', request_id=ident, request=request)
@@ -236,14 +361,18 @@ def exchange(command, environ, timeout=5.0):
         raise ReadError('claude_timeout_invalid')
     env = _environment(environ)
     deadline = time.monotonic() + timeout
+    process = session = observer = None
+    normal, reason, result = False, None, None
     try:
-        process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.DEVNULL, env=env, cwd='/', close_fds=True,
-                                   start_new_session=True)
-    except (OSError, ValueError):
-        raise ReadError('claude_unavailable') from None
-    session, normal = None, False
-    try:
+        observer = _ExitObserver()
+        observer.open()  # allocate before spawn; every subsequent failure owns this handle
+        try:
+            process = subprocess.Popen([*command, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, env=env, cwd='/', close_fds=True,
+                                       start_new_session=True)
+        except (OSError, ValueError):
+            raise ReadError('claude_unavailable') from None
+        observer.attach(process.pid)  # kqueue must attach before either solicited response can exist
         session = _Session(process, deadline)
         session.send('contract-init', dict(subtype='initialize', hooks=None))
         initialization = session.response('contract-init')
@@ -252,18 +381,25 @@ def exchange(command, environ, timeout=5.0):
         process.stdin.close()
         if session.line() is not None:
             raise ReadError('claude_protocol_unexpected')  # reject even a buffered post-response message
-        if not lifecycle._exited(process.pid, max(0, deadline - time.monotonic())):
-            raise ReadError('claude_timeout')
-        exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-        if exited.si_code != os.CLD_EXITED or exited.si_status != 0:
+        if observer.wait(deadline) != 0:
             raise ReadError('claude_exited')  # leave the leader unreaped until failed group cleanup
         normal = True
-    except OSError:
-        raise ReadError('claude_protocol_invalid') from None
+    except ReadError as error:
+        reason = str(error)
+    except Exception:
+        reason = 'claude_protocol_invalid'
     finally:
-        if session is not None:
-            session.selector.close()
-        lifecycle._stop(process, normal)  # close, grace, TERM/KILL the owned group, then reap
-    if process.returncode != 0:
+        try:
+            if process is not None:
+                result, failed = _finish(process, normal)
+                if failed and reason is None:
+                    reason = 'claude_protocol_invalid'
+        finally:
+            for handle in (session, observer):
+                if _close(handle) and reason is None:
+                    reason = 'claude_protocol_invalid'
+    if reason is not None:
+        raise ReadError(reason) from None
+    if type(result) is not int or result != 0:
         raise ReadError('claude_exited')
     return projected
