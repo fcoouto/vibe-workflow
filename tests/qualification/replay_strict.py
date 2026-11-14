@@ -22,7 +22,9 @@ Per ledger identity it walks the records in `at` order (file order breaks ties):
   later `resets_at` than the one seen, or a record at or after the seen `resets_at`. A second record of one attempt
   (or a repeated export key) is a stray record.
 
-The report holds counts, work kinds and bands only: no id, title, name or timestamp. A label is reported only when
+The report holds counts, work kinds and bands only: no id, title, name or timestamp.
+Stored legacy role labels are projected through the shared compatibility mapping; records remain unchanged.
+A label is reported only when
 it is a work kind of the shipped task-profile template (the one package file read besides the export) and a routing
 complexity band; any other bucket text is counted under `invalid_labels` and fails the replay, never echoed. A record stores its specialist's
 work kind (`bucket[0]`), not the specialist's name, so `specialists` counts work kinds; the three canary specialists
@@ -202,8 +204,12 @@ def _report(triples, unreadable):
         for _, _, key, record in sorted(items, key=lambda item: item[:2]):
             report["records"] += 1
             bucket = record.get("bucket") if isinstance(record.get("bucket"), list) else []
-            if len(bucket) == 2 and bucket[0] in kinds and bucket[1] in routing.COMPLEXITY_BANDS:
-                report["specialists"][bucket[0]] = report["specialists"].get(bucket[0], 0) + 1
+            kind = bucket[0] if len(bucket) == 2 else None
+            stored = task_profile.stored(kind)
+            if stored and stored.get("legacy"):
+                kind = stored["work_kind"]
+            if len(bucket) == 2 and kind in kinds and bucket[1] in routing.COMPLEXITY_BANDS:
+                report["specialists"][kind] = report["specialists"].get(kind, 0) + 1
                 report["bands"][bucket[1]] = report["bands"].get(bucket[1], 0) + 1
             else:
                 report["invalid_labels"] += 1  # counted, never echoed: export text is untrusted
