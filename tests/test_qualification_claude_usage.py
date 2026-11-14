@@ -139,6 +139,10 @@ for line in sys.stdin:
         response['response'] = []
     emit(dict(type='control_response', response=response))
     if not initializing:
+        if scenario in ('nonzero_with_child', 'signaled_with_child'):
+            child = subprocess.Popen([sys.executable, '-I', '-B', '-c', 'import time; time.sleep(60)'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            record(dict(child=child.pid, child_pgid=os.getpgid(child.pid)))
         if scenario == 'trailing':
             emit(dict(type='assistant', message='fixture@example.invalid'))
         if scenario == 'hang_after_usage':
@@ -146,6 +150,10 @@ for line in sys.stdin:
         if scenario == 'nonzero':
             sys.exit(3)
 record(dict(eof=True))
+if scenario == 'nonzero_with_child':
+    sys.exit(3)
+if scenario == 'signaled_with_child':
+    os.kill(os.getpid(), signal.SIGTERM)
 '''
 
 
@@ -406,6 +414,69 @@ class ExchangeTests(Contract):
         self.assertEqual(signals.call_args_list, [])
         with self.assertRaises(ProcessLookupError):
             os.kill(self.entries()[0]['pid'], 0)
+
+    def test_failed_exit_after_valid_responses_kills_helpers_before_reaping(self):
+        real_killpg = os.killpg
+        for scenario, code, status in (('nonzero_with_child', os.CLD_EXITED, 3),
+                                       ('signaled_with_child', os.CLD_KILLED, signal.SIGTERM)):
+            with self.subTest(scenario=scenario):
+                signals, removed = [], False
+                self.log.write_text('')
+
+                def killpg(pid, sig):
+                    exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    signals.append((sig, exited))
+                    return real_killpg(pid, sig)
+
+                try:
+                    with mock.patch.object(os, 'killpg', side_effect=killpg), \
+                            self.assertRaises(reader.ReadError) as caught:
+                        self.exchange(scenario)
+                    self.assertEqual(str(caught.exception), 'claude_exited')
+                    entries = self.entries()
+                    leader = entries[0]['pid']
+                    helpers = [entry for entry in entries if 'child' in entry]
+                    self.assertEqual(len(helpers), 1)
+                    self.assertEqual(helpers[0]['child_pgid'], leader)
+                    self.assertTrue(entries[-1]['eof'])
+                    self.assertEqual([entry['received']['request']['subtype'] for entry in entries
+                                      if 'received' in entry], ['initialize', 'get_usage'])
+                    self.assertEqual([sig for sig, _ in signals], [signal.SIGTERM, signal.SIGKILL])
+                    for _, exited in signals:
+                        self.assertIsNotNone(exited)  # each signal must precede reaping the failed leader
+                        self.assertEqual((exited.si_pid, exited.si_code, exited.si_status), (leader, code, status))
+                    for owned in (leader, helpers[0]['child']):
+                        end = time.monotonic() + 3
+                        while time.monotonic() < end:
+                            try:
+                                os.kill(owned, 0)
+                            except ProcessLookupError:
+                                break
+                            time.sleep(0.05)
+                        with self.assertRaises(ProcessLookupError):
+                            os.kill(owned, 0)
+                    removed = True
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(leader, 0)
+                finally:
+                    # Red runs still own the leaked helper; never signal its group after the leader is reaped.
+                    if not removed:
+                        for entry in self.entries():
+                            if 'child' not in entry:
+                                continue
+                            try:
+                                os.kill(entry['child'], signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            end = time.monotonic() + 3
+                            while time.monotonic() < end:
+                                try:
+                                    os.kill(entry['child'], 0)
+                                except ProcessLookupError:
+                                    break
+                                time.sleep(0.05)
+                            with self.assertRaises(ProcessLookupError):
+                                os.kill(entry['child'], 0)
 
     def test_timeout_kills_owned_group_before_reaping_even_when_leader_exits_on_eof(self):
         real_killpg = os.killpg

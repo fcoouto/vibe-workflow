@@ -254,6 +254,9 @@ def exchange(command, environ, timeout=5.0):
             raise ReadError('claude_protocol_unexpected')  # reject even a buffered post-response message
         if not lifecycle._exited(process.pid, max(0, deadline - time.monotonic())):
             raise ReadError('claude_timeout')
+        exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+        if exited.si_code != os.CLD_EXITED or exited.si_status != 0:
+            raise ReadError('claude_exited')  # leave the leader unreaped until failed group cleanup
         normal = True
     except OSError:
         raise ReadError('claude_protocol_invalid') from None
