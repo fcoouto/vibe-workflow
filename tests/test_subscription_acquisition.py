@@ -169,6 +169,45 @@ class AcquisitionTests(Stores):
         getattr(served, 'acquire_billing', lambda body: None)(body)
         self.assertEqual(len(self.reads), 1)
 
+    def test_unavailable_native_bridge_never_acquires_during_activation(self):
+        service = self.service_for_project(one_shot=True)
+        with mock.patch.object(delegation_routing, 'enrolled_hosts', return_value=['claude-code']), \
+                mock.patch.object(delegation_routing, 'open_unrouted_assignments', return_value=[]), \
+                mock.patch.object(native_routing, '_runtime_delegation', return_value='managed_delegation_required'), \
+                mock.patch.object(command, '_self_check', return_value=[]):
+            answer = service.handle(json.dumps(dict(v=1, op='set', expected_revision=0,
+                change=dict(managed_projects=[str(self.project)]))).encode())
+        self.assertEqual(answer['codes']['subscription_sources'], ['claude_code_native_bridge_unavailable'])
+        self.assertEqual(self.reads, [])
+
+    def test_unverified_model_demand_never_triggers_acquisition(self):
+        path = next(path for path in routing_paths.load_rules()['paths'] if path.get('demand_scope') == 'per_model')
+        routing_paths.qualify(self.settings, path['path'], demand={window: 5 for window in path['windows']},
+                              evidence='synthetic', now=self.now)
+        answer = self.collect(choices=[dict(provider=path['provider'], model='invented-go', effort='high',
+            harness=path['harness'], funding='subscription')], harnesses=[path['harness']])
+        self.assertEqual(answer['observations']['routes'], [])
+        self.assertEqual(self.reads, [])
+
+    def test_manifest_failure_is_sanitized_before_acquisition(self):
+        routing_settings.update(self.settings, dict(managed_projects=[str(self.project)]), 0)
+        service = self.service_for_project(one_shot=True)
+        with mock.patch.object(collector.LocalSource, 'manifest', side_effect=ValueError('private detail')):
+            answer = service.handle(json.dumps(self.body()).encode())
+        self.assertEqual((answer['state'], answer['reason']), ('blocked', 'observations_unavailable'))
+        self.assertNotIn('private detail', json.dumps(answer))
+        self.assertEqual(self.reads, [])
+
+    def test_nonlocal_collector_source_never_acquires(self):
+        route = collector.LocalSource(self.settings).manifest(None, [dict(IDENTITY, funding='subscription')])[0]
+        source = collector.StaticSource([route])
+        source.acquire_billing = mock.Mock(side_effect=AssertionError('injected acquisition ran'))
+        answer = collector.collect(str(self.project), dict(scope='scope1'), source=source,
+            settings_path=self.settings, ledger_path=self.ledger_path, refresh_windows=True,
+            choices=[dict(IDENTITY, funding='subscription')], harnesses=['claude-native'])
+        self.assertEqual(answer['observations']['routes'], [])
+        self.assertEqual(source.acquire_billing.call_count, 0)
+
 
 class UnqualifiedSourceTests(Stores):
     def test_positive_looking_files_cannot_supply_a_production_billing_fact(self):
@@ -201,3 +240,13 @@ class CanaryAcquisitionTests(RankedStores):
             controller.before_prepare(self.body())
         self.assertEqual(len(controller.kept), 2)
         self.assertEqual(len(reads), 1)
+
+    def test_acquisition_time_is_not_recorded_as_preview_time(self):
+        from tests.qualification import canary_ranked
+        controller = self.controller()
+        with mock.patch.object(canary_ranked.time, 'perf_counter', side_effect=[0, 2, 5, 5.001, 10, 10.003]):
+            controller.before_prepare(self.body())
+        timing = controller.timings[-1]
+        self.assertEqual(timing.get('acquire_ms'), 2000)
+        self.assertEqual(timing['preview_ms'], 1)
+        self.assertEqual(timing['refresh_ms'], 3)
