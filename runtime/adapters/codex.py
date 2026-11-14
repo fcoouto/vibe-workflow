@@ -1088,9 +1088,9 @@ NATIVE_FAILURE_CODES = {"contextWindowExceeded", "sessionBudgetExceeded", "usage
 NATIVE_READ_ONLY_REJECTION = 'patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings'
 
 
-def _native_patch_denied(item, output, submitted_patch):
+def _native_patch_denied(item, output, submitted_patch, *, rejection=NATIVE_READ_ONLY_REJECTION):
     if item.get('name') == 'apply_patch':
-        return item.get('input') == submitted_patch and output == NATIVE_READ_ONLY_REJECTION
+        return item.get('input') == submitted_patch and output == rejection
     if item.get('name') != 'exec' or not isinstance(item.get('input'), str):
         return False
     script = item['input'].removesuffix('\n')
@@ -1106,7 +1106,7 @@ def _native_patch_denied(item, output, submitted_patch):
     return (isinstance(envelope, dict) and set(envelope) == {'type', 'text'}
             and envelope['type'] == 'input_text' and isinstance(envelope['text'], str)
             and re.fullmatch(r'Script failed\nWall time [0-9]{1,6}(?:\.[0-9]{1,6})? seconds\nOutput:\n', envelope['text'])
-            and denial == {'type': 'input_text', 'text': 'Script error:\n' + NATIVE_READ_ONLY_REJECTION})
+            and denial == {'type': 'input_text', 'text': 'Script error:\n' + rejection})
 
 
 def _verify_bootstrap_reads(rows, expected_hashes, patch_call_id):
@@ -1197,16 +1197,19 @@ def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id,
             raise ValueError
         call, output = calls
         item, result = call['payload'], output['payload']
+        wrapped = case_id == 'pre-tool-enforcement' and not child_patch and item.get('name') == 'exec'
         if (call['turn_id'] != turn_id or output['turn_id'] != turn_id
-                or item['type'] != 'custom_tool_call' or item.get('name') != 'apply_patch'
-                or item.get('namespace') not in (None, 'functions') or item.get('input') != submitted_patch
+                or item['type'] != 'custom_tool_call' or item.get('name') != ('exec' if wrapped else 'apply_patch')
+                or item.get('namespace') not in (None, 'functions') or not wrapped and item.get('input') != submitted_patch
                 or item.get('call_id') != call_id or result['type'] != 'custom_tool_call_output'
-                or result.get('call_id') != call_id or result.get('name') not in (None, 'apply_patch')):
+                or result.get('call_id') != call_id or result.get('name') not in (None, item['name'])
+                or wrapped and result.get('namespace') not in (None, 'functions')):
             raise ValueError
         text = result.get('output')
         if case_id == 'pre-tool-enforcement':
             reason = 'Patching requires a WORKING editable bound task without applicable blockers'
-            if text != f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}':
+            if not _native_patch_denied(item, text, submitted_patch,
+                    rejection=f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}'):
                 raise ValueError
         elif not (isinstance(text, str) or isinstance(text, list) and all(isinstance(part, dict)
                 and part.get('type') == 'input_text' and isinstance(part.get('text'), str) for part in text)):
