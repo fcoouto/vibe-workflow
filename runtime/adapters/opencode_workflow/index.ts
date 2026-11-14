@@ -26,7 +26,8 @@ const SESSION = /^ses_[A-Za-z0-9]{1,128}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._:@+\/-]{0,127}$/
 
 type Config = { featureStatus?: (directory: string) => Promise<unknown>;
-  stopForms?: StopForms; stopNow?: () => number }
+  stopForms?: StopForms; stopNow?: () => number;
+  registerStopOwner?: (owner: StopApprovals) => void | (() => void) | Promise<void | (() => void)> }
 
 /** The route a `model.request` names, or null when it is not one. */
 export function routeOf(model: unknown): Route | null {
@@ -126,6 +127,7 @@ export function createWorkflowPlugin(config: Config = {}) {
       // No default native transport is qualified; the dependency seam never performs discovery or copies credentials.
       const stops = new StopApprovals({ directory, gate: () => gate, forms: config.stopForms, now: config.stopNow,
         error: (code) => { if (lastError !== "event_stream_lost") lastError = code } })
+      const disposeReview = await config.registerStopOwner?.(stops)
 
       const guard = (name: string, body: (event: any) => Promise<void> | void) => async (event: any) => {
         if (!gate) return
@@ -174,7 +176,7 @@ export function createWorkflowPlugin(config: Config = {}) {
       const events = new AbortController()
       let eventChannelAvailable = typeof ctx?.event?.subscribe === "function"
       if (eventChannelAvailable) {
-        void (async () => {
+        const consumeEvents = async () => {
           try {
             for await (const event of ctx.event.subscribe({ types: ["session.created", FINISHED, "form.replied",
               "form.cancelled", "session.execution.failed", "session.execution.interrupted"], signal: events.signal })) {
@@ -197,7 +199,8 @@ export function createWorkflowPlugin(config: Config = {}) {
           if (!events.signal.aborted) {
             lastError = "event_stream_lost"
           }
-        })()
+        }
+        void consumeEvents()
       } else lastError = "event_stream_lost"
 
       await ctx.session.hook("model.request", guard("model_request", async (event) => {
@@ -291,6 +294,7 @@ export function createWorkflowPlugin(config: Config = {}) {
         stops.close()
         gate = null
         events.abort()
+        disposeReview?.()
       }
     },
   }

@@ -1,0 +1,20 @@
+{
+  "name": "vibe-workflow-opencode",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.ts",
+    "./rpc": "./rpc.ts"
+  },
+  "scripts": { "build": "vite build" },
+  "dependencies": { "@opencode/client": ">=2.2.6", "@opencode/plugin": ">=2.2.6" },
+  "devDependencies": {
+    "solid-js": ">=1.9.0",
+    "vite": ">=7.0.0",
+    "vite-plugin-solid": ">=2.11.0",
+    "typescript": ">=5.8.0",
+    "@types/node": ">=26.0.0"
+  }
+}

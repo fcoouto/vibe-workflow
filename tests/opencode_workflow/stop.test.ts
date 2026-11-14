@@ -12,7 +12,7 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
 const settle = async () => { for (let i = 0; i < 8; i++) await tick() }
 const copy = (value: any) => structuredClone(value)
 
-async function harness(t: any, options: { bridge?: boolean; answer?: string } = {}) {
+async function harness(t: any, options: { bridge?: boolean; answer?: string; early?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "stop-form-unit-"))
   const file = join(directory, "canary.txt")
   writeFileSync(file, "VALUE = 0\n")
@@ -22,6 +22,7 @@ async function harness(t: any, options: { bridge?: boolean; answer?: string } = 
   let wake = () => {}
   let now = 0
   let serial = 0
+  let owner: any
   const forms = new Map<string, any>()
   const operations: string[] = []
   const driver: any = {
@@ -29,8 +30,9 @@ async function harness(t: any, options: { bridge?: boolean; answer?: string } = 
       assert.ok(signal instanceof AbortSignal)
       operations.push("create")
       const info = { ...copy(form), sessionID }
-      forms.set(info.id, { ...info, state: options.answer
+      forms.set(info.id, { ...info, state: options.early && options.answer
         ? { status: "answered", answer: { decision: options.answer } } : { status: "pending" } })
+      if (options.answer) setImmediate(() => { void reply(options.answer).catch(() => {}) })
       return info
     },
     async get({ sessionID, formID }: any) {
@@ -75,6 +77,7 @@ async function harness(t: any, options: { bridge?: boolean; answer?: string } = 
     featureStatus: async () => ({ features: { escalation_gate: { effective: true, values: {} } } }),
     stopForms: options.bridge === false ? undefined : driver,
     stopNow: () => now,
+    registerStopOwner: (value: any) => { owner = value },
   } as any).setup(ctx)
   t.after(async () => { cleanup(); await settle(); rmSync(directory, { recursive: true, force: true }) })
   const emit = async (event: any) => { queue.push(event); wake(); await settle() }
@@ -110,12 +113,110 @@ async function harness(t: any, options: { bridge?: boolean; answer?: string } = 
   const reply = async (answer = "approve") => {
     const detail: any = [...forms.values()].at(-1)
     assert.ok(detail, "the adapter must create the native form before waiting")
+    let ticket: any
+    if (owner?.pending(ROOT).some((item: any) => item.formID === detail.id)) {
+      const view = owner.open(ROOT, detail.id, "view_test")
+      ticket = await owner.begin({ attemptID: view.attemptID, viewID: "view_test", submissionID: "submit_test",
+        contentDigest: view.contentDigest, decision: answer === "reject" ? "reject" : "approve" })
+    }
     detail.state = { status: "answered", answer: { decision: answer } }
     await emit({ type: "form.replied", data: { id: detail.id, sessionID: detail.sessionID, answer: { decision: answer } } })
+    if (ticket) owner.complete(ticket, "settled")
   }
   return { hooks, driver, forms, operations, file, directory, makeCall, evaluate, complete, fail, stop, status, emit, reply,
-    cleanup, advance: async (ms: number) => { now += ms; t.mock.timers.tick(ms); await settle() } }
+    cleanup, owner: () => owner, advance: async (ms: number) => { now += ms; t.mock.timers.tick(ms); await settle() } }
 }
+
+test("default composer approval without viewer receipt never authorizes", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle()
+  const form = [...h.forms.values()][0]
+  form.state = { status: "answered", answer: { decision: "approve" } }
+  await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT } })
+  await pending
+  assert.equal(c.effect, "deny")
+})
+
+test("pending read belongs to explicit begin, and duplicate submissions share its ticket", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle()
+  assert.deepEqual(h.operations, ["create"])
+  const owner = h.owner(); const form = [...h.forms.values()][0]
+  const view = owner.open(ROOT, form.id, "view_one")
+  assert.equal(view.patch, c.metadata.files[0].patch)
+  assert.throws(() => owner.open(ROOT, form.id, "view_two"))
+  const input = { attemptID: view.attemptID, viewID: "view_one", submissionID: "submission_one",
+    contentDigest: view.contentDigest, decision: "approve" }
+  const first = owner.begin(input); const second = owner.begin(input)
+  assert.equal(first, second)
+  const ticket = await first
+  assert.deepEqual(h.operations, ["create", "get"])
+  form.state = { status: "answered", answer: { decision: "approve" } }
+  await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT } })
+  assert.equal(c.effect, "deny", "native event cannot replace the committed receipt")
+  owner.complete(ticket, "settled"); owner.complete(ticket, "settled")
+  await pending
+  assert.equal(c.effect, "allow")
+  assert.equal(await owner.begin(input), ticket, "an identical completed begin replay returns its result")
+  assert.deepEqual(h.operations, ["create", "get", "get"])
+})
+
+test("an already answered form fails the selected pending read", async (t) => {
+  const h = await harness(t, { answer: "approve", early: true })
+  await h.stop()
+  const c = h.makeCall(); await h.evaluate(c)
+  assert.equal(c.effect, "deny")
+  assert.deepEqual(h.operations, ["create", "get"])
+})
+
+for (const outcome of ["settled", "failed"] as const) test(`receipt ${outcome} without event requires exact native state`, async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle()
+  const owner = h.owner(); const form = [...h.forms.values()][0]
+  assert.deepEqual(owner.pending("ses_foreign"), [])
+  const view = owner.open(ROOT, form.id, "view_receipt")
+  const input = { attemptID: view.attemptID, viewID: "view_receipt", submissionID: "submit_receipt",
+    contentDigest: view.contentDigest, decision: "approve" }
+  const ticket = await owner.begin(input)
+  await assert.rejects(owner.begin({ ...input, submissionID: "submit_other" }))
+  form.state = { status: "answered", answer: { decision: "approve" } }
+  owner.complete(ticket, outcome)
+  await pending
+  assert.equal(c.effect, outcome === "settled" ? "allow" : "deny")
+  if (outcome === "settled") {
+    owner.abandon(view.attemptID, "view_receipt")
+    await h.complete(c)
+    assert.deepEqual((await h.status()).held, [], "abandon cannot undo consumed permission")
+  }
+})
+
+test("abandon during pending GET invalidates its late result and retains hold", async (t) => {
+  const h = await harness(t)
+  await h.stop()
+  const c = h.makeCall(); const pending = h.evaluate(c)
+  await settle()
+  const owner = h.owner(); const form = [...h.forms.values()][0]
+  const view = owner.open(ROOT, form.id, "view_close")
+  const original = h.driver.get
+  let release!: (value: any) => void
+  let first = true
+  h.driver.get = (...args: any[]) => { if (!first) return original(...args); first = false; return new Promise((done) => { release = done }) }
+  const begin = owner.begin({ attemptID: view.attemptID, viewID: "view_close", submissionID: "submit_close",
+    contentDigest: view.contentDigest, decision: "approve" })
+  const denied = assert.rejects(begin)
+  await settle(); owner.abandon(view.attemptID, "view_close")
+  await denied; await pending
+  release(copy(form)); await settle()
+  assert.equal(c.effect, "deny")
+  assert.equal((await h.status()).held[0].stage, "stop")
+  assert.equal(h.operations.filter((op) => op === "cancel").length, 1)
+})
 
 test("unqualified default bridge denies stop without native discovery or a form", async (t) => {
   const h = await harness(t, { bridge: false })
@@ -144,7 +245,7 @@ test("exact authoritative form approval preserves allow and releases only matchi
   assert.deepEqual((await h.status()).held, [])
   await h.complete(c)
   assert.deepEqual((await h.status()).held, [])
-  assert.deepEqual(h.operations, ["create", "get"])
+  assert.deepEqual(h.operations, ["create", "get", "get"])
 })
 
 test("pending evaluation stays denied and never edits the file before authoritative settlement", async (t) => {
@@ -199,7 +300,7 @@ test("native ask survives form approval and native rejection keeps the hold", as
   const c = h.makeCall({ effect: "ask" })
   await h.evaluate(c)
   assert.equal(c.effect, "ask")
-  assert.deepEqual(h.operations, ["create", "get"])
+  assert.deepEqual(h.operations, ["create", "get", "get"])
   await h.complete(c, { status: "error", error: { message: "native reject" } })
   assert.equal((await h.status()).held[0].stage, "stop")
   await h.complete(c)
@@ -271,8 +372,12 @@ test("one extra authoritative confirmation handles event before state and coales
   const c = h.makeCall(); const pending = h.evaluate(c)
   await settle()
   const form: any = [...h.forms.values()][0]; assert.ok(form)
+  const view = h.owner().open(ROOT, form.id, "view_event")
+  const ticket = await h.owner().begin({ attemptID: view.attemptID, viewID: "view_event",
+    submissionID: "submit_event", contentDigest: view.contentDigest, decision: "approve" })
   await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT, answer: { decision: "approve" } } })
   await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT, answer: { decision: "approve" } } })
+  h.owner().complete(ticket, "settled")
   await pending
   assert.equal(c.effect, "allow")
   assert.deepEqual(h.operations, ["create", "get", "get", "get"])
@@ -284,7 +389,11 @@ test("unconfirmed terminal event denies and cancels within six operations", asyn
   const c = h.makeCall(); const pending = h.evaluate(c)
   await settle()
   const form: any = [...h.forms.values()][0]; assert.ok(form)
+  const view = h.owner().open(ROOT, form.id, "view_unconfirmed")
+  const ticket = await h.owner().begin({ attemptID: view.attemptID, viewID: "view_unconfirmed",
+    submissionID: "submit_unconfirmed", contentDigest: view.contentDigest, decision: "approve" })
   await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT, answer: { decision: "approve" } } })
+  h.owner().complete(ticket, "settled")
   await pending
   assert.equal(c.effect, "deny")
   assert.deepEqual(h.operations, ["create", "get", "get", "get", "cancel", "get"])
@@ -422,7 +531,7 @@ test("foreign session, form ID, answer field and binding changes cannot authoriz
       if (mutation === "binding") value.metadata.binding = "old"
       if (mutation === "generation") value.metadata.generation = "old"
       if (mutation === "fields") value.fields[0].description = "different change"
-      if (mutation === "extra-answer") value.state.answer.extra = "approve"
+      if (mutation === "extra-answer" && value.state.answer) value.state.answer.extra = "approve"
       return value
     }
     const c = h.makeCall(); await h.evaluate(c)
@@ -445,21 +554,27 @@ test("unknown native call or changed message ID cannot acquire a form", async (t
   assert.deepEqual(h.operations, [])
 })
 
-test("a reply before create response and a reply during the initial read are not lost", async (t) => {
+test("a reply before create response or before pending read cannot become retroactive viewer approval", async (t) => {
   for (const stage of ["create", "get"]) {
-    const h = await harness(t)
+    const h = await harness(t, { answer: "approve" })
     await h.stop()
     const original = h.driver[stage]
     let once = false
     h.driver[stage] = async (...args: any[]) => {
       const value = await original(...args)
-      if (!once) { once = true; await h.reply() }
+      if (!once) {
+        once = true
+        const form = [...h.forms.values()][0]
+        form.state = { status: "answered", answer: { decision: "approve" } }
+        await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT } })
+        if (stage === "get") return copy(form)
+      }
       return value
     }
     const c = h.makeCall(); await h.evaluate(c)
-    assert.equal(c.effect, "allow", stage)
+    assert.equal(c.effect, "deny", stage)
     await h.complete(c)
-    assert.deepEqual((await h.status()).held, [])
+    assert.equal((await h.status()).held[0].stage, "stop")
     assert.ok(h.operations.length <= 4)
   }
 })

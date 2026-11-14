@@ -4,10 +4,10 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 
 **Status: selected mechanical paths qualified on OpenCode 2.2.6 with released 0.1.39. Six original native cases passed, plus a later actual standalone TUI flow covering rendered refusal, native child permission identity and event ordering. Two instrumented native fault instances passed separately. The TUI follow-up required a fixture-only read-only tool permission correction and forced frontend shutdown; shared-server TUI attachment and general workflow improvement are not qualified. Earlier failures remain recorded; neither general semantic detection nor the deferred judge is qualified. See the [13 November report](../docs/qualification/2026-11-13-opencode-escalation-gate.md), [earlier behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
-**Unreleased candidate:** the [approved no-concurrent-external-writer design](../docs/superpowers/specs/2026-11-13-opencode-stop-form-design.md)
-now has deterministic adapter/state-machine regression coverage. Stop-stage native
-approval alone no longer clears a hold. The default candidate has **no qualified
-authenticated form transport**: stopped edits deny with
+**Unreleased candidate:** the [approved Desktop-first design](../docs/superpowers/specs/2026-11-14-opencode-desktop-stop-approval-design.md)
+adds an explicit complete-change viewer submission to the existing one-use owner.
+Stop-stage native approval alone never authorizes an edit or clears a hold. The
+generic entry retains **no authenticated form transport**: stopped edits deny with
 `stop_form_bridge_unavailable`; the existing root-message reset remains available.
 The form dependency seam supports offline tests and future qualified embedding,
 not a new user setting or a working installed bridge. No live qualification,
@@ -37,11 +37,11 @@ The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/openco
   64 KiB. Unsupported stopped tools, multi-file requests and malformed metadata deny.
 - A form decision binds generation, tree, native session/message/call, hold
   incarnation, complete native proposed change and hook-observed file digest.
-  Exact authoritative approval restores the incoming native allow/ask effect;
+  A committed viewer submission plus exact authoritative approval restores the incoming native allow/ask effect;
   it never overrides a configured deny or grants broader permissions.
 - Pending, reject, cancel, stale/foreign/mutated state, repeated authorization,
   interruption, bridge failure and unconfirmed settlement deny. A terminal event
-  permits authoritative readback and at most one extra confirmation read; no
+  is only a hint. A confirmed viewer receipt permits authoritative readback and at most one extra confirmation read; no
   periodic polling or create retry. Target occupancy lasts through native
   permission wait and execution. Failed or unrelated completions never clear it.
 - Acquisition stops at 110 seconds; final 10 seconds of a 120-second form-operation
@@ -56,6 +56,58 @@ The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/openco
 - Tests use fake native form responses and temporary local files, not a custom
   production writer. Authenticated same-service access, complete client display,
   scheduling during a native permission hook and cleanup still need live proof.
+
+## Separate Desktop artifact (unqualified candidate)
+
+The generic directory entry remains dependency-free. The separate prepared root
+selects `server.ts`, declares the official Promise client and RPC SDK, and exports
+one prebuilt CommonJS GUI entry. Prepare a **new, outside-checkout** directory:
+
+```text
+python3 -B scripts/package_opencode.py --output /absolute/new/artifact
+```
+
+Preparation copies the clean generic resource membership and the declared adapter
+sources. It preserves `runtime/adapters/opencode_workflow/../../../scripts/workflow.py`.
+It neither installs dependencies nor loads a client. Existing destinations and
+symlink destinations/parents are rejected. Generic packaging remains unchanged;
+never put `node_modules` or the generated GUI bundle into that export.
+
+The prepared artifact includes the scoped npm lockfile. In that separately owned
+directory, prepare dependencies with install scripts disabled (`npm ci
+--ignore-scripts --no-audit --no-fund`), then explicitly run `npm run build`. Keep npm
+home, cache and user/global config isolated; use **different** user/global config
+paths. A local plugin directory does not install its own dependencies. A successful
+source export is not a successful dependency preparation or build.
+
+The server connector lazily calls official `Service.discover`, never `ensure`.
+Each owned operation has at most one discovery, authenticated PID/endpoint check,
+and exact session-location check, inside its existing eight-second cap. Missing
+capabilities, redirect, mismatched identity or dependency failure deny. Credentials
+remain in the official discovery flow and are never logged or copied into artifacts.
+
+Desktop uses its native Panel and controls. One live view can select one submission;
+duplicate selection reuses the pending read and ticket. The current own-server
+client replies once, accepts fulfilled native void/204, and acknowledges settlement.
+Failed or unknown replies never commit. Closing, changing session/server, losing
+presentation or expiring invalidates unconsumed work. Plain text preserves the full
+patch with both scroll axes; unsupported controls/bidi formatting deny rather than
+being stripped. “Decision accepted” does not mean the native edit completed.
+
+Clean scripts-disabled dependency preparation, the official single-CJS GUI build,
+and real native loader resolution have passed in a disposable artifact. The initial
+npm config-path failure remains recorded. Strict own-source GUI/server checks pass
+with dependency declaration checking skipped; an unsuppressed GUI check still fails
+on the SDK's optional Electron declaration. This is not complete SDK declaration
+closure or actual client execution.
+
+Desktop loading, rendered accessibility and original builtin execution remain
+unqualified. The installed packaged Desktop's profile option does not contain its
+protocol registration, automatic updater or failed shell-import service fallback.
+Do not use that personal installation for qualification under the current
+preserve-installation/shared-service constraints. A genuinely disposable macOS
+environment and supported GUI tooling need separate authorization and proof.
+No installed-package update, release or positive native claim follows from the build.
 
 ## Install and configure
 

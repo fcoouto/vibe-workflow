@@ -14,7 +14,15 @@ type Attempt = {
   gate: Gate; session: string; root: string; hold: number; file: string; key: string; target: string
   form: any; binding: string; snapshot: string; start: number; calls: number; sent: boolean
   controller: AbortController; terminal: boolean; wake?: () => void; detail?: any; permit: boolean
+  id: string; ready: boolean; patch: string; digest: string; view?: string
+  submission?: { input: Submission; promise: Promise<string>; ticket?: string; outcome?: "settled" | "failed" }
 }
+export type Submission = { attemptID: string; viewID: string; submissionID: string;
+  contentDigest: string; decision: "approve" | "reject" }
+export type ReviewPayload = { generation: string; attemptID: string; sessionID: string; rootID: string;
+  formID: string; file: string; reason: string; patch: string; contentDigest: string; remainingMS: number }
+export type ReviewNotice = { sessionID: string; rootID: string; formID: string; attemptID: string;
+  state: "reviewing" | "accepted" | "completed" | "failed" | "cancelled" }
 type RecordEntry = { tool: string; attempt?: Attempt }
 type Options = { directory: string; gate: () => Gate | null; forms?: StopForms;
   error: (code: string) => void; now?: () => number }
@@ -59,10 +67,79 @@ export class StopApprovals {
   private closed = false
   private now: () => number
   private options: Options
+  private listener?: (notice: ReviewNotice) => void
 
   constructor(options: Options) {
     this.options = options
     this.now = options.now ?? (() => performance.now())
+  }
+
+  observe(listener: (notice: ReviewNotice) => void): () => void {
+    if (this.listener) throw new Error("review observer already registered")
+    this.listener = listener
+    return () => { if (this.listener === listener) this.listener = undefined }
+  }
+
+  private notify(a: Attempt, state: ReviewNotice["state"]): void {
+    try { this.listener?.({ sessionID: a.session, rootID: a.root, formID: a.form.id, attemptID: a.id, state }) }
+    catch { /* Notifications are hints; the owner still requires authoritative state. */ }
+  }
+
+  private active(a: Attempt): boolean {
+    const current = this.options.gate()?.stopped(a.session, a.file)
+    return !this.closed && !a.controller.signal.aborted && this.now() - a.start < ACQUIRE_MS
+      && this.options.gate() === a.gate && current?.root === a.root && current?.hold === a.hold
+      && this.targets.get(a.target) === a
+  }
+
+  pending(sessionID: string): ReviewNotice[] {
+    return [...this.targets.values()].filter((a) => a.ready && !a.permit && this.active(a)
+      && (a.session === sessionID || a.root === sessionID)).map((a) => ({ sessionID: a.session,
+        rootID: a.root, formID: a.form.id, attemptID: a.id, state: "reviewing" }))
+  }
+
+  open(sessionID: string, formID: string, viewID: string): ReviewPayload {
+    const a = [...this.targets.values()].find((a) => a.session === sessionID && a.form.id === formID)
+    if (!a || !a.ready || a.permit || !this.active(a) || !key(viewID, sessionID, formID)
+      || (a.view && a.view !== viewID)) throw new Error("review unavailable")
+    a.view = viewID
+    return Object.freeze({ generation: this.generation, attemptID: a.id, sessionID: a.session, rootID: a.root,
+      formID: a.form.id, file: a.file, reason: "Escalation and re-evaluation did not converge.",
+      patch: a.patch, contentDigest: a.digest, remainingMS: ACQUIRE_MS - (this.now() - a.start) })
+  }
+
+  begin(input: Submission): Promise<string> {
+    const a = [...this.targets.values()].find((a) => a.id === input.attemptID)
+    if (!a || !this.active(a) || !a.view || a.view !== input.viewID
+      || !key(input.attemptID, input.viewID, input.submissionID) || input.contentDigest !== a.digest
+      || !["approve", "reject"].includes(input.decision)) return Promise.reject(new Error("invalid submission"))
+    if (a.submission) return isDeepStrictEqual(a.submission.input, input) ? a.submission.promise
+      : Promise.reject(new Error("submission already selected"))
+    // Select synchronously, before the first native read, including identical concurrent replays.
+    const submission = { input: structuredClone(input), promise: undefined as unknown as Promise<string>,
+      ticket: undefined as string | undefined, outcome: undefined as "settled" | "failed" | undefined }
+    a.submission = submission
+    submission.promise = Promise.resolve().then(async () => {
+      const detail = await this.read(a)
+      if (!this.active(a) || detail.state.status !== "pending") throw new Error("form is not pending")
+      return submission.ticket = randomUUID()
+    }).catch((error) => { this.invalidate(a); throw error })
+    return submission.promise
+  }
+
+  complete(ticket: string, outcome: "settled" | "failed"): void {
+    const a = [...this.targets.values()].find((a) => a.submission?.ticket === ticket)
+    if (!a || !ticket || !["settled", "failed"].includes(outcome)) throw new Error("invalid receipt")
+    if (a.submission!.outcome === outcome) return
+    if (!this.active(a) || a.submission!.outcome) throw new Error("inactive receipt")
+    a.submission!.outcome = outcome
+    if (outcome === "failed") this.invalidate(a)
+    else a.wake?.()
+  }
+
+  abandon(attemptID: string, viewID: string): void {
+    const a = [...this.targets.values()].find((a) => a.id === attemptID && a.view === viewID)
+    if (a && !a.permit) this.invalidate(a)
   }
 
   before(event: any): void {
@@ -109,7 +186,8 @@ export class StopApprovals {
           options: [{ value: "approve", label: "Approve this edit" }, { value: "reject", label: "Reject" }] }] }
       a = { gate, session: event.sessionID, ...stopped, file: files[0], key: id!, target, form,
         binding: captured, snapshot: before, start: this.now(), calls: 0, sent: false,
-        controller: new AbortController(), terminal: false, permit: false }
+        controller: new AbortController(), terminal: false, permit: false,
+        id: randomUUID(), ready: false, patch: change.patch, digest: hash(form.fields[0].description) }
       record.attempt = a
       this.targets.set(target, a)
       const attempt = a
@@ -118,19 +196,21 @@ export class StopApprovals {
       a.sent = true
       const created = await this.call(a, "create", { sessionID: a.session, form: payload })
       if (!isDeepStrictEqual(identity(created), identity(form))) throw new Error("form identity mismatch")
+      if (!this.active(a)) throw new Error("inactive approval")
+      a.ready = true
+      this.notify(a, "reviewing")
+      await this.wait(a)
+      if (a.submission?.outcome !== "settled") return
       let detail = await this.read(a)
-      if (detail.state.status === "pending") {
-        await this.wait(a)
-        detail = await this.read(a)
-        if (detail.state.status === "pending") detail = await this.read(a)
-      }
-      if (detail.state.status !== "answered" || Object.keys(detail.state.answer ?? {}).length !== 1
+      if (detail.state.status === "pending") detail = await this.read(a)
+      if (a.submission.input.decision !== "approve" || detail.state.status !== "answered" || Object.keys(detail.state.answer ?? {}).length !== 1
         || detail.state.answer.decision !== "approve") return
       const current = this.options.gate()?.stopped(a.session, a.file)
       if (this.closed || a.controller.signal.aborted || this.now() - a.start >= ACQUIRE_MS
         || this.options.gate() !== gate || current?.root !== a.root || current?.hold !== a.hold
         || binding(event) !== a.binding || snapshot(a.file) !== a.snapshot) return
       a.permit = true
+      this.notify(a, "accepted")
       event.effect = incoming
       if (message === undefined) delete event.message
       else event.message = message
@@ -158,6 +238,7 @@ export class StopApprovals {
       && this.options.gate() === a.gate && current?.root === a.root && current?.hold === a.hold
     this.invalidate(a)
     if (approved) a.gate.edited(a.session, [a.file], a.hold)
+    this.notify(a, approved ? "completed" : "failed")
     return true
   }
 
@@ -169,7 +250,7 @@ export class StopApprovals {
       if ((event.type === "form.replied" || event.type === "form.cancelled")
         && data?.id === a.form.id && data?.sessionID === a.session && !a.terminal) {
         a.terminal = true
-        a.wake?.()
+        if (!a.submission || event.type === "form.cancelled") this.invalidate(a)
       }
     }
   }
@@ -188,11 +269,12 @@ export class StopApprovals {
     a.permit = false
     a.controller.abort()
     if (this.targets.get(a.target) === a) this.targets.delete(a.target)
+    this.notify(a, "cancelled")
   }
 
   private wait(a: Attempt): Promise<void> {
     if (a.controller.signal.aborted) return Promise.reject(new Error("inactive approval"))
-    if (a.terminal) return Promise.resolve()
+    if (a.submission?.outcome === "settled") return Promise.resolve()
     return new Promise<void>((done, fail) => {
       const abort = () => { a.wake = undefined; fail(new Error("inactive approval")) }
       a.controller.signal.addEventListener("abort", abort, { once: true })
