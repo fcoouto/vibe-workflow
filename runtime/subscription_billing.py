@@ -12,6 +12,8 @@ ahead of the clock beyond CLOCK_MARGIN, `valid_until` after now, and `paid_cross
 A source answers it through `billing(route, now)`; only code selects the source. No production producer is
 qualified: `LocalSource.billing` answers None and reads nothing, so every subscription route is refused. A label,
 digest, quota seed, path qualification, zero cost or absent credit is never this fact.
+Code-selected sources may acquire missing/stale facts before eligibility through `acquire_billing(routes, now)`.
+Acquisition is separate from pure reads; no production source implements that capability yet.
 
 `double` is the only positive producer here: a code-level double for tests and the sandboxed activation
 self-checks, labelled `synthetic:<label>`. It is never wired to `LocalSource`, a request, a setting or the
@@ -61,6 +63,26 @@ def verified(source, route, now):
     except Exception:  # noqa: BLE001 - an unreadable producer is unverified billing, never an error or a pass
         return False
     return problem(fact, route, now) is None
+
+
+def acquire(source, routes, now):
+    """Ask a code-selected source to acquire missing/stale facts before eligibility, never from a pure read.
+
+    The caller supplies statically relevant subscription routes. The source owns verified connection grouping,
+    locking/backoff and any incidental window writes; sharing a pool label never establishes shared identity.
+    No production acquisition is qualified yet. An absent or failed source leaves the ordinary checks in force;
+    its return value is never accepted as a billing fact.
+    """
+    read = getattr(source, 'acquire_billing', None)
+    if not callable(read):
+        return
+    needed = [copy.deepcopy(route) for route in routes
+              if route.get('billing_class') == 'included_subscription' and not verified(source, route, now)]
+    if needed:
+        try:
+            read(needed, now)
+        except Exception:  # noqa: BLE001 - acquisition failure never supplies authority or leaks native error text
+            pass
 
 
 def double(label):
