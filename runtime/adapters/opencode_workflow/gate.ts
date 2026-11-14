@@ -214,10 +214,9 @@ export class Gate {
     const tree = this.trees.get(known.root)!
     const now = ++this.seq
     for (const file of files) {
-      let entry = tree.get(file)
+      const entry = tree.get(file)
       if (entry && entry.heldAt !== null && this.stage(entry) === "stop") {
-        tree.delete(file)  // the user approved the stop-stage ask: start this file afresh
-        entry = undefined
+        continue  // a late completion cannot clear the final stop
       }
       if (!entry) {
         if (tree.size < MAX_FILES) tree.set(file, fresh(now))
@@ -261,7 +260,7 @@ export class Gate {
     })
     if (!held.length) return { effect: "allow" }
     const stages = held.map(([, entry]) => this.stage(entry))
-    // Ask only when every held file is at the stop stage; any other held file still needs its diagnosis.
+    // Report any outstanding diagnosis before the final stop; every held stage denies edits.
     const stage: Stage = stages.includes("reevaluation") ? "reevaluation" : stages.includes("escalating") ? "escalating"
       : "stop"
     const names = held.slice(0, MAX_LISTED).map(([file]) => file).join(", ")
@@ -269,7 +268,7 @@ export class Gate {
     const rounds = Math.max(...held.map(([, entry]) => entry.rounds))
     const message = `escalation gate: ${names}${more} had ${rounds} repair rounds and failed again (stage: ${stage}). `
       + `${NEXT[stage]}. See ${POLICY}.`
-    return { effect: stage === "stop" ? "ask" : "deny", message }
+    return { effect: "deny", message }
   }
 
   holds(session: string): boolean {

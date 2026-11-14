@@ -4,6 +4,13 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 
 **Status: selected mechanical paths qualified on OpenCode 2.2.6 with released 0.1.39. Six original native cases passed, plus a later actual standalone TUI flow covering rendered refusal, native child permission identity and event ordering. Two instrumented native fault instances passed separately. The TUI follow-up required a fixture-only read-only tool permission correction and forced frontend shutdown; shared-server TUI attachment and general workflow improvement are not qualified. Earlier failures remain recorded; neither general semantic detection nor the deferred judge is qualified. See the [13 November report](../docs/qualification/2026-11-13-opencode-escalation-gate.md), [earlier behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
+**Unreleased behavior change:** the final stop now denies edits rather than
+offering approval. Late completed edits cannot clear it. Separate explicit user
+direction through the existing root-message control is required before another
+edit; no pending edit resumes automatically. Native qualification of this change
+is pending. The custom approval-panel work in PR #294 remains deferred,
+draft/BLOCKED, unmerged and unreleased.
+
 ## What it does
 
 The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/opencode_workflow/index.ts) watches one tree per interactive root session: the session and its subagents. Ledger-derived sessions belong to the Smart Routing shim and are ignored. It makes no model calls and writes nothing while nothing is held.
@@ -12,7 +19,7 @@ The plugin in [`runtime/adapters/opencode_workflow/`](../runtime/adapters/openco
 - **Trip.** A repair round on a file is a re-edit after a failure. After two rounds and a new failure, the file is held. Passing checks never clear rounds; a second failure without a repair in between does.
 - **Hold.** Edits of a held file by any session in the tree are denied, with a message naming the files, rounds, stage and next step. Everything else passes.
 - **Release.** A new subagent, created after the hold, that made no edits and finished successfully releases a file when its route is stronger than every level on the file. Where two routes cannot be ranked, a different route is enough. Same-level reviews never release.
-- **Stages.** Up to three escalations; then, or when no ranked option is above every level, the architecture re-evaluation: a new read-only session at least as strong as every level releases the file and resets its count once. After that, three more escalations or no stronger option turn the hold into an approval prompt; an approved edit starts the file afresh.
+- **Stages.** Up to three escalations; then, or when no ranked option is above every level, the architecture re-evaluation: a new read-only session at least as strong as every level releases the file and resets its count once. After that, three more escalations or no stronger option stop further edits. Repeated attempts, later diagnoses and late completed edits cannot clear that stop; the user must separately direct continuation through the existing control below.
 - **Ranking.** The `ladder` setting lists `provider/model` entries, weakest first. Within one model, variants rank `low`, `medium`, `high`, `xhigh`, `max`. Anything else is unranked.
 
 ## Reset and troubleshooting
