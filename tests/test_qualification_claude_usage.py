@@ -362,35 +362,50 @@ class ExchangeTests(Contract):
             try:
                 yield
             finally:
-                rescued = []
+                errors, rescued = [], False
+
+                def attempt(action, *args):
+                    try:
+                        return action(*args)
+                    except Exception as error:
+                        errors.append('%s: %s' % (type(error).__name__, error))
+
+                def rescue(process):
+                    try:
+                        real_killpg(process.pid, signal.SIGKILL)  # this owned leader is still unreaped
+                    except OSError:
+                        pass
+                    end = time.monotonic() + 3
+                    while time.monotonic() < end:
+                        pid, status = real_waitpid(process.pid, os.WNOHANG)
+                        if pid == process.pid:
+                            process.returncode = os.waitstatus_to_exitcode(status)
+                            self.events.append(('reap', pid, process.returncode))
+                            return
+                        time.sleep(0.01)
+                    self.fail('Independent cleanup could not reap its owned child')
+
+                def kill_helper(pid):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
                 for process, stdin, stdout in self.processes:
                     if not any(event[:2] == ('reap', process.pid) for event in self.events):
-                        rescued.append(process.pid)
-                        try:
-                            real_killpg(process.pid, signal.SIGKILL)  # this owned leader is still unreaped
-                        except OSError:
-                            pass
-                        end = time.monotonic() + 3
-                        while time.monotonic() < end:
-                            pid, status = real_waitpid(process.pid, os.WNOHANG)
-                            if pid:
-                                process.returncode = os.waitstatus_to_exitcode(status)
-                                break
-                            time.sleep(0.01)
-                        else:
-                            self.fail('Independent cleanup could not reap its owned child')
+                        rescued = True
+                        attempt(rescue, process)
                     for pipe in (stdin, stdout):
                         if pipe is not None:
-                            pipe.close()
+                            attempt(pipe.close)
                 # Red runs still own the leaked helper; never signal its group after the leader is reaped.
-                for entry in self.entries():
+                for entry in attempt(self.entries) or []:
                     if 'child' in entry:
-                        try:
-                            os.kill(entry['child'], signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        self.assert_gone(entry['child'])
-                self.assertTrue(self.allow_rescue or not rescued, 'Exchange left an owned child unreaped')
+                        attempt(kill_helper, entry['child'])
+                        attempt(self.assert_gone, entry['child'])
+                attempt(self.assertTrue, self.allow_rescue or not rescued, 'Exchange left an owned child unreaped')
+                if errors:
+                    self.fail('Independent cleanup errors: ' + '; '.join(errors))
 
     def assert_gone(self, pid):
         end = time.monotonic() + 3
@@ -537,44 +552,61 @@ class ExchangeTests(Contract):
             self.assertEqual(self.exchange(), EXPECTED)
         self.assert_order(self.processes[-1][0], 0, False)
 
+    def assert_failed_exit(self, scenario, status):
+        with self.assertRaises(reader.ReadError) as caught:
+            self.exchange(scenario)
+        self.assertEqual(str(caught.exception), 'claude_exited')
+        entries = self.entries()
+        self.assertEqual(next(entry['child_pgid'] for entry in entries if 'child' in entry), entries[0]['pid'])
+        self.assertTrue(entries[-1]['eof'])
+        self.assert_order(self.processes[-1][0], status, True)
+
     def test_failed_exit_after_valid_responses_kills_helpers_before_reaping(self):
-        for scenario, status in (('nonzero_with_child', 3), ('signaled_with_child', -signal.SIGTERM)):
-            with self.subTest(scenario=scenario):
-                self.log.write_text('')
+        self.assert_failed_exit('nonzero_with_child', 3)
+
+    def test_failed_exit_after_valid_responses_signaled_helper(self):
+        self.assert_failed_exit('signaled_with_child', -signal.SIGTERM)
+
+    def assert_timeout(self, scenario, status):
+        started = time.monotonic()
+        with self.assertRaises(reader.ReadError) as caught:
+            self.exchange(scenario, timeout=0.4)
+        self.assertEqual(str(caught.exception), 'claude_timeout')
+        self.assertLess(time.monotonic() - started, 3)
+        self.assert_order(self.processes[-1][0], status, True)
+        if scenario == 'eof_leaving_child':
+            self.assertTrue(self.entries()[-1]['eof'])
+
+    def test_timeout_kills_owned_group_before_reaping_even_when_leader_exits_on_eof(self):
+        self.assert_timeout('hang', -signal.SIGKILL)
+
+    def test_timeout_eof_leader_leaves_helper(self):
+        self.assert_timeout('eof_leaving_child', 0)
+
+    def test_timeout_after_usage(self):
+        self.assert_timeout('hang_after_usage', -signal.SIGTERM)
+
+    def assert_kqueue_exit(self, scenario, status):
+        with self.exit_backend(kqueue=True):
+            if status:
                 with self.assertRaises(reader.ReadError) as caught:
                     self.exchange(scenario)
                 self.assertEqual(str(caught.exception), 'claude_exited')
-                entries = self.entries()
-                self.assertEqual(next(entry['child_pgid'] for entry in entries if 'child' in entry), entries[0]['pid'])
-                self.assertTrue(entries[-1]['eof'])
-                self.assert_order(self.processes[-1][0], status, True)
+            else:
+                self.assertEqual(self.exchange(scenario), EXPECTED)
+            self.assert_order(self.processes[-1][0], status, bool(status))
 
-    def test_timeout_kills_owned_group_before_reaping_even_when_leader_exits_on_eof(self):
-        for scenario in ('hang', 'eof_leaving_child', 'hang_after_usage'):
-            self.log.write_text('')
-            started = time.monotonic()
-            with self.subTest(scenario=scenario), self.assertRaises(reader.ReadError) as caught:
-                self.exchange(scenario, timeout=0.4)
-            self.assertEqual(str(caught.exception), 'claude_timeout')
-            self.assertLess(time.monotonic() - started, 3)
-            status = 0 if scenario == 'eof_leaving_child' else -signal.SIGKILL if scenario == 'hang' else -signal.SIGTERM
-            self.assert_order(self.processes[-1][0], status, True)
-            if scenario == 'eof_leaving_child':
-                self.assertTrue(self.entries()[-1]['eof'])
+    def test_supported_kqueue_zero_exit(self):
+        self.assert_kqueue_exit('ok', 0)
 
-    def test_supported_kqueue_zero_delayed_and_failed_exits(self):
-        with self.exit_backend(kqueue=True):
-            for scenario, status in (('ok', 0), ('delayed_exit', 0), ('nonzero_with_child', 3),
-                                     ('signaled_with_child', -signal.SIGTERM)):
-                with self.subTest(scenario=scenario):
-                    self.log.write_text('')
-                    if status:
-                        with self.assertRaises(reader.ReadError) as caught:
-                            self.exchange(scenario)
-                        self.assertEqual(str(caught.exception), 'claude_exited')
-                    else:
-                        self.assertEqual(self.exchange(scenario), EXPECTED)
-                    self.assert_order(self.processes[-1][0], status, bool(status))
+    def test_supported_kqueue_delayed_exit(self):
+        self.assert_kqueue_exit('delayed_exit', 0)
+
+    def test_supported_kqueue_nonzero_exit(self):
+        self.assert_kqueue_exit('nonzero_with_child', 3)
+
+    def test_supported_kqueue_signaled_exit(self):
+        self.assert_kqueue_exit('signaled_with_child', -signal.SIGTERM)
 
     def test_kqueue_is_allocated_before_spawn_and_registered_before_controls(self):
         with self.exit_backend(kqueue=True):
@@ -762,6 +794,130 @@ class ExchangeTests(Contract):
 
     def test_readerror_never_preserves_arbitrary_native_text(self):
         self.assertEqual(str(reader.ReadError('fixture-private-error')), 'claude_protocol_invalid')
+
+
+class GuardSafetyTests(unittest.TestCase):
+    """Exercise the actual scenario entry points and guard without creating or signaling real processes."""
+
+    def exercise(self, names, fault=None):
+        state = dict(entries=[], live=set(), born=[], killed=[], groups=[], closed=[], ran=[], replaced=[], clock=0)
+
+        class Log:
+            def write_text(self, value):
+                state['replaced'].append(tuple(state['live']))
+                state['entries'] = []
+
+        class Pipe:
+            def __init__(self, name):
+                self.name = name
+            def close(self):
+                state['closed'].append(self.name)
+                if fault == 'pipe' and self.name == '101-in':
+                    raise OSError('pipe101')
+
+        def process(pid):
+            return SimpleNamespace(pid=pid, returncode=None), Pipe('%d-in' % pid), Pipe('%d-out' % pid)
+
+        def setup(case):
+            case.processes, case.events, case.resources, case.allow_rescue = [], [], [], False
+            case.log = Log()
+            case.log.write_text('')
+            case.enterContext(case.owned_children())
+            if fault:
+                case.processes = [process(101), process(102)]
+                if fault not in ('wait', 'timeout'):
+                    case.events = [('reap', 101, 0), ('reap', 102, 0)]
+                state['entries'] = [{'child': 201}, {'child': 202}]
+                state['live'].update((201, 202))
+
+        def exchange(case, scenario='ok', timeout=2):
+            state['ran'].append(scenario)
+            pid = 100 + len(state['ran'])
+            case.processes.append(process(pid))
+            status = {'nonzero_with_child': 3, 'signaled_with_child': -signal.SIGTERM,
+                      'hang': -signal.SIGKILL, 'hang_after_usage': -signal.SIGTERM}.get(scenario, 0)
+            case.events.append(('reap', pid, status))  # model an F1 regression: leader reaped, helper still live
+            state['entries'] = [{'pid': pid, 'pgid': pid}, {'eof': True}]
+            if scenario in ('nonzero_with_child', 'signaled_with_child', 'hang', 'eof_leaving_child'):
+                helper = pid + 100
+                state['entries'].insert(1, dict(child=helper, child_pgid=pid))
+                state['live'].add(helper)
+                state['born'].append(helper)
+            if scenario in ('hang', 'eof_leaving_child', 'hang_after_usage'):
+                raise reader.ReadError('claude_timeout')
+            if status:
+                raise reader.ReadError('claude_exited')
+            return copy.deepcopy(EXPECTED)
+
+        def kill(pid, sig):
+            self.assertEqual(sig, signal.SIGKILL)
+            state['killed'].append(pid)
+            state['live'].discard(pid)
+
+        def killpg(pid, sig):
+            if not sig:
+                raise ProcessLookupError
+            state['groups'].append(pid)
+
+        def waitpid(pid, flags):
+            if pid == 101 and fault == 'wait':
+                raise OSError('wait101')
+            return (0, 0) if pid == 101 and fault == 'timeout' else (pid, 0)
+
+        def gone(case, pid):
+            if fault == 'helper' and pid == 201:
+                raise AssertionError('helper201')
+            case.assertNotIn(pid, state['live'])
+
+        def clock():
+            state['clock'] += 0.1
+            return state['clock']
+
+        @contextmanager
+        def backend(case, **options):
+            yield  # pure scenario proof, not a native kqueue or Linux execution claim
+
+        with ExitStack() as patches:
+            for target, name, value in ((ExchangeTests, 'setUp', setup), (ExchangeTests, 'exchange', exchange),
+                    (ExchangeTests, 'entries', lambda case: state['entries']), (ExchangeTests, 'assert_gone', gone),
+                    (ExchangeTests, 'exit_backend', backend), (os, 'kill', kill), (os, 'killpg', killpg),
+                    (os, 'waitpid', waitpid), (time, 'monotonic', clock), (time, 'sleep', lambda delay: None)):
+                patches.enter_context(mock.patch.object(target, name, new=value))
+            result = unittest.TestResult()
+            unittest.TestSuite(ExchangeTests(name) for name in names).run(result)
+        return state, result
+
+    def test_each_descendant_scenario_cleans_before_the_next_case(self):
+        families = {
+            'test_failed_exit_after_valid_responses': ('nonzero_with_child', 'signaled_with_child'),
+            'test_timeout_': ('hang_after_usage', 'eof_leaving_child', 'hang'),
+            'test_supported_kqueue_': ('delayed_exit', 'nonzero_with_child', 'signaled_with_child', 'ok'),
+        }
+        methods = unittest.defaultTestLoader.getTestCaseNames(ExchangeTests)
+        for prefix, scenarios in families.items():
+            with self.subTest(prefix=prefix):
+                state, result = self.exercise([name for name in methods if name.startswith(prefix)])
+                self.assertEqual(state['ran'], list(scenarios))
+                self.assertEqual(result.testsRun, len(scenarios))
+                self.assertEqual(len(result.failures), sum(name not in ('ok', 'delayed_exit') for name in scenarios))
+                self.assertEqual(result.errors, [])
+                self.assertEqual(state['killed'], state['born'])
+                self.assertEqual(state['live'], set())
+                self.assertFalse(any(state['replaced']))
+                self.assertEqual(state['groups'], [])  # every modeled leader had already been reaped
+
+    def test_cleanup_faults_do_not_skip_remaining_obligations(self):
+        for fault, message in (('wait', 'wait101'), ('timeout', 'could not reap'),
+                               ('pipe', 'pipe101'), ('helper', 'helper201')):
+            with self.subTest(fault=fault):
+                state, result = self.exercise(['test_readerror_never_preserves_arbitrary_native_text'], fault)
+                self.assertEqual(state['closed'], ['101-in', '101-out', '102-in', '102-out'])
+                self.assertEqual(state['killed'], [201, 202])
+                self.assertEqual(state['live'], set())
+                self.assertEqual(state['groups'], [101, 102] if fault in ('wait', 'timeout') else [])
+                self.assertEqual(len(result.failures), 1)
+                self.assertEqual(result.errors, [])
+                self.assertIn(message, result.failures[0][1])
 
 
 if __name__ == '__main__':
