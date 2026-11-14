@@ -1,5 +1,6 @@
 import type { StopForms } from "./stop.ts"
 import type { Endpoint } from "@opencode/client/service"
+import type { OpenCodeClient } from "@opencode/client"
 
 const loadOfficial = async () => {
   const [{ OpenCode }, { Service }] = await Promise.all([import("@opencode/client"), import("@opencode/client/service")])
@@ -17,9 +18,13 @@ function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   })
 }
 
-export function createStopForms(directory: string, seams: { load?: () => Promise<any>; fetch?: typeof fetch } = {}): StopForms {
-  let dependency: Promise<any> | undefined
-  const invoke = async (method: keyof StopForms, input: any, options: { signal: AbortSignal }) => {
+type Official = { OpenCode: Pick<Awaited<ReturnType<typeof loadOfficial>>["OpenCode"], "make">;
+  Service: Pick<Awaited<ReturnType<typeof loadOfficial>>["Service"], "discover" | "headers"> }
+
+export function createStopForms(directory: string, seams: { load?: () => Promise<Official>; fetch?: typeof fetch } = {}): StopForms {
+  let dependency: Promise<Official> | undefined
+  const invoke = async (sessionID: string, options: { signal: AbortSignal },
+    operation: (forms: OpenCodeClient["session"]["form"], options: { signal: AbortSignal }) => Promise<unknown>) => {
     options.signal.throwIfAborted()
     const signal = AbortSignal.any([options.signal, AbortSignal.timeout(8000)])
     const { OpenCode, Service } = await bounded(dependency ??= (seams.load ?? loadOfficial)(), signal)
@@ -46,19 +51,21 @@ export function createStopForms(directory: string, seams: { load?: () => Promise
     }
     const client = OpenCode.make({ baseUrl: base.origin, headers, fetch: guardedFetch })
     if (typeof client?.server?.info !== "function" || typeof client?.session?.get !== "function"
-      || ["create", "get", "cancel"].some((name) => typeof client.session.form?.[name] !== "function")) {
+      || (["create", "get", "cancel"] as const).some((name) => typeof client.session.form?.[name] !== "function")) {
       throw new Error("form capability unavailable")
     }
     // At most one discovery, identity and location check per owned form operation; no retries or polling.
-    const info: any = await bounded(client.server.info({ signal }), signal)
+    const info = await bounded(client.server.info({ signal }), signal)
     signal.throwIfAborted()
     if (info?.pid !== process.pid || !Array.isArray(info.urls)
       || !info.urls.some((url: string) => new URL(url).origin === base.origin)) throw new Error("service identity mismatch")
-    const session: any = await bounded(client.session.get({ sessionID: input.sessionID }, { signal }), signal)
-    if (session?.id !== input.sessionID || session?.location?.directory !== directory) throw new Error("session location mismatch")
+    const session = await bounded(client.session.get({ sessionID }, { signal }), signal)
+    if (session?.id !== sessionID || session?.location?.directory !== directory) throw new Error("session location mismatch")
     signal.throwIfAborted()
-    return bounded(client.session.form[method](input, { signal }), signal)
+    return bounded(operation(client.session.form, { signal }), signal)
   }
-  return { create: (input, options) => invoke("create", input, options),
-    get: (input, options) => invoke("get", input, options), cancel: (input, options) => invoke("cancel", input, options) }
+  return { create: (input, options) => invoke(input.sessionID, options,
+      (forms, request) => forms.create({ ...input.form, sessionID: input.sessionID }, request)),
+    get: (input, options) => invoke(input.sessionID, options, (forms, request) => forms.get(input, request)),
+    cancel: (input, options) => invoke(input.sessionID, options, (forms, request) => forms.cancel(input, request)) }
 }

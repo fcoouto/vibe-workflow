@@ -8,7 +8,7 @@ function fixture() {
   const info = { pid: process.pid, urls: ["http://127.0.0.1:4000"], version: "future", paths: { tmp: "/tmp" } }
   const session = { id: "ses_test", location: { directory: "/project" } }
   const client = { server: { info: async () => info }, session: { get: async () => session,
-    form: { create: async (input: any) => { formCalls++; return input.form },
+    form: { create: async ({ sessionID, ...form }: any) => { formCalls++; return form },
       get: async () => { formCalls++; return { state: { status: "pending" } } },
       cancel: async () => { formCalls++ } } } }
   const endpoint: any = { url: "http://127.0.0.1:4000", auth: { type: "basic", username: "unit", password: "synthetic" } }
@@ -28,7 +28,10 @@ test("connector stays lazy, discovers without ensure, authenticates PID and acce
   const f = fixture()
   assert.deepEqual(f.counts(), { loads: 0, discoveries: 0, formCalls: 0 })
   const signal = new AbortController().signal
-  assert.deepEqual(await f.forms.create({ sessionID: "ses_test", form: { id: "frm_one" } }, { signal }), { id: "frm_one" })
+  const form = { id: "frm_one", title: "Review edit", metadata: { binding: "exact" },
+    fields: [{ key: "decision", type: "string", description: "Complete proposed change", required: true,
+      options: [{ value: "approve", label: "Approve" }, { value: "reject", label: "Reject" }] }] } as const
+  assert.deepEqual(await f.forms.create({ sessionID: "ses_test", form }, { signal }), form)
   assert.equal(await f.forms.cancel({ sessionID: "ses_test", formID: "frm_one" }, { signal }), undefined)
   assert.equal(f.config().headers.authorization, "synthetic")
   assert.equal(f.counts().formCalls, 2)

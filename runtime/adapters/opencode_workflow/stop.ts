@@ -4,9 +4,10 @@ import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs"
 import { resolve } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import type { Gate } from "./gate.ts"
+import type { SessionFormCreateInput } from "@opencode/client"
 
 export type StopForms = {
-  create(input: { sessionID: string; form: Record<string, unknown> }, options: { signal: AbortSignal }): Promise<unknown>
+  create(input: { sessionID: string; form: Omit<SessionFormCreateInput, "sessionID"> }, options: { signal: AbortSignal }): Promise<unknown>
   get(input: { sessionID: string; formID: string }, options: { signal: AbortSignal }): Promise<unknown>
   cancel(input: { sessionID: string; formID: string }, options: { signal: AbortSignal }): Promise<unknown>
 }
@@ -183,7 +184,7 @@ export class StopApprovals {
         metadata: { generation: this.generation, nonce, binding: hash(captured + before) },
         fields: [{ key: "decision", type: "string", title: "Approve this edit?", required: true, custom: false,
           description: `${files[0]}\nEscalation and re-evaluation did not converge.\n${change.patch}`,
-          options: [{ value: "approve", label: "Approve this edit" }, { value: "reject", label: "Reject" }] }] }
+           options: [{ value: "approve", label: "Approve this edit" }, { value: "reject", label: "Reject" }] }] } satisfies SessionFormCreateInput
       a = { gate, session: event.sessionID, ...stopped, file: files[0], key: id!, target, form,
         binding: captured, snapshot: before, start: this.now(), calls: 0, sent: false,
         controller: new AbortController(), terminal: false, permit: false,
@@ -236,9 +237,8 @@ export class StopApprovals {
     const current = this.options.gate()?.stopped(a.session, a.file)
     const approved = !this.closed && a.permit && event.tool === "edit" && event.status === "completed"
       && this.options.gate() === a.gate && current?.root === a.root && current?.hold === a.hold
-    this.invalidate(a)
     if (approved) a.gate.edited(a.session, [a.file], a.hold)
-    this.notify(a, approved ? "completed" : "failed")
+    this.invalidate(a, approved ? "completed" : "failed")
     return true
   }
 
@@ -246,7 +246,9 @@ export class StopApprovals {
     for (const a of this.targets.values()) {
       const data = event?.data
       if ((event.type === "session.execution.interrupted" || event.type === "session.execution.failed")
-        && (data?.sessionID === a.session || data?.sessionID === a.root)) this.invalidate(a)
+        && (data?.sessionID === a.session || data?.sessionID === a.root)) {
+        this.invalidate(a, event.type === "session.execution.failed" ? "failed" : "cancelled")
+      }
       if ((event.type === "form.replied" || event.type === "form.cancelled")
         && data?.id === a.form.id && data?.sessionID === a.session && !a.terminal) {
         a.terminal = true
@@ -265,11 +267,12 @@ export class StopApprovals {
     this.records.clear()
   }
 
-  private invalidate(a: Attempt): void {
+  private invalidate(a: Attempt, outcome: "cancelled" | "completed" | "failed" = "cancelled"): void {
+    if (this.targets.get(a.target) !== a) return
     a.permit = false
     a.controller.abort()
-    if (this.targets.get(a.target) === a) this.targets.delete(a.target)
-    this.notify(a, "cancelled")
+    this.targets.delete(a.target)
+    this.notify(a, outcome)
   }
 
   private wait(a: Attempt): Promise<void> {

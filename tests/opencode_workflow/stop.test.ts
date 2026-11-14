@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync } from "n
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { createWorkflowPlugin } from "../../runtime/adapters/opencode_workflow/index.ts"
+import { StopViewer } from "../../runtime/adapters/opencode_workflow/viewer.ts"
 
 const ROOT = "ses_root"
 const MAX = { providerID: "p", id: "m", variant: "max" }
@@ -736,4 +737,80 @@ test("native JSON field ordering does not turn an exact form approval into a den
   assert.equal(c.effect, "allow")
   await h.complete(c)
   assert.deepEqual((await h.status()).held, [])
+})
+
+for (const status of ["completed", "error"]) test(`owner emits only exact terminal ${status} after accepted permission`, async (t) => {
+  const h = await harness(t, { answer: "approve" }); await h.stop()
+  const notices: string[] = []
+  h.owner().observe((notice: any) => notices.push(notice.state))
+  const call = h.makeCall(); await h.evaluate(call); await h.complete(call, { status })
+  await h.complete(call, { status })
+  assert.deepEqual(notices, ["reviewing", "accepted", status === "completed" ? "completed" : "failed"])
+  assert.equal((await h.status()).held.length, status === "completed" ? 0 : 1)
+})
+
+for (const status of ["completed", "error"]) for (const order of ["before", "after"]) for (const close of [true, false])
+  test(`real owner ${status} ${order} receipt response remains terminal through late acceptance and close${close ? "" : " without close first"}`, async (t) => {
+    const h = await harness(t); await h.stop()
+    const call = h.makeCall(); const evaluation = h.evaluate(call); await settle()
+    const owner = h.owner(); const form = [...h.forms.values()][0]
+    const states: string[] = []; const notices: string[] = []
+    let release!: () => void
+    const response = new Promise<void>((done) => { release = done })
+    const rpc = { open: async (input: any) => owner.open(input.sessionID, input.formID, input.viewID),
+      begin: (input: any) => owner.begin(input),
+      complete: async (input: any) => { owner.complete(input.ticket, input.outcome); await response },
+      abandon: async (input: any) => owner.abandon(input.attemptID, input.viewID) }
+    const client = { session: { form: { reply: async () => {
+      form.state = { status: "answered", answer: { decision: "approve" } }
+      await h.emit({ type: "form.replied", data: { id: form.id, sessionID: ROOT } })
+    } } } }
+    const live = { client, rpc, sessionID: ROOT, directory: h.directory, serverID: "builtin", visit: {},
+      desktop: true, builtin: true, connected: true, compatible: true, visible: true }
+    const viewer = new StopViewer({ current: () => live, usable: () => true, state: (state) => states.push(state) })
+    t.after(() => viewer.close())
+    owner.observe((notice: any) => { notices.push(notice.state); viewer.notice(notice) })
+    const view = await viewer.open(ROOT, form.id)
+    const submitting = viewer.submit("approve").catch(() => {})
+    await evaluation
+    assert.equal(call.effect, "allow")
+    if (order === "after") { release(); await submitting }
+    if (close) viewer.close()
+    assert.equal(states.at(-1), "accepted", "closing cannot undo a server-consumed approval")
+    await h.complete(call, { status })
+    if (order === "before") { release(); await submitting }
+    viewer.notice({ ...view, state: "accepted" }); viewer.close(); viewer.notice({ ...view, state: status === "completed" ? "completed" : "failed" })
+    assert.deepEqual(notices, ["accepted", status === "completed" ? "completed" : "failed"])
+    assert.equal(states.at(-1), status === "completed" ? "completed" : "failed")
+    assert.equal((await h.status()).held.length, status === "completed" ? 0 : 1)
+  })
+
+for (const event of ["session.execution.interrupted", "session.execution.failed"]) test(`owner ${event} remains terminal across pending receipt response`, async (t) => {
+  const h = await harness(t); await h.stop()
+  const call = h.makeCall(); const evaluation = h.evaluate(call); await settle()
+  const owner = h.owner(); const form = [...h.forms.values()][0]
+  const states: string[] = []; const notices: string[] = []
+  let release!: () => void
+  const response = new Promise<void>((done) => { release = done })
+  const rpc = { open: async (input: any) => owner.open(input.sessionID, input.formID, input.viewID),
+    begin: (input: any) => owner.begin(input),
+    complete: async (input: any) => { owner.complete(input.ticket, input.outcome); await response },
+    abandon: async (input: any) => owner.abandon(input.attemptID, input.viewID) }
+  const client = { session: { form: { reply: async () => { form.state = { status: "answered", answer: { decision: "approve" } } } } } }
+  const live = { client, rpc, sessionID: ROOT, directory: h.directory, serverID: "builtin", visit: {},
+    desktop: true, builtin: true, connected: true, compatible: true, visible: true }
+  const viewer = new StopViewer({ current: () => live, usable: () => true, state: (state) => states.push(state) })
+  t.after(() => viewer.close())
+  owner.observe((notice: any) => { notices.push(notice.state); viewer.notice(notice) })
+  const view = await viewer.open(ROOT, form.id)
+  const submitting = viewer.submit("approve").catch(() => {})
+  await evaluation
+  await h.emit({ type: event, data: { sessionID: ROOT } })
+  release(); await submitting; viewer.close(); viewer.notice({ ...view, state: "accepted" })
+  const expected = event.endsWith("failed") ? "failed" : "cancelled"
+  assert.deepEqual(notices, ["accepted", expected])
+  assert.equal(states.at(-1), expected)
+  await h.complete(call)
+  assert.equal((await h.status()).held.length, 1)
+  assert.equal(states.at(-1), expected)
 })

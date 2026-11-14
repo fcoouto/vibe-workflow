@@ -1,4 +1,4 @@
-import { Command, Panel, Plugin, type PanelProps } from "@opencode/plugin/gui"
+import { Command, Panel, Plugin, usePanel, type PanelProps } from "@opencode/plugin/gui"
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show, untrack } from "solid-js"
 import { StopReview } from "./rpc.ts"
 import { StopViewer, type ViewerState } from "./viewer.ts"
@@ -48,6 +48,7 @@ export default Plugin.define({
     })
 
     function Review(props: PanelProps) {
+      const panel = usePanel()
       const [payload, setPayload] = createSignal<ReviewPayload>()
       const [state, setState] = createSignal<ViewerState>("opening")
       const [usable, setUsable] = createSignal(false)
@@ -62,7 +63,8 @@ export default Plugin.define({
         if (!own(session)) return undefined
         return { client: session.server.client, ownerClient: client, rpc: client.rpc(StopReview), sessionID: session.id, directory: session.directory,
           serverID: session.server.id, visit: session.visit, desktop: ctx.app.platform === "desktop",
-          builtin: session.server.builtin, connected: session.server.connected, compatible: session.server.compatible }
+          builtin: session.server.builtin, connected: session.server.connected, compatible: session.server.compatible,
+          visible: panel.visible() }
       }
       const measure = () => {
         const p = payload()
@@ -71,7 +73,7 @@ export default Plugin.define({
         const bounds = shell?.getBoundingClientRect()
         const contained = (node: HTMLElement) => { const rect = node.getBoundingClientRect(); return bounds
           && rect.top >= bounds.top && rect.bottom <= bounds.bottom && rect.left >= bounds.left && rect.right <= bounds.right }
-        const valid = !!p && visible(shell) && visible(header) && visible(content) && visible(actions)
+        const valid = panel.visible() && !!p && visible(shell) && visible(header) && visible(content) && visible(actions)
           && content.textContent === p.patch && content.clientHeight >= 32
           && header.scrollHeight <= header.clientHeight && actions.scrollHeight <= actions.clientHeight
           && [header, content, actions].every(contained) && !document.hidden
@@ -86,21 +88,26 @@ export default Plugin.define({
         const attemptID = selected()
         const notice = untrack(() => notices().find((item) => item.attemptID === attemptID))
         if (!connected || !own(session) || !notice) return
-        const viewer = new StopViewer({ current: live, usable: measure, state: setState })
-        controller = viewer
         let active = true
+        const viewer: StopViewer = new StopViewer({ current: live, usable: measure,
+          state: (next) => { if (active && controller === viewer) setState(next) } })
+        controller = viewer
+        createEffect(() => viewer.presentationChanged())
         setPayload(undefined)
-        void viewer.open(notice.sessionID, notice.formID).then((value) => {
-          if (active && client === ctx.client) { setPayload(value); queueMicrotask(() => { measure(); content?.focus() }) }
+        void untrack(() => viewer.open(notice.sessionID, notice.formID)).then((value) => {
+          if (active && controller === viewer && client === ctx.client) {
+            setPayload(value)
+            queueMicrotask(() => { if (active && controller === viewer) { measure(); content?.focus() } })
+          }
         }).catch(() => {})
         onCleanup(() => { active = false; viewer.close(); if (controller === viewer) controller = undefined })
       })
       createEffect(() => {
         const p = payload()
         const notice = p && notices().find((item) => item.attemptID === p.attemptID)
-        if (notice && notice.state !== "reviewing") {
-          if (notice.state === "cancelled" || notice.state === "failed") controller?.close()
-          setState(notice.state)
+        if (notice && p && notice.state !== "reviewing" && notice.formID === p.formID
+          && notice.sessionID === p.sessionID && notice.rootID === p.rootID) {
+          controller?.notice(notice)
         }
       })
       const observer = new ResizeObserver(measure)
