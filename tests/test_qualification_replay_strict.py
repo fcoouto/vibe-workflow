@@ -214,6 +214,38 @@ class StrictReplayTests(Temp):
         self.assertEqual(report["worker_choice"]["failed"], 3)
         self.assertFalse(report["passed"])
 
+    def test_stored_legacy_roles_report_work_kinds_without_rewriting_records(self):
+        roles = ("worker", "review", "coordinator", "implementer", "reviewer", "researcher", "repair")
+        records = [pilot("legacy-%d" % index, NOW + index) for index in range(len(roles))]
+        for record, role in zip(records, roles):
+            record["bucket"] = [role, "medium"]
+        original = copy.deepcopy(records)
+        report = self.run_replay(records)
+        self.assertTrue(report["passed"], report)
+        self.assertEqual(report["specialists"], dict(implementation=3, review=2, planning=1, investigation=1))
+        self.assertEqual(report["worker_choice"], dict(old=7, new=0, failed=0))
+        self.assertEqual(report["invalid_labels"], 0)
+        self.assertEqual(records, original)
+
+    def test_legacy_role_compatibility_preserves_funding_failures(self):
+        record = pilot("legacy-over", NOW, reserved=901)
+        record["bucket"] = ["implementer", "low"]
+        report = replay_strict.replay_records([record])
+        self.assertEqual(report["invalid_labels"], 0)
+        self.assertEqual(report["funding_violations"], 1)
+        self.assertEqual(report["worker_choice"]["failed"], 1)
+        self.assertFalse(report["passed"])
+
+    def test_unknown_stored_roles_and_current_roster_ids_are_not_work_kind_labels(self):
+        records = [pilot("unknown-%d" % index, NOW + index) for index in range(2)]
+        for record, role in zip(records, ("private-unknown-role", "code-reviewer")):
+            record["bucket"] = [role, "medium"]
+        report = replay_strict.replay_records(records)
+        self.assertEqual(report["invalid_labels"], 2)
+        self.assertFalse(report["passed"])
+        self.assertNotIn("private-unknown-role", json.dumps(report))
+        self.assertNotIn("code-reviewer", json.dumps(report))
+
     def test_a_new_worker_choice_record_claims_no_ranked_route(self):
         record = current_choice("c-1", NOW)
         record["ranking"]["shortlist"] = ["strategy-a"]
