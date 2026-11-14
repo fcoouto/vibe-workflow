@@ -1,5 +1,6 @@
 """Current D4-born acquisition-owner controls; qualification observations are synthetic fixtures."""
 import json
+import sqlite3
 import unittest
 
 from runtime import changes, evidence, recovery_uses, review_storage, startup, state
@@ -37,6 +38,21 @@ class CanonicalOwnedReaderTests(unittest.TestCase):
         self.assertIs(result.comparison, comparison)
         self.assertIs(result.discovery.state, discovery)
         return result
+
+    def test_busy_evidence_writer_releases_its_owned_connection_and_leases(self):
+        resources = self.resources()
+        other = sqlite3.connect(self.context.database, timeout=0, isolation_level=None)
+        try:
+            other.execute('begin immediate')
+            with self.assertRaises(state.StateError) as raised:
+                with evidence._context_database(self.context, write=True, resources=resources):
+                    self.fail('A locked authority admitted another writer')
+        finally:
+            other.close()
+        self.assertIsInstance(raised.exception, state.StateBusy)
+        self.assertEqual(resources._connections, {})
+        self.assertEqual(resources._leases, {})
+        self.assertEqual(resources.live.used, 0)
 
 
     def acquire(self, resources, db):

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,30 @@ from tests.fixture_evidence import EvidenceFixture
 
 
 class EvidenceTests(EvidenceFixture, unittest.TestCase):
+
+    def test_peer_fixture_commits_without_inherited_git_identity(self):
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith('GIT_') and key != 'EMAIL'}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+        with patch.dict(os.environ, env, clear=True):
+            fixture = EvidenceTests(methodName='runTest')
+            fixture._canonical_peer = True
+            self.addCleanup(fixture.doCleanups)
+            fixture.setUp()
+            author = subprocess.check_output(['git', '-C', str(fixture.peer_scope.repository_root),
+                'log', '-1', '--format=%an <%ae>'], text=True).strip()
+        self.assertEqual(author, 'Fixture <fixture@example.invalid>')
+
+    def test_evidence_database_other_sqlite_failures_remain_sanitized(self):
+        context = self.api._evidence_context(self.scope)
+        for error in (sqlite3.DatabaseError('database is locked'),
+                      sqlite3.OperationalError('database is locked: private-input'),
+                      sqlite3.OperationalError('no such table: private-input')):
+            with self.subTest(error=str(error)), self.assertRaises(state.StateError) as raised:
+                with self.api._context_database(context, write=True):
+                    raise error
+            self.assertNotIsInstance(raised.exception, state.StateBusy)
+            self.assertEqual(str(raised.exception), 'Evidence authority registration unavailable or locked')
 
     def test_executor_launch_failure_releases_check_without_handwritten_stop_proof(self):
         from runtime import delegation
