@@ -119,7 +119,8 @@ class FakeLauncherHost:
             return 200, dict(version=adapter.QUALIFIED_VERSION)
         if path == "/api/plugin":
             return 200, dict(location=dict(directory=self.directory),
-                             data=[dict(id=plugin, source=dict(type="sdk"), features=dict(server=True),
+                             data=[dict(id=plugin, source=dict(type="builtin" if plugin.startswith("opencode.") else "sdk"),
+                                        features=dict(server=True),
                                         state=dict(status="active")) for plugin in self.plugins])
         if path == "/api/agent":
             return 200, dict(data=[agent if isinstance(agent, dict) else dict(name=agent) for agent in self.agents])

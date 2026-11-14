@@ -106,6 +106,10 @@ def plugin_ids(body):
         state = item.get("state") if isinstance(item, dict) else None
         value = item.get("id") if isinstance(item, dict) else None
         active = isinstance(state, dict) and state.get("status") == "active"
+        source = item.get("source") if isinstance(item, dict) else None
+        if isinstance(value, str) and BUILTIN.match(value) and (not isinstance(source, dict)
+                                                               or source.get("type") != "builtin"):
+            value = "<nonbuiltin-plugin>"
         found.append(value if active and isinstance(value, str) and value else "<unidentified-or-inactive-plugin>")
     return found
 
@@ -224,8 +228,13 @@ class LauncherProbes:
         return dict(http=status, effect=effect_of(body) if status == 200 else None)
 
     def plugin_list(self, host):
-        status, body = host.request("GET", "/api/plugin")
+        status, body = self.plugin_listing(host)
         return plugin_ids(body) if status == 200 else []
+
+    def plugin_listing(self, host):
+        # The inventory endpoint can return [] during startup; RPC resolution waits for plugin initialization.
+        status, _ = host.rpc("health", {})
+        return host.request("GET", "/api/plugin") if status == 200 else (status, None)
 
     # ------------------------------------------------------------ the temp-HOME servers: A1-A3 (0 calls), then A5
     def temp_group(self, chosen):
@@ -255,7 +264,8 @@ class LauncherProbes:
         try:
             host = self.start("temp", project)
             wrapped = ZeroCallHost(host)
-            listing = {name: wrapped.request("GET", "/api/%s" % name) for name in ("plugin", "mcp", "config")}
+            listing = dict(plugin=self.plugin_listing(wrapped))
+            listing.update({name: wrapped.request("GET", "/api/%s" % name) for name in ("mcp", "config")})
             texts = {name: json.dumps(body) for name, (status, body) in listing.items() if status == 200}
             ids = plugin_ids(listing["plugin"][1]) if listing["plugin"][0] == 200 else []
             session = self.worker_session(wrapped, "isolation probe")
