@@ -404,6 +404,74 @@ class NativeBehaviorRecordTests(unittest.TestCase):
             with self.assertRaises(doctor.ObservationError):
                 observe(changed)
 
+    def managed_wrapped_denial(self):
+        patch, result = wrapped_patch_denial()
+        reason = 'Patching requires a WORKING editable bound task without applicable blockers'
+        result['payload']['output'][1]['text'] = (
+            'Script error:\nCommand blocked by PreToolUse hook: '+reason+'. Command: '+PATCH)
+        return [session(), started(), patch,
+            row('token_usage_record', dict(usage={})), result]
+
+    def test_managed_parent_wrapped_denial_keeps_outer_identity_and_original_sources(self):
+        rows = self.managed_wrapped_denial()
+        raw = encoded(rows)
+        fact = codex._native_managed_tool(self.records(rows), raw=raw, submitted_patch=PATCH,
+            turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement')
+        self.assertEqual(fact['call_id'], 'native-call')
+        self.assertEqual(fact['turn_id'], 'native-turn')
+        self.assertEqual(fact['submitted_patch_sha256'], hashlib.sha256(PATCH.encode()).hexdigest())
+        expected = []
+        for index in (2, 4):
+            line = encoded([rows[index]])
+            offset = len(encoded(rows[:index]))
+            expected.append(dict(reference=f'/public/native-rollout.jsonl#bytes:{offset}:{len(line)}',
+                sha256=hashlib.sha256(line).hexdigest()))
+            self.assertEqual(raw[offset:offset+len(line)], line)
+        self.assertEqual(startup._canonical_plain(fact['sources']), expected)
+        self.assertNotIn('post_hook_fingerprint', fact)
+
+    def test_managed_parent_wrapped_denial_rejects_substitution_and_ambiguous_pairs(self):
+        from copy import deepcopy
+        rows = self.managed_wrapped_denial()
+        variants = []
+        for index, key, values in (
+                (2, 'input', [rows[2]['payload']['input']+'text(1);',
+                    rows[2]['payload']['input'].replace('after', 'different'),
+                    'text(await tools.apply_patch(PATCH));\n']),
+                (2, 'namespace', ['mcp']),
+                (4, 'namespace', ['mcp']),
+                (4, 'name', ['apply_patch', 'shell']),
+                (4, 'call_id', ['another-call']),
+                (4, 'output', [
+                    wrapped_patch_denial()[1]['payload']['output'],
+                    rows[4]['payload']['output']+[dict(type='input_text', text='extra')],
+                    [rows[4]['payload']['output'][0],
+                        dict(type='input_text', text=rows[4]['payload']['output'][1]['text']+' altered')],
+                    [dict(type='input_text', text='Script completed\nWall time 0.5 seconds\nOutput:\n'),
+                        rows[4]['payload']['output'][1]],
+                    rows[4]['payload']['output'][1]['text'],
+                ])):
+            for value in values:
+                changed = deepcopy(rows)
+                changed[index]['payload'][key] = value
+                variants.append(changed)
+        variants.extend(([rows[0], rows[1], rows[4], rows[2]], [*rows, rows[4]],
+            [*rows, rows[2], rows[4]],
+            [*rows[:4], row('event_msg', dict(type='task_complete', turn_id='native-turn')),
+                row('event_msg', dict(type='task_started', turn_id='other-turn')), rows[4]]))
+        for changed in variants:
+            with self.subTest(rows=changed), self.assertRaises(doctor.ObservationError):
+                codex._native_managed_tool(self.records(changed), submitted_patch=PATCH,
+                    turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement')
+        for selection in (dict(call_id='unrecorded-inner'), dict(case_id='post-tool-handling'),
+                dict(child_patch=True)):
+            with self.subTest(selection=selection), self.assertRaises(doctor.ObservationError):
+                codex._native_managed_tool(self.records(rows), submitted_patch=PATCH, **(
+                    dict(turn_id='native-turn', call_id='native-call', case_id='pre-tool-enforcement') | selection))
+        # Toolkit denial is not the native sandbox-safety claim in either direction.
+        with self.assertRaises(doctor.ObservationError):
+            self.rejection(rows)
+
     def test_managed_selected_parent_turn_keeps_actual_prior_history(self):
         observe = self.api(codex, '_native_managed_tool')
         reason = 'Patching requires a WORKING editable bound task without applicable blockers'
