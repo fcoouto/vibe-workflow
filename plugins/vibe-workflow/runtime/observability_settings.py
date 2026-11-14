@@ -620,9 +620,9 @@ def _runtime_ready(scope):
 
 
 def _collection_fields(code):
-    from runtime.adapters import codex_usage
-    sources = sorted("codex " + version for version in codex_usage.QUALIFIED_VERSIONS)
-    return dict(collection=code, native_collection_qualified=bool(sources), collection_sources=sources)
+    from runtime.software_versions import MINIMUM_VERSIONS
+    sources = ["codex >= " + MINIMUM_VERSIONS["codex"]]
+    return dict(collection=code, native_collection_qualified=True, collection_sources=sources)
 
 
 def _collection_code(scope, project, read_checkout):

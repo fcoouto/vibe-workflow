@@ -15,7 +15,7 @@ When a thread's baseline is zero, ``token_count`` rows with ``info: null`` that 
 non-null row are read as zero usage; a null after any non-null row is ``token_info_missing``.
 
 A forked file repeats its parent's ``session_meta`` header after its own, before its first token row, and its
-totals start fresh. The first row of every file must be the thread's own header with a qualified version; later
+totals start fresh. The first row of every file must be the thread's own header; later
 headers in a file are ignored until its first token row and are a mismatch after it.
 
 Paginated history: every plain and page file of the thread found in the window is read in name-timestamp order
@@ -33,7 +33,9 @@ that mentions ``"token_count"`` in its text, is skipped unparsed.
 
 The row shape, row timestamps, inclusive counters, leading null rows, separation of parent and child thread
 totals and forked headers were confirmed on real 0.167.0-era files on 12 November 2026, so
-``QUALIFIED_VERSIONS`` holds ``0.167.0``; any other version reports ``source_version_unqualified``.
+``QUALIFIED_VERSIONS`` retains ``0.167.0`` as deprecated provenance, not an allowlist. Known software releases
+below the Codex minimum report the legacy ``source_version_unqualified`` gap. Equal/newer releases and unknown
+version metadata still require the same identity, row shape, timestamp and counter checks.
 
 Resumed threads need no separate detection: on the same real files, a resumed session continued in the same
 file, and after each of 94 idle gaps over an hour the next total equalled the previous total plus that row's
@@ -60,10 +62,11 @@ import stat
 import time
 
 from runtime.startup import StartupError, json_object
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 
 SOURCE = "codex-session-file"
-QUALIFIED_VERSIONS = frozenset({"0.167.0"})
+QUALIFIED_VERSIONS = frozenset({"0.167.0"})  # Deprecated provenance, never a release allowlist.
 COUNTERS = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens",
             "output_tokens", "reasoning_output_tokens", "total_tokens")
 GAP_CODES = frozenset({
@@ -137,7 +140,7 @@ def _located(thread_id, started_at, cutoff_at, deadline, stack):
 
 
 def read_thread_usage(thread_id, *, started_at, cutoff_at, deadline, qualified_versions=QUALIFIED_VERSIONS):
-    """Return one thread's usage between ``started_at`` and ``cutoff_at``; any gap leaves every counter None."""
+    """Return window usage; gaps leave counters None. ``qualified_versions`` is deprecated provenance only."""
     thread_id = _thread_id(thread_id)
     _window(started_at, cutoff_at, deadline)
     qualified = _qualified(qualified_versions)
@@ -167,7 +170,7 @@ def read_thread_usage(thread_id, *, started_at, cutoff_at, deadline, qualified_v
 
 
 def acquire_task_observations(threads, *, started_at, cutoff_at, deadline, qualified_versions=QUALIFIED_VERSIONS):
-    """Read every expected thread of a task; coverage is complete only when no thread has a gap."""
+    """Read all expected threads; gaps mean incomplete coverage. ``qualified_versions`` is deprecated provenance."""
     _window(started_at, cutoff_at, deadline)
     _qualified(qualified_versions)
     if not isinstance(threads, list) or len(threads) > MAX_THREADS:
@@ -426,7 +429,7 @@ class _Reading:
                 raise UsageGap("session_meta_mismatch")
             version = payload.get("cli_version")
             self.cli_version = version if isinstance(version, str) and _VERSION.fullmatch(version) else None
-            if self.cli_version is None or self.cli_version not in self.qualified:
+            if at_least(self.cli_version, MINIMUM_VERSIONS["codex"]) is False:
                 raise UsageGap("source_version_unqualified")
             moment = _time(row.get("timestamp"))
             if self.files == 1:

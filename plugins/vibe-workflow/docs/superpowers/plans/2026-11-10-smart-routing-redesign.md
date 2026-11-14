@@ -10,6 +10,20 @@
 
 **Spec:** [Smart Routing redesign](../specs/2026-11-10-smart-routing-redesign-design.md), approved by the user on 10 November 2026. It amends the [8 November design](../specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) and the [C.3 wiring design](../specs/2026-11-10-smart-routing-c3-wiring-design.md). The [8 November plan](2026-11-08-smart-routing.md) stays the record of the merged slices, the pre-canary requirements and the cutover tasks; this plan owns slices F1 to F8 and L1 to L4.
 
+### Advisory replay retirement, approved 13 November 2026
+
+[Validation Edit 14](../../smart-routing-validation.md#edit-14-13-november-2026-advisory-replay-retired)
+retires the historical/prospective advisory sample/report, F8 implementation/merge
+prerequisite and advisory-only capture/journal work. It supersedes conflicting F8
+requirements here and in the inherited 8 November plan, including its S2.7/S2.8,
+S3.7 and pre-canary items 7 and 12. Preserve earlier decisions and incomplete
+evidence as history, not an advisory pass. F1–F7, strict replay and every unrelated
+billing, dispatch, native, allowance, canary and release requirement remain.
+The 10 November simplifications and coordinator call 38 below describe their
+then-current scope; their instruction to retain F8 is superseded by this amendment.
+L1–L3 remain post-canary outcome learning, not a substitute historical comparison;
+L4 stays conditional. No collection, client installation or live authority follows.
+
 **Required in this release, clarified by the user on 10 November 2026:** profile the task, rank suitable models, select an eligible subscription connection, launch the admitted model with its supported effort, and record the outcome. Returning a recommendation or requiring the user to choose and launch it is insufficient. F1 supplies the profile, F4 supplies client bindings, F5 preserves subscription allocation, and F7 verifies the complete flow. Here, `gateway` means paid OpenRouter; it does not include OpenCode's included subscription allowance.
 
 ### Release scope amendment: connected subscriptions and native clients
@@ -76,14 +90,14 @@ Each line names a condition the design implies and the task whose tests pin it.
 | F5 | List price and value order, one subscription shortlist, existing allocation, replay fields, pre-registration Edit 7 | Full suite | F4 |
 | F6 | Model names removed, `validate.py` check | Affected modules | F5 |
 | F7 | Strict replay runner; canary harness in ranked mode on the admitted route | Affected modules | F6 |
-| F8 | Historical replay runner | Affected modules | F5, in parallel with F6 and F7 |
+| F8 | Historical replay runner — retired 13 November 2026; partial work preserved | No current delivery gate | Not required |
 
 The order follows the files the slices share: `runtime/routing.py`, `runtime/routing_evidence.py`, `runtime/routing_observations.py`, `scripts/routing.py`, `scripts/validate.py`, `runtime/routing_launch.py`, `runtime/opencode_launcher.py`, `runtime/delegation_routing.py`, `runtime/openrouter_worker_managed.py`, `scripts/openrouter_proposals.py`, `runtime/usage_budget.py`, `tests/test_routing_production_flows.py`, `tests/qualification/server.py` and `tests/qualification/canary.py`. Slices that run in parallel own disjoint files: F1 does not touch `scripts/validate.py` or `runtime/routing.py`, and F8 touches only its own two files and one section of the validation document.
 
 **Differences from design section 6, and why (coordinator's calls):**
 
 - **The new row key moves from F5 to F2.** The role is the first part of today's row key, so removing role names rewrites the key. Doing it in F5 would need an interim mapping in F2, which the design forbids.
-- **F7 and F8 are new.** The 8 November plan requires a strict replay that passes before the canary and a historical replay that has run ([pre-canary item 7](2026-11-08-smart-routing.md#pre-canary-requirements)). No runner exists for either: `tests/test_routing_replay.py` replays synthetic arrivals only, and `tests/qualification/replay_export.py` only exports.
+- **F7 and F8 were added by this plan.** F7 supplies the required strict replay and ranked canary. F8's advisory runner was required by the inherited pre-canary item 7; Edit 14 retires that duty and preserves the partial work without requiring its merge.
 - **F6 follows F5** because the usage canary takes its model from the priced table.
 
 ## File structure
@@ -97,7 +111,7 @@ The order follows the files the slices share: `runtime/routing.py`, `runtime/rou
 | `runtime/routing_funding.py` | F5 | The ranked decision moved out of `runtime/routing.py`, one subscription shortlist, existing allocation and the admission record builder |
 | `runtime/model_names.py` | F6 | Display-name lookup and the model-name check `scripts/validate.py` calls |
 | `tests/qualification/replay_strict.py` | F7 | Strict replay over exported admission records |
-| `tests/qualification/replay_history.py` | F8 | Advisory historical replay over past session metadata |
+| `tests/qualification/replay_history.py` | F8 (retired) | Preserved partial advisory work; not required for this release |
 | `runtime/routing_learning.py` | L1 | Analysis rows and scores |
 | `runtime/due_jobs.py` | L2 | Due-job check, one detached runner, backoff |
 
@@ -1158,11 +1172,17 @@ Before F6.2 implementation, resolve the review's unconfirmed generic-alias conce
 - [ ] **Step 5: Run** `scripts/test_sharded.py 'test_qualification*'` and `scripts/validate.py`. Expected: OK.
 - [ ] **Step 6: Commit** `test(qualification): the canary uses ranked admissions and real window state`.
 
-After F7 and F8 have both merged, the coordinator runs the strict replay over the exported pilot ledger and records the result, and the explanation of the 21st record, under Results in `docs/smart-routing-validation.md`, in a PR of its own. Waiting for F8 keeps that edit from colliding with F8's edit of the same document.
+After F7 is merged, the coordinator runs the strict replay over the 21 exported pilot admissions and records the result, and the explanation of the 21st record, under Results in `docs/smart-routing-validation.md`, in a PR of its own. Edit 14 removes the F8 merge wait; it does not supply a strict pass or authorize access to the private export.
 
 ---
 
 ## Slice F8: Historical replay runner
+
+> **Retired, 13 November 2026, by validation Edit 14.** The task below records the
+> former scope only. Do not resume implementation, collection or qualification for
+> this advisory duty. Preserve partial PR #283 and its branch; close it superseded
+> by the retirement amendment, not merged or marked passed. The later prospective
+> plan, PS-01 correction and proposed sender journal are retired with this duty.
 
 **Owned files:** `tests/qualification/replay_history.py`, `tests/test_qualification_replay_history.py`, `docs/smart-routing-validation.md` (the store field-mapping edit only; F5.1 has merged by then, and Results are written by the coordinator after the run).
 
@@ -1188,12 +1208,12 @@ The run itself happens after a path is qualified live, as Edit 6 orders.
 
 These join the [pre-canary requirements](2026-11-08-smart-routing.md#pre-canary-requirements) of the 8 November plan:
 
-1. F1 to F8 are merged.
+1. F1 to F7 are merged. F8 is retired and is not a prerequisite (Edit 14).
 2. **The guidance is published again in the new row shape.** The coordinator runs the existing guidance publication procedure once: each vendor guide page is read by a model once and turned into rows of `work_kind`, complexity and risk; the catalog input gains `provider`, `list_price` and `display_name`; `scripts/routing_table.py refresh` compiles the production table. Until the due jobs of L2 exist, the catalog and guides are refreshed by hand.
 3. Edit 7 is registered (Task F5.1) and the strict replay over the exported pilot ledger has passed (after F7).
 4. `scripts/validate.py` has run once with the real home and reports `model_names: passed`.
 5. Under approved decisions A and C: skip the gateway check and leave the gateway and Codex-native paths unqualified. Run the approved isolation probes, drill and demand measurement; qualify only measured OpenCode subscription paths. No OpenRouter key or organization is needed for this session. Under clarified B, the router must automatically select and launch models on those subscription paths; the ranked canary cannot be replaced by recommendation-only or explicit-choice launches.
-6. Use this order: compiled table → measured `qualify_path` requests → `seed_window` for every demanded window → activation → historical replay and its recorded advisory report → approved ranked canary. The strict pilot replay has already passed. Seeding itself requires qualification, not a table.
+6. Use this order: compiled table → measured `qualify_path` requests → `seed_window` for every demanded window → user activation → approved ranked canary. The strict pilot replay must already have passed; this is a prerequisite, not a recorded result. Seeding itself requires qualification, not a table. No advisory replay/report intervenes (Edit 14).
 7. Record the approved subscription paths, pinned table/route inputs and existing call caps before the canary, arrange its quiet window, and seed again after a stale gap where no eligible pool is fresh. Exact admitted identity still controls each send. Remove the project from `managed_projects` after the approved canary. The user schedules the live session; this plan grants no new live calls.
 
 **Release coverage beyond this canary:** F4.5's OpenCode subscription binding and F4.6's two native clients must have their synthetic end-to-end checks and supported-client evidence recorded. The existing two-provider canary cannot establish three-provider or native-client coverage. Reuse existing observations where applicable; request only the missing bounded checks under separate approved caps. Lack of one connection on this machine does not require every user to connect it, but leaves its live support claim unverified.

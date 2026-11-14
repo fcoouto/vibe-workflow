@@ -7,10 +7,11 @@ import os
 import sys
 
 from runtime import langfuse
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 from runtime.startup import StartupError, json_object
 
 
-KEYRING_VERSION = "25.7.0"
+KEYRING_VERSION = MINIMUM_VERSIONS["keyring"]
 MAX_BLOB = 2048
 USERNAME = "project-keys"
 SERVICE_PREFIX = "vibe-coding-workflow.langfuse."
@@ -38,7 +39,7 @@ def validate_pair(pair):
 def _backend():
     if sys.platform not in ("darwin", "win32"):
         raise CredentialError("unsupported_credential_store")
-    # The pinned native constructors apply these environment overrides themselves.
+    # The native constructors apply these environment overrides themselves.
     if "KEYCHAIN_PATH" in os.environ or any("KEYRING_PROPERTY_" in name for name in os.environ):
         raise CredentialError("credential_store_environment_override")
     try:
@@ -47,8 +48,8 @@ def _backend():
         raise CredentialError("credential_dependency_missing") from None
     except Exception:
         raise CredentialError("credential_dependency_unavailable") from None
-    if installed != KEYRING_VERSION:
-        raise CredentialError("credential_dependency_version_unsupported")
+    if at_least(installed, KEYRING_VERSION) is False:
+        raise CredentialError("credential_dependency_version_too_old")
     try:
         if sys.platform == "darwin":
             from keyring.backends.macOS import Keyring
@@ -57,6 +58,9 @@ def _backend():
             from keyring.backends.Windows import WinVaultKeyring
             backend = WinVaultKeyring()
         _ = backend.priority
+        if not all(callable(getattr(backend, name, None)) for name in
+                   ("get_password", "set_password", "delete_password")):
+            raise ValueError("Missing native credential API")
     except Exception:
         raise CredentialError("credential_store_unavailable") from None
     if sys.platform == "darwin" and getattr(backend, "keychain", None) is not None:

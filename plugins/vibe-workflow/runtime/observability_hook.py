@@ -77,7 +77,7 @@ def _upload(settings, scope, report, context):
     started_at = datetime.fromtimestamp(created, timezone.utc)
     cutoff_at = datetime.now(timezone.utc)
     observations = codex_usage.acquire_task_observations(threads, started_at=started_at, cutoff_at=cutoff_at,
-        deadline=time.monotonic() + O3_SECONDS, qualified_versions=codex_usage.QUALIFIED_VERSIONS)
+        deadline=time.monotonic() + O3_SECONDS)
     reconciled = accounting.reconcile_task(observations, verification=report)
     with settings.export_store(scope, task_ref, key, write=True, create=True) as owner:
         envelope = owner.load()

@@ -15,9 +15,10 @@ from types import SimpleNamespace
 
 from runtime import model_names
 from runtime.adapters import session_start
+from runtime.adapters.codex_context import native_hook_context as _native_hook_context
 from runtime.adapters.session_start import diagnostic, render
 from runtime.engine import HookResult, RuntimeEvent
-from runtime.doctor import MAX_OUTPUT, NativeProcess, ObservationError, validate_initialize, version
+from runtime.doctor import MAX_OUTPUT, NATIVE_MAX_FILE, NATIVE_MAX_RECORD, NativeProcess, ObservationError, validate_initialize, version
 from runtime.startup import StartupError, AcceptedScope, json_object
 
 
@@ -428,7 +429,7 @@ def _native_surface(thread, surface, observer_version=None):
 def guarded_child_lineage(event, *, deadline):
     """Read the CLI child hook transcript. Settlement corroborates the parent spawn separately."""
     from runtime.onboarding import _read_file
-    from runtime.startup import CANONICAL_MAX_ROWS
+    from runtime.doctor import NATIVE_MAX_ROWS
 
     try:
         if event.client != 'codex' or event.kind != 'PreToolUse' or event.tool_name != 'apply_patch':
@@ -442,11 +443,11 @@ def guarded_child_lineage(event, *, deadline):
                 or path.resolve(strict=True) != path or not path.name.startswith('rollout-')
                 or not path.name.endswith(f'-{child}.jsonl')):
             raise ObservationError('guarded_rollout_unverified')
-        raw = _read_file(path, MAX_OUTPUT, private=True)
-        lines = raw.splitlines()
-        if not lines or not raw.endswith(b'\n') or len(lines) > CANONICAL_MAX_ROWS:
+        raw = _read_file(path, NATIVE_MAX_FILE, private=True)
+        lines = raw.splitlines(keepends=True)
+        if not lines or not raw.endswith(b'\n') or len(lines) > NATIVE_MAX_ROWS:
             raise ObservationError('guarded_rollout_unverified')
-        first, *rows = [json_object(line) for line in lines]
+        first, *rows = [json_object(line, limit=NATIVE_MAX_RECORD) for line in lines]
         metadata = first['payload']
         if (first['type'] != 'session_meta' or metadata['id'] != child
                 or any(row['type'] == 'session_meta' for row in rows)):
@@ -744,7 +745,7 @@ def _exec_wrapped_pairs(raw, data, turn, *, tools):
         source, output_offset, output_size = output['source']['reference'].rsplit(':', 2)
         start = int(call_offset) + int(call_size)
         end = int(output_offset) + int(output_size)
-        middle = [json_object(line) for line in raw[start:int(output_offset)].splitlines()]
+        middle = [json_object(line, limit=NATIVE_MAX_RECORD) for line in raw[start:int(output_offset)].splitlines()]
         completion, = [row for row in middle if row['type'] != 'token_usage_record']
         event = completion['payload']
         if (completion['type'] != 'event_msg' or event.get('type') != 'item_completed'
@@ -781,7 +782,7 @@ def _exec_wrapped_pairs(raw, data, turn, *, tools):
         nested_ids = {call['payload']['call_id'] for call, _ in pairs.values()}
         completed = set()
         for line in raw.splitlines():
-            row = json_object(line)
+            row = json_object(line, limit=NATIVE_MAX_RECORD)
             event = row['payload']
             item = event.get('item')
             if (row['type'] == 'event_msg' and event.get('type') == 'item_completed'
@@ -870,7 +871,7 @@ def _cooperative_activity(raw, *, path, child, turn, result, review, wait_args=N
     tools_started = False
     settings_seen = False
     for line in raw.splitlines():
-        row = json_object(line)
+        row = json_object(line, limit=NATIVE_MAX_RECORD)
         kind, event = row['type'], row['payload']
         if kind in {'session_meta', 'turn_context', 'token_usage_record', 'world_state'}:
             continue
@@ -1007,7 +1008,7 @@ def _observe_native_assignment(scope, attempt, parent_turn_id, spawn_item_id, *,
                 _no_links(path)
                 info = path.stat()
                 physical = dict(device=info.st_dev, inode=info.st_ino)
-                raw = _read_file(path, MAX_OUTPUT, expected_binding=physical)
+                raw = _read_file(path, NATIVE_MAX_FILE, expected_binding=physical)
                 activity = _cooperative_activity(raw, path=path, child=child, turn=turn, result=result,
                     review=review, wait_args=wait_args)
                 observed_tools = {call['id']: call['tool'] for call in activity['calls']}
@@ -1017,7 +1018,7 @@ def _observe_native_assignment(scope, attempt, parent_turn_id, spawn_item_id, *,
             if latest() != (turn, status, failure_code, will_retry) or prepared(scope, attempt) != binding:
                 raise ObservationError("assignment_changed")
             if cooperative and (_native_metadata(scope, request, child, observed_version).get('path') != str(path)
-                    or _read_file(path, MAX_OUTPUT, expected_binding=physical) != raw or time.monotonic() >= deadline):
+                    or _read_file(path, NATIVE_MAX_FILE, expected_binding=physical) != raw or time.monotonic() >= deadline):
                 raise ObservationError('cooperative_source_changed')
             receipt = dict(version=2, mechanism=mechanism, attempt_id=attempt,
                 task_name=binding["task_name"], agent_path=agent_path, native_version=admitted_version,
@@ -1087,9 +1088,9 @@ NATIVE_FAILURE_CODES = {"contextWindowExceeded", "sessionBudgetExceeded", "usage
 NATIVE_READ_ONLY_REJECTION = 'patch rejected: writing is blocked by read-only sandbox; rejected by user approval settings'
 
 
-def _native_patch_denied(item, output, submitted_patch):
+def _native_patch_denied(item, output, submitted_patch, *, rejection=NATIVE_READ_ONLY_REJECTION):
     if item.get('name') == 'apply_patch':
-        return item.get('input') == submitted_patch and output == NATIVE_READ_ONLY_REJECTION
+        return item.get('input') == submitted_patch and output == rejection
     if item.get('name') != 'exec' or not isinstance(item.get('input'), str):
         return False
     script = item['input'].removesuffix('\n')
@@ -1105,7 +1106,7 @@ def _native_patch_denied(item, output, submitted_patch):
     return (isinstance(envelope, dict) and set(envelope) == {'type', 'text'}
             and envelope['type'] == 'input_text' and isinstance(envelope['text'], str)
             and re.fullmatch(r'Script failed\nWall time [0-9]{1,6}(?:\.[0-9]{1,6})? seconds\nOutput:\n', envelope['text'])
-            and denial == {'type': 'input_text', 'text': 'Script error:\n' + NATIVE_READ_ONLY_REJECTION})
+            and denial == {'type': 'input_text', 'text': 'Script error:\n' + rejection})
 
 
 def _verify_bootstrap_reads(rows, expected_hashes, patch_call_id):
@@ -1196,16 +1197,19 @@ def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id,
             raise ValueError
         call, output = calls
         item, result = call['payload'], output['payload']
+        wrapped = case_id == 'pre-tool-enforcement' and not child_patch and item.get('name') == 'exec'
         if (call['turn_id'] != turn_id or output['turn_id'] != turn_id
-                or item['type'] != 'custom_tool_call' or item.get('name') != 'apply_patch'
-                or item.get('namespace') not in (None, 'functions') or item.get('input') != submitted_patch
+                or item['type'] != 'custom_tool_call' or item.get('name') != ('exec' if wrapped else 'apply_patch')
+                or item.get('namespace') not in (None, 'functions') or not wrapped and item.get('input') != submitted_patch
                 or item.get('call_id') != call_id or result['type'] != 'custom_tool_call_output'
-                or result.get('call_id') != call_id or result.get('name') not in (None, 'apply_patch')):
+                or result.get('call_id') != call_id or result.get('name') not in (None, item['name'])
+                or wrapped and result.get('namespace') not in (None, 'functions')):
             raise ValueError
         text = result.get('output')
         if case_id == 'pre-tool-enforcement':
             reason = 'Patching requires a WORKING editable bound task without applicable blockers'
-            if text != f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}':
+            if not _native_patch_denied(item, text, submitted_patch,
+                    rejection=f'Command blocked by PreToolUse hook: {reason}. Command: {submitted_patch}'):
                 raise ValueError
         elif not (isinstance(text, str) or isinstance(text, list) and all(isinstance(part, dict)
                 and part.get('type') == 'input_text' and isinstance(part.get('text'), str) for part in text)):
@@ -1222,52 +1226,6 @@ def _native_managed_tool(records, *, submitted_patch, turn_id, call_id, case_id,
         return _canonical_freeze(fact)
     except (StartupError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
         raise ObservationError('native_managed_tool_unobserved') from None
-
-
-def _native_hook_context(records, *, expected_context, turn_id):
-    """Observe exact harness-hook context without inventing hook events or source paths."""
-    import xml.etree.ElementTree as xml
-    from runtime.startup import MAX_INPUT, _canonical_freeze, _canonical_plain
-    try:
-        if not isinstance(expected_context, str) or not expected_context or len(expected_context.encode()) > MAX_INPUT:
-            raise ValueError
-        data = _canonical_plain(records)
-        found = []
-        for row in data['records']:
-            item = row['payload']
-            if item['type'] != 'message' or item.get('role') != 'user':
-                continue
-            content = item.get('content')
-            passthrough = item.get('internal_chat_message_metadata_passthrough')
-            metadata = passthrough.get('content_item_metadata') if isinstance(passthrough, dict) else None
-            if not isinstance(content, list) or not isinstance(metadata, list) or len(content) != len(metadata):
-                continue
-            for index, part in enumerate(content):
-                provenance = metadata[index].get('provenance') if isinstance(metadata[index], dict) else None
-                if (not isinstance(part, dict) or part.get('type') != 'input_text'
-                        or not isinstance(provenance, dict) or provenance.get('type') != 'harness'
-                        or provenance.get('hook') is not True):
-                    continue
-                text = part.get('text')
-                if not isinstance(text, str) or '<!' in text or '<?' in text:
-                    raise ValueError
-                fragment = xml.fromstring(text)
-                if (fragment.tag != 'hook_prompt' or set(fragment.attrib) != {'hook_run_id'}
-                        or len(fragment) or fragment.tail is not None):
-                    raise ValueError
-                hook_id = _review_id(fragment.attrib['hook_run_id'])
-                if fragment.text == expected_context:
-                    if row['turn_id'] != turn_id:
-                        raise ValueError
-                    message_id = _review_id(item['id']) if item.get('id') is not None else None
-                    found.append(dict(thread_id=data['thread_id'], turn_id=row['turn_id'],
-                        hook_run_id=hook_id, message_id=message_id, content_index=index,
-                        context_sha256=hashlib.sha256(fragment.text.encode()).hexdigest(), sources=[row['source']]))
-        if len(found) != 1:
-            raise ValueError
-        return _canonical_freeze(found[0])
-    except (StartupError, ValueError, TypeError, KeyError, UnicodeError, RecursionError, xml.ParseError):
-        raise ObservationError('native_hook_context_unobserved') from None
 
 
 def _setup_executable(process):
@@ -1450,7 +1408,7 @@ def observe_setup_metadata(process, attempt):
             physical = dict(device=info.st_dev, inode=info.st_ino)
             if time.monotonic() >= process.deadline:
                 raise ObservationError('timeout')
-            raw = d3._read_file(path, MAX_OUTPUT, expected_binding=physical)
+            raw = d3._read_file(path, NATIVE_MAX_FILE, expected_binding=physical)
             records = doctor.native_behavior_records(raw, thread_id=thread_id, source_reference=str(path))
             if probe is not None:
                 probe = startup._canonical_plain(probe)
@@ -1480,7 +1438,7 @@ def observe_setup_metadata(process, attempt):
                     raise ObservationError('setup_context_delivery_unobserved')
                 actual = startup._canonical_plain(matches[0])
                 original['observations']['startup-context'] = [*actual['sources'], context['reference']]
-            if d3._read_file(path, MAX_OUTPUT, expected_binding=physical) != raw:
+            if d3._read_file(path, NATIVE_MAX_FILE, expected_binding=physical) != raw:
                 raise ObservationError('setup_native_source_changed')
             if time.monotonic() >= process.deadline:
                 raise ObservationError('timeout')
@@ -1533,7 +1491,7 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
             physical = dict(device=info.st_dev, inode=info.st_ino)
             if time.monotonic() >= deadline:
                 raise ObservationError('timeout')
-            raw = d3._read_file(path, MAX_OUTPUT, expected_binding=physical)
+            raw = d3._read_file(path, NATIVE_MAX_FILE, expected_binding=physical)
             from runtime.doctor import native_behavior_records
             records = native_behavior_records(raw, thread_id=stream['id'], source_reference=str(path))
             fact = startup._canonical_plain(_native_managed_tool(records, submitted_patch=probe['patch'],
@@ -1562,7 +1520,7 @@ def observe_managed_case(scope, task_ref, attempt_ref, case_id):
                 count = after['post_receipts_count']
                 if type(count) is not int or count <= 0 or after['generation']-before['generation'] != count:
                     raise ObservationError('managed_generation_unattributed')
-            if d3._read_file(path, MAX_OUTPUT, expected_binding=physical) != raw:
+            if d3._read_file(path, NATIVE_MAX_FILE, expected_binding=physical) != raw:
                 raise ObservationError('managed_native_source_changed')
             if (time.monotonic() >= deadline or projection != startup._canonical_plain(
                     setup_observation.managed_observation_projection(scope, task_ref, attempt_ref, case_id=case_id))

@@ -1,5 +1,10 @@
 # Smart Routing cutover criteria
 
+> **Current replay requirement, 13 November 2026:** [Edit 14](#edit-14-13-november-2026-advisory-replay-retired)
+> retires historical/prospective advisory replay and its F8 prerequisite. Strict
+> replay still gates the canary and cutover. Earlier registrations and results
+> below remain historical; retirement is not a passing replay result.
+
 - **Status:** Pre-registration draft, written before any canary starts (plan Task S2.7, amendments A11 and A14). Edited on 9 November 2026, before any pilot run: added the [pilot canary](#pilot-canary-bounded-not-the-pre-registered-canary). The user chose a bounded pilot because the pre-registered canary cannot run yet. No existing number was changed. Edited again on 9 November 2026, still before any pilot run, after the independent review of the pilot harness: the pilot runs on a dedicated canary ledger, the refusal order is stated as implemented, the working-tree check and its residual risks are added, and the probes' calls are counted against the pilot cap. No number was changed. A third edit on 9 November 2026, still before any pilot run, corrects one stale fact: the remaining qualification budget is 9 of 14 spent, 5 remain (it read "9 remain"). It also states what happens when the guard probe fails for another reason, and adds the ancestor-config refusal. No threshold changed. Edit 4: pilot cap 24 -> 28 before attempt 2. Reason: attempt 1 aborted at admission 1 on a harness defect (TypeError in the accounting wrapper) after 2 real requests; the cap is raised by 4 so a second attempt can still run the pre-registered 20 admissions; no other number changed; both attempts are reported. The user is told of this edit; the durable call ledger carries it as an appended cap line. Edit 5, before attempt 2 and changing no number: the settled-accounting re-read rule and titled sessions for admissions 2 to 20 (see Mechanism). [Edit 6](#edit-6-10-november-2026-replay-against-the-available-history), on 10 November 2026 before any replay has run: the 200-assignment replay minimum becomes every eligible past session, labelled by fixed metadata rules, and its disagreement rate becomes advisory only; the strict replay runs only on real admission records, over the exported pilot records before the canary (where it must pass) and again at C.1, and quality re-execution is deferred to C.1. The replaced text is kept and marked superseded. No latency budget, canary bound or pilot number changed. [Edit 7](#edit-7-11-november-2026-redesigned-replay-ranking-and-canary), registered on 11 November 2026 before any replay, ranked canary or label under it: specialist roles, the strict replay of ranked and worker-choice records, historical replay labels, value order, subscription-only selection, benchmark tolerance, the promotion test and the canary's cap interpretation. Earlier text, including Edit 6, is kept; dated pointers mark the sections Edit 7 amends, and its points govern the redesigned work where they differ. [Edit 8](#edit-8-11-november-2026-no-worker-count-admission), registered on 11 November 2026: no count of open workers admits or refuses; saved caps and declared D6 worker counts are history, and the pilot's one-at-a-time driver is a qualification protocol, not admission policy.
 - **Numbers:** Every number below is a **proposed value, not a measured result**. Change a number only by editing this file before the run it governs; record the edit and its reason. Results never change a threshold after the fact.
 - **Related:** [design](superpowers/specs/2026-11-08-usage-routing-opencode-subscriptions-design.md) sections 10.4 and 13, and the [plan](superpowers/plans/2026-11-08-smart-routing.md).
@@ -169,6 +174,10 @@ Results go to `tests/fixtures/smart-routing/probes/pilot-results.json` and to Re
 
 ## Edit 6 (10 November 2026): replay against the available history
 
+> **Amended on 13 November 2026 by [Edit 14](#edit-14-13-november-2026-advisory-replay-retired).**
+> The historical sample/report duty and advisory step in Order are retired.
+> Strict replay, admission-record retention and canary safeguards remain required.
+
 Registered on 10 November 2026, before any historical or cutover replay has run, on the user's instruction of that day: "No problem, reduce the value to the amount of past assignments we have." It replaces the text marked superseded in [Allocator replay](#allocator-replay), [Disagreement and quality re-execution](#disagreement-and-quality-re-execution) and [Canary](#canary); that text stays as written. No latency budget, canary bound or pilot number changed.
 
 **Why.** The 200-assignment minimum assumed that recorded assignments carry what the strict checks need. Past worker sessions record the model, the variant or effort, timestamps and token counts, but not the task family, the complexity or risk band, the funding state at arrival, or acceptance. Only admission records carry those. Today the only ones are the pilot's 20, made with a fixed synthetic window observation. The 15 runs in the usage ledger are legacy S1 calls, not routing admissions, and are excluded. So the replay is split in two.
@@ -294,6 +303,79 @@ Registered on 11 November 2026 for plan Task F5, checkpoint A1, after the user d
 6. **Downgrade.** A package from before this edit rejects new D6 plans without the three count fields, and assignments stored with `host_capacity: null`. No reverse reader was authorized or proved. To go back, keep the state as it is and reconcile it with a compatible package; never delete or rewrite its history, and never downgrade it automatically.
 
 Registration is not permission: this edit authorizes no live run, budget, qualification or release.
+
+## Edit 10 (13 November 2026): project-only historical replay
+
+> **Retired by [Edit 14](#edit-14-13-november-2026-advisory-replay-retired).**
+> This sample registration remains history, not an active collection duty.
+
+The user approved excluding the other `opus` project from the historical replay
+on 13 November 2026, before any historical replay had run. This changes only the
+sample scope in Edit 6 and the requirement to identify and map store C. Earlier
+registrations and counts remain as historical context, not sample targets.
+
+The sample is every eligible session of **this project's current and legacy
+checkouts**, from the registered OpenCode and Codex sources. Store C (`opus`) is
+out of scope: do not locate, inspect, map or read it for this replay. Its absence
+does not block F8. A caller must provide only the approved checkout roots of this
+project, not a parent directory that also includes another project. Other-project
+sessions in a shared client database are outside the sample. Supplied unregistered
+stores are refused before any store read, never silently dropped.
+
+Both retained source mappings and their completeness checks remain required.
+Qualification/pilot exclusion provenance and ID checks, mapped-metadata-only
+read-only access, schema identity, privacy, fixed labels, qualified routing inputs
+and every live/canary gate remain unchanged. No replay, data access, live call,
+budget increase, settings change or activation is authorized by this amendment.
+Report the actual eligible count and exclusions; do not substitute the old
+three-source total or infer a result for the excluded `opus` sessions.
+
+## Edit 14 (13 November 2026): advisory replay retired
+
+The user approved the simplest-path recommendation after the Opus brainstorm:
+“Yes, let's retire advisory replay... proceed as recommended”. The advisory number
+had no pass/fail threshold, but running and recording it was still a procedural
+pre-canary prerequisite. This edit removes that prerequisite rather than building
+provenance infrastructure for it.
+
+1. **Retired scope.** No historical or prospective advisory sample, disagreement
+   report, F8 implementation or F8 merge is required before the canary, cutover or
+   this release. This supersedes Edit 6's advisory sample/report and Order steps
+   2–3, Edit 7 point 4, Edit 10, and inherited advisory/F8 requirements. It also
+   supersedes the later partial-F8 registrations retained in
+   [PR #283](https://github.com/fcoouto/vibe-workflow/pull/283): Edits 11–13's
+   advisory collection/report duties, the prospective registration plan and PS-01
+   timing/frozen-input requirement. Those unmerged registrations are preserved,
+   not represented as delivered or qualified. No managed-cohort report replaces
+   the retired sample. Do not build the proposed sender journal, enrollment,
+   purpose, census, closure or freeze controls solely for this advisory work.
+2. **Strict replay stays mandatory and independent of F8.** After F7 is merged,
+   run strict replay over the 21 exported pilot admissions and record the result
+   and the explanation of the 21st record in a separate Results PR. A strict pass
+   remains required before the canary. At C.1, replay the pilot's and every canary
+   admission again. Keep Edit 7's ranked/worker-choice rules, Edit 8's no-count-cap
+   amendment, all four strict pass/fail rows and record export/retention rules.
+   Missing detail remains a strict failure, not a retired advisory obligation.
+3. **Remaining order.** Strict pilot replay passes before the canary. The live
+   path remains compiled table, measured path qualification, seeds for every
+   demanded window, user activation, then the separately approved ranked canary.
+   F1–F7 merge and all other pre-canary prerequisites still apply. Removing F8's
+   wait does not qualify billing, freshness, demand, native catalogs/isolation,
+   paths or the production table. Keep cap `0`, existing allowances, exact
+   admitted-identity dispatch and every other canary/cutover/release safeguard.
+4. **Preserve evidence and state.** Earlier registrations, result versions, partial
+   exclusion provenance and failed recovery findings remain as recorded; historical
+   exclusion coverage remains incomplete. Keep the 21 strict admissions separate.
+   Preserve the partial F8 branch and local native prototypes without merging,
+   installing or publishing those prototypes. Retirement is not an advisory pass
+   and creates no strict pass, accepted sample or qualified capture mechanism.
+5. **Learning and authority.** L1–L3 still follow the canary; L4 remains conditional.
+   L1 studies routed outcomes and rework, not a reconstructed historical-choice
+   comparison. Admission records do not prove a census of every native send. API
+   Usage remains required next release; production OpenRouter remains deferred.
+   This edit grants no history/content/credential access, collection, installation,
+   live qualification, model/provider calls, activation, spending, budget reset,
+   settings change or release permission. All unrelated v1 gaps remain open.
 
 ## Results
 

@@ -66,11 +66,14 @@ The Codex runtime hooks require configured runtime state; absent configuration p
 
 Stop continuation is opt-in through one runnable condition, current correlated turn, budget exactly 1, no unresolved blockers/decisions and eligible `WORKING`/`REVIEW` state. At most one continuation is consumed per task/turn, even across conditions, edits, retries, process restarts and concurrent Stop events; a genuinely new bound turn has its own allowance. Consumption occurs before continuation output, so it cannot be rearmed for that task/turn. A PostToolUse event with a previously unseen turn suppresses old-turn continuation without associating that completion with the task or pausing it. If Post arrives before canonical Pre establishes a turn binding, a later Pre for that same turn cannot adopt it; continuation or correlated pause requires a turn first established by canonical Pre. Missing or uncertain correlation passes without continuation. Interrupt can pause a correlated task; see [native qualification limits](../docs/d2-validation.md). Task state and references do not prove permission or task ownership. Readiness requires current evidence verification; status rechecks `DONE` tasks against actual content. A `DONE` result does not grant merge authority.
 
-## Package version matching
+## Accepted source compatibility
 
 Original fingerprints remain provenance and are never rewritten. The current
 schema-3 reader requires exact executing policy and runtime pins. Automatic
-cross-version compatibility is deferred; older or mixed pairs remain blocked.
+compatibility across changed source fingerprints is deferred; changed or mixed
+source pairs remain blocked. These are accepted-content checks, not software
+release-number gates. A release-number difference alone does not establish changed
+source content or an unsupported external client.
 Updates never silently repin existing records. Accepted scope,
 policy, physical authority, writer ownership and candidate checks still apply;
 a changed relevant policy/candidate requires fresh evidence. Legacy readers and

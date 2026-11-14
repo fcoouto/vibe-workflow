@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from runtime import delegation_routing, evidence, routing, startup, state, task_profile
+from runtime import delegation_routing, evidence, routing, software_versions as versions, startup, state, task_profile
 from runtime.startup import MAX_INPUT, StartupError, json_object
 
 
@@ -1597,10 +1597,10 @@ def _qualified_child_patch(scope, db, event, *, budget, pre_fingerprint=None):
         if event.kind == 'PreToolUse' and event.transcript_path is not None:
             deadline = budget['deadline'] if budget is not None else time.monotonic() + startup.OBSERVATION_SECONDS
             lineage = codex.guarded_child_lineage(event, deadline=deadline)
-            matches = [record for record in prepared if
+            matches = [record for record in prepared if versions.at_least(lineage['native_version'], versions.MINIMUM_VERSIONS['codex']) is not False and
                 record['owner']['session_id'] == lineage['parent_session_id'] and all(
                     record['data']['binding'][key] == lineage[field] for key, field in (
-                        ('task_name', 'task_name'), ('native_version', 'native_version'),
+                        ('task_name', 'task_name'),
                         ('requested_model', 'model'), ('requested_effort', 'effort')))]
         elif event.kind == 'PostToolUse' and pre_fingerprint is not None:
             matches = [record for record in prepared if _child_patch_pre_fingerprint(

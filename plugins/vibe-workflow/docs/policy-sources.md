@@ -1,5 +1,23 @@
 # Policy source map
 
+## Minimum-only software compatibility — 13 November 2026
+
+The user rejected exact software-version gates, then clarified minimum-only
+support with no upper bounds. They accepted the oldest documented working
+versions as initial floors and requested command/API research for the rest.
+[Software compatibility](software-compatibility.md) records floor evidence,
+proposed Git/GitHub CLI/RTK floors and unresolved plugin/service floors.
+`runtime/software_versions.py` owns numeric comparison; existing adapters retain
+capability, identity, schema and content checks. The policy update supersedes
+release allowlists and optional dependency exact pins, not historical evidence,
+accepted source fingerprints or immutable receipt integrity checks.
+
+Representative instruction cases: an OpenCode 2.2.6 CLI/2.2.7 server mismatch does
+not trigger requalification by release number; a newer keyring keeps the explicit
+native backend and still rejects redirection; an unchanged native catalog keeps
+its connection/control binding across software updates. Executable regression
+tests cover the corresponding decisions; no live client deployment is claimed.
+
 ## Smart Routing: approved storage amendment (F5.S) — 12 November 2026
 
 The user approved the coordinator's generous storage design. The registered result is in
@@ -1070,7 +1088,22 @@ The user decided, after a brainstorm with GPT-6 Astra (xhigh) and Gemini 4 Argon
 
 ## Smart Routing replay pre-registration, Edit 6 · 10 November 2026
 
+> **Historical registration; advisory duty retired 13 November 2026.**
+> [Edit 14](smart-routing-validation.md#edit-14-13-november-2026-advisory-replay-retired)
+> supersedes the advisory/F8 requirement, not strict replay or its safeguards.
+
 [Validation Edit 6](smart-routing-validation.md#edit-6-10-november-2026-replay-against-the-available-history) amends the S2.7 replay pre-registration before any replay has run, on the user's instruction of 10 November 2026 to reduce the replay minimum to the past assignments that exist. A read-only count that day found about 1,349 past worker sessions carrying model, effort, timestamps and tokens but no task family, bands, funding state or acceptance. The historical replay now uses every eligible past session, labelled by fixed metadata-only rules, and its disagreement rate is advisory only. The strict criteria are unchanged and run only on real admission records: over the exported pilot records before the canary, where they must pass and gate it, and over the pilot's and the canary's at C.1. The canary harness exports canary records with their snapshot detail every 12 hours. The independent review of PR #230 made the labelling deterministic (word splitting, tokens counted once, per-store field mapping from schemas only, funding by recorded auth mode) and kept the first replay report across any rule change. Quality re-execution is deferred to C.1 and needs a new dated registration. The original text is kept and marked superseded. The [Smart Routing plan](superpowers/plans/2026-11-08-smart-routing.md) S2.7, S2.8, S3.7 and C.1 statuses and the pre-canary list link to it. No Toolkit source changed.
+
+## Smart Routing advisory retirement, Edit 14 · 13 November 2026
+
+The user approved the Opus simplest-path recommendation: “Yes, let's retire
+advisory replay... proceed as recommended”. [Validation Edit 14](smart-routing-validation.md#edit-14-13-november-2026-advisory-replay-retired)
+retires historical/prospective advisory reporting, F8 implementation/merge and
+advisory-only capture/journal work. The redesign design/plan and strict-replay
+runbook carry the same scope. Old incomplete evidence and the separate 21 strict
+pilot admissions remain unchanged. Strict replay, cap `0`, billing, dispatch,
+native and canary gates remain; L1 cannot recreate past disagreement. No collection,
+installation, live qualification, activation or spending is authorized.
 
 ## Smart Routing: read-only Codex rate-limit reader (R7) · 10 November 2026
 

@@ -199,8 +199,8 @@ def server_config(settings_path, ledger_path, plugin, options=None):
     managed service's own stores with the routing state directories protected from model edits; no MCP server,
     formatter or LSP server; and the worker profile's permission rules. With `options` (`launch_options`), the
     model's request body pins the endpoint and caps the output, and every built-in agent's steps are capped. Whether
-    OpenCode lets a project or global config add to or override it is unobserved (clients/opencode.md#managed-launcher,
-    pre-canary probe)."""
+    other configuration sources add to or override it still needs qualification: empty collections do not erase
+    inherited entries (clients/opencode.md#managed-launcher, pre-canary probe)."""
     shim = dict(python=sys.executable, settings=str(settings_path), ledger=str(ledger_path),
                 protected_paths=protected_paths(settings_path, ledger_path))
     config = {'$schema': 'https://opencode.ai/config.json', 'plugins': [dict(package=str(plugin), options=shim)],
@@ -292,12 +292,14 @@ def start_server(checkout, *, settings_path, ledger_path, opencode='opencode', e
     try:
         plugin = workdir / 'plugins' / 'routing'
         plugin.mkdir(parents=True, mode=0o700)
+        config_dir = workdir / 'config'
+        config_dir.mkdir(mode=0o700)  # separate from plugins/ to prevent automatic plus explicit discovery
         (plugin / 'index.ts').write_text('export { default } from %s\n' % json.dumps(str(SHIM)))
         password = secrets.token_urlsafe(32)
         env = host_environment(os.environ if environ is None else environ)
         env.update(SERVER_FLAGS, OPENCODE_CONFIG_CONTENT=json.dumps(server_config(settings_path, ledger_path, plugin,
                                                                                   options)),
-                   OPENCODE_SERVER_PASSWORD=password)
+                   OPENCODE_SERVER_PASSWORD=password, OPENCODE_CONFIG_DIR=str(config_dir))
         port, log = _free_port(), workdir / 'server.log'
         executable = shutil.which(opencode) or opencode  # resolved with the caller's PATH; the server gets SERVER_PATH
         with open(os.open(log, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), 'wb') as out:
@@ -343,6 +345,8 @@ def health(host):
 
 def enforcement(host, answer):
     """The adapter's `probe` of this host with the worker profile's own tool states: `enforced` or `advisory`."""
+    if not isinstance(answer, dict) or answer.get('state') != 'ok':
+        return 'advisory'
     try:
         status, info = host.request('GET', '/api/info')
     except Exception:  # noqa: BLE001

@@ -1,7 +1,7 @@
 """Native client catalogs for Smart Routing's native bridge (F4.6): Codex native subagents and Claude Code Agent.
 
 A native catalog lists, for one client, the model aliases its own launch accepts and the efforts that launch can
-express, bound to the client's version, connection and effective invocation controls. It never comes from a request
+express, bound to the client's connection and effective invocation controls, with version provenance. It never comes from a request
 or another client's catalog, and no model name is parsed.
 
 Sources, all unqualified today:
@@ -11,12 +11,14 @@ Sources, all unqualified today:
 - The stored snapshot `{binding, models: [{alias, resolved, efforts}]}` beside the routing settings, written only by a
   qualified bounded acquisition outside served preparation (`store_snapshot`). None is qualified or run here: with no
   snapshot the bridge refuses (`native_catalog_unavailable`). A snapshot is reused only while its binding equals the
-  current one (`native_binding_changed` otherwise); no process starts on a `prepare`.
+  current connection and controls (`native_binding_changed` otherwise); version-only changes do not invalidate it.
+  No process starts on a `prepare`.
 - `from_claude_initialize` and `from_codex_models` map the documented payloads (Claude initialization `models[]`:
   `value`, `resolvedModel`, `supportsEffort`, `supportedEffortLevels`; the Codex catalog `{model, supported_efforts}`)
   into snapshot models, for that acquisition. Parsing a payload is not qualifying its source.
 """
 from runtime import routing, routing_launch, routing_observations as collector
+from runtime.software_versions import MINIMUM_VERSIONS, at_least
 
 SNAPSHOT_FILE = 'native-catalogs.json'
 HOSTS = {'claude-code': 'claude_native', 'codex': 'codex_native'}
@@ -81,10 +83,12 @@ def catalog(settings_path, client):
     binding = current_binding(client)
     if not _binding_ok(binding):
         return None, 'native_binding_unverified'
+    if at_least(binding['client_version'], MINIMUM_VERSIONS[client]) is False:
+        return None, 'native_version_too_old'
     snapshot = stored(settings_path, client)
     if snapshot is None:
         return None, 'native_catalog_unavailable'
-    if snapshot['binding'] != binding:
+    if any(snapshot['binding'][key] != binding[key] for key in ('connection', 'controls')):
         return None, 'native_binding_changed'
     return identities(client, snapshot['models']), None
 

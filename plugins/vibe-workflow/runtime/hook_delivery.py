@@ -2,7 +2,7 @@
 
 No client lists whether it trusts a plugin's hooks, so the only evidence is the startup hook running. That hook
 (`record_delivery`) leaves one small private note per client; `delivered` is true only for a note that names the
-current package version and the current hook definition file. Neither function spawns a process, uses the
+current hook definition content. Package versions are diagnostic metadata. Neither function spawns a process, uses the
 network or calls a model."""
 
 import calendar
@@ -61,11 +61,11 @@ def read_note(path):
 
 
 def _matches(note, client, wanted):
-    return note is not None and note["client"] == client and (note["version"], note["hook_sha256"]) == wanted
+    return note is not None and note["client"] == client and note["hook_sha256"] == wanted[1]
 
 
 def delivery(package, client, environ=None, now=None):
-    """The time of this client's note when it matches the package version and hook definitions it runs now and
+    """The time of this client's note when it matches the hook definitions it runs now and
     is at most seven days old (active sessions rewrite it daily); otherwise None."""
     wanted = current(package, client)
     note = read_note(note_path(client, environ)) if wanted is not None else None
@@ -91,7 +91,7 @@ def record_delivery(package, client, environ=None, deadline=None, now=None):
     now = int(time.time() if now is None else now)
     path = note_path(client, environ)
     note = read_note(path)
-    if _matches(note, client, wanted) and 0 <= now - note["delivered_epoch"] <= MAX_AGE:
+    if _matches(note, client, wanted) and note["version"] == wanted[0] and 0 <= now - note["delivered_epoch"] <= MAX_AGE:
         return False
     data = (json.dumps(dict(schema_version=SCHEMA_VERSION, client=client, version=wanted[0], hook_sha256=wanted[1],
                             delivered_at=time.strftime(TIME_FORMAT, time.gmtime(now)))) + "\n").encode()

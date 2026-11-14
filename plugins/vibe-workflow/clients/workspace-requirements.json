@@ -32,8 +32,8 @@
     },
     {
       "id": "vibe-workflow-plugin",
-      "name": "vibe-workflow plugin at the expected version",
-      "why": "Loads the workflow rules at session start; a stale copy leaves a client on old rules.",
+      "name": "vibe-workflow plugin installed and enabled",
+      "why": "Loads workflow rules at session start; version drift is diagnostic, while hook content and trust remain checked.",
       "scope": "client",
       "check": {
         "codex": {"kind": "package"},
@@ -126,7 +126,7 @@
       "name": "Graphify command",
       "why": "Builds the local code map that agents query to find dependencies without reading many files.",
       "scope": "machine",
-      "check": {"kind": "cli", "argv": ["graphify", "--version"]},
+      "check": {"kind": "cli", "argv": ["graphify", "--version"], "minimum": "0.9.104"},
       "install_ref": "https://github.com/Graphify-Labs/graphify",
       "user_actions": []
     },
