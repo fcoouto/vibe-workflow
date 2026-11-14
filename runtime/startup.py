@@ -224,8 +224,17 @@ def _checkout_identity(cwd, *, include_git_dir=False, limit=1024 * 1024, total_l
 
 def _machine_only_record_directory(root, *, budget=None):
     """Recognize existing machine family files, never project enrollment authority."""
-    if os.name != "posix" or root != Path.home().resolve() or os.path.lexists(root / PROJECT_FILE):
+    if os.name != "posix" or os.path.lexists(root / PROJECT_FILE):
         return False
+    # An isolated client HOME does not move the account's existing machine registry.
+    if root != Path.home().resolve():
+        try:
+            import pwd
+            home = pwd.getpwuid(os.getuid()).pw_dir
+            if not os.path.isabs(home) or root != Path(home).resolve():
+                return False
+        except (ImportError, KeyError, OSError, RuntimeError, ValueError):
+            return False
     family = "workstreams-families.sqlite3"
     allowed = {family, family + "-journal", family + "-wal", family + "-shm"}
     descriptor = os.open(root / PROJECT_FILE.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
