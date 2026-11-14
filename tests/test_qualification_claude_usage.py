@@ -255,7 +255,10 @@ class ParseTests(Contract):
                     {'resets_at': 1}, {'resets_at': 'fixture@example.invalid'},
                     {'resets_at': '2026-02-30T00:00:00Z'}, {'resets_at': '2026-11-14'},
                     {'resets_at': '2026-11-14T00:00:00'},
-                    {'resets_at': '2026-11-14T00:00:00+00:60'}):
+                    {'resets_at': '2026-11-14T00:00:00+00:60'},
+                    {'resets_at': '2026-11-14T00:00:00-00:60'},
+                    {'utilization': 1, 'resets_at': '2026-11-14T00:00:00+00:60'},
+                    {'utilization': 1, 'resets_at': '2026-11-14T00:00:00-00:60'}):
             with self.subTest(row=row):
                 value = copy.deepcopy(USAGE)
                 value['rate_limits']['five_hour'] = row
@@ -268,6 +271,11 @@ class ParseTests(Contract):
         self.assertEqual(self.parse(value)['aggregate_meters'],
                          {'five_hour': {'utilization': 0, 'resets_at': '2026-11-14T05:00:00Z'},
                           'seven_day': {'utilization': 100.0, 'resets_at': '2026-11-20T00:00:00-03:00'}})
+        for reset in ('2026-11-14T00:00:00+00:59', '2026-11-14T00:00:00-00:59'):
+            with self.subTest(reset=reset):
+                value['rate_limits']['five_hour'] = {'utilization': 1, 'resets_at': reset}
+                self.assertEqual(self.parse(value)['aggregate_meters']['five_hour'],
+                                 {'utilization': 1, 'resets_at': reset})
 
     def test_unsupported_scopes_never_silently_drop_constraints(self):
         for key, scoped in (('model_scoped', {'fixture': {}}), ('limits', [{}]),

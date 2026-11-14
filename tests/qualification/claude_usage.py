@@ -31,7 +31,7 @@ REASONS = ('claude_command_invalid', 'claude_environment_invalid', 'claude_timeo
            'claude_inference_unverified', 'claude_behaviors_unverified', 'claude_meter_invalid',
            'claude_scope_unsupported')
 ISO_RESET = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}'
-                       r'(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})')
+                       r'(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-5][0-9])')
 
 
 class ReadError(Exception):
