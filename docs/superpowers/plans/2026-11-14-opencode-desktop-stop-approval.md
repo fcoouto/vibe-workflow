@@ -1,5 +1,20 @@
 # Desktop Stop Approval Implementation Plan
 
+## Status: closed as deferred
+
+The user approved closing qualification as **deferred, not passed**, on
+14 November 2026. The accepted direction is to stop unsuccessful work, explain
+the situation naturally and wait for explicit user direction under existing
+controls. No custom approval panel or automatic resumption is in the accepted
+delivery scope. See the [current design decision](../specs/2026-11-14-opencode-desktop-stop-approval-design.md#current-decision-qualification-deferred).
+
+The implementation steps below are historical. Unchecked native steps are not
+pending autonomous work and must not be marked passed. No further campaign,
+deployment, merge or release follows from this plan. Preserve the source,
+reviews, failed attempts and consumed allocations. Existing installed behavior
+and shared configuration remain unchanged. PR #294 is retained as a deferred
+draft/BLOCKED record; closing this qualification does not require merging it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Package a portable native connector and complete-change Desktop panel that authorize one stopped original builtin edit only through exact dual-gated approval.

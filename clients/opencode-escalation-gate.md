@@ -4,7 +4,14 @@ Load this file when you install, configure, test or diagnose the optional OpenCo
 
 **Status: selected mechanical paths qualified on OpenCode 2.2.6 with released 0.1.39. Six original native cases passed, plus a later actual standalone TUI flow covering rendered refusal, native child permission identity and event ordering. Two instrumented native fault instances passed separately. The TUI follow-up required a fixture-only read-only tool permission correction and forced frontend shutdown; shared-server TUI attachment and general workflow improvement are not qualified. Earlier failures remain recorded; neither general semantic detection nor the deferred judge is qualified. See the [13 November report](../docs/qualification/2026-11-13-opencode-escalation-gate.md), [earlier behavior report](../docs/qualification/2026-11-12-opencode-escalation-gate.md) and [hook results](../tests/fixtures/opencode_workflow/probes.json).**
 
-**Unreleased candidate:** the [approved Desktop-first design](../docs/superpowers/specs/2026-11-14-opencode-desktop-stop-approval-design.md)
+**Qualification deferred:** on 14 November 2026, the user closed the unreleased
+approval-panel qualification as deferred, not passed. The accepted direction keeps
+existing stop-and-wait behavior without a custom approval panel or automatic
+resumption. Conversational explanations should be natural. No runtime or installed
+behavior changes follow from this closure. The [current decision](../docs/superpowers/specs/2026-11-14-opencode-desktop-stop-approval-design.md#current-decision-qualification-deferred)
+supersedes the historical candidate work below; PR #294 remains draft/BLOCKED.
+
+**Historical unreleased candidate:** the [Desktop-first design](../docs/superpowers/specs/2026-11-14-opencode-desktop-stop-approval-design.md)
 adds an explicit complete-change viewer submission to the existing one-use owner.
 Stop-stage native approval alone never authorizes an edit or clears a hold. The
 generic entry retains **no authenticated form transport**: stopped edits deny with

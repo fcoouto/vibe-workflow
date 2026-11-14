@@ -1,5 +1,27 @@
 # Desktop-first native stop approval
 
+## Current decision: qualification deferred
+
+On 14 November 2026, the user approved closing this qualification as **deferred,
+not passed**, and selected the simpler existing stop-and-wait behavior:
+
+- Stop repeated unsuccessful work, explain the problem, and wait for the user's
+  explicit direction before any further work proceeds under existing controls.
+- Do not introduce a custom approval panel or automatically resume a pending edit.
+- Keep conversational explanations natural. For example: “This approach isn't
+  working. I'll pause here. How would you like to proceed?”
+
+This decision supersedes the pending approval-panel delivery and native campaigns
+described below. The remaining design is retained as historical, unqualified work,
+not permission to deploy it or run another attempt. Preserve its implementation,
+reviews, failed attempts, consumed allocations and evidence.
+
+This closure changes no runtime behavior, instruction recognition, permissions,
+shared configuration or installed package. It does not make arbitrary conversational
+replies authorization to continue a blocked operation. PR #294 remains a deferred
+draft/BLOCKED record; no merge or release is required to close this qualification.
+Native viewer, form approval and matching-completion criteria remain unverified.
+
 ## Authority and status
 
 The user approved a scoped connector/full-change viewer redesign on 14 November
