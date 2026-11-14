@@ -1394,12 +1394,11 @@ def acquire_project_entry(event, package, *, qualifier=None, deadline=None, budg
         # A linked checkout without a local record still needs physical primary discovery.
         if ((root is None or scope is not None or records[root] is not None)
                 and not any(record is not None and record.get('schema_version') == 2 for record in peers)):
-            home = Path.home().resolve()
-            home_was_absent = ((home in records and records[home] is None)
-                               or (home in peer_records and peer_records[home] is None))
-            if (home != root and home_was_absent
-                    and read_record(home, budget=budget, allow_machine_only=home != primary) is not None):
-                raise StartupError("Project authority changed during entry acquisition")
+            # Recheck skipped ancestors, including those found only through the primary.
+            for path, prior in (records | peer_records).items():
+                if (path != root and prior is None
+                        and read_record(path, budget=budget, allow_machine_only=path != primary) is not None):
+                    raise StartupError("Project authority changed during entry acquisition")
             if scope is not None and scope.runtime is not None:
                 return CanonicalAcquisition(ScopeResolution('suspended', None,
                     'legacy_runtime_requires_original_pinned_package_and_approved_D4_enrollment'), root / PROJECT_FILE)
