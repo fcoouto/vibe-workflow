@@ -7,7 +7,8 @@ derives the account key (a digest of email, organization when present and the cl
 are never stored), the native catalog snapshot (`native_catalog.store_snapshot`) and, only from the examined
 successful branch, the pool's 5h/7d windows dated conservatively at request start minus the client's 60 s cache
 ceiling. Installed-source evidence (2.1.311, bytes only): a claude.ai subscriber's initialization reports email,
-organization and subscription type with no `tokenSource` (environment OAuth tokens and keys report one), and a
+organization and a display plan label ("Claude Max") with no `tokenSource` (environment OAuth tokens and keys report
+one; the normalized subscription type is in the usage answer, and only it classifies the sign-in), and a
 successful usage answer keeps the raw `limits` array and adds `model_scoped: []` when no per-model window exists,
 while a header-seeded fallback strips both. The only raw limit kind with known meaning is `weekly_scoped` under
 `scope.model`. So any raw limit element, scoped meter or unknown key is refused rather than mapped or ignored, and a
@@ -207,13 +208,14 @@ def account_key(account):
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def parse_account(init):
+def parse_account(init, use):
     """`(key, client_version, models)` of a claude.ai subscriber sign-in, else `claude_account_unsupported`: a
     first-party provider, an email, a known subscription type and neither a `tokenSource` (an environment token or
-    other source) nor an `apiKeySource` (a key)."""
+    other source) nor an `apiKeySource` (a key). The subscription type is the normalized one of the same exchange's
+    usage answer: initialization carries only the user-visible plan label ("Claude Max"), which is never matched."""
     account = init.get('account')
     if type(account) is not dict or not routing._text(account.get('email')) \
-            or account.get('apiProvider') != 'firstParty' or account.get('subscriptionType') not in SUBSCRIPTIONS \
+            or account.get('apiProvider') != 'firstParty' or use.get('subscription_type') not in SUBSCRIPTIONS \
             or 'tokenSource' in account and account['tokenSource'] is not None \
             or 'apiKeySource' in account and account['apiKeySource'] is not None \
             or not routing._optional(account.get('organization'), routing._text):
@@ -431,7 +433,7 @@ def _record(settings_path, init, use, started):
     written. A usage problem still records the account and catalog, with no confirmed exchange, so no earlier row
     stays usable. Another account's rows never match the new key; nothing earlier is re-dated."""
     from runtime.adapters import native_catalog
-    key, version, models = parse_account(init)
+    key, version, models = parse_account(init, use)
     check_quiet(use)
     now = int(time.time())
     try:

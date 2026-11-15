@@ -177,6 +177,49 @@ Claude metadata source status (14 November 2026): `tests/qualification/claude_us
 
 Further installed-source assessment (14 November) does not close that source gate. The examined initialization and public account-info projection omit stable account UUID. A successful usage control can retain aggregate meters and an Extra Usage flag from a failed-fetch fallback; those fields alone cannot receive the shorter successful-cache freshness bound. Model-scoped display rows are filtered projections, and `is_active` identifies the displayed indicator, not the only enforced constraint. A false Extra Usage flag must distinguish explicit provider disablement from temporary exhausted-credit or spending-limit states. Effective settings from a new metadata process cannot attest another running coordinator. These gaps require supported identity/control bindings, complete applicable window and demand semantics, provider-disablement evidence and separately authorized live qualification; this source-only change supplies none of them.
 
+### Native Claude reader attempt, 15 November 2026
+
+One real `runtime/claude_usage.refresh` attempt on committed `3315165f`, using
+Claude Code 2.1.311 and private qualification stores, returned
+`failed / claude_account_unsupported`. It sent only the two metadata controls;
+the response reported zero cost, zero API duration, empty model usage and no
+behavior scan. The one child exited and was reaped; no process remained in its
+owned group. No model prompt, native task launch, production-state change or
+retry occurred. This adds failed-attempt evidence to the package-only checkpoint
+above, not a successful account/source qualification.
+
+Installed-source inspection separately established a parser-contract bug:
+initialization's `account.subscriptionType` is a display label, possibly
+`Claude <plan>`, whereas the same exchange's `usage.subscription_type` is the
+machine enum. The reader now classifies from that enum, preserving first-party,
+identity, token/key-source and catalog checks. Synthetic regressions cover valid
+display labels and missing/unknown machine types.
+
+The exact live rejection branch was not retained beyond its fixed reason.
+The attempt also reported 24 unrecognized usage keys and absent empty raw/scoped
+completeness markers. The repair does not ignore these fields or turn partial
+usage into capacity. A separately bounded, redacted field-shape observation is
+still needed before any new usage mapping; no successful post-repair read or
+native launch is claimed.
+
+**Approved second read, after the classification repair:** On reviewed `b85b4cfc`,
+one separately authorized zero-inference exchange confirmed the native account
+fact and account-bound catalog (14 entries, 64 alias-effort identities).
+Usage still returned `claude_limits_unsupported`: the parser rejected 24
+unrecognized keys before its raw/scoped checks. Three raw limit rows and one
+model-scoped row were also present, with extra metadata/nullable rollout fields.
+No usable windows were produced. Only redacted field names/types and private
+derived state were retained. One child completed in 1.203 seconds, was reaped and
+left no owned-group process. Account/catalog observation now exists; complete
+usage, demand, native launch and activation remain unqualified. There was no
+retry or remaining live allowance.
+
+Installed-source follow-up found no exact catalog-to-model-bucket membership:
+the client joins a filtered display-label projection for UI use. This does not
+establish complete per-route applicability. A positive scoped-window mapping is
+still blocked on a supported binding or an explicitly accepted conservative
+design; no model-name inference or extra capacity was added.
+
 ## Live checks still open
 
 1. **OpenCode with ChatGPT:** partly observed on 10 November 2026 ([report](smart-routing-qualification.md#chatgpt-attempts-5-and-6)). Sign in with ChatGPT through an isolated server works end to end for `gpt-6-luna`: one request, tokens recorded, window settlement, no dollar charge. `gpt-5.5`, listed by OpenCode, was refused with 400 `model_not_found`, so a listed model is not an entitled one. Still open: the ChatGPT usage page entry and its credits setting, whether the route shares Codex's pool (the Codex rate limits before and after one request; there is no reader), and `native.rateLimit`, which this route does not report.
