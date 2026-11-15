@@ -196,6 +196,18 @@ class ParentObservationTests(unittest.TestCase):
         with self.assertRaises((startup.StartupError, codex.ObservationError)):
             codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
                 'pre-tool-enforcement', trace_bundle=str(bundle))
+        with state._database(self.scope, write=True) as db:
+            db.execute("update receipts set conflicted=0,fingerprint=? where tool_call_id='exec-parent-inner'",
+                (codex.patch_input_fingerprint(PATCH.replace('+after', '+unapproved')),))
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                'pre-tool-enforcement', trace_bundle=str(bundle))
+        with state._database(self.scope, write=True) as db:
+            db.execute("update receipts set fingerprint=?,rowid=0 where tool_call_id='exec-parent-inner'",
+                (codex.patch_input_fingerprint(PATCH),))
+        with self.assertRaises((startup.StartupError, codex.ObservationError)):
+            codex.observe_managed_case(self.scope, selected, self.allocation['reference'],
+                'pre-tool-enforcement', trace_bundle=str(bundle))
 
     def test_wrapped_denial_cannot_borrow_a_same_id_core_receipt(self):
         self.begin()

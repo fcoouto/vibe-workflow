@@ -561,7 +561,10 @@ class NativeBehaviorOwnerTests(unittest.TestCase):
         from tests.test_delegation import AdmissionTests
         from tests.test_evidence import EvidenceTests
         self.assertEqual(list(inspect.signature(codex.observe_managed_case).parameters),
-            ['scope', 'task_ref', 'attempt_ref', 'case_id'], 'Managed observer still uses a D4 process')
+            ['scope', 'task_ref', 'attempt_ref', 'case_id', 'trace_bundle'], 'Managed observer still uses a D4 process')
+        trace_parameter = inspect.signature(codex.observe_managed_case).parameters['trace_bundle']
+        self.assertEqual(trace_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(trace_parameter.default)
         prepared_scope = self._qualified_context(managed_pre=True)
         scope = prepared_scope['published']['scope']; original = prepared_scope['original']; allocation = prepared_scope['managed']
         identity = dict(allocation['task'], scope_ref='fixture:actual-managed-parent-task')

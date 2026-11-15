@@ -145,6 +145,43 @@ class CodexTraceTests(unittest.TestCase):
         with self.assertRaises(codex.ObservationError):
             self.fact()
 
+    def test_source_replacement_links_and_deadline_during_read_fail_closed(self):
+        from runtime.adapters import codex_trace
+        path = self.bundle/'payloads/2.json'
+        held = self.bundle/'payloads/original.json'
+        path.rename(held); path.hardlink_to(held)
+        with self.assertRaises(codex.ObservationError):
+            self.fact()
+        path.unlink(); held.rename(path)
+        original = codex_trace.d3._read_file
+        changed = False
+        def replacing(target, *args, **kwargs):
+            nonlocal changed
+            raw = original(target, *args, **kwargs)
+            if Path(target) == path and not changed:
+                changed = True
+                temporary = path.with_suffix('.replacement')
+                temporary.write_bytes(raw); temporary.chmod(0o600)
+                temporary.replace(path)
+            return raw
+        with patch.object(codex_trace.d3, '_read_file', side_effect=replacing), self.assertRaises(codex.ObservationError):
+            self.fact()
+        bundle_alias = self.home/'alias'
+        bundle_alias.symlink_to(self.bundle, target_is_directory=True)
+        with self.assertRaises(codex.ObservationError):
+            self.fact(bundle=str(bundle_alias))
+        reads = 0
+        def expiring(target, *args, **kwargs):
+            nonlocal reads
+            reads += 1
+            raw = original(target, *args, **kwargs)
+            if reads == 3:
+                clock.return_value = 10
+            return raw
+        with patch.object(codex_trace.time, 'monotonic', return_value=0) as clock:
+            with patch.object(codex_trace.d3, '_read_file', side_effect=expiring), self.assertRaisesRegex(codex.ObservationError, 'timeout'):
+                self.fact(deadline=5)
+
 
 if __name__ == '__main__':
     unittest.main()
